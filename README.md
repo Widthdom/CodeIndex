@@ -27,6 +27,35 @@ Most code search tools optimize for either desktop UI workflows or one-off text 
 
 It is not an IDE replacement or desktop search app. It is a small local search runtime you can script, automate, and hand to AI tools.
 
+Use `rg` when you want a zero-setup one-off scan. Use `cdidx` when the same repository will be searched again and again.
+
+## cdidx vs rg
+
+| | `rg` | `cdidx` |
+|---|---|---|
+| Best at | One-off text scans | Repeated local code search |
+| Setup | None | One-time index build |
+| Search model | Reads files every time | Queries a local SQLite FTS5 index |
+| Output for automation | Plain text | Human-readable, JSON, and MCP |
+| AI integration | Needs parsing | Structured by design |
+| Updates after edits | Re-run search | Refresh only changed files |
+
+## 30-Second Quick Start
+
+`.NET 8 SDK required`
+
+```bash
+dotnet tool install -g cdidx
+cdidx .
+cdidx search "handleRequest"
+```
+
+That is the whole loop:
+
+1. `cdidx .` builds or refreshes `.cdidx/codeindex.db`
+2. `cdidx search ...` returns results from the local index
+3. after edits, refresh with `cdidx . --files path/to/file.cs` or `cdidx . --commits HEAD`
+
 ## Prerequisites
 
 .NET 8.0 SDK is required to build cdidx.
@@ -575,6 +604,35 @@ No CLAUDE.md hacks or SQL templates needed — the AI interacts with cdidx nativ
 - `Incremental` — `--files` と `--commits` で変更分だけ更新。
 
 IDEの置き換えやデスクトップ検索アプリではありません。スクリプト可能で、自動化できて、AIツールにそのまま渡せる小さなローカル検索ランタイムです。
+
+単発で文字列を掘りたいなら `rg`、同じリポジトリを人間とAIの両方が何度も検索するなら `cdidx` が向いています。
+
+## cdidx と rg の違い
+
+| | `rg` | `cdidx` |
+|---|---|---|
+| 得意な用途 | 単発のテキスト走査 | 繰り返し行うローカルコード検索 |
+| 初期セットアップ | 不要 | 最初に一度インデックス作成 |
+| 検索モデル | 毎回ファイルを読む | ローカルの SQLite FTS5 インデックスを検索 |
+| 自動化向け出力 | プレーンテキスト | 人間向け出力、JSON、MCP |
+| AI連携 | パースが必要 | 構造化前提 |
+| 編集後の更新 | 再検索するだけ | 変更ファイルだけ更新できる |
+
+## 30秒で試す
+
+`.NET 8 SDK が必要`
+
+```bash
+dotnet tool install -g cdidx
+cdidx .
+cdidx search "handleRequest"
+```
+
+やることはこれだけです:
+
+1. `cdidx .` で `.cdidx/codeindex.db` を作成または更新
+2. `cdidx search ...` でローカルインデックスを検索
+3. 編集後は `cdidx . --files path/to/file.cs` や `cdidx . --commits HEAD` で差分更新
 
 ## 前提条件
 
