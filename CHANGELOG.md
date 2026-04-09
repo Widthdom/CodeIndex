@@ -9,6 +9,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+#### Changed
+
+- **Sharpened cdidx branding in docs and package metadata** — Repositioned README and NuGet package description around `cdidx` as an AI-native local code index for CLI and MCP workflows, with clearer differentiation from desktop search tools and one-off grep usage. Affected: `README.md`, `src/CodeIndex/CodeIndex.csproj`.
+
 ### [1.0.4] - 2026-04-09
 
 #### Changed
@@ -140,6 +144,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## 日本語
 
 ### [Unreleased]
+
+#### 変更
+
+- **ドキュメントとパッケージ説明で cdidx のブランドを明確化** — README と NuGet パッケージ説明を、`cdidx` を CLI / MCP ワークフロー向けの AIネイティブなローカルコードインデックスとして打ち出す内容に整理し、デスクトップ検索ツールや単発の grep 利用との差別化を明確にした。対象: `README.md`, `src/CodeIndex/CodeIndex.csproj`.
 
 ### [1.0.4] - 2026-04-09
 
