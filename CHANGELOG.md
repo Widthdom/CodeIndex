@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+### [1.1.0] - 2026-04-10
+
 #### Changed
 
 - **Clarified safe indexing after history rewrites** — README and `SELF_IMPROVEMENT.md` now explicitly recommend `cdidx .` after `git reset`, `git rebase`, `git commit --amend`, `git switch`, or `git merge`, and `--commits` now prints the same guidance in human-readable mode. Added a regression test for the new CLI note. Affected: `README.md`, `SELF_IMPROVEMENT.md`, `src/CodeIndex/Cli/IndexCommandRunner.cs`, `tests/CodeIndex.Tests/IndexCommandRunnerTests.cs`.
@@ -177,6 +179,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+### [1.1.0] - 2026-04-10
+
 #### 変更
 
 - **履歴改変後の安全な再インデックス手順を明確化** — README と `SELF_IMPROVEMENT.md` に、`git reset`、`git rebase`、`git commit --amend`、`git switch`、`git merge` の後は `cdidx .` を優先するルールを明記し、`--commits` の人間向け出力でも同じ案内を出すようにした。新しい CLI 注意文の回帰テストも追加した。対象: `README.md`, `SELF_IMPROVEMENT.md`, `src/CodeIndex/Cli/IndexCommandRunner.cs`, `tests/CodeIndex.Tests/IndexCommandRunnerTests.cs`.
@@ -339,7 +343,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.0.5...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/Widthdom/CodeIndex/compare/v1.0.5...v1.1.0
 [1.0.5]: https://github.com/Widthdom/CodeIndex/compare/v1.0.4...v1.0.5
 [1.0.4]: https://github.com/Widthdom/CodeIndex/compare/v1.0.3...v1.0.4
 [1.0.3]: https://github.com/Widthdom/CodeIndex/compare/v1.0.2...v1.0.3
