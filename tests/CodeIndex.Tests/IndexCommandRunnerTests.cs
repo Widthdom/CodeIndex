@@ -267,6 +267,12 @@ public class IndexCommandRunnerTests
         process.WaitForExit();
         if (process.ExitCode != 0)
             throw new InvalidOperationException($"git {string.Join(' ', args)} failed: {stderr.Trim()}");
+
+        if (args.Length == 1 && args[0] == "init")
+        {
+            RunGit(workDir, "config", "user.name", "CodeIndex Tests");
+            RunGit(workDir, "config", "user.email", "tests@codeindex.local");
+        }
     }
 
     private static void DeleteDirectory(string path)
