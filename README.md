@@ -87,6 +87,27 @@ curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/v1.5.0/install.s
 
 Supported platforms: `linux-x64`, `linux-arm64`, `osx-arm64` (glibc-based Linux only; Alpine/musl is not supported). Installs to `~/.local/bin` by default (override with `CDIDX_INSTALL_DIR`).
 
+If install fails with HTTP 403 in a managed container/proxy environment, GitHub endpoints may be blocked. Use a pinned version and mirror endpoints:
+
+```bash
+export CDIDX_GITHUB_API_URL="https://<your-mirror>/repos/Widthdom/CodeIndex"
+export CDIDX_RELEASE_BASE_URL="https://<your-mirror>/releases/download"
+curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash -s -- v1.8.0
+```
+
+If install succeeds but `cdidx` is still not found, your shell likely does not include `~/.local/bin` in `PATH` yet:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+cdidx --version
+```
+
+To make this permanent (bash):
+
+```bash
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+```
+
 **Dockerfile example:**
 
 ```dockerfile
@@ -158,6 +179,21 @@ if ($path -notlike '*C:\Tools*') {
 ```
 
 Restart your terminal after adding to PATH.
+
+### Option D: Use GHCR image from a branch
+
+For AI/container workflows, you can open a container directly from a branch-built image on GHCR.
+
+After pushing your branch, GitHub Actions publishes:
+
+- `ghcr.io/<owner>/cdidx:<branch-name>`
+- `ghcr.io/<owner>/cdidx:sha-<commit>`
+
+Example:
+
+```bash
+docker run --rm ghcr.io/widthdom/cdidx:work --version
+```
 
 ### Verify
 
@@ -867,6 +903,27 @@ curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/v1.5.0/install.s
 
 対応プラットフォーム: `linux-x64`, `linux-arm64`, `osx-arm64`（glibc ベースの Linux のみ。Alpine/musl は非対応）。デフォルトで `~/.local/bin` にインストール（`CDIDX_INSTALL_DIR` で変更可）。
 
+管理されたコンテナ/プロキシ環境でインストール時に HTTP 403 が出る場合、GitHub エンドポイントがブロックされている可能性があります。固定バージョン + ミラー URL を使用してください:
+
+```bash
+export CDIDX_GITHUB_API_URL="https://<your-mirror>/repos/Widthdom/CodeIndex"
+export CDIDX_RELEASE_BASE_URL="https://<your-mirror>/releases/download"
+curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash -s -- v1.8.0
+```
+
+インストール自体は成功しているのに `cdidx` が見つからない場合は、シェルの `PATH` に `~/.local/bin` が入っていない可能性があります:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+cdidx --version
+```
+
+永続化する場合（bash）:
+
+```bash
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+```
+
 **Dockerfile の例:**
 
 ```dockerfile
@@ -938,6 +995,21 @@ if ($path -notlike '*C:\Tools*') {
 ```
 
 PATH追加後はターミナルを再起動してください。
+
+### 方法D: ブランチ由来のGHCRイメージを使う
+
+AI/コンテナ用途では、ブランチからビルドされた GHCR イメージを直接指定してコンテナを開けます。
+
+ブランチを push すると GitHub Actions が次を公開します:
+
+- `ghcr.io/<owner>/cdidx:<branch-name>`
+- `ghcr.io/<owner>/cdidx:sha-<commit>`
+
+例:
+
+```bash
+docker run --rm ghcr.io/widthdom/cdidx:work --version
+```
 
 ### 確認
 

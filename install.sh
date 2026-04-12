@@ -13,6 +13,8 @@ REPO="Widthdom/CodeIndex"
 INSTALL_DIR="${CDIDX_INSTALL_DIR:-$HOME/.local/bin}"
 BINARY_NAME="cdidx"
 TMPDIR_CLEANUP=""
+GITHUB_API_BASE="${CDIDX_GITHUB_API_URL:-https://api.github.com/repos/${REPO}}"
+RELEASE_BASE_URL="${CDIDX_RELEASE_BASE_URL:-https://github.com/${REPO}/releases/download}"
 
 # --- Helpers / ヘルパー ---
 
@@ -78,8 +80,21 @@ resolve_version() {
         info "Fetching latest release version..."
         need_cmd curl
         local api_response
-        api_response="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest")" \
-            || error "Failed to fetch latest release from GitHub API. Check your network connection."
+        api_response="$(curl -fsSL "${GITHUB_API_BASE}/releases/latest")" || {
+            error "Failed to fetch latest release metadata from ${GITHUB_API_BASE}/releases/latest.
+
+Possible causes:
+  - Network/proxy blocks GitHub API access (common in managed AI containers)
+  - Temporary connectivity issue
+
+Try one of these:
+  1) Pin a version explicitly (skips latest API call):
+       bash install.sh v1.8.0
+  2) Use a mirror endpoint:
+       export CDIDX_GITHUB_API_URL='https://<your-mirror>/repos/${REPO}'
+       export CDIDX_RELEASE_BASE_URL='https://<your-mirror>/releases/download'
+       bash install.sh v1.8.0"
+        }
 
         VERSION="$(printf '%s' "$api_response" | grep '"tag_name"' | head -1 | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')"
 
@@ -118,7 +133,7 @@ download_and_install() {
     need_cmd mktemp
 
     local archive_name="CodeIndex-${RID}.tar.gz"
-    local base_url="https://github.com/${REPO}/releases/download/${VERSION}"
+    local base_url="${RELEASE_BASE_URL}/${VERSION}"
     local archive_url="${base_url}/${archive_name}"
     local checksums_url="${base_url}/sha256sums.txt"
 
@@ -128,11 +143,16 @@ download_and_install() {
 
     info "Downloading ${archive_name}..."
     curl -fsSL -o "${tmpdir}/${archive_name}" "$archive_url" \
-        || error "Failed to download $archive_url. Check that version $VERSION exists and has a ${RID} binary."
+        || error "Failed to download ${archive_url}.
+
+Check:
+  - Version exists and publishes ${RID}: ${VERSION}
+  - Network/proxy can access release assets
+  - If needed, set CDIDX_RELEASE_BASE_URL to an internal mirror"
 
     info "Downloading checksums..."
     curl -fsSL -o "${tmpdir}/sha256sums.txt" "$checksums_url" \
-        || error "Failed to download checksums from $checksums_url."
+        || error "Failed to download checksums from ${checksums_url}. If you use a mirror, ensure sha256sums.txt is also mirrored."
 
     # Verify checksum / チェックサム検証
     info "Verifying checksum..."
