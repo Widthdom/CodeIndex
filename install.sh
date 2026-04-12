@@ -163,9 +163,29 @@ download_and_install() {
     tar xzf "${tmpdir}/${archive_name}" -C "$tmpdir"
 
     # Install / インストール
+    # The tarball ships the cdidx binary together with its native SQLite
+    # companion (libe_sqlite3.so / libe_sqlite3.dylib) and version.json.
+    # All three files must live next to the binary, otherwise:
+    #   - cdidx crashes with "libe_sqlite3: cannot open shared object file"
+    #     on any DB operation.
+    #   - cdidx --version reports "v0.0.0" because version.json is missing.
+    # tarball には cdidx バイナリと共にネイティブ SQLite (libe_sqlite3.so /
+    # libe_sqlite3.dylib) と version.json が同梱される。これら 3 ファイルは
+    # バイナリと同じディレクトリに置かないと、DB 操作で
+    # "libe_sqlite3: cannot open shared object file" になり、
+    # version.json が無いと --version が "v0.0.0" に退化する。
     mkdir -p "$INSTALL_DIR"
     cp "${tmpdir}/${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}"
     chmod +x "${INSTALL_DIR}/${BINARY_NAME}"
+
+    # Copy sibling runtime files (native SQLite library, version metadata).
+    # 同梱されたランタイムファイル（ネイティブ SQLite ライブラリ、バージョン情報）もコピー。
+    local sibling
+    for sibling in libe_sqlite3.so libe_sqlite3.dylib version.json; do
+        if [ -f "${tmpdir}/${sibling}" ]; then
+            cp "${tmpdir}/${sibling}" "${INSTALL_DIR}/${sibling}"
+        fi
+    done
 
     info "Installed cdidx to ${INSTALL_DIR}/${BINARY_NAME}"
 }

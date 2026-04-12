@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+#### Fixed
+- **`install.sh` now copies bundled SQLite native library and `version.json`** — The one-liner installer previously copied only the `cdidx` binary from the release tarball, leaving `libe_sqlite3.so` (or `libe_sqlite3.dylib` on macOS) and `version.json` behind. This caused every DB operation on a freshly installed cdidx to crash with `libe_sqlite3: cannot open shared object file`, and `cdidx --version` to silently fall back to reporting `v0.0.0`. The installer now copies every sibling runtime file shipped in the tarball next to the binary. Affected: `install.sh`.
+
 ### [1.8.0] - 2026-04-12
 
 #### Added
@@ -558,6 +561,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## 日本語
 
 ### [Unreleased]
+
+#### 修正
+- **`install.sh` が同梱の SQLite ネイティブライブラリと `version.json` もコピーするように** — これまでワンライナーインストーラーはリリース tarball から `cdidx` バイナリのみをコピーし、`libe_sqlite3.so`（macOS では `libe_sqlite3.dylib`）と `version.json` を残していた。その結果、インストール直後の cdidx は DB 操作のたびに `libe_sqlite3: cannot open shared object file` でクラッシュし、`cdidx --version` は静かに `v0.0.0` へフォールバックしていた。インストーラーは tarball に同梱されたランタイムファイルをバイナリと同じディレクトリへ配置するようになった。対象: `install.sh`。
 
 ### [1.8.0] - 2026-04-12
 
