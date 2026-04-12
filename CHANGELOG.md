@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+#### Changed
+- **README Option A PATH troubleshooting for container/cloud shells** — Added explicit `~/.local/bin` PATH recovery steps (temporary + persistent bash example) to the one-liner installer sections in both English and Japanese so `cdidx: command not found` is easier to fix in minimal environments. Affected: `README.md`.
+
 ### [1.8.0] - 2026-04-12
 
 #### Added
@@ -558,6 +561,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## 日本語
 
 ### [Unreleased]
+
+#### 変更
+- **README 方法Aに PATH トラブルシュートを追記（コンテナ/クラウド向け）** — ワンライナーインストーラー節（英語・日本語）に、`~/.local/bin` が `PATH` にない環境での復旧手順（一時設定 + bash 永続化例）を追加。`cdidx: command not found` の初回つまずきを減らす。対象: `README.md`。
 
 ### [1.8.0] - 2026-04-12
 
