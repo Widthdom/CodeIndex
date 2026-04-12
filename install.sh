@@ -166,9 +166,26 @@ download_and_install() {
     info "Extracting..."
     tar xzf "${tmpdir}/${archive_name}" -C "$extract_dir"
 
+    # Resolve extraction root. Most releases extract files at archive root,
+    # but some repacks may wrap them in a single top-level directory.
+    # 展開ルートを解決。通常はアーカイブ直下だが、再パック時に
+    # 単一トップレベルディレクトリで包まれる場合にも対応する。
+    local payload_root="$extract_dir"
+    if [ ! -f "${payload_root}/${BINARY_NAME}" ]; then
+        local top_dirs
+        top_dirs="$(find "$extract_dir" -mindepth 1 -maxdepth 1 -type d | wc -l | awk '{print $1}')"
+        if [ "$top_dirs" = "1" ]; then
+            payload_root="$(find "$extract_dir" -mindepth 1 -maxdepth 1 -type d | head -1)"
+        fi
+    fi
+
+    if [ ! -f "${payload_root}/${BINARY_NAME}" ]; then
+        error "Archive does not contain ${BINARY_NAME} at an expected location."
+    fi
+
     # Install binary / バイナリをインストール
     mkdir -p "$INSTALL_DIR"
-    cp "${extract_dir}/${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}"
+    cp "${payload_root}/${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}"
     chmod +x "${INSTALL_DIR}/${BINARY_NAME}"
 
     # Install runtime assets alongside the binary.
@@ -183,11 +200,19 @@ download_and_install() {
     # - ネイティブ SQLite ライブラリ（Linux は libe_sqlite3.so、macOS は
     #   libe_sqlite3.dylib）は P/Invoke 解決のためバイナリの隣に必要で、
     #   無いと起動直後に DllNotFoundException で全コマンドが落ちる。
+    local required_assets="version.json"
+    if [ "$OS_NAME" = "linux" ]; then
+        required_assets="${required_assets} libe_sqlite3.so"
+    elif [ "$OS_NAME" = "osx" ]; then
+        required_assets="${required_assets} libe_sqlite3.dylib"
+    fi
+
     local asset
-    for asset in version.json libe_sqlite3.so libe_sqlite3.dylib; do
-        if [ -f "${extract_dir}/${asset}" ]; then
-            cp "${extract_dir}/${asset}" "${INSTALL_DIR}/${asset}"
+    for asset in $required_assets; do
+        if [ ! -f "${payload_root}/${asset}" ]; then
+            error "Archive is missing required runtime asset: ${asset}"
         fi
+        cp "${payload_root}/${asset}" "${INSTALL_DIR}/${asset}"
     done
 
     info "Installed cdidx to ${INSTALL_DIR}/${BINARY_NAME}"

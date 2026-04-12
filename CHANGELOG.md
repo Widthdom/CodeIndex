@@ -16,6 +16,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Fixed
 - **`unused` no longer crashes with "data is NULL at ordinal 5" on legacy indexes (#49)** — When older cdidx binaries added the `start_line` / `end_line` symbol columns but left existing rows with NULL, `cdidx unused` crashed because `GetUnusedSymbols` called `GetInt32` on those NULL ordinals. The symbol-column SQL helper now wraps fallback-aware reads in `COALESCE(s.<col>, <fallback>)`, and `GetUnusedSymbols` additionally defends each read with `IsDBNull` so a fully-legacy row falls back to `s.line`. Affected: `DbReader.cs`, `DbSymbolReader.cs`, `DbReaderTests.cs`.
+- **`install.sh` now fails fast when release archives are missing required runtime assets** — The installer now detects either a flat archive layout or a single top-level payload directory, then requires the OS-specific runtime assets (`version.json` + `libe_sqlite3.so` on Linux, `version.json` + `libe_sqlite3.dylib` on macOS). If required files are missing, installation aborts with a clear error instead of silently installing a partially broken binary. Affected: `install.sh`.
 
 ### [1.8.1] - 2026-04-13
 
@@ -588,6 +589,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### 修正
 - **`unused` がレガシーインデックスで「data is NULL at ordinal 5」でクラッシュしなくなった (#49)** — 古い cdidx バイナリが symbols の `start_line` / `end_line` カラムを追加しただけで既存行を NULL のまま残していた場合、`cdidx unused` は `GetInt32` が NULL を読めずクラッシュしていた。シンボルカラム SQL ヘルパーを `COALESCE(s.<col>, <fallback>)` で包み、さらに `GetUnusedSymbols` の読み出しも `IsDBNull` でガードして、完全にレガシーな行は `s.line` にフォールバックするようにした。対象: `DbReader.cs`、`DbSymbolReader.cs`、`DbReaderTests.cs`。
+- **`install.sh` が必須ランタイム資産欠落時に即時失敗するよう修正** — インストーラは、アーカイブ直下レイアウトと単一トップレベルディレクトリ配下レイアウトのどちらにも対応したうえで、OS ごとの必須資産（Linux: `version.json` + `libe_sqlite3.so`、macOS: `version.json` + `libe_sqlite3.dylib`）を必須チェックする。必須ファイルが欠けている場合は、部分的に壊れたインストールを黙って進めず、明確なエラーで中断する。対象: `install.sh`。
 
 ### [1.8.1] - 2026-04-13
 
