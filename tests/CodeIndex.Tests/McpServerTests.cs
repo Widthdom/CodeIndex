@@ -726,6 +726,33 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_Index_PopulatesValidateIssuesLikeCliIndex()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_fixture_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(fixtureDir);
+        var filePath = Path.Combine(fixtureDir, "bom_sample.cs");
+        try
+        {
+            File.WriteAllBytes(filePath, [0xEF, 0xBB, 0xBF, (byte)'c', (byte)'l', (byte)'a', (byte)'s', (byte)'s', (byte)' ', (byte)'A', (byte)' ', (byte)'{', (byte)'}', (byte)'\n']);
+
+            var indexRequest = JsonNode.Parse($$"""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"index","arguments":{"path":"{{fixtureDir.Replace("\\", "\\\\")}}"}}}""")!;
+            var indexResponse = _server.HandleMessage(indexRequest)!;
+            Assert.False(indexResponse["result"]!["isError"]?.GetValue<bool>() ?? false);
+
+            var validateRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"validate","arguments":{}}}""")!;
+            var validateResponse = _server.HandleMessage(validateRequest)!;
+            var issues = validateResponse["result"]!["structuredContent"]!["issues"]!.AsArray();
+
+            Assert.Contains(issues, issue => issue!["kind"]!.GetValue<string>() == "bom");
+        }
+        finally
+        {
+            if (Directory.Exists(fixtureDir))
+                Directory.Delete(fixtureDir, recursive: true);
+        }
+    }
+
+    [Fact]
     public void ToolsCall_UnknownTool_ReturnsError()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"nonexistent","arguments":{}}}""")!;

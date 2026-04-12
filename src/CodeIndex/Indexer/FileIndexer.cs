@@ -218,6 +218,18 @@ public class FileIndexer
     /// </summary>
     public (FileRecord record, string content, string? warning) BuildRecord(string absolutePath)
     {
+        var (record, content, _, warning) = BuildRecordWithRawBytes(absolutePath);
+        return (record, content, warning);
+    }
+
+    /// <summary>
+    /// Build a FileRecord and return both decoded content and raw bytes.
+    /// Callers can run encoding validation without a second file read.
+    /// FileRecordを構築し、デコード済み内容とraw bytesを返す。
+    /// 呼び出し側は再読込なしでエンコーディング検証できる。
+    /// </summary>
+    public (FileRecord record, string content, byte[] rawBytes, string? warning) BuildRecordWithRawBytes(string absolutePath)
+    {
         var relativePath = Path.GetRelativePath(_projectRoot, absolutePath);
         var info = new FileInfo(absolutePath);
 
@@ -263,7 +275,7 @@ public class FileIndexer
             Modified = info.LastWriteTimeUtc,
         };
 
-        return (record, content, warning);
+        return (record, content, bytes, warning);
     }
 
     /// <summary>

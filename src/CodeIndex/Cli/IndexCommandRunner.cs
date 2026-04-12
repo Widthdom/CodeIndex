@@ -327,7 +327,7 @@ public static class IndexCommandRunner
                     continue;
                 }
 
-                var (record, content, warning) = indexer.BuildRecord(absPath);
+                var (record, content, rawBytes, warning) = indexer.BuildRecordWithRawBytes(absPath);
 
                 if (warning != null && !options.Json)
                     ConsoleUi.PrintWarning(warning);
@@ -350,7 +350,6 @@ public static class IndexCommandRunner
                 var references = ReferenceExtractor.Extract(fileId, record.Lang, content, symbols);
                 writer.InsertReferences(references);
                 // Validate content for encoding issues / エンコーディング問題を検証
-                var rawBytes = File.ReadAllBytes(absPath);
                 var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
                 writer.InsertIssues(fileId, issues);
                 txn.Commit();
@@ -481,7 +480,7 @@ public static class IndexCommandRunner
             }
             try
             {
-                var (record, content, warning) = indexer.BuildRecord(filePath);
+                var (record, content, rawBytes, warning) = indexer.BuildRecordWithRawBytes(filePath);
 
                 if (warning != null && !options.Json)
                     ConsoleUi.PrintWarning(warning);
@@ -509,7 +508,6 @@ public static class IndexCommandRunner
                 var references = ReferenceExtractor.Extract(fileId, record.Lang, content, symbols);
                 writer.InsertReferences(references);
                 // Validate content for encoding issues / エンコーディング問題を検証
-                var rawBytes = File.ReadAllBytes(filePath);
                 var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
                 writer.InsertIssues(fileId, issues);
                 txn.Commit();

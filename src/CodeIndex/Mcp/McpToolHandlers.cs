@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Reflection;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
@@ -126,6 +127,20 @@ public partial class McpServer
             return $"No {label} found. Call-graph queries are not indexed for '{lang}'.";
 
         return $"No {label} found.";
+    }
+
+    /// <summary>
+    /// Best-effort invocation for optional readiness markers.
+    /// Works with older builds (method absent) and newer split-readiness builds.
+    /// 任意のreadinessマーカーをベストエフォートで呼び出す。
+    /// 旧ビルド（メソッド未定義）と新split-readinessビルドの両方で動作。
+    /// </summary>
+    private static void TryInvokeDbWriterMarker(DbWriter writer, string methodName)
+    {
+        var method = typeof(DbWriter).GetMethod(methodName, BindingFlags.Instance | BindingFlags.Public);
+        if (method is null || method.GetParameters().Length != 0)
+            return;
+        method.Invoke(writer, null);
     }
 
     private JsonNode ExecuteSearch(JsonNode? id, JsonNode? args)
@@ -929,7 +944,7 @@ public partial class McpServer
         {
             try
             {
-                var (record, content, _) = indexer.BuildRecord(filePath);
+                var (record, content, rawBytes, _) = indexer.BuildRecordWithRawBytes(filePath);
                 var existingId = writer.GetUnchangedFileId(record.Path, record.Modified, record.Checksum);
                 if (existingId != null)
                 {
@@ -946,6 +961,10 @@ public partial class McpServer
                 writer.InsertSymbols(symbols);
                 var references = ReferenceExtractor.Extract(fileId, record.Lang, content, symbols);
                 writer.InsertReferences(references);
+                // Keep MCP index parity with CLI index: persist file-level validation issues too.
+                // MCPインデックスもCLIインデックスと同等に、ファイル検証issueを保存する。
+                var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
+                writer.InsertIssues(fileId, issues);
                 txn.Commit();
             }
             catch
@@ -953,6 +972,14 @@ public partial class McpServer
                 errors++;
             }
             processed++;
+        }
+
+        if (errors == 0)
+        {
+            // Forward-compatible with split readiness flags introduced in #75 lineage.
+            // #75系で導入される分離readinessフラグにも前方互換で対応する。
+            TryInvokeDbWriterMarker(writer, "MarkGraphReady");
+            TryInvokeDbWriterMarker(writer, "MarkIssuesReady");
         }
 
         writer.OptimizeFts();
