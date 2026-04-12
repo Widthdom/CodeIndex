@@ -27,6 +27,13 @@ curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh 
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
+If the first line fails with 403/network errors inside Codex sandbox, ask the
+agent to retry with unsandboxed network execution. Copy-paste prompt:
+
+```text
+GitHub download is blocked in this sandbox (403). Please rerun only the install/download checks with unsandboxed network execution enabled, then continue in sandbox mode.
+```
+
 The installer downloads the latest release tarball, verifies SHA256, and
 copies the binary **plus the adjacent runtime assets** (`version.json` and
 `libe_sqlite3.so` on Linux / `libe_sqlite3.dylib` on macOS) into
@@ -131,6 +138,14 @@ any destructive action.
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash
 export PATH="$HOME/.local/bin:$PATH"
+```
+
+Codex のサンドボックス内で 403 / ネットワークエラーになる場合は、
+「ダウンロード確認だけサンドボックス外ネットワークで再実行」するよう
+エージェントに依頼してください。コピペ用プロンプト:
+
+```text
+GitHub ダウンロードがこのサンドボックスでは 403 で失敗します。インストール／ダウンロード確認の部分だけサンドボックス外ネットワーク実行で再試行し、その後は通常のサンドボックス実行に戻してください。
 ```
 
 インストーラは最新リリースの tarball をダウンロードし、SHA256 を検証して、
