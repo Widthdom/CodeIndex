@@ -87,7 +87,15 @@ curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/v1.5.0/install.s
 
 Supported platforms: `linux-x64`, `linux-arm64`, `osx-arm64` (glibc-based Linux only; Alpine/musl is not supported). Installs to `~/.local/bin` by default (override with `CDIDX_INSTALL_DIR`).
 
-If `cdidx` is not found after install, your shell likely does not include `~/.local/bin` in `PATH` yet:
+If install fails with HTTP 403 in a managed container/proxy environment, GitHub endpoints may be blocked. Use a pinned version and mirror endpoints:
+
+```bash
+export CDIDX_GITHUB_API_URL="https://<your-mirror>/repos/Widthdom/CodeIndex"
+export CDIDX_RELEASE_BASE_URL="https://<your-mirror>/releases/download"
+curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash -s -- v1.8.0
+```
+
+If install succeeds but `cdidx` is still not found, your shell likely does not include `~/.local/bin` in `PATH` yet:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
@@ -880,7 +888,15 @@ curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/v1.5.0/install.s
 
 対応プラットフォーム: `linux-x64`, `linux-arm64`, `osx-arm64`（glibc ベースの Linux のみ。Alpine/musl は非対応）。デフォルトで `~/.local/bin` にインストール（`CDIDX_INSTALL_DIR` で変更可）。
 
-インストール後に `cdidx` が見つからない場合、シェルの `PATH` に `~/.local/bin` が入っていない可能性があります:
+管理されたコンテナ/プロキシ環境でインストール時に HTTP 403 が出る場合、GitHub エンドポイントがブロックされている可能性があります。固定バージョン + ミラー URL を使用してください:
+
+```bash
+export CDIDX_GITHUB_API_URL="https://<your-mirror>/repos/Widthdom/CodeIndex"
+export CDIDX_RELEASE_BASE_URL="https://<your-mirror>/releases/download"
+curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash -s -- v1.8.0
+```
+
+インストール自体は成功しているのに `cdidx` が見つからない場合は、シェルの `PATH` に `~/.local/bin` が入っていない可能性があります:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"

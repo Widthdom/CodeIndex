@@ -11,6 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Changed
 - **README Option A PATH troubleshooting for container/cloud shells** — Added explicit `~/.local/bin` PATH recovery steps (temporary + persistent bash example) to the one-liner installer sections in both English and Japanese so `cdidx: command not found` is easier to fix in minimal environments. Affected: `README.md`.
+- **Installer supports mirror endpoints for restricted AI containers** — `install.sh` now accepts `CDIDX_GITHUB_API_URL` and `CDIDX_RELEASE_BASE_URL` so users can route version lookup and release downloads through internal mirrors when direct GitHub access is blocked. Error messages now include concrete fallback commands (pin version, set mirror URLs). README Option A (EN/JP) now documents this flow and clarifies that PATH fixes apply after a successful install. Affected: `install.sh`, `README.md`.
 
 ### [1.8.0] - 2026-04-12
 
@@ -564,6 +565,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### 変更
 - **README 方法Aに PATH トラブルシュートを追記（コンテナ/クラウド向け）** — ワンライナーインストーラー節（英語・日本語）に、`~/.local/bin` が `PATH` にない環境での復旧手順（一時設定 + bash 永続化例）を追加。`cdidx: command not found` の初回つまずきを減らす。対象: `README.md`。
+- **制限付きAIコンテナ向けにインストーラーのミラー対応を追加** — `install.sh` が `CDIDX_GITHUB_API_URL` と `CDIDX_RELEASE_BASE_URL` を受け付けるようになり、GitHub 直アクセスがブロックされた環境でも内部ミラー経由でバージョン解決とリリース取得を行えるようになった。エラーメッセージに固定バージョン指定とミラー設定の具体例を追加。README 方法A（英日）にも反映し、PATH 対処は「インストール成功後」の手順であることを明確化。対象: `install.sh`、`README.md`。
 
 ### [1.8.0] - 2026-04-12
 
