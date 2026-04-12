@@ -281,7 +281,29 @@ public static class ConsoleUi
             if (doc.RootElement.TryGetProperty("version", out var ver))
                 return ver.GetString() ?? "0.0.0";
         }
-        return "0.0.0";
+
+        // Fallback for single-file/self-contained publish where version.json may not be deployed next to the host.
+        // version.json がホスト横に配置されない単一ファイル配布向けフォールバック。
+        var assembly = System.Reflection.Assembly.GetEntryAssembly() ?? System.Reflection.Assembly.GetExecutingAssembly();
+        var informational = (System.Reflection.AssemblyInformationalVersionAttribute?)Attribute.GetCustomAttribute(
+            assembly,
+            typeof(System.Reflection.AssemblyInformationalVersionAttribute))
+            ?.InformationalVersion;
+        if (!string.IsNullOrWhiteSpace(informational))
+        {
+            var plusIndex = informational.IndexOf('+');
+            return plusIndex > 0 ? informational[..plusIndex] : informational;
+        }
+
+        var fileVersion = (System.Reflection.AssemblyFileVersionAttribute?)Attribute.GetCustomAttribute(
+            assembly,
+            typeof(System.Reflection.AssemblyFileVersionAttribute))
+            ?.Version;
+        if (!string.IsNullOrWhiteSpace(fileVersion))
+            return fileVersion;
+
+        var assemblyVersion = assembly.GetName().Version?.ToString();
+        return string.IsNullOrWhiteSpace(assemblyVersion) ? "0.0.0" : assemblyVersion;
     }
 
     // --- Usage / 使い方 ---

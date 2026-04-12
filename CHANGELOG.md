@@ -9,6 +9,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+#### Changed
+- **README Option A PATH troubleshooting for container/cloud shells** — Added explicit `~/.local/bin` PATH recovery steps (temporary + persistent bash example) to the one-liner installer sections in both English and Japanese so `cdidx: command not found` is easier to fix in minimal environments. Affected: `README.md`.
+
+#### Fixed
+- **Release binaries now carry tag version and bundle SQLite native library reliably** — Release workflow now injects `-p:Version=<tag>` into `dotnet publish`, disables trimming for release archives, and enables `IncludeNativeLibrariesForSelfExtract` for single-file self-contained builds. This addresses `cdidx v0.0.0` version output and runtime `DllNotFoundException: e_sqlite3` failures seen in Linux tarball installs. Affected: `.github/workflows/release.yml`, `src/CodeIndex/Cli/ConsoleUi.cs`.
+
 ### [1.8.0] - 2026-04-12
 
 #### Added
@@ -558,6 +564,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## 日本語
 
 ### [Unreleased]
+
+#### 変更
+- **README 方法Aに PATH トラブルシュートを追記（コンテナ/クラウド向け）** — ワンライナーインストーラー節（英語・日本語）に、`~/.local/bin` が `PATH` にない環境での復旧手順（一時設定 + bash 永続化例）を追加。`cdidx: command not found` の初回つまずきを減らす。対象: `README.md`。
+
+#### 修正
+- **リリースバイナリがタグ版数を反映し、SQLite ネイティブライブラリを安定同梱** — リリース workflow の `dotnet publish` に `-p:Version=<tag>` を注入し、配布アーカイブでは trim を無効化、単一ファイル自己完結ビルド向けに `IncludeNativeLibrariesForSelfExtract` を有効化。Linux tarball インストールで発生した `cdidx v0.0.0` 表示と `DllNotFoundException: e_sqlite3` 実行時エラーに対応。対象: `.github/workflows/release.yml`、`src/CodeIndex/Cli/ConsoleUi.cs`。
 
 ### [1.8.0] - 2026-04-12
 

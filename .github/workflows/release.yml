@@ -61,14 +61,24 @@ jobs:
         if: ${{ !matrix.cross_compile }}
         run: dotnet test CodeIndex.sln --configuration Release --no-build --nologo
 
+      - name: Extract version from tag
+        id: release_version
+        shell: bash
+        run: |
+          TAG="${{ inputs.tag_name || github.ref_name }}"
+          VERSION="${TAG#v}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
       - name: Publish (self-contained)
         run: >
           dotnet publish src/CodeIndex/CodeIndex.csproj
           --configuration Release
           --runtime ${{ matrix.rid }}
           --self-contained true
+          -p:Version=${{ steps.release_version.outputs.version }}
           -p:PublishSingleFile=true
-          -p:PublishTrimmed=true
+          -p:PublishTrimmed=false
+          -p:IncludeNativeLibrariesForSelfExtract=true
           --output publish
 
       - name: Remove debugging symbols (Linux/macOS)
