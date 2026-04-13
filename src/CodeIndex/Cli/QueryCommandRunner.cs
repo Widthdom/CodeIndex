@@ -93,14 +93,14 @@ public static class QueryCommandRunner
             var results = reader.GetDefinitions(options.Query, options.Limit, options.Kind, options.Lang, options.IncludeBody, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, options.Exact);
             if (results.Count == 0)
             {
-                if (options.CountOnly)
-                    Console.WriteLine(options.Json ? JsonSerializer.Serialize(new { count = 0, files = 0 }, jsonOptions) : "0");
-                else if (!options.Json)
+                ExactZeroHint? zeroHint = null;
+                if (options.Exact && options.Query != null)
                 {
-                    Console.Error.WriteLine("No definitions found.");
-                    WriteKindHint(options.Kind, reader);
-                    WriteZeroResultHints(options, reader, "Try 'search' for full-text matches instead of symbol lookup.");
+                    var relaxed = reader.GetDefinitions(options.Query, Math.Max(options.Limit, ExactZeroHint.SampleLimit), options.Kind, options.Lang, options.IncludeBody, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false);
+                    zeroHint = ExactZeroHint.From(relaxed.Count, relaxed.Select(r => r.Name));
                 }
+                EmitExactZeroResult(options, jsonOptions, "definitions", zeroHint,
+                    extraHumanHints: () => { WriteKindHint(options.Kind, reader); WriteZeroResultHints(options, reader, "Try 'search' for full-text matches instead of symbol lookup."); });
                 return options.CountOnly ? CommandExitCodes.Success : CommandExitCodes.NotFound;
             }
 
@@ -162,16 +162,45 @@ public static class QueryCommandRunner
             var results = reader.SearchReferences(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Exact);
             if (results.Count == 0)
             {
+                // #88 exact-zero hint: only meaningful when the graph table is actually available
+                // (otherwise the degraded-graph note takes precedence and the hint would
+                // compound-confuse users).
+                // #88: graph 使用可能時のみ hint。degraded 時は既存の degraded 通知を優先。
+                ExactZeroHint? zeroHint = null;
+                if (options.Exact && options.Query != null && reader._hasReferencesTable)
+                {
+                    var relaxed = reader.SearchReferences(options.Query, Math.Max(options.Limit, ExactZeroHint.SampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false);
+                    zeroHint = ExactZeroHint.From(relaxed.Count, relaxed.Select(r => r.SymbolName));
+                }
+
                 if (options.CountOnly)
-                    Console.WriteLine(options.Json ? JsonSerializer.Serialize(new { count = 0, files = 0, graph_table_available = reader._hasReferencesTable, degraded = !reader._hasReferencesTable }, jsonOptions) : "0");
-                else if (options.Json && !reader._hasReferencesTable)
-                    WriteDegradedGraphZeroResult("references", json: true, graphAvailable: false, jsonOptions);
-                else if (!options.Json)
+                {
+                    if (options.Json)
+                    {
+                        var payload = new Dictionary<string, object?> { ["count"] = 0, ["files"] = 0, ["graph_table_available"] = reader._hasReferencesTable, ["degraded"] = !reader._hasReferencesTable };
+                        if (zeroHint != null) payload["exact_zero_hint"] = zeroHint;
+                        Console.WriteLine(JsonSerializer.Serialize(payload, jsonOptions));
+                    }
+                    else
+                    {
+                        Console.WriteLine("0");
+                        if (zeroHint != null) Console.Error.WriteLine(zeroHint.ToHumanLine());
+                    }
+                }
+                else if (options.Json)
+                {
+                    if (!reader._hasReferencesTable)
+                        WriteDegradedGraphZeroResult("references", json: true, graphAvailable: false, jsonOptions);
+                    else if (zeroHint != null)
+                        Console.WriteLine(JsonSerializer.Serialize(new Dictionary<string, object?> { ["count"] = 0, ["exact_zero_hint"] = zeroHint }, jsonOptions));
+                }
+                else
                 {
                     Console.Error.WriteLine("No references found.");
                     WriteGraphSupportHint(options.Lang);
                     WriteLangHint(options.Lang, reader);
                     WriteDegradedGraphZeroResult("references", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
+                    if (zeroHint != null) Console.Error.WriteLine(zeroHint.ToHumanLine());
                 }
                 return options.CountOnly ? CommandExitCodes.Success : CommandExitCodes.NotFound;
             }
@@ -220,16 +249,41 @@ public static class QueryCommandRunner
             var results = reader.GetCallers(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Exact);
             if (results.Count == 0)
             {
+                ExactZeroHint? zeroHint = null;
+                if (options.Exact && options.Query != null && reader._hasReferencesTable)
+                {
+                    var relaxed = reader.GetCallers(options.Query, Math.Max(options.Limit, ExactZeroHint.SampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false);
+                    zeroHint = ExactZeroHint.From(relaxed.Count, relaxed.Select(r => r.CalleeName));
+                }
+
                 if (options.CountOnly)
-                    Console.WriteLine(options.Json ? JsonSerializer.Serialize(new { count = 0, files = 0, graph_table_available = reader._hasReferencesTable, degraded = !reader._hasReferencesTable }, jsonOptions) : "0");
-                else if (options.Json && !reader._hasReferencesTable)
-                    WriteDegradedGraphZeroResult("callers", json: true, graphAvailable: false, jsonOptions);
-                else if (!options.Json)
+                {
+                    if (options.Json)
+                    {
+                        var payload = new Dictionary<string, object?> { ["count"] = 0, ["files"] = 0, ["graph_table_available"] = reader._hasReferencesTable, ["degraded"] = !reader._hasReferencesTable };
+                        if (zeroHint != null) payload["exact_zero_hint"] = zeroHint;
+                        Console.WriteLine(JsonSerializer.Serialize(payload, jsonOptions));
+                    }
+                    else
+                    {
+                        Console.WriteLine("0");
+                        if (zeroHint != null) Console.Error.WriteLine(zeroHint.ToHumanLine());
+                    }
+                }
+                else if (options.Json)
+                {
+                    if (!reader._hasReferencesTable)
+                        WriteDegradedGraphZeroResult("callers", json: true, graphAvailable: false, jsonOptions);
+                    else if (zeroHint != null)
+                        Console.WriteLine(JsonSerializer.Serialize(new Dictionary<string, object?> { ["count"] = 0, ["exact_zero_hint"] = zeroHint }, jsonOptions));
+                }
+                else
                 {
                     Console.Error.WriteLine("No callers found.");
                     WriteGraphSupportHint(options.Lang);
                     WriteLangHint(options.Lang, reader);
                     WriteDegradedGraphZeroResult("callers", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
+                    if (zeroHint != null) Console.Error.WriteLine(zeroHint.ToHumanLine());
                 }
                 return options.CountOnly ? CommandExitCodes.Success : CommandExitCodes.NotFound;
             }
@@ -274,16 +328,43 @@ public static class QueryCommandRunner
             var results = reader.GetCallees(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Exact);
             if (results.Count == 0)
             {
+                ExactZeroHint? zeroHint = null;
+                if (options.Exact && options.Query != null && reader._hasReferencesTable)
+                {
+                    var relaxed = reader.GetCallees(options.Query, Math.Max(options.Limit, ExactZeroHint.SampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false);
+                    // callees filters on container_name, so CallerName carries the relaxed match.
+                    // callees は container_name に対する filter なので、CallerName を sample に使う。
+                    zeroHint = ExactZeroHint.From(relaxed.Count, relaxed.Select(r => r.CallerName ?? string.Empty));
+                }
+
                 if (options.CountOnly)
-                    Console.WriteLine(options.Json ? JsonSerializer.Serialize(new { count = 0, files = 0, graph_table_available = reader._hasReferencesTable, degraded = !reader._hasReferencesTable }, jsonOptions) : "0");
-                else if (options.Json && !reader._hasReferencesTable)
-                    WriteDegradedGraphZeroResult("callees", json: true, graphAvailable: false, jsonOptions);
-                else if (!options.Json)
+                {
+                    if (options.Json)
+                    {
+                        var payload = new Dictionary<string, object?> { ["count"] = 0, ["files"] = 0, ["graph_table_available"] = reader._hasReferencesTable, ["degraded"] = !reader._hasReferencesTable };
+                        if (zeroHint != null) payload["exact_zero_hint"] = zeroHint;
+                        Console.WriteLine(JsonSerializer.Serialize(payload, jsonOptions));
+                    }
+                    else
+                    {
+                        Console.WriteLine("0");
+                        if (zeroHint != null) Console.Error.WriteLine(zeroHint.ToHumanLine());
+                    }
+                }
+                else if (options.Json)
+                {
+                    if (!reader._hasReferencesTable)
+                        WriteDegradedGraphZeroResult("callees", json: true, graphAvailable: false, jsonOptions);
+                    else if (zeroHint != null)
+                        Console.WriteLine(JsonSerializer.Serialize(new Dictionary<string, object?> { ["count"] = 0, ["exact_zero_hint"] = zeroHint }, jsonOptions));
+                }
+                else
                 {
                     Console.Error.WriteLine("No callees found.");
                     WriteGraphSupportHint(options.Lang);
                     WriteLangHint(options.Lang, reader);
                     WriteDegradedGraphZeroResult("callees", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
+                    if (zeroHint != null) Console.Error.WriteLine(zeroHint.ToHumanLine());
                 }
                 return options.CountOnly ? CommandExitCodes.Success : CommandExitCodes.NotFound;
             }
@@ -361,14 +442,17 @@ public static class QueryCommandRunner
             var results = reader.SearchSymbols(symbolQueries, options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, options.Exact);
             if (results.Count == 0)
             {
-                if (options.CountOnly)
-                    Console.WriteLine(options.Json ? JsonSerializer.Serialize(new { count = 0, files = 0 }, jsonOptions) : "0");
-                else if (!options.Json)
+                // #88 exact-zero hint: re-run with exact=false to tell callers whether --exact
+                // filtered out real rows (typo/casing) or the name is genuinely absent.
+                // #88: --exact 0 件時は substring で再検索してヒントを出す。
+                ExactZeroHint? zeroHint = null;
+                if (options.Exact && symbolQueries != null && symbolQueries.Count > 0)
                 {
-                    Console.Error.WriteLine("No symbols found.");
-                    WriteKindHint(options.Kind, reader);
-                    WriteZeroResultHints(options, reader);
+                    var relaxed = reader.SearchSymbols(symbolQueries, Math.Max(options.Limit, ExactZeroHint.SampleLimit), options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false);
+                    zeroHint = ExactZeroHint.From(relaxed.Count, relaxed.Select(r => r.Name));
                 }
+                EmitExactZeroResult(options, jsonOptions, label: "symbols", zeroHint,
+                    extraHumanHints: () => { WriteKindHint(options.Kind, reader); WriteZeroResultHints(options, reader); });
                 return options.CountOnly ? CommandExitCodes.Success : CommandExitCodes.NotFound;
             }
 
@@ -1313,6 +1397,48 @@ public static class QueryCommandRunner
     // (degraded)". Without this, AI agents and humans cannot tell the index from a legacy /
     // read-only DB apart from a DB that genuinely has no callers for the query.
     // graph テーブル欠損による 0 と本物の 0 を JSON で区別できるようにする。
+    /// <summary>
+    /// Emit the zero-result payload for symbol / graph commands, attaching the #88 exact-zero
+    /// hint when present. Shared across `symbols` / `definition` / `references` / `callers` /
+    /// `callees` so every `--exact` path has the same contract.
+    /// zero 件時の出力を共通化し、#88 の `exact_zero_hint` を付与する。
+    /// </summary>
+    private static void EmitExactZeroResult(
+        QueryCommandOptions options,
+        JsonSerializerOptions jsonOptions,
+        string label,
+        ExactZeroHint? hint,
+        Action? extraHumanHints = null,
+        string? filesKey = "files")
+    {
+        if (options.CountOnly)
+        {
+            if (options.Json)
+            {
+                var payload = new Dictionary<string, object?> { ["count"] = 0 };
+                if (filesKey != null) payload[filesKey] = 0;
+                if (hint != null) payload["exact_zero_hint"] = hint;
+                Console.WriteLine(JsonSerializer.Serialize(payload, jsonOptions));
+            }
+            else
+            {
+                Console.WriteLine("0");
+                if (hint != null) Console.Error.WriteLine(hint.ToHumanLine());
+            }
+        }
+        else if (options.Json)
+        {
+            if (hint != null)
+                Console.WriteLine(JsonSerializer.Serialize(new Dictionary<string, object?> { ["count"] = 0, ["exact_zero_hint"] = hint }, jsonOptions));
+        }
+        else
+        {
+            Console.Error.WriteLine($"No {label} found.");
+            extraHumanHints?.Invoke();
+            if (hint != null) Console.Error.WriteLine(hint.ToHumanLine());
+        }
+    }
+
     private static void WriteDegradedGraphZeroResult(string resultsKey, bool json, bool graphAvailable, JsonSerializerOptions jsonOptions)
     {
         if (graphAvailable) return;

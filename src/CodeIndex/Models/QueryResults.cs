@@ -1,3 +1,6 @@
+using System.Collections.Generic;
+using System.Linq;
+
 namespace CodeIndex.Database;
 
 // Result DTOs for query operations / クエリ操作用の結果DTO
@@ -59,6 +62,61 @@ public class DefinitionResult : SymbolResult
     public string Content { get; set; } = string.Empty;
     public string? BodyContent { get; set; }
     public int? Complexity { get; set; }
+}
+
+/// <summary>
+/// Zero-result hint emitted when `--exact` filters out all matches but the same query without
+/// `--exact` would have returned rows (#88). Surfaces the relaxed count and a few sample names
+/// so AI clients and humans can distinguish a genuine miss from a casing / typo that exact
+/// mode filtered out. Only produced when exact=true AND the primary query returned 0 results.
+/// --exact が 0 件だが substring なら当たる場合のヒント (#88)。本物の 0 件と exact filtering を
+/// 区別できるよう、緩和検索の件数とサンプル名を返す。
+/// </summary>
+public class ExactZeroHint
+{
+    public int RelaxedCount { get; set; }
+    public List<string> SampleNames { get; set; } = new();
+    public string Suggestion { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Max number of sample names emitted so the hint payload stays tiny.
+    /// サンプル名の上限。
+    /// </summary>
+    public const int SampleLimit = 5;
+
+    /// <summary>
+    /// Build the hint from a relaxed-query result set. Returns null when the relaxed
+    /// query itself returned nothing (in that case the hint would add no value — a genuine
+    /// miss, likely a typo).
+    /// 緩和クエリが 0 件なら null を返す（本物の miss に対してヒントは出さない）。
+    /// </summary>
+    public static ExactZeroHint? From(int relaxedCount, IEnumerable<string> names)
+    {
+        if (relaxedCount <= 0) return null;
+        var samples = names
+            .Where(n => !string.IsNullOrEmpty(n))
+            .Distinct(StringComparer.Ordinal)
+            .Take(SampleLimit)
+            .ToList();
+        return new ExactZeroHint
+        {
+            RelaxedCount = relaxedCount,
+            SampleNames = samples,
+            Suggestion = "drop --exact or use the exact indexed casing",
+        };
+    }
+
+    /// <summary>
+    /// Single-line human-readable rendering of the hint.
+    /// ヒントの 1 行表示。
+    /// </summary>
+    public string ToHumanLine()
+    {
+        var sample = SampleNames.Count == 0
+            ? string.Empty
+            : $" (e.g. {string.Join(", ", SampleNames.Select(n => $"`{n}`"))})";
+        return $"Hint: --exact found 0 matches, but substring matching would return {RelaxedCount}{sample}. {Suggestion}.";
+    }
 }
 
 public class ReferenceResult

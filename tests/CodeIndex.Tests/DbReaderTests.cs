@@ -405,6 +405,70 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void ExactZeroHint_From_ReturnsNullWhenRelaxedCountIsZero()
+    {
+        // #88: a genuine miss (relaxed query also 0) must not produce a hint — the caller
+        // needs to see the normal "No X found" path without a misleading suggestion.
+        // #88: relaxed も 0 件なら hint を返さない（本物の miss にヒントを出さない）。
+        var hint = ExactZeroHint.From(0, new[] { "anything" });
+        Assert.Null(hint);
+    }
+
+    [Fact]
+    public void ExactZeroHint_From_CapsSamplesAtFiveDistinctNonEmpty()
+    {
+        // #88 contract: sample_names capped at ExactZeroHint.SampleLimit, duplicates removed,
+        // empty strings skipped. Keeps payload tiny for MCP round-trip.
+        // #88: sample_names は上限 5、重複排除、空文字列スキップ。
+        var names = new[] { "A", "A", "B", "", "C", "D", "E", "F", "G" };
+        var hint = ExactZeroHint.From(42, names);
+        Assert.NotNull(hint);
+        Assert.Equal(42, hint!.RelaxedCount);
+        Assert.Equal(5, hint.SampleNames.Count);
+        Assert.Equal(new[] { "A", "B", "C", "D", "E" }, hint.SampleNames);
+    }
+
+    [Fact]
+    public void ExactZeroHint_ToHumanLine_ContainsCountAndSamples()
+    {
+        // #88 human rendering: one line, counts + bracketed samples + suggestion.
+        // #88: 1 行の human 表示（件数 + サンプル + 提案）。
+        var hint = ExactZeroHint.From(3, new[] { "HandleRequest", "HandleRequestAsync" });
+        Assert.NotNull(hint);
+        var line = hint!.ToHumanLine();
+        Assert.Contains("--exact found 0", line);
+        Assert.Contains("substring matching would return 3", line);
+        Assert.Contains("HandleRequest", line);
+        Assert.Contains("HandleRequestAsync", line);
+        Assert.Contains("drop --exact or use the exact indexed casing", line);
+    }
+
+    [Fact]
+    public void SearchSymbols_ExactZeroCaseRelaxedQueryExposesSiblings()
+    {
+        // #88 integration: `--exact Runfoo` misses (no exact-case match, no case-insensitive
+        // match), but the relaxed substring query returns sibling-like names that the hint
+        // path would surface. This is the query shape the CLI uses to build the hint.
+        // #88: --exact 0 件でも substring は siblings を返すことを確認（ヒント生成の基礎動作）。
+        var extraFileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/auth_v2.py", Lang = "python", Size = 80, Lines = 4,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertSymbols([
+            new SymbolRecord { FileId = extraFileId, Kind = "function", Name = "authenticate_v2", Line = 1, StartLine = 1, EndLine = 1 },
+        ]);
+
+        // Exact: authenticate_vx (typo) → 0 results.
+        var exactMiss = _reader.SearchSymbols(new[] { "authenticate_vx" }, limit: 10, exact: true);
+        Assert.Empty(exactMiss);
+
+        // Relaxed: same query → returns siblings whose substring matches.
+        var relaxed = _reader.SearchSymbols(new[] { "authenticate_v" }, limit: 10, exact: false);
+        Assert.Contains(relaxed, r => r.Name == "authenticate_v2");
+    }
+
+    [Fact]
     public void SearchSymbols_ExactFallsBackToNocaseWhenFoldKeyVersionMismatches()
     {
         // #86 codex third-pass review: when a future NameFold.Fold change bumps NameFold.Version

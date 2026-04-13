@@ -249,6 +249,15 @@ public partial class McpServer
             JsonNode? namesEcho = effectiveQueries == null ? null : JsonSerializer.SerializeToNode(effectiveQueries, _jsonOptions);
             if (results.Count == 0)
             {
+                // #88 exact-zero hint: re-run with exact=false to tell the AI client whether
+                // --exact filtered out real matches (typo/casing) vs genuinely absent symbol.
+                // #88: --exact が 0 件なら substring で再検索し、ヒントを返す。
+                ExactZeroHint? zeroHint = null;
+                if (exact && effectiveQueries != null && effectiveQueries.Count > 0)
+                {
+                    var relaxed = reader.SearchSymbols(effectiveQueries, Math.Max(limit, ExactZeroHint.SampleLimit), kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false);
+                    zeroHint = ExactZeroHint.From(relaxed.Count, relaxed.Select(r => r.Name));
+                }
                 var payload = new JsonObject
                 {
                     ["query"] = query,
@@ -260,8 +269,12 @@ public partial class McpServer
                     ["count"] = 0,
                     ["results"] = new JsonArray()
                 };
+                if (zeroHint != null)
+                    payload["exact_zero_hint"] = JsonSerializer.SerializeToNode(zeroHint, _jsonOptions);
                 AddFreshnessHint(payload, reader);
-                return CreateToolResult(id, "No symbols found.", payload);
+                return CreateToolResult(id,
+                    zeroHint != null ? $"No symbols found. Substring would return {zeroHint.RelaxedCount}." : "No symbols found.",
+                    payload);
             }
 
             var structured = new JsonObject
@@ -303,6 +316,12 @@ public partial class McpServer
         return WithDbReader(id, reader =>
         {
             var results = reader.GetDefinitions(query, limit, kind, lang, includeBody, pathPatterns, excludePaths, excludeTests, since, exact);
+            ExactZeroHint? zeroHint = null;
+            if (results.Count == 0 && exact && query != null)
+            {
+                var relaxed = reader.GetDefinitions(query, Math.Max(limit, ExactZeroHint.SampleLimit), kind, lang, includeBody, pathPatterns, excludePaths, excludeTests, since, exact: false);
+                zeroHint = ExactZeroHint.From(relaxed.Count, relaxed.Select(r => r.Name));
+            }
             var payload = new JsonObject
             {
                 ["query"] = query,
@@ -314,10 +333,14 @@ public partial class McpServer
                 ["count"] = results.Count,
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
+            if (zeroHint != null)
+                payload["exact_zero_hint"] = JsonSerializer.SerializeToNode(zeroHint, _jsonOptions);
             if (results.Count == 0)
                 AddFreshnessHint(payload, reader);
             return CreateToolResult(id,
-                results.Count == 0 ? "No definitions found." : $"Found {results.Count} definition(s).",
+                results.Count == 0
+                    ? (zeroHint != null ? $"No definitions found. Substring would return {zeroHint.RelaxedCount}." : "No definitions found.")
+                    : $"Found {results.Count} definition(s).",
                 payload);
         });
     }
@@ -342,6 +365,12 @@ public partial class McpServer
         {
             var results = reader.SearchReferences(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact);
             bool? graphSupported = lang == null ? null : ReferenceExtractor.SupportsLanguage(lang);
+            ExactZeroHint? zeroHint = null;
+            if (results.Count == 0 && exact && query != null && reader._hasReferencesTable)
+            {
+                var relaxed = reader.SearchReferences(query, Math.Max(limit, ExactZeroHint.SampleLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact: false);
+                zeroHint = ExactZeroHint.From(relaxed.Count, relaxed.Select(r => r.SymbolName));
+            }
             var payload = new JsonObject
             {
                 ["query"] = query,
@@ -355,10 +384,12 @@ public partial class McpServer
                 ["count"] = results.Count,
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
+            if (zeroHint != null)
+                payload["exact_zero_hint"] = JsonSerializer.SerializeToNode(zeroHint, _jsonOptions);
             if (results.Count == 0)
                 AddFreshnessHint(payload, reader);
             return CreateToolResult(id,
-                BuildGraphSummary("references", results.Count, lang, graphSupported),
+                BuildGraphSummary("references", results.Count, lang, graphSupported) + (zeroHint != null ? $" Substring would return {zeroHint.RelaxedCount}." : string.Empty),
                 payload);
         });
     }
@@ -383,6 +414,12 @@ public partial class McpServer
         {
             var results = reader.GetCallers(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact);
             bool? graphSupported = lang == null ? null : ReferenceExtractor.SupportsLanguage(lang);
+            ExactZeroHint? zeroHint = null;
+            if (results.Count == 0 && exact && query != null && reader._hasReferencesTable)
+            {
+                var relaxed = reader.GetCallers(query, Math.Max(limit, ExactZeroHint.SampleLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact: false);
+                zeroHint = ExactZeroHint.From(relaxed.Count, relaxed.Select(r => r.CalleeName));
+            }
             var payload = new JsonObject
             {
                 ["query"] = query,
@@ -396,10 +433,12 @@ public partial class McpServer
                 ["count"] = results.Count,
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
+            if (zeroHint != null)
+                payload["exact_zero_hint"] = JsonSerializer.SerializeToNode(zeroHint, _jsonOptions);
             if (results.Count == 0)
                 AddFreshnessHint(payload, reader);
             return CreateToolResult(id,
-                BuildGraphSummary("callers", results.Count, lang, graphSupported),
+                BuildGraphSummary("callers", results.Count, lang, graphSupported) + (zeroHint != null ? $" Substring would return {zeroHint.RelaxedCount}." : string.Empty),
                 payload);
         });
     }
@@ -424,6 +463,12 @@ public partial class McpServer
         {
             var results = reader.GetCallees(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact);
             bool? graphSupported = lang == null ? null : ReferenceExtractor.SupportsLanguage(lang);
+            ExactZeroHint? zeroHint = null;
+            if (results.Count == 0 && exact && query != null && reader._hasReferencesTable)
+            {
+                var relaxed = reader.GetCallees(query, Math.Max(limit, ExactZeroHint.SampleLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact: false);
+                zeroHint = ExactZeroHint.From(relaxed.Count, relaxed.Select(r => r.CallerName ?? string.Empty));
+            }
             var payload = new JsonObject
             {
                 ["query"] = query,
@@ -437,10 +482,12 @@ public partial class McpServer
                 ["count"] = results.Count,
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
+            if (zeroHint != null)
+                payload["exact_zero_hint"] = JsonSerializer.SerializeToNode(zeroHint, _jsonOptions);
             if (results.Count == 0)
                 AddFreshnessHint(payload, reader);
             return CreateToolResult(id,
-                BuildGraphSummary("callees", results.Count, lang, graphSupported),
+                BuildGraphSummary("callees", results.Count, lang, graphSupported) + (zeroHint != null ? $" Substring would return {zeroHint.RelaxedCount}." : string.Empty),
                 payload);
         });
     }
