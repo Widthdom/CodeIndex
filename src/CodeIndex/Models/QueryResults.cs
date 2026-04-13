@@ -85,6 +85,23 @@ public class ExactZeroHint
     public const int SampleLimit = 5;
 
     /// <summary>
+    /// Build the hint via a single-probe-first optimization. The probe fetches at most
+    /// <c>SampleLimit + 1</c> relaxed rows; if the probe did not saturate, its row count IS
+    /// the true relaxed total (no COUNT(*) query needed). Only when the probe saturates do we
+    /// fall back to <paramref name="countAll"/> for the accurate total. Turns the common
+    /// "typo + few siblings" exact-miss case into ONE substring scan instead of TWO.
+    /// Codex #88 adversarial review 4th pass — avoid paying 2 relaxed scans on every exact miss.
+    /// probe + fallback COUNT のパターンで、relaxed セットが小さければ追加 COUNT 不要。
+    /// </summary>
+    public static ExactZeroHint? FromProbe<T>(Func<int, IReadOnlyList<T>> probe, Func<int> countAll, Func<T, string> nameOf)
+    {
+        var samples = probe(SampleLimit + 1);
+        if (samples.Count == 0) return null;
+        var relaxedTotal = samples.Count <= SampleLimit ? samples.Count : countAll();
+        return From(relaxedTotal, samples.Take(SampleLimit).Select(nameOf));
+    }
+
+    /// <summary>
     /// Build the hint from a relaxed-query result set. Returns null when the relaxed
     /// query itself returned nothing (in that case the hint would add no value — a genuine
     /// miss, likely a typo).

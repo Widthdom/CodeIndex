@@ -276,12 +276,13 @@ public partial class McpServer
                 ExactZeroHint? zeroHint = null;
                 if (exact && effectiveQueries != null && effectiveQueries.Count > 0)
                 {
-                    var relaxedTotal = reader.CountSymbolMatches(effectiveQueries, kind, lang, pathPatterns, excludePaths, excludeTests, since);
-                    if (relaxedTotal > 0)
-                    {
-                        var samples = reader.SearchSymbols(effectiveQueries, ExactZeroHint.SampleLimit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false);
-                        zeroHint = ExactZeroHint.From(relaxedTotal, samples.Select(r => r.Name));
-                    }
+                    // Single-probe-first optimization (codex #88 4th pass): avoid 2 LIKE scans
+                    // per exact miss. Probe with LIMIT=SampleLimit+1; only fall back to
+                    // CountSymbolMatches when the probe saturates.
+                    zeroHint = ExactZeroHint.FromProbe<SymbolResult>(
+                        n => reader.SearchSymbols(effectiveQueries, n, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false),
+                        () => reader.CountSymbolMatches(effectiveQueries, kind, lang, pathPatterns, excludePaths, excludeTests, since),
+                        r => r.Name);
                 }
                 var payload = new JsonObject
                 {
@@ -344,12 +345,10 @@ public partial class McpServer
             ExactZeroHint? zeroHint = null;
             if (results.Count == 0 && exact && query != null)
             {
-                var relaxedTotal = reader.CountSymbolMatches(new[] { query }, kind, lang, pathPatterns, excludePaths, excludeTests, since);
-                if (relaxedTotal > 0)
-                {
-                    var samples = reader.GetDefinitions(query, ExactZeroHint.SampleLimit, kind, lang, includeBody, pathPatterns, excludePaths, excludeTests, since, exact: false);
-                    zeroHint = ExactZeroHint.From(relaxedTotal, samples.Select(r => r.Name));
-                }
+                zeroHint = ExactZeroHint.FromProbe<DefinitionResult>(
+                    n => reader.GetDefinitions(query, n, kind, lang, includeBody, pathPatterns, excludePaths, excludeTests, since, exact: false),
+                    () => reader.CountSymbolMatches(new[] { query }, kind, lang, pathPatterns, excludePaths, excludeTests, since),
+                    r => r.Name);
             }
             var payload = new JsonObject
             {
@@ -397,12 +396,10 @@ public partial class McpServer
             ExactZeroHint? zeroHint = null;
             if (results.Count == 0 && exact && query != null && reader._hasReferencesTable)
             {
-                var relaxedTotal = reader.CountReferenceMatches(query, lang, kind, pathPatterns, excludePaths, excludeTests);
-                if (relaxedTotal > 0)
-                {
-                    var samples = reader.SearchReferences(query, ExactZeroHint.SampleLimit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false);
-                    zeroHint = ExactZeroHint.From(relaxedTotal, samples.Select(r => r.SymbolName));
-                }
+                zeroHint = ExactZeroHint.FromProbe<ReferenceResult>(
+                    n => reader.SearchReferences(query, n, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
+                    () => reader.CountReferenceMatches(query, lang, kind, pathPatterns, excludePaths, excludeTests),
+                    r => r.SymbolName);
             }
             var payload = new JsonObject
             {
@@ -450,12 +447,10 @@ public partial class McpServer
             ExactZeroHint? zeroHint = null;
             if (results.Count == 0 && exact && query != null && reader._hasReferencesTable)
             {
-                var relaxedTotal = reader.CountCallerMatches(query, lang, kind, pathPatterns, excludePaths, excludeTests);
-                if (relaxedTotal > 0)
-                {
-                    var samples = reader.GetCallers(query, ExactZeroHint.SampleLimit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false);
-                    zeroHint = ExactZeroHint.From(relaxedTotal, samples.Select(r => r.CalleeName));
-                }
+                zeroHint = ExactZeroHint.FromProbe<CallerResult>(
+                    n => reader.GetCallers(query, n, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
+                    () => reader.CountCallerMatches(query, lang, kind, pathPatterns, excludePaths, excludeTests),
+                    r => r.CalleeName);
             }
             var payload = new JsonObject
             {
@@ -503,12 +498,10 @@ public partial class McpServer
             ExactZeroHint? zeroHint = null;
             if (results.Count == 0 && exact && query != null && reader._hasReferencesTable)
             {
-                var relaxedTotal = reader.CountCalleeMatches(query, lang, kind, pathPatterns, excludePaths, excludeTests);
-                if (relaxedTotal > 0)
-                {
-                    var samples = reader.GetCallees(query, ExactZeroHint.SampleLimit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false);
-                    zeroHint = ExactZeroHint.From(relaxedTotal, samples.Select(r => r.CallerName ?? string.Empty));
-                }
+                zeroHint = ExactZeroHint.FromProbe<CalleeResult>(
+                    n => reader.GetCallees(query, n, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
+                    () => reader.CountCalleeMatches(query, lang, kind, pathPatterns, excludePaths, excludeTests),
+                    r => r.CallerName ?? string.Empty);
             }
             var payload = new JsonObject
             {

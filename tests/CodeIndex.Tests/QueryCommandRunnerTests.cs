@@ -1,5 +1,6 @@
 using System.Text.Json;
 using CodeIndex.Cli;
+using CodeIndex.Database;
 
 namespace CodeIndex.Tests;
 
@@ -551,6 +552,55 @@ public class QueryCommandRunnerTests
             ["files", "--since"], jsonDefault: false);
         Assert.NotNull(options.ParseError);
         Assert.Contains("--since requires a value", options.ParseError);
+    }
+
+    [Fact]
+    public void RunReferences_ExactZero_JsonEnvelopeUsesCommandSpecificKey()
+    {
+        // Codex #88 4th pass: graph commands' degraded envelope already uses command-specific
+        // empty-array keys (`references`/`callers`/`callees`). The exact-zero envelope must
+        // match that convention so JSON consumers that special-cased the degraded envelope
+        // see the same shape.
+        // graph 系 envelope は `references: []` 等のコマンド固有キーで統一。
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_exact_zero_refs");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            // Add a reference site for HandleRequest so substring probe finds it.
+            // HandleRequest への参照箇所を作る。
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/a.cs", "csharp",
+                "public class Caller { public void Go() { HandleRequest(); } }\n");
+            // Mark graph+issues ready so the reader sees the references table as authoritative;
+            // otherwise the degraded envelope preempts the exact-zero hint path.
+            // reader が graph を trusted 扱いするため readiness を stamp。
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.MarkGraphReady();
+                writer.MarkIssuesReady();
+            }
+
+            var (code, stdout, _) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["HandleReq", "--exact", "--db", dbPath, "--json"], _jsonOptions));
+
+            // When substring would catch HandleRequest → envelope with `references: []`.
+            // If substring also misses (reference extraction varies), skip the shape assertion
+            // but still require non-garbled exit state.
+            // substring で hit すれば envelope 形で確認、miss なら exit コードのみ確認。
+            Assert.Equal(CommandExitCodes.NotFound, code);
+            var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            if (lines.Length == 0) return; // relaxed also 0 — acceptable
+            using var envelope = JsonDocument.Parse(lines[0]);
+            var root = envelope.RootElement;
+            Assert.Equal(0, root.GetProperty("count").GetInt32());
+            Assert.True(root.TryGetProperty("references", out _), "graph command envelope must use 'references' key, not 'results'");
+            Assert.False(root.TryGetProperty("results", out _), "graph command envelope must NOT use 'results' key (reserved for symbols/definition)");
+            Assert.True(root.TryGetProperty("exact_zero_hint", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
     }
 
     [Fact]

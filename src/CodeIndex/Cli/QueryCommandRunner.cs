@@ -96,18 +96,12 @@ public static class QueryCommandRunner
                 ExactZeroHint? zeroHint = null;
                 if (options.Exact && options.Query != null)
                 {
-                    // definitions wrap symbols, so use the shared CountSymbolMatches for the
-                    // true relaxed total. Samples are taken separately via GetDefinitions at
-                    // the sample cap (which is cheap because the underlying SearchSymbols limit
-                    // is tiny). Codex #88 review.
-                    // definitions は symbols を包むため CountSymbolMatches で真の件数、
-                    // サンプルは GetDefinitions を sample 上限で別取りする。
-                    var relaxedTotal = reader.CountSymbolMatches(new[] { options.Query }, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since);
-                    if (relaxedTotal > 0)
-                    {
-                        var samples = reader.GetDefinitions(options.Query, ExactZeroHint.SampleLimit, options.Kind, options.Lang, options.IncludeBody, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false);
-                        zeroHint = ExactZeroHint.From(relaxedTotal, samples.Select(r => r.Name));
-                    }
+                    // definitions wrap symbols; reuse CountSymbolMatches for the saturated-probe
+                    // fallback. Codex #88 4th-pass optimization: single-probe-first.
+                    zeroHint = ExactZeroHint.FromProbe<DefinitionResult>(
+                        n => reader.GetDefinitions(options.Query, n, options.Kind, options.Lang, options.IncludeBody, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false),
+                        () => reader.CountSymbolMatches(new[] { options.Query }, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since),
+                        r => r.Name);
                 }
                 EmitExactZeroResult(options, jsonOptions, "definitions", zeroHint,
                     extraHumanHints: () => { WriteKindHint(options.Kind, reader); WriteZeroResultHints(options, reader, "Try 'search' for full-text matches instead of symbol lookup."); });
@@ -179,15 +173,11 @@ public static class QueryCommandRunner
                 ExactZeroHint? zeroHint = null;
                 if (options.Exact && options.Query != null && reader._hasReferencesTable)
                 {
-                    // True relaxed total via CountReferenceMatches; samples via SearchReferences
-                    // with limit = SampleLimit. Codex #88 review.
-                    // 真の件数 + 別取り sample。codex #88 指摘。
-                    var relaxedTotal = reader.CountReferenceMatches(options.Query, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
-                    if (relaxedTotal > 0)
-                    {
-                        var samples = reader.SearchReferences(options.Query, ExactZeroHint.SampleLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false);
-                        zeroHint = ExactZeroHint.From(relaxedTotal, samples.Select(r => r.SymbolName));
-                    }
+                    // Single-probe-first; codex #88 4th-pass optimization.
+                    zeroHint = ExactZeroHint.FromProbe<ReferenceResult>(
+                        n => reader.SearchReferences(options.Query, n, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
+                        () => reader.CountReferenceMatches(options.Query, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests),
+                        r => r.SymbolName);
                 }
 
                 if (options.CountOnly)
@@ -209,14 +199,15 @@ public static class QueryCommandRunner
                     if (!reader._hasReferencesTable)
                         WriteDegradedGraphZeroResult("references", json: true, graphAvailable: false, jsonOptions);
                     else if (zeroHint != null)
-                        // `results: []` marker matches the existing WriteDegradedGraphZeroResult
-                        // envelope so JSON consumers can discriminate summary from row DTOs.
-                        // Codex #88 review — CLI --json schema stability on exact-zero branches.
-                        // 既存の degraded envelope と同じ `results: []` を付けて consumer が判別可能にする。
+                        // Use the command-specific empty-array key ("references") to match the
+                        // existing WriteDegradedGraphZeroResult envelope shape for this command.
+                        // Consumers that special-cased the graph degraded envelope on `references`
+                        // already handle this shape. Codex #88 review (4th pass).
+                        // graph 系コマンドは既存 degraded envelope と同じコマンド固有キーを使う。
                         Console.WriteLine(JsonSerializer.Serialize(new Dictionary<string, object?>
                         {
                             ["count"] = 0,
-                            ["results"] = Array.Empty<object>(),
+                            ["references"] = Array.Empty<object>(),
                             ["exact_zero_hint"] = zeroHint,
                         }, jsonOptions));
                 }
@@ -278,12 +269,11 @@ public static class QueryCommandRunner
                 ExactZeroHint? zeroHint = null;
                 if (options.Exact && options.Query != null && reader._hasReferencesTable)
                 {
-                    var relaxedTotal = reader.CountCallerMatches(options.Query, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
-                    if (relaxedTotal > 0)
-                    {
-                        var samples = reader.GetCallers(options.Query, ExactZeroHint.SampleLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false);
-                        zeroHint = ExactZeroHint.From(relaxedTotal, samples.Select(r => r.CalleeName));
-                    }
+                    // Single-probe-first; codex #88 4th-pass optimization.
+                    zeroHint = ExactZeroHint.FromProbe<CallerResult>(
+                        n => reader.GetCallers(options.Query, n, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
+                        () => reader.CountCallerMatches(options.Query, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests),
+                        r => r.CalleeName);
                 }
 
                 if (options.CountOnly)
@@ -305,14 +295,13 @@ public static class QueryCommandRunner
                     if (!reader._hasReferencesTable)
                         WriteDegradedGraphZeroResult("callers", json: true, graphAvailable: false, jsonOptions);
                     else if (zeroHint != null)
-                        // `results: []` marker matches the existing WriteDegradedGraphZeroResult
-                        // envelope so JSON consumers can discriminate summary from row DTOs.
-                        // Codex #88 review — CLI --json schema stability on exact-zero branches.
-                        // 既存の degraded envelope と同じ `results: []` を付けて consumer が判別可能にする。
+                        // Use the command-specific empty-array key ("callers") matching the
+                        // existing WriteDegradedGraphZeroResult shape for this command.
+                        // Codex #88 review (4th pass) — envelope parity.
                         Console.WriteLine(JsonSerializer.Serialize(new Dictionary<string, object?>
                         {
                             ["count"] = 0,
-                            ["results"] = Array.Empty<object>(),
+                            ["callers"] = Array.Empty<object>(),
                             ["exact_zero_hint"] = zeroHint,
                         }, jsonOptions));
                 }
@@ -370,14 +359,12 @@ public static class QueryCommandRunner
                 ExactZeroHint? zeroHint = null;
                 if (options.Exact && options.Query != null && reader._hasReferencesTable)
                 {
-                    var relaxedTotal = reader.CountCalleeMatches(options.Query, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
-                    if (relaxedTotal > 0)
-                    {
-                        // callees filters on container_name, so CallerName carries the relaxed match name.
-                        // callees は container_name フィルタなので sample は CallerName 側。
-                        var samples = reader.GetCallees(options.Query, ExactZeroHint.SampleLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false);
-                        zeroHint = ExactZeroHint.From(relaxedTotal, samples.Select(r => r.CallerName ?? string.Empty));
-                    }
+                    // callees filters on container_name, so CallerName carries the relaxed match name.
+                    // Single-probe-first; codex #88 4th-pass optimization.
+                    zeroHint = ExactZeroHint.FromProbe<CalleeResult>(
+                        n => reader.GetCallees(options.Query, n, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
+                        () => reader.CountCalleeMatches(options.Query, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests),
+                        r => r.CallerName ?? string.Empty);
                 }
 
                 if (options.CountOnly)
@@ -399,14 +386,12 @@ public static class QueryCommandRunner
                     if (!reader._hasReferencesTable)
                         WriteDegradedGraphZeroResult("callees", json: true, graphAvailable: false, jsonOptions);
                     else if (zeroHint != null)
-                        // `results: []` marker matches the existing WriteDegradedGraphZeroResult
-                        // envelope so JSON consumers can discriminate summary from row DTOs.
-                        // Codex #88 review — CLI --json schema stability on exact-zero branches.
-                        // 既存の degraded envelope と同じ `results: []` を付けて consumer が判別可能にする。
+                        // Command-specific empty-array key ("callees") matching existing
+                        // WriteDegradedGraphZeroResult shape. Codex #88 review (4th pass).
                         Console.WriteLine(JsonSerializer.Serialize(new Dictionary<string, object?>
                         {
                             ["count"] = 0,
-                            ["results"] = Array.Empty<object>(),
+                            ["callees"] = Array.Empty<object>(),
                             ["exact_zero_hint"] = zeroHint,
                         }, jsonOptions));
                 }
@@ -500,18 +485,15 @@ public static class QueryCommandRunner
                 ExactZeroHint? zeroHint = null;
                 if (options.Exact && symbolQueries != null && symbolQueries.Count > 0)
                 {
-                    // Use a dedicated COUNT(*) so `relaxed_count` is the TRUE total, not the
-                    // probe result length which is capped at the caller's --limit (or 5). Codex
-                    // review: --limit 1 previously over-reported 5 and a large relaxed set
-                    // under-reported. Two round-trips for the zero-exact path only.
-                    // COUNT(*) で真の件数、別途 sample を最大 5 件取得。--limit 1 での過大報告と
-                    // 大規模結果での過小報告を同時に解消（codex 指摘）。
-                    var relaxedTotal = reader.CountSymbolMatches(symbolQueries, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since);
-                    if (relaxedTotal > 0)
-                    {
-                        var samples = reader.SearchSymbols(symbolQueries, ExactZeroHint.SampleLimit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false);
-                        zeroHint = ExactZeroHint.From(relaxedTotal, samples.Select(r => r.Name));
-                    }
+                    // Single-probe first: LIMIT = SampleLimit + 1 covers both existence AND
+                    // the true count when the relaxed set is small (<= SampleLimit, the common
+                    // typo case). Only saturated probes fall back to CountSymbolMatches for the
+                    // accurate total. Codex #88 4th-pass review: avoid 2 LIKE scans per exact miss.
+                    // 単一 probe でほとんどのケースを 1 クエリで済ませ、飽和時のみ COUNT にフォールバック。
+                    zeroHint = ExactZeroHint.FromProbe<SymbolResult>(
+                        n => reader.SearchSymbols(symbolQueries, n, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false),
+                        () => reader.CountSymbolMatches(symbolQueries, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since),
+                        r => r.Name);
                 }
                 EmitExactZeroResult(options, jsonOptions, label: "symbols", zeroHint,
                     extraHumanHints: () => { WriteKindHint(options.Kind, reader); WriteZeroResultHints(options, reader); });
