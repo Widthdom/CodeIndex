@@ -209,7 +209,16 @@ public static class QueryCommandRunner
                     if (!reader._hasReferencesTable)
                         WriteDegradedGraphZeroResult("references", json: true, graphAvailable: false, jsonOptions);
                     else if (zeroHint != null)
-                        Console.WriteLine(JsonSerializer.Serialize(new Dictionary<string, object?> { ["count"] = 0, ["exact_zero_hint"] = zeroHint }, jsonOptions));
+                        // `results: []` marker matches the existing WriteDegradedGraphZeroResult
+                        // envelope so JSON consumers can discriminate summary from row DTOs.
+                        // Codex #88 review — CLI --json schema stability on exact-zero branches.
+                        // 既存の degraded envelope と同じ `results: []` を付けて consumer が判別可能にする。
+                        Console.WriteLine(JsonSerializer.Serialize(new Dictionary<string, object?>
+                        {
+                            ["count"] = 0,
+                            ["results"] = Array.Empty<object>(),
+                            ["exact_zero_hint"] = zeroHint,
+                        }, jsonOptions));
                 }
                 else
                 {
@@ -296,7 +305,16 @@ public static class QueryCommandRunner
                     if (!reader._hasReferencesTable)
                         WriteDegradedGraphZeroResult("callers", json: true, graphAvailable: false, jsonOptions);
                     else if (zeroHint != null)
-                        Console.WriteLine(JsonSerializer.Serialize(new Dictionary<string, object?> { ["count"] = 0, ["exact_zero_hint"] = zeroHint }, jsonOptions));
+                        // `results: []` marker matches the existing WriteDegradedGraphZeroResult
+                        // envelope so JSON consumers can discriminate summary from row DTOs.
+                        // Codex #88 review — CLI --json schema stability on exact-zero branches.
+                        // 既存の degraded envelope と同じ `results: []` を付けて consumer が判別可能にする。
+                        Console.WriteLine(JsonSerializer.Serialize(new Dictionary<string, object?>
+                        {
+                            ["count"] = 0,
+                            ["results"] = Array.Empty<object>(),
+                            ["exact_zero_hint"] = zeroHint,
+                        }, jsonOptions));
                 }
                 else
                 {
@@ -381,7 +399,16 @@ public static class QueryCommandRunner
                     if (!reader._hasReferencesTable)
                         WriteDegradedGraphZeroResult("callees", json: true, graphAvailable: false, jsonOptions);
                     else if (zeroHint != null)
-                        Console.WriteLine(JsonSerializer.Serialize(new Dictionary<string, object?> { ["count"] = 0, ["exact_zero_hint"] = zeroHint }, jsonOptions));
+                        // `results: []` marker matches the existing WriteDegradedGraphZeroResult
+                        // envelope so JSON consumers can discriminate summary from row DTOs.
+                        // Codex #88 review — CLI --json schema stability on exact-zero branches.
+                        // 既存の degraded envelope と同じ `results: []` を付けて consumer が判別可能にする。
+                        Console.WriteLine(JsonSerializer.Serialize(new Dictionary<string, object?>
+                        {
+                            ["count"] = 0,
+                            ["results"] = Array.Empty<object>(),
+                            ["exact_zero_hint"] = zeroHint,
+                        }, jsonOptions));
                 }
                 else
                 {
@@ -1464,7 +1491,21 @@ public static class QueryCommandRunner
         else if (options.Json)
         {
             if (hint != null)
-                Console.WriteLine(JsonSerializer.Serialize(new Dictionary<string, object?> { ["count"] = 0, ["exact_zero_hint"] = hint }, jsonOptions));
+            {
+                // Match the envelope shape used by WriteDegradedGraphZeroResult so JSON consumers
+                // can discriminate a summary envelope from a result row with the same `results: []`
+                // marker. Codex #88 review: CLI --json is a row-stream by default and the hint
+                // envelope needs to look unambiguously like "this is a zero-result summary", not a
+                // row DTO. `results: []` combined with a sibling `exact_zero_hint` is the signal.
+                // 既存の degraded envelope と同じ `results: []` marker を付け、consumer が行とエンベロープを
+                // 確実に判別できるようにする。
+                Console.WriteLine(JsonSerializer.Serialize(new Dictionary<string, object?>
+                {
+                    ["count"] = 0,
+                    ["results"] = Array.Empty<object>(),
+                    ["exact_zero_hint"] = hint,
+                }, jsonOptions));
+            }
         }
         else
         {

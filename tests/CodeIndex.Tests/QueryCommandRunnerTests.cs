@@ -553,6 +553,63 @@ public class QueryCommandRunnerTests
         Assert.Contains("--since requires a value", options.ParseError);
     }
 
+    [Fact]
+    public void RunSymbols_ExactZero_JsonIncludesResultsMarkerAndHint()
+    {
+        // Codex #88 review (latest pass): CLI --json normally streams result rows; the exact-
+        // zero hint envelope must carry a `results: []` marker so consumers can discriminate
+        // a summary from a row DTO — same envelope shape as WriteDegradedGraphZeroResult.
+        // Exercise three branches for `symbols`: exact-hit (row stream), exact-miss with
+        // sibling (envelope with hint), and genuine miss (no stdout output at all).
+        // CLI の envelope shape 固定: `results: []` marker と `exact_zero_hint` を期待。
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_exact_zero_hint");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/handlers.cs", "csharp",
+                "public class HandleRequest { public void Run() {} }\npublic class HandleRequestAsync { public void Run() {} }\n");
+
+            // Exact hit: row stream, no envelope.
+            // exact hit: 通常の row 出力、envelope 無し。
+            var (hitCode, hitStdout, _) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["HandleRequest", "--exact", "--db", dbPath, "--json"], _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, hitCode);
+            var hitLines = hitStdout.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            Assert.NotEmpty(hitLines);
+            using var firstRow = JsonDocument.Parse(hitLines[0]);
+            Assert.True(firstRow.RootElement.TryGetProperty("name", out _), "exact-hit output must be a row DTO (has 'name' property)");
+
+            // Exact miss with substring sibling: single envelope line with results:[] + hint.
+            // exact miss + substring 有り: envelope 1 行、results:[] と hint を含む。
+            var (missCode, missStdout, _) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["HandleReq", "--exact", "--db", dbPath, "--json"], _jsonOptions));
+            Assert.Equal(CommandExitCodes.NotFound, missCode);
+            var missLines = missStdout.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            Assert.Single(missLines);
+            using var envelope = JsonDocument.Parse(missLines[0]);
+            var root = envelope.RootElement;
+            Assert.Equal(0, root.GetProperty("count").GetInt32());
+            Assert.Equal(JsonValueKind.Array, root.GetProperty("results").ValueKind);
+            Assert.Equal(0, root.GetProperty("results").GetArrayLength());
+            var hint = root.GetProperty("exact_zero_hint");
+            Assert.True(hint.GetProperty("relaxed_count").GetInt32() >= 2);
+            var samples = hint.GetProperty("sample_names").EnumerateArray().Select(s => s.GetString()).ToList();
+            Assert.Contains("HandleRequest", samples);
+            Assert.Contains("HandleRequestAsync", samples);
+
+            // Genuine miss: no stdout output (exit NotFound, no envelope to confuse consumers).
+            // 本物の miss: stdout 何も出さない (consumer を混乱させない)。
+            var (genuineCode, genuineStdout, _) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["zzz_nonexistent_xyz_123", "--exact", "--db", dbPath, "--json"], _jsonOptions));
+            Assert.Equal(CommandExitCodes.NotFound, genuineCode);
+            Assert.True(string.IsNullOrWhiteSpace(genuineStdout), $"expected empty stdout, got: {genuineStdout}");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     private static JsonDocument ParseJsonOutput(string stdout)
     {
         var jsonLine = stdout
