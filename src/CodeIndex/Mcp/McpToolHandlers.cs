@@ -128,6 +128,27 @@ public partial class McpServer
         return $"No {label} found.";
     }
 
+    /// <summary>
+    /// Build the `exact_zero_hint` MCP payload with explicit snake_case keys.
+    /// The server's `_jsonOptions` is CamelCase, so serializing the DTO directly would emit
+    /// a mixed-shape payload (`relaxedCount` / `sampleNames` inside a snake_case outer key),
+    /// silently breaking the documented #88 contract. Codex adversarial review.
+    /// MCP の _jsonOptions は CamelCase のため、DTO を素直にシリアライズすると内キーが
+    /// relaxedCount / sampleNames になって #88 仕様の snake_case と食い違う。明示的に構築する。
+    /// </summary>
+    private static JsonNode BuildExactZeroHintNode(ExactZeroHint hint)
+    {
+        var samples = new JsonArray();
+        foreach (var s in hint.SampleNames)
+            samples.Add(s);
+        return new JsonObject
+        {
+            ["relaxed_count"] = hint.RelaxedCount,
+            ["sample_names"] = samples,
+            ["suggestion"] = hint.Suggestion,
+        };
+    }
+
     private JsonNode ExecuteSearch(JsonNode? id, JsonNode? args)
     {
         var query = args?["query"]?.GetValue<string>();
@@ -270,7 +291,7 @@ public partial class McpServer
                     ["results"] = new JsonArray()
                 };
                 if (zeroHint != null)
-                    payload["exact_zero_hint"] = JsonSerializer.SerializeToNode(zeroHint, _jsonOptions);
+                    payload["exact_zero_hint"] = BuildExactZeroHintNode(zeroHint);
                 AddFreshnessHint(payload, reader);
                 return CreateToolResult(id,
                     zeroHint != null ? $"No symbols found. Substring would return {zeroHint.RelaxedCount}." : "No symbols found.",
@@ -334,7 +355,7 @@ public partial class McpServer
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
             if (zeroHint != null)
-                payload["exact_zero_hint"] = JsonSerializer.SerializeToNode(zeroHint, _jsonOptions);
+                payload["exact_zero_hint"] = BuildExactZeroHintNode(zeroHint);
             if (results.Count == 0)
                 AddFreshnessHint(payload, reader);
             return CreateToolResult(id,
@@ -385,7 +406,7 @@ public partial class McpServer
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
             if (zeroHint != null)
-                payload["exact_zero_hint"] = JsonSerializer.SerializeToNode(zeroHint, _jsonOptions);
+                payload["exact_zero_hint"] = BuildExactZeroHintNode(zeroHint);
             if (results.Count == 0)
                 AddFreshnessHint(payload, reader);
             return CreateToolResult(id,
@@ -434,7 +455,7 @@ public partial class McpServer
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
             if (zeroHint != null)
-                payload["exact_zero_hint"] = JsonSerializer.SerializeToNode(zeroHint, _jsonOptions);
+                payload["exact_zero_hint"] = BuildExactZeroHintNode(zeroHint);
             if (results.Count == 0)
                 AddFreshnessHint(payload, reader);
             return CreateToolResult(id,
@@ -483,7 +504,7 @@ public partial class McpServer
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
             if (zeroHint != null)
-                payload["exact_zero_hint"] = JsonSerializer.SerializeToNode(zeroHint, _jsonOptions);
+                payload["exact_zero_hint"] = BuildExactZeroHintNode(zeroHint);
             if (results.Count == 0)
                 AddFreshnessHint(payload, reader);
             return CreateToolResult(id,

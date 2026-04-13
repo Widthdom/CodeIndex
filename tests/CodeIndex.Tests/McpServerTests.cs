@@ -1014,4 +1014,53 @@ public class McpServerTests : IDisposable
                 File.Delete(_dbPath);
         }
     }
+
+    [Fact]
+    public void ToolsCall_Symbols_ExactZero_AttachesSnakeCaseHint()
+    {
+        // Codex #88 review regression: MCP server uses CamelCase PropertyNamingPolicy, but the
+        // #88 contract requires `exact_zero_hint.{relaxed_count,sample_names,suggestion}` with
+        // snake_case keys. Without the explicit JsonObject builder, serializing the DTO through
+        // _jsonOptions would emit a mixed payload (snake_case outer key, camelCase inner keys).
+        // Verify the MCP response uses snake_case end-to-end on the exact-zero path for all 5
+        // leaf commands (symbols seed path is enough to exercise the shared builder).
+        // Codex 指摘: MCP は CamelCase 既定なので、明示的 JsonObject builder が snake_case
+        // キーを保つことを固定する回帰テスト。
+        var request = JsonNode.Parse("""
+            {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbols","arguments":{"query":"Ap","exact":true}}}
+            """)!;
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        var hint = structured["exact_zero_hint"];
+        Assert.NotNull(hint);
+
+        // Snake_case outer field keys (contract). CamelCase equivalents must NOT be present.
+        // 外キー + 内キーが snake_case であること。camelCase 版が存在してはいけない。
+        Assert.NotNull(hint!["relaxed_count"]);
+        Assert.NotNull(hint["sample_names"]);
+        Assert.NotNull(hint["suggestion"]);
+        Assert.Null(hint["relaxedCount"]);
+        Assert.Null(hint["sampleNames"]);
+
+        // The relaxed substring "Ap" must catch the seeded `App` symbol.
+        // substring "Ap" は seed の App シンボルを拾う。
+        Assert.Equal(1, hint["relaxed_count"]!.GetValue<int>());
+        Assert.Contains("App", hint["sample_names"]!.AsArray().Select(n => n!.GetValue<string>()));
+    }
+
+    [Fact]
+    public void ToolsCall_Symbols_ExactZero_NoHintWhenRelaxedAlsoZero()
+    {
+        // Genuine miss: `--exact` + a name no substring would match either. No hint should be
+        // emitted (the "No symbols found." message is enough).
+        // 本物の miss（substring も 0 件）ではヒントを出さない。
+        var request = JsonNode.Parse("""
+            {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbols","arguments":{"query":"zzz_nonexistent_xyz","exact":true}}}
+            """)!;
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Null(structured["exact_zero_hint"]);
+    }
 }
