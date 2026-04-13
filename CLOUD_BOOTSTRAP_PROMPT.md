@@ -36,14 +36,19 @@ library is loaded via P/Invoke from the binary's directory, and
 
 ### Step 1.5 — Unblock `cdidx` in this session's permissions
 
-The repo-tracked `.claude/settings.json` denies `Bash(cdidx:*)` and
-`Bash(~/.local/bin/cdidx:*)` to keep local sessions from silently falling
-back to a stale global binary. In this container those denies would block
-every smoke-test command below. Claude Code treats `deny` as absolute —
-`settings.local.json` allows cannot override it — so the only workable
-escape is to remove those two entries from the **workspace copy** of
-`.claude/settings.json` and **do not commit the change**. It is a
-session-local unblock, not a repo edit.
+The repo-tracked `.claude/settings.json` denies `Bash(cdidx:*)`,
+`Bash(~/.local/bin/cdidx:*)`, and `Bash($HOME/.local/bin/cdidx:*)` to
+keep local sessions from silently falling back to a stale global binary.
+In this container those denies would block every smoke-test command
+below. Observed Claude Code behavior is that tracked `deny` is not
+overridden by `settings.local.json` allows (not confirmed against a
+public spec — verify if your environment behaves differently). The
+workaround that has been observed to work is to remove those `cdidx`
+entries from the **workspace copy** of `.claude/settings.json` and
+**do not commit the change**. It is a session-local unblock, not a
+repo edit. If your Claude Code build honors `settings.local.json`
+allow-overrides, an untracked `.claude/settings.local.json` with the
+matching allow lines is an equivalent alternative.
 
 ### Step 2 — Smoke test the installed binary end-to-end
 
@@ -155,13 +160,18 @@ export PATH="$HOME/.local/bin:$PATH"
 
 リポジトリ追跡の `.claude/settings.json` は、ローカルセッションが古い
 グローバルバイナリに黙ってフォールバックしないよう
-`Bash(cdidx:*)` と `Bash(~/.local/bin/cdidx:*)` を deny しています。
-このコンテナではその deny が以降のスモークテストを全部ブロックします。
-Claude Code の `deny` は絶対で `settings.local.json` の allow では
-上書きできないため、唯一の現実的な回避策は**ワークスペース上の**
-`.claude/settings.json` からその2エントリを削除し、**その変更を
-コミットしない**ことです。リポジトリへの修正ではなくセッション限定の
-一時解除として扱ってください。
+`Bash(cdidx:*)`、`Bash(~/.local/bin/cdidx:*)`、
+`Bash($HOME/.local/bin/cdidx:*)` を deny しています。このコンテナでは
+その deny が以降のスモークテストを全部ブロックします。観測された
+Claude Code の挙動として、追跡された `deny` は `settings.local.json`
+の allow では上書きされません（公開仕様で裏を取った記述ではないため、
+環境が異なる場合は各自で確認してください）。観測済みに機能する回避策は
+**ワークスペース上の** `.claude/settings.json` から `cdidx` 系の
+エントリを削除し、**その変更をコミットしない**ことです。リポジトリへの
+修正ではなくセッション限定の一時解除として扱ってください。もし
+お使いの Claude Code ビルドで `settings.local.json` の allow が
+deny を上書きできるのであれば、追跡外の `.claude/settings.local.json`
+に該当の allow を追加する方法も同等に使えます。
 
 ### Step 2 — インストール済みバイナリをエンドツーエンドでスモーク
 
