@@ -16,7 +16,8 @@
       "Bash(locate:*)",
       "Bash(mlocate:*)",
       "Bash(mdfind:*)",
-      "Bash(cdidx:*)"
+      "Bash(cdidx:*)",
+      "Bash(~/.local/bin/cdidx:*)"
     ]
   }
 }
