@@ -322,6 +322,84 @@ public partial class DbReader
     }
 
     /// <summary>
+    /// Count of relaxed substring matches on `symbol_references.symbol_name`. Used by the
+    /// #88 exact-zero hint so `relaxed_count` is the true total, not a capped probe.
+    /// #88 exact-zero hint 向けに symbol_name に対する relaxed substring の件数を COUNT(*) で返す。
+    /// </summary>
+    public int CountReferenceMatches(string query, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
+    {
+        if (!_hasReferencesTable) return 0;
+        using var cmd = _conn.CreateCommand();
+        var sql = @"SELECT COUNT(*) FROM symbol_references r JOIN files f ON r.file_id = f.id WHERE 1=1";
+        sql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
+        sql += " AND r.symbol_name LIKE @query ESCAPE '\\'";
+        if (referenceKind != null) sql += " AND r.reference_kind = @referenceKind";
+        if (lang != null) sql += " AND f.lang = @lang";
+        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
+        cmd.CommandText = sql;
+        cmd.Parameters.AddWithValue("@query", $"%{EscapeLikeQuery(query)}%");
+        if (referenceKind != null) cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
+        if (lang != null) cmd.Parameters.AddWithValue("@lang", lang);
+        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+        var raw = cmd.ExecuteScalar();
+        return raw is long l ? (int)l : (raw is int i ? i : 0);
+    }
+
+    /// <summary>
+    /// Count of relaxed substring matches for callers (grouped like <see cref="GetCallers"/>).
+    /// Mirrors the GROUP BY so the reported count equals the distinct caller rows a user would
+    /// see, not the raw reference count.
+    /// #88 exact-zero hint 向け callers 件数。実際の結果 row 数と同じ COUNT を返すよう GROUP BY と整合。
+    /// </summary>
+    public int CountCallerMatches(string query, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
+    {
+        if (!_hasReferencesTable) return 0;
+        using var cmd = _conn.CreateCommand();
+        var sql = @"SELECT COUNT(*) FROM (SELECT 1 FROM symbol_references r JOIN files f ON r.file_id = f.id
+                                           WHERE r.container_name IS NOT NULL";
+        sql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
+        if (referenceKind != null) sql += " AND r.reference_kind = @referenceKind";
+        else sql += " AND r.reference_kind IN ('call', 'instantiate')";
+        sql += " AND r.symbol_name LIKE @query ESCAPE '\\'";
+        if (lang != null) sql += " AND f.lang = @lang";
+        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
+        sql += " GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name)";
+        cmd.CommandText = sql;
+        cmd.Parameters.AddWithValue("@query", $"%{EscapeLikeQuery(query)}%");
+        if (referenceKind != null) cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
+        if (lang != null) cmd.Parameters.AddWithValue("@lang", lang);
+        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+        var raw = cmd.ExecuteScalar();
+        return raw is long l ? (int)l : (raw is int i ? i : 0);
+    }
+
+    /// <summary>
+    /// Count of relaxed substring matches for callees (container_name filter, grouped).
+    /// #88 exact-zero hint 向け callees 件数（container_name に対する relaxed、GROUP BY 整合）。
+    /// </summary>
+    public int CountCalleeMatches(string query, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
+    {
+        if (!_hasReferencesTable) return 0;
+        using var cmd = _conn.CreateCommand();
+        var sql = @"SELECT COUNT(*) FROM (SELECT 1 FROM symbol_references r JOIN files f ON r.file_id = f.id
+                                           WHERE r.container_name IS NOT NULL";
+        sql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
+        if (referenceKind != null) sql += " AND r.reference_kind = @referenceKind";
+        else sql += " AND r.reference_kind IN ('call', 'instantiate')";
+        sql += " AND r.container_name LIKE @query ESCAPE '\\'";
+        if (lang != null) sql += " AND f.lang = @lang";
+        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
+        sql += " GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.reference_kind)";
+        cmd.CommandText = sql;
+        cmd.Parameters.AddWithValue("@query", $"%{EscapeLikeQuery(query)}%");
+        if (referenceKind != null) cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
+        if (lang != null) cmd.Parameters.AddWithValue("@lang", lang);
+        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+        var raw = cmd.ExecuteScalar();
+        return raw is long l ? (int)l : (raw is int i ? i : 0);
+    }
+
+    /// <summary>
     /// Find callers for a referenced symbol.
     /// 指定シンボルを呼び出している呼び出し元を探す。
     /// </summary>

@@ -444,6 +444,40 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void CountSymbolMatches_ReturnsTrueRelaxedTotalIndependentOfLimit()
+    {
+        // Codex #88 review regression: earlier impl used SearchSymbols(limit=Max(limit,5)) and
+        // reported .Count as relaxed_count, which over-reported on --limit 1 (hit cap = 5) and
+        // under-reported when the real total exceeded the cap. The dedicated COUNT helper must
+        // return the TRUE total regardless of any caller-side limit.
+        // #88 codex: 真の substring 件数を caller limit に関係なく返すこと。
+        var extraFileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/handlers.py", Lang = "python", Size = 400, Lines = 20,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        var seven = new[]
+        {
+            "Handle", "HandleA", "HandleB", "HandleC",
+            "Handler", "HandleRequest", "handleEvent",
+        };
+        var records = new List<SymbolRecord>();
+        for (int i = 0; i < seven.Length; i++)
+            records.Add(new SymbolRecord { FileId = extraFileId, Kind = "function", Name = seven[i], Line = i + 1, StartLine = i + 1, EndLine = i + 1 });
+        _writer.InsertSymbols(records);
+
+        // substring "Handle" catches 6 of the 7 (all except lowercase "handleEvent"
+        // doesn't match "Handle" as a case-insensitive LIKE? LIKE is case-insensitive in
+        // SQLite default; so yes it does match). Let's just verify the total equals the
+        // substring result count.
+        // LIKE は SQLite 既定で case-insensitive なので 7 件全部当たる。true total を確認。
+        var total = _reader.CountSymbolMatches(new[] { "Handle" });
+        var fullList = _reader.SearchSymbols(new[] { "Handle" }, limit: 100, exact: false);
+        Assert.Equal(fullList.Count, total);
+        Assert.True(total >= 6, $"expected >=6 relaxed matches, got {total}");
+    }
+
+    [Fact]
     public void SearchSymbols_ExactZeroCaseRelaxedQueryExposesSiblings()
     {
         // #88 integration: `--exact Runfoo` misses (no exact-case match, no case-insensitive

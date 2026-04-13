@@ -96,8 +96,18 @@ public static class QueryCommandRunner
                 ExactZeroHint? zeroHint = null;
                 if (options.Exact && options.Query != null)
                 {
-                    var relaxed = reader.GetDefinitions(options.Query, Math.Max(options.Limit, ExactZeroHint.SampleLimit), options.Kind, options.Lang, options.IncludeBody, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false);
-                    zeroHint = ExactZeroHint.From(relaxed.Count, relaxed.Select(r => r.Name));
+                    // definitions wrap symbols, so use the shared CountSymbolMatches for the
+                    // true relaxed total. Samples are taken separately via GetDefinitions at
+                    // the sample cap (which is cheap because the underlying SearchSymbols limit
+                    // is tiny). Codex #88 review.
+                    // definitions は symbols を包むため CountSymbolMatches で真の件数、
+                    // サンプルは GetDefinitions を sample 上限で別取りする。
+                    var relaxedTotal = reader.CountSymbolMatches(new[] { options.Query }, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since);
+                    if (relaxedTotal > 0)
+                    {
+                        var samples = reader.GetDefinitions(options.Query, ExactZeroHint.SampleLimit, options.Kind, options.Lang, options.IncludeBody, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false);
+                        zeroHint = ExactZeroHint.From(relaxedTotal, samples.Select(r => r.Name));
+                    }
                 }
                 EmitExactZeroResult(options, jsonOptions, "definitions", zeroHint,
                     extraHumanHints: () => { WriteKindHint(options.Kind, reader); WriteZeroResultHints(options, reader, "Try 'search' for full-text matches instead of symbol lookup."); });
@@ -169,8 +179,15 @@ public static class QueryCommandRunner
                 ExactZeroHint? zeroHint = null;
                 if (options.Exact && options.Query != null && reader._hasReferencesTable)
                 {
-                    var relaxed = reader.SearchReferences(options.Query, Math.Max(options.Limit, ExactZeroHint.SampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false);
-                    zeroHint = ExactZeroHint.From(relaxed.Count, relaxed.Select(r => r.SymbolName));
+                    // True relaxed total via CountReferenceMatches; samples via SearchReferences
+                    // with limit = SampleLimit. Codex #88 review.
+                    // 真の件数 + 別取り sample。codex #88 指摘。
+                    var relaxedTotal = reader.CountReferenceMatches(options.Query, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
+                    if (relaxedTotal > 0)
+                    {
+                        var samples = reader.SearchReferences(options.Query, ExactZeroHint.SampleLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false);
+                        zeroHint = ExactZeroHint.From(relaxedTotal, samples.Select(r => r.SymbolName));
+                    }
                 }
 
                 if (options.CountOnly)
@@ -252,8 +269,12 @@ public static class QueryCommandRunner
                 ExactZeroHint? zeroHint = null;
                 if (options.Exact && options.Query != null && reader._hasReferencesTable)
                 {
-                    var relaxed = reader.GetCallers(options.Query, Math.Max(options.Limit, ExactZeroHint.SampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false);
-                    zeroHint = ExactZeroHint.From(relaxed.Count, relaxed.Select(r => r.CalleeName));
+                    var relaxedTotal = reader.CountCallerMatches(options.Query, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
+                    if (relaxedTotal > 0)
+                    {
+                        var samples = reader.GetCallers(options.Query, ExactZeroHint.SampleLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false);
+                        zeroHint = ExactZeroHint.From(relaxedTotal, samples.Select(r => r.CalleeName));
+                    }
                 }
 
                 if (options.CountOnly)
@@ -331,10 +352,14 @@ public static class QueryCommandRunner
                 ExactZeroHint? zeroHint = null;
                 if (options.Exact && options.Query != null && reader._hasReferencesTable)
                 {
-                    var relaxed = reader.GetCallees(options.Query, Math.Max(options.Limit, ExactZeroHint.SampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false);
-                    // callees filters on container_name, so CallerName carries the relaxed match.
-                    // callees は container_name に対する filter なので、CallerName を sample に使う。
-                    zeroHint = ExactZeroHint.From(relaxed.Count, relaxed.Select(r => r.CallerName ?? string.Empty));
+                    var relaxedTotal = reader.CountCalleeMatches(options.Query, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
+                    if (relaxedTotal > 0)
+                    {
+                        // callees filters on container_name, so CallerName carries the relaxed match name.
+                        // callees は container_name フィルタなので sample は CallerName 側。
+                        var samples = reader.GetCallees(options.Query, ExactZeroHint.SampleLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false);
+                        zeroHint = ExactZeroHint.From(relaxedTotal, samples.Select(r => r.CallerName ?? string.Empty));
+                    }
                 }
 
                 if (options.CountOnly)
@@ -448,8 +473,18 @@ public static class QueryCommandRunner
                 ExactZeroHint? zeroHint = null;
                 if (options.Exact && symbolQueries != null && symbolQueries.Count > 0)
                 {
-                    var relaxed = reader.SearchSymbols(symbolQueries, Math.Max(options.Limit, ExactZeroHint.SampleLimit), options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false);
-                    zeroHint = ExactZeroHint.From(relaxed.Count, relaxed.Select(r => r.Name));
+                    // Use a dedicated COUNT(*) so `relaxed_count` is the TRUE total, not the
+                    // probe result length which is capped at the caller's --limit (or 5). Codex
+                    // review: --limit 1 previously over-reported 5 and a large relaxed set
+                    // under-reported. Two round-trips for the zero-exact path only.
+                    // COUNT(*) で真の件数、別途 sample を最大 5 件取得。--limit 1 での過大報告と
+                    // 大規模結果での過小報告を同時に解消（codex 指摘）。
+                    var relaxedTotal = reader.CountSymbolMatches(symbolQueries, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since);
+                    if (relaxedTotal > 0)
+                    {
+                        var samples = reader.SearchSymbols(symbolQueries, ExactZeroHint.SampleLimit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false);
+                        zeroHint = ExactZeroHint.From(relaxedTotal, samples.Select(r => r.Name));
+                    }
                 }
                 EmitExactZeroResult(options, jsonOptions, label: "symbols", zeroHint,
                     extraHumanHints: () => { WriteKindHint(options.Kind, reader); WriteZeroResultHints(options, reader); });

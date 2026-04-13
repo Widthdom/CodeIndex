@@ -189,6 +189,48 @@ public partial class DbReader
     }
 
     /// <summary>
+    /// Total count of symbols matched by a relaxed substring query. Used by the #88
+    /// `exact_zero_hint` path so the reported `relaxed_count` reflects the true total
+    /// instead of being capped by the caller's `--limit` (or the 5-row sample cap).
+    /// Always uses substring semantics — this is specifically for the relaxed hint.
+    /// #88 の relaxed_count を正確に返すための COUNT(*) ヘルパ。substring 意味論専用。
+    /// </summary>
+    public int CountSymbolMatches(IReadOnlyList<string>? queries, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null)
+    {
+        using var cmd = _conn.CreateCommand();
+        var sql = @"SELECT COUNT(*) FROM symbols s JOIN files f ON s.file_id = f.id WHERE 1=1";
+
+        var effectiveQueries = queries?.Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();
+        if (effectiveQueries != null && effectiveQueries.Count > 0)
+        {
+            var orClauses = string.Join(" OR ", effectiveQueries.Select((_, idx) => $"s.name LIKE @query{idx} ESCAPE '\\'"));
+            sql += $" AND ({orClauses})";
+        }
+        if (kind != null)
+            sql += " AND s.kind = @kind";
+        if (lang != null)
+            sql += " AND f.lang = @lang";
+        if (since != null && _fileColumns.Contains("modified"))
+            sql += " AND f.modified >= @since";
+        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
+
+        cmd.CommandText = sql;
+        if (effectiveQueries != null)
+        {
+            for (int idx = 0; idx < effectiveQueries.Count; idx++)
+                cmd.Parameters.AddWithValue($"@query{idx}", $"%{EscapeLikeQuery(effectiveQueries[idx])}%");
+        }
+        if (kind != null) cmd.Parameters.AddWithValue("@kind", kind);
+        if (lang != null) cmd.Parameters.AddWithValue("@lang", lang);
+        if (since != null && _fileColumns.Contains("modified"))
+            cmd.Parameters.AddWithValue("@since", since.Value.ToString("O"));
+        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+
+        var raw = cmd.ExecuteScalar();
+        return raw is long l ? (int)l : (raw is int i ? i : 0);
+    }
+
+    /// <summary>
     /// Resolve symbol definitions with reconstructed excerpts.
     /// シンボル定義を抜粋付きで解決する。
     /// </summary>
