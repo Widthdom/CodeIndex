@@ -12,9 +12,17 @@ set -euo pipefail
 REPO="Widthdom/CodeIndex"
 INSTALL_DIR="${CDIDX_INSTALL_DIR:-$HOME/.local/bin}"
 BINARY_NAME="cdidx"
+GITHUB_BASE_URL="${CDIDX_GITHUB_BASE_URL:-https://github.com}"
+GITHUB_API_BASE_URL="${CDIDX_GITHUB_API_BASE_URL:-https://api.github.com}"
+# Normalize optional base URL overrides by removing a trailing slash.
+# 末尾スラッシュ付きでも URL 連結が壊れないようにする。
+GITHUB_BASE_URL="${GITHUB_BASE_URL%/}"
+GITHUB_API_BASE_URL="${GITHUB_API_BASE_URL%/}"
 TMPDIR_CLEANUP=""
 STAGE_DIR_CLEANUP=""
 BACKUP_DIR_CLEANUP=""
+LOCAL_MIRROR_DIR_CLEANUP=""
+LOCAL_MIRROR_PID=""
 EXISTING_BIN=""
 EXISTING_VERSION=""
 EXPLICIT_VERSION_REQUESTED=0
@@ -35,6 +43,12 @@ cleanup() {
     fi
     if [ -n "$BACKUP_DIR_CLEANUP" ]; then
         rm -rf "$BACKUP_DIR_CLEANUP"
+    fi
+    if [ -n "$LOCAL_MIRROR_PID" ]; then
+        kill "$LOCAL_MIRROR_PID" > /dev/null 2>&1 || true
+    fi
+    if [ -n "$LOCAL_MIRROR_DIR_CLEANUP" ]; then
+        rm -rf "$LOCAL_MIRROR_DIR_CLEANUP"
     fi
 }
 trap cleanup EXIT
@@ -105,7 +119,7 @@ fetch_latest_release_version() {
     need_cmd curl
     need_cmd mktemp
 
-    local api_url="https://api.github.com/repos/${REPO}/releases/latest"
+    local api_url="${GITHUB_API_BASE_URL}/repos/${REPO}/releases/latest"
     local response_file
     if ! response_file="$(mktemp)"; then
         error "Failed to create temporary file for latest-release lookup."
@@ -416,7 +430,7 @@ download_and_install() {
     need_cmd mktemp
 
     local archive_name="CodeIndex-${RID}.tar.gz"
-    local base_url="https://github.com/${REPO}/releases/download/${VERSION}"
+    local base_url="${GITHUB_BASE_URL}/${REPO}/releases/download/${VERSION}"
     local archive_url="${base_url}/${archive_name}"
     local checksums_url="${base_url}/sha256sums.txt"
 
@@ -577,6 +591,73 @@ check_path() {
     esac
 }
 
+run_local_mirror_self_test() {
+    need_cmd python3
+    need_cmd tar
+    need_cmd mktemp
+    need_cmd awk
+    need_cmd sleep
+
+    local rehearsal_version="${1:-v1.11.0}"
+    case "$rehearsal_version" in
+        v*) ;;
+        *)  rehearsal_version="v${rehearsal_version}" ;;
+    esac
+    local rehearsal_version_no_prefix="${rehearsal_version#v}"
+    local local_mirror_port="${CDIDX_LOCAL_MIRROR_PORT:-18765}"
+    local local_mirror_root
+    local local_release_base
+    local local_payload_dir
+    local checksum
+
+    if ! local_mirror_root="$(mktemp -d /tmp/cdidx-local-mirror.XXXXXX)"; then
+        error "Failed to create local mirror directory for self-test."
+    fi
+    LOCAL_MIRROR_DIR_CLEANUP="$local_mirror_root"
+
+    local_release_base="${local_mirror_root}/${REPO}/releases/download/${rehearsal_version}"
+    local_payload_dir="${local_release_base}/payload"
+    mkdir -p "$local_payload_dir"
+
+    cat > "${local_payload_dir}/${BINARY_NAME}" <<EOF
+#!/usr/bin/env bash
+if [ "\${1:-}" = "--version" ]; then
+  echo "${BINARY_NAME} ${rehearsal_version}"
+  exit 0
+fi
+echo "mock ${BINARY_NAME} (${rehearsal_version}) for local mirror self-test" >&2
+exit 2
+EOF
+    chmod +x "${local_payload_dir}/${BINARY_NAME}"
+    printf '{"version":"%s"}\n' "$rehearsal_version_no_prefix" > "${local_payload_dir}/version.json"
+    : > "${local_payload_dir}/libe_sqlite3.so"
+
+    (
+        cd "$local_payload_dir"
+        tar czf ../CodeIndex-linux-x64.tar.gz "${BINARY_NAME}" version.json libe_sqlite3.so
+    )
+
+    if command -v sha256sum > /dev/null 2>&1; then
+        checksum="$(sha256sum "${local_release_base}/CodeIndex-linux-x64.tar.gz" | awk '{print $1}')"
+    elif command -v shasum > /dev/null 2>&1; then
+        checksum="$(shasum -a 256 "${local_release_base}/CodeIndex-linux-x64.tar.gz" | awk '{print $1}')"
+    elif command -v openssl > /dev/null 2>&1; then
+        checksum="$(openssl dgst -sha256 "${local_release_base}/CodeIndex-linux-x64.tar.gz" | awk '{print $NF}')"
+    else
+        error "No checksum tool found (need sha256sum, shasum, or openssl) for local mirror self-test."
+    fi
+    printf '%s  CodeIndex-linux-x64.tar.gz\n' "$checksum" > "${local_release_base}/sha256sums.txt"
+
+    python3 -m http.server "$local_mirror_port" --directory "$local_mirror_root" > /tmp/cdidx-local-mirror-http.log 2>&1 &
+    LOCAL_MIRROR_PID=$!
+    sleep 1
+
+    info "Running local mirror self-test against http://127.0.0.1:${local_mirror_port}/"
+    GITHUB_BASE_URL="http://127.0.0.1:${local_mirror_port}"
+    main "$rehearsal_version"
+    "${INSTALL_DIR}/${BINARY_NAME}" --version
+}
+
 # --- Main / メイン ---
 
 main() {
@@ -602,5 +683,13 @@ main() {
 }
 
 if [ "${CDIDX_INSTALL_SH_LIB_ONLY:-0}" != "1" ]; then
-    main "$@"
+    case "${1:-}" in
+        --self-test-local-mirror)
+            shift
+            run_local_mirror_self_test "${1:-v1.11.0}"
+            ;;
+        *)
+            main "$@"
+            ;;
+    esac
 fi
