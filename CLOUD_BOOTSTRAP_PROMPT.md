@@ -27,6 +27,20 @@ curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh 
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
+If `raw.githubusercontent.com` is blocked in your environment, run the
+repo-local installer instead and pin an explicit version (example:
+`v1.11.0`) to avoid the extra latest-release API lookup:
+
+```bash
+bash ./install.sh v1.11.0
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+If release downloads are blocked from `github.com`, point the installer at a
+reachable GitHub mirror/proxy by setting:
+`CDIDX_GITHUB_BASE_URL` and `CDIDX_GITHUB_API_BASE_URL` before running
+`install.sh`.
+
 The installer downloads the latest release tarball, verifies SHA256, and
 copies the binary **plus the adjacent runtime assets** (`version.json` and
 `libe_sqlite3.so` on Linux / `libe_sqlite3.dylib` on macOS) into
@@ -166,6 +180,19 @@ any destructive action.
 curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash
 export PATH="$HOME/.local/bin:$PATH"
 ```
+
+もし環境の制約で `raw.githubusercontent.com` に到達できない場合は、リポジトリ
+内の `install.sh` を直接実行し、`latest` API 参照を避けるため明示バージョン
+（例: `v1.11.0`）を指定してください:
+
+```bash
+bash ./install.sh v1.11.0
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+`github.com` からのリリース取得自体がブロックされる環境では、`install.sh`
+実行前に `CDIDX_GITHUB_BASE_URL` と `CDIDX_GITHUB_API_BASE_URL` を設定して、
+到達可能な GitHub mirror/proxy 経由に切り替えてください。
 
 インストーラは最新リリースの tarball をダウンロードし、SHA256 を検証して、
 バイナリに加え**隣接ランタイム資産**（`version.json`、Linux は

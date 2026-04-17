@@ -12,6 +12,8 @@ set -euo pipefail
 REPO="Widthdom/CodeIndex"
 INSTALL_DIR="${CDIDX_INSTALL_DIR:-$HOME/.local/bin}"
 BINARY_NAME="cdidx"
+GITHUB_BASE_URL="${CDIDX_GITHUB_BASE_URL:-https://github.com}"
+GITHUB_API_BASE_URL="${CDIDX_GITHUB_API_BASE_URL:-https://api.github.com}"
 TMPDIR_CLEANUP=""
 STAGE_DIR_CLEANUP=""
 BACKUP_DIR_CLEANUP=""
@@ -105,7 +107,7 @@ fetch_latest_release_version() {
     need_cmd curl
     need_cmd mktemp
 
-    local api_url="https://api.github.com/repos/${REPO}/releases/latest"
+    local api_url="${GITHUB_API_BASE_URL}/repos/${REPO}/releases/latest"
     local response_file
     if ! response_file="$(mktemp)"; then
         error "Failed to create temporary file for latest-release lookup."
@@ -416,7 +418,7 @@ download_and_install() {
     need_cmd mktemp
 
     local archive_name="CodeIndex-${RID}.tar.gz"
-    local base_url="https://github.com/${REPO}/releases/download/${VERSION}"
+    local base_url="${GITHUB_BASE_URL}/${REPO}/releases/download/${VERSION}"
     local archive_url="${base_url}/${archive_name}"
     local checksums_url="${base_url}/sha256sums.txt"
 
@@ -580,6 +582,11 @@ check_path() {
 # --- Main / メイン ---
 
 main() {
+    # Normalize optional base URL overrides by removing a trailing slash.
+    # 末尾スラッシュ付きでも URL 連結が壊れないようにする。
+    GITHUB_BASE_URL="${GITHUB_BASE_URL%/}"
+    GITHUB_API_BASE_URL="${GITHUB_API_BASE_URL%/}"
+
     info "cdidx installer"
     detect_platform
     info "Detected platform: ${RID}"
