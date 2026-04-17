@@ -3467,6 +3467,90 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_MultiSectionAttribute_DoesNotLeakTrailingAttributeNamesAsPhantoms()
+    {
+        // [A, B(args)] multi-section attributes must not leak B/C as phantom `function` symbols.
+        // The attribute-stripper must blank out the whole bracket group even when it consumes the entire line,
+        // otherwise the method regex latches onto the content after the comma.
+        // xUnit/MSTest/ASP.NET/EF attribute conventions rely heavily on this shape.
+        // 複数セクション属性 [A, B(args)] の 2つ目以降の属性名が phantom function として漏れないこと。
+        var content = """
+            using System;
+            using System.Diagnostics;
+
+            namespace MultiSectionAttr;
+
+            public class Svc
+            {
+                [Obsolete, Conditional("DEBUG")]
+                public void A() {}
+
+                [Obsolete][Conditional("DEBUG")]
+                public void B() {}
+
+                [Obsolete] [Conditional("DEBUG")]
+                public void C() {}
+
+                [Obsolete, Conditional("DEBUG")]
+                [System.ComponentModel.Description("x")]
+                public void D() {}
+
+                [Obsolete, Conditional("DEBUG"), System.ComponentModel.Description("y")]
+                public void E() {}
+
+                [Fact, Trait("cat", "io")]
+                public void F() {}
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Svc");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "A");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "B");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "C");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "D");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "E");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "F");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "Conditional");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "Description");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "Trait");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "Obsolete");
+    }
+
+    [Fact]
+    public void Extract_CSharp_MultiSectionAttributeOnClassOrProperty_DoesNotLeakPhantoms()
+    {
+        // Comma-separated attribute sections on types and properties (EF/ASP.NET/DataAnnotations shape)
+        // must stay clean as well — [Required, StringLength(50), Column("name")] etc.
+        // 型・プロパティに付く [Required, StringLength(50), Column("name")] 形でも phantom が出ないこと。
+        var content = """
+            using System.ComponentModel.DataAnnotations;
+            using System.ComponentModel.DataAnnotations.Schema;
+
+            namespace Data;
+
+            [Serializable, ApiController]
+            public class User
+            {
+                [Required, StringLength(50), Column("name")]
+                public string Name { get; set; } = "";
+
+                [Key, DatabaseGenerated(DatabaseGeneratedOption.Identity)]
+                public int Id { get; set; }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "User");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Name");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Id");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "StringLength");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "Column");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "DatabaseGenerated");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "ApiController");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsRecordVariants()
     {
         // record, record class, record struct with various modifiers
