@@ -460,6 +460,156 @@ public sealed class InstallScriptTests : IDisposable
     }
 
     [Fact]
+    public void ResolveVersion_UsesConfiguredGitHubApiBaseUrl()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            """
+            curl() {
+                local output_path=""
+                local url=""
+                while [ $# -gt 0 ]; do
+                    case "$1" in
+                        -o)
+                            output_path="$2"
+                            shift 2
+                            ;;
+                        -w)
+                            shift 2
+                            ;;
+                        *)
+                            url="$1"
+                            shift
+                            ;;
+                    esac
+                done
+
+                echo "CURL_URL:$url"
+                printf '{"tag_name":"v1.2.3"}' > "$output_path"
+                printf '200'
+                return 0
+            }
+
+            GITHUB_API_BASE_URL="https://mirror.example/api/"
+            resolve_version ""
+            """);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Fetching latest release version", stdout);
+        Assert.Contains("Version: v1.2.3", stdout);
+        Assert.Contains("CURL_URL:https://mirror.example/api/repos/Widthdom/CodeIndex/releases/latest", stdout);
+        Assert.Equal(string.Empty, stderr);
+    }
+
+    [Fact]
+    public void DownloadAndInstall_UsesConfiguredGitHubReleaseBaseUrl()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var installDir = Path.Combine(_tempRoot, "release_base_url_override_bin");
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            """
+            VERSION="v9.9.9"
+            RID="linux-x64"
+            GITHUB_BASE_URL="https://mirror.example/github/"
+
+            download_release_file() {
+                echo "DOWNLOAD_URL:$1"
+                return 1
+            }
+
+            download_and_install || true
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+            },
+            enforceStrictMode: false);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Downloading CodeIndex-linux-x64.tar.gz", stdout);
+        Assert.Contains("DOWNLOAD_URL:https://mirror.example/github/Widthdom/CodeIndex/releases/download/v9.9.9/CodeIndex-linux-x64.tar.gz", stdout);
+        Assert.Equal(string.Empty, stderr);
+    }
+
+    [Fact]
+    public void ResolveVersion_WithoutOverrides_UsesDefaultGitHubApiBaseUrl()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            """
+            curl() {
+                local output_path=""
+                local url=""
+                while [ $# -gt 0 ]; do
+                    case "$1" in
+                        -o)
+                            output_path="$2"
+                            shift 2
+                            ;;
+                        -w)
+                            shift 2
+                            ;;
+                        *)
+                            url="$1"
+                            shift
+                            ;;
+                    esac
+                done
+
+                echo "CURL_URL:$url"
+                printf '{"tag_name":"v1.2.3"}' > "$output_path"
+                printf '200'
+                return 0
+            }
+
+            resolve_version ""
+            """);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Fetching latest release version", stdout);
+        Assert.Contains("Version: v1.2.3", stdout);
+        Assert.Contains("CURL_URL:https://api.github.com/repos/Widthdom/CodeIndex/releases/latest", stdout);
+        Assert.Equal(string.Empty, stderr);
+    }
+
+    [Fact]
+    public void DownloadAndInstall_WithoutOverrides_UsesDefaultGitHubReleaseBaseUrl()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var installDir = Path.Combine(_tempRoot, "release_base_url_default_bin");
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            """
+            VERSION="v9.9.9"
+            RID="linux-x64"
+
+            download_release_file() {
+                echo "DOWNLOAD_URL:$1"
+                return 1
+            }
+
+            download_and_install || true
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+            },
+            enforceStrictMode: false);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Downloading CodeIndex-linux-x64.tar.gz", stdout);
+        Assert.Contains("DOWNLOAD_URL:https://github.com/Widthdom/CodeIndex/releases/download/v9.9.9/CodeIndex-linux-x64.tar.gz", stdout);
+        Assert.Equal(string.Empty, stderr);
+    }
+
+    [Fact]
     public void DownloadAndInstall_MissingAsset_DoesNotCreateFilesInEmptyInstallDir()
     {
         if (OperatingSystem.IsWindows())
