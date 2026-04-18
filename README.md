@@ -77,6 +77,10 @@ That is the whole loop:
 ### Option A: One-liner install (no .NET required)
 
 Works in containers, CI, and any Linux/macOS environment — no .NET SDK needed.
+This includes AI cloud harnesses such as **Claude Code** and **OpenAI Codex**
+containers when they can execute shell commands and reach the release assets.
+For restricted-network cloud sessions, see
+[CLOUD_BOOTSTRAP_PROMPT.md](CLOUD_BOOTSTRAP_PROMPT.md).
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash
@@ -949,6 +953,10 @@ cdidx search "handleRequest"
 ### 方法A: ワンライナーインストール（.NET 不要）
 
 コンテナ、CI、Linux/macOS 環境で .NET SDK なしで使えます。
+これは **Claude Code** や **OpenAI Codex** のクラウド実行環境
+（シェル実行とリリース取得が可能な場合）も含みます。ネットワーク制約のある
+クラウドセッション向け手順は
+[CLOUD_BOOTSTRAP_PROMPT.md](CLOUD_BOOTSTRAP_PROMPT.md) を参照してください。
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash
