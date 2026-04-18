@@ -460,6 +460,74 @@ public sealed class InstallScriptTests : IDisposable
     }
 
     [Fact]
+    public void ResolveVersion_UsesConfiguredGitHubApiBaseUrl()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            """
+            GITHUB_API_BASE_URL="https://mirror.example/api"
+            echo "API_URL:$(latest_release_api_url)"
+            """);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("API_URL:https://mirror.example/api/repos/Widthdom/CodeIndex/releases/latest", stdout);
+        Assert.Equal(string.Empty, stderr);
+    }
+
+    [Fact]
+    public void DownloadAndInstall_UsesConfiguredGitHubReleaseBaseUrl()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            """
+            VERSION="v9.9.9"
+            GITHUB_BASE_URL="https://mirror.example/github"
+            echo "BASE_URL:$(release_download_base_url)"
+            """);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("BASE_URL:https://mirror.example/github/Widthdom/CodeIndex/releases/download/v9.9.9", stdout);
+        Assert.Equal(string.Empty, stderr);
+    }
+
+    [Fact]
+    public void ResolveVersion_WithoutOverrides_UsesDefaultGitHubApiBaseUrl()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            """
+            echo "API_URL:$(latest_release_api_url)"
+            """);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("API_URL:https://api.github.com/repos/Widthdom/CodeIndex/releases/latest", stdout);
+        Assert.Equal(string.Empty, stderr);
+    }
+
+    [Fact]
+    public void DownloadAndInstall_WithoutOverrides_UsesDefaultGitHubReleaseBaseUrl()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            """
+            VERSION="v9.9.9"
+            echo "BASE_URL:$(release_download_base_url)"
+            """);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("BASE_URL:https://github.com/Widthdom/CodeIndex/releases/download/v9.9.9", stdout);
+        Assert.Equal(string.Empty, stderr);
+    }
+
+    [Fact]
     public void DownloadAndInstall_MissingAsset_DoesNotCreateFilesInEmptyInstallDir()
     {
         if (OperatingSystem.IsWindows())

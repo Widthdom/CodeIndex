@@ -27,6 +27,61 @@ curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh 
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
+If `raw.githubusercontent.com` is blocked in your environment, run the
+repo-local installer instead and pin an explicit version (for example, the
+value in this repo's `version.json`) to avoid the extra latest-release API
+lookup:
+
+```bash
+bash ./install.sh vX.Y.Z
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+If release downloads are blocked from `github.com`, point the installer at a
+reachable GitHub mirror/proxy by setting:
+`CDIDX_GITHUB_BASE_URL` and `CDIDX_GITHUB_API_BASE_URL` before running
+`install.sh`.
+
+Example:
+
+```bash
+export CDIDX_GITHUB_BASE_URL="https://<your-mirror-host>"
+export CDIDX_GITHUB_API_BASE_URL="https://<your-mirror-host>/api"
+bash ./install.sh vX.Y.Z
+```
+
+Do not assume "Claude Code cloud has no outbound restrictions" just because it
+works there. A more common difference is that each environment has different
+egress policy / proxy allow-lists. Before concluding root cause, compare:
+
+```bash
+env | grep -Ei '(^|_)(http|https)_proxy|no_proxy' || true
+curl -I https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh
+curl -I https://github.com/Widthdom/CodeIndex/releases/download/vX.Y.Z/CodeIndex-linux-x64.tar.gz
+```
+
+If one environment gets `200/302` and another gets `403` (or `CONNECT tunnel
+failed`), treat it as a network-policy difference first, not an installer bug.
+
+### Optional: zero-external-network install-path self-test
+
+If outbound traffic is blocked but you still want to verify installer logic
+end-to-end, host a **local mirror** on `127.0.0.1` and point
+`CDIDX_GITHUB_BASE_URL` to it. The installer still performs checksum
+verification and extraction exactly as in production; only the source host is
+local.
+
+You can run the built-in self-test mode:
+
+```bash
+bash ./install.sh --self-test-local-mirror
+```
+
+This mode uses a mock payload only to validate installer flow (download URL
+selection, checksum verification, extraction, placement). It is not a
+replacement for validating official release artifacts in a network-open
+environment.
+
 The installer downloads the latest release tarball, verifies SHA256, and
 copies the binary **plus the adjacent runtime assets** (`version.json` and
 `libe_sqlite3.so` on Linux / `libe_sqlite3.dylib` on macOS) into
@@ -166,6 +221,58 @@ any destructive action.
 curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash
 export PATH="$HOME/.local/bin:$PATH"
 ```
+
+もし環境の制約で `raw.githubusercontent.com` に到達できない場合は、リポジトリ
+内の `install.sh` を直接実行し、`latest` API 参照を避けるため明示バージョン
+（例: このリポジトリの `version.json` の値）を指定してください:
+
+```bash
+bash ./install.sh vX.Y.Z
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+`github.com` からのリリース取得自体がブロックされる環境では、`install.sh`
+実行前に `CDIDX_GITHUB_BASE_URL` と `CDIDX_GITHUB_API_BASE_URL` を設定して、
+到達可能な GitHub mirror/proxy 経由に切り替えてください。
+
+例:
+
+```bash
+export CDIDX_GITHUB_BASE_URL="https://<your-mirror-host>"
+export CDIDX_GITHUB_API_BASE_URL="https://<your-mirror-host>/api"
+bash ./install.sh vX.Y.Z
+```
+
+なお、「Claude Code cloud では通る」ことだけで
+「外向き制限が一切ない」とは断定しないでください。実際には環境ごとに
+egress policy や proxy の allow-list が異なるケースが多いです。結論前に、
+次を比較してください:
+
+```bash
+env | grep -Ei '(^|_)(http|https)_proxy|no_proxy' || true
+curl -I https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh
+curl -I https://github.com/Widthdom/CodeIndex/releases/download/vX.Y.Z/CodeIndex-linux-x64.tar.gz
+```
+
+片方が `200/302`、もう片方が `403`（または `CONNECT tunnel failed`）なら、
+まず installer 不具合よりネットワークポリシー差分を疑うべきです。
+
+### 任意: 外向きネットワーク不要のインストール経路 self-test
+
+外向き通信が塞がれていても installer の処理経路を end-to-end で検証したい場合、
+`127.0.0.1` 上に**ローカル mirror**を立てて
+`CDIDX_GITHUB_BASE_URL` を向ける方法が使えます。これでも checksum 検証・展開・
+配置の流れ自体は本番と同じで、取得元ホストだけをローカル化できます。
+
+組み込みの self-test モードは次のとおりです:
+
+```bash
+bash ./install.sh --self-test-local-mirror
+```
+
+このモードは installer の処理経路（取得URL選択・checksum 検証・展開・配置）
+を確認するための mock payload を使います。ネットワークが開いた環境での
+公式 release artifact 検証の代替ではありません。
 
 インストーラは最新リリースの tarball をダウンロードし、SHA256 を検証して、
 バイナリに加え**隣接ランタイム資産**（`version.json`、Linux は
