@@ -227,7 +227,8 @@ Default output:
 ⠹ Scanning...
   Found 42 files
 
-Indexing...
+⠋ Indexing...
+⠙ Indexing...
   ████████████████████░░░░░░░░░░░░  67.0%  [28/42]
 
 Done.
@@ -242,6 +243,8 @@ Done.
   Elapsed : 00:00:02
 ```
 
+During long-running indexing on an interactive terminal, `Indexing...` stays live as a spinner instead of dropping to a fixed line until the next 50-file progress update. Warnings still print immediately, but the spinner resumes right after each warning so the run does not look frozen. When stdout is redirected (for example `cdidx . > out.txt`), cdidx prints a single `Indexing...` line to stdout, keeps warnings on stderr, and emits only line-based progress updates to stdout.
+
 Machine-readable output also reports the post-run readiness bits directly:
 
 ```bash
@@ -255,6 +258,7 @@ cdidx ./myproject --json
 With `--verbose`, each file also shows a status tag so you can see exactly what happened:
 
 ```
+  [WARN] src/generated/min.js: line exceeded max display width
   [OK  ] src/app.cs (12 chunks, 5 symbols)
   [SKIP] src/utils.cs
   [DEL ] src/old.cs
@@ -262,6 +266,8 @@ With `--verbose`, each file also shows a status tag so you can see exactly what 
 ```
 
 > `[OK  ]` = indexed successfully, `[SKIP]` = unchanged / skipped, `[DEL ]` = deleted from DB (file removed from disk), `[ERR ]` = failed (verbose mode includes stack trace)
+
+Warnings are written to stderr. On an interactive terminal, the indexing spinner pauses long enough to print each warning cleanly, then resumes immediately.
 
 This is useful for debugging indexing issues or verifying which files were actually processed.
 
@@ -1144,7 +1150,8 @@ cdidx ./myproject --verbose     # ファイルごとの詳細表示
 ⠹ Scanning...
   Found 42 files
 
-Indexing...
+⠋ Indexing...
+⠙ Indexing...
   ████████████████████░░░░░░░░░░░░  67.0%  [28/42]
 
 Done.
@@ -1159,6 +1166,8 @@ Done.
   Elapsed : 00:00:02
 ```
 
+対話ターミナルで長時間インデックスするときも、`Indexing...` は次の 50 ファイル更新まで固定文字列に落ちず、スピナーとして動き続けます。警告はその場で表示されますが、各警告の直後にスピナーが再開するため、処理が止まったようには見えません。stdout をリダイレクトしている場合（例: `cdidx . > out.txt`）は、stdout には `Indexing...` を 1 回だけ出し、警告は stderr に分離したまま、stdout には行単位の進捗だけを出します。
+
 機械向けの `--json` 出力でも、実行後の readiness bit がそのまま返ります:
 
 ```bash
@@ -1172,6 +1181,7 @@ cdidx ./myproject --json
 `--verbose` を付けると、各ファイルにステータスタグも表示され、何が起きたか一目でわかります:
 
 ```
+  [WARN] src/generated/min.js: 表示幅を超える長い行を検出
   [OK  ] src/app.cs (12 chunks, 5 symbols)
   [SKIP] src/utils.cs
   [DEL ] src/old.cs
@@ -1179,6 +1189,8 @@ cdidx ./myproject --json
 ```
 
 > `[OK  ]` = インデックス成功、`[SKIP]` = 未変更・スキップ、`[DEL ]` = DBから削除（ディスク上のファイルが消えた）、`[ERR ]` = 失敗（verboseではスタックトレースも表示）
+
+警告は stderr に出ます。対話ターミナルでは、警告をきれいに表示するために一瞬だけスピナーを止め、表示後すぐに再開します。
 
 インデックスの問題をデバッグしたり、どのファイルが実際に処理されたかを確認するのに便利です。
 

@@ -588,6 +588,8 @@ public static class IndexCommandRunner
 
         if (!options.Json)
             Console.WriteLine($"Updating {targetPaths.Count} file(s)...");
+        CancellationTokenSource? updateCts = null;
+        var interactiveUpdateSpinner = !options.Json && !Console.IsOutputRedirected;
         int updated = 0, removed = 0, skipped = 0, warnings = 0, errors = 0;
         var errorList = new List<object>();
         var warningList = new List<object>();
@@ -653,8 +655,37 @@ public static class IndexCommandRunner
                 }
 
                 if (!options.Json)
+                {
+                    PauseUpdateSpinnerForConsoleWrite();
                     ConsoleUi.PrintWarning($"{scanError.Path}: {scanError.Message}");
+                    ResumeUpdateSpinnerAfterConsoleWrite();
+                }
             }
+        }
+
+        void StartUpdateSpinnerIfNeeded()
+        {
+            if (!interactiveUpdateSpinner || updateCts != null)
+                return;
+
+            updateCts = ConsoleUi.StartSpinner("Updating...", spinnerFrames);
+        }
+
+        void PauseUpdateSpinnerForConsoleWrite()
+        {
+            if (updateCts == null)
+                return;
+
+            ConsoleUi.StopSpinner(updateCts);
+            updateCts = null;
+        }
+
+        void ResumeUpdateSpinnerAfterConsoleWrite()
+        {
+            if (!interactiveUpdateSpinner)
+                return;
+
+            StartUpdateSpinnerIfNeeded();
         }
 
         if (writer.CountUnsupportedReferences(supportedGraphLanguages) > 0)
@@ -667,8 +698,11 @@ public static class IndexCommandRunner
                 purgeTxn.Commit();
         }
 
+        StartUpdateSpinnerIfNeeded();
+
         foreach (var relPath in targetPaths)
         {
+            StartUpdateSpinnerIfNeeded();
             var absPath = Path.Combine(projectRoot, relPath.Replace('/', Path.DirectorySeparatorChar));
             try
             {
@@ -678,7 +712,11 @@ public static class IndexCommandRunner
                     {
                         skipped++;
                         if (options.Verbose && !options.Json)
+                        {
+                            PauseUpdateSpinnerForConsoleWrite();
                             Console.WriteLine($"  [SKIP] {relPath} (not in DB)");
+                            ResumeUpdateSpinnerAfterConsoleWrite();
+                        }
                         continue;
                     }
 
@@ -691,13 +729,21 @@ public static class IndexCommandRunner
                         removed++;
                         ftsMutated = true;
                         if (options.Verbose && !options.Json)
+                        {
+                            PauseUpdateSpinnerForConsoleWrite();
                             Console.WriteLine($"  [DEL ] {relPath}");
+                            ResumeUpdateSpinnerAfterConsoleWrite();
+                        }
                     }
                     else
                     {
                         skipped++;
                         if (options.Verbose && !options.Json)
+                        {
+                            PauseUpdateSpinnerForConsoleWrite();
                             Console.WriteLine($"  [SKIP] {relPath} (not in DB)");
+                            ResumeUpdateSpinnerAfterConsoleWrite();
+                        }
                     }
                     continue;
                 }
@@ -710,7 +756,11 @@ public static class IndexCommandRunner
                     {
                         skipped++;
                         if (options.Verbose && !options.Json)
+                        {
+                            PauseUpdateSpinnerForConsoleWrite();
                             Console.WriteLine($"  [SKIP] {relPath} ({DescribePathFilter(pathFilter.FilterKind)})");
+                            ResumeUpdateSpinnerAfterConsoleWrite();
+                        }
                         continue;
                     }
 
@@ -718,7 +768,11 @@ public static class IndexCommandRunner
                     {
                         skipped++;
                         if (options.Verbose && !options.Json)
+                        {
+                            PauseUpdateSpinnerForConsoleWrite();
                             Console.WriteLine($"  [SKIP] {relPath} ({DescribePathFilter(pathFilter.FilterKind)})");
+                            ResumeUpdateSpinnerAfterConsoleWrite();
+                        }
                         continue;
                     }
 
@@ -731,13 +785,21 @@ public static class IndexCommandRunner
                         removed++;
                         ftsMutated = true;
                         if (options.Verbose && !options.Json)
+                        {
+                            PauseUpdateSpinnerForConsoleWrite();
                             Console.WriteLine($"  [DEL ] {relPath} ({DescribePathFilter(pathFilter.FilterKind)})");
+                            ResumeUpdateSpinnerAfterConsoleWrite();
+                        }
                     }
                     else
                     {
                         skipped++;
                         if (options.Verbose && !options.Json)
+                        {
+                            PauseUpdateSpinnerForConsoleWrite();
                             Console.WriteLine($"  [SKIP] {relPath} ({DescribePathFilter(pathFilter.FilterKind)})");
+                            ResumeUpdateSpinnerAfterConsoleWrite();
+                        }
                     }
                     continue;
                 }
@@ -752,10 +814,12 @@ public static class IndexCommandRunner
                     errorList.Add(new { file = relPath, message = "Could not probe file for indexability/language." });
                     if (!options.Json)
                     {
+                        PauseUpdateSpinnerForConsoleWrite();
                         if (options.Verbose)
                             Console.Error.WriteLine($"  [ERR ] {relPath}: Could not probe file for indexability/language.");
                         else
                             Console.Error.WriteLine($"  [ERR ] {relPath}: Could not probe file for indexability/language.");
+                        ResumeUpdateSpinnerAfterConsoleWrite();
                     }
                     continue;
                 }
@@ -766,7 +830,11 @@ public static class IndexCommandRunner
                     {
                         skipped++;
                         if (options.Verbose && !options.Json)
+                        {
+                            PauseUpdateSpinnerForConsoleWrite();
                             Console.WriteLine($"  [SKIP] {relPath} (unsupported type)");
+                            ResumeUpdateSpinnerAfterConsoleWrite();
+                        }
                         continue;
                     }
 
@@ -779,13 +847,21 @@ public static class IndexCommandRunner
                         removed++;
                         ftsMutated = true;
                         if (options.Verbose && !options.Json)
+                        {
+                            PauseUpdateSpinnerForConsoleWrite();
                             Console.WriteLine($"  [DEL ] {relPath} (no longer indexable)");
+                            ResumeUpdateSpinnerAfterConsoleWrite();
+                        }
                     }
                     else
                     {
                         skipped++;
                         if (options.Verbose && !options.Json)
+                        {
+                            PauseUpdateSpinnerForConsoleWrite();
                             Console.WriteLine($"  [SKIP] {relPath} (unsupported type)");
+                            ResumeUpdateSpinnerAfterConsoleWrite();
+                        }
                     }
                     continue;
                 }
@@ -793,7 +869,11 @@ public static class IndexCommandRunner
                 var (record, content, rawBytes, warning) = indexer.BuildRecordWithRawBytes(absPath);
 
                 if (warning != null && !options.Json)
+                {
+                    PauseUpdateSpinnerForConsoleWrite();
                     ConsoleUi.PrintWarning(warning);
+                    ResumeUpdateSpinnerAfterConsoleWrite();
+                }
 
                 var existingId = writer.GetUnchangedFileId(
                     record.Path,
@@ -804,7 +884,11 @@ public static class IndexCommandRunner
                 {
                     skipped++;
                     if (options.Verbose && !options.Json)
+                    {
+                        PauseUpdateSpinnerForConsoleWrite();
                         Console.WriteLine($"  [SKIP] {relPath} (unchanged)");
+                        ResumeUpdateSpinnerAfterConsoleWrite();
+                    }
                     continue;
                 }
 
@@ -827,7 +911,11 @@ public static class IndexCommandRunner
                 updated++;
                 ftsMutated = true;
                 if (options.Verbose && !options.Json)
+                {
+                    PauseUpdateSpinnerForConsoleWrite();
                     Console.WriteLine($"  [OK  ] {relPath} ({chunks.Count} chunks, {symbols.Count} symbols, {references.Count} refs)");
+                    ResumeUpdateSpinnerAfterConsoleWrite();
+                }
             }
             catch (Exception ex)
             {
@@ -837,13 +925,17 @@ public static class IndexCommandRunner
                 errorList.Add(new { file = relPath, message = ex.Message });
                 if (!options.Json)
                 {
+                    PauseUpdateSpinnerForConsoleWrite();
                     if (options.Verbose)
                         Console.Error.WriteLine($"  [ERR ] {relPath}: {ex.Message}\n{ex.StackTrace}");
                     else
                         Console.Error.WriteLine($"  [ERR ] {relPath}: {ex.Message}");
+                    ResumeUpdateSpinnerAfterConsoleWrite();
                 }
             }
         }
+
+        PauseUpdateSpinnerForConsoleWrite();
 
         if (purgedRefs > 0 && !options.Json)
             Console.WriteLine($"  Purged {purgedRefs:N0} stale references (unsupported language)");
@@ -1311,25 +1403,69 @@ public static class IndexCommandRunner
             Console.WriteLine($"  Purged {purgedRefs:N0} stale references (unsupported language)");
 
         CancellationTokenSource? indexCts = null;
-        if (!options.Json)
-            indexCts = ConsoleUi.StartSpinner("Indexing...", spinnerFrames);
         int processed = 0, skipped = 0, warnings = warningList.Count, errors = errorList.Count;
-        bool indexSpinnerStopped = false;
+
+        var interactiveIndexSpinner = !options.Json && !Console.IsOutputRedirected;
+        var redirectedIndexingMessagePrinted = false;
+
+        void StartIndexSpinnerIfNeeded()
+        {
+            if (!interactiveIndexSpinner || indexCts != null)
+                return;
+
+            indexCts = ConsoleUi.StartSpinner("Indexing...", spinnerFrames);
+        }
+
+        void PauseIndexSpinnerForConsoleWrite()
+        {
+            if (indexCts == null)
+                return;
+
+            ConsoleUi.StopSpinner(indexCts);
+            indexCts = null;
+        }
+
+        void ResumeIndexSpinnerAfterConsoleWrite()
+        {
+            if (!interactiveIndexSpinner || processed >= files.Count)
+                return;
+
+            StartIndexSpinnerIfNeeded();
+        }
+
+        void EnsureIndexingActivityVisible()
+        {
+            if (options.Json)
+                return;
+
+            if (interactiveIndexSpinner)
+            {
+                StartIndexSpinnerIfNeeded();
+                return;
+            }
+
+            if (redirectedIndexingMessagePrinted)
+                return;
+
+            Console.WriteLine("Indexing...");
+            redirectedIndexingMessagePrinted = true;
+        }
+
+        EnsureIndexingActivityVisible();
 
         foreach (var filePath in files)
         {
-            if (!indexSpinnerStopped)
-            {
-                ConsoleUi.StopSpinner(indexCts);
-                indexSpinnerStopped = true;
-                if (!options.Json) Console.WriteLine("Indexing...");
-            }
+            EnsureIndexingActivityVisible();
             try
             {
                 var (record, content, rawBytes, warning) = indexer.BuildRecordWithRawBytes(filePath);
 
                 if (warning != null && !options.Json)
+                {
+                    PauseIndexSpinnerForConsoleWrite();
                     ConsoleUi.PrintWarning(warning);
+                    ResumeIndexSpinnerAfterConsoleWrite();
+                }
 
                 var existingId = writer.GetUnchangedFileId(
                     record.Path,
@@ -1342,10 +1478,17 @@ public static class IndexCommandRunner
                     processed++;
                     if (options.Verbose && !options.Json)
                     {
+                        PauseIndexSpinnerForConsoleWrite();
                         ConsoleUi.ClearProgressLine();
                         Console.WriteLine($"  [SKIP] {record.Path}");
+                        ResumeIndexSpinnerAfterConsoleWrite();
                     }
-                    if (!options.Json) ConsoleUi.PrintProgress(processed, files.Count);
+                    if (!options.Json)
+                    {
+                        PauseIndexSpinnerForConsoleWrite();
+                        ConsoleUi.PrintProgress(processed, files.Count);
+                        ResumeIndexSpinnerAfterConsoleWrite();
+                    }
                     continue;
                 }
 
@@ -1366,8 +1509,10 @@ public static class IndexCommandRunner
 
                 if (options.Verbose && !options.Json)
                 {
+                    PauseIndexSpinnerForConsoleWrite();
                     ConsoleUi.ClearProgressLine();
                     Console.WriteLine($"  [OK  ] {record.Path} ({chunks.Count} chunks, {symbols.Count} symbols, {references.Count} refs)");
+                    ResumeIndexSpinnerAfterConsoleWrite();
                 }
             }
             catch (Exception ex)
@@ -1376,23 +1521,26 @@ public static class IndexCommandRunner
                 errorList.Add(new { file = filePath, message = ex.Message });
                 if (!options.Json)
                 {
+                    PauseIndexSpinnerForConsoleWrite();
                     ConsoleUi.ClearProgressLine();
                     if (options.Verbose)
                         Console.Error.WriteLine($"  [ERR ] {filePath}: {ex.Message}\n{ex.StackTrace}");
                     else
                         Console.Error.WriteLine($"  [ERR ] {filePath}: {ex.Message}");
+                    ResumeIndexSpinnerAfterConsoleWrite();
                 }
             }
 
             processed++;
-            if (!options.Json) ConsoleUi.PrintProgress(processed, files.Count);
+            if (!options.Json)
+            {
+                PauseIndexSpinnerForConsoleWrite();
+                ConsoleUi.PrintProgress(processed, files.Count);
+                ResumeIndexSpinnerAfterConsoleWrite();
+            }
         }
 
-        if (!indexSpinnerStopped)
-        {
-            ConsoleUi.StopSpinner(indexCts);
-            if (!options.Json) Console.WriteLine("Indexing...");
-        }
+        PauseIndexSpinnerForConsoleWrite();
 
         writer.OptimizeFts();
         // Only stamp readiness on a fully successful run (errors == 0). A partial / error
