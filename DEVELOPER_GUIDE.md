@@ -22,6 +22,7 @@ src/CodeIndex/
     ConsoleUi.cs              — Spinner, progress bar, banner, easter egg, version, usage text
     DbPathResolver.cs         — Resolve default index DB paths and query-time project roots for explicit `--db` values
     GitHelper.cs              — Git helpers: diff-tree for --commits, worktree-aware common dir resolution
+    GlobalToolLog.cs          — Best-effort persistent stderr/lifecycle log for distributed installs, with 30-file retention
     IndexCommandRunner.cs     — Index command execution, ignore-aware update/full-scan flows, backfill-fold upgrade path
     QueryCommandRunner.cs     — Search/definition/references/callers/callees/symbols/files/find/excerpt/map/inspect/outline/status execution and query arg parsing
     SearchSnippetFormatter.cs — Match-centered search snippet formatting for human/JSON output
@@ -665,6 +666,18 @@ intentionally ignored by `--reinstall-real` so a broken build can never
 clobber a working real install, and both temp dirs are cleaned up on normal
 exit and on failure via `trap`.
 
+For post-install troubleshooting on "silent" hosts that swallow terminal
+stderr, distributed/non-development executions also mirror stderr plus minimal
+lifecycle breadcrumbs to a per-user daily log. The log path is
+`%LOCALAPPDATA%\cdidx\logs\` on Windows, `~/Library/Logs/cdidx/` on macOS,
+and `$XDG_STATE_HOME/cdidx/logs/` (or `~/.local/state/cdidx/logs/`) on Linux.
+The file name is `stderr-YYYYMMDD.log`, and the logger keeps only the newest
+30 daily files. Repository-local development runs from `src/CodeIndex/bin/...`
+and `tests/.../bin/...` are excluded by default so ordinary build/test cycles
+do not accumulate persistent logs. Set `CDIDX_DISABLE_PERSISTENT_LOG=1` to opt
+out entirely, or `CDIDX_GLOBAL_TOOL_LOG_DIR` to redirect the log directory
+during testing or packaging.
+
 ### The moving parts
 
 Four artifacts have to end up in three correct places for `cdidx` to work:
@@ -1044,6 +1057,7 @@ flowchart TD
 | `Error: --json is not available on this trimmed build.` | `PublishTrimmed` + reflection-based `JsonSerializer` on the self-contained release | Current fail-fast behavior. Use the default human-readable output, the MCP server, or the NuGet/global-tool build until a source-gen or publish-configuration fix ships |
 | `cdidx status` shows `Files: 0` on a repo that clearly has files | Index DB never built, or pointing at the wrong `--db` | Run `cdidx <projectPath>` first; verify `.cdidx/codeindex.db` exists |
 | Every command shows `index fresh` but results are obviously stale | You indexed a different working copy | Re-run `cdidx . --commits HEAD` or `cdidx . --files <paths>` |
+| The host swallowed stderr and the user only knows "cdidx did not work" | The shell or launcher captured/discarded terminal stderr | Inspect the daily persistent stderr log in the per-user `cdidx/logs/` directory (`stderr-YYYYMMDD.log`); disable with `CDIDX_DISABLE_PERSISTENT_LOG=1` only when you intentionally do not want breadcrumbs |
 
 ### Why this matters
 
@@ -1687,6 +1701,19 @@ bootstrap prompt では、maintainer が押さえるべき cloud 向け installe
 
 mock に頼らないリリース前検証として、`install.sh --reinstall-real <version>` は指定タグを隔離された `/tmp/cdidx-reinstall-real.XXXXXX` にダウンロード・インストールしたうえで、`cdidx --version` を走らせて報告されたバージョンが要求タグと一致することを検証し、さらに `/tmp/cdidx-reinstall-scratch.XXXXXX` に極小の Python プロジェクトを生成して `cdidx . --db <scratch>/.cdidx/codeindex.db` と `cdidx search greet --db <...>` を通し、出力中にスクラッチシンボルが現れることを確認する。出力は人間向けフォーマットを意図的に使う: trimmed release build は `--json` に対して exit code 4 で早期失敗するため、`--json` を要求する検証モードは実リリースでは原理的に成功し得ない。これにより、新しいバイナリの上で実インデックス経路（シンボル抽出、ネイティブ SQLite ロード、FTS5 検索）まで実際に動くかを確認できる。`--self-test-local-mirror` のモックは `--version` しかスタブしないため、インデックスや検索経路の回帰はそちらでは素通りしてしまう。`--reinstall-real` は `CDIDX_INSTALL_DIR` を意図的に無視するので、検証モードで壊れたビルドが実インストールを上書きすることはない。temp インストールディレクトリとスクラッチディレクトリは、正常終了でも失敗でも `trap` によって確実に片付けられる。
 
+"silent host" で端末 stderr が握りつぶされるケースに備えて、配布済み/
+常用実行では stderr と最小限のライフサイクル情報をユーザー単位の日次
+ログにも複写するようになっている。保存先は Windows では
+`%LOCALAPPDATA%\cdidx\logs\`、macOS では `~/Library/Logs/cdidx/`、
+Linux では `$XDG_STATE_HOME/cdidx/logs/`（未設定時は
+`~/.local/state/cdidx/logs/`）で、ファイル名は `stderr-YYYYMMDD.log`。
+保持世代は新しい 30 ファイルまで。通常の開発/テストサイクルで
+ワークツリー直下に永続ログが増えないよう、`src/CodeIndex/bin/...`
+と `tests/.../bin/...` からのリポジトリ内開発実行は既定で対象外として
+いる。完全に無効化したい場合は `CDIDX_DISABLE_PERSISTENT_LOG=1`、
+テストやパッケージングで保存先を切り替えたい場合は
+`CDIDX_GLOBAL_TOOL_LOG_DIR` を使う。
+
 ### 構成要素
 
 `cdidx` が動作するためには、4つのアーティファクトが3つの正しい場所に収まる必要がある:
@@ -1942,6 +1969,7 @@ flowchart TD
 | `Error: --json is not available on this trimmed build.` | 自己完結リリースの `PublishTrimmed` + リフレクションベース `JsonSerializer` | 現在の fail-fast 挙動。ソース生成または publish 設定修正版が出るまでは、人間向け出力、MCP サーバー、または NuGet グローバルツール版を使う |
 | 明らかにファイルのあるリポジトリで `cdidx status` が `Files: 0` | インデックス DB を作っていない、あるいは別の `--db` を指している | 先に `cdidx <projectPath>` を実行。`.cdidx/codeindex.db` の存在を確認 |
 | 全コマンドが `index fresh` だが結果は明らかに古い | 別の作業コピーにインデックスを張っている | `cdidx . --commits HEAD` または `cdidx . --files <paths>` を再実行 |
+| ホストが stderr を握りつぶし、ユーザーには「cdidx がうまく動かない」だけが見える | シェルやランチャーが端末 stderr を回収または破棄している | ユーザーごとの `cdidx/logs/` 配下にある日次の永続 stderr ログ（`stderr-YYYYMMDD.log`）を確認する。意図的に痕跡を残したくないときだけ `CDIDX_DISABLE_PERSISTENT_LOG=1` で無効化する |
 
 ### なぜこれが重要か
 

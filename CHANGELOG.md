@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+#### Changed
+- **Distributed installs now keep persistent stderr breadcrumbs with 30-day retention** — `ProgramRunner` now enables `GlobalToolLog` for distributed/non-development executions and mirrors terminal stderr plus minimal lifecycle metadata into a per-user daily file named `stderr-YYYYMMDD.log`. Repository-local development runs from `src/CodeIndex/bin/...` and `tests/.../bin/...` stay excluded by default so normal build/test cycles do not accumulate persistent logs. Default log roots are `%LOCALAPPDATA%\cdidx\logs\` on Windows, `~/Library/Logs/cdidx/` on macOS, and `$XDG_STATE_HOME/cdidx/logs/` (or `~/.local/state/cdidx/logs/`) on Linux. The log directory is pruned to the newest 30 daily files on startup, `CDIDX_DISABLE_PERSISTENT_LOG=1` disables the feature, and `CDIDX_GLOBAL_TOOL_LOG_DIR` remains available for test/packaging overrides. Added regression coverage for stderr mirroring, 30-file pruning, and explicit opt-out, and documented the behavior in the user and developer guides. Affected: `src/CodeIndex/Cli/GlobalToolLog.cs`, `src/CodeIndex/Cli/ProgramRunner.cs`, `tests/CodeIndex.Tests/ProgramRunnerTests.cs`, `README.md`, `DEVELOPER_GUIDE.md`.
+
 ### [1.12.0] - 2026-04-19
 
 #### Changed
@@ -745,6 +748,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## 日本語
 
 ### [Unreleased]
+
+#### 変更
+- **配布済み実行で永続 stderr ログを保持し、保持世代を 30 日分にした** — `ProgramRunner` は配布済み/常用実行で `GlobalToolLog` を有効化し、端末 stderr と最小限のライフサイクル情報をユーザー単位の日次ファイル `stderr-YYYYMMDD.log` に複写するようになった。通常の build/test サイクルで永続ログが増えないよう、`src/CodeIndex/bin/...` と `tests/.../bin/...` からのリポジトリ内開発実行は既定で除外する。既定の保存先は Windows では `%LOCALAPPDATA%\cdidx\logs\`、macOS では `~/Library/Logs/cdidx/`、Linux では `$XDG_STATE_HOME/cdidx/logs/`（未設定時は `~/.local/state/cdidx/logs/`）。起動時にログディレクトリを新しい 30 個の日次ファイルだけ残すよう prune し、`CDIDX_DISABLE_PERSISTENT_LOG=1` で無効化、`CDIDX_GLOBAL_TOOL_LOG_DIR` はテスト/パッケージング用 override として引き続き利用できる。stderr ミラー、30 ファイル prune、明示 opt-out の回帰テストを追加し、ユーザー向け/開発者向けドキュメントにも挙動を追記した。対象: `src/CodeIndex/Cli/GlobalToolLog.cs`, `src/CodeIndex/Cli/ProgramRunner.cs`, `tests/CodeIndex.Tests/ProgramRunnerTests.cs`, `README.md`, `DEVELOPER_GUIDE.md`。
 
 ### [1.12.0] - 2026-04-19
 

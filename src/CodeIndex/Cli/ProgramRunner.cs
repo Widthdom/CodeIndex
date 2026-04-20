@@ -9,6 +9,7 @@ internal static class ProgramRunner
     internal static int Run(string[] args, JsonSerializerOptions? jsonOptions = null, string? appVersion = null)
     {
         appVersion ??= ConsoleUi.LoadVersion();
+        using var globalToolLog = GlobalToolLog.TryStart(args, appVersion);
         jsonOptions ??= new JsonSerializerOptions
         {
             PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
@@ -19,21 +20,28 @@ internal static class ProgramRunner
         if (args.Length == 0 || args[0] is "--help" or "-h")
         {
             ConsoleUi.PrintUsage(showBanner: args.Length > 0);
+            GlobalToolLog.Info($"command_complete exit_code={(args.Length == 0 ? CommandExitCodes.UsageError : CommandExitCodes.Success)} help_or_usage=true");
             return args.Length == 0 ? CommandExitCodes.UsageError : CommandExitCodes.Success;
         }
 
         if (args[0] is "--version" or "-V")
         {
             Console.WriteLine($"cdidx v{appVersion}");
+            GlobalToolLog.Info($"command_complete exit_code={CommandExitCodes.Success} version_only=true");
             return CommandExitCodes.Success;
         }
 
         if (args[0] == "--completions")
-            return RunCompletions(args[1..]);
+        {
+            var exitCode = RunCompletions(args[1..]);
+            GlobalToolLog.Info($"command_complete exit_code={exitCode} command=completions");
+            return exitCode;
+        }
 
         if (args.Length > 1 && ArgHelper.WantsHelp(args.AsSpan(1)))
         {
             ConsoleUi.PrintUsage(showBanner: true);
+            GlobalToolLog.Info($"command_complete exit_code={CommandExitCodes.Success} subcommand_help=true");
             return CommandExitCodes.Success;
         }
 
@@ -41,15 +49,20 @@ internal static class ProgramRunner
         if (easterEgg != null && !args.Any(a => !a.StartsWith('-')))
         {
             ConsoleUi.PrintEasterEggMessage(easterEgg);
+            GlobalToolLog.Info($"command_complete exit_code={CommandExitCodes.Success} easter_egg={easterEgg}");
             return CommandExitCodes.Success;
         }
 
         try
         {
             if (args[0] is "mcp" or "mcp-server")
-                return RunMcp(args[1..], appVersion);
+            {
+                var mcpExitCode = RunMcp(args[1..], appVersion);
+                GlobalToolLog.Info($"command_complete exit_code={mcpExitCode} command=mcp");
+                return mcpExitCode;
+            }
 
-            return args[0] switch
+            var exitCode = args[0] switch
             {
                 "search" => QueryCommandRunner.RunSearch(args[1..], jsonOptions),
                 "definition" => QueryCommandRunner.RunDefinition(args[1..], jsonOptions),
@@ -76,12 +89,18 @@ internal static class ProgramRunner
                     => IndexCommandRunner.Run(args, jsonOptions),
                 _ => ShowError(args, $"Unknown command: {args[0]}")
             };
+            GlobalToolLog.Info($"command_complete exit_code={exitCode} command={args[0]}");
+            return exitCode;
         }
         catch (Exception ex)
         {
             if (JsonOutputFailure.TryHandle(ex, out var exitCode))
+            {
+                GlobalToolLog.Error($"command_complete exit_code={exitCode} handled_exception={ex.GetType().Name}: {ex.Message}");
                 return exitCode;
+            }
 
+            GlobalToolLog.Error($"unhandled_exception type={ex.GetType().FullName}: {ex}");
             throw;
         }
     }
