@@ -9314,6 +9314,83 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_CarriedBlockCommentLookalike_DoesNotEmitPhantomSymbol()
+    {
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public partial class Host",
+            "{",
+            "    public partial class Wrapped<T>",
+            "        where T : class",
+            "    {",
+            "        /*",
+            "        public partial class Fake { } */ public partial class Child { } }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Fake");
+        var child = Assert.Single(symbols.Where(s =>
+            s.Kind == "class"
+            && s.Name == "Child"
+            && s.ContainerKind == "class"
+            && s.ContainerName == "Wrapped"));
+        Assert.Equal("public partial class Child { }", child.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_CarriedBlockCommentSameName_DoesNotDuplicateSingleRealSymbol()
+    {
+        var content = string.Join(
+            "\n",
+            "public partial class Host",
+            "{",
+            "    public partial class Wrapped<T>",
+            "        where T : class",
+            "    {",
+            "        /*",
+            "        public partial class Child { } */ public partial class Child { } }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var children = symbols
+            .Where(s => s.Kind == "class" && s.Name == "Child")
+            .ToList();
+        var child = Assert.Single(children);
+        Assert.Equal("class", child.ContainerKind);
+        Assert.Equal("Wrapped", child.ContainerName);
+        Assert.Equal("public partial class Child { }", child.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_CarriedBlockCommentSameNamePlusOuterSibling_OnlyKeepsRealSymbols()
+    {
+        var content = string.Join(
+            "\n",
+            "public partial class Host",
+            "{",
+            "    public partial class Wrapped<T>",
+            "        where T : class",
+            "    {",
+            "        /*",
+            "        public partial class Child { } */ public partial class Child { } }",
+            "",
+            "    public partial class Child { }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var children = symbols
+            .Where(s => s.Kind == "class" && s.Name == "Child")
+            .OrderBy(s => s.Line)
+            .ToList();
+        Assert.Equal(2, children.Count);
+        Assert.Equal(("class", "Wrapped"), (children[0].ContainerKind, children[0].ContainerName));
+        Assert.Equal(("class", "Host"), (children[1].ContainerKind, children[1].ContainerName));
+        Assert.All(children, child => Assert.Equal("public partial class Child { }", child.Signature));
+    }
+
+    [Fact]
     public void Extract_CSharp_SameLineGenericBraceBodiedMembersStillExposeLaterCompactSiblings()
     {
         // After the #525 raw-column brace clamp, same-line generic brace-bodied

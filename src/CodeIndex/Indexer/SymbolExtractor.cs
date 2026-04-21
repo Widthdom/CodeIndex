@@ -1546,9 +1546,10 @@ public static class SymbolExtractor
                     var csharpSameLineBraceStartColumn = csharpSingleLineCollapsedMatch
                         ? csharpSignatureRawStartColumn
                         : absoluteStartColumn;
+                    var csharpSameLineBraceScanLine = lang == "csharp" ? structuralLine : line;
                     var sameLineEndColumn = pattern.BodyStyle == BodyStyle.Brace
                         && bodyEndLine == startLine
-                        ? FindSameLineBraceEndColumn(line, csharpSameLineBraceStartColumn, lang, kind)
+                        ? FindSameLineBraceEndColumn(csharpSameLineBraceScanLine, csharpSameLineBraceStartColumn, lang, kind)
                         : -1;
                     var sameLineEndUsesRawColumns = pattern.BodyStyle == BodyStyle.Brace
                         && bodyEndLine == startLine;
@@ -1583,7 +1584,7 @@ public static class SymbolExtractor
                         // sibling が property など先頭側 pattern へ再到達できるようにする。
                         // これが無いと event signature が後続宣言を飲み込み、後続 sibling が
                         // earlier pattern に届かない。Closes #520.
-                        var braceEndColumn = FindSameLineBraceEndColumn(line, csharpSameLineBraceStartColumn, lang, kind);
+                        var braceEndColumn = FindSameLineBraceEndColumn(csharpSameLineBraceScanLine, csharpSameLineBraceStartColumn, lang, kind);
                         if (braceEndColumn >= absoluteStartColumn)
                         {
                             sameLineEndColumn = braceEndColumn;
@@ -2029,7 +2030,7 @@ public static class SymbolExtractor
                             // 通常の単独宣言行で duplicate 経路を再び開かない。Closes #470 / #473.
                             if (csharpSingleLineCollapsedMatch && sameLineEndUsesRawColumns)
                             {
-                                var rawNextSiblingOffset = FindNextSameLineBraceStatementStart(line, sameLineEndColumn + 1, lang);
+                                var rawNextSiblingOffset = FindNextSameLineBraceStatementStart(structuralLine, sameLineEndColumn + 1, lang);
                                 if (rawNextSiblingOffset > sameLineEndColumn)
                                 {
                                     restartPatternScanOffset = TranslateCSharpRawColumnToCollapsed(
@@ -2113,7 +2114,7 @@ public static class SymbolExtractor
                     var nextSameLineOffset = -1;
                     if (csharpSingleLineCollapsedMatch && sameLineEndUsesRawColumns)
                     {
-                        var rawNextSameLineOffset = FindNextSameLineBraceStatementStart(line, sameLineEndColumn + 1, lang);
+                        var rawNextSameLineOffset = FindNextSameLineBraceStatementStart(structuralLine, sameLineEndColumn + 1, lang);
                         if (rawNextSameLineOffset > sameLineEndColumn)
                         {
                             nextSameLineOffset = TranslateCSharpRawColumnToCollapsed(
