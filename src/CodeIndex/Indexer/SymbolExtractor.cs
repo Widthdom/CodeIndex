@@ -1585,14 +1585,17 @@ public static class SymbolExtractor
                         && ReferenceEquals(patternMatchLine, csharpMatchLines[i]);
                     var csharpSignatureRawStartColumn = csharpGateRawStartColumn;
                     var csharpSameLineBraceStartColumn = csharpSingleLineCollapsedMatch
-                        ? csharpSignatureRawStartColumn
-                        : absoluteStartColumn;
+                        ? absoluteStartColumn
+                        : csharpSignatureRawStartColumn;
                     var sameLineEndColumn = pattern.BodyStyle == BodyStyle.Brace
                         && bodyEndLine == startLine
-                        ? FindSameLineBraceEndColumn(line, csharpSameLineBraceStartColumn, lang, kind)
+                        ? (lang == "csharp" && csharpSingleLineCollapsedMatch
+                            ? FindCSharpSameLineBraceEndColumnFromSanitized(patternMatchLine, csharpSameLineBraceStartColumn)
+                            : FindSameLineBraceEndColumn(line, csharpSameLineBraceStartColumn, lang, kind))
                         : -1;
                     var sameLineEndUsesRawColumns = pattern.BodyStyle == BodyStyle.Brace
-                        && bodyEndLine == startLine;
+                        && bodyEndLine == startLine
+                        && !(lang == "csharp" && csharpSingleLineCollapsedMatch);
                     if (lang == "csharp"
                         && csharpSingleLineCollapsedMatch
                         && CanUseCSharpSameLineSemicolonEndColumn(kind))
@@ -1623,12 +1626,14 @@ public static class SymbolExtractor
                         // sibling が property など先頭側 pattern へ再到達できるようにする。
                         // これが無いと event signature が後続宣言を飲み込み、後続 sibling が
                         // earlier pattern に届かない。Closes #520.
-                        var braceEndColumn = FindSameLineBraceEndColumn(line, csharpSameLineBraceStartColumn, lang, kind);
+                        var braceEndColumn = csharpSingleLineCollapsedMatch
+                            ? FindCSharpSameLineBraceEndColumnFromSanitized(patternMatchLine, csharpSameLineBraceStartColumn)
+                            : FindSameLineBraceEndColumn(line, csharpSameLineBraceStartColumn, lang, kind);
                         if (braceEndColumn >= absoluteStartColumn
                             && (sameLineEndColumn < absoluteStartColumn || braceEndColumn < sameLineEndColumn))
                         {
                             sameLineEndColumn = braceEndColumn;
-                            sameLineEndUsesRawColumns = true;
+                            sameLineEndUsesRawColumns = !(lang == "csharp" && csharpSingleLineCollapsedMatch);
                         }
                     }
                     if (sameLineEndColumn < absoluteStartColumn
@@ -1676,8 +1681,7 @@ public static class SymbolExtractor
                     else if (sameLineEndColumn >= absoluteStartColumn)
                     {
                         if (lang == "csharp"
-                            && csharpSingleLineCollapsedMatch
-                            && (sameLineEndUsesRawColumns || CanUseCSharpSameLineSemicolonEndColumn(kind)))
+                            && csharpSingleLineCollapsedMatch)
                         {
                             var rawStart = csharpSignatureRawStartColumn;
                             var rawEndInclusive = sameLineEndUsesRawColumns
@@ -9760,7 +9764,13 @@ public static class SymbolExtractor
 
     private static int FindCSharpSameLineBraceEndColumn(string line, int startColumn)
     {
-        var sanitizedLine = LexCSharpLine(line, new CSharpLexState()).SanitizedLine;
+        return FindCSharpSameLineBraceEndColumnFromSanitized(
+            LexCSharpLine(line, new CSharpLexState()).SanitizedLine,
+            startColumn);
+    }
+
+    private static int FindCSharpSameLineBraceEndColumnFromSanitized(string sanitizedLine, int startColumn)
+    {
         var depth = 0;
         var opened = false;
         var expressionBody = false;

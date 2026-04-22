@@ -10322,8 +10322,15 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
         Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Fake");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Child" && s.ContainerKind == "class" && s.ContainerName == "Wrapped");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "OuterChild" && s.ContainerKind == "class" && s.ContainerName == "Host");
+        var child = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Child"));
+        Assert.Equal("class", child.ContainerKind);
+        Assert.Equal("Wrapped", child.ContainerName);
+        Assert.Equal("public partial class Child { }", child.Signature);
+
+        var outerChild = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "OuterChild"));
+        Assert.Equal("class", outerChild.ContainerKind);
+        Assert.Equal("Host", outerChild.ContainerName);
+        Assert.Equal("public partial class OuterChild { }", outerChild.Signature);
     }
 
     [Fact]
@@ -10350,8 +10357,15 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
         Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Fake");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Child" && s.ContainerKind == "class" && s.ContainerName == "Wrapped");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "OuterChild" && s.ContainerKind == "class" && s.ContainerName == "Host");
+        var child = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Child"));
+        Assert.Equal("class", child.ContainerKind);
+        Assert.Equal("Wrapped", child.ContainerName);
+        Assert.Equal("public partial class Child { }", child.Signature);
+
+        var outerChild = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "OuterChild"));
+        Assert.Equal("class", outerChild.ContainerKind);
+        Assert.Equal("Host", outerChild.ContainerName);
+        Assert.Equal("public partial class OuterChild { }", outerChild.Signature);
     }
 
     [Fact]
