@@ -1274,7 +1274,8 @@ public static class SymbolExtractor
                 while (firstNonWhitespace < matchLine.Length && char.IsWhiteSpace(matchLine[firstNonWhitespace]))
                     firstNonWhitespace++;
 
-                if (firstNonWhitespace < matchLine.Length && matchLine[firstNonWhitespace] == '}')
+                if (firstNonWhitespace < matchLine.Length
+                    && matchLine[firstNonWhitespace] is '}' or ';' or '"')
                     patternStartOffset = FindNextSameLineNonClosingBraceStatementStart(matchLine, firstNonWhitespace + 1, lang);
             }
             while (patternStartOffset >= 0 && patternStartOffset < matchLine.Length)
@@ -9519,19 +9520,22 @@ public static class SymbolExtractor
             : FindNextBraceStatementStart(matchLine, startIndex);
     }
 
-    // C# same-line restarts can legitimately hit a container-closing `}` before the next
-    // real sibling declaration (`... P { get; } } public int Q { get; }`). Keep advancing
-    // until we reach a non-`}` statement start so the later outer sibling is still visible.
-    // C# の同一行再開は、次の実 sibling 宣言の前に container を閉じる `}` に当たりうる
-    // (`... P { get; } } public int Q { get; }`)。後続の outer sibling を落とさないよう、
-    // 非 `}` の statement start に当たるまで再開位置を進める。
+    // C# same-line restarts can legitimately hit a container-closing `}`, an empty
+    // statement `;`, or a carried verbatim-string closing `"` before the next real sibling
+    // declaration (`... P { get; } } public int Q { get; }`, or a carried multiline string
+    // continuation like `"; public class Child { }`). Keep advancing until we reach a
+    // non-`}` / non-`;` / non-`"` statement start so the later real declaration stays visible.
+    // C# の同一行再開は、次の実 sibling 宣言の前に container を閉じる `}`、空文の `;`、
+    // あるいは継続 verbatim string の閉じ `"` に当たりうる（`... P { get; } } public int Q { get; }`
+    // や、`"; public class Child { }` のような継続文字列の閉じ直後）。後続の実宣言を落とさないよう、
+    // 非 `}` / 非 `;` / 非 `"` の statement start に当たるまで再開位置を進める。
     private static int FindNextSameLineNonClosingBraceStatementStart(string matchLine, int startIndex, string? lang)
     {
         var nextOffset = FindNextSameLineBraceStatementStart(matchLine, startIndex, lang);
         while (lang == "csharp"
                && nextOffset >= 0
                && nextOffset < matchLine.Length
-               && matchLine[nextOffset] == '}')
+               && matchLine[nextOffset] is '}' or ';' or '"')
         {
             nextOffset = FindNextSameLineBraceStatementStart(matchLine, nextOffset + 1, lang);
         }

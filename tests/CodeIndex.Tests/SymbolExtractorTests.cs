@@ -10298,6 +10298,63 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_CarriedVerbatimStringContinuationStillFindsLaterSameLineNestedAndOuterTypes()
+    {
+        // When a physical line begins inside a carried verbatim string, the closing `";`
+        // leaves a top-level semicolon before the real declaration stream. The same-line
+        // C# restart must skip that empty statement and still reach the later real types.
+        // Closes #630 / #633.
+        // 継続中の verbatim string から始まる物理行では、閉じ `";` の直後に top-level の
+        // 空文 `;` が残る。same-line の C# 再開はその空文を飛ばし、後続の実型宣言まで
+        // 到達しなければならない。Closes #630 / #633.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public partial class Host",
+            "{",
+            "    public partial class Wrapped<T>",
+            "        where T : class",
+            "    {",
+            "        private string _s = @\"",
+            "        public partial class Fake { }\"; public partial class Child { } } public partial class OuterChild { }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Fake");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Child" && s.ContainerKind == "class" && s.ContainerName == "Wrapped");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "OuterChild" && s.ContainerKind == "class" && s.ContainerName == "Host");
+    }
+
+    [Fact]
+    public void Extract_CSharp_CarriedRawStringContinuationStillFindsLaterSameLineNestedAndOuterTypes()
+    {
+        // Raw-string continuation lines have the same top-level `;` restart hazard as
+        // verbatim strings. The fake declaration inside the string must stay suppressed
+        // while the later real nested and outer siblings still extract. Closes #630 / #633.
+        // raw string の継続行も、verbatim string と同じく top-level の `;` 再開ハザードを持つ。
+        // 文字列内の fake 宣言は抑止したまま、後続の実 nested / outer sibling を抽出する必要がある。
+        // Closes #630 / #633.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public partial class Host",
+            "{",
+            "    public partial class Wrapped<T>",
+            "        where T : class",
+            "    {",
+            "        private string _s = \"\"\"",
+            "        public partial class Fake { }\"\"\"; public partial class Child { } } public partial class OuterChild { }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Fake");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Child" && s.ContainerKind == "class" && s.ContainerName == "Wrapped");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "OuterChild" && s.ContainerKind == "class" && s.ContainerName == "Host");
+    }
+
+    [Fact]
     public void Extract_CSharp_InlineBlockCommentBeforeSameLineClassDoesNotPolluteSignature()
     {
         // Inline block comments that end immediately before a real same-line declaration must
