@@ -10367,7 +10367,7 @@ public static class SymbolExtractor
             || !HasCSharpEventAccessorStart(remaining))
             return false;
 
-        var bodyEnd = FindCSharpSameLineBraceEndColumn(matchLine, startColumn);
+        var bodyEnd = FindCSharpSameLineBraceEndColumnFromSanitized(matchLine, startColumn);
         if (bodyEnd < startColumn)
             return false;
 
