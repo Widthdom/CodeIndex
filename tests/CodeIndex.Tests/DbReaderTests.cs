@@ -3192,10 +3192,10 @@ public class DbReaderTests : IDisposable
                 EXEC fn_Target; EXEC sales.fn_Target;
             END
             GO
-            """);
+        """);
 
-        var commentDependency = Assert.Single(
-            _reader.GetFileDependencies(limit: 10, lang: "sql", pathPatterns: ["sql_unqualified_row_comment.sql"], excludePathPatterns: null, excludeTests: false));
+        var commentDependencies = _reader.GetFileDependencies(limit: 10, lang: "sql", pathPatterns: ["sql_unqualified_row_comment.sql"], excludePathPatterns: null, excludeTests: false);
+        var commentDependency = Assert.Single(commentDependencies);
         Assert.Equal("src/sql_unqualified_row_comment.sql", commentDependency.SourcePath);
         Assert.Equal("src/sql_unqualified_row_targets.sql", commentDependency.TargetPath);
         Assert.Equal(1, commentDependency.ReferenceCount);
@@ -3225,6 +3225,64 @@ public class DbReaderTests : IDisposable
             pathPatterns: ["sql_unqualified_row"], excludePathPatterns: null, excludeTests: false);
         Assert.DoesNotContain(unused, symbol => symbol.Name == "dbo.fn_Target");
         Assert.DoesNotContain(unused, symbol => symbol.Name == "sales.fn_Target");
+    }
+
+    [Fact]
+    public void SqlQualifiedNames_QualifiedCallsStaySchemaSpecificAcrossGraphReaders()
+    {
+        InsertIndexedFile("src/sql_qualified_leaf_collision_target.sql", "sql",
+            """
+            CREATE FUNCTION dbo.fn_Target()
+            RETURNS INT
+            AS
+            BEGIN
+                RETURN 1;
+            END
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_qualified_leaf_collision_other_target.sql", "sql",
+            """
+            CREATE FUNCTION sales.fn_Target()
+            RETURNS INT
+            AS
+            BEGIN
+                RETURN 2;
+            END
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_qualified_leaf_collision_caller.sql", "sql",
+            """
+            CREATE PROCEDURE dbo.Caller
+            AS
+            BEGIN
+                EXEC dbo.fn_Target;
+            END
+            GO
+            """);
+
+        var callers = _reader.GetCallers("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_qualified_leaf_collision"]);
+        var caller = Assert.Single(callers);
+        Assert.Equal("dbo.Caller", caller.CallerName);
+        Assert.Equal(1, caller.ReferenceCount);
+
+        var dependencies = _reader.GetFileDependencies(limit: 10, lang: "sql", pathPatterns: ["sql_qualified_leaf_collision"], excludePathPatterns: null, excludeTests: false);
+        var dependency = Assert.Single(dependencies);
+        Assert.Equal("src/sql_qualified_leaf_collision_caller.sql", dependency.SourcePath);
+        Assert.Equal("src/sql_qualified_leaf_collision_target.sql", dependency.TargetPath);
+        Assert.Equal(1, dependency.ReferenceCount);
+        Assert.Equal("dbo.fn_Target", dependency.Symbols);
+
+        var hotspots = _reader.GetSymbolHotspots(10, "function", "sql", ["sql_qualified_leaf_collision"], null, false);
+        var dboHotspot = Assert.Single(hotspots, item => item.Symbol.Name == "dbo.fn_Target");
+        Assert.Equal(1, dboHotspot.ReferenceCount);
+        Assert.DoesNotContain(hotspots, item => item.Symbol.Name == "sales.fn_Target");
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: "function", lang: "sql",
+            pathPatterns: ["sql_qualified_leaf_collision"], excludePathPatterns: null, excludeTests: false);
+        Assert.DoesNotContain(unused, symbol => symbol.Name == "dbo.fn_Target");
+        Assert.Contains(unused, symbol => symbol.Name == "sales.fn_Target");
     }
 
     [Fact]

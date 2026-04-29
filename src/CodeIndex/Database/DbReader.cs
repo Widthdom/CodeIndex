@@ -5199,13 +5199,14 @@ public partial class DbReader
                         (tf.symbol_segment_count = snc.symbol_segment_count AND tf.symbol_name = snc.symbol_name COLLATE NOCASE)
                      OR (sql_segment_count(snc.raw_symbol_name) = 1
                          AND snc.allow_leaf_fallback = 1
+                         AND snc.symbol_segment_count = 1
                          AND tf.symbol_segment_count > 1
                          AND sql_leaf_name(tf.symbol_name) = snc.raw_symbol_name COLLATE NOCASE
                          AND NOT EXISTS (
                                 SELECT 1
                                 FROM target_files tf_exact
                                 WHERE tf_exact.target_lang = tf.target_lang
-                                  AND tf_exact.symbol_segment_count = 1
+                                  AND tf_exact.symbol_segment_count = snc.symbol_segment_count
                                   AND tf_exact.symbol_name = snc.symbol_name COLLATE NOCASE
                             )
                          AND NOT EXISTS (

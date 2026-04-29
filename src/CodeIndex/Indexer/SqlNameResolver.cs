@@ -108,18 +108,27 @@ internal static class SqlNameResolver
         if (normalizedSymbolName.Length == 0)
             return string.Empty;
         if (string.IsNullOrWhiteSpace(context))
-            return normalizedSymbolName;
+            return QualifyLeafNameFromContainerCore(normalizedSymbolName, containerName);
 
         var leafName = GetLeafName(symbolName);
         if (leafName.Length > 0 && columnNumber.HasValue && columnNumber.Value > 0)
         {
-            if (TryGetQualifiedNameAtColumn(context, columnNumber, out var match)
-                && string.Equals(GetLeafName(match.NormalizedName), leafName, StringComparison.OrdinalIgnoreCase))
+            if (TryGetQualifiedNameAtColumn(context, columnNumber, out var columnMatch)
+                && HasQualifier(columnMatch.NormalizedName)
+                && string.Equals(GetLeafName(columnMatch.NormalizedName), leafName, StringComparison.OrdinalIgnoreCase))
             {
-                return match.NormalizedName;
+                return columnMatch.NormalizedName;
             }
 
+            if (!ContextContainsAnyQualifiedName(context))
+                return normalizedSymbolName;
+
             return QualifyLeafNameFromContainerCore(normalizedSymbolName, containerName);
+        }
+
+        if (TryGetQualifiedNameAtColumn(context, columnNumber, out var directMatch))
+        {
+            return directMatch.NormalizedName;
         }
 
         return ResolveReferenceName(symbolName, context, containerName);
@@ -143,18 +152,27 @@ internal static class SqlNameResolver
         if (normalizedSymbolName.Length == 0)
             return 0;
         if (string.IsNullOrWhiteSpace(context))
-            return GetSegmentCount(normalizedSymbolName);
+            return GetSegmentCount(QualifyLeafNameFromContainerCore(normalizedSymbolName, containerName));
 
         var leafName = GetLeafName(symbolName);
         if (leafName.Length > 0 && columnNumber.HasValue && columnNumber.Value > 0)
         {
-            if (TryGetQualifiedNameAtColumn(context, columnNumber, out var match)
-                && string.Equals(GetLeafName(match.NormalizedName), leafName, StringComparison.OrdinalIgnoreCase))
+            if (TryGetQualifiedNameAtColumn(context, columnNumber, out var columnMatch)
+                && HasQualifier(columnMatch.NormalizedName)
+                && string.Equals(GetLeafName(columnMatch.NormalizedName), leafName, StringComparison.OrdinalIgnoreCase))
             {
-                return match.SegmentCount;
+                return columnMatch.SegmentCount;
             }
 
+            if (!ContextContainsAnyQualifiedName(context))
+                return 1;
+
             return GetSegmentCount(QualifyLeafNameFromContainerCore(normalizedSymbolName, containerName));
+        }
+
+        if (TryGetQualifiedNameAtColumn(context, columnNumber, out var directMatch))
+        {
+            return directMatch.SegmentCount;
         }
 
         return GetSegmentCount(ResolveReferenceName(symbolName, context, containerName));
@@ -166,10 +184,11 @@ internal static class SqlNameResolver
         if (normalizedSymbolName.Length == 0 || HasQualifier(normalizedSymbolName))
             return false;
 
-        var leafName = GetLeafName(symbolName);
-        if (leafName.Length > 0
-            && TryGetQualifiedNameAtColumn(context, columnNumber, out var match)
-            && string.Equals(GetLeafName(match.NormalizedName), leafName, StringComparison.OrdinalIgnoreCase))
+        if (ResolveReferenceSegmentCountAtColumn(symbolName, context, containerName, columnNumber) > 1)
+            return false;
+
+        if (TryGetQualifiedNameContainingColumn(context, columnNumber, out var match)
+            && match.SegmentCount > 1)
         {
             return false;
         }
@@ -234,14 +253,44 @@ internal static class SqlNameResolver
         var zeroBasedColumn = columnNumber.Value - 1;
         foreach (var candidate in EnumerateQualifiedNameMatches(context))
         {
-            if (candidate.SegmentCount <= 1 && !candidate.NormalizedName.Contains('.', StringComparison.Ordinal))
-                continue;
-
             if (zeroBasedColumn >= candidate.LeafStartIndex && zeroBasedColumn < candidate.LeafEndIndexExclusive)
             {
                 match = candidate;
                 return true;
             }
+        }
+
+        return false;
+    }
+
+    private static bool TryGetQualifiedNameContainingColumn(string? context, int? columnNumber, out QualifiedNameMatch match)
+    {
+        match = default;
+        if (string.IsNullOrWhiteSpace(context) || !columnNumber.HasValue || columnNumber.Value <= 0)
+            return false;
+
+        var zeroBasedColumn = columnNumber.Value - 1;
+        foreach (var candidate in EnumerateQualifiedNameMatches(context))
+        {
+            if (zeroBasedColumn >= candidate.StartIndex && zeroBasedColumn < candidate.EndIndexExclusive)
+            {
+                match = candidate;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool ContextContainsAnyQualifiedName(string? context)
+    {
+        if (string.IsNullOrWhiteSpace(context))
+            return false;
+
+        foreach (var candidate in EnumerateQualifiedNameMatches(context))
+        {
+            if (candidate.SegmentCount > 1)
+                return true;
         }
 
         return false;
