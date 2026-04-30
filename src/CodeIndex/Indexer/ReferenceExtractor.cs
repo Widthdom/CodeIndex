@@ -173,6 +173,15 @@ public static class ReferenceExtractor
             "all", "clean", "install", "build", "run", "help",
         },
     };
+    private static readonly Dictionary<string, HashSet<string>> LanguageSpecificCallNameKeeps = new(StringComparer.Ordinal)
+    {
+        // Rust uses `new` / `default` as ordinary method names (`Type::new`, `Default::default`).
+        // Rust では `new` / `default` は通常のメソッド名 (`Type::new`, `Default::default`)。
+        ["rust"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "new", "default",
+        },
+    };
 
     // JavaScript / TypeScript tokens that legally sit immediately before a template literal
     // without being a tag identifier: unary / binary operators (`void \`...\``,
@@ -13348,6 +13357,12 @@ public static class ReferenceExtractor
 
     private static bool IsIgnoredCallName(string language, string name)
     {
+        if (LanguageSpecificCallNameKeeps.TryGetValue(language, out var languageSpecificKeepNames)
+            && languageSpecificKeepNames.Contains(name))
+        {
+            return false;
+        }
+
         if (language == "php")
         {
             if (SharedIgnoredCallNamesCaseInsensitive.Contains(name))

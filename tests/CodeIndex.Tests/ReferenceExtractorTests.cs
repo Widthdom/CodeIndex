@@ -7729,6 +7729,89 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_RustConstructors_PreserveNewAndDefaultCalls()
+    {
+        // Regression for issue #273: Rust's `Type::new()` and `Default::default()`
+        // are ordinary method calls, not keywords. The shared `new` / `default`
+        // ignore list must not suppress them.
+        // issue #273 回帰: Rust の `Type::new()` と `Default::default()` は通常の
+        // メソッド呼び出しであり、キーワードではない。共有の `new` / `default`
+        // ignore list で落としてはいけない。
+        const string content = """
+            struct Point {
+                x: i32,
+                y: i32,
+            }
+
+            impl Point {
+                fn new(x: i32, y: i32) -> Self {
+                    Self { x, y }
+                }
+            }
+
+            fn make_point() -> Point {
+                Point::new(1, 2)
+            }
+
+            fn make_vec() -> Vec<i32> {
+                Vec::new()
+            }
+
+            fn make_string() -> String {
+                String::new()
+            }
+
+            fn make_default() -> Point {
+                Default::default()
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
+
+        Assert.Equal(3, references.Count(reference =>
+            reference.SymbolName == "new"
+            && reference.ReferenceKind == "call"));
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "new"
+            && reference.ContainerName == "make_point");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "new"
+            && reference.ContainerName == "make_vec");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "new"
+            && reference.ContainerName == "make_string");
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "default"
+            && reference.ReferenceKind == "call"));
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "default"
+            && reference.ContainerName == "make_default");
+    }
+
+    [Fact]
+    public void Extract_GoBuiltinNew_RemainsIgnored()
+    {
+        // Regression for issue #273: Rust gets an exception for `new`, but Go's
+        // builtin `new(T)` should still remain ignored so we do not regress the
+        // existing false-positive suppression.
+        // issue #273 回帰: Rust には `new` の例外を与えるが、Go の builtin
+        // `new(T)` は引き続き無視されるべきで、既存の偽陽性抑止を壊してはならない。
+        const string content = """
+            package main
+
+            func makeValue() *int {
+                return new(int)
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "new");
+    }
+
+    [Fact]
     public void Extract_JsTemplateHoleBlockCommentBody_DoesNotLeakPhantomReferences()
     {
         // Regression for issue #291 follow-up: identifiers inside a `/* ... */`
