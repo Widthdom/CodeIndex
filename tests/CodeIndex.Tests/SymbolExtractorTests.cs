@@ -9439,6 +9439,27 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Go_DetectsGenericTypeDeclarations()
+    {
+        var content = """
+            type Stack[T any] struct {
+                items []T
+            }
+
+            type Container[T comparable, U any] interface {
+                Get() U
+            }
+
+            type Alias[T any] string
+            """;
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Stack");
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "Container");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Alias");
+    }
+
+    [Fact]
     public void Extract_Shell_DetectsFunctions()
     {
         var content = "function setup() {\n  echo 'setup'\n}\n\ncleanup() {\n  echo 'cleanup'\n}";

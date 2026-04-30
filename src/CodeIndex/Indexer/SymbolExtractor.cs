@@ -968,10 +968,10 @@ public static class SymbolExtractor
         ["go"] =
         [
             new("function", new Regex(@"^func\s+(?:\([^)]+\)\s+)?(?<name>\w+)\s*[\(\[]", RegexOptions.Compiled), BodyStyle.Brace),
-            new("struct",   new Regex(@"^type\s+(?<name>\w+)\s+struct\b", RegexOptions.Compiled), BodyStyle.Brace),
-            new("interface", new Regex(@"^type\s+(?<name>\w+)\s+interface\b", RegexOptions.Compiled), BodyStyle.Brace),
+            new("struct",   new Regex(@"^type\s+(?<name>\w+)(?:\[[^\]]+\])?\s+struct\b", RegexOptions.Compiled), BodyStyle.Brace),
+            new("interface", new Regex(@"^type\s+(?<name>\w+)(?:\[[^\]]+\])?\s+interface\b", RegexOptions.Compiled), BodyStyle.Brace),
             // Type alias (type Name = OtherType or type Name OtherType) / 型エイリアス
-            new("import",   new Regex(@"^type\s+(?<name>\w+)\s+[=\w]", RegexOptions.Compiled), BodyStyle.None),
+            new("import",   new Regex(@"^type\s+(?<name>\w+)(?:\[[^\]]+\])?\s+[=\w]", RegexOptions.Compiled), BodyStyle.None),
             // Const declaration inside const block / const ブロック内の定数宣言
             new("function", new Regex(@"^\s+(?<name>[A-Z]\w*)\s*=\s*", RegexOptions.Compiled), BodyStyle.None),
             // Package-level var / パッケージレベル変数
