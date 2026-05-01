@@ -10419,6 +10419,84 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Swift_DetectsInitDeinitAndSubscript()
+    {
+        var content = """
+            public final class CacheBox {
+                public required init(capacity: Int) { }
+                deinit { }
+                subscript(key: String) -> Int { 1 }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "init");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "deinit");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "subscript");
+    }
+
+    [Fact]
+    public void Extract_Swift_DetectsFailableInit()
+    {
+        var content = """
+            struct User {
+                init?(id: String) { }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "init?");
+    }
+
+    [Fact]
+    public void Extract_Swift_DetectsAssociatedType()
+    {
+        var content = """
+            public protocol Repository {
+                associatedtype Item
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Item");
+    }
+
+    [Fact]
+    public void Extract_Swift_DetectsCustomOperatorDeclarations()
+    {
+        var content = """
+            infix operator <=> : ComparisonPrecedence
+            prefix operator +++
+            """;
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "<=>");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "+++");
+    }
+
+    [Fact]
+    public void Extract_Swift_DetectsPrecedenceGroup()
+    {
+        var content = """
+            precedencegroup ExponentPrecedence {
+                associativity: right
+                higherThan: MultiplicationPrecedence
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "ExponentPrecedence");
+    }
+
+    [Fact]
+    public void Extract_Swift_DetectsDottedExtensionTarget()
+    {
+        var content = """
+            extension Foundation.URL {
+                func normalized() -> URL { self }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Foundation.URL");
+    }
+
+    [Fact]
     public void Extract_ObjC_DetectsInterfacesPropertiesMethodsAndImports()
     {
         var content = """
