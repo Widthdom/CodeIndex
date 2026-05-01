@@ -19,8 +19,12 @@ public partial class DbReader
     private static string SanitizeFtsQuery(string query)
     {
         // Escape double quotes inside the query, then wrap each whitespace-separated
-        // token in double quotes so FTS5 treats them as literal phrases.
+        // token in double quotes so FTS5 treats them as literal phrases. A trailing
+        // `*` is preserved as a prefix-search shorthand so `auth*` can match
+        // `authenticate` without requiring raw FTS5 syntax.
         // クエリ内のダブルクォートをエスケープし、各トークンをダブルクォートで囲む。
+        // 末尾の `*` は prefix 検索の shorthand として保持し、`auth*` で
+        // `authenticate` を raw FTS5 構文なしに検索できるようにする。
         var tokens = query.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
         if (tokens.Length == 0)
             return "\"\"";
@@ -58,11 +62,13 @@ public partial class DbReader
     /// </summary>
     private static string FormatFtsToken(string token)
     {
-        var quoted = "\"" + token.Replace("\"", "\"\"") + "\"";
+        var hasExplicitPrefix = token.Length > 1 && token.EndsWith('*');
+        var literalToken = hasExplicitPrefix ? token[..^1] : token;
+        var quoted = "\"" + literalToken.Replace("\"", "\"\"") + "\"";
         // '"phrase"*' (no space) is FTS5 prefix-phrase syntax. '"phrase" *' (with space)
         // means "phrase followed by any token", which is not what we want.
         // '"phrase"*'（スペースなし）がFTS5のprefix phrase構文。スペース有りは別意味なので付けない。
-        return ContainsCjk(token) ? quoted + "*" : quoted;
+        return (hasExplicitPrefix || ContainsCjk(literalToken)) ? quoted + "*" : quoted;
     }
 
     private static bool ContainsCjk(string token)

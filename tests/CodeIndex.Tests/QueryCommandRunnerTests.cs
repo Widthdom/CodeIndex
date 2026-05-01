@@ -176,6 +176,38 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_TrailingWildcardActsAsPrefixShorthand()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_prefix_shorthand");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/auth.cs",
+                "csharp",
+                "public class Authenticator { public bool AuthenticateUser() => true; }\n");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/other.cs",
+                "csharp",
+                "public class Other { public void Idle() { } }\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["auth*", "--db", dbPath, "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("1", stdout.Trim());
+            Assert.Equal(string.Empty, stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunPublishedTrimmedCli_SerializesQueryJsonAndErrorJson()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_trimmed_publish");

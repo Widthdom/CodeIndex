@@ -391,7 +391,7 @@ public static class ConsoleUi
         Console.WriteLine("  --focus-line <line>        excerpt: line whose focused column should stay visible (requires --focus-column)");
         Console.WriteLine("  --focus-column <n>         excerpt: column to keep centered when clamping (must be within the focused line)");
         Console.WriteLine("  --focus-length <n>         excerpt: width of the focused span (default: 1, requires --focus-column)");
-        Console.WriteLine("  --fts                      Use raw FTS5 query syntax for search");
+        Console.WriteLine("  --fts                      Use raw FTS5 query syntax for search (trailing * is a prefix shorthand in literal-safe mode)");
         Console.WriteLine("  --exact                    Backward-compatible shorthand. Prefer --exact-substring for search, keep --exact for find, and prefer --exact-name for symbols/definition/references/callers/callees/inspect.");
         Console.WriteLine("  --exact-substring          Search only: case-sensitive exact substring (no FTS5)");
         Console.WriteLine("  --exact-name               symbols/definition/references/callers/callees/inspect: NFKC + Unicode CaseFold exact name match (legacy/stale-fold DBs fall back to ASCII NOCASE; use `cdidx backfill-fold` or check `status --json` fold_ready)");
@@ -411,6 +411,7 @@ public static class ConsoleUi
         Console.WriteLine("                                              Update DB from multiple commits");
         Console.WriteLine("  cdidx index ./myproject --files src/app.cs    Update specific files");
         Console.WriteLine("  cdidx search \"authenticate\"                    Full-text search");
+        Console.WriteLine("  cdidx search \"auth*\"                          Prefix shorthand in literal-safe mode");
         Console.WriteLine("  cdidx search --query --path --path README.md   Search for a literal option token");
         Console.WriteLine("  cdidx search \"Run();\" --exact-substring        Case-sensitive exact substring search");
         Console.WriteLine("  cdidx definition ResolveGitCommonDir --body   Show a symbol definition and body");
