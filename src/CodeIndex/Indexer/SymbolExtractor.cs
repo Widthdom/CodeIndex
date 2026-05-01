@@ -1758,6 +1758,8 @@ public static class SymbolExtractor
         // レビュー blocker 対応としてここで専用抽出に分岐する。
         if (lang == "html")
             return ExtractHtmlSymbols(fileId, lines);
+        if (lang == "xml")
+            return ExtractXmlSymbols(fileId, lines);
 
         var structuralLines = StructuralLineMasker.MaskLines(lang, lines);
         var cssScannerLines = lang == "css"
@@ -4283,6 +4285,50 @@ public static class SymbolExtractor
 
         AssignContainers(symbols, lines, null);
         PopulateDeclaredContainerQualifiedNames(symbols);
+        return symbols;
+    }
+
+    private static List<SymbolRecord> ExtractXmlSymbols(long fileId, string[] lines)
+    {
+        var symbols = new List<SymbolRecord>();
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            foreach (Match classMatch in Regex.Matches(line, @"\bx:Class\s*=\s*[""'](?<value>[^""']+)[""']"))
+            {
+                var value = classMatch.Groups["value"].Value.Trim();
+                if (value.Length == 0)
+                    continue;
+                symbols.Add(new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "class",
+                    Name = value,
+                    Line = i + 1,
+                    StartLine = i + 1,
+                    EndLine = i + 1,
+                    Signature = line.Trim(),
+                });
+            }
+
+            foreach (Match nameMatch in Regex.Matches(line, @"\bx:Name\s*=\s*[""'](?<value>[^""']+)[""']"))
+            {
+                var value = nameMatch.Groups["value"].Value.Trim();
+                if (value.Length == 0)
+                    continue;
+                symbols.Add(new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "property",
+                    Name = value,
+                    Line = i + 1,
+                    StartLine = i + 1,
+                    EndLine = i + 1,
+                    Signature = line.Trim(),
+                });
+            }
+        }
+
         return symbols;
     }
 
