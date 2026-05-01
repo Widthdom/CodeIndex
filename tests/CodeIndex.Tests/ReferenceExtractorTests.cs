@@ -372,6 +372,36 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SqlExec_WithEscapedBracketIdentifier_IndexesProcedureCall()
+    {
+        const string content = """
+            EXEC [dbo].[proc]]name];
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "proc]name"
+            && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_SqlExec_WithNumberedProcedureSuffix_IndexesProcedureCall()
+    {
+        const string content = """
+            EXEC dbo.sp_helptext;1;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "sp_helptext;1"
+            && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_CsharpSameLineDefinitionCalls_KeepRecursiveAndDelegatedReferences()
     {
         // issue #252: same-line definition suppression must drop only the declarator token,

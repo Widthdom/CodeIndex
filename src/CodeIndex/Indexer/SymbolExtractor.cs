@@ -70,7 +70,7 @@ public static class SymbolExtractor
     private const string CSharpIdentifierPattern = @"@?[_\p{L}]\w*";
     private const string CSharpNamespacePattern = CSharpIdentifierPattern + @"(?:\." + CSharpIdentifierPattern + @")*";
     private const string CSharpTypeTokenCharsPattern = @"[\w@?.<>\[\],:*]";
-    private const string SqlQualifiedIdentifierSegmentPattern = @"(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)";
+    private const string SqlQualifiedIdentifierSegmentPattern = @"(?:\[(?:[^\]\r\n]|\]\])+\]|""[^""]+""|[\w$#]+)";
     private const string SqlQualifiedIdentifierPattern =
         @"(?:" + SqlQualifiedIdentifierSegmentPattern + @")(?:\s*\.\s*(?:" + SqlQualifiedIdentifierSegmentPattern + @"))*";
     private const string CSharpTypeSegmentPattern =

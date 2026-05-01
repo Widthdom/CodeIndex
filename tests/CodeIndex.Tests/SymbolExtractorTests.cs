@@ -136,6 +136,20 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_SqlProcedure_WithEscapedBracketIdentifier_IsDetected()
+    {
+        var content = """
+            CREATE PROCEDURE [dbo].[proc]]name]
+            AS
+            SELECT 1;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "proc]]name");
+    }
+
+    [Fact]
     public void Extract_VueScriptSetup_DetectsTypeScriptSymbols()
     {
         const string content = """

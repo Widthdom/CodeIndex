@@ -18,7 +18,7 @@ public static class ReferenceExtractor
         int PendingTypeLineNumber,
         string? PendingContext,
         SymbolRecord? PendingContainer);
-    private const string SqlProcCallIdentifierPattern = @"(?:\[[^\[\]\r\n]+\]|`[^`\r\n]+`|""(?:""""|[^""\r\n])+""|##?\w+|[_\p{L}][\p{L}\p{Mn}\p{Mc}\p{Nd}\p{Pc}$]*)";
+    private const string SqlProcCallIdentifierPattern = @"(?:\[(?:[^\]\r\n]|\]\])+\]|`[^`\r\n]+`|""(?:""""|[^""\r\n])+""|##?\w+|[_\p{L}][\p{L}\p{Mn}\p{Mc}\p{Nd}\p{Pc}$]*(?:;\d+)?)";
     private const string SqlProcCallQualifierPattern = @"(?:(?:" + SqlProcCallIdentifierPattern + @")?\s*\.\s*)*";
 
     private static readonly HashSet<string> SupportedLanguages =
@@ -2885,6 +2885,8 @@ public static class ReferenceExtractor
             resolvedName = rawName.Substring(1, rawName.Length - 2);
             if (rawName[0] == '"')
                 resolvedName = resolvedName.Replace("\"\"", "\"", StringComparison.Ordinal);
+            else if (rawName[0] == '[')
+                resolvedName = resolvedName.Replace("]]", "]", StringComparison.Ordinal);
             resolvedIndex = rawIndex + 1;
             wasQuoted = true;
             return;
