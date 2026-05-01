@@ -17961,4 +17961,73 @@ public class SymbolExtractorTests
 
         throw new InvalidOperationException("Could not locate repository root / リポジトリルートを特定できませんでした");
     }
+    [Fact]
+    public void Extract_Vb_DetectsDelegateSymbols()
+    {
+        var content = """
+            Public Delegate Sub Notify(message As String)
+            Friend Delegate Function Compute(x As Integer) As Integer
+            """;
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "Notify" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "Compute" && s.Visibility == "friend");
+    }
+
+    [Fact]
+    public void Extract_Vb_DetectsEnumMembersAsProperties()
+    {
+        var content = """
+            Public Enum Color
+                Red
+                Green = 2
+            End Enum
+            """;
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Color");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Red");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Green");
+    }
+
+    [Fact]
+    public void Extract_Vb_DetectsOperatorOverloadsAsFunctions()
+    {
+        var content = """
+            Public Shared Operator +(left As Box, right As Box) As Box
+            End Operator
+            """;
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "+");
+    }
+
+    [Fact]
+    public void Extract_Vb_DetectsInheritsAndImplementsAsImports()
+    {
+        var content = """
+            Public Class Worker
+                Inherits BaseWorker
+                Implements IDisposable
+            End Class
+            """;
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "BaseWorker");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "IDisposable");
+    }
+
+    [Fact]
+    public void Extract_Vb_DetectsNotOverridableMembers()
+    {
+        var content = """
+            Public Class Worker
+                Public NotOverridable Overrides Sub Run()
+                End Sub
+            End Class
+            """;
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Run");
+    }
 }
