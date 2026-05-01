@@ -18030,4 +18030,24 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Run");
     }
+
+    [Fact]
+    public void Extract_Vb_EnumMemberPattern_DoesNotCaptureControlKeywords()
+    {
+        var content = """
+            Public Class Worker
+                Public Sub Run()
+                End Sub
+            End Class
+
+            Public Enum Color
+                Red
+            End Enum
+            """;
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Red");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "End");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "Public");
+    }
 }
