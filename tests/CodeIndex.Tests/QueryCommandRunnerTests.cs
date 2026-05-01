@@ -25862,14 +25862,19 @@ public class QueryCommandRunnerTests
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             TestProjectHelper.InsertIndexedFile(
                 dbPath,
-                "schema.tsql",
+                "schema_target.tsql",
                 "sql",
                 """
                 CREATE PROCEDURE dbo.usp_Target
                 AS
                 SELECT 1;
                 GO
-
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "schema_caller.tsql",
+                "sql",
+                """
                 CREATE PROCEDURE sales.usp_Caller
                 AS
                 BEGIN

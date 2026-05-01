@@ -3171,6 +3171,12 @@ public class DbReaderTests : IDisposable
         Assert.Equal("src/sql_bare_call_target.sql", dependency.TargetPath);
         Assert.Equal(1, dependency.ReferenceCount);
 
+        var tsqlDependencies = _reader.GetFileDependencies(limit: 10, lang: "tsql", pathPatterns: ["sql_bare_call_"], excludePathPatterns: null, excludeTests: false);
+        var tsqlDependency = Assert.Single(tsqlDependencies);
+        Assert.Equal("src/sql_bare_call_caller.sql", tsqlDependency.SourcePath);
+        Assert.Equal("src/sql_bare_call_target.sql", tsqlDependency.TargetPath);
+        Assert.Equal(1, tsqlDependency.ReferenceCount);
+
         var hotspot = Assert.Single(
             _reader.GetSymbolHotspots(10, "function", "sql", ["sql_bare_call_"], null, false),
             item => item.Symbol.Name == "dbo.fn_Target");
@@ -3417,6 +3423,11 @@ public class DbReaderTests : IDisposable
         Assert.Equal(1, impact.DefinitionCount);
         Assert.Equal("[dbo].[fn_Target]", Assert.Single(impact.Definitions).Name);
         Assert.Equal("[sales].[fn_Target]", Assert.Single(impact.Callers).CallerName);
+
+        var tsqlImpact = _reader.AnalyzeImpact("dbo.fn_Target", maxDepth: 1, limit: 10, lang: "tsql", pathPatterns: ["sql_quoted_definition"]);
+        Assert.Equal(1, tsqlImpact.DefinitionCount);
+        Assert.Equal("[dbo].[fn_Target]", Assert.Single(tsqlImpact.Definitions).Name);
+        Assert.Equal("[sales].[fn_Target]", Assert.Single(tsqlImpact.Callers).CallerName);
     }
 
     [Fact]
