@@ -6,6 +6,7 @@ namespace CodeIndex.Tests;
 /// Tests for console usage output.
 /// コンソールの使い方出力のテスト。
 /// </summary>
+[Collection("SQLite pool sensitive")]
 public class ConsoleUiTests
 {
     [Fact]
