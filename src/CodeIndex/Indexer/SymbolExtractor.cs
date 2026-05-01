@@ -1758,8 +1758,6 @@ public static class SymbolExtractor
         // レビュー blocker 対応としてここで専用抽出に分岐する。
         if (lang == "html")
             return ExtractHtmlSymbols(fileId, lines);
-        if (lang == "xml")
-            return ExtractXmlSymbols(fileId, lines);
 
         var structuralLines = StructuralLineMasker.MaskLines(lang, lines);
         var cssScannerLines = lang == "css"
@@ -3117,6 +3115,8 @@ public static class SymbolExtractor
 
         if (string.Equals(originalLang, "svelte", StringComparison.Ordinal))
             ExtractSvelteReactiveSymbols(fileId, lines, symbols);
+        if (lang == "xml")
+            symbols.AddRange(ExtractXmlSymbols(fileId, lines));
 
         AssignContainers(symbols, lines, csharpLineStartStates);
         MaterializeRecordPrimaryComponentSymbols(symbols, pendingRecordPrimaryComponents);
