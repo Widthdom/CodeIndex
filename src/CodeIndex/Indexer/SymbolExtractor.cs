@@ -79,6 +79,12 @@ public static class SymbolExtractor
         @"(?:(?:global::)?(?:" + CSharpTypeSegmentPattern + @")(?:\s+(?:" + CSharpTypeSegmentPattern + @"))*" + CSharpTupleSuffixPattern + @")";
     private const string CSharpMethodTypeParameterListPattern =
         @"(?:<(?:(?>[^<>]+)|<(?<CSharpMethodTypeParameterDepth>)|>(?<-CSharpMethodTypeParameterDepth>))*(?(CSharpMethodTypeParameterDepth)(?!))>\s*)?";
+    private const string JavaIdentifierPattern = @"[\p{L}_$][\p{L}\p{Nd}_$]*";
+    private const string JavaQualifiedIdentifierPattern = JavaIdentifierPattern + @"(?:\s*\.\s*" + JavaIdentifierPattern + @")*";
+    private const string JavaMethodTypeParameterPattern =
+        @"(?:<(?:(?>[^<>]+)|<(?<JavaMethodTypeParameterDepth>)|>(?<-JavaMethodTypeParameterDepth>))*(?(JavaMethodTypeParameterDepth)(?!))>\s+)?";
+    private const string JavaReturnTypePattern =
+        @"(?:" + JavaQualifiedIdentifierPattern + @"(?:\s*<[^;=(){}]+>)?(?:\s*\[\s*\])*)";
     private static readonly Regex PhpGroupUseRegex = new(
         @"^\s*use\s+(?:(?<type>function|const)\s+)?(?<prefix>[\w\\]+\\)\{\s*(?<items>[^{}]+?)\s*\}\s*;",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
@@ -1016,6 +1022,8 @@ public static class SymbolExtractor
         ],
         ["java"] =
         [
+            // Package declaration / package 宣言
+            new("namespace", new Regex(@"^\s*package\s+(?<name>[\w.]+)\s*;", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
             // Module declaration (Java 9+ module-info.java) / モジュール宣言（Java 9+ の module-info.java）
             new("namespace", new Regex(@"^\s*(?:open\s+)?module\s+(?<name>[\w.]+)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
             // Annotation type (@interface) / アノテーション型
@@ -1029,12 +1037,12 @@ public static class SymbolExtractor
             // Class — with extended modifiers (final, sealed, static, abstract, strictfp)
             // クラス — 拡張修飾子対応（final, sealed, static, abstract, strictfp）
             new("class",    new Regex(@"^\s*(?<visibility>public|private|protected)?\s*(?:(?:static|final|abstract|sealed|non-sealed|strictfp)\s+)*class\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility"),
-            // Static final field (Java equivalent of C# const) — order-flexible (static final or final static), generic types with spaces
-            // static final フィールド — 語順柔軟（static final / final static）、スペース含むジェネリック型対応
-            new("function", new Regex(@"^\s*(?<visibility>public|private|protected)?\s*(?:(?:static|final)\s+){2}(?<returnType>[\w?.<>\[\],\s]+?)\s+(?<name>[A-Z_]\w*)\s*=", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, "visibility", "returnType"),
+            // Static final field (Java equivalent of C# const) — order-flexible and annotation-friendly.
+            // static final フィールド — 語順柔軟かつアノテーション併用にも対応。
+            new("function", new Regex($@"^\s*(?:@\w+(?:\([^)]*\))?\s+)*(?<visibility>public|private|protected)?\s*(?=(?:(?:static|final|transient|volatile)\s+)*static\b)(?=(?:(?:static|final|transient|volatile)\s+)*final\b)(?:(?:static|final|transient|volatile)\s+)*(?<returnType>{JavaReturnTypePattern})\s+(?<name>[A-Z_]\w*)\s*=", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, "visibility", "returnType"),
             // Method with return type — expanded modifiers (default, native, synchronized, final)
             // 戻り値型付きメソッド — 拡張修飾子対応（default, native, synchronized, final）
-            new("function", new Regex(@"^\s*(?!(?:return|throw|new|if|for|while|switch|do|case|else|try|catch|finally|synchronized|break|continue|yield|assert)\b)(?<visibility>public|private|protected)?\s*(?:(?:static|abstract|synchronized|final|default|native|strictfp)\s+)*(?!(?:record)\b)(?:<[^>]*>+\s+)?(?<returnType>\w+(?:<[^>]+>)?(?:\[\])?)\s+(?<name>\w+)\s*\(", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility", "returnType"),
+            new("function", new Regex($@"^\s*(?!(?:return|throw|new|if|for|while|switch|do|case|else|try|catch|finally|synchronized|break|continue|yield|assert)\b)(?:@\w+(?:\([^)]*\))?\s+)*(?<visibility>public|private|protected)?\s*(?:(?:static|abstract|synchronized|final|default|native|strictfp)\s+)*(?!(?:record)\b){JavaMethodTypeParameterPattern}(?<returnType>{JavaReturnTypePattern})\s+(?<name>{JavaIdentifierPattern})\s*\(", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility", "returnType"),
             // Enum members are extracted by ExtractJavaEnumMembers using a body-scoped scanner,
             // which handles any indent style (tab, 2-space, 4-space) and skips member-like lines
             // outside the enum body (e.g. `\tRED();` method calls inside a class body).

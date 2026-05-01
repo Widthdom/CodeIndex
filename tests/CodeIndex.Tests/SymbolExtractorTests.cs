@@ -10704,6 +10704,30 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Java_DetectsPackageQualifiedReturnTypesAndAnnotatedMembers()
+    {
+        var content = """
+            package com.example.service;
+
+            public class UserService {
+                @Deprecated
+                public UserService() {}
+
+                public java.util.List<String[]> loadAll() { return java.util.List.of(); }
+
+                @Deprecated
+                public static final java.util.Map<String, Integer> MAX_RETRIES = java.util.Map.of();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "com.example.service");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "loadAll" && s.ReturnType == "java.util.List<String[]>");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MAX_RETRIES" && s.ReturnType == "java.util.Map<String, Integer>");
+    }
+
+    [Fact]
     public void Extract_Java_DetectsRecordAndSealedClass()
     {
         // Java 16+ record, Java 17+ sealed class / Java 16 の record、Java 17 の sealed class
