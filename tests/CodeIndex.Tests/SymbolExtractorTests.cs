@@ -17908,6 +17908,45 @@ public class SymbolExtractorTests
         Assert.Contains("public Sample {", compactCtor.Signature);
     }
 
+    [Fact]
+    public void Extract_Xml_XamlCapturesXClassAndXName()
+    {
+        var content = """
+            <Window x:Class="Sample.MainWindow"
+                    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+                <Grid>
+                    <Button x:Name="SaveButton" Content="Save" />
+                    <TextBlock x:Name="StatusText" />
+                </Grid>
+            </Window>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "xml", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Sample.MainWindow");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "SaveButton");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "StatusText");
+    }
+
+    [Fact]
+    public void Extract_Xml_NonXamlXmlDoesNotEmitXamlSymbols()
+    {
+        var content = """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net8.0</TargetFramework>
+              </PropertyGroup>
+              <ItemGroup>
+                <Foo x:Name="ShouldNotBeCaptured" />
+              </ItemGroup>
+            </Project>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "xml", content);
+        Assert.DoesNotContain(symbols, s => s.Name == "ShouldNotBeCaptured");
+    }
+
     private static string GetRepositoryRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);

@@ -99,6 +99,12 @@ public static class SymbolExtractor
     private static readonly Regex GoImportSpecRegex = new(
         @"^(?<name>(?:(?:[._]|[\p{L}_][\p{L}\p{Nd}_]*)\s+)?""(?:\\.|[^""\\])*"")(?:\s*;)?(?:\s*(?://.*|/\*.*\*/))?\s*$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex XamlClassRegex = new(
+        @"\bx:Class\s*=\s*[""'](?<value>[^""']+)[""']",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex XamlNameRegex = new(
+        @"\bx:Name\s*=\s*[""'](?<value>[^""']+)[""']",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     // Optional TypeScript generic type-argument token that may sit between an HOC call
     // name and its `(`. Consumed only by the TypeScript HOC-binding row — the JavaScript
@@ -3115,6 +3121,8 @@ public static class SymbolExtractor
 
         if (string.Equals(originalLang, "svelte", StringComparison.Ordinal))
             ExtractSvelteReactiveSymbols(fileId, lines, symbols);
+        if (lang == "xml")
+            symbols.AddRange(ExtractXmlSymbols(fileId, lines));
 
         AssignContainers(symbols, lines, csharpLineStartStates);
         MaterializeRecordPrimaryComponentSymbols(symbols, pendingRecordPrimaryComponents);
@@ -4283,6 +4291,66 @@ public static class SymbolExtractor
 
         AssignContainers(symbols, lines, null);
         PopulateDeclaredContainerQualifiedNames(symbols);
+        return symbols;
+    }
+
+    private static List<SymbolRecord> ExtractXmlSymbols(long fileId, string[] lines)
+    {
+        var hasXamlNamespace = false;
+        foreach (var line in lines)
+        {
+            if (line.IndexOf("xmlns:x=", StringComparison.OrdinalIgnoreCase) < 0)
+                continue;
+            if (line.IndexOf("schemas.microsoft.com/winfx/2006/xaml", StringComparison.OrdinalIgnoreCase) >= 0
+                || line.IndexOf("github.com/avaloniaui", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                hasXamlNamespace = true;
+                break;
+            }
+        }
+
+        if (!hasXamlNamespace)
+            return [];
+
+        var symbols = new List<SymbolRecord>();
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            foreach (Match classMatch in XamlClassRegex.Matches(line))
+            {
+                var value = classMatch.Groups["value"].Value.Trim();
+                if (value.Length == 0)
+                    continue;
+                symbols.Add(new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "class",
+                    Name = value,
+                    Line = i + 1,
+                    StartLine = i + 1,
+                    EndLine = i + 1,
+                    Signature = line.Trim(),
+                });
+            }
+
+            foreach (Match nameMatch in XamlNameRegex.Matches(line))
+            {
+                var value = nameMatch.Groups["value"].Value.Trim();
+                if (value.Length == 0)
+                    continue;
+                symbols.Add(new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "property",
+                    Name = value,
+                    Line = i + 1,
+                    StartLine = i + 1,
+                    EndLine = i + 1,
+                    Signature = line.Trim(),
+                });
+            }
+        }
+
         return symbols;
     }
 
