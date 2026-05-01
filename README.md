@@ -641,7 +641,7 @@ The database reflects the working tree at the time of the last index. After swit
 | SystemVerilog | `.sv`, `.svh` | -- |
 | VHDL | `.vhd`, `.vhdl` | -- |
 | Common Lisp | `.lisp`, `.lsp`, `.cl` | yes (defpackage, in-package, use-package, defclass, defstruct, defun/defmacro/defgeneric/defmethod) |
-| Racket | `.rkt` | yes (module, define, define-syntax-rule, define-for-syntax, struct, require, provide) |
+| Racket | `.rkt` | yes (module, define, define-syntax-rule, define-syntaxes, define-for-syntax, struct, require, provide) |
 | Pascal | `.pas`, `.pp`, `.dpr` | -- |
 | Ada | `.ada`, `.adb`, `.ads` | -- |
 | Fortran | `.f`, `.f77`, `.f90`, `.f95`, `.f03`, `.f08`, `.for`, `.ftn` | -- |

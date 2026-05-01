@@ -16035,7 +16035,7 @@ public class SymbolExtractorTests
     [Fact]
     public void Extract_Racket_DetectsModuleAndDefinitions()
     {
-        // Racket: module, define, struct, require / Racket: module、define、struct、require
+        // Racket: module, define, define-syntaxes, struct, require / Racket: module、define、define-syntaxes、struct、require
         var content = """
             #lang racket
 
@@ -16052,6 +16052,10 @@ public class SymbolExtractorTests
               (define-syntax-rule (make-point x)
                 x)
 
+              (define-syntaxes (make-point-2)
+                (lambda (stx)
+                  stx))
+
               (struct point (x y)))
             """;
         var symbols = SymbolExtractor.Extract(1, "racket", content);
@@ -16063,6 +16067,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "answer");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "render");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "make-point");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "make-point-2");
         Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "point");
     }
 

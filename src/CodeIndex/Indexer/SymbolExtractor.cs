@@ -1295,8 +1295,8 @@ public static class SymbolExtractor
         ["racket"] =
         [
             new("namespace", new Regex(@"^\s*\(\s*module(?:\*|\+)?\s+(?<name>[^\s()]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("function",  new Regex(@"^\s*\(\s*define(?:-syntax(?:-rule|-parser)?|-values)?\s+\(\s*(?<name>[^\s()]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("property",  new Regex(@"^\s*\(\s*define(?:-syntax(?:-rule|-parser)?|-values|-for-syntax)?\s+(?<name>[^\s()()]+)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("function",  new Regex(@"^\s*\(\s*define(?:-syntax(?:-rule|-parser|es)?|-values)?\s+\(\s*(?<name>[^\s()]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("property",  new Regex(@"^\s*\(\s*define(?:-syntax(?:-rule|-parser|es)?|-values|-for-syntax)?\s+(?<name>[^\s()()]+)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
             new("struct",    new Regex(@"^\s*\(\s*struct\s+(?<name>[^\s()]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
             new("import",    new Regex(@"^\s*\(\s*require\s+(?<name>[^\s()]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
             new("import",    new Regex(@"^\s*\(\s*provide\s+(?<name>[^\s()]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
