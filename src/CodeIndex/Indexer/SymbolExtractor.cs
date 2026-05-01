@@ -1287,6 +1287,7 @@ public static class SymbolExtractor
             new("namespace", new Regex(@"^\s*\(\s*defpackage\s+(?<name>[^\s()]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
             new("import",    new Regex(@"^\s*\(\s*in-package\s+(?<name>[^\s()]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
             new("import",    new Regex(@"^\s*\(\s*use-package\s+(?<name>[^\s()]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("import",    new Regex(@"^\s*\(\s*(?:shadowing-)?import\s+['""]?(?<name>[^\s()'""]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
             new("class",     new Regex(@"^\s*\(\s*defclass\s+(?<name>[^\s()]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
             new("struct",    new Regex(@"^\s*\(\s*defstruct\s+(?<name>[^\s()]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
             new("property",  new Regex(@"^\s*\(\s*(?:defparameter|defvar|defconstant)\s+(?<name>[^\s()]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),

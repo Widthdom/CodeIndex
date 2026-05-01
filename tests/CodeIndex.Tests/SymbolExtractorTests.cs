@@ -15996,13 +15996,15 @@ public class SymbolExtractorTests
     [Fact]
     public void Extract_CommonLisp_DetectsTopLevelDefinitions()
     {
-        // Common Lisp: package, classes, structs, variables, functions / Common Lisp: パッケージ、クラス、構造体、変数、関数
+        // Common Lisp: package, package transitions, classes, structs, variables, functions / Common Lisp: パッケージ、パッケージ遷移、クラス、構造体、変数、関数
         var content = """
             (defpackage :my-app
               (:use :cl))
 
             (in-package :my-app)
             (use-package :cl)
+            (import 'widget)
+            (shadowing-import 'render)
 
             (defclass widget ()
               ())
@@ -16025,6 +16027,8 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == ":my-app");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == ":my-app");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == ":cl");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "widget");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "render");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "widget");
         Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "point");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "*default-size*");
