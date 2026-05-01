@@ -4811,11 +4811,17 @@ public partial class DbReader
             if (!TryLoadIndexedFileLines(path, out _, out _, out var lineMap) || lineMap.Count == 0)
                 continue;
 
+            var csharpExactSearch = exact && string.Equals(fileLang, "csharp", StringComparison.OrdinalIgnoreCase);
+            var searchQuery = csharpExactSearch ? StripCSharpVerbatimPrefixesForSearch(query) : query;
             for (int lineNumber = 1; lineNumber <= totalLines && results.Count < limit; lineNumber++)
             {
                 if (!lineMap.TryGetValue(lineNumber, out var lineText))
                     continue;
 
+                int[]? rawIndexMap = null;
+                var searchLine = lineText;
+                if (csharpExactSearch)
+                    searchLine = StripCSharpVerbatimPrefixesForSearch(lineText, out rawIndexMap);
                 var snippetStart = Math.Max(1, lineNumber - before);
                 var snippetEnd = Math.Min(totalLines, lineNumber + after);
                 var snippetLineNumbers = Enumerable.Range(snippetStart, snippetEnd - snippetStart + 1)
@@ -4824,26 +4830,34 @@ public partial class DbReader
                 if (snippetLineNumbers.Count == 0)
                     continue;
 
-                for (int searchStart = 0; searchStart < lineText.Length && results.Count < limit;)
+                for (int searchStart = 0; searchStart < searchLine.Length && results.Count < limit;)
                 {
-                    var matchColumn = lineText.IndexOf(query, searchStart, comparison);
+                    var matchColumn = searchLine.IndexOf(searchQuery, searchStart, comparison);
                     if (matchColumn < 0)
                         break;
+
+                    var rawMatchColumn = rawIndexMap == null ? matchColumn : rawIndexMap[matchColumn];
+                    var rawMatchLength = searchQuery.Length;
+                    if (rawIndexMap != null && rawMatchLength > 0)
+                    {
+                        var rawMatchEndIndex = rawIndexMap[matchColumn + rawMatchLength - 1];
+                        rawMatchLength = rawMatchEndIndex - rawMatchColumn + 1;
+                    }
 
                     var snippetLines = snippetLineNumbers.Select(line => lineMap[line]).ToList();
                     var clampedSnippet = LineWidthFormatter.ClampLines(
                         snippetLines,
                         maxLineWidth,
                         focusLineIndex: snippetLineNumbers.IndexOf(lineNumber),
-                        focusColumn: matchColumn + 1,
-                        focusLength: query.Length);
+                        focusColumn: rawMatchColumn + 1,
+                        focusLength: rawMatchLength);
 
                     results.Add(new FileFindResult
                     {
                         Path = path,
                         Lang = fileLang,
                         Line = lineNumber,
-                        Column = matchColumn + 1,
+                        Column = rawMatchColumn + 1,
                         StartLine = snippetLineNumbers[0],
                         EndLine = snippetLineNumbers[^1],
                         Snippet = clampedSnippet.Text,
@@ -4865,7 +4879,7 @@ public partial class DbReader
 
         var comparison = exact ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
         using var fileCmd = _conn.CreateCommand();
-        var sql = "SELECT f.path, f.lines FROM files f WHERE 1=1";
+        var sql = "SELECT f.path, f.lang, f.lines FROM files f WHERE 1=1";
         if (lang != null)
             sql += " AND f.lang = @lang";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
@@ -4881,19 +4895,23 @@ public partial class DbReader
         while (fileReader.TrackedRead())
         {
             var path = fileReader.GetString(0);
-            var totalLines = fileReader.GetInt32(1);
+            var fileLang = GetNullableString(fileReader, 1);
+            var totalLines = fileReader.GetInt32(2);
             if (!TryLoadIndexedFileLines(path, out _, out _, out var lineMap) || lineMap.Count == 0)
                 continue;
 
+            var csharpExactSearch = exact && string.Equals(fileLang, "csharp", StringComparison.OrdinalIgnoreCase);
+            var searchQuery = csharpExactSearch ? StripCSharpVerbatimPrefixesForSearch(query) : query;
             var fileMatches = 0;
             for (int lineNumber = 1; lineNumber <= totalLines; lineNumber++)
             {
                 if (!lineMap.TryGetValue(lineNumber, out var lineText))
                     continue;
 
-                for (int searchStart = 0; searchStart < lineText.Length;)
+                var searchLine = csharpExactSearch ? StripCSharpVerbatimPrefixesForSearch(lineText) : lineText;
+                for (int searchStart = 0; searchStart < searchLine.Length;)
                 {
-                    var matchColumn = lineText.IndexOf(query, searchStart, comparison);
+                    var matchColumn = searchLine.IndexOf(searchQuery, searchStart, comparison);
                     if (matchColumn < 0)
                         break;
 
@@ -4911,6 +4929,97 @@ public partial class DbReader
 
         return new QueryCountResult(count, fileCount);
     }
+
+    private static string StripCSharpVerbatimPrefixesForSearch(string text)
+    {
+        if (text.Length == 0 || text.IndexOf('@') < 0)
+            return text;
+
+        var sb = new System.Text.StringBuilder(text.Length);
+        bool atBoundary = true;
+        for (int i = 0; i < text.Length; i++)
+        {
+            char c = text[i];
+            if (atBoundary && c == '@'
+                && i + 1 < text.Length
+                && IsCSharpIdentifierStartChar(text[i + 1]))
+            {
+                atBoundary = false;
+                continue;
+            }
+
+            sb.Append(c);
+            if (c == '.')
+            {
+                atBoundary = true;
+            }
+            else if (c == ':' && i + 1 < text.Length && text[i + 1] == ':')
+            {
+                sb.Append(':');
+                i++;
+                atBoundary = true;
+            }
+            else
+            {
+                atBoundary = false;
+            }
+        }
+
+        return sb.Length == text.Length ? text : sb.ToString();
+    }
+
+    private static string StripCSharpVerbatimPrefixesForSearch(string text, out int[]? rawIndexMap)
+    {
+        if (text.Length == 0 || text.IndexOf('@') < 0)
+        {
+            rawIndexMap = null;
+            return text;
+        }
+
+        var sb = new System.Text.StringBuilder(text.Length);
+        var map = new List<int>(text.Length);
+        bool atBoundary = true;
+        for (int i = 0; i < text.Length; i++)
+        {
+            char c = text[i];
+            if (atBoundary && c == '@'
+                && i + 1 < text.Length
+                && IsCSharpIdentifierStartChar(text[i + 1]))
+            {
+                atBoundary = false;
+                continue;
+            }
+
+            sb.Append(c);
+            map.Add(i);
+            if (c == '.')
+            {
+                atBoundary = true;
+            }
+            else if (c == ':' && i + 1 < text.Length && text[i + 1] == ':')
+            {
+                sb.Append(':');
+                map.Add(++i);
+                atBoundary = true;
+            }
+            else
+            {
+                atBoundary = false;
+            }
+        }
+
+        if (sb.Length == text.Length)
+        {
+            rawIndexMap = null;
+            return text;
+        }
+
+        rawIndexMap = map.ToArray();
+        return sb.ToString();
+    }
+
+    private static bool IsCSharpIdentifierStartChar(char c) =>
+        c == '_' || char.IsLetter(c);
 
     /// <summary>
     /// Reconstruct one indexed file into an ordered line map.
