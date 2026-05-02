@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+- **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
+
 ### [1.18.0] - 2026-05-02
 
 #### Changed
@@ -146,6 +148,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Expanded `--lang tsql` regression coverage to callers and callees** — added CLI tests that exercise the SQL alias through `RunCallers` and `RunCallees`, so the follow-up coverage now includes the remaining graph-query entry points.
 - **Expanded regression coverage for the `--lang tsql` alias on impact and dependency queries** — added tests that exercise the SQL alias through `AnalyzeImpact` and `GetFileDependencies`, so the alias stays covered beyond the original `symbols` and `references` checks.
+=======
+- **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
+>>>>>>> Stashed changes
 
 ### [1.17.1] - 2026-05-01
 
@@ -1227,6 +1232,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+- **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
+
 ### [1.18.0] - 2026-05-02
 
 #### 変更
@@ -1364,6 +1371,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **`--lang tsql` の回帰テストを callers / callees まで拡張しました** — SQL 別名を `RunCallers` と `RunCallees` で通す CLI テストを追加し、follow-up 対応のカバレッジを残りのグラフ系エントリポイントにも広げました。
 - **`--lang tsql` 別名の impact と dependency クエリ向け回帰テストを拡充しました** — `AnalyzeImpact` と `GetFileDependencies` で SQL 別名を通すテストを追加し、元の `symbols` / `references` 確認だけに依存しないようにしました。
+=======
+- **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
+>>>>>>> Stashed changes
 
 ### [1.17.1] - 2026-05-01
 
