@@ -11185,15 +11185,15 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "rust", content);
 
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "std::fmt::Display");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Display");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Display" && s.Line == 2 && s.StartColumn == 10);
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "std::io::Result as IoResult");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "IoResult");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "IoResult" && s.Line == 3 && s.StartColumn == 20);
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "std::io::Write");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Write");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Write" && s.Line == 3 && s.StartColumn == 30);
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "crate::net::Client");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Client");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Client" && s.Line == 6 && s.StartColumn == 10);
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "crate::net::server::Server as NetServer");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "NetServer");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "NetServer" && s.Line == 7 && s.StartColumn == 28);
     }
 
     [Fact]

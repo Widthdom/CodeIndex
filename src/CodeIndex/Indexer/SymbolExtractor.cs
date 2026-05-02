@@ -151,6 +151,7 @@ public static class SymbolExtractor
     private static readonly Regex RustUseStatementRegex = new(
         @"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?use\s+(?<body>.+);\s*$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.Singleline);
+    private readonly record struct RustUseSymbolOccurrence(string Name, int Line, int Column);
     private static readonly Regex XamlClassRegex = new(
         @"\bx:Class\s*=\s*[""'](?<value>[^""']+)[""']",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -2389,55 +2390,67 @@ public static class SymbolExtractor
     {
         for (var i = 0; i < lines.Length; i++)
         {
-            var line = lines[i];
-            if (!TryReadRustUseStatement(lines, i, out var statement, out var endLineIndex))
+            if (!TryReadRustUseStatement(lines, i, out var statement, out var lineStarts, out var endLineIndex))
                 continue;
 
-            var match = RustUseStatementRegex.Match(statement);
-            if (!match.Success)
+            var useIndex = statement.IndexOf("use ", StringComparison.Ordinal);
+            if (useIndex < 0)
                 continue;
 
-            var body = match.Groups["body"].Value.Trim();
+            var body = statement[(useIndex + 4)..].Trim();
             if (body.Length == 0)
                 continue;
 
-            var names = new HashSet<string>(StringComparer.Ordinal);
-            CollectRustUseSymbolNames(body, names);
+            var semicolonIndex = body.LastIndexOf(';');
+            if (semicolonIndex < 0)
+                continue;
+            body = body[..semicolonIndex].Trim();
+            if (body.Length == 0)
+                continue;
 
-            foreach (var name in names)
+            var occurrences = new List<RustUseSymbolOccurrence>();
+            var bodyOffset = useIndex + 4;
+            var trimmedBodyOffset = statement[(useIndex + 4)..].IndexOf(body, StringComparison.Ordinal);
+            if (trimmedBodyOffset >= 0)
+                bodyOffset += trimmedBodyOffset;
+            CollectRustUseSymbolOccurrences(body, bodyOffset, lineStarts, i + 1, occurrences);
+
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var occurrence in occurrences)
             {
-                if (HasRustSymbol(symbols, fileId, i + 1, "import", name))
+                if (!seen.Add($"{occurrence.Name}@{occurrence.Line}:{occurrence.Column}"))
                     continue;
 
-                var startColumn = line.IndexOf(name, StringComparison.Ordinal);
-                if (startColumn < 0)
-                    startColumn = line.Length - line.TrimStart().Length;
+                var name = occurrence.Name;
+                if (HasRustSymbol(symbols, fileId, occurrence.Line, "import", name))
+                    continue;
 
                 AddSymbolRecord(
                     symbols,
                     cssSeenSymbols: null,
-                    i + 1,
+                    occurrence.Line,
                     new SymbolRecord
                     {
                         FileId = fileId,
                         Kind = "import",
                         Name = name,
-                        Line = i + 1,
-                        StartLine = i + 1,
-                        StartColumn = startColumn,
-                        EndLine = i + 1,
-                        Signature = line.Trim(),
+                        Line = occurrence.Line,
+                        StartLine = occurrence.Line,
+                        StartColumn = occurrence.Column,
+                        EndLine = occurrence.Line,
+                        Signature = statement.Trim(),
                     },
-                    line);
+                    lines[occurrence.Line - 1]);
             }
 
             i = endLineIndex;
         }
     }
 
-    private static bool TryReadRustUseStatement(string[] lines, int startIndex, out string statement, out int endIndex)
+    private static bool TryReadRustUseStatement(string[] lines, int startIndex, out string statement, out List<int> lineStarts, out int endIndex)
     {
         statement = string.Empty;
+        lineStarts = [];
         endIndex = startIndex;
 
         var firstLine = lines[startIndex];
@@ -2446,12 +2459,16 @@ public static class SymbolExtractor
 
         var builder = new StringBuilder(firstLine.Length + 32);
         var braceDepth = 0;
+        lineStarts.Add(0);
 
         for (var i = startIndex; i < lines.Length; i++)
         {
             var current = lines[i];
             if (i > startIndex)
+            {
                 builder.Append('\n');
+                lineStarts.Add(builder.Length);
+            }
             builder.Append(current);
 
             foreach (var ch in current)
@@ -2480,11 +2497,19 @@ public static class SymbolExtractor
         return false;
     }
 
-    private static void CollectRustUseSymbolNames(string body, ISet<string> names, string? prefix = null)
+    private static void CollectRustUseSymbolOccurrences(
+        string body,
+        int bodyOffset,
+        IReadOnlyList<int> lineStarts,
+        int startLineNumber,
+        List<RustUseSymbolOccurrence> occurrences,
+        string? prefix = null)
     {
         var text = body.Trim();
         if (text.Length == 0)
             return;
+
+        bodyOffset += body.IndexOf(text, StringComparison.Ordinal);
 
         var openBraceIndex = text.IndexOf('{');
         if (openBraceIndex >= 0)
@@ -2495,23 +2520,28 @@ public static class SymbolExtractor
                 var groupedPrefix = CombineRustUsePrefix(prefix, text[..openBraceIndex].Trim());
                 var inner = text[(openBraceIndex + 1)..closeBraceIndex];
                 foreach (var item in SplitRustUseItems(inner))
-                    CollectRustUseSymbolNames(item, names, groupedPrefix);
+                {
+                    var itemOffset = bodyOffset + openBraceIndex + 1 + inner.IndexOf(item, StringComparison.Ordinal);
+                    CollectRustUseSymbolOccurrences(item, itemOffset, lineStarts, startLineNumber, occurrences, groupedPrefix);
+                }
                 return;
             }
         }
 
         var aliasIndex = FindTopLevelKeyword(text, " as ");
         var hasPathPrefix = !string.IsNullOrWhiteSpace(prefix);
-        var isQualifiedSymbol = text.Contains("::", StringComparison.Ordinal) || aliasIndex >= 0 || hasPathPrefix;
 
-        if (isQualifiedSymbol && text is not "self" and not "super" and not "crate" and not "*")
-            names.Add(CombineRustUsePrefix(prefix, text));
+        if (hasPathPrefix && text is not "self" and not "super" and not "crate" and not "*")
+            AddRustUseOccurrence(occurrences, CombineRustUsePrefix(prefix, text), bodyOffset, lineStarts, startLineNumber);
 
         if (aliasIndex >= 0)
         {
             var alias = text[(aliasIndex + 4)..].Trim();
             if (alias.Length > 0)
-                names.Add(alias);
+            {
+                var aliasStart = bodyOffset + aliasIndex + 4 + (text[(aliasIndex + 4)..].Length - alias.Length);
+                AddRustUseOccurrence(occurrences, alias, aliasStart, lineStarts, startLineNumber);
+            }
         }
 
         var leaf = text;
@@ -2519,7 +2549,11 @@ public static class SymbolExtractor
             leaf = text[..aliasIndex].Trim();
 
         if (hasPathPrefix && text == "self")
-            names.Add(CombineRustUsePrefix(prefix, string.Empty));
+        {
+            var selfIndex = text.IndexOf("self", StringComparison.Ordinal);
+            if (selfIndex >= 0)
+                AddRustUseOccurrence(occurrences, CombineRustUsePrefix(prefix, string.Empty), bodyOffset + selfIndex, lineStarts, startLineNumber);
+        }
 
         if (leaf.Length == 0)
             return;
@@ -2530,10 +2564,38 @@ public static class SymbolExtractor
 
         if (leaf.Length > 0 && leaf is not "self" and not "super" and not "crate" and not "*")
         {
+            var leafStartInText = text.IndexOf(leaf, StringComparison.Ordinal);
+            if (leafStartInText < 0)
+                leafStartInText = text.IndexOf(leaf, StringComparison.Ordinal);
+            var leafOffset = bodyOffset + Math.Max(0, leafStartInText);
             if (hasPathPrefix)
-                names.Add(CombineRustUsePrefix(prefix, leaf));
-            names.Add(leaf);
+                AddRustUseOccurrence(occurrences, CombineRustUsePrefix(prefix, leaf), leafOffset, lineStarts, startLineNumber);
+            AddRustUseOccurrence(occurrences, leaf, leafOffset, lineStarts, startLineNumber);
         }
+    }
+
+    private static void AddRustUseOccurrence(
+        List<RustUseSymbolOccurrence> occurrences,
+        string name,
+        int absoluteOffset,
+        IReadOnlyList<int> lineStarts,
+        int startLineNumber)
+    {
+        if (name.Length == 0)
+            return;
+
+        var lineIndex = 0;
+        for (var i = lineStarts.Count - 1; i >= 0; i--)
+        {
+            if (lineStarts[i] <= absoluteOffset)
+            {
+                lineIndex = i;
+                break;
+            }
+        }
+
+        var column = absoluteOffset - lineStarts[lineIndex] + 1;
+        occurrences.Add(new RustUseSymbolOccurrence(name, startLineNumber + lineIndex, column));
     }
 
     private static string CombineRustUsePrefix(string? prefix, string name)
