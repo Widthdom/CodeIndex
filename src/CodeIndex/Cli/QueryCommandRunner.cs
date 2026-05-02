@@ -35,10 +35,12 @@ public static class QueryCommandRunner
         ["kt"] = "kotlin",
         ["kts"] = "kotlin",
         ["tsql"] = "sql",
+        ["transactsql"] = "sql",
     };
     private static readonly Dictionary<string, string[]> LanguageDisplayAliases = new(StringComparer.Ordinal)
     {
         ["yaml"] = ["yml"],
+        ["sql"] = ["tsql", "t-sql", "transact-sql", "sqlserver", "mssql"],
     };
     private static readonly HashSet<string> ValueTakingOptions =
     [
@@ -3013,7 +3015,10 @@ public static class QueryCommandRunner
     {
         if (langValue == null)
             return null;
-        var normalized = langValue.ToLowerInvariant();
+        var normalized = langValue
+            .ToLowerInvariant()
+            .Replace("-", string.Empty, StringComparison.Ordinal)
+            .Replace(" ", string.Empty, StringComparison.Ordinal);
         return LangFilterAliases.TryGetValue(normalized, out var canonical) ? canonical : normalized;
     }
 

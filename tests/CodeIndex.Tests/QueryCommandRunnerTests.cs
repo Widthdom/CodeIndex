@@ -104,6 +104,18 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void GetLanguageAliases_ReportsSqlDialectAliases()
+    {
+        var aliases = QueryCommandRunner.GetLanguageAliases("sql");
+
+        Assert.Contains("tsql", aliases);
+        Assert.Contains("t-sql", aliases);
+        Assert.Contains("transact-sql", aliases);
+        Assert.Contains("sqlserver", aliases);
+        Assert.Contains("mssql", aliases);
+    }
+
+    [Fact]
     public void ParseArgs_AllowsDashPrefixedPositionalQueryLiteral()
     {
         var options = QueryCommandRunner.ParseArgs(["--open-reports", "--db", "query.db"], jsonDefault: false, allowNamedQuery: true);
@@ -172,6 +184,9 @@ public class QueryCommandRunnerTests
     [InlineData("yml", "yaml")]
     [InlineData("kt", "kotlin")]
     [InlineData("KTS", "kotlin")]
+    [InlineData("T-SQL", "sql")]
+    [InlineData("transact-sql", "sql")]
+    [InlineData("transact sql", "sql")]
     public void ParseArgs_NormalizesLangAliases(string input, string expected)
     {
         var options = QueryCommandRunner.ParseArgs(["needle", "--lang", input], jsonDefault: false);
@@ -286,6 +301,37 @@ jobs:
                 "scripts/run.bat",
                 "batch",
                 $"echo {queryToken}\r\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [queryToken, "--db", dbPath, "--lang", input, "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("1", stdout.Trim());
+            Assert.Equal(string.Empty, stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("T-SQL")]
+    [InlineData("transact-sql")]
+    [InlineData("transact sql")]
+    public void RunSearch_NormalizesSqlDialectLangAliases(string input)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_lang_alias");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var queryToken = "sql_lang_alias_3f7d21";
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "sql/repro.sql",
+                "sql",
+                $"SELECT '{queryToken}';");
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 [queryToken, "--db", dbPath, "--lang", input, "--count"],
