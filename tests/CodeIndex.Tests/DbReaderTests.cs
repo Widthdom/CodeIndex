@@ -73,6 +73,8 @@ public class DbReaderTests : IDisposable
     [InlineData("JS")]
     [InlineData("jsx")]
     [InlineData("JSX")]
+    [InlineData("cjs")]
+    [InlineData("MJS")]
     public void CountSearchResults_NormalizesJavascriptShorthandLangSpellings(string lang)
     {
         const string query = "JavaScriptShorthandToken";

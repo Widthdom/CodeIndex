@@ -142,6 +142,8 @@ public class QueryCommandRunnerTests
 
         Assert.Contains("js", aliases);
         Assert.Contains("jsx", aliases);
+        Assert.Contains("cjs", aliases);
+        Assert.Contains("mjs", aliases);
     }
 
     [Fact]
@@ -322,6 +324,8 @@ public class QueryCommandRunnerTests
     [InlineData("cmd", "batch")]
     [InlineData("JS", "javascript")]
     [InlineData("jsx", "javascript")]
+    [InlineData("cjs", "javascript")]
+    [InlineData("MJS", "javascript")]
     [InlineData("C#", "csharp")]
     [InlineData("cs", "csharp")]
     [InlineData("Java", "java")]
@@ -352,6 +356,8 @@ public class QueryCommandRunnerTests
     [InlineData("cshtml")]
     [InlineData("js")]
     [InlineData("JSX")]
+    [InlineData("cjs")]
+    [InlineData("MJS")]
     [InlineData("Java")]
     [InlineData("kt")]
     [InlineData("kts")]
@@ -429,6 +435,38 @@ public class QueryCommandRunnerTests
             TestProjectHelper.InsertIndexedFile(
                 dbPath,
                 "src/App.js",
+                "javascript",
+                $@"const marker = ""{queryToken}"";");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [queryToken, "--db", dbPath, "--lang", lang, "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("1", stdout.Trim());
+            Assert.Equal(string.Empty, stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("cjs")]
+    [InlineData("mjs")]
+    [InlineData("CJS")]
+    [InlineData("MJS")]
+    public void RunSearch_NormalizesJavascriptExtensionStyleLangAliases(string lang)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_javascript_extension_lang_alias");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var queryToken = $"javascript_extension_lang_alias_{Guid.NewGuid():N}";
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/App.mjs",
                 "javascript",
                 $@"const marker = ""{queryToken}"";");
 

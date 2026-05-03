@@ -25,6 +25,8 @@ public static class QueryCommandRunner
     {
         ["js"] = "javascript",
         ["jsx"] = "javascript",
+        ["cjs"] = "javascript",
+        ["mjs"] = "javascript",
         ["c#"] = "csharp",
         ["cs"] = "csharp",
         ["cshtml"] = "csharp",
@@ -49,7 +51,7 @@ public static class QueryCommandRunner
     };
     private static readonly Dictionary<string, string[]> LanguageDisplayAliases = new(StringComparer.Ordinal)
     {
-        ["javascript"] = ["js", "jsx"],
+        ["javascript"] = ["js", "jsx", "cjs", "mjs"],
         ["csharp"] = ["cshtml", "razor"],
         ["yaml"] = ["yml"],
         ["typescript"] = ["ts", "tsx", "cts", "mts"],
