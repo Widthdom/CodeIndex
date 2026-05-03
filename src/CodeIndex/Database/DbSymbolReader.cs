@@ -681,7 +681,7 @@ public partial class DbReader
         if (macroQuery.Length == 0)
             return null;
 
-        if (exact && isMacroQuery && macroQuery.Contains("::", StringComparison.Ordinal) && macroQuery.Contains("r#", StringComparison.Ordinal))
+        if (exact && isMacroQuery && macroQuery.Contains("::", StringComparison.Ordinal))
             return NormalizeRustQualifiedMacroQuery(macroQuery);
 
         var leafIndex = macroQuery.LastIndexOf("::", StringComparison.Ordinal);

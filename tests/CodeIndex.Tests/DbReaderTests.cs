@@ -457,6 +457,26 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SearchReferences_RustQualifiedMacroInvocationsStayPathAware()
+    {
+        InsertIndexedFile(
+            "src/macros.rs",
+            "rust",
+            """
+            fn main() {
+                crate::macros::build!();
+                crate::other::build!();
+            }
+            """);
+
+        var results = _reader.SearchReferences("crate::macros::build!", lang: "rust", exact: true);
+
+        var reference = Assert.Single(results);
+        Assert.Equal("crate::macros::build", reference.SymbolName);
+        Assert.Equal("src/macros.rs", reference.Path);
+    }
+
+    [Fact]
     public void RustQualifiedQueriesResolveAcrossGraphCommands()
     {
         InsertIndexedFile(
