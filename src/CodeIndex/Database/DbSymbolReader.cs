@@ -225,13 +225,19 @@ public partial class DbReader
                 ? string.Join(" OR ", effectiveQueries.Select((queryValue, idx) =>
                 {
                     var allowLeafFallback = !SqlNameResolver.HasQualifier(queryValue);
+                    var swiftBacktickAlias = ComputeSwiftBacktickAlias(queryValue, lang);
+                    var swiftBacktickClause = swiftBacktickAlias != null
+                        ? _foldReady
+                            ? $" OR s.name_folded = @query{idx}SwiftBacktickAlias"
+                            : $" OR s.name = @query{idx}SwiftBacktickAlias COLLATE NOCASE"
+                        : string.Empty;
                     return _foldReady
                         ? allowLeafFallback
-                            ? $"(s.name_folded = @query{idx} OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name_folded(s.name) = @query{idx}NormalizedFolded) OR sql_leaf_name_folded(s.name) = @query{idx}LeafFolded)))"
-                            : $"(s.name_folded = @query{idx} OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name_folded(s.name) = @query{idx}NormalizedFolded))"
+                            ? $"(s.name_folded = @query{idx}{swiftBacktickClause} OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name_folded(s.name) = @query{idx}NormalizedFolded) OR sql_leaf_name_folded(s.name) = @query{idx}LeafFolded)))"
+                            : $"(s.name_folded = @query{idx}{swiftBacktickClause} OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name_folded(s.name) = @query{idx}NormalizedFolded))"
                         : allowLeafFallback
-                            ? $"(s.name = @query{idx} COLLATE NOCASE OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name(s.name) = @query{idx}Normalized COLLATE NOCASE) OR sql_leaf_name(s.name) = @query{idx}Leaf COLLATE NOCASE)))"
-                            : $"(s.name = @query{idx} COLLATE NOCASE OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name(s.name) = @query{idx}Normalized COLLATE NOCASE))";
+                            ? $"(s.name = @query{idx} COLLATE NOCASE{swiftBacktickClause} OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name(s.name) = @query{idx}Normalized COLLATE NOCASE) OR sql_leaf_name(s.name) = @query{idx}Leaf COLLATE NOCASE)))"
+                            : $"(s.name = @query{idx} COLLATE NOCASE{swiftBacktickClause} OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name(s.name) = @query{idx}Normalized COLLATE NOCASE))";
                 }))
                 : string.Join(" OR ", effectiveQueries.Select((_, idx) => $"(s.name LIKE @query{idx} ESCAPE '\\' OR (f.lang = 'sql' AND sql_normalize_name(s.name) LIKE @query{idx}NormalizedLike ESCAPE '\\'))"));
             sql += $" AND ({orClauses})";
@@ -263,6 +269,13 @@ public partial class DbReader
                 cmd.Parameters.AddWithValue($"@query{i}LeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(value)) ?? SqlNameResolver.GetLeafName(value));
                 cmd.Parameters.AddWithValue($"@query{i}SegmentCount", SqlNameResolver.GetSegmentCount(value));
                 cmd.Parameters.AddWithValue($"@query{i}NormalizedLike", $"%{EscapeLikeQuery(SqlNameResolver.NormalizeQualifiedName(value))}%");
+                var swiftBacktickAlias = ComputeSwiftBacktickAlias(value, lang);
+                if (swiftBacktickAlias != null)
+                {
+                    cmd.Parameters.AddWithValue($"@query{i}SwiftBacktickAlias", _foldReady
+                        ? NameFold.Fold(swiftBacktickAlias) ?? swiftBacktickAlias
+                        : swiftBacktickAlias);
+                }
             }
         }
         if (kind != null)
@@ -355,13 +368,19 @@ public partial class DbReader
                 ? string.Join(" OR ", effectiveQueries.Select((queryValue, idx) =>
                 {
                     var allowLeafFallback = !SqlNameResolver.HasQualifier(queryValue);
+                    var swiftBacktickAlias = ComputeSwiftBacktickAlias(queryValue, lang);
+                    var swiftBacktickClause = swiftBacktickAlias != null
+                        ? _foldReady
+                            ? $" OR s.name_folded = @query{idx}SwiftBacktickAlias"
+                            : $" OR s.name = @query{idx}SwiftBacktickAlias COLLATE NOCASE"
+                        : string.Empty;
                     return _foldReady
                         ? allowLeafFallback
-                            ? $"(s.name_folded = @query{idx} OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name_folded(s.name) = @query{idx}NormalizedFolded) OR sql_leaf_name_folded(s.name) = @query{idx}LeafFolded)))"
-                            : $"(s.name_folded = @query{idx} OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name_folded(s.name) = @query{idx}NormalizedFolded))"
+                            ? $"(s.name_folded = @query{idx}{swiftBacktickClause} OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name_folded(s.name) = @query{idx}NormalizedFolded) OR sql_leaf_name_folded(s.name) = @query{idx}LeafFolded)))"
+                            : $"(s.name_folded = @query{idx}{swiftBacktickClause} OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name_folded(s.name) = @query{idx}NormalizedFolded))"
                         : allowLeafFallback
-                            ? $"(s.name = @query{idx} COLLATE NOCASE OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name(s.name) = @query{idx}Normalized COLLATE NOCASE) OR sql_leaf_name(s.name) = @query{idx}Leaf COLLATE NOCASE)))"
-                            : $"(s.name = @query{idx} COLLATE NOCASE OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name(s.name) = @query{idx}Normalized COLLATE NOCASE))";
+                            ? $"(s.name = @query{idx} COLLATE NOCASE{swiftBacktickClause} OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name(s.name) = @query{idx}Normalized COLLATE NOCASE) OR sql_leaf_name(s.name) = @query{idx}Leaf COLLATE NOCASE)))"
+                            : $"(s.name = @query{idx} COLLATE NOCASE{swiftBacktickClause} OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name(s.name) = @query{idx}Normalized COLLATE NOCASE))";
                 }))
                 : string.Join(" OR ", effectiveQueries.Select((_, idx) => $"(s.name LIKE @query{idx} ESCAPE '\\' OR (f.lang = 'sql' AND sql_normalize_name(s.name) LIKE @query{idx}NormalizedLike ESCAPE '\\'))"));
             sql += $" AND ({orClauses})";
@@ -401,6 +420,13 @@ public partial class DbReader
                 cmd.Parameters.AddWithValue($"@query{idx}LeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(effectiveQueries[idx])) ?? SqlNameResolver.GetLeafName(effectiveQueries[idx]));
                 cmd.Parameters.AddWithValue($"@query{idx}SegmentCount", SqlNameResolver.GetSegmentCount(effectiveQueries[idx]));
                 cmd.Parameters.AddWithValue($"@query{idx}NormalizedLike", $"%{EscapeLikeQuery(SqlNameResolver.NormalizeQualifiedName(effectiveQueries[idx]))}%");
+                var swiftBacktickAlias = ComputeSwiftBacktickAlias(effectiveQueries[idx], lang);
+                if (swiftBacktickAlias != null)
+                {
+                    cmd.Parameters.AddWithValue($"@query{idx}SwiftBacktickAlias", _foldReady
+                        ? NameFold.Fold(swiftBacktickAlias) ?? swiftBacktickAlias
+                        : swiftBacktickAlias);
+                }
             }
         }
         var preferLiteralExactMatch = effectiveQueries != null && effectiveQueries.Count == 1;
@@ -580,6 +606,33 @@ public partial class DbReader
             return NormalizeJavaScriptSymbolSearchQuery(query);
 
         return NormalizeCSharpVerbatimQuery(query, lang);
+    }
+
+    private static string? ComputeSwiftBacktickAlias(string? query, string? lang)
+    {
+        if (!string.Equals(lang, "swift", StringComparison.OrdinalIgnoreCase) || string.IsNullOrWhiteSpace(query))
+            return null;
+
+        var trimmed = query.Trim();
+        if (trimmed.Length == 0)
+            return null;
+
+        if (trimmed.IndexOfAny(['`', ':', '/', '<', '>', '(', ')', '[', ']', ' ']) >= 0)
+            return null;
+
+        var lastDot = trimmed.LastIndexOf('.');
+        if (lastDot < 0)
+            return $"`{trimmed}`";
+
+        if (lastDot == 0 || lastDot == trimmed.Length - 1)
+            return null;
+
+        var prefix = trimmed[..(lastDot + 1)];
+        var leaf = trimmed[(lastDot + 1)..];
+        if (leaf.IndexOf('.') >= 0)
+            return null;
+
+        return $"{prefix}`{leaf}`";
     }
 
     private static string? NormalizeJavaScriptSymbolSearchQuery(string? query)

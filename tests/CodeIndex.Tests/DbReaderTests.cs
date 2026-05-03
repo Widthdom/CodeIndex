@@ -327,6 +327,74 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SearchSymbols_SwiftExactQueriesMatchBacktickEscapedIdentifiers()
+    {
+        InsertIndexedFile(
+            "src/swift.swift",
+            "swift",
+            """
+            public struct Store {
+                public func `repeat`() {}
+            }
+            """);
+
+        var plainResults = _reader.SearchSymbols("repeat", lang: "swift", exact: true);
+        var escapedResults = _reader.SearchSymbols("`repeat`", lang: "swift", exact: true);
+
+        var plain = Assert.Single(plainResults);
+        var escaped = Assert.Single(escapedResults);
+
+        Assert.Equal("`repeat`", plain.Name);
+        Assert.Equal("src/swift.swift", plain.Path);
+        Assert.Equal(plain.Name, escaped.Name);
+        Assert.Equal(plain.Path, escaped.Path);
+    }
+
+    [Fact]
+    public void SearchSymbols_SwiftExactQueriesMatchQualifiedBacktickEscapedIdentifiers()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/qualified.swift",
+            Lang = "swift",
+            Size = 64,
+            Lines = 1,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks([new ChunkRecord
+        {
+            FileId = fileId,
+            ChunkIndex = 0,
+            StartLine = 1,
+            EndLine = 1,
+            Content = "MyType.`repeat`",
+        }]);
+        _writer.InsertSymbols([new SymbolRecord
+        {
+            FileId = fileId,
+            Kind = "function",
+            Name = "MyType.`repeat`",
+            Line = 1,
+            StartLine = 1,
+            EndLine = 1,
+            BodyStartLine = 1,
+            BodyEndLine = 1,
+            Signature = "func MyType.`repeat`() {}",
+        }]);
+
+        var plainResults = _reader.SearchSymbols("MyType.repeat", lang: "swift", exact: true);
+        var escapedResults = _reader.SearchSymbols("MyType.`repeat`", lang: "swift", exact: true);
+
+        var plain = Assert.Single(plainResults);
+        var escaped = Assert.Single(escapedResults);
+
+        Assert.Equal("MyType.`repeat`", plain.Name);
+        Assert.Equal("src/qualified.swift", plain.Path);
+        Assert.Equal(plain.Name, escaped.Name);
+        Assert.Equal(plain.Path, escaped.Path);
+    }
+
+    [Fact]
     public void SearchReferences_RustRawMacroInvocationsIgnoreRawPrefixAndBang()
     {
         InsertIndexedFile(
