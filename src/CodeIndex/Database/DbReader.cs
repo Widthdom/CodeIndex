@@ -31,6 +31,7 @@ public partial class DbReader
     private static readonly Regex CSharpUsingStaticImportRegex = new(@"^\s*(?:global\s+)?using\s+static\s+(?<target>[^;]+)", RegexOptions.Compiled);
     private static readonly Regex CSharpUsingAliasImportRegex = new(@"^\s*(?:global\s+)?using\s+(?!static\b)(?<alias>[^\s=;]+)\s*=\s*(?<target>[^;]+)", RegexOptions.Compiled);
     private static readonly Regex CSharpUsingNamespaceImportRegex = new(@"^\s*(?:global\s+)?using\s+(?!static\b)(?<target>[^;=]+)", RegexOptions.Compiled);
+    private static readonly IReadOnlyDictionary<string, string> QueryLanguageAliases = BuildQueryLanguageAliases();
     private readonly SqliteConnection _conn;
     private readonly bool _isReadOnly;
     private readonly HashSet<string> _fileColumns;
@@ -781,51 +782,55 @@ public partial class DbReader
         if (lang == null)
             return null;
 
-        var compact = lang.Replace("-", string.Empty, StringComparison.Ordinal).Replace(" ", string.Empty, StringComparison.Ordinal);
-        if (string.Equals(compact, "js", StringComparison.OrdinalIgnoreCase))
-            return "javascript";
-        if (string.Equals(compact, "jsx", StringComparison.OrdinalIgnoreCase))
-            return "javascript";
-        if (string.Equals(compact, "cjs", StringComparison.OrdinalIgnoreCase))
-            return "javascript";
-        if (string.Equals(compact, "mjs", StringComparison.OrdinalIgnoreCase))
-            return "javascript";
-        if (string.Equals(compact, "javascript", StringComparison.OrdinalIgnoreCase))
-            return "javascript";
-        if (string.Equals(compact, "ts", StringComparison.OrdinalIgnoreCase))
-            return "typescript";
-        if (string.Equals(compact, "tsx", StringComparison.OrdinalIgnoreCase))
-            return "typescript";
-        if (string.Equals(compact, "cts", StringComparison.OrdinalIgnoreCase))
-            return "typescript";
-        if (string.Equals(compact, "mts", StringComparison.OrdinalIgnoreCase))
-            return "typescript";
-        if (string.Equals(compact, "typescript", StringComparison.OrdinalIgnoreCase))
-            return "typescript";
-        if (string.Equals(compact, "java", StringComparison.OrdinalIgnoreCase))
-            return "java";
-        if (string.Equals(compact, "jav", StringComparison.OrdinalIgnoreCase))
-            return "java";
-        if (string.Equals(compact, "cshtml", StringComparison.OrdinalIgnoreCase))
-            return "csharp";
-        if (string.Equals(compact, "razor", StringComparison.OrdinalIgnoreCase))
-            return "csharp";
-        if (string.Equals(compact, "xaml", StringComparison.OrdinalIgnoreCase))
-            return "xml";
-        if (string.Equals(compact, "axaml", StringComparison.OrdinalIgnoreCase))
-            return "xml";
-        if (string.Equals(compact, "rs", StringComparison.OrdinalIgnoreCase))
-            return "rust";
-        return string.Equals(compact, "tsql", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(compact, "transactsql", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(compact, "mssql", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(compact, "sqlserver", StringComparison.OrdinalIgnoreCase)
-            ? "sql"
-            : lang;
+        var normalized = NormalizeQueryLanguageKey(lang);
+        return QueryLanguageAliases.TryGetValue(normalized, out var canonical)
+            ? canonical
+            : normalized;
     }
 
     internal static bool ContainsSqlLanguage(IEnumerable<string?> langs)
         => langs.Any(IsSqlLanguage);
+
+    private static IReadOnlyDictionary<string, string> BuildQueryLanguageAliases()
+    {
+        var aliases = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var (pattern, lang) in FileIndexer.GetLanguageExtensions())
+            AddQueryLanguageAlias(aliases, pattern, lang);
+
+        AddQueryLanguageAlias(aliases, "c#", "csharp");
+        AddQueryLanguageAlias(aliases, "c++", "cpp");
+        AddQueryLanguageAlias(aliases, "cplusplus", "cpp");
+        AddQueryLanguageAlias(aliases, "f#", "fsharp");
+        AddQueryLanguageAlias(aliases, "jav", "java");
+        AddQueryLanguageAlias(aliases, "py3", "python");
+        AddQueryLanguageAlias(aliases, "vb.net", "vb");
+        AddQueryLanguageAlias(aliases, "vbnet", "vb");
+        AddQueryLanguageAlias(aliases, "visual basic", "vb");
+        AddQueryLanguageAlias(aliases, "visualbasic", "vb");
+        AddQueryLanguageAlias(aliases, "sqlserver", "sql");
+        AddQueryLanguageAlias(aliases, "mssql", "sql");
+        AddQueryLanguageAlias(aliases, "transactsql", "sql");
+
+        return aliases;
+    }
+
+    private static void AddQueryLanguageAlias(IDictionary<string, string> aliases, string alias, string canonical)
+        => aliases.TryAdd(NormalizeQueryLanguageKey(alias), canonical);
+
+    private static string NormalizeQueryLanguageKey(string lang)
+    {
+        var builder = new StringBuilder(lang.Length);
+        foreach (var ch in lang.Trim())
+        {
+            if (char.IsWhiteSpace(ch) || ch is '-' or '_' or '.')
+                continue;
+
+            builder.Append(char.ToLowerInvariant(ch));
+        }
+
+        return builder.ToString();
+    }
 
     private static bool AllowSqlLeafFallbackForQuery(string query)
         => !SqlNameResolver.HasQualifier(query);

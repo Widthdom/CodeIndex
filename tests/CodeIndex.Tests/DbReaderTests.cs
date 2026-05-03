@@ -108,6 +108,29 @@ public class DbReaderTests : IDisposable
         Assert.Equal(1, counts.FileCount);
     }
 
+    [Theory]
+    [InlineData("src/csharp-alias.cs", "csharp", "c#")]
+    [InlineData("src/cpp-alias.cpp", "cpp", "c++")]
+    [InlineData("src/fsharp-alias.fs", "fsharp", "f#")]
+    [InlineData("src/vb-alias.vb", "vb", "vb.net")]
+    [InlineData("src/java-alias.java", "java", "jav")]
+    [InlineData("src/python-alias.py", "python", "py3")]
+    [InlineData("src/sql-alias.sql", "sql", "sqlserver")]
+    public void CountSearchResults_NormalizesCommonLanguageAliases(string path, string fileLang, string queryLang)
+    {
+        const string query = "CommonAliasToken";
+
+        InsertIndexedFile(
+            path,
+            fileLang,
+            $@"const marker = ""{query}"";");
+
+        var counts = _reader.CountSearchResults(query, lang: queryLang);
+
+        Assert.Equal(1, counts.Count);
+        Assert.Equal(1, counts.FileCount);
+    }
+
     private void SeedData()
     {
         const string authContent = "def authenticate(user, password):\n    if user == 'admin':\n        return True\n    return False";

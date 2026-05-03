@@ -103,6 +103,19 @@ public class QueryCommandRunnerTests
         Assert.Equal("myquery", options.Query);
     }
 
+    [Theory]
+    [InlineData("c#", "csharp")]
+    [InlineData("c++", "cpp")]
+    [InlineData("py3", "python")]
+    [InlineData("sqlserver", "sql")]
+    public void ParseArgs_NormalizesCommonLangAliases(string input, string expected)
+    {
+        var options = QueryCommandRunner.ParseArgs(["RunSearch", "--lang", input], jsonDefault: false, allowNamedQuery: true);
+
+        Assert.Equal("RunSearch", options.Query);
+        Assert.Equal(expected, options.Lang);
+    }
+
     [Fact]
     public void GetLanguageAliases_ReportsSqlDialectAliases()
     {
@@ -164,12 +177,20 @@ public class QueryCommandRunnerTests
     }
 
     [Theory]
-    [InlineData("transact-sql")]
-    [InlineData("transact sql")]
-    public void NormalizeQueryLanguage_MapsTransactSqlToSql(string input)
+    [InlineData("transact-sql", "sql")]
+    [InlineData("transact sql", "sql")]
+    [InlineData("sqlserver", "sql")]
+    [InlineData("mssql", "sql")]
+    [InlineData("c#", "csharp")]
+    [InlineData("c++", "cpp")]
+    [InlineData("f#", "fsharp")]
+    [InlineData("vb.net", "vb")]
+    [InlineData("py3", "python")]
+    public void NormalizeQueryLanguage_MapsCommonAliasesToCanonicalLanguages(string input, string expected)
     {
-        Assert.Equal("sql", DbReader.NormalizeQueryLanguage(input));
-        Assert.True(DbReader.IsSqlLanguage(input));
+        Assert.Equal(expected, DbReader.NormalizeQueryLanguage(input));
+        Assert.Equal(expected, QueryCommandRunner.NormalizeLangFilterValue(input));
+        Assert.Equal(expected == "sql", DbReader.IsSqlLanguage(input));
     }
 
     [Theory]

@@ -21,40 +21,15 @@ public static class QueryCommandRunner
     internal const int ExactZeroHintProbeLimit = 1;
     internal const int ExactZeroHintSampleLimit = 5;
     private const string HotspotsGroupedByNameKind = "name_kind";
-    private static readonly Dictionary<string, string> LangFilterAliases = new(StringComparer.Ordinal)
-    {
-        ["js"] = "javascript",
-        ["jsx"] = "javascript",
-        ["cjs"] = "javascript",
-        ["mjs"] = "javascript",
-        ["c#"] = "csharp",
-        ["cs"] = "csharp",
-        ["cshtml"] = "csharp",
-        ["bat"] = "batch",
-        ["cmd"] = "batch",
-        ["py"] = "python",
-        ["py3"] = "python",
-        ["pyi"] = "python",
-        ["pyw"] = "python",
-        ["yml"] = "yaml",
-        ["razor"] = "csharp",
-        ["jav"] = "java",
-        ["kt"] = "kotlin",
-        ["kts"] = "kotlin",
-        ["ts"] = "typescript",
-        ["tsx"] = "typescript",
-        ["cts"] = "typescript",
-        ["mts"] = "typescript",
-        ["tsql"] = "sql",
-        ["transactsql"] = "sql",
-        ["xaml"] = "xml",
-        ["axaml"] = "xml",
-    };
     private static readonly Dictionary<string, string[]> LanguageDisplayAliases = new(StringComparer.Ordinal)
     {
         ["javascript"] = ["js", "jsx", "cjs", "mjs"],
-        ["csharp"] = ["cshtml", "razor"],
+        ["csharp"] = ["c#", "cs", "cshtml", "razor"],
         ["java"] = ["jav"],
+        ["cpp"] = ["c++", "cplusplus"],
+        ["fsharp"] = ["f#"],
+        ["vb"] = ["vb.net", "vbnet", "visual basic"],
+        ["python"] = ["py3"],
         ["yaml"] = ["yml"],
         ["typescript"] = ["ts", "tsx", "cts", "mts"],
         ["rust"] = ["rs"],
@@ -3032,13 +3007,7 @@ public static class QueryCommandRunner
 
     internal static string? NormalizeLangFilterValue(string? langValue)
     {
-        if (langValue == null)
-            return null;
-        var normalized = langValue
-            .ToLowerInvariant()
-            .Replace("-", string.Empty, StringComparison.Ordinal)
-            .Replace(" ", string.Empty, StringComparison.Ordinal);
-        return LangFilterAliases.TryGetValue(normalized, out var canonical) ? canonical : normalized;
+        return DbReader.NormalizeQueryLanguage(langValue);
     }
 
     internal static IReadOnlyList<string> GetLanguageAliases(string lang)
