@@ -53,8 +53,47 @@ public static class ReferenceExtractor
     private static readonly Regex CobolCopyRegex = new(
         @"^\s*COPY\s+(?:""(?<name>[^""]+)""|'(?<name>[^']+)'|(?<name>[A-Z0-9][A-Z0-9-]*))\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CobolGotoRegex = new(
+        @"^\s*(?:GO\s+TO|GOTO)\s+(?<name>[A-Z0-9][A-Z0-9-]*)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex CobolPerformRegex = new(
         @"^\s*PERFORM\s+(?!(?:VARYING|UNTIL|WITH|TIMES|TEST|THRU|THROUGH)\b)(?<name>[A-Z0-9][A-Z0-9-]*)(?:\s+(?:THRU|THROUGH)\s+(?<end>[A-Z0-9][A-Z0-9-]*))?",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CobolSetRegex = new(
+        @"^\s*SET\s+(?<name>[A-Z0-9][A-Z0-9-]*)\s+\b(?:TO\s+TRUE|TO\b)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CobolOpenRegex = new(
+        @"^\s*OPEN\s+(?:INPUT|OUTPUT|I-O|EXTEND)\s+(?<name>[A-Z0-9][A-Z0-9-]*)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CobolSearchRegex = new(
+        @"^\s*SEARCH\s+(?:(?:ALL|FIRST)\s+)?(?<name>[A-Z0-9][A-Z0-9-]*)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CobolSimpleReferenceRegex = new(
+        @"^\s*(?:READ|WRITE|REWRITE|DELETE|CLOSE|SORT|MERGE|INSPECT|DISPLAY|ACCEPT)\s+(?<name>[A-Z0-9][A-Z0-9-]*)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CobolMoveRegex = new(
+        @"^\s*MOVE\b.*?\bTO\s+(?<name>[A-Z0-9][A-Z0-9-]*)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CobolAddRegex = new(
+        @"^\s*ADD\b.*?\bTO\s+(?<name>[A-Z0-9][A-Z0-9-]*)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CobolSubtractRegex = new(
+        @"^\s*SUBTRACT\b.*?\bFROM\s+(?<name>[A-Z0-9][A-Z0-9-]*)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CobolMultiplyRegex = new(
+        @"^\s*MULTIPLY\b.*?\bBY\s+(?<name>[A-Z0-9][A-Z0-9-]*)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CobolDivideRegex = new(
+        @"^\s*DIVIDE\b.*?\bINTO\s+(?<name>[A-Z0-9][A-Z0-9-]*)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CobolComputeRegex = new(
+        @"^\s*COMPUTE\s+(?<name>[A-Z0-9][A-Z0-9-]*)\s*=",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CobolStringRegex = new(
+        @"^\s*STRING\b.*?\bINTO\s+(?<name>[A-Z0-9][A-Z0-9-]*)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CobolUnstringRegex = new(
+        @"^\s*UNSTRING\b.*?\bINTO\s+(?<name>[A-Z0-9][A-Z0-9-]*)\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     // Batch jump targets can appear as direct commands, chained commands, or inline `if`
@@ -2999,33 +3038,86 @@ public static class ReferenceExtractor
     {
         foreach (Match match in CobolCallRegex.Matches(rawLine))
         {
-            var name = match.Groups["name"].Value;
-            if (string.IsNullOrWhiteSpace(name))
-                continue;
-
-            AddReference(references, seen, fileId, name.ToUpperInvariant(), match.Groups["name"].Index, "call", context, lineNumber, container);
+            EmitCobolNamedReference(references, seen, fileId, match, "call", context, lineNumber, container);
         }
 
         foreach (Match match in CobolCopyRegex.Matches(rawLine))
         {
-            var name = match.Groups["name"].Value;
-            if (string.IsNullOrWhiteSpace(name))
-                continue;
+            EmitCobolNamedReference(references, seen, fileId, match, "reference", context, lineNumber, container);
+        }
 
-            AddReference(references, seen, fileId, name.ToUpperInvariant(), match.Groups["name"].Index, "reference", context, lineNumber, container);
+        foreach (Match match in CobolGotoRegex.Matches(rawLine))
+        {
+            EmitCobolNamedReference(references, seen, fileId, match, "call", context, lineNumber, container);
+        }
+
+        foreach (Match match in CobolSetRegex.Matches(rawLine))
+        {
+            EmitCobolNamedReference(references, seen, fileId, match, "reference", context, lineNumber, container);
+        }
+
+        foreach (Match match in CobolOpenRegex.Matches(rawLine))
+        {
+            EmitCobolNamedReference(references, seen, fileId, match, "reference", context, lineNumber, container);
+        }
+
+        foreach (Match match in CobolSearchRegex.Matches(rawLine))
+        {
+            EmitCobolNamedReference(references, seen, fileId, match, "reference", context, lineNumber, container);
+        }
+
+        foreach (Match match in CobolSimpleReferenceRegex.Matches(rawLine))
+        {
+            EmitCobolNamedReference(references, seen, fileId, match, "reference", context, lineNumber, container);
+        }
+
+        foreach (Match match in CobolMoveRegex.Matches(rawLine))
+        {
+            EmitCobolNamedReference(references, seen, fileId, match, "reference", context, lineNumber, container);
+        }
+
+        foreach (Match match in CobolAddRegex.Matches(rawLine))
+        {
+            EmitCobolNamedReference(references, seen, fileId, match, "reference", context, lineNumber, container);
+        }
+
+        foreach (Match match in CobolSubtractRegex.Matches(rawLine))
+        {
+            EmitCobolNamedReference(references, seen, fileId, match, "reference", context, lineNumber, container);
+        }
+
+        foreach (Match match in CobolMultiplyRegex.Matches(rawLine))
+        {
+            EmitCobolNamedReference(references, seen, fileId, match, "reference", context, lineNumber, container);
+        }
+
+        foreach (Match match in CobolDivideRegex.Matches(rawLine))
+        {
+            EmitCobolNamedReference(references, seen, fileId, match, "reference", context, lineNumber, container);
+        }
+
+        foreach (Match match in CobolComputeRegex.Matches(rawLine))
+        {
+            EmitCobolNamedReference(references, seen, fileId, match, "reference", context, lineNumber, container);
+        }
+
+        foreach (Match match in CobolStringRegex.Matches(rawLine))
+        {
+            EmitCobolNamedReference(references, seen, fileId, match, "reference", context, lineNumber, container);
+        }
+
+        foreach (Match match in CobolUnstringRegex.Matches(rawLine))
+        {
+            EmitCobolNamedReference(references, seen, fileId, match, "reference", context, lineNumber, container);
         }
 
         foreach (Match match in CobolPerformRegex.Matches(rawLine))
         {
-            var name = match.Groups["name"].Value;
-            if (string.IsNullOrWhiteSpace(name))
-                continue;
-
             var endName = match.Groups["end"].Value;
             if (!string.IsNullOrWhiteSpace(endName)
                 && TryAddCobolPerformRangeReferences(
                     cobolCallableSymbols,
-                    name,
+                    match.Groups["name"].Value,
                     endName,
                     context,
                     lineNumber,
@@ -3037,8 +3129,25 @@ public static class ReferenceExtractor
                 continue;
             }
 
-            AddReference(references, seen, fileId, name.ToUpperInvariant(), match.Groups["name"].Index, "call", context, lineNumber, container);
+            EmitCobolNamedReference(references, seen, fileId, match, "call", context, lineNumber, container);
         }
+    }
+
+    private static void EmitCobolNamedReference(
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        Match match,
+        string referenceKind,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        var name = match.Groups["name"].Value;
+        if (string.IsNullOrWhiteSpace(name))
+            return;
+
+        AddReference(references, seen, fileId, name.ToUpperInvariant(), match.Groups["name"].Index, referenceKind, context, lineNumber, container);
     }
 
     private static bool TryAddCobolPerformRangeReferences(

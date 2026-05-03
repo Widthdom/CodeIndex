@@ -425,6 +425,79 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CobolCommonStatements_CapturesSearchableReferences()
+    {
+        const string content = """
+            IDENTIFICATION DIVISION.
+            PROGRAM-ID. hello-world.
+            PROCEDURE DIVISION.
+            MAIN-SECTION SECTION.
+                GO TO NEXT-PARA
+                OPEN INPUT CUSTOMER-FILE
+                READ CUSTOMER-FILE
+                WRITE CUSTOMER-RECORD
+                SEARCH ALL CUSTOMER-TABLE
+                SET HAS-ITEM TO TRUE
+                MOVE SOURCE-VALUE TO DEST-VALUE
+                ADD AMOUNT TO TOTAL
+                SUBTRACT TAX FROM NET
+                MULTIPLY RATE BY RESULT
+                DIVIDE GRAND-TOTAL INTO AVERAGE
+                COMPUTE FINAL-TOTAL = TOTAL + TAX
+                STRING FIRST-NAME DELIMITED BY SIZE INTO BUFFER
+                UNSTRING BUFFER INTO PART1
+                DISPLAY CUSTOMER-NAME
+                ACCEPT INPUT-NAME
+                INSPECT BUFFER
+                CLOSE CUSTOMER-FILE
+                STOP RUN.
+            NEXT-PARA.
+                CONTINUE.
+            END PROGRAM hello-world.
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cobol", content);
+        var references = ReferenceExtractor.Extract(1, "cobol", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "NEXT-PARA"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "MAIN-SECTION");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "CUSTOMER-FILE"
+            && reference.ReferenceKind == "reference"
+            && reference.ContainerName == "MAIN-SECTION");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "CUSTOMER-TABLE"
+            && reference.ReferenceKind == "reference"
+            && reference.ContainerName == "MAIN-SECTION");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "HAS-ITEM"
+            && reference.ReferenceKind == "reference"
+            && reference.ContainerName == "MAIN-SECTION");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "DEST-VALUE"
+            && reference.ReferenceKind == "reference"
+            && reference.ContainerName == "MAIN-SECTION");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "FINAL-TOTAL"
+            && reference.ReferenceKind == "reference"
+            && reference.ContainerName == "MAIN-SECTION");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "BUFFER"
+            && reference.ReferenceKind == "reference"
+            && reference.ContainerName == "MAIN-SECTION");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "INPUT-NAME"
+            && reference.ReferenceKind == "reference"
+            && reference.ContainerName == "MAIN-SECTION");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "CUSTOMER-NAME"
+            && reference.ReferenceKind == "reference"
+            && reference.ContainerName == "MAIN-SECTION");
+    }
+
+    [Fact]
     public void Extract_VueScriptSetup_DetectsJavaScriptTypeScriptCalls()
     {
         const string content = """
