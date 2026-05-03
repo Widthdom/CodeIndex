@@ -106,8 +106,10 @@ public class QueryCommandRunnerTests
     [Theory]
     [InlineData("c#", "csharp")]
     [InlineData("c++", "cpp")]
+    [InlineData("fs", "fsharp")]
     [InlineData("py", "python")]
     [InlineData("py3", "python")]
+    [InlineData("rb", "ruby")]
     [InlineData("python3", "python")]
     [InlineData("sqlserver", "sql")]
     public void ParseArgs_NormalizesCommonLangAliases(string input, string expected)
@@ -159,6 +161,15 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void GetLanguageAliases_ReportsFsharpAliases()
+    {
+        var aliases = QueryCommandRunner.GetLanguageAliases("fsharp");
+
+        Assert.Contains("f#", aliases);
+        Assert.Contains("fs", aliases);
+    }
+
+    [Fact]
     public void GetLanguageAliases_ReportsJavascriptAliases()
     {
         var aliases = QueryCommandRunner.GetLanguageAliases("javascript");
@@ -186,6 +197,14 @@ public class QueryCommandRunnerTests
         Assert.Contains("py", aliases);
         Assert.Contains("py3", aliases);
         Assert.Contains("python3", aliases);
+    }
+
+    [Fact]
+    public void GetLanguageAliases_ReportsRubyAliases()
+    {
+        var aliases = QueryCommandRunner.GetLanguageAliases("ruby");
+
+        Assert.Contains("rb", aliases);
     }
 
     [Theory]
@@ -850,6 +869,37 @@ jobs:
             Assert.Equal(CommandExitCodes.Success, symbolsExitCode);
             Assert.Equal("1", symbolsStdout.Trim());
             Assert.Equal(string.Empty, symbolsStderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("rb", "ruby", "package/example.rb")]
+    [InlineData("fs", "fsharp", "Module.fs")]
+    public void RunSearch_AcceptsRubyAndFsharpLangAliases(string alias, string canonicalLang, string filePath)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_{canonicalLang}_{alias}_lang_alias");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                filePath,
+                canonicalLang,
+                """
+                public_api
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["public_api", "--db", dbPath, "--lang", alias, "--exact", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("1", stdout.Trim());
+            Assert.Equal(string.Empty, stderr);
         }
         finally
         {

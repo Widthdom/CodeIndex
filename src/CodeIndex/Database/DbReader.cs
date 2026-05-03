@@ -802,10 +802,12 @@ public partial class DbReader
         AddQueryLanguageAlias(aliases, "c++", "cpp");
         AddQueryLanguageAlias(aliases, "cplusplus", "cpp");
         AddQueryLanguageAlias(aliases, "f#", "fsharp");
+        AddQueryLanguageAlias(aliases, "fs", "fsharp");
         AddQueryLanguageAlias(aliases, "jav", "java");
         AddQueryLanguageAlias(aliases, "py", "python");
         AddQueryLanguageAlias(aliases, "python3", "python");
         AddQueryLanguageAlias(aliases, "py3", "python");
+        AddQueryLanguageAlias(aliases, "rb", "ruby");
         AddQueryLanguageAlias(aliases, "vb.net", "vb");
         AddQueryLanguageAlias(aliases, "vbnet", "vb");
         AddQueryLanguageAlias(aliases, "visual basic", "vb");
