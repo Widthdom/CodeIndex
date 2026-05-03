@@ -803,6 +803,7 @@ public partial class DbReader
         AddQueryLanguageAlias(aliases, "cplusplus", "cpp");
         AddQueryLanguageAlias(aliases, "f#", "fsharp");
         AddQueryLanguageAlias(aliases, "jav", "java");
+        AddQueryLanguageAlias(aliases, "python3", "python");
         AddQueryLanguageAlias(aliases, "py3", "python");
         AddQueryLanguageAlias(aliases, "vb.net", "vb");
         AddQueryLanguageAlias(aliases, "vbnet", "vb");

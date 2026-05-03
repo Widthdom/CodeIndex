@@ -107,6 +107,7 @@ public class QueryCommandRunnerTests
     [InlineData("c#", "csharp")]
     [InlineData("c++", "cpp")]
     [InlineData("py3", "python")]
+    [InlineData("python3", "python")]
     [InlineData("sqlserver", "sql")]
     public void ParseArgs_NormalizesCommonLangAliases(string input, string expected)
     {

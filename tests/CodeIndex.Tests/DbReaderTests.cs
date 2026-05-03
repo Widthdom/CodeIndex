@@ -115,6 +115,7 @@ public class DbReaderTests : IDisposable
     [InlineData("src/vb-alias.vb", "vb", "vb.net")]
     [InlineData("src/java-alias.java", "java", "jav")]
     [InlineData("src/python-alias.py", "python", "py3")]
+    [InlineData("src/python3-alias.py", "python", "python3")]
     [InlineData("src/sql-alias.sql", "sql", "sqlserver")]
     public void CountSearchResults_NormalizesCommonLanguageAliases(string path, string fileLang, string queryLang)
     {
