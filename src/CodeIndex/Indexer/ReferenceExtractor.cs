@@ -50,6 +50,9 @@ public static class ReferenceExtractor
     private static readonly Regex CobolCallRegex = new(
         @"^\s*CALL\s+(?:""(?<name>[^""]+)""|'(?<name>[^']+)'|(?<name>[A-Z0-9][A-Z0-9-]*))",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CobolCopyRegex = new(
+        @"^\s*COPY\s+(?:""(?<name>[^""]+)""|'(?<name>[^']+)'|(?<name>[A-Z0-9][A-Z0-9-]*))\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex CobolPerformRegex = new(
         @"^\s*PERFORM\s+(?!(?:VARYING|UNTIL|WITH|TIMES|TEST|THRU|THROUGH)\b)(?<name>[A-Z0-9][A-Z0-9-]*)(?:\s+(?:THRU|THROUGH)\s+(?<end>[A-Z0-9][A-Z0-9-]*))?",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -3001,6 +3004,15 @@ public static class ReferenceExtractor
                 continue;
 
             AddReference(references, seen, fileId, name.ToUpperInvariant(), match.Groups["name"].Index, "call", context, lineNumber, container);
+        }
+
+        foreach (Match match in CobolCopyRegex.Matches(rawLine))
+        {
+            var name = match.Groups["name"].Value;
+            if (string.IsNullOrWhiteSpace(name))
+                continue;
+
+            AddReference(references, seen, fileId, name.ToUpperInvariant(), match.Groups["name"].Index, "reference", context, lineNumber, container);
         }
 
         foreach (Match match in CobolPerformRegex.Matches(rawLine))

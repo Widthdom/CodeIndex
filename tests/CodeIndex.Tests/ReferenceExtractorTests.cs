@@ -403,6 +403,28 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CobolCopy_CapturesCopybookReference()
+    {
+        const string content = """
+            IDENTIFICATION DIVISION.
+            PROGRAM-ID. hello-world.
+            PROCEDURE DIVISION.
+            MAIN-SECTION SECTION.
+                COPY COMMON-REC.
+                STOP RUN.
+            END PROGRAM hello-world.
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cobol", content);
+        var references = ReferenceExtractor.Extract(1, "cobol", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "COMMON-REC"
+            && reference.ReferenceKind == "reference"
+            && reference.ContainerName == "MAIN-SECTION");
+    }
+
+    [Fact]
     public void Extract_VueScriptSetup_DetectsJavaScriptTypeScriptCalls()
     {
         const string content = """
