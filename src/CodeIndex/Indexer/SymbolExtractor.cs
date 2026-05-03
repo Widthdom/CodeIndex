@@ -276,6 +276,13 @@ public static class SymbolExtractor
     // 以上の丸括弧ネストは実 HOC シグネチャでは極めて稀で、ReDoS 安全に受理するには完全
     // な bracket walker が必要になるため、それぞれ 3 段・1 段で打ち切る。#240 解消。
     private const string TypeScriptOptionalHocTypeArgsPattern = @"(?:<(?:[^<>()=]|=>?|\((?:[^()]|\([^()]*\))*\)|<(?:[^<>()=]|=>?|\((?:[^()]|\([^()]*\))*\)|<(?:[^<>()=]|=>?|\((?:[^()]|\([^()]*\))*\))*>)*>)*>\s*)?";
+    // Optional TypeScript generic parameter list that may follow a `type` alias name.
+    // Allow defaulted parameters (`T = string`) in addition to constraints and nested
+    // type expressions so generic aliases stay searchable.
+    // `type` エイリアス名の後に続く TypeScript の generic parameter list（オプション）。
+    // `T = string` のような default 付き parameter に加え、constraint や入れ子の
+    // type expression も許容して generic alias を検索対象に残す。
+    private const string TypeScriptOptionalTypeParameterListPattern = @"(?:<(?:[^<>()=]|=(?!>)|=>?|\((?:[^()]|\([^()]*\))*\)|<(?:[^<>()=]|=(?!>)|=>?|\((?:[^()]|\([^()]*\))*\)|<(?:[^<>()=]|=(?!>)|=>?|\((?:[^()]|\([^()]*\))*\))*>)*>)*>\s*)?";
 
     private enum BodyStyle
     {
@@ -714,7 +721,7 @@ public static class SymbolExtractor
             // Include optional `*` between `function` and name for generator functions (e.g. `function* gen()`, `async function* asyncGen()`)
             // `function` と名前の間に任意の `*` を許容し、ジェネレータ関数 (`function* gen()`, `async function* asyncGen()`) にも対応
             new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?(?:async\s+)?function(?:\s+|\s*\*\s*)(?<name>\w+)\s*[\(<]", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("import", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?type\s+(?<name>\w+)\s*=", RegexOptions.Compiled), BodyStyle.None, "visibility"),
+            new("import", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?type\s+(?<name>\w+)" + TypeScriptOptionalTypeParameterListPattern + @"\s*=", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             new("property", new Regex(@"^\s*(?:(?<visibility>export)\s+)?declare\s+(?:const|let|var)\s+(?<name>\w+)(?::\s*[^;=]+)?\s*;", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*(?::\s*.+?)?\s*=\s*(?:async\s+)?(?:\([^)]*\)|[^=])\s*=>", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // HOC-wrapped / call-result component bindings — same narrow HOC-prefix set

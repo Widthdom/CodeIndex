@@ -3679,6 +3679,17 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScript_DetectsGenericTypeAliasesWithDefaultTypeParameters()
+    {
+        var content = """
+            export type Result<T = string> = { value: T };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Result");
+    }
+
+    [Fact]
     public void Extract_TypeScript_DetectsInlineDefaultExportMultipleMethods()
     {
         var content = "export default class { first(): void {} second(): void {} }";
