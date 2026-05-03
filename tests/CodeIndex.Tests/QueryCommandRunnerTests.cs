@@ -1783,7 +1783,7 @@ jobs:
         // Sanity: short rows still fit the fixed-width layout on a single line.
         // 短い行は従来通り 1 行の固定幅レイアウトに収まる。
         var csharpLine = lines.Single(line => line.StartsWith("csharp ", StringComparison.Ordinal));
-        Assert.Matches(@"^csharp\s+\.cs\s+\.cshtml\s+\.razor\s+-\s+yes\s+yes\s*$", csharpLine);
+        Assert.Matches(@"^csharp\s+\.cs\s+\.cshtml\s+\.razor\s+cshtml\s+razor\s+yes\s+yes\s*$", csharpLine);
 
         // Dockerfile / Makefile / Python / Ruby / MSBuild rows spill extensions to a continuation line.
         // Dockerfile / Makefile / Python / Ruby / MSBuild 行は拡張子を継続行に退避する。
