@@ -59,7 +59,7 @@ public class ConsoleUiTests
         Assert.Contains("cdidx unused [--db <path>] [--json] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count]", output);
         Assert.Contains("cdidx hotspots [--db <path>] [--json] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--group-by-name]", output);
         Assert.Contains("--json                     Output as JSON (streaming hits use JSON lines; counts/summaries use one object)", output);
-        Assert.Contains("--lang <lang>              Filter by language (aliases: bat, cmd, ts, tsx, cts, mts)", output);
+        Assert.Contains("--lang <lang>              Filter by language (aliases: bat, cmd, cshtml, razor, ts, tsx, cts, mts)", output);
         Assert.Contains("--group-by-name            hotspots: collapse rows sharing (name, kind) across files into one line", output);
         Assert.Contains("cdidx search \"Run();\" --exact-substring        Case-sensitive exact substring search", output);
         Assert.Contains("cdidx search --query --path --path README.md   Search for a literal option token", output);
@@ -209,6 +209,8 @@ public class ConsoleUiTests
                 Assert.Contains(groupByNameToken, output);
                 Assert.Contains(licenseToken, output);
                 Assert.Contains(maxLineWidthToken, output);
+                Assert.Contains("cshtml", output);
+                Assert.Contains("razor", output);
                 if (shell == "zsh")
                     Assert.Contains("--max-line-width[Clamp long single-line contexts (0 disables clamping)]:number", output);
                 if (shell is "bash" or "zsh")
