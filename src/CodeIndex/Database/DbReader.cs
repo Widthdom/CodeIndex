@@ -792,6 +792,8 @@ public partial class DbReader
             return "javascript";
         if (string.Equals(compact, "javascript", StringComparison.OrdinalIgnoreCase))
             return "javascript";
+        if (string.Equals(compact, "typescript", StringComparison.OrdinalIgnoreCase))
+            return "typescript";
         if (string.Equals(compact, "ts", StringComparison.OrdinalIgnoreCase))
             return "typescript";
         if (string.Equals(compact, "tsx", StringComparison.OrdinalIgnoreCase))

@@ -90,6 +90,24 @@ public class DbReaderTests : IDisposable
         Assert.Equal(1, counts.FileCount);
     }
 
+    [Theory]
+    [InlineData("TypeScript")]
+    [InlineData("typescript")]
+    public void CountSearchResults_NormalizesTypeScriptSpelling(string lang)
+    {
+        const string query = "TypeScriptToken";
+
+        InsertIndexedFile(
+            "src/typescript-alias.ts",
+            "typescript",
+            $@"const marker = ""{query}"";");
+
+        var counts = _reader.CountSearchResults(query, lang: lang);
+
+        Assert.Equal(1, counts.Count);
+        Assert.Equal(1, counts.FileCount);
+    }
+
     private void SeedData()
     {
         const string authContent = "def authenticate(user, password):\n    if user == 'admin':\n        return True\n    return False";
