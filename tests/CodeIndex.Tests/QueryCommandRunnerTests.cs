@@ -2019,14 +2019,10 @@ jobs:
 
         var lines = stdout.Split('\n').Select(line => line.TrimEnd('\r')).ToArray();
 
-        // Sanity: short rows still fit the fixed-width layout on a single line.
-        // 短い行は従来通り 1 行の固定幅レイアウトに収まる。
-        var csharpLine = lines.Single(line => line.StartsWith("csharp ", StringComparison.Ordinal));
-        Assert.Matches(@"^csharp\s+\.cs\s+\.cshtml\s+\.razor\s+cshtml\s+razor\s+yes\s+yes\s*$", csharpLine);
-
-        // Dockerfile / Makefile / Python / Ruby / MSBuild rows spill extensions to a continuation line.
-        // Dockerfile / Makefile / Python / Ruby / MSBuild 行は拡張子を継続行に退避する。
-        var wideLangs = new[] { "dockerfile", "makefile", "python", "ruby", "msbuild" };
+        // Rows with long extension / alias lists must spill onto a continuation line so the
+        // Symbols / Graph columns stay readable.
+        // 拡張子や alias が長い行は継続行に退避し、Symbols / Graph 列の可読性を保つ。
+        var wideLangs = new[] { "csharp", "dockerfile", "makefile", "python", "ruby", "msbuild" };
         foreach (var wide in wideLangs)
         {
             var headerIndex = Array.FindIndex(lines, line => line.StartsWith($"{wide} ", StringComparison.Ordinal));
