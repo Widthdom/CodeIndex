@@ -42,6 +42,8 @@ public static class QueryCommandRunner
         ["mts"] = "typescript",
         ["tsql"] = "sql",
         ["transactsql"] = "sql",
+        ["xaml"] = "xml",
+        ["axaml"] = "xml",
     };
     private static readonly Dictionary<string, string[]> LanguageDisplayAliases = new(StringComparer.Ordinal)
     {
@@ -49,6 +51,7 @@ public static class QueryCommandRunner
         ["yaml"] = ["yml"],
         ["typescript"] = ["ts", "tsx", "cts", "mts"],
         ["sql"] = ["tsql", "t-sql", "transact-sql", "transactsql", "sqlserver", "mssql"],
+        ["xml"] = ["xaml", "axaml"],
     };
     private static readonly HashSet<string> ValueTakingOptions =
     [

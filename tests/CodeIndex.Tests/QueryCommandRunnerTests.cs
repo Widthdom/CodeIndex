@@ -127,6 +127,15 @@ public class QueryCommandRunnerTests
         Assert.Contains("mts", aliases);
     }
 
+    [Fact]
+    public void GetLanguageAliases_ReportsXmlAliases()
+    {
+        var aliases = QueryCommandRunner.GetLanguageAliases("xml");
+
+        Assert.Contains("xaml", aliases);
+        Assert.Contains("axaml", aliases);
+    }
+
     [Theory]
     [InlineData("transact-sql")]
     [InlineData("transact sql")]
@@ -145,6 +154,14 @@ public class QueryCommandRunnerTests
     {
         Assert.Equal("typescript", DbReader.NormalizeQueryLanguage(input));
         Assert.False(DbReader.IsSqlLanguage(input));
+    }
+
+    [Theory]
+    [InlineData("xaml")]
+    [InlineData("axaml")]
+    public void NormalizeQueryLanguage_MapsXamlShorthandsToXml(string input)
+    {
+        Assert.Equal("xml", DbReader.NormalizeQueryLanguage(input));
     }
 
     [Fact]
@@ -195,6 +212,43 @@ public class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, xmlExitCode);
             Assert.Equal("0", xmlStdout.Trim());
             Assert.Equal(string.Empty, xmlStderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("xaml")]
+    [InlineData("axaml")]
+    public void RunSearch_RecognizesXamlLanguageAliases(string lang)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_xaml_lang_alias");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var queryToken = $"xaml_lang_alias_{Guid.NewGuid():N}";
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/MainWindow.xaml",
+                "xml",
+                $$"""
+                <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+                    <Grid>
+                        <TextBlock Text="{{queryToken}}" />
+                    </Grid>
+                </Window>
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [queryToken, "--db", dbPath, "--lang", lang, "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("1", stdout.Trim());
+            Assert.Equal(string.Empty, stderr);
         }
         finally
         {

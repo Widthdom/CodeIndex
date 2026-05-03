@@ -467,6 +467,31 @@ public class DbReaderTests : IDisposable
     }
 
     [Theory]
+    [InlineData("xaml")]
+    [InlineData("axaml")]
+    public void Search_FiltersByXamlLanguageAliases(string lang)
+    {
+        var queryToken = $"xaml_alias_{Guid.NewGuid():N}";
+
+        InsertIndexedFile(
+            "src/MainWindow.xaml",
+            "xml",
+            $$"""
+            <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+                <Grid>
+                    <TextBlock Text="{{queryToken}}" />
+                </Grid>
+            </Window>
+            """);
+
+        var results = _reader.Search(queryToken, lang: lang);
+
+        Assert.Single(results);
+        Assert.Equal("src/MainWindow.xaml", results[0].Path);
+    }
+
+    [Theory]
     [InlineData("cshtml")]
     [InlineData("razor")]
     public void Search_FiltersByCSharpRazorAliases(string lang)
