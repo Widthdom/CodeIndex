@@ -35,13 +35,16 @@ public static class QueryCommandRunner
         ["kt"] = "kotlin",
         ["kts"] = "kotlin",
         ["ts"] = "typescript",
+        ["tsx"] = "typescript",
+        ["cts"] = "typescript",
+        ["mts"] = "typescript",
         ["tsql"] = "sql",
         ["transactsql"] = "sql",
     };
     private static readonly Dictionary<string, string[]> LanguageDisplayAliases = new(StringComparer.Ordinal)
     {
         ["yaml"] = ["yml"],
-        ["typescript"] = ["ts"],
+        ["typescript"] = ["ts", "tsx", "cts", "mts"],
         ["sql"] = ["tsql", "t-sql", "transact-sql", "transactsql", "sqlserver", "mssql"],
     };
     private static readonly HashSet<string> ValueTakingOptions =

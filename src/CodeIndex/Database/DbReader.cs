@@ -784,6 +784,12 @@ public partial class DbReader
         var compact = lang.Replace("-", string.Empty, StringComparison.Ordinal).Replace(" ", string.Empty, StringComparison.Ordinal);
         if (string.Equals(compact, "ts", StringComparison.OrdinalIgnoreCase))
             return "typescript";
+        if (string.Equals(compact, "tsx", StringComparison.OrdinalIgnoreCase))
+            return "typescript";
+        if (string.Equals(compact, "cts", StringComparison.OrdinalIgnoreCase))
+            return "typescript";
+        if (string.Equals(compact, "mts", StringComparison.OrdinalIgnoreCase))
+            return "typescript";
         return string.Equals(compact, "tsql", StringComparison.OrdinalIgnoreCase)
             || string.Equals(compact, "transactsql", StringComparison.OrdinalIgnoreCase)
             || string.Equals(compact, "mssql", StringComparison.OrdinalIgnoreCase)

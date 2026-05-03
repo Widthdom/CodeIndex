@@ -122,6 +122,9 @@ public class QueryCommandRunnerTests
         var aliases = QueryCommandRunner.GetLanguageAliases("typescript");
 
         Assert.Contains("ts", aliases);
+        Assert.Contains("tsx", aliases);
+        Assert.Contains("cts", aliases);
+        Assert.Contains("mts", aliases);
     }
 
     [Theory]
@@ -133,11 +136,15 @@ public class QueryCommandRunnerTests
         Assert.True(DbReader.IsSqlLanguage(input));
     }
 
-    [Fact]
-    public void NormalizeQueryLanguage_MapsTsToTypeScript()
+    [Theory]
+    [InlineData("ts")]
+    [InlineData("tsx")]
+    [InlineData("cts")]
+    [InlineData("mts")]
+    public void NormalizeQueryLanguage_MapsTypeScriptShorthands(string input)
     {
-        Assert.Equal("typescript", DbReader.NormalizeQueryLanguage("ts"));
-        Assert.False(DbReader.IsSqlLanguage("ts"));
+        Assert.Equal("typescript", DbReader.NormalizeQueryLanguage(input));
+        Assert.False(DbReader.IsSqlLanguage(input));
     }
 
     [Fact]
@@ -209,6 +216,9 @@ public class QueryCommandRunnerTests
     [InlineData("yml", "yaml")]
     [InlineData("kt", "kotlin")]
     [InlineData("KTS", "kotlin")]
+    [InlineData("tsx", "typescript")]
+    [InlineData("CTS", "typescript")]
+    [InlineData("mts", "typescript")]
     [InlineData("T-SQL", "sql")]
     [InlineData("transact-sql", "sql")]
     [InlineData("transact sql", "sql")]
@@ -8540,7 +8550,7 @@ jobs:
     }
 
     [Fact]
-    public void RunSearch_WithTypeScriptLangAliasFiltersTypeScriptFiles()
+    public void RunSearch_WithTypeScriptLangAliasesFiltersTypeScriptFiles()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_typescript_lang_alias");
         try
@@ -8556,13 +8566,16 @@ jobs:
                 }
                 """);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                ["TypeScript", "--db", dbPath, "--lang", "ts", "--count"],
-                _jsonOptions));
+            foreach (var langAlias in new[] { "ts", "tsx", "cts", "mts" })
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                    ["TypeScript", "--db", dbPath, "--lang", langAlias, "--count"],
+                    _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal("1", stdout.Trim());
-            Assert.Equal(string.Empty, stderr);
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal("1", stdout.Trim());
+                Assert.Equal(string.Empty, stderr);
+            }
         }
         finally
         {

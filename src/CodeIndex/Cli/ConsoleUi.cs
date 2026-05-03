@@ -385,7 +385,7 @@ public static class ConsoleUi
         Console.WriteLine("  --db <path>                Database file path (default: .cdidx/codeindex.db in current directory)");
         Console.WriteLine("  --json                     Output as JSON (streaming hits use JSON lines; counts/summaries use one object)");
         Console.WriteLine("  --limit <n>, --top <n>     Max results to return (default: 20)");
-        Console.WriteLine("  --lang <lang>              Filter by language (aliases: bat, cmd)");
+        Console.WriteLine("  --lang <lang>              Filter by language (aliases: bat, cmd, ts, tsx, cts, mts)");
         Console.WriteLine("  --path <glob>              Restrict matches to glob-style path patterns (* and ?)");
         Console.WriteLine("  --query <query>            Pass a query literal, useful when the query starts with '-'");
         Console.WriteLine("  --exclude-path <glob>      Exclude glob-style path patterns (* and ?) (repeatable)");
