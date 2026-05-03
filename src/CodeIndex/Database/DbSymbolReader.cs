@@ -693,10 +693,18 @@ public partial class DbReader
             return null;
 
         var commonJsPrefixLength = 0;
-        if (trimmed.StartsWith("module.exports.", StringComparison.Ordinal))
-            commonJsPrefixLength = "module.exports.".Length;
-        else if (trimmed.StartsWith("exports.", StringComparison.Ordinal))
-            commonJsPrefixLength = "exports.".Length;
+        if (trimmed.StartsWith("module.exports", StringComparison.Ordinal))
+        {
+            var nextIndex = "module.exports".Length;
+            if (trimmed.Length > nextIndex && trimmed[nextIndex] is '.' or '[')
+                commonJsPrefixLength = nextIndex;
+        }
+        else if (trimmed.StartsWith("exports", StringComparison.Ordinal))
+        {
+            var nextIndex = "exports".Length;
+            if (trimmed.Length > nextIndex && trimmed[nextIndex] is '.' or '[')
+                commonJsPrefixLength = nextIndex;
+        }
 
         if (commonJsPrefixLength == 0)
             return trimmed;
@@ -705,11 +713,44 @@ public partial class DbReader
         if (trimmed.Length == 0)
             return null;
 
+        trimmed = trimmed.TrimStart();
+        if (trimmed.StartsWith(".", StringComparison.Ordinal))
+            trimmed = trimmed[1..].TrimStart();
+
+        var bracketLeaf = NormalizeJavaScriptBracketLeaf(trimmed);
+        if (bracketLeaf != null)
+            return bracketLeaf;
+
         var leafIndex = trimmed.LastIndexOf('.');
         if (leafIndex >= 0)
             trimmed = trimmed[(leafIndex + 1)..];
 
+        bracketLeaf = NormalizeJavaScriptBracketLeaf(trimmed);
+        if (bracketLeaf != null)
+            return bracketLeaf;
+
         return trimmed.Length == 0 ? null : trimmed;
+    }
+
+    private static string? NormalizeJavaScriptBracketLeaf(string query)
+    {
+        var trimmed = query.Trim();
+        if (trimmed.Length < 3 || trimmed[0] != '[' || trimmed[^1] != ']')
+            return null;
+
+        var inner = trimmed[1..^1].Trim();
+        if (inner.Length < 2)
+            return null;
+
+        var quote = inner[0];
+        if (quote is not '\'' and not '"')
+            return null;
+
+        if (inner[^1] != quote)
+            return null;
+
+        var leaf = inner[1..^1].Trim();
+        return leaf.Length == 0 ? null : leaf;
     }
 
     private static string? NormalizeRustSymbolSearchQuery(string? query, bool exact = false)

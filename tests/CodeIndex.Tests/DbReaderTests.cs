@@ -275,6 +275,33 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SearchSymbols_JavaScriptCommonJsBracketExportQueriesResolveToLeafNames()
+    {
+        InsertIndexedFile(
+            "src/commonjs-bracket.js",
+            "javascript",
+            """
+            module.exports["foo"] = function foo() { return 1; };
+            function caller() {
+                foo();
+            }
+            exports['bar'] = 42;
+            """);
+
+        var foo = Assert.Single(_reader.SearchSymbols("module.exports[\"foo\"]", lang: "javascript", exact: true));
+        Assert.Equal("foo", foo.Name);
+        Assert.Equal("src/commonjs-bracket.js", foo.Path);
+
+        var bar = Assert.Single(_reader.SearchSymbols("exports['bar']", lang: "javascript", exact: true));
+        Assert.Equal("bar", bar.Name);
+        Assert.Equal("src/commonjs-bracket.js", bar.Path);
+
+        var references = _reader.SearchReferences("module.exports[\"foo\"]", lang: "javascript", exact: true);
+        Assert.NotEmpty(references);
+        Assert.Contains(references, reference => reference.SymbolName == "foo" && reference.ContainerName == "caller" && reference.Path == "src/commonjs-bracket.js");
+    }
+
+    [Fact]
     public void SearchSymbols_JavaScriptQualifiedQueriesOutsideCommonJsRemainExact()
     {
         InsertIndexedFile(

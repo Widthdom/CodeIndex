@@ -590,7 +590,7 @@ public static class SymbolExtractor
         RegexOptions.Compiled);
 
     private static readonly Regex JavaScriptTypeScriptCommonJsNamedExportAssignmentRegex = new(
-        $@"^\s*(?:module\.exports|exports)\.(?<name>{JavaScriptTypeScriptIdentifierPattern})(?:\s*:\s*[^=]+?)?\s*(?<![=!<>])=(?![=>])\s*(?<rhs>.*)$",
+        $@"^\s*(?:module\.exports|exports)(?:\.(?<name>{JavaScriptTypeScriptIdentifierPattern})|\[\s*['""](?<bracketName>[^'""]*)['""]\s*\])(?:\s*:\s*[^=]+?)?\s*(?<![=!<>])=(?![=>])\s*(?<rhs>.*)$",
         RegexOptions.Compiled);
 
     private static readonly Regex JavaScriptTypeScriptQualifiedAssignmentRegex = new(
@@ -9388,6 +9388,7 @@ private sealed class RubyMaskState
                 || TryGetGroup(bindingMatch, "visibility") == "export"
                 || bindingMatch.Groups["exportsAlias"].Success
                 || bindingMatch.Groups["moduleExportsAlias"].Success
+                || bindingMatch.Groups["bracketName"].Success
                 || bindingMatch.Groups["moduleExports"].Success;
             if (!isExported
                 && IsJavaScriptTypeScriptMatchInNamespaceScope(privateScopeColumns, i, match.Index, sanitizedLine))
@@ -10278,7 +10279,13 @@ private sealed class RubyMaskState
                     continue;
                 }
 
-                var name = match.Groups["name"].Value;
+                var name = TryGetGroup(match, "name")
+                    ?? GetJavaScriptTypeScriptCommonJsBracketName(rawLines[i], absoluteMatchIndex + match.Groups["bracketName"].Index, match.Groups["bracketName"].Length);
+                if (name == null)
+                {
+                    statementStart = FindNextJavaScriptTypeScriptStatementStart(sanitizedLine, statementStart + 1);
+                    continue;
+                }
                 if (!TryCollectJavaScriptTypeScriptAssignedRhs(
                         rawLines,
                         sanitizedLines,
@@ -10373,6 +10380,15 @@ private sealed class RubyMaskState
                 statementStart = FindNextJavaScriptTypeScriptStatementStart(sanitizedLines[i], rhsEndColumn + 1);
             }
         }
+    }
+
+    private static string? GetJavaScriptTypeScriptCommonJsBracketName(string rawLine, int startColumn, int length)
+    {
+        if (length <= 0 || startColumn < 0 || startColumn + length > rawLine.Length)
+            return null;
+
+        var rawName = rawLine.Substring(startColumn, length).Trim();
+        return rawName.Length == 0 ? null : rawName;
     }
 
     private static void ExtractJavaScriptTypeScriptExportedObjectLiteralProperties(
