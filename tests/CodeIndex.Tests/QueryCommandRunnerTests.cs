@@ -116,6 +116,14 @@ public class QueryCommandRunnerTests
         Assert.Contains("mssql", aliases);
     }
 
+    [Fact]
+    public void GetLanguageAliases_ReportsTypeScriptAlias()
+    {
+        var aliases = QueryCommandRunner.GetLanguageAliases("typescript");
+
+        Assert.Contains("ts", aliases);
+    }
+
     [Theory]
     [InlineData("transact-sql")]
     [InlineData("transact sql")]
@@ -123,6 +131,13 @@ public class QueryCommandRunnerTests
     {
         Assert.Equal("sql", DbReader.NormalizeQueryLanguage(input));
         Assert.True(DbReader.IsSqlLanguage(input));
+    }
+
+    [Fact]
+    public void NormalizeQueryLanguage_MapsTsToTypeScript()
+    {
+        Assert.Equal("typescript", DbReader.NormalizeQueryLanguage("ts"));
+        Assert.False(DbReader.IsSqlLanguage("ts"));
     }
 
     [Fact]
@@ -8517,6 +8532,37 @@ jobs:
             Assert.Equal(CommandExitCodes.Success, withExclude.Result);
             Assert.Equal("0", withExclude.Stdout.Trim());
             Assert.Equal(string.Empty, withExclude.Stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_WithTypeScriptLangAliasFiltersTypeScriptFiles()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_typescript_lang_alias");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.ts",
+                "typescript",
+                """
+                export function hit() {
+                    return "TypeScript";
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["TypeScript", "--db", dbPath, "--lang", "ts", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("1", stdout.Trim());
+            Assert.Equal(string.Empty, stderr);
         }
         finally
         {
