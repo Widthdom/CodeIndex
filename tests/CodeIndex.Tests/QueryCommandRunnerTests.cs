@@ -106,6 +106,7 @@ public class QueryCommandRunnerTests
     [Theory]
     [InlineData("c#", "csharp")]
     [InlineData("c++", "cpp")]
+    [InlineData("py", "python")]
     [InlineData("py3", "python")]
     [InlineData("python3", "python")]
     [InlineData("sqlserver", "sql")]
@@ -175,6 +176,16 @@ public class QueryCommandRunnerTests
 
         Assert.Contains("xaml", aliases);
         Assert.Contains("axaml", aliases);
+    }
+
+    [Fact]
+    public void GetLanguageAliases_ReportsPythonAliases()
+    {
+        var aliases = QueryCommandRunner.GetLanguageAliases("python");
+
+        Assert.Contains("py", aliases);
+        Assert.Contains("py3", aliases);
+        Assert.Contains("python3", aliases);
     }
 
     [Theory]
@@ -792,6 +803,44 @@ jobs:
                 _jsonOptions));
             var (symbolsExitCode, symbolsStdout, symbolsStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
                 ["public_api", "--db", dbPath, "--lang", "python", "--exact-name", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, searchExitCode);
+            Assert.Equal("1", searchStdout.Trim());
+            Assert.Equal(string.Empty, searchStderr);
+
+            Assert.Equal(CommandExitCodes.Success, symbolsExitCode);
+            Assert.Equal("1", symbolsStdout.Trim());
+            Assert.Equal(string.Empty, symbolsStderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearchAndSymbols_AcceptPythonPyLangAlias()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_python_py_lang_alias");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "package/__init__.py",
+                "python",
+                """
+                __all__ = [
+                    "public_api",
+                ]
+                """);
+
+            var (searchExitCode, searchStdout, searchStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["public_api", "--db", dbPath, "--lang", "py", "--exact", "--count"],
+                _jsonOptions));
+            var (symbolsExitCode, symbolsStdout, symbolsStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["public_api", "--db", dbPath, "--lang", "py", "--exact-name", "--count"],
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, searchExitCode);
