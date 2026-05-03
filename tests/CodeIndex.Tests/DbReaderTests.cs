@@ -68,6 +68,26 @@ public class DbReaderTests : IDisposable
         Assert.Equal(1, counts.FileCount);
     }
 
+    [Theory]
+    [InlineData("js")]
+    [InlineData("JS")]
+    [InlineData("jsx")]
+    [InlineData("JSX")]
+    public void CountSearchResults_NormalizesJavascriptShorthandLangSpellings(string lang)
+    {
+        const string query = "JavaScriptShorthandToken";
+
+        InsertIndexedFile(
+            "src/javascript-shorthand.js",
+            "javascript",
+            $@"const marker = ""{query}"";");
+
+        var counts = _reader.CountSearchResults(query, lang: lang);
+
+        Assert.Equal(1, counts.Count);
+        Assert.Equal(1, counts.FileCount);
+    }
+
     private void SeedData()
     {
         const string authContent = "def authenticate(user, password):\n    if user == 'admin':\n        return True\n    return False";

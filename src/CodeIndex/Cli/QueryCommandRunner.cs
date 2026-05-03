@@ -23,6 +23,8 @@ public static class QueryCommandRunner
     private const string HotspotsGroupedByNameKind = "name_kind";
     private static readonly Dictionary<string, string> LangFilterAliases = new(StringComparer.Ordinal)
     {
+        ["js"] = "javascript",
+        ["jsx"] = "javascript",
         ["c#"] = "csharp",
         ["cs"] = "csharp",
         ["cshtml"] = "csharp",
@@ -47,6 +49,7 @@ public static class QueryCommandRunner
     };
     private static readonly Dictionary<string, string[]> LanguageDisplayAliases = new(StringComparer.Ordinal)
     {
+        ["javascript"] = ["js", "jsx"],
         ["csharp"] = ["cshtml", "razor"],
         ["yaml"] = ["yml"],
         ["typescript"] = ["ts", "tsx", "cts", "mts"],

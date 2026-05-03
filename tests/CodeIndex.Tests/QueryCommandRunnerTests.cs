@@ -136,6 +136,15 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void GetLanguageAliases_ReportsJavascriptAliases()
+    {
+        var aliases = QueryCommandRunner.GetLanguageAliases("javascript");
+
+        Assert.Contains("js", aliases);
+        Assert.Contains("jsx", aliases);
+    }
+
+    [Fact]
     public void GetLanguageAliases_ReportsXmlAliases()
     {
         var aliases = QueryCommandRunner.GetLanguageAliases("xml");
@@ -311,6 +320,8 @@ public class QueryCommandRunnerTests
     [Theory]
     [InlineData("bat", "batch")]
     [InlineData("cmd", "batch")]
+    [InlineData("JS", "javascript")]
+    [InlineData("jsx", "javascript")]
     [InlineData("C#", "csharp")]
     [InlineData("cs", "csharp")]
     [InlineData("Java", "java")]
@@ -339,6 +350,8 @@ public class QueryCommandRunnerTests
     [InlineData("c#")]
     [InlineData("cs")]
     [InlineData("cshtml")]
+    [InlineData("js")]
+    [InlineData("JSX")]
     [InlineData("Java")]
     [InlineData("kt")]
     [InlineData("kts")]
@@ -379,6 +392,13 @@ public class QueryCommandRunnerTests
         String marker = ""{queryToken}"";
     }}
 }}");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/App.js",
+                "javascript",
+                $@"function run() {{
+    const marker = ""{queryToken}"";
+}}");
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 [queryToken, "--db", dbPath, "--lang", input, "--count"],
@@ -393,6 +413,38 @@ public class QueryCommandRunnerTests
         TestProjectHelper.DeleteDirectory(projectRoot);
     }
 }
+
+    [Theory]
+    [InlineData("js")]
+    [InlineData("jsx")]
+    [InlineData("JS")]
+    [InlineData("JSX")]
+    public void RunSearch_NormalizesJavascriptLangAliases(string lang)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_javascript_lang_alias");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var queryToken = $"javascript_lang_alias_{Guid.NewGuid():N}";
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/App.js",
+                "javascript",
+                $@"const marker = ""{queryToken}"";");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [queryToken, "--db", dbPath, "--lang", lang, "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("1", stdout.Trim());
+            Assert.Equal(string.Empty, stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
 
     [Theory]
     [InlineData("yml")]
@@ -1728,6 +1780,8 @@ jobs:
 
         Assert.Contains(".cjs", javascript.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
         Assert.Contains(".mjs", javascript.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
+        Assert.Contains("js", javascript.GetProperty("aliases").EnumerateArray().Select(alias => alias.GetString()));
+        Assert.Contains("jsx", javascript.GetProperty("aliases").EnumerateArray().Select(alias => alias.GetString()));
         Assert.Contains(".cts", typescript.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
         Assert.Contains(".mts", typescript.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
         Assert.Contains(".m", objc.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
