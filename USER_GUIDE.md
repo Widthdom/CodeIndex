@@ -744,16 +744,14 @@ Or, if .NET 8+ SDK is available:
 dotnet tool install -g cdidx
 ```
 
-配布済み/常用実行として `cdidx` が動いているときは、標準エラーが
-握りつぶされるホストでも痕跡が残るよう、stderr と最小限の
-ライフサイクル情報をユーザー単位のファイルへベストエフォートで追記します。
-リポジトリ内の `src/CodeIndex/bin/...` / `tests/.../bin/...` からの
-ローカル開発実行は既定で対象外です。保存先は Windows では
-`%LOCALAPPDATA%\cdidx\logs\`、macOS では `~/Library/Logs/cdidx/`、
-Linux では `$XDG_STATE_HOME/cdidx/logs/`（未設定時は
-`~/.local/state/cdidx/logs/`）です。ログは日次でローテーションし、
-新しい 30 ファイルを保持します。無効化したい場合は
-`CDIDX_DISABLE_PERSISTENT_LOG=1` を設定してください。
+When `cdidx` is running as a distributed/non-development install, it also
+appends stderr plus minimal lifecycle breadcrumbs to a per-user file so silent
+hosts still leave traces. Local development runs from the repository's
+`src/CodeIndex/bin/...` or `tests/.../bin/...` outputs are excluded by default.
+Default locations are `%LOCALAPPDATA%\cdidx\logs\` on Windows,
+`~/Library/Logs/cdidx/` on macOS, and `$XDG_STATE_HOME/cdidx/logs/` (or
+`~/.local/state/cdidx/logs/`) on Linux. Logs rotate daily and keep the newest
+30 files. Set `CDIDX_DISABLE_PERSISTENT_LOG=1` to opt out.
 
 **If already installed**, reinstall or switch to a specific version explicitly:
 
