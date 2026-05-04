@@ -339,13 +339,13 @@ The reasoning is simple: a sharper C# experience makes the self-improvement loop
 If a user wants to start this loop, the minimal instruction can be:
 
 ```markdown
-Read `SELF_IMPROVEMENT.md` and start implementing the next non-breaking improvement.
+Read `docs/SELF_IMPROVEMENT.md` and start implementing the next non-breaking improvement.
 ```
 
 If the user wants more direction:
 
 ```markdown
-Read `SELF_IMPROVEMENT.md`, inspect the current repo with cdidx itself, identify the next high-value non-breaking improvement for AI friendliness or adoption, implement it, verify it, commit exactly one task, rebuild cdidx from the latest commit, refresh `.cdidx/codeindex.db` with `--commits` when possible, use `--files` only for in-place edits/new files, and use a full scan when checkout-changing git operations or stale-file purge require it, then continue from the refreshed index. Ask before any breaking change.
+Read `docs/SELF_IMPROVEMENT.md`, inspect the current repo with cdidx itself, identify the next high-value non-breaking improvement for AI friendliness or adoption, implement it, verify it, commit exactly one task, rebuild cdidx from the latest commit, refresh `.cdidx/codeindex.db` with `--commits` when possible, use `--files` only for in-place edits/new files, and use a full scan when checkout-changing git operations or stale-file purge require it, then continue from the refreshed index. Ask before any breaking change.
 ```
 
 ---
@@ -683,11 +683,11 @@ cdidx は C# で書かれています。C# の解析を改善すれば、それ�
 このループを始めるとき、最小の指示はこれで十分です:
 
 ```markdown
-Read `SELF_IMPROVEMENT.md` and start implementing the next non-breaking improvement.
+Read `docs/SELF_IMPROVEMENT.md` and start implementing the next non-breaking improvement.
 ```
 
 少し具体化したいなら:
 
 ```markdown
-Read `SELF_IMPROVEMENT.md`, inspect the current repo with cdidx itself, identify the next high-value non-breaking improvement for AI friendliness or adoption, implement it, verify it, commit exactly one task, rebuild cdidx from the latest commit, refresh `.cdidx/codeindex.db` with `--commits` when possible, use `--files` only for in-place edits/new files, and use a full scan when checkout-changing git operations or stale-file purge require it, then continue from the refreshed index. Ask before any breaking change.
+Read `docs/SELF_IMPROVEMENT.md`, inspect the current repo with cdidx itself, identify the next high-value non-breaking improvement for AI friendliness or adoption, implement it, verify it, commit exactly one task, rebuild cdidx from the latest commit, refresh `.cdidx/codeindex.db` with `--commits` when possible, use `--files` only for in-place edits/new files, and use a full scan when checkout-changing git operations or stale-file purge require it, then continue from the refreshed index. Ask before any breaking change.
 ```

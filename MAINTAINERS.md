@@ -55,7 +55,7 @@ as *not part of the end-user documentation surface* so that:
   → [DEVELOPER_GUIDE.md → 「リリース手順」](docs/DEVELOPER_GUIDE.md#リリース手順)
 - **.NET SDK のないコンテナから Claude Code Cloud セッションを bootstrap する。** SDK の無いコンテナから *このリポジトリ* に対して Claude Code を走らせたい認可 Maintainer 向けのワークフローです。
   → [CLOUD_BOOTSTRAP_PROMPT.md](docs/CLOUD_BOOTSTRAP_PROMPT.md) — 初回投入用のプロンプト。
-  → [DEVELOPER_GUIDE.md → 「Cloud Claude Code bootstrap（.NET SDK なし）」](docs/DEVELOPER_GUIDE.md#cloud-claude-code-bootstrapnet-sdk-なし) — そのプロンプトの裏で走るインストール・ランタイムの詳細解説。
+  → [DEVELOPER_GUIDE.md → 「Cloud Claude Code bootstrap（.NET SDK なし）」](docs/DEVELOPER_GUIDE.md#cloud-bootstrap-no-dotnet-sdk-ja) — そのプロンプトの裏で走るインストール・ランタイムの詳細解説。
 - **AI 駆動の自己改善ループ。** Maintainer が走らせる Claude Code セッションが cdidx 自身を改善するときの運用契約。エンドユーザーには不要です。
   → [SELF_IMPROVEMENT.md](docs/SELF_IMPROVEMENT.md)
 

@@ -516,7 +516,7 @@ cdidx ./myproject --files src/app.cs        # specific files only
 
 ## AI integration
 
-For the CLAUDE.md template (ready-to-copy code search rules for AI agents), see the [AI Integration](../README.md#ai-integration) section in README.
+For the CLAUDE.md template (ready-to-copy code search rules for AI agents), see the [AI Integration](USER_GUIDE.md#ai-integration) section in the user guide.
 
 ### Output format
 
@@ -596,12 +596,12 @@ The `suggest_improvement` MCP tool allows AI agents to report gaps or errors.
 
 | File | Purpose |
 |------|---------|
-| [`src/CodeIndex/Models/SuggestionRecord.cs`](src/CodeIndex/Models/SuggestionRecord.cs) | Suggestion data model (DTO) |
-| [`src/CodeIndex/Cli/SuggestionStore.cs`](src/CodeIndex/Cli/SuggestionStore.cs) | Local JSON storage with SHA256 dedup |
-| [`src/CodeIndex/Cli/SourceCodeDetector.cs`](src/CodeIndex/Cli/SourceCodeDetector.cs) | Heuristic source code leak prevention |
-| [`src/CodeIndex/Cli/GitHubIssueReporter.cs`](src/CodeIndex/Cli/GitHubIssueReporter.cs) | GitHub Issues API client (best-effort) |
-| [`src/CodeIndex/Mcp/McpToolHandlers.cs`](src/CodeIndex/Mcp/McpToolHandlers.cs) | `ExecuteSuggestImprovement` handler |
-| [`src/CodeIndex/Mcp/McpToolDefinitions.cs`](src/CodeIndex/Mcp/McpToolDefinitions.cs) | Tool schema definition |
+| [`src/CodeIndex/Models/SuggestionRecord.cs`](../src/CodeIndex/Models/SuggestionRecord.cs) | Suggestion data model (DTO) |
+| [`src/CodeIndex/Cli/SuggestionStore.cs`](../src/CodeIndex/Cli/SuggestionStore.cs) | Local JSON storage with SHA256 dedup |
+| [`src/CodeIndex/Cli/SourceCodeDetector.cs`](../src/CodeIndex/Cli/SourceCodeDetector.cs) | Heuristic source code leak prevention |
+| [`src/CodeIndex/Cli/GitHubIssueReporter.cs`](../src/CodeIndex/Cli/GitHubIssueReporter.cs) | GitHub Issues API client (best-effort) |
+| [`src/CodeIndex/Mcp/McpToolHandlers.cs`](../src/CodeIndex/Mcp/McpToolHandlers.cs) | `ExecuteSuggestImprovement` handler |
+| [`src/CodeIndex/Mcp/McpToolDefinitions.cs`](../src/CodeIndex/Mcp/McpToolDefinitions.cs) | Tool schema definition |
 
 ### What is sent (when GitHub token is configured)
 
@@ -631,7 +631,7 @@ The detector intentionally allows short inline code examples (e.g. `` `const foo
 
 ## Exit codes
 
-See [Exit codes](../README.md#exit-codes) in README.
+See [Exit codes](USER_GUIDE.md#exit-codes) in the user guide.
 
 ## Design decisions
 
@@ -1699,7 +1699,7 @@ VB.NET のコンテナ系パターンは `RegexOptions.IgnoreCase` と `VisualBa
 
 ## AI連携
 
-CLAUDE.mdテンプレート（AI向けコード検索ルールのコピペ用）については、READMEの[AIとの連携](../README.md#aiとの連携)セクションを参照してください。
+CLAUDE.mdテンプレート（AI向けコード検索ルールのコピペ用）については、ユーザーガイドの[AIとの連携](USER_GUIDE.md#aiとの連携)セクションを参照してください。
 
 ### 出力形式
 
@@ -1778,12 +1778,12 @@ Unlist しても exact version restore は不可能になりません。これ�
 
 | ファイル | 役割 |
 |---------|------|
-| [`src/CodeIndex/Models/SuggestionRecord.cs`](src/CodeIndex/Models/SuggestionRecord.cs) | 提案データモデル（DTO） |
-| [`src/CodeIndex/Cli/SuggestionStore.cs`](src/CodeIndex/Cli/SuggestionStore.cs) | SHA256重複排除付きのローカルJSON蓄積 |
-| [`src/CodeIndex/Cli/SourceCodeDetector.cs`](src/CodeIndex/Cli/SourceCodeDetector.cs) | ヒューリスティックによるソースコード漏洩防止 |
-| [`src/CodeIndex/Cli/GitHubIssueReporter.cs`](src/CodeIndex/Cli/GitHubIssueReporter.cs) | GitHub Issues APIクライアント（ベストエフォート） |
-| [`src/CodeIndex/Mcp/McpToolHandlers.cs`](src/CodeIndex/Mcp/McpToolHandlers.cs) | `ExecuteSuggestImprovement` ハンドラ |
-| [`src/CodeIndex/Mcp/McpToolDefinitions.cs`](src/CodeIndex/Mcp/McpToolDefinitions.cs) | ツールスキーマ定義 |
+| [`src/CodeIndex/Models/SuggestionRecord.cs`](../src/CodeIndex/Models/SuggestionRecord.cs) | 提案データモデル（DTO） |
+| [`src/CodeIndex/Cli/SuggestionStore.cs`](../src/CodeIndex/Cli/SuggestionStore.cs) | SHA256重複排除付きのローカルJSON蓄積 |
+| [`src/CodeIndex/Cli/SourceCodeDetector.cs`](../src/CodeIndex/Cli/SourceCodeDetector.cs) | ヒューリスティックによるソースコード漏洩防止 |
+| [`src/CodeIndex/Cli/GitHubIssueReporter.cs`](../src/CodeIndex/Cli/GitHubIssueReporter.cs) | GitHub Issues APIクライアント（ベストエフォート） |
+| [`src/CodeIndex/Mcp/McpToolHandlers.cs`](../src/CodeIndex/Mcp/McpToolHandlers.cs) | `ExecuteSuggestImprovement` ハンドラ |
+| [`src/CodeIndex/Mcp/McpToolDefinitions.cs`](../src/CodeIndex/Mcp/McpToolDefinitions.cs) | ツールスキーマ定義 |
 
 ### 送信されるデータ（GitHubトークン設定時）
 
@@ -1813,7 +1813,7 @@ description と context フィールドは、保存およびオプションの G
 
 ## 終了コード
 
-READMEの[終了コード](../README.md#終了コード)セクションを参照してください。
+ユーザーガイドの[終了コード](USER_GUIDE.md#終了コード)セクションを参照してください。
 
 ## 設計判断
 
@@ -1873,6 +1873,8 @@ READMEの[終了コード](../README.md#終了コード)セクションを参照
   解決手順: `.git`ファイルを読む → `gitdir:`を解析 → そのパスの`commondir`ファイルを読む → `../..`を`feature-branch/`ディレクトリ起点で解決（`feature-branch/` → `..` → `worktrees/` → `..` → `.git/`）→ `info/exclude`に書き込む。
 
 - **クロスコンパイルの linux-arm64 にランタイムスモークテストがない** — `release.yml` は x64 ランナー上で `linux-arm64` をクロスコンパイルする（`dotnet publish -r linux-arm64 --self-contained`）。ランナーが ARM バイナリをネイティブ実行できないためテストはスキップされる。理想的には QEMU ベースのスモークテスト（`cdidx --version`）をリリース前に実行すべきだが、GitHub Actions の無料枠ランナーには QEMU も ARM ランナーも含まれない。QEMU セットアップステップの追加は可能だが、リリースごとに CI の複雑さと実行時間が増す。.NET のクロスコンパイルは公式サポート機能で広く使われているため、実際に壊れたアーティファクトが出るリスクは低い。将来 ARM 固有の不具合が報告された場合、`docker run --platform linux/arm64` と QEMU の組み合わせが最初の対策となる。
+
+<a id="cloud-bootstrap-no-dotnet-sdk-ja"></a>
 
 ## Cloud AI コーディングハーネス bootstrap（Claude Code / Codex、.NET SDK なし）
 
