@@ -3,7 +3,7 @@ category: fixed
 affected:
   - src/CodeIndex/Indexer/SymbolExtractor.cs
   - tests/CodeIndex.Tests/QueryCommandRunnerTests.cs
-  - DEVELOPER_GUIDE.md
+  - docs/DEVELOPER_GUIDE.md
 ---
 
 ## English

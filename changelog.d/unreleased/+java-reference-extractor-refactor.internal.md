@@ -1,7 +1,7 @@
 ---
 category: internal
 affected:
-  - DEVELOPER_GUIDE.md
+  - docs/DEVELOPER_GUIDE.md
   - src/CodeIndex/Indexer/JavaReferenceExtractor.cs
   - src/CodeIndex/Indexer/ReferenceExtractor.cs
 ---

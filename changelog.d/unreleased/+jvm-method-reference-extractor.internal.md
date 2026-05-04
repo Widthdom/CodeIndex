@@ -6,7 +6,7 @@ affected:
   - src/CodeIndex/Indexer/KotlinReferenceExtractor.cs
   - src/CodeIndex/Indexer/ScalaReferenceExtractor.cs
   - src/CodeIndex/Indexer/JvmMethodReferenceExtractor.cs
-  - DEVELOPER_GUIDE.md
+  - docs/DEVELOPER_GUIDE.md
 ---
 
 ## English

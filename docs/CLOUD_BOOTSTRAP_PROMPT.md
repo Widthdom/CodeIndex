@@ -1,7 +1,7 @@
 # Cloud Bootstrap Prompt
 
-> **Maintainers / authorized operators only** — see [MAINTAINERS.md](MAINTAINERS.md). End users running cdidx on their own codebase don't need this file.
-> **Maintainer・認可オペレーター向け** — 全体の索引は [MAINTAINERS.md](MAINTAINERS.md) を参照。自分のコードベースに cdidx を使うだけのエンドユーザーには不要です。
+> **Maintainers / authorized operators only** — see [MAINTAINERS.md](../MAINTAINERS.md). End users running cdidx on their own codebase don't need this file.
+> **Maintainer・認可オペレーター向け** — 全体の索引は [MAINTAINERS.md](../MAINTAINERS.md) を参照。自分のコードベースに cdidx を使うだけのエンドユーザーには不要です。
 
 Kickoff prompt for cloud AI coding sessions (for example Claude Code or OpenAI
 Codex) that work on this repo without a local .NET SDK. Paste the English
@@ -264,7 +264,7 @@ structured responses.
   not pick up uncommitted edits made in the current session. Default to
   `--files` (or a full `"$CDIDX" .`) after local edits to avoid searching
   a stale index.
-- Read `SELF_IMPROVEMENT.md` and follow its loop, but substitute the
+- Read `docs/SELF_IMPROVEMENT.md` and follow its loop, but substitute the
   rebuild / reindex steps above for anything that assumes a local SDK.
 
 ### Safe improvement targets from this environment
@@ -273,8 +273,8 @@ You can fully validate changes in these areas without a .NET SDK:
 
 - `install.sh`, `.github/workflows/*.yml`, the contents and layout of the
   release tarball (inspect with `tar tzf`).
-- `README.md`, `CHANGELOG.md`, `CLAUDE.md`, `SELF_IMPROVEMENT.md`,
-  `TESTING_GUIDE.md`, `DEVELOPER_GUIDE.md` — both the English and the
+- `README.md`, `CHANGELOG.md`, `CLAUDE.md`, `docs/SELF_IMPROVEMENT.md`,
+  `docs/TESTING_GUIDE.md`, `docs/DEVELOPER_GUIDE.md` — both the English and the
   Japanese sections of each.
 - The `# Code Search Rules` / `# コードベース検索ルール` template in
   `README.md`.
@@ -292,7 +292,7 @@ You can fully validate changes in these areas without a .NET SDK:
 - Do **not** claim "verified locally" or "dotnet test passes" — you
   cannot prove either here.
 
-### Everything else follows `CLAUDE.md` and `SELF_IMPROVEMENT.md`
+### Everything else follows `CLAUDE.md` and `docs/SELF_IMPROVEMENT.md`
 
 Per-commit checklist, bilingual English / Japanese documentation,
 `CHANGELOG.md` entries go under `[Unreleased]` only, no U+FFFD characters
@@ -551,7 +551,7 @@ source-gen JSON 問題が解決するまでは、デフォルトの人間向け�
   現在のセッションで未コミットの編集は拾わないので、ローカル編集後は
   `--files` またはフル `"$CDIDX" .` を既定として使い、古いインデックスを
   検索してしまわないようにしてください。
-- `SELF_IMPROVEMENT.md` を読み、そのループに従う。ただし、ローカル SDK を
+- `docs/SELF_IMPROVEMENT.md` を読み、そのループに従う。ただし、ローカル SDK を
   前提としている再ビルド / 再インデックス手順は上記で読み替える。
 
 ### この環境で安全に改善できる領域
@@ -560,8 +560,8 @@ source-gen JSON 問題が解決するまでは、デフォルトの人間向け�
 
 - `install.sh`、`.github/workflows/*.yml`、リリース tarball の内容と
   レイアウト（`tar tzf` で検査）。
-- `README.md`、`CHANGELOG.md`、`CLAUDE.md`、`SELF_IMPROVEMENT.md`、
-  `TESTING_GUIDE.md`、`DEVELOPER_GUIDE.md` — それぞれの英語セクションと
+- `README.md`、`CHANGELOG.md`、`CLAUDE.md`、`docs/SELF_IMPROVEMENT.md`、
+  `docs/TESTING_GUIDE.md`、`docs/DEVELOPER_GUIDE.md` — それぞれの英語セクションと
   日本語セクションの両方。
 - `README.md` の `# Code Search Rules` / `# コードベース検索ルール`
   テンプレート。
@@ -577,7 +577,7 @@ source-gen JSON 問題が解決するまでは、デフォルトの人間向け�
 - 「ローカルで検証済み」「dotnet test 通過」とは**書かない** — ここでは
   どちらも証明できません。
 
-### その他は `CLAUDE.md` と `SELF_IMPROVEMENT.md` に従う
+### その他は `CLAUDE.md` と `docs/SELF_IMPROVEMENT.md` に従う
 
 コミット毎チェックリスト、英日併記ドキュメント、`CHANGELOG.md` の
 エントリは必ず `[Unreleased]` 配下のみ、変更ファイルに U+FFFD を混入

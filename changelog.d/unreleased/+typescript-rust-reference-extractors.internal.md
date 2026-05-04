@@ -4,7 +4,7 @@ affected:
   - src/CodeIndex/Indexer/ReferenceExtractor.cs
   - src/CodeIndex/Indexer/RustReferenceExtractor.cs
   - src/CodeIndex/Indexer/TypeScriptReferenceExtractor.cs
-  - DEVELOPER_GUIDE.md
+  - docs/DEVELOPER_GUIDE.md
 ---
 
 ## English

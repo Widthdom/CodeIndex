@@ -6,7 +6,7 @@ affected:
   - src/CodeIndex/Indexer/RReferenceExtractor.cs
   - src/CodeIndex/Indexer/PhpReferenceExtractor.cs
   - src/CodeIndex/Indexer/PowerShellReferenceExtractor.cs
-  - DEVELOPER_GUIDE.md
+  - docs/DEVELOPER_GUIDE.md
 ---
 
 ## English

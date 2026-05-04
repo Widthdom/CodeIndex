@@ -5,7 +5,7 @@ affected:
   - src/CodeIndex/Indexer/SwiftReferenceExtractor.cs
   - src/CodeIndex/Indexer/KotlinReferenceExtractor.cs
   - src/CodeIndex/Indexer/TrailingLambdaReferenceExtractor.cs
-  - DEVELOPER_GUIDE.md
+  - docs/DEVELOPER_GUIDE.md
 ---
 
 ## English

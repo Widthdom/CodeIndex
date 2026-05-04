@@ -2,7 +2,7 @@
 category: docs
 affected:
   - README.md
-  - USER_GUIDE.md
+  - docs/USER_GUIDE.md
 ---
 
 ## English

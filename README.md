@@ -32,8 +32,8 @@ structured code context from local repositories.
 | VS Code-only chat context | VS Code workspace index | editor-managed context inside the Copilot/VS Code UX |
 | Terminal, CI, scripts, or MCP clients | `cdidx` | explicit CLI + MCP boundary that works outside an IDE |
 
-Details: [why cdidx](USER_GUIDE.md#why-cdidx), [cdidx vs rg](USER_GUIDE.md#cdidx-vs-rg),
-and [cdidx vs VS Code workspace index](USER_GUIDE.md#cdidx-vs-vs-code-workspace-index).
+Details: [why cdidx](docs/USER_GUIDE.md#why-cdidx), [cdidx vs rg](docs/USER_GUIDE.md#cdidx-vs-rg),
+and [cdidx vs VS Code workspace index](docs/USER_GUIDE.md#cdidx-vs-vs-code-workspace-index).
 
 ## Quick Start
 
@@ -62,14 +62,14 @@ scripts, CI, or AI tools. Use `rg` when you only need a one-off text scan.
 
 ## Documentation
 
-- [User Guide](USER_GUIDE.md): detailed installation, command examples,
+- [User Guide](docs/USER_GUIDE.md): detailed installation, command examples,
   options, supported languages, MCP setup, and troubleshooting.
-- [Cloud Bootstrap](CLOUD_BOOTSTRAP_PROMPT.md): install guidance for restricted
+- [Cloud Bootstrap](docs/CLOUD_BOOTSTRAP_PROMPT.md): install guidance for restricted
   cloud agent sessions.
-- [Developer Guide](DEVELOPER_GUIDE.md): architecture, implementation notes, and
+- [Developer Guide](docs/DEVELOPER_GUIDE.md): architecture, implementation notes, and
   release workflow.
-- [Testing Guide](TESTING_GUIDE.md): test conventions and validation commands.
-- [Self-Improvement Contract](SELF_IMPROVEMENT.md): rules for agents improving
+- [Testing Guide](docs/TESTING_GUIDE.md): test conventions and validation commands.
+- [Self-Improvement Contract](docs/SELF_IMPROVEMENT.md): rules for agents improving
   CodeIndex itself.
 - [Integration Policy](INTEGRATION_POLICY.md): permitted CLI, JSON, MCP, and
   integration use.
@@ -109,8 +109,8 @@ details.
 | VS Code 内だけの chat 文脈 | VS Code workspace index | Copilot / VS Code UX 内で editor が管理 |
 | ターミナル、CI、スクリプト、MCP client | `cdidx` | IDE 外でも使える明示的な CLI + MCP 境界 |
 
-詳細: [なぜ cdidx なのか](USER_GUIDE.md#なぜ-cdidx-なのか)、[rg との違い](USER_GUIDE.md#rg-との違い)、
-[VS Code workspace index との違い](USER_GUIDE.md#vs-code-workspace-index-との違い)。
+詳細: [なぜ cdidx なのか](docs/USER_GUIDE.md#なぜ-cdidx-なのか)、[rg との違い](docs/USER_GUIDE.md#rg-との違い)、
+[VS Code workspace index との違い](docs/USER_GUIDE.md#vs-code-workspace-index-との違い)。
 
 ## すぐに試す
 
@@ -139,13 +139,13 @@ cdidx mcp
 
 ## ドキュメント
 
-- [ユーザーガイド](USER_GUIDE.md): 詳細なインストール、コマンド例、オプション、
+- [ユーザーガイド](docs/USER_GUIDE.md): 詳細なインストール、コマンド例、オプション、
   対応言語、MCP 設定、トラブルシュート。
-- [クラウドブートストラップ](CLOUD_BOOTSTRAP_PROMPT.md): 制限されたクラウド
+- [クラウドブートストラップ](docs/CLOUD_BOOTSTRAP_PROMPT.md): 制限されたクラウド
   エージェント環境でのインストール手順。
-- [開発者ガイド](DEVELOPER_GUIDE.md): アーキテクチャ、実装メモ、リリース手順。
-- [テストガイド](TESTING_GUIDE.md): テスト規約と検証コマンド。
-- [自己改善コントラクト](SELF_IMPROVEMENT.md): CodeIndex 自身を改善する
+- [開発者ガイド](docs/DEVELOPER_GUIDE.md): アーキテクチャ、実装メモ、リリース手順。
+- [テストガイド](docs/TESTING_GUIDE.md): テスト規約と検証コマンド。
+- [自己改善コントラクト](docs/SELF_IMPROVEMENT.md): CodeIndex 自身を改善する
   エージェント向けルール。
 - [統合ポリシー](INTEGRATION_POLICY.md): CLI、JSON、MCP、各種統合で許可される利用。
 

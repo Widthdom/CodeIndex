@@ -4,7 +4,7 @@ affected:
   - src/CodeIndex/Indexer/ReferenceExtractor.cs
   - src/CodeIndex/Indexer/ScalaReferenceExtractor.cs
   - src/CodeIndex/Indexer/GradleReferenceExtractor.cs
-  - DEVELOPER_GUIDE.md
+  - docs/DEVELOPER_GUIDE.md
 ---
 
 ## English

@@ -4,7 +4,7 @@ affected:
   - src/CodeIndex/Indexer/ReferenceExtractor.cs
   - src/CodeIndex/Indexer/BatchReferenceExtractor.cs
   - src/CodeIndex/Indexer/ShellReferenceExtractor.cs
-  - DEVELOPER_GUIDE.md
+  - docs/DEVELOPER_GUIDE.md
 ---
 
 ## English

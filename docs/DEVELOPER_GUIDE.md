@@ -516,7 +516,7 @@ cdidx ./myproject --files src/app.cs        # specific files only
 
 ## AI integration
 
-For the CLAUDE.md template (ready-to-copy code search rules for AI agents), see the [AI Integration](README.md#ai-integration) section in README.
+For the CLAUDE.md template (ready-to-copy code search rules for AI agents), see the [AI Integration](../README.md#ai-integration) section in README.
 
 ### Output format
 
@@ -631,7 +631,7 @@ The detector intentionally allows short inline code examples (e.g. `` `const foo
 
 ## Exit codes
 
-See [Exit codes](README.md#exit-codes) in README.
+See [Exit codes](../README.md#exit-codes) in README.
 
 ## Design decisions
 
@@ -694,7 +694,7 @@ See [Exit codes](README.md#exit-codes) in README.
 
 ## Cloud Claude Code bootstrap (no .NET SDK)
 
-> **Maintainers / authorized operators only** — see [MAINTAINERS.md](MAINTAINERS.md). End users can skip this section.
+> **Maintainers / authorized operators only** — see [MAINTAINERS.md](../MAINTAINERS.md). End users can skip this section.
 
 This section explains — in detail — the mechanism by which a cloud AI coding
 session (for example Claude Code or OpenAI Codex) that follows
@@ -1699,7 +1699,7 @@ VB.NET のコンテナ系パターンは `RegexOptions.IgnoreCase` と `VisualBa
 
 ## AI連携
 
-CLAUDE.mdテンプレート（AI向けコード検索ルールのコピペ用）については、READMEの[AIとの連携](README.md#aiとの連携)セクションを参照してください。
+CLAUDE.mdテンプレート（AI向けコード検索ルールのコピペ用）については、READMEの[AIとの連携](../README.md#aiとの連携)セクションを参照してください。
 
 ### 出力形式
 
@@ -1813,7 +1813,7 @@ description と context フィールドは、保存およびオプションの G
 
 ## 終了コード
 
-READMEの[終了コード](README.md#終了コード)セクションを参照してください。
+READMEの[終了コード](../README.md#終了コード)セクションを参照してください。
 
 ## 設計判断
 
@@ -1876,7 +1876,7 @@ READMEの[終了コード](README.md#終了コード)セクションを参照し
 
 ## Cloud AI コーディングハーネス bootstrap（Claude Code / Codex、.NET SDK なし）
 
-> **Maintainer・認可オペレーター向け** — 全体の索引は [MAINTAINERS.md](MAINTAINERS.md) を参照。エンドユーザーは読み飛ばして構いません。
+> **Maintainer・認可オペレーター向け** — 全体の索引は [MAINTAINERS.md](../MAINTAINERS.md) を参照。エンドユーザーは読み飛ばして構いません。
 
 このセクションでは、[CLOUD_BOOTSTRAP_PROMPT.md](CLOUD_BOOTSTRAP_PROMPT.md) に従う Cloud AI コーディングセッション（例: Claude Code / OpenAI Codex）が、.NET SDK がインストールされていないコンテナにもかかわらず、動作する `cdidx` バイナリと SQLite ランタイムを手に入れるまでの仕組みを詳述する。インストールパスのリグレッションは `dotnet build` が動く環境では不可視なため、Cloud セッションは公開リリース体験のカナリアとなる（「炭鉱のカナリア」に由来する比喩。ここでいうカナリアはペットとして飼われる小型の鳴鳥で、体が小さく呼吸も速いため人間より遥かに少ない量の有毒ガスで中毒症状を起こす。かつて炭鉱ではこの性質を利用し、人間より先に一酸化炭素などの有毒ガスに反応して鳴き止む・倒れるカナリアを坑内に連れて入り、作業員がまだ気付けない危険を早期に検知する生体センサーとして使っていた。そこから転じて IT では、本番のユーザーが被害を受ける前に異常を真っ先に検知する役割を指す）。各層を理解することが重要である理由はここにある。
 

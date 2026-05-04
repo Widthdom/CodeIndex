@@ -10577,10 +10577,10 @@ public class ReferenceExtractorTests
     public void Extract_CsharpCaseListPatternTypeHead_EmitsTypeReference()
     {
         // issue #667: `case List<int> [_, ..]:` and similar list-pattern case labels must keep
-        // the leading type head as a `type_reference` so DEVELOPER_GUIDE.md's documented positive
+        // the leading type head as a `type_reference` so docs/DEVELOPER_GUIDE.md's documented positive
         // example for C# type-position edges stays test-backed.
         // issue #667: `case List<int> [_, ..]:` のような list pattern の case ラベルでも先頭型 head を
-        // `type_reference` として残し、DEVELOPER_GUIDE.md の positive example をテストで裏付ける。
+        // `type_reference` として残し、docs/DEVELOPER_GUIDE.md の positive example をテストで裏付ける。
         const string content = """
             using System.Collections.Generic;
 

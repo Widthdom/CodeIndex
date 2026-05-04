@@ -3,7 +3,7 @@ category: added
 affected:
   - src/CodeIndex/Cli/IndexFreshnessChecker.cs
   - src/CodeIndex/Cli/QueryCommandRunner.cs
-  - USER_GUIDE.md
+  - docs/USER_GUIDE.md
   - AGENT_GUIDE.md
 ---
 

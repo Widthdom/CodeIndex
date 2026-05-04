@@ -13,7 +13,7 @@ For implementation tasks:
 1. Read the agent entry point for your tool, if one was loaded automatically.
 2. Read this file.
 3. Read the relevant workflow in `.codex/workflows/`.
-4. Read project-specific files referenced by that workflow, such as `SELF_IMPROVEMENT.md`, `DEVELOPER_GUIDE.md`, or `TESTING_GUIDE.md`.
+4. Read project-specific files referenced by that workflow, such as `docs/SELF_IMPROVEMENT.md`, `docs/DEVELOPER_GUIDE.md`, or `docs/TESTING_GUIDE.md`.
 5. Read only the additional source files needed for the task.
 
 ## Search and Indexing Rules
@@ -64,7 +64,7 @@ When editing changelog content, verify that both English and Japanese entries ar
 ## Documentation Rules
 
 - Treat documentation as part of the feature contract, not as optional cleanup.
-- If a change affects user-visible behavior, CLI/MCP output, flags, error messages, install/release behavior, or contributor/agent workflow, update the matching docs in the same change. For CodeIndex this usually means `README.md`, `DEVELOPER_GUIDE.md`, `TESTING_GUIDE.md`, `SELF_IMPROVEMENT.md`, `INTEGRATION_POLICY.md`, `CLAUDE.md`, `AGENT_GUIDE.md`, or the relevant `.codex/workflows/*.md` file.
+- If a change affects user-visible behavior, CLI/MCP output, flags, error messages, install/release behavior, or contributor/agent workflow, update the matching docs in the same change. For CodeIndex this usually means `README.md`, `docs/DEVELOPER_GUIDE.md`, `docs/TESTING_GUIDE.md`, `docs/SELF_IMPROVEMENT.md`, `INTEGRATION_POLICY.md`, `CLAUDE.md`, `AGENT_GUIDE.md`, or the relevant `.codex/workflows/*.md` file.
 - Do not open or merge a PR with a user-visible change unless the required docs and changelog updates are present, or the PR body explicitly explains why no docs/changelog change is needed.
   - Changelog entries are required for user-visible or behavior-changing work. For ordinary implementation PRs, write the changelog entry as a bilingual fragment under `changelog.d/unreleased/`; do not update `CHANGELOG.md` directly as the default path.
   - Use issue-based fragment names and `issues:` front matter only when the work is actually tied to GitHub issues. For non-issue work, use a `+<slug>.<category>.md` fragment and omit `issues` entirely. Never write `issues: null` or `issues: []`.
@@ -72,9 +72,9 @@ When editing changelog content, verify that both English and Japanese entries ar
 
 ## Repository Rules
 
-- Follow `DEVELOPER_GUIDE.md` for architecture and dependency policy. Production/runtime dependencies stay limited to `Microsoft.Data.Sqlite`.
-- Follow `TESTING_GUIDE.md` for test conventions, helpers, and parallelism rules.
-- Follow `SELF_IMPROVEMENT.md` when the task is about improving `cdidx` itself.
+- Follow `docs/DEVELOPER_GUIDE.md` for architecture and dependency policy. Production/runtime dependencies stay limited to `Microsoft.Data.Sqlite`.
+- Follow `docs/TESTING_GUIDE.md` for test conventions, helpers, and parallelism rules.
+- Follow `docs/SELF_IMPROVEMENT.md` when the task is about improving `cdidx` itself.
 - If a change is user-facing, keep the matching tests, docs, and changelog entry in the same commit.
 - Preserve cross-platform behavior when touching filesystem behavior, process execution, console output, or SQLite lifetime.
 - Ask before implementing breaking, destructive, or user-workflow-changing changes.

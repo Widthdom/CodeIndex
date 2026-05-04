@@ -2,7 +2,7 @@
 
 > **[日本語版はこちら / Japanese version](#自己改善ループ)**
 >
-> **Maintainers / authorized operators only** — see [MAINTAINERS.md](MAINTAINERS.md). End users don't need this document.
+> **Maintainers / authorized operators only** — see [MAINTAINERS.md](../MAINTAINERS.md). End users don't need this document.
 
 This document is a ready-to-use operating contract for AI agents improving `cdidx` from inside this repository.
 
@@ -202,13 +202,13 @@ dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll inspect ResolveGitCommonDir --
 
 Before committing, explicitly review:
 1. Tests
-2. TESTING_GUIDE.md
+2. docs/TESTING_GUIDE.md
 3. CHANGELOG.md — New entries normally go under bilingual fragments in `changelog.d/unreleased/`; only release-preparation PRs edit `CHANGELOG.md` directly. See `AGENT_GUIDE.md` and `.codex/workflows/precommit.md` for the full rules.
 4. README.md
 5. README `# Code Search Rules` / `# コードベース検索ルール`
-6. DEVELOPER_GUIDE.md
+6. docs/DEVELOPER_GUIDE.md
 7. `AGENT_GUIDE.md` and `.codex/workflows/precommit.md`
-8. This file (`SELF_IMPROVEMENT.md`)
+8. This file (`docs/SELF_IMPROVEMENT.md`)
 9. PR description, if a PR already exists
 
 Then commit one coherent task.
@@ -546,13 +546,13 @@ dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll inspect ResolveGitCommonDir --
 
 コミット前に、明示的に次を確認します:
 1. Tests
-2. TESTING_GUIDE.md
+2. docs/TESTING_GUIDE.md
 3. CHANGELOG.md — 新エントリは `[Unreleased]` のみに書く。既存のバージョン見出しには追加も変更もしない。完全なルールは `AGENT_GUIDE.md` と `.codex/workflows/precommit.md` 参照。
 4. README.md
 5. README `# Code Search Rules` / `# コードベース検索ルール`
-6. DEVELOPER_GUIDE.md
+6. docs/DEVELOPER_GUIDE.md
 7. `AGENT_GUIDE.md` と `.codex/workflows/precommit.md`
-8. このファイル（`SELF_IMPROVEMENT.md`）
+8. このファイル（`docs/SELF_IMPROVEMENT.md`）
 9. 既存PRがあるなら PR説明
 
 そのうえで、1つのまとまりだけをコミットします。

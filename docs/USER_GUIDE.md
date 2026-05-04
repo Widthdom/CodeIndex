@@ -1,7 +1,7 @@
 # cdidx User Guide
 
 This is the detailed user documentation moved out of the concise
-[README.md](README.md). It keeps the extended install notes, command examples,
+[README.md](../README.md). It keeps the extended install notes, command examples,
 AI/MCP setup, language list, and troubleshooting details.
 
 > **[日本語版はこちら / Japanese version](#cdidx日本語)**
@@ -34,7 +34,7 @@ cdidx mcp                        # Start MCP server for AI tools
 - **Docs**: [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) for architecture, AI response details, and release workflow
 - **AI dev contract**: [SELF_IMPROVEMENT.md](SELF_IMPROVEMENT.md)
 - **Testing**: [TESTING_GUIDE.md](TESTING_GUIDE.md)
-- **License**: [FSL-1.1-ALv2](LICENSE); integration materials may be Apache-2.0 where marked
+- **License**: [FSL-1.1-ALv2](../LICENSE); integration materials may be Apache-2.0 where marked
 
 ## Why cdidx
 
@@ -720,7 +720,7 @@ For the full MCP tool list, JSON field contracts, exact-match metadata, and fall
 
 ### Setup: Add to CLAUDE.md
 
-To let AI agents use the generated index, place a `CLAUDE.md` in your project root (the template below is for **downstream projects** that adopt cdidx — contributors working on the cdidx repo itself should follow [CLAUDE.md](CLAUDE.md) in this repo, which routes execution through the locally built `dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll` instead of a bare `cdidx` command):
+To let AI agents use the generated index, place a `CLAUDE.md` in your project root (the template below is for **downstream projects** that adopt cdidx — contributors working on the cdidx repo itself should follow [CLAUDE.md](../CLAUDE.md) in this repo, which routes execution through the locally built `dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll` instead of a bare `cdidx` command):
 
 ~~~markdown
 # Code Search Rules
@@ -1030,7 +1030,7 @@ cdidx includes a `suggest_improvement` MCP tool for AI agents that hit gaps or b
 
 ## Releasing a new version
 
-> **Maintainers / authorized operators only** — the full release procedure now lives in [DEVELOPER_GUIDE.md#release-workflow](DEVELOPER_GUIDE.md#release-workflow). [MAINTAINERS.md](MAINTAINERS.md) is the maintainer index.
+> **Maintainers / authorized operators only** — the full release procedure now lives in [DEVELOPER_GUIDE.md#release-workflow](DEVELOPER_GUIDE.md#release-workflow). [MAINTAINERS.md](../MAINTAINERS.md) is the maintainer index.
 
 The short version: `version.json` is the single source of truth, and the maintainer checklist covers branch/PR triage, changelog promotion, tagging, and clean-install verification.
 
@@ -1069,7 +1069,7 @@ cdidx mcp                        # AIツール向けMCPサーバー起動
 - **ドキュメント**: [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) アーキテクチャ、AI応答の詳細、リリース手順
 - **AI開発規約**: [SELF_IMPROVEMENT.md](SELF_IMPROVEMENT.md)
 - **テストガイド**: [TESTING_GUIDE.md](TESTING_GUIDE.md)
-- **ライセンス**: [FSL-1.1-ALv2](LICENSE)。統合向け資料は明示されていれば Apache-2.0 です
+- **ライセンス**: [FSL-1.1-ALv2](../LICENSE)。統合向け資料は明示されていれば Apache-2.0 です
 
 ## なぜ cdidx なのか
 
@@ -1716,7 +1716,7 @@ MCP ツール一覧、JSON フィールド契約、`--exact` まわりのメタ�
 
 ### セットアップ: CLAUDE.mdに追加
 
-AIエージェントにインデックスを活用させるには、プロジェクトルートに `CLAUDE.md` を配置してください（以下のテンプレートは **cdidx を導入する下流プロジェクト向け**です。cdidx 本体のリポジトリに貢献する場合は当 repo の [CLAUDE.md](CLAUDE.md) を参照してください。素の `cdidx` コマンドではなくローカルビルドの `dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll` を経由する運用になっています）:
+AIエージェントにインデックスを活用させるには、プロジェクトルートに `CLAUDE.md` を配置してください（以下のテンプレートは **cdidx を導入する下流プロジェクト向け**です。cdidx 本体のリポジトリに貢献する場合は当 repo の [CLAUDE.md](../CLAUDE.md) を参照してください。素の `cdidx` コマンドではなくローカルビルドの `dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll` を経由する運用になっています）:
 
 ~~~markdown
 # コードベース検索ルール
@@ -2016,7 +2016,7 @@ cdidx には、AI エージェントがギャップや不具合に気づいた�
 
 ## 新バージョンのリリース
 
-> **Maintainer・認可オペレーター向け** — 詳細なリリース手順は [DEVELOPER_GUIDE.md#release-workflow](DEVELOPER_GUIDE.md#release-workflow) にあります。[MAINTAINERS.md](MAINTAINERS.md) は maintainer 向け索引です。
+> **Maintainer・認可オペレーター向け** — 詳細なリリース手順は [DEVELOPER_GUIDE.md#release-workflow](DEVELOPER_GUIDE.md#release-workflow) にあります。[MAINTAINERS.md](../MAINTAINERS.md) は maintainer 向け索引です。
 
 要点だけ言うと、バージョンの真実は `version.json` に集約されており、メンテナ向けチェックリストには未マージ枝/PR のトリアージ、CHANGELOG 昇格、タグ付け、クリーンインストール検証まで含まれます。
 

@@ -3,7 +3,7 @@ category: internal
 affected:
   - src/CodeIndex/Indexer/ReferenceExtractor.cs
   - src/CodeIndex/Indexer/CSharpReferenceExtractor.cs
-  - DEVELOPER_GUIDE.md
+  - docs/DEVELOPER_GUIDE.md
 ---
 
 ## English
