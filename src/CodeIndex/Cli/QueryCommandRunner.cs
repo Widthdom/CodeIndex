@@ -1665,17 +1665,17 @@ public static class QueryCommandRunner
                     Console.WriteLine(status.Summary);
                 Console.WriteLine();
                 if (status.Version != null)
-                    Console.WriteLine($"Version : cdidx v{status.Version}");
-                Console.WriteLine($"Files   : {status.Files:N0}");
-                Console.WriteLine($"Chunks  : {status.Chunks:N0}");
-                Console.WriteLine($"Symbols : {status.Symbols:N0}");
-                Console.WriteLine($"Refs    : {status.References:N0}");
+                    Console.WriteLine($"Version  : cdidx v{status.Version}");
+                Console.WriteLine($"Files    : {status.Files:N0}");
+                Console.WriteLine($"Chunks   : {status.Chunks:N0}");
+                Console.WriteLine($"Symbols  : {status.Symbols:N0}");
+                Console.WriteLine($"Refs     : {status.References:N0}");
                 if (status.IndexedAt != null)
-                    Console.WriteLine($"Indexed : {status.IndexedAt:O}");
+                    Console.WriteLine($"Indexed  : {status.IndexedAt:O}");
                 if (status.LatestModified != null)
-                    Console.WriteLine($"Source  : {status.LatestModified:O}");
+                    Console.WriteLine($"Source   : {status.LatestModified:O}");
                 if (status.GitHead != null)
-                    Console.WriteLine($"Git HEAD: {status.GitHead}");
+                    Console.WriteLine($"Git HEAD : {status.GitHead}");
                 if (status.GitIsDirty != null)
                     Console.WriteLine($"Git Dirty: {status.GitIsDirty}");
                 if (status.WorkspaceCheck != null)

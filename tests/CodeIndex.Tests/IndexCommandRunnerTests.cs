@@ -3033,9 +3033,10 @@ public class IndexCommandRunnerTests
             var (exitCode, output) = RunAndCaptureOutput([projectRoot, "--files", "app.cs"]);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Contains("Graph   : degraded", output);
-            Assert.Contains("Issues  : degraded", output);
-            Assert.Contains("Fold    : degraded", output);
+            Assert.Contains("Graph    : degraded", output);
+            Assert.Contains("Issues   : degraded", output);
+            Assert.Contains("SQL graph: ready", output);
+            Assert.Contains("Fold     : degraded", output);
         }
         finally
         {
@@ -3189,10 +3190,11 @@ public class IndexCommandRunnerTests
 
             var (humanExitCode, output) = RunAndCaptureOutput([projectRoot]);
             Assert.Equal(CommandExitCodes.Success, humanExitCode);
-            Assert.Contains("Graph   : ready", output);
-            Assert.Contains("Issues  : ready", output);
-            Assert.Contains("Hotspots: ready", output);
-            Assert.Contains("Fold    : ready", output);
+            Assert.Contains("Graph    : ready", output);
+            Assert.Contains("Issues   : ready", output);
+            Assert.Contains("SQL graph: ready", output);
+            Assert.Contains("Hotspots : ready", output);
+            Assert.Contains("Fold     : ready", output);
         }
         finally
         {

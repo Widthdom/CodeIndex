@@ -274,19 +274,19 @@ Default output:
 
 Done.
 
-  Files   : 42
-  Chunks  : 318
-  Symbols : 156
-  Refs    : 1,024
-  Updated : 14
-  Skipped : 28 (unchanged)
-  Graph   : ready
-  Issues  : ready
+  Files    : 42
+  Chunks   : 318
+  Symbols  : 156
+  Refs     : 1,024
+  Updated  : 14
+  Skipped  : 28 (unchanged)
+  Graph    : ready
+  Issues   : ready
   SQL graph: ready
-  Hotspots: ready
-  C# names: ready
-  Fold    : ready
-  Elapsed : 00:00:02
+  Hotspots : ready
+  C# names : ready
+  Fold     : ready
+  Elapsed  : 00:00:02
 ```
 
 During long-running indexing on an interactive terminal, `Indexing...` stays live as a spinner instead of dropping to a fixed line until the next 50-file progress update. Warnings still print immediately, but the spinner resumes right after each warning so the run does not look frozen. When stdout is redirected (for example `cdidx . > out.txt`), cdidx prints a single `Indexing...` line to stdout, keeps warnings on stderr, and emits only line-based progress updates to stdout.
@@ -487,10 +487,10 @@ cdidx status --check --json
 Output:
 
 ```
-Files   : 42
-Chunks  : 318
-Symbols : 156
-Refs    : 912
+Files    : 42
+Chunks   : 318
+Symbols  : 156
+Refs     : 912
 Languages:
   csharp         28
   python         10

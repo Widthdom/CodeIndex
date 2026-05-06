@@ -27329,7 +27329,8 @@ jobs:
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Contains($"Git HEAD: {expectedHead}", stdout);
+            Assert.Contains("Files    : 1", stdout);
+            Assert.Contains($"Git HEAD : {expectedHead}", stdout);
             Assert.Contains("Git Dirty: True", stdout);
         }
         finally
