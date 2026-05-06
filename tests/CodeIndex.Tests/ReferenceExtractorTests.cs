@@ -19843,4 +19843,43 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, r => r.SymbolName == "define");
         Assert.DoesNotContain(references, r => r.SymbolName == "module");
     }
+
+    [Fact]
+    public void Extract_Perl_CapturesModuleInheritanceAndArrowCalls()
+    {
+        const string content = """
+            package My::App;
+
+            use My::Util;
+            use parent qw(My::Base My::Role);
+
+            sub render {
+                My::Widget->new();
+                $self->helper();
+                My::Util::format($self);
+            }
+
+            sub helper {
+                return 1;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "perl", content);
+        var references = ReferenceExtractor.Extract(1, "perl", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "My::Util" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "My::Base" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "My::Role" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "My::Widget" && r.ReferenceKind == "instantiate");
+        Assert.Contains(references, r =>
+            r.SymbolName == "helper"
+            && r.ReferenceKind == "call"
+            && r.ContainerKind == "function"
+            && r.ContainerName == "render");
+        Assert.Contains(references, r =>
+            r.SymbolName == "format"
+            && r.ReferenceKind == "call"
+            && r.ContainerKind == "function"
+            && r.ContainerName == "render");
+    }
 }

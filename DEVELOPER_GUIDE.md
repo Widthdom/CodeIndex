@@ -358,6 +358,7 @@ Supported symbol kinds by language:
 | Rust | functions, macros, `const`, `static`, impl/type aliases, structs, unions, traits, enums | `use`, turbofish and structural type-position references | yes |
 | Swift | functions, classes, actors, structs, protocols, enums, stored properties | imports and trailing-closure calls | yes |
 | Ruby | `def`, Rails DSL, block calls, classes, modules, attributes | `require` | yes |
+| Perl | packages, subroutines, constants | `use`, `require`, `parent` / `base`, arrow method calls | yes |
 | C / C++ | functions, macros, structs, C++ classes, enums, enum classes | `#include`, type-position references | yes |
 | PHP | functions, constants, enum cases, classes, interfaces, traits, enums | `use`, `require`, `include` | yes |
 | Scala | `def`, classes, objects, traits, enums | imports, type aliases, block calls | yes |
@@ -381,7 +382,7 @@ For JavaScript / TypeScript, reference extraction also captures tagged template 
 
 SQL also emits `namespace` symbols for `CREATE SCHEMA`, but the summary table above does not have a dedicated namespace column. SQL graph extraction emits `reference` edges for named source/target forms such as `FROM`, `JOIN`, `INSERT INTO`, `UPDATE`, `TRUNCATE TABLE`, `DELETE FROM`, `DELETE ... USING`, and `MERGE ... USING`; procedure and table-valued-function calls stay on the `call` path.
 
-Additionally, 22 languages are detected and indexed as raw text without symbol extraction: cmake, clojure, crystal, dockerignore, d, editorconfig, erlang, gitignore, json, justfile, julia, markdown, nim, ocaml, perl, solidity, svelte, tcl, toml, vue, xml, yaml.
+Additionally, 21 languages are detected and indexed as raw text without symbol extraction: cmake, clojure, crystal, dockerignore, d, editorconfig, erlang, gitignore, json, justfile, julia, markdown, nim, ocaml, solidity, svelte, tcl, toml, vue, xml, yaml.
 
 VB.NET container patterns use `RegexOptions.IgnoreCase` plus `VisualBasicEnd`-based range tracking, so `Partial` spelling differences and multi-file type families still receive stable definition ranges and hotspot-family metadata.
 
@@ -1474,6 +1475,7 @@ LIMIT 20;
 | Rust | function、macro、`const`、`static`、impl/type alias、struct、union、trait、enum | `use`、turbofish、structural type-position reference | yes |
 | Swift | function、class、actor、struct、protocol、enum、stored property | import、trailing-closure call | yes |
 | Ruby | `def`、Rails DSL、block call、class、module、attribute | `require` | yes |
+| Perl | package、subroutine、constant | `use`、`require`、`parent` / `base`、arrow method call | yes |
 | C / C++ | function、macro、struct、C++ class、enum、enum class | `#include`、type-position reference | yes |
 | PHP | function、constant、enum case、class、interface、trait、enum | `use`、`require`、`include` | yes |
 | Scala | `def`、class、object、trait、enum | import、type alias、block call | yes |
@@ -1497,7 +1499,7 @@ JavaScript / TypeScript では、reference extraction が `` gql`...` ``、`` st
 
 SQL は `CREATE SCHEMA` から `namespace` シンボルも出力するが、上の要約表には namespace 専用列はない。SQL graph extraction は `FROM`、`JOIN`、`INSERT INTO`、`UPDATE`、`TRUNCATE TABLE`、`DELETE FROM`、`DELETE ... USING`、`MERGE ... USING` のような source/target 形を `reference` edge として出力し、procedure call と table-valued function 使用は `call` 経路に残す。
 
-他に22言語がテキスト検索用に検出されるがシンボル抽出パターンは未対応: cmake, clojure, crystal, dockerignore, d, editorconfig, erlang, gitignore, json, justfile, julia, markdown, nim, ocaml, perl, solidity, svelte, tcl, toml, vue, xml, yaml。
+他に21言語がテキスト検索用に検出されるがシンボル抽出パターンは未対応: cmake, clojure, crystal, dockerignore, d, editorconfig, erlang, gitignore, json, justfile, julia, markdown, nim, ocaml, solidity, svelte, tcl, toml, vue, xml, yaml。
 
 正規表現ベースの抽出は意図的にシンプルです。AST精度よりも速度とポータビリティを優先しています。
 

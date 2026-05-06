@@ -1262,12 +1262,15 @@ public static partial class SymbolExtractor
         ["perl"] =
         [
             // Perl package declarations / Perl の package 宣言
-            new("namespace", new Regex(@"^\s*package\s+(?<name>[\w:]+)\s*;", RegexOptions.Compiled), BodyStyle.None),
+            new("namespace", new Regex(@"^\s*package\s+(?<name>" + PerlQualifiedIdentifierPattern + @")\b(?:\s+v?[\d._]+)?\s*;", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            // Perl constants are compile-time subroutines, so expose them as functions for navigation.
+            // Perl constant はコンパイル時 subroutine なので、ナビゲーション用に function として出す。
+            new("function", new Regex(@"^\s*use\s+constant\s+(?<name>" + PerlIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
             // Perl module imports / Perl の module import
-            new("import", new Regex(@"^\s*use\s+(?<name>[\p{L}_][\w:]*)", RegexOptions.Compiled), BodyStyle.None),
-            new("import", new Regex(@"^\s*require\s+(?<name>[\p{L}_][\w:]*)", RegexOptions.Compiled), BodyStyle.None),
+            new("import", new Regex(@"^\s*use\s+(?<name>" + PerlQualifiedIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("import", new Regex(@"^\s*require\s+(?<name>" + PerlQualifiedIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
             // Perl subroutines / Perl の subroutine
-            new("function", new Regex(@"^\s*sub\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
+            new("function", new Regex(@"^\s*sub\s+(?<name>" + PerlIdentifierPattern + @")\b(?:\s*:[^{;]+)?", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
         ],
         ["c"] =
         [
@@ -3404,6 +3407,8 @@ public static partial class SymbolExtractor
             ExtractCppSameLineClassBodyMembers(fileId, lines, symbols);
         if (lang == "python")
             ExtractPythonAllExportSymbols(fileId, lines, symbols, pythonModulePrefix);
+        if (lang == "perl")
+            ExtractPerlHashConstantSymbols(fileId, lines, symbols);
         AssignContainers(symbols, lines, csharpLineStartStates);
         MaterializeRecordPrimaryComponentSymbols(symbols, pendingRecordPrimaryComponents);
         KotlinSymbolNameNormalizer.NormalizeSecondaryConstructorNames(symbols);

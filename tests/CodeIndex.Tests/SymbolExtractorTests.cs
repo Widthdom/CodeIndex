@@ -20275,4 +20275,35 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "alias" && s.Name == "G");
         Assert.Contains(symbols, s => s.Kind == "alias" && s.Name == "H");
     }
+
+    [Fact]
+    public void Extract_Perl_CapturesPackagesImportsConstantsAndAttributedSubs()
+    {
+        var content = """
+            package My::App v1.2.3;
+
+            use parent 'My::Base';
+            use constant DEFAULT_LIMIT => 10;
+            use constant { SECOND_LIMIT => 20, 'THIRD_LIMIT' => 30 };
+            use constant {
+                FOURTH_LIMIT => 40,
+                "FIFTH_LIMIT" => 50,
+            };
+
+            sub render : prototype($) {
+                return DEFAULT_LIMIT;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "perl", content);
+
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "My::App");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "parent");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "DEFAULT_LIMIT");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "SECOND_LIMIT");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "THIRD_LIMIT");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "FOURTH_LIMIT");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "FIFTH_LIMIT");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "render");
+    }
 }

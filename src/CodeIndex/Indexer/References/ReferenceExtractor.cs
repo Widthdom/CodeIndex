@@ -168,6 +168,13 @@ public static partial class ReferenceExtractor
             "raise", "yield", "super", "include", "extend",
             "unless", "case", "begin", "until", "module", "rescue", "ensure",
         },
+        ["perl"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "use", "require", "package", "sub", "my", "our", "local", "state",
+            "if", "elsif", "unless", "while", "until", "foreach", "for", "given", "when",
+            "print", "say", "die", "warn", "open", "close", "defined", "exists", "delete",
+            "bless", "ref", "scalar", "wantarray", "eval", "do",
+        },
         // F# contextual keywords / F# 文脈キーワード
         ["fsharp"] = new HashSet<string>(StringComparer.Ordinal)
         {
@@ -1841,6 +1848,19 @@ public static partial class ReferenceExtractor
                         lineNumber,
                         ResolveContainerForCall,
                         matchedCallIndices,
+                        AddCallLikeReference);
+                }
+                else if (language == "perl")
+                {
+                    PerlReferenceExtractor.EmitAdditionalReferences(
+                        preparedLine,
+                        originalLine,
+                        references,
+                        seen,
+                        fileId,
+                        context,
+                        lineNumber,
+                        ResolveContainerForCall,
                         AddCallLikeReference);
                 }
 
