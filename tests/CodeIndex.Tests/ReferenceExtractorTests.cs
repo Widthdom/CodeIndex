@@ -19785,4 +19785,62 @@ public class ReferenceExtractorTests
 
         Assert.DoesNotContain(references, r => r.SymbolName == "value" && r.ReferenceKind == "type_reference");
     }
+
+    [Fact]
+    public void Extract_CommonLisp_CapturesCallsFunctionQuotesAndInstantiation()
+    {
+        const string content = """
+            (defclass widget () ())
+
+            (defun render (widget)
+              "(helper widget)"
+              ; (helper widget)
+              (helper widget)
+              (mapcar #'helper widgets)
+              (make-instance 'widget))
+
+            (defun helper (value)
+              value)
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "commonlisp", content);
+        var references = ReferenceExtractor.Extract(1, "commonlisp", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "helper"
+            && r.ReferenceKind == "call"
+            && r.ContainerKind == "function"
+            && r.ContainerName == "render");
+        Assert.Contains(references, r =>
+            r.SymbolName == "widget"
+            && r.ReferenceKind == "instantiate"
+            && r.ContainerName == "render");
+        Assert.DoesNotContain(references, r => r.Context.Contains("(helper widget)\"", StringComparison.Ordinal));
+        Assert.DoesNotContain(references, r => r.Context.StartsWith("; ", StringComparison.Ordinal));
+        Assert.DoesNotContain(references, r => r.SymbolName == "defun");
+    }
+
+    [Fact]
+    public void Extract_Racket_CapturesSExpressionCallsWithContainers()
+    {
+        const string content = """
+            (module app racket
+              (define (render value)
+                (helper value))
+
+              (define (helper value)
+                value))
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "racket", content);
+        var references = ReferenceExtractor.Extract(1, "racket", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "helper"
+            && r.ReferenceKind == "call"
+            && r.ContainerKind == "function"
+            && r.ContainerName == "render");
+        Assert.DoesNotContain(references, r => r.SymbolName == "define");
+        Assert.DoesNotContain(references, r => r.SymbolName == "module");
+    }
 }

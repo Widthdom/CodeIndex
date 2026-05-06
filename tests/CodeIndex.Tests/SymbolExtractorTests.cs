@@ -17268,6 +17268,34 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "point");
     }
 
+    [Fact]
+    public void Extract_CommonLisp_MasksCommentsAndAssignsFunctionRanges()
+    {
+        var content = """
+            (in-package :my-app)
+
+            (defun render (widget)
+              "(defun hidden-string () nil)"
+              ; (defun hidden-line () nil)
+              #| (defun hidden-block () nil) |#
+              (helper widget))
+
+            (defun helper (value)
+              value)
+            """;
+        var symbols = SymbolExtractor.Extract(1, "commonlisp", content);
+
+        var render = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "render"));
+        Assert.Equal(3, render.StartLine);
+        Assert.Equal(7, render.EndLine);
+        Assert.Equal(3, render.BodyStartLine);
+        Assert.Equal(7, render.BodyEndLine);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "helper");
+        Assert.DoesNotContain(symbols, s => s.Name == "hidden-string");
+        Assert.DoesNotContain(symbols, s => s.Name == "hidden-line");
+        Assert.DoesNotContain(symbols, s => s.Name == "hidden-block");
+    }
+
     [Theory]
     [InlineData("csharp", "public interface IFoo { }", "interface")]
     [InlineData("csharp", "public enum Color { }", "enum")]

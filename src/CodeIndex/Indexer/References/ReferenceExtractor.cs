@@ -21,7 +21,7 @@ public static partial class ReferenceExtractor
     [
         "python", "javascript", "typescript", "csharp", "go", "rust",
         "java", "kotlin", "ruby", "perl", "c", "cpp", "php", "swift",
-        "dart", "scala", "elixir", "lua", "vb", "fsharp", "sql", "cobol", "batch",
+        "dart", "scala", "elixir", "lua", "commonlisp", "racket", "vb", "fsharp", "sql", "cobol", "batch",
         "assembly",
         "r", "powershell", "shell", "haskell",
         "gradle", "terraform", "protobuf", "dockerfile", "makefile",
@@ -841,6 +841,9 @@ public static partial class ReferenceExtractor
         var luaReferenceLines = language == "lua"
             ? LuaReferenceExtractor.MaskLongCommentAndStringLines(lines)
             : null;
+        var lispReferenceLines = language is "commonlisp" or "racket"
+            ? SymbolExtractor.MaskLispCodeLines(lines)
+            : null;
         string[]? luaPreparedLines = null;
         if (luaReferenceLines != null)
         {
@@ -1013,7 +1016,7 @@ public static partial class ReferenceExtractor
         {
             var lineNumber = i + 1;
             var originalLine = lines[i];
-            var preparedLine = luaPreparedLines?[i] ?? preparedLines[i];
+            var preparedLine = luaPreparedLines?[i] ?? lispReferenceLines?[i] ?? preparedLines[i];
             var csharpAttrRangesOnLine = csharpAttrRanges?[i];
             var csharpAttrTopLevelOnLine = csharpAttrTopLevelRanges?[i];
             if (language == "csharp"
@@ -1762,7 +1765,20 @@ public static partial class ReferenceExtractor
                     ResolveContainerForCall);
 
             var matchedCallIndices = new HashSet<int>();
-            if (language is "powershell")
+            if (language is "commonlisp" or "racket")
+            {
+                LispReferenceExtractor.EmitReferences(
+                    language,
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    ResolveContainerForCall,
+                    definitionNames);
+            }
+            else if (language is "powershell")
             {
                 PowerShellReferenceExtractor.EmitCallReferences(preparedLine, AddCallLikeReference);
             }

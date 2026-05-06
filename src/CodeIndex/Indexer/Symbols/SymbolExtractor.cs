@@ -1451,26 +1451,6 @@ public static partial class SymbolExtractor
             new("interface", new Regex(@"^\s*defprotocol\s+(?<name>[\w.]+)", RegexOptions.Compiled), BodyStyle.ElixirEnd),
             new("import",   new Regex(@"^\s*(?:import|alias|use|require)\s+(?<name>[\w.]+)", RegexOptions.Compiled), BodyStyle.None),
         ],
-        ["commonlisp"] =
-        [
-            new("namespace", new Regex(@"^\s*\(\s*defpackage\s+(?<name>[^\s()]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("import",    new Regex(@"^\s*\(\s*in-package\s+(?<name>[^\s()]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("import",    new Regex(@"^\s*\(\s*use-package\s+(?<name>[^\s()]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("import",    new Regex(@"^\s*\(\s*(?:shadowing-)?import\s+['""]?(?<name>[^\s()'""]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("class",     new Regex(@"^\s*\(\s*defclass\s+(?<name>[^\s()]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("struct",    new Regex(@"^\s*\(\s*defstruct\s+(?<name>[^\s()]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("property",  new Regex(@"^\s*\(\s*(?:defparameter|defvar|defconstant)\s+(?<name>[^\s()]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("function",  new Regex(@"^\s*\(\s*(?:defun|defmacro|defgeneric|defmethod)\s+(?<name>[^\s()]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-        ],
-        ["racket"] =
-        [
-            new("namespace", new Regex(@"^\s*\(\s*module(?:\*|\+)?\s+(?<name>[^\s()]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("function",  new Regex(@"^\s*\(\s*define(?:-syntax(?:-rule|-parser|es)?|-values)?\s+\(\s*(?<name>[^\s()]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("property",  new Regex(@"^\s*\(\s*define(?:-syntax(?:-rule|-parser|es)?|-values|-for-syntax)?\s+(?<name>[^\s()()]+)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("struct",    new Regex(@"^\s*\(\s*struct\s+(?<name>[^\s()]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("import",    new Regex(@"^\s*\(\s*require\s+(?<name>[^\s()]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("import",    new Regex(@"^\s*\(\s*provide\s+(?<name>[^\s()]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-        ],
         ["dart"] =
         [
             new("function", new Regex(@"^\s*(?!return\b|await\b|const\b|new\b|throw\b|yield\b|if\b|else\b|for\b|while\b|switch\b|case\b|catch\b|do\b|try\b|finally\b|class\b|enum\b|mixin\b|extension\b|typedef\b|library\b|part\b|import\b|export\b)(?:(?:static|abstract|override|external)\s+)*(?<rt>\w[\w<>,\s\?]*?)\s+(?<name>(?!if\b|else\b|for\b|while\b|switch\b|case\b|class\b|enum\b|mixin\b|extension\b|typedef\b|library\b|part\b|import\b|export\b|abstract\b|void\b|var\b|final\b|late\b|const\b|new\b|return\b|throw\b|yield\b|await\b|extends\b|implements\b|with\b|on\b|is\b|as\b|in\b|of\b|super\b|this\b)\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "rt"),
@@ -1809,7 +1789,7 @@ public static partial class SymbolExtractor
     /// シンボル抽出パターンを持つ言語のセットを返す。
     /// </summary>
     public static IReadOnlyCollection<string> GetSupportedLanguages()
-      => PatternCache.Keys.Concat(new[] { "vue", "svelte", "markdown" }).ToArray();
+      => PatternCache.Keys.Concat(new[] { "commonlisp", "racket", "vue", "svelte", "markdown" }).ToArray();
 
     private static string? NormalizeLanguage(string? lang)
         => lang is "vue" or "svelte" ? "typescript" : lang;
@@ -1865,9 +1845,6 @@ public static partial class SymbolExtractor
             return markdownSymbols;
         }
 
-        if (!PatternCache.TryGetValue(lang, out var patterns))
-            return [];
-
         // Normalize CRLF / CR to LF first so direct callers that bypass FileIndexer
         // still present a `\n`-only content stream, and then strip line-leading
         // UTF-8 BOM (U+FEFF) defensively so `^\s*`-anchored patterns match on
@@ -1889,6 +1866,12 @@ public static partial class SymbolExtractor
         var pythonModulePrefix = lang == "python"
             ? GetPythonModulePrefix(filePath)
             : null;
+
+        if (lang is "commonlisp" or "racket")
+            return ExtractLispSymbols(fileId, lang, lines);
+
+        if (!PatternCache.TryGetValue(lang, out var patterns))
+            return [];
 
         // HTML has no brace/indent-scoped bodies, so the generic pattern loop's
         // "first match per line" semantics drop every additional symbol on the
