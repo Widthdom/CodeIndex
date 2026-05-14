@@ -463,6 +463,63 @@ public class ConcurrencyTests : IDisposable
             $"Sample: {string.Join(", ", violations.Take(3).Select(v => $"{v.kind}: scoped={v.scoped:o} workspace={v.workspace:o} hasEntrypoint={v.hasEntrypoint}"))}");
     }
 
+    [Fact]
+    public async Task SetReadyBit_ConcurrentWriters_DoNotLoseFlags()
+    {
+        // Issue #1513 regression: SetReadyBit's PRAGMA user_version read-modify-write
+        // must serialise across writers. Without an immediate write lock, two parallel
+        // cdidx processes can each read the same prior value, OR in their own flag,
+        // and the slower writer's PRAGMA write clobbers the faster writer's flag.
+        // The fix wraps the read+write in BEGIN IMMEDIATE; this test races MarkGraphReady
+        // against MarkIssuesReady from two separate connections across many iterations
+        // so a regression to non-atomic behaviour drops at least one flag with high probability.
+        // Issue #1513 回帰テスト: SetReadyBit の PRAGMA user_version read-modify-write が
+        // 書き込みプロセス間で直列化されることを検証する。BEGIN IMMEDIATE が無いと
+        // 2 つの並列 writer が同じ prior 値を読み、それぞれの flag を OR して書き戻す際に
+        // 後勝ちで一方の flag が消える。多くの反復で MarkGraphReady と MarkIssuesReady を
+        // 競合させ、回帰時にどちらかの flag が落ちる確率を高める。
+        const int iterations = 50;
+        var lostFlagIterations = new List<(int iteration, int finalUserVersion)>();
+        for (int i = 0; i < iterations; i++)
+        {
+            using (var resetCmd = _db.Connection.CreateCommand())
+            {
+                resetCmd.CommandText = "PRAGMA user_version = 0";
+                resetCmd.ExecuteNonQuery();
+            }
+
+            using var start = new ManualResetEventSlim(false);
+            var graphTask = Task.Run(() =>
+            {
+                using var graphDb = new DbContext(_dbPath);
+                var w = new DbWriter(graphDb.Connection);
+                start.Wait();
+                w.MarkGraphReady();
+            });
+            var issuesTask = Task.Run(() =>
+            {
+                using var issuesDb = new DbContext(_dbPath);
+                var w = new DbWriter(issuesDb.Connection);
+                start.Wait();
+                w.MarkIssuesReady();
+            });
+
+            start.Set();
+            await Task.WhenAll(graphTask, issuesTask);
+
+            var finalVersion = _db.GetUserVersion();
+            bool graphSet = (finalVersion & DbContext.GraphReadyFlag) != 0;
+            bool issuesSet = (finalVersion & DbContext.IssuesReadyFlag) != 0;
+            if (!graphSet || !issuesSet)
+                lostFlagIterations.Add((i, finalVersion));
+        }
+
+        Assert.True(
+            lostFlagIterations.Count == 0,
+            $"SetReadyBit lost a flag in {lostFlagIterations.Count}/{iterations} iterations. " +
+            $"Sample: {string.Join(", ", lostFlagIterations.Take(3).Select(v => $"i={v.iteration} user_version={v.finalUserVersion}"))}");
+    }
+
     private static List<ReferenceRecord> BuildReferenceBatch(long fileId, string label, int count)
     {
         var refs = new List<ReferenceRecord>(count);

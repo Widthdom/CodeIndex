@@ -2027,11 +2027,40 @@ public class DbWriter
 
     private void SetReadyBit(int flag)
     {
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = "PRAGMA user_version";
-        var raw = cmd.ExecuteScalar();
-        int current = raw is long l ? (int)l : (raw is int i ? i : 0);
-        Execute($"PRAGMA user_version = {current | flag}");
+        // The ready bits share a single PRAGMA user_version word, so two parallel
+        // cdidx writers (e.g. CI + a local rebuild) can each read the same prior
+        // value, OR in their own flag, and the slower writer's PRAGMA write clobbers
+        // the faster writer's flag. Wrap the read-modify-write in BEGIN IMMEDIATE so
+        // SQLite's reserved write lock serialises it across processes (issue #1513).
+        bool ownTransaction = !IsInTransaction();
+        if (ownTransaction)
+            Execute("BEGIN IMMEDIATE");
+        try
+        {
+            int current;
+            using (var read = _conn.CreateCommand())
+            {
+                read.CommandText = "PRAGMA user_version";
+                var raw = read.ExecuteScalar();
+                current = raw is long l ? (int)l : (raw is int i ? i : 0);
+            }
+            int next = current | flag;
+            if (next != current)
+                Execute($"PRAGMA user_version = {next}");
+            if (ownTransaction)
+            {
+                Execute("COMMIT");
+                ownTransaction = false;
+            }
+        }
+        catch
+        {
+            if (ownTransaction)
+            {
+                try { Execute("ROLLBACK"); } catch { /* best effort */ }
+            }
+            throw;
+        }
     }
 
     private static List<string> BuildSupportedLanguageParameters(SqliteCommand cmd, IReadOnlyCollection<string> supportedLanguages)
