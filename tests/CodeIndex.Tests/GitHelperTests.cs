@@ -214,18 +214,24 @@ public class GitHelperTests : IDisposable
     public async Task GetChangedFilesFromCommit_HandlesLargeOutputWithoutDeadlock()
     {
         // Regression for #1497: the helper must read stdout/stderr concurrently so a commit
-        // whose changed-file list exceeds the OS pipe buffer (typically 64 KiB) cannot
-        // deadlock the process. Each filename is long enough that ~2000 files easily push
-        // diff-tree --name-only output past the buffer threshold.
-        // #1497 リグレッション: stdout/stderr を同時に汲み出すため、変更ファイル一覧が
-        // パイプバッファ（通常 64KiB）を超えるコミットでもデッドロックしない。
+        // whose changed-file list exceeds the OS pipe buffer cannot deadlock the process.
+        // Windows anonymous pipes default to ~4 KiB and POSIX pipes to ~64 KiB; we push past
+        // the POSIX threshold with long filenames rather than many files so NTFS file
+        // creation on Windows CI does not balloon the runtime.
+        // #1497 リグレッション: stdout/stderr を同時に汲み出すためデッドロックしない。
+        // POSIX のパイプバッファ(~64KiB)を超えるサイズをファイル数ではなく
+        // 長いファイル名で稼ぐことで、Windows NTFS のファイル作成コストを抑える。
         var repoDir = CreateGitRepo();
 
-        const int fileCount = 2000;
+        const int fileCount = 500;
+        var namePadding = new string('x', 130);
         var expected = new List<string>(fileCount);
         for (var i = 0; i < fileCount; i++)
         {
-            var name = $"file_with_a_reasonably_long_name_to_exceed_pipe_buffer_{i:0000}.txt";
+            // ≈140 chars + newline per filename × 500 ≈ 70 KiB of diff-tree --name-only output,
+            // comfortably above the 64 KiB POSIX pipe buffer.
+            // ≈140文字+改行 × 500 ≈ 70 KiB の出力で 64 KiB の POSIX パイプバッファを超える。
+            var name = $"f_{namePadding}_{i:0000}.txt";
             File.WriteAllText(Path.Combine(repoDir, name), "x\n");
             expected.Add(name);
         }
