@@ -279,6 +279,59 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SearchReferences_TerraformDottedQueriesResolveToBareNames_Issue1502()
+    {
+        // Issue #1502: references stored by the Terraform extractor use bare symbol names
+        // (e.g. "instances", "regions", "max_size"), but users naturally query the HCL form
+        // (`var.instances`, `local.regions`). Without prefix normalization at the query
+        // layer, `cdidx references var.instances` returned nothing.
+        // Issue #1502: Terraform extractor は bare 名（"instances" 等）で参照を格納するが、
+        // 利用者は HCL 形式（`var.instances` 等）で問い合わせる。クエリ層で prefix を
+        // 取り除かないと、`cdidx references var.instances` が空になる。
+        InsertIndexedFile(
+            "main.tf",
+            "terraform",
+            """
+            variable "instances" {
+              type = map(object({ size = string }))
+            }
+
+            variable "max_size" {
+              type = number
+            }
+
+            locals {
+              regions = ["us-east-1", "us-west-2"]
+              suffix  = "demo"
+            }
+
+            output "ids" {
+              value = var.max_size
+            }
+
+            resource "aws_instance" "fleet" {
+              for_each = var.instances
+              count    = length(local.regions)
+              tags     = local.suffix
+            }
+            """);
+
+        var varInstances = _reader.SearchReferences("var.instances", lang: "terraform", exact: true);
+        Assert.Contains(varInstances, reference => reference.SymbolName == "instances" && reference.Path == "main.tf");
+
+        var localRegions = _reader.SearchReferences("local.regions", lang: "terraform", exact: true);
+        Assert.Contains(localRegions, reference => reference.SymbolName == "regions" && reference.Path == "main.tf");
+
+        var varMaxSize = _reader.SearchReferences("var.max_size", lang: "terraform", exact: true);
+        Assert.Contains(varMaxSize, reference => reference.SymbolName == "max_size" && reference.Path == "main.tf");
+
+        // Lang inference also works when caller omits lang (extension-only path).
+        // lang を省略した場合（拡張子推論のみ）も解決できることを確認する。
+        var inferredLocalSuffix = _reader.SearchReferences("local.suffix", lang: null, exact: true);
+        Assert.Contains(inferredLocalSuffix, reference => reference.SymbolName == "suffix" && reference.Path == "main.tf");
+    }
+
+    [Fact]
     public void SearchSymbols_JavaScriptCommonJsBracketExportQueriesResolveToLeafNames()
     {
         InsertIndexedFile(
@@ -7969,6 +8022,77 @@ public class DbReaderTests : IDisposable
         var result = _reader.AnalyzeImpact("MyAuditAttribute", maxDepth: 3, limit: 20, lang: "csharp");
 
         Assert.Contains(result.FileImpacts, f => f.SourcePath == "src/Svc.cs" && f.TargetPath == "src/MyAuditAttribute.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencyHints_InvokeReferenceAnchorsFileImpactWithoutStructuredTypeEvidence()
+    {
+        // issue #1881: a `call` / `instantiate` reference to the resolved target name in
+        // the source file is a strictly stronger anchor than the metadata-bypass
+        // widening for the file-level `impact` heuristic, and was previously ignored
+        // when no structured type evidence (signature / return-type token) existed in
+        // the same file. The reordered candidate loop now consults call/instantiate
+        // evidence before falling through to the metadata bypass, so a file that
+        // genuinely instantiates `MyAuditAttribute` surfaces in `impact MyAuditAttribute`
+        // even when the call site's container_name is missing — without depending on
+        // the looser ambiguity-guarded attribute / annotation widening.
+        // issue #1881: ソースファイル内の `call` / `instantiate` 参照は signature /
+        // return 型トークンに比べてより強い anchor だが、従来は同ファイルに structured
+        // 型エビデンスが無いと file-level `impact` heuristic で無視されていた。
+        // 並び替えた candidate loop は metadata bypass にフォールスルーする前に
+        // call/instantiate エビデンスを評価するため、container_name が欠落した
+        // call site でも `MyAuditAttribute` を実際に instantiate しているファイルが
+        // `impact MyAuditAttribute` の結果に現れる — 曖昧性ガード付きの attribute /
+        // annotation 広げに依存せずに済む。
+        InsertIndexedFile("src/MyAuditAttribute.java", "java",
+            """
+            package src;
+
+            public class MyAuditAttribute {
+            }
+            """);
+        // Pure consumer with no structured type evidence (no method signature mentioning
+        // `MyAuditAttribute`, no return-type token). The synthetic `instantiate`
+        // reference below carries a NULL container so the BFS caller predicate
+        // (`r.container_name IS NOT NULL OR (f.lang = 'csharp' AND r.container_name IS NULL)`)
+        // misses it for Java — forcing the impact heuristic path to evaluate the
+        // candidate. Without the issue #1881 fix, the heuristic would drop the edge
+        // for lack of structured-type evidence; with the fix, the call-graph
+        // reference itself anchors the file as a dependent.
+        // structured 型エビデンスが無い純粋な consumer（`MyAuditAttribute` を含む
+        // method signature も return 型も無い）。下で挿入する `instantiate` 参照は
+        // container を NULL にしてあり、Java では BFS の caller 述語
+        // (`r.container_name IS NOT NULL OR (f.lang = 'csharp' AND r.container_name IS NULL)`)
+        // に拾われない。そのため impact heuristic 経路で candidate が評価される。
+        // issue #1881 修正前は structured 型エビデンスが無く edge が落ちていたが、
+        // 修正後は call-graph 参照自体が file を依存元として anchor する。
+        var svcFileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/Svc.java",
+            Lang = "java",
+            Size = 32,
+            Lines = 5,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertReferences(new[]
+        {
+            new ReferenceRecord
+            {
+                FileId = svcFileId,
+                SymbolName = "MyAuditAttribute",
+                ReferenceKind = "instantiate",
+                Line = 4,
+                Column = 9,
+                Context = "        new MyAuditAttribute();",
+                ContainerKind = null,
+                ContainerName = null,
+            },
+        });
+
+        var result = _reader.AnalyzeImpact("MyAuditAttribute", maxDepth: 3, limit: 20, lang: "java");
+
+        Assert.Contains(result.FileImpacts, f =>
+            f.SourcePath == "src/Svc.java" && f.TargetPath == "src/MyAuditAttribute.java");
     }
 
     [Fact]

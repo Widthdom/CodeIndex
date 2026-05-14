@@ -54,16 +54,22 @@ public static class IndexCommandRunner
 
         if (options.Rebuild && isUpdateMode)
         {
+            // Enumerate the three mutually-exclusive usage forms so the conflict error
+            // does not require a second `--help` round-trip to find the correct command.
+            const string rebuildConflictSynopsis =
+                "`cdidx index <projectPath> --rebuild`, "
+                + "`cdidx index <projectPath> --commits <id> [id ...]`, "
+                + "or `cdidx index <projectPath> --files <path> [path ...]`";
             if (options.Json)
                 Console.WriteLine(JsonSerializer.Serialize(new CommandErrorJsonResult(
                     "error",
                     "--rebuild cannot be used with --commits or --files (rebuild requires a full rescan)",
-                    "Drop `--rebuild` for partial updates, or rerun `cdidx index <projectPath> --rebuild` for a full rescan."),
+                    "Use one of: " + rebuildConflictSynopsis + "."),
                     jsonContext.CommandErrorJsonResult));
             else
             {
                 Console.Error.WriteLine("Error: --rebuild cannot be used with --commits or --files (rebuild requires a full rescan)");
-                Console.Error.WriteLine("Hint: drop `--rebuild` for `--commits`/`--files`, or rerun `cdidx index <projectPath> --rebuild` for a full rescan.");
+                Console.Error.WriteLine("Hint: use one of: " + rebuildConflictSynopsis + ".");
             }
             return CommandExitCodes.UsageError;
         }

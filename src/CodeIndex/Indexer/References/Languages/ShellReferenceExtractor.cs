@@ -82,6 +82,24 @@ internal static class ShellReferenceExtractor
         }
 
         var shellSourceLine = StripComment(originalLine);
+
+        // CommandCallRegex requires a statement-start anchor (line start, `;`, `&&`, etc.),
+        // so calls embedded in `$(...)` command substitution or `` `...` `` backticks are
+        // never matched against `preparedLine` alone. PrepareLine also blanks backtick
+        // spans via StringLiteralRegex. Re-scan the raw line so nested `helper` calls in
+        // `result=$(helper)` or ``output=`helper arg` `` still emit call edges (#1499).
+        EmitSubstitutionCalls(
+            shellSourceLine,
+            0,
+            shellSourceLine.Length,
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            callableNames,
+            resolveContainerForCall);
+
         foreach (Match match in SourceReferenceRegex.Matches(shellSourceLine))
         {
             var name = NormalizeSourceTargetToken(match.Groups["name"].Value);
@@ -127,6 +145,247 @@ internal static class ShellReferenceExtractor
                 searchIndex = aliasIndex + aliasName.Length;
             }
         }
+    }
+
+    private static void EmitSubstitutionCalls(
+        string line,
+        int spanStart,
+        int spanEnd,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        HashSet<string>? callableNames,
+        Func<int, SymbolRecord?> resolveContainerForCall)
+    {
+        if (callableNames == null || callableNames.Count == 0)
+            return;
+        if (spanStart < 0 || spanEnd > line.Length || spanStart >= spanEnd)
+            return;
+
+        var i = spanStart;
+        var inSingleQuote = false;
+        var inDoubleQuote = false;
+        while (i < spanEnd)
+        {
+            var ch = line[i];
+
+            if (inSingleQuote)
+            {
+                if (ch == '\'')
+                    inSingleQuote = false;
+                i++;
+                continue;
+            }
+
+            if (ch == '\\' && i + 1 < spanEnd)
+            {
+                i += 2;
+                continue;
+            }
+
+            if (!inDoubleQuote && ch == '\'')
+            {
+                inSingleQuote = true;
+                i++;
+                continue;
+            }
+
+            if (ch == '"')
+            {
+                inDoubleQuote = !inDoubleQuote;
+                i++;
+                continue;
+            }
+
+            if (ch == '$' && i + 1 < spanEnd && line[i + 1] == '(')
+            {
+                var innerStart = i + 2;
+                var innerEnd = FindSubstitutionParenClose(line, innerStart, spanEnd);
+                if (innerEnd < 0)
+                    return;
+
+                ScanSubstitutionInner(
+                    line,
+                    innerStart,
+                    innerEnd,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    callableNames,
+                    resolveContainerForCall);
+                i = innerEnd + 1;
+                continue;
+            }
+
+            if (!inSingleQuote && ch == '`')
+            {
+                var innerStart = i + 1;
+                var innerEnd = FindBacktickClose(line, innerStart, spanEnd);
+                if (innerEnd < 0)
+                    return;
+
+                ScanSubstitutionInner(
+                    line,
+                    innerStart,
+                    innerEnd,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    callableNames,
+                    resolveContainerForCall);
+                i = innerEnd + 1;
+                continue;
+            }
+
+            i++;
+        }
+    }
+
+    private static void ScanSubstitutionInner(
+        string line,
+        int innerStart,
+        int innerEnd,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        HashSet<string> callableNames,
+        Func<int, SymbolRecord?> resolveContainerForCall)
+    {
+        if (innerStart >= innerEnd)
+            return;
+
+        // CommandCallRegex anchors against statement-start tokens (`^`, `;`, `&&`, ...).
+        // Prepend `;` so the first identifier inside the substitution is recognized as a
+        // command position even though it is not literally at the start of a line.
+        var inner = line.Substring(innerStart, innerEnd - innerStart);
+        var virtualLine = ";" + inner;
+        foreach (Match match in CommandCallRegex.Matches(virtualLine))
+        {
+            var name = match.Groups["name"].Value;
+            if (!callableNames.Contains(name))
+                continue;
+
+            // -1 to undo the synthetic `;` prefix when mapping back to the real line.
+            var callIndex = innerStart + match.Groups["name"].Index - 1;
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                name,
+                callIndex,
+                "call",
+                context,
+                lineNumber,
+                resolveContainerForCall(callIndex));
+        }
+
+        EmitSubstitutionCalls(
+            line,
+            innerStart,
+            innerEnd,
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            callableNames,
+            resolveContainerForCall);
+    }
+
+    private static int FindSubstitutionParenClose(string line, int start, int spanEnd)
+    {
+        var depth = 1;
+        var i = start;
+        var inSingleQuote = false;
+        var inDoubleQuote = false;
+        while (i < spanEnd)
+        {
+            var ch = line[i];
+
+            if (inSingleQuote)
+            {
+                if (ch == '\'')
+                    inSingleQuote = false;
+                i++;
+                continue;
+            }
+
+            if (ch == '\\' && i + 1 < spanEnd)
+            {
+                i += 2;
+                continue;
+            }
+
+            if (!inDoubleQuote && ch == '\'')
+            {
+                inSingleQuote = true;
+                i++;
+                continue;
+            }
+
+            if (ch == '"')
+            {
+                inDoubleQuote = !inDoubleQuote;
+                i++;
+                continue;
+            }
+
+            if (ch == '$' && i + 1 < spanEnd && line[i + 1] == '(')
+            {
+                depth++;
+                i += 2;
+                continue;
+            }
+
+            if (!inDoubleQuote && ch == '(')
+            {
+                depth++;
+                i++;
+                continue;
+            }
+
+            if (ch == ')')
+            {
+                depth--;
+                if (depth == 0)
+                    return i;
+                i++;
+                continue;
+            }
+
+            i++;
+        }
+
+        return -1;
+    }
+
+    private static int FindBacktickClose(string line, int start, int spanEnd)
+    {
+        var i = start;
+        while (i < spanEnd)
+        {
+            var ch = line[i];
+            if (ch == '\\' && i + 1 < spanEnd)
+            {
+                i += 2;
+                continue;
+            }
+
+            if (ch == '`')
+                return i;
+
+            i++;
+        }
+
+        return -1;
     }
 
     private static string NormalizeSourceTargetToken(string token)

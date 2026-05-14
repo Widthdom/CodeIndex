@@ -15,10 +15,25 @@ internal static class CssReferenceExtractor
         @"@extend\s+(?<name>[%.][A-Za-z_][\w-]*)",
         RegexOptions.Compiled);
 
+    private static readonly Regex ScssIncludeReferenceRegex = new(
+        @"@include\s+(?<name>[A-Za-z_][\w-]*)",
+        RegexOptions.Compiled);
+
     private static readonly Regex CssCustomPropertyReferenceRegex = new(@"\bvar\(\s*--(?<name>[\w-]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex CssAnimationNameValueRegex = new(@"\banimation-name\s*:\s*(?<value>[^;{}]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex CssAnimationShorthandValueRegex = new(@"\banimation\s*:\s*(?<value>[^;{}]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex CssClassSelectorReferenceRegex = new(@"(?<![A-Za-z0-9_-])\.(?<name>[\w-]+)", RegexOptions.Compiled);
+    // First char restricted to letter/`_`/`-` so numeric hex colors like `#336699`
+    // do not match. Letter-only hex colors (`#fff`) are still ambiguous; the
+    // emission site additionally requires a selector-position context to skip them.
+    // 数値開始の hex color (`#336699`) を弾くため最初の文字を letter / `_` / `-` に限定する。
+    // `#fff` のような文字だけの hex color は曖昧なので、呼び出し側でセレクタ位置の
+    // コンテキストをさらに要求して除外する。
+    private static readonly Regex CssIdSelectorReferenceRegex = new(@"(?<![A-Za-z0-9_-])#(?<name>[A-Za-z_-][\w-]*)", RegexOptions.Compiled);
+    private static readonly Regex CssImportReferenceRegex = new(
+        @"@import\s+(?:url\(\s*)?(?:""(?<name>[^""]+)""|'(?<name>[^']+)'|(?<name>[^\s)""';]+))",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex CssInlineBlockCommentRegex = new(@"/\*.*?\*/", RegexOptions.Compiled);
 
     private static readonly ReferencePattern[] CssReferencePatterns =
     [
@@ -29,6 +44,7 @@ internal static class CssReferenceExtractor
     [
         new(ScssVariableReferenceRegex, "call", SkipVariableDeclarations: true),
         new(ScssExtendReferenceRegex, "call"),
+        new(ScssIncludeReferenceRegex, "call"),
     ];
 
     private static readonly HashSet<string> CssAnimationShorthandIgnoredTokens = new(StringComparer.OrdinalIgnoreCase)
@@ -42,6 +58,7 @@ internal static class CssReferenceExtractor
 
     public static void EmitCss(
         string preparedLine,
+        string originalLine,
         string context,
         int lineNumber,
         List<ReferenceRecord> references,
@@ -90,6 +107,31 @@ internal static class CssReferenceExtractor
             fileId,
             definitionNames,
             container);
+
+        // `@import "theme.css";` paths are stripped by the shared string-literal masker, so the
+        // regex must scan the original (comment-stripped) line. Comment-strip locally to avoid
+        // false positives on `/* @import "fake.css"; */`.
+        // 共有の文字列リテラルマスカーが `@import "theme.css";` のパスを潰すため、@import の
+        // パターンは元行（ブロックコメント除去後）に対して走らせる。`/* @import "fake.css"; */`
+        // のような偽陽性を避けるため、ここでローカルに `/* */` を除去する。
+        var importScanLine = CssInlineBlockCommentRegex.Replace(originalLine, " ");
+        foreach (Match match in CssImportReferenceRegex.Matches(importScanLine))
+        {
+            var nameGroup = match.Groups["name"];
+            if (!nameGroup.Success || nameGroup.Value.Length == 0)
+                continue;
+
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                nameGroup.Value,
+                nameGroup.Index,
+                "import",
+                context,
+                lineNumber,
+                container);
+        }
     }
 
     public static void EmitScss(
@@ -308,6 +350,15 @@ internal static class CssReferenceExtractor
         HashSet<string>? definitionNames,
         SymbolRecord? container)
     {
+        // ID selectors (`#name`) are emitted only in selector-position segments
+        // because `#fff` / `#abc123` color literals also match the regex. A
+        // segment is treated as selector position when it terminates at `{`
+        // on the current line (clear selector → block opener) or when the
+        // entire line is a selector-list continuation (trimmed line ends with `,`).
+        // ID セレクタ (`#name`) は `#fff` 等の color literal とパターンが衝突するため、
+        // セレクタ位置のセグメントでのみ参照を発行する。セグメントが本行内で `{` で
+        // 終わる場合、または行末カンマで selector list が継続する場合をセレクタ位置とみなす。
+        var isSelectorContinuationLine = preparedLine.TrimEnd().EndsWith(',');
         var segmentStart = 0;
         while (segmentStart < preparedLine.Length)
         {
@@ -320,10 +371,15 @@ internal static class CssReferenceExtractor
             if (trimmedStart < segmentEnd && preparedLine[trimmedStart] != '@')
             {
                 var selectorSegment = preparedLine[trimmedStart..segmentEnd];
+                var isIdSelectorContext = braceIndex >= 0
+                    || (segmentStart == 0 && isSelectorContinuationLine);
                 foreach (var (partStart, partEnd) in EnumerateCssSelectorListSegments(selectorSegment))
                 {
                     var selectorPart = selectorSegment[partStart..partEnd];
-                    if (!ContainsCssClassSelectorReferenceCandidate(selectorPart))
+                    var hasClassCandidate = ContainsCssClassSelectorReferenceCandidate(selectorPart);
+                    var hasIdCandidate = isIdSelectorContext
+                        && ContainsCssIdSelectorReferenceCandidate(selectorPart);
+                    if (!hasClassCandidate && !hasIdCandidate)
                         continue;
 
                     var selectorPartTrimStart = 0;
@@ -331,22 +387,36 @@ internal static class CssReferenceExtractor
                         selectorPartTrimStart++;
 
                     var selectorPartBody = selectorPart[selectorPartTrimStart..];
-                    foreach (Match match in CssClassSelectorReferenceRegex.Matches(selectorPartBody))
-                    {
-                        var nameGroup = match.Groups["name"];
-                        var name = "." + nameGroup.Value;
-                        if (definitionNames != null && definitionNames.Contains(name))
-                            continue;
 
-                        ReferenceExtractor.AddReference(
+                    if (hasClassCandidate)
+                    {
+                        EmitCssSelectorMatches(
+                            CssClassSelectorReferenceRegex,
+                            selectorPartBody,
+                            ".",
+                            trimmedStart + partStart + selectorPartTrimStart,
+                            context,
+                            lineNumber,
                             references,
                             seen,
                             fileId,
-                            name,
-                            trimmedStart + partStart + selectorPartTrimStart + match.Groups["name"].Index - 1,
-                            "reference",
+                            definitionNames,
+                            container);
+                    }
+
+                    if (hasIdCandidate)
+                    {
+                        EmitCssSelectorMatches(
+                            CssIdSelectorReferenceRegex,
+                            selectorPartBody,
+                            "#",
+                            trimmedStart + partStart + selectorPartTrimStart,
                             context,
                             lineNumber,
+                            references,
+                            seen,
+                            fileId,
+                            definitionNames,
                             container);
                     }
                 }
@@ -356,6 +426,39 @@ internal static class CssReferenceExtractor
                 break;
 
             segmentStart = braceIndex + 1;
+        }
+    }
+
+    private static void EmitCssSelectorMatches(
+        Regex regex,
+        string selectorPartBody,
+        string prefix,
+        int baseColumn,
+        string context,
+        int lineNumber,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        HashSet<string>? definitionNames,
+        SymbolRecord? container)
+    {
+        foreach (Match match in regex.Matches(selectorPartBody))
+        {
+            var nameGroup = match.Groups["name"];
+            var name = prefix + nameGroup.Value;
+            if (definitionNames != null && definitionNames.Contains(name))
+                continue;
+
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                name,
+                baseColumn + nameGroup.Index - 1,
+                "reference",
+                context,
+                lineNumber,
+                container);
         }
     }
 
@@ -403,6 +506,12 @@ internal static class CssReferenceExtractor
     }
 
     private static bool ContainsCssClassSelectorReferenceCandidate(string selectorPart)
+        => ContainsCssSelectorReferenceCandidate(selectorPart, '.');
+
+    private static bool ContainsCssIdSelectorReferenceCandidate(string selectorPart)
+        => ContainsCssSelectorReferenceCandidate(selectorPart, '#');
+
+    private static bool ContainsCssSelectorReferenceCandidate(string selectorPart, char prefix)
     {
         var bracketDepth = 0;
         char quote = '\0';
@@ -434,7 +543,7 @@ internal static class CssReferenceExtractor
                 continue;
             }
 
-            if (bracketDepth == 0 && ch == '.')
+            if (bracketDepth == 0 && ch == prefix)
                 return true;
         }
 

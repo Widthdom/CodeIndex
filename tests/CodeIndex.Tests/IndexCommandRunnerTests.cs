@@ -85,8 +85,10 @@ public class IndexCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
             Assert.Contains("--rebuild cannot be used with --commits or --files", stderr);
-            Assert.Contains("drop `--rebuild`", stderr);
-            Assert.Contains("cdidx index <projectPath> --rebuild", stderr);
+            Assert.Contains("Hint: use one of:", stderr);
+            Assert.Contains("`cdidx index <projectPath> --rebuild`", stderr);
+            Assert.Contains("`cdidx index <projectPath> --commits <id> [id ...]`", stderr);
+            Assert.Contains("`cdidx index <projectPath> --files <path> [path ...]`", stderr);
         }
         finally
         {
@@ -105,7 +107,12 @@ public class IndexCommandRunnerTests
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
             Assert.Equal("error", json.GetProperty("status").GetString());
             Assert.Contains("--rebuild cannot be used with --commits or --files", json.GetProperty("message").GetString());
-            Assert.Contains("cdidx index <projectPath> --rebuild", json.GetProperty("hint").GetString());
+            var hint = json.GetProperty("hint").GetString();
+            Assert.NotNull(hint);
+            Assert.StartsWith("Use one of:", hint);
+            Assert.Contains("`cdidx index <projectPath> --rebuild`", hint);
+            Assert.Contains("`cdidx index <projectPath> --commits <id> [id ...]`", hint);
+            Assert.Contains("`cdidx index <projectPath> --files <path> [path ...]`", hint);
         }
         finally
         {

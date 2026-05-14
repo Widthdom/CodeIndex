@@ -796,6 +796,116 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_Shell_DetectsCallsInsideCommandSubstitution()
+    {
+        const string content = """
+            helper() {
+              echo helper
+            }
+
+            other() {
+              echo other
+            }
+
+            run() {
+              result=$(helper)
+              count=$(helper arg)
+              if [ -n "$(other)" ]; then
+                :
+              fi
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "shell", content);
+        var references = ReferenceExtractor.Extract(1, "shell", content, symbols);
+
+        Assert.Equal(3, references.Count(reference => reference.ReferenceKind == "call"));
+        Assert.Equal(2, references.Count(reference =>
+            reference.SymbolName == "helper"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "run"));
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "other"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "run");
+    }
+
+    [Fact]
+    public void Extract_Shell_DetectsCallsInsideBackticks()
+    {
+        const string content = """
+            helper() {
+              echo helper
+            }
+
+            run() {
+              output=`helper arg`
+              echo "wrapped `helper`"
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "shell", content);
+        var references = ReferenceExtractor.Extract(1, "shell", content, symbols);
+
+        Assert.Equal(2, references.Count(reference => reference.ReferenceKind == "call"));
+        Assert.Equal(2, references.Count(reference =>
+            reference.SymbolName == "helper"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "run"));
+    }
+
+    [Fact]
+    public void Extract_Shell_DetectsCallsInsideNestedCommandSubstitution()
+    {
+        const string content = """
+            outer() {
+              echo outer
+            }
+
+            inner() {
+              echo inner
+            }
+
+            run() {
+              result=$(outer $(inner))
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "shell", content);
+        var references = ReferenceExtractor.Extract(1, "shell", content, symbols);
+
+        Assert.Equal(2, references.Count(reference => reference.ReferenceKind == "call"));
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "outer"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "run");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "inner"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "run");
+    }
+
+    [Fact]
+    public void Extract_Shell_IgnoresSingleQuotedCommandSubstitutionLookAlikes()
+    {
+        const string content = """
+            helper() {
+              echo helper
+            }
+
+            run() {
+              literal='$(helper)'
+              also='`helper`'
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "shell", content);
+        var references = ReferenceExtractor.Extract(1, "shell", content, symbols);
+
+        Assert.Empty(references.Where(reference => reference.ReferenceKind == "call"));
+    }
+
+    [Fact]
     public void Extract_Perl_DetectsCallsAndIgnoresHashComments()
     {
         const string content = """
@@ -1513,6 +1623,40 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_Css_IdSelectors_AreReferenced()
+    {
+        const string content = """
+            #header { color: blue; }
+            body #header { padding: 0; }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "css", content);
+        var references = ReferenceExtractor.Extract(1, "css", content, symbols);
+
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "#header"
+            && reference.ReferenceKind == "reference"));
+    }
+
+    [Fact]
+    public void Extract_Css_HexColorLiterals_DoNotEmitIdReferences()
+    {
+        const string content = """
+            .card {
+                color: #fff;
+                background: #abc123;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "css", content);
+        var references = ReferenceExtractor.Extract(1, "css", content, symbols);
+
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName.StartsWith("#")
+            && reference.ReferenceKind == "reference");
+    }
+
+    [Fact]
     public void Extract_Terraform_DottedReferences_AreReferenced()
     {
         const string content = """
@@ -1585,6 +1729,51 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, reference =>
             reference.ReferenceKind == "call"
             && reference.SymbolName is "region" or "instance_count" or "common_tags" or "ubuntu" or "network" or "web" or "foo");
+    }
+
+    [Fact]
+    public void Extract_Terraform_VarOrLocal_AsRawObject_IsReferenced_Issue1502()
+    {
+        const string content = """
+            variable "instances" {
+              type = map(object({ size = string }))
+            }
+
+            variable "max_size" {
+              type = number
+            }
+
+            locals {
+              regions = ["us-east-1", "us-west-2"]
+              suffix  = "demo"
+            }
+
+            output "ids" {
+              value = var.max_size
+            }
+
+            resource "aws_instance" "fleet" {
+              for_each = var.instances
+              count    = length(local.regions)
+              tags     = local.suffix
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "terraform", content);
+        var references = ReferenceExtractor.Extract(1, "terraform", content, symbols);
+
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "instances"
+            && reference.ReferenceKind == "reference"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "max_size"
+            && reference.ReferenceKind == "reference"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "regions"
+            && reference.ReferenceKind == "reference"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "suffix"
+            && reference.ReferenceKind == "reference"));
     }
 
     [Fact]
@@ -2636,6 +2825,118 @@ public class ReferenceExtractorTests
             reference.SymbolName == "radius"
             && reference.ReferenceKind == "call"
             && reference.ContainerName == "rounded"));
+    }
+
+    [Fact]
+    public void Extract_CSS_ScssIncludeReferences_AreIndexedAsCall()
+    {
+        // issue #1501: SCSS `@include name(args)` is a mixin invocation and must produce a
+        // `call` edge to the mixin definition, otherwise mixins appear as zero-usage symbols
+        // and `callers` / `impact` cannot trace mixin call graphs.
+        // issue #1501: SCSS の `@include name(args)` は mixin 呼び出しであり、定義への `call`
+        // エッジを出さなければ mixin が未使用シンボル扱いになり、`callers` / `impact` でも
+        // mixin の呼び出し関係を辿れない。
+        const string content = """
+            @mixin border-radius($radius) {
+              border-radius: $radius;
+            }
+
+            @mixin reset {
+              margin: 0;
+            }
+
+            .card {
+              @include border-radius(4px);
+              @include reset;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "css", content);
+        var references = ReferenceExtractor.Extract(1, "css", content, symbols);
+
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "border-radius"
+            && reference.ReferenceKind == "call"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "reset"
+            && reference.ReferenceKind == "call"));
+    }
+
+    [Fact]
+    public void Extract_CSS_AtImportReferences_AreIndexedAsImport()
+    {
+        // issue #1501: stylesheet-level `@import "..."` / `@import url(...)` declarations
+        // express cross-stylesheet dependency edges, so the extractor must emit `import`-kind
+        // edges or `impact` underreports the blast radius of editing a shared theme stylesheet.
+        // issue #1501: stylesheet レベルの `@import "..."` / `@import url(...)` は
+        // 跨ぎ参照のエッジであり、`import` 種別のエッジを出さないと共通テーマ stylesheet を
+        // 編集した際の `impact` が影響範囲を取りこぼす。
+        const string content = """
+            @import "theme.css";
+            @import 'reset.css';
+            @import url("typography.css");
+            @import url('layout.css');
+            @import url(utilities.css);
+            @import "media.css" screen and (min-width: 600px);
+
+            .page {
+              color: black;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "css", content);
+        var references = ReferenceExtractor.Extract(1, "css", content, symbols);
+
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "theme.css"
+            && reference.ReferenceKind == "import"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "reset.css"
+            && reference.ReferenceKind == "import"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "typography.css"
+            && reference.ReferenceKind == "import"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "layout.css"
+            && reference.ReferenceKind == "import"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "utilities.css"
+            && reference.ReferenceKind == "import"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "media.css"
+            && reference.ReferenceKind == "import"));
+    }
+
+    [Fact]
+    public void Extract_CSS_MixedCssAndScssImportAndInclude_EmitBothEdgeKinds()
+    {
+        // issue #1501 mixed-extension fixture: a `.scss` entry point pulls in a `.css`
+        // partial via `@import` and invokes a mixin via `@include`. Both edge kinds must
+        // surface so the graph captures the cross-file dependency *and* the mixin call.
+        // issue #1501 の mixed-extension fixture: `.scss` のエントリポイントが `@import` で
+        // `.css` パーシャルを取り込み、`@include` で mixin を呼び出す。両エッジを同時に
+        // 出力できないとファイル間依存と mixin 呼び出しの片方が欠落する。
+        const string content = """
+            @import "tokens.css";
+
+            @mixin elevated($depth) {
+              box-shadow: 0 $depth 0 rgba(0, 0, 0, 0.1);
+            }
+
+            .card {
+              @include elevated(2px);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "css", content);
+        var references = ReferenceExtractor.Extract(1, "css", content, symbols);
+
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "tokens.css"
+            && reference.ReferenceKind == "import"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "elevated"
+            && reference.ReferenceKind == "call"));
     }
 
     [Fact]
