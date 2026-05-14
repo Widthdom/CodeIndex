@@ -232,9 +232,101 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_ReusesDbContextAcrossInvocations()
+    {
+        // #1494: every MCP tool call used to construct a fresh DbContext (and reopen the
+        // SQLite connection, reapply pragmas, re-register every SQL function). The session
+        // should now cache a single DbContext after the first tool call and reuse it.
+        // #1494: 旧実装はツール呼び出しごとに DbContext を作り直していたため、SQLite 接続再開・
+        // PRAGMA 再適用・SQL 関数再登録のコストを毎回払っていた。セッション内では一度だけ開いた
+        // DbContext を再利用するようになっていることを検証する。
+        Assert.Null(GetSharedDbContextField(_server));
+
+        var first = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status"}}""")!);
+        Assert.False(first!["result"]?["isError"]?.GetValue<bool>() ?? false);
+        var afterFirst = GetSharedDbContextField(_server);
+        Assert.NotNull(afterFirst);
+
+        var second = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"status"}}""")!);
+        Assert.False(second!["result"]?["isError"]?.GetValue<bool>() ?? false);
+        Assert.Same(afterFirst, GetSharedDbContextField(_server));
+    }
+
+    [Fact]
+    public void ToolsCall_DbMissingThenCreated_ReopensSharedContext()
+    {
+        // The cached DbContext must drop itself when the file is missing so a follow-up call
+        // — after the user runs `cdidx index` from another shell — can succeed instead of
+        // failing against a stale handle.
+        // DB ファイルが消えた場合はキャッシュをクリアし、外部で再作成された後の呼び出しで
+        // 古いハンドルに失敗せず再オープンできることを確認する。
+        var missingPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_reopen_{Guid.NewGuid():N}.db");
+        using var server = new McpServer(missingPath, ConsoleUi.LoadVersion());
+        try
+        {
+            var miss = server.HandleMessage(JsonNode.Parse(
+                """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status"}}""")!)!;
+            Assert.True(miss["result"]?["isError"]?.GetValue<bool>() ?? false);
+            Assert.Null(GetSharedDbContextField(server));
+
+            using (var seed = new DbContext(missingPath))
+            {
+                seed.InitializeSchema();
+            }
+
+            var hit = server.HandleMessage(JsonNode.Parse(
+                """{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"status"}}""")!)!;
+            Assert.False(hit["result"]?["isError"]?.GetValue<bool>() ?? false);
+            Assert.NotNull(GetSharedDbContextField(server));
+        }
+        finally
+        {
+            server.Dispose();
+            DeleteFileRobust(missingPath);
+        }
+    }
+
+    [Fact]
+    public void Dispose_ReleasesSharedDbContext()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_dispose_{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var seed = new DbContext(dbPath))
+            {
+                seed.InitializeSchema();
+            }
+
+            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            _ = server.HandleMessage(JsonNode.Parse(
+                """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status"}}""")!);
+            Assert.NotNull(GetSharedDbContextField(server));
+
+            server.Dispose();
+
+            Assert.Null(GetSharedDbContextField(server));
+            Assert.Throws<ObjectDisposedException>(() => server.GetOrOpenSharedDb());
+        }
+        finally
+        {
+            DeleteFileRobust(dbPath);
+        }
+    }
+
+    private static DbContext? GetSharedDbContextField(McpServer server)
+    {
+        var field = typeof(McpServer).GetField("_sharedDb",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        Assert.NotNull(field);
+        return (DbContext?)field!.GetValue(server);
+    }
+
+    [Fact]
     public async Task ProcessLineAsync_WhenResponseSerializationFails_ReturnsJsonRpcError()
     {
-        var server = new McpServer(
+        using var server = new McpServer(
             _dbPath,
             ConsoleUi.LoadVersion(),
             false,
@@ -579,7 +671,7 @@ public class McpServerTests : IDisposable
             using (var db = new DbContext(dbPath))
             {
                 db.InitializeSchema();
-                var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+                using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
                 var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"files","arguments":{"query":"nonexistent_xyz_123"}}}""")!;
                 var response = server.HandleMessage(request)!;
                 using var document = JsonDocument.Parse(response.ToJsonString());
@@ -1078,7 +1170,7 @@ public class McpServerTests : IDisposable
     {
         InsertIndexedFile("src/session.py", "python", "def login(user, password):\n    return Run(user)\n");
         DropGraphExactFallbackIndexes();
-        var readOnlyServer = new McpServer(new Uri(_dbPath).AbsoluteUri + "?immutable=1", ConsoleUi.LoadVersion());
+        using var readOnlyServer = new McpServer(new Uri(_dbPath).AbsoluteUri + "?immutable=1", ConsoleUi.LoadVersion());
 
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"references","arguments":{"query":"Run","exact":true}}}""")!;
         var response = readOnlyServer.HandleMessage(request)!;
@@ -1371,7 +1463,7 @@ public class McpServerTests : IDisposable
         {
             var dbPath = CreateSqlGraphContractFixtureDb(projectRoot);
             DowngradeSqlGraphContractRows(dbPath);
-            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
 
             var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"fn_Target","lang":"sql","exact":true}}}""")!;
             var response = server.HandleMessage(request)!;
@@ -1396,7 +1488,7 @@ public class McpServerTests : IDisposable
         {
             var dbPath = CreateSqlGraphContractFixtureDb(projectRoot);
             DowngradeSqlGraphContractRows(dbPath);
-            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
 
             var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"references","arguments":{"query":"fn_Target","lang":"sql"}}}""")!;
             var response = server.HandleMessage(request)!;
@@ -1422,7 +1514,7 @@ public class McpServerTests : IDisposable
         {
             var dbPath = CreateMixedSqlGraphContractFixtureDb(projectRoot);
             DowngradeSqlGraphContractRows(dbPath);
-            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
 
             var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"callers","arguments":{"query":"N","exact":true}}}""")!;
             var response = server.HandleMessage(request)!;
@@ -2184,7 +2276,7 @@ public class McpServerTests : IDisposable
     {
         InsertIndexedFile("src/session.py", "python", "def login(user, password):\n    return Run(user)\n");
         DropGraphExactFallbackIndexes();
-        var readOnlyServer = new McpServer(new Uri(_dbPath).AbsoluteUri + "?immutable=1", ConsoleUi.LoadVersion());
+        using var readOnlyServer = new McpServer(new Uri(_dbPath).AbsoluteUri + "?immutable=1", ConsoleUi.LoadVersion());
 
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"Run","exact":true}}}""")!;
         var response = readOnlyServer.HandleMessage(request)!;
@@ -2199,7 +2291,7 @@ public class McpServerTests : IDisposable
     {
         InsertIndexedFile("src/session.py", "python", "def login(user, password):\n    return Run(user)\n");
         DropGraphExactFallbackIndexes();
-        var readOnlyServer = new McpServer(new Uri(_dbPath).AbsoluteUri + "?immutable=1", ConsoleUi.LoadVersion());
+        using var readOnlyServer = new McpServer(new Uri(_dbPath).AbsoluteUri + "?immutable=1", ConsoleUi.LoadVersion());
 
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"Run"}}}""")!;
         var response = readOnlyServer.HandleMessage(request)!;
@@ -2216,7 +2308,7 @@ public class McpServerTests : IDisposable
     {
         InsertIndexedFile("src/session.py", "python", "def Run(user):\n    return user\n\ndef login(user, password):\n    return Run(user)\n");
         DropSymbolExactFallbackIndex();
-        var readOnlyServer = new McpServer(new Uri(_dbPath).AbsoluteUri + "?immutable=1", ConsoleUi.LoadVersion());
+        using var readOnlyServer = new McpServer(new Uri(_dbPath).AbsoluteUri + "?immutable=1", ConsoleUi.LoadVersion());
 
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbols","arguments":{"query":"Run","exact":true}}}""")!;
         var response = readOnlyServer.HandleMessage(request)!;
@@ -2233,7 +2325,7 @@ public class McpServerTests : IDisposable
     {
         InsertIndexedFile("src/session.py", "python", "def Run(user):\n    return user\n");
         DropSymbolExactFallbackIndex();
-        var readOnlyServer = new McpServer(new Uri(_dbPath).AbsoluteUri + "?immutable=1", ConsoleUi.LoadVersion());
+        using var readOnlyServer = new McpServer(new Uri(_dbPath).AbsoluteUri + "?immutable=1", ConsoleUi.LoadVersion());
 
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbols","arguments":{"exact":true,"limit":1}}}""")!;
         var response = readOnlyServer.HandleMessage(request)!;
@@ -2251,7 +2343,7 @@ public class McpServerTests : IDisposable
     {
         InsertIndexedFile("src/session.py", "python", "def Run(user):\n    return user\n\ndef login(user, password):\n    return Run(user)\n");
         DropSymbolExactFallbackIndex();
-        var readOnlyServer = new McpServer(new Uri(_dbPath).AbsoluteUri + "?immutable=1", ConsoleUi.LoadVersion());
+        using var readOnlyServer = new McpServer(new Uri(_dbPath).AbsoluteUri + "?immutable=1", ConsoleUi.LoadVersion());
 
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"definition","arguments":{"query":"Run","exact":true}}}""")!;
         var response = readOnlyServer.HandleMessage(request)!;
@@ -2295,7 +2387,7 @@ public class McpServerTests : IDisposable
         InsertIndexedFile("src/session.py", "python", "def Run(user):\n    return user\n\ndef login(user, password):\n    return Run(user)\n");
         ForceLegacyExactFallbackMode();
         DropSymbolExactFallbackIndex();
-        var readOnlyServer = new McpServer(new Uri(_dbPath).AbsoluteUri + "?immutable=1", ConsoleUi.LoadVersion());
+        using var readOnlyServer = new McpServer(new Uri(_dbPath).AbsoluteUri + "?immutable=1", ConsoleUi.LoadVersion());
 
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"Run","exact":true}}}""")!;
         var response = readOnlyServer.HandleMessage(request)!;
@@ -2313,7 +2405,7 @@ public class McpServerTests : IDisposable
         InsertIndexedFile("docs/guide.md", "markdown", "# Heading\n\nSee also `Run`.\n");
         ForceLegacyExactFallbackMode();
         DropGraphExactFallbackIndexes();
-        var readOnlyServer = new McpServer(new Uri(_dbPath).AbsoluteUri + "?immutable=1", ConsoleUi.LoadVersion());
+        using var readOnlyServer = new McpServer(new Uri(_dbPath).AbsoluteUri + "?immutable=1", ConsoleUi.LoadVersion());
 
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"Heading","lang":"markdown","exact":true}}}""")!;
         var response = readOnlyServer.HandleMessage(request)!;
@@ -2332,7 +2424,7 @@ public class McpServerTests : IDisposable
         InsertIndexedFile("docs/guide.md", "markdown", "# Heading\n\nSee also `Run`.\n");
         ForceLegacyExactFallbackMode();
         DropGraphExactFallbackIndexes();
-        var readOnlyServer = new McpServer(new Uri(_dbPath).AbsoluteUri + "?immutable=1", ConsoleUi.LoadVersion());
+        using var readOnlyServer = new McpServer(new Uri(_dbPath).AbsoluteUri + "?immutable=1", ConsoleUi.LoadVersion());
 
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"Run","path":"docs/","exact":true}}}""")!;
         var response = readOnlyServer.HandleMessage(request)!;
@@ -2518,7 +2610,7 @@ public class McpServerTests : IDisposable
         {
             var dbPath = CreateSqlGraphContractFixtureDb(projectRoot);
             DowngradeSqlGraphContractRows(dbPath);
-            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
 
             var definitionRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"definition","arguments":{"query":"fn_Target","lang":"sql","exact":true}}}""")!;
             var definitionResponse = server.HandleMessage(definitionRequest)!;
@@ -2554,7 +2646,7 @@ public class McpServerTests : IDisposable
         {
             var dbPath = CreateSqlGraphContractFixtureDb(projectRoot);
             DowngradeSqlGraphContractRows(dbPath);
-            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
 
             var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"impact_analysis","arguments":{"query":"fn_Target","lang":"sql"}}}""")!;
             var response = server.HandleMessage(request)!;
@@ -2580,7 +2672,7 @@ public class McpServerTests : IDisposable
         {
             var dbPath = CreateMixedSqlGraphContractFixtureDb(projectRoot);
             DowngradeSqlGraphContractRows(dbPath);
-            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
 
             var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"N","exact":true}}}""")!;
             var response = server.HandleMessage(request)!;
@@ -2605,7 +2697,7 @@ public class McpServerTests : IDisposable
         {
             var dbPath = CreateSqlGraphContractZeroResultFixtureDb(projectRoot);
             DowngradeSqlGraphContractVersion(dbPath);
-            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
 
             var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"deps","arguments":{}}}""")!;
             var response = server.HandleMessage(request)!;
@@ -2631,7 +2723,7 @@ public class McpServerTests : IDisposable
         {
             var dbPath = CreateSqlGraphContractZeroResultFixtureDb(projectRoot);
             DowngradeSqlGraphContractVersion(dbPath);
-            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
 
             var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbol_hotspots","arguments":{}}}""")!;
             var response = server.HandleMessage(request)!;
@@ -2657,7 +2749,7 @@ public class McpServerTests : IDisposable
         {
             var dbPath = CreateSqlGraphContractZeroResultFixtureDb(projectRoot);
             DowngradeSqlGraphContractVersion(dbPath);
-            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
 
             var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"kind":"interface"}}}""")!;
             var response = server.HandleMessage(request)!;
@@ -2684,7 +2776,7 @@ public class McpServerTests : IDisposable
         {
             var dbPath = CreateSqlGraphContractZeroResultFixtureDb(projectRoot);
             DowngradeSqlGraphContractVersion(dbPath);
-            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
 
             var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbol_hotspots","arguments":{"kind":"class"}}}""")!;
             var response = server.HandleMessage(request)!;
@@ -2727,7 +2819,7 @@ public class McpServerTests : IDisposable
         var dbPath = CreateLegacyDbWithoutIndexedAt();
         try
         {
-            var readOnlyServer = new McpServer(new Uri(dbPath).AbsoluteUri + "?immutable=1", ConsoleUi.LoadVersion());
+            using var readOnlyServer = new McpServer(new Uri(dbPath).AbsoluteUri + "?immutable=1", ConsoleUi.LoadVersion());
             var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"files","arguments":{"query":"nonexistent_xyz_123"}}}""")!;
             var response = readOnlyServer.HandleMessage(request)!;
             using var document = JsonDocument.Parse(response.ToJsonString());
@@ -2758,7 +2850,7 @@ public class McpServerTests : IDisposable
             using (var db = new DbContext(dbPath))
             {
                 db.InitializeSchema();
-                var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+                using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
 
                 var request = JsonNode.Parse($$$"""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"{{{toolName}}}","arguments":{{{argsJson}}}}}""")!;
                 var response = server.HandleMessage(request)!;
@@ -3245,7 +3337,7 @@ public class McpServerTests : IDisposable
                 writer.MarkGraphReady();
             }
 
-            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
             var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
             var response = server.HandleMessage(request)!;
 
@@ -3316,7 +3408,7 @@ public class McpServerTests : IDisposable
                 cmd.ExecuteNonQuery();
             }
 
-            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
             var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
             var response = server.HandleMessage(request)!;
 
@@ -3366,7 +3458,7 @@ public class McpServerTests : IDisposable
             var sourcePath = Path.Combine(projectRoot, "src", "app.cs");
             File.WriteAllText(sourcePath, "class App { void Run() {} }\n");
 
-            var readOnlyServer = new McpServer(new Uri(dbPath).AbsoluteUri + "?immutable=1", ConsoleUi.LoadVersion());
+            using var readOnlyServer = new McpServer(new Uri(dbPath).AbsoluteUri + "?immutable=1", ConsoleUi.LoadVersion());
             var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
             var response = readOnlyServer.HandleMessage(request)!;
 
@@ -3407,7 +3499,7 @@ public class McpServerTests : IDisposable
 
             File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), "class App { void Run() {} }\n");
 
-            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
             var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
             var response = server.HandleMessage(request)!;
 
@@ -3445,7 +3537,7 @@ public class McpServerTests : IDisposable
 
             File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), "class App { void Run() {} }\n");
 
-            var server = new McpServer(dbPath, ConsoleUi.LoadVersion(), dbPathExplicit: true);
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion(), dbPathExplicit: true);
             var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
             var response = server.HandleMessage(request)!;
 
@@ -3489,7 +3581,7 @@ public class McpServerTests : IDisposable
             File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), "class App { void Run() {} }\n");
 
             var dbUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
-            var server = new McpServer(dbUri, ConsoleUi.LoadVersion(), dbPathExplicit: true);
+            using var server = new McpServer(dbUri, ConsoleUi.LoadVersion(), dbPathExplicit: true);
             var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
             var response = server.HandleMessage(request)!;
 
@@ -3530,7 +3622,7 @@ public class McpServerTests : IDisposable
 
             File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), "class App { void Run() {} }\n");
 
-            var server = new McpServer(dbPath, ConsoleUi.LoadVersion(), dbPathExplicit: true);
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion(), dbPathExplicit: true);
             var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
             var response = server.HandleMessage(request)!;
 
@@ -3785,7 +3877,7 @@ public class McpServerTests : IDisposable
             TestProjectHelper.RunGit(fixtureDir, "commit", "-m", "init-b");
             File.SetLastWriteTimeUtc(sourcePathB, DateTime.UtcNow.AddSeconds(2));
 
-            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
             var indexRequest = new JsonObject
             {
                 ["jsonrpc"] = "2.0",
@@ -3833,7 +3925,7 @@ public class McpServerTests : IDisposable
             TestProjectHelper.RunGit(fixtureDir, "commit", "-m", "init");
             var expectedHead = TestProjectHelper.RunGit(fixtureDir, "rev-parse", "HEAD").Trim();
 
-            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
             var indexRequest = new JsonObject
             {
                 ["jsonrpc"] = "2.0",
@@ -3939,7 +4031,7 @@ public class McpServerTests : IDisposable
         try
         {
             File.WriteAllText(Path.Combine(fixtureDir, "app.cs"), "public class App { public void Straße() { } }");
-            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
 
             var firstIndex = new JsonObject
             {
@@ -4024,7 +4116,7 @@ public class McpServerTests : IDisposable
         try
         {
             File.WriteAllText(Path.Combine(fixtureDir, "app.cs"), "public class App { public void Run() { } }");
-            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
 
             var firstIndex = new JsonObject
             {
@@ -4087,7 +4179,7 @@ public class McpServerTests : IDisposable
         try
         {
             File.WriteAllText(Path.Combine(fixtureDir, "app.cs"), "public class App { }");
-            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
 
             var request = new JsonObject
             {
@@ -4154,7 +4246,7 @@ public class McpServerTests : IDisposable
                     }
                 }
                 """);
-            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
 
             var firstIndex = new JsonObject
             {
@@ -4224,7 +4316,7 @@ public class McpServerTests : IDisposable
             File.WriteAllText(Path.Combine(srcDir, "Api.Part1.cs"), "public partial class Api { public void Run() { } }");
             File.WriteAllText(Path.Combine(srcDir, "Api.Part2.cs"), "public partial class Api { public void Run(int value) { } }");
             File.WriteAllText(Path.Combine(srcDir, "Caller.cs"), "public class Caller { public void Call(Api api) { api.Run(); api.Run(1); } }");
-            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
 
             var firstIndex = new JsonObject
             {
@@ -4296,7 +4388,7 @@ public class McpServerTests : IDisposable
             File.WriteAllText(Path.Combine(srcDir, "Api.Part1.cs"), "public partial class Api { public void Run() { } }");
             File.WriteAllText(Path.Combine(srcDir, "Api.Part2.cs"), "public partial class Api { public void Run(int value) { } }");
             File.WriteAllText(Path.Combine(srcDir, "Caller.cs"), "public class Caller { public void Call(Api api) { api.Run(); api.Run(1); } }");
-            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
 
             var firstIndex = new JsonObject
             {
@@ -4385,7 +4477,7 @@ public class McpServerTests : IDisposable
                 writer.MarkGraphReady();
             }
 
-            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
             var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbol_hotspots","arguments":{"lang":"csharp","kind":"function"}}}""")!;
             var response = server.HandleMessage(request)!;
 
@@ -4438,7 +4530,7 @@ public class McpServerTests : IDisposable
                 writer.SetMeta(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey("csharp"), null);
             }
 
-            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
             var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbol_hotspots","arguments":{"lang":"csharp","kind":"function"}}}""")!;
             var response = server.HandleMessage(request)!;
 
@@ -4476,7 +4568,7 @@ public class McpServerTests : IDisposable
                 writer.SetMeta(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey("csharp"), null);
             }
 
-            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
             var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbol_hotspots","arguments":{"lang":"csharp","kind":"function"}}}""")!;
             var response = server.HandleMessage(request)!;
 
@@ -4515,7 +4607,7 @@ public class McpServerTests : IDisposable
             originalMode = File.GetUnixFileMode(unreadableDir);
             File.SetUnixFileMode(unreadableDir, UnixFileMode.None);
 
-            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
             var request = new JsonObject
             {
                 ["jsonrpc"] = "2.0",
@@ -4555,7 +4647,7 @@ public class McpServerTests : IDisposable
 
         try
         {
-            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
             var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"backfill_fold","arguments":{}}}""")!;
             var response = server.HandleMessage(request)!;
 
@@ -4576,7 +4668,7 @@ public class McpServerTests : IDisposable
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_backfill_missing_{Guid.NewGuid():N}.db");
         var dbUri = new Uri(dbPath).AbsoluteUri;
-        var server = new McpServer(dbUri, ConsoleUi.LoadVersion());
+        using var server = new McpServer(dbUri, ConsoleUi.LoadVersion());
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"backfill_fold","arguments":{}}}""")!;
         var response = server.HandleMessage(request)!;
 
@@ -4841,7 +4933,7 @@ public class McpServerTests : IDisposable
                 writer.MarkGraphReady();
             }
 
-            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
             var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp"}}}""")!;
             var response = server.HandleMessage(request)!;
 
@@ -5452,7 +5544,7 @@ public class McpServerTests : IDisposable
                 }]);
             }
 
-            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
             var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp"}}}""")!;
             var response = server.HandleMessage(request)!;
 
@@ -5480,7 +5572,7 @@ public class McpServerTests : IDisposable
         try
         {
             File.WriteAllText(Path.Combine(fixtureDir, "intl.py"), "def Straße():\n    pass\n");
-            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
 
             var firstIndex = new JsonObject
             {
@@ -5719,7 +5811,7 @@ public class McpServerTests : IDisposable
     [Fact]
     public void ToolsCall_Search_DbNotFound_ReturnsError()
     {
-        var server = new McpServer("/nonexistent/path/test.db", "0.1.1");
+        using var server = new McpServer("/nonexistent/path/test.db", "0.1.1");
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"test"}}}""")!;
         var response = server.HandleMessage(request)!;
 
@@ -6120,6 +6212,7 @@ public class McpServerTests : IDisposable
 
     public void Dispose()
     {
+        _server.Dispose();
         _db.Dispose();
         DeleteDbPath();
         TestProjectHelper.DeleteDirectory(_projectRoot);

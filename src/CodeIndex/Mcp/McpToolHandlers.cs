@@ -1543,9 +1543,12 @@ public partial class McpServer
         if (!Directory.Exists(projectPath))
             return CreateToolErrorResponse(id, "Directory not found");
 
-        // Determine DB path — use the provided _dbPath or default
-        // DBパスを決定 — 指定された_dbPathまたはデフォルトを使用
-        using var db = new DbContext(_dbPath);
+        // Reuse the per-session DbContext (issue #1494) instead of opening a fresh
+        // connection on every index call. InitializeSchema below is idempotent so the
+        // shared connection still picks up legacy-DB migrations on demand.
+        // index 呼び出しごとに新しい接続を開かず、セッション共有 DbContext を再利用する（#1494）。
+        // 後段の InitializeSchema は冪等なので共有接続でもレガシー DB の移行は正しく走る。
+        var db = GetOrOpenSharedDb();
         var priorFoldVersion = db.GetMetaString("fold_key_version");
         var priorFoldFingerprint = db.GetMetaString("fold_key_fingerprint");
         var priorCSharpSymbolNameContractVersion = db.GetMetaString(DbContext.CSharpSymbolNameContractVersionMetaKey);
@@ -1571,6 +1574,7 @@ public partial class McpServer
         }
 
         db.InitializeSchema();
+        MarkSharedDbMigrated();
 
         var writer = new DbWriter(db.Connection);
         var indexer = new FileIndexer(projectPath, GitHelper.ResolveIgnoreCase(projectPath), GitHelper.TryGetRepositoryRoot(projectPath) ?? Path.GetFullPath(projectPath));
@@ -1800,8 +1804,12 @@ public partial class McpServer
 
         try
         {
-            using var db = new DbContext(_dbPath);
+            // Reuse the per-session DbContext (issue #1494). InitializeSchema is idempotent
+            // and remains correct on a long-lived connection.
+            // セッション共有 DbContext を再利用する（#1494）。InitializeSchema は冪等。
+            var db = GetOrOpenSharedDb();
             db.InitializeSchema();
+            MarkSharedDbMigrated();
             var writer = new DbWriter(db.Connection);
             var userVersionBefore = db.GetUserVersion();
             var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);

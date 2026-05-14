@@ -13,7 +13,7 @@ namespace CodeIndex.Mcp;
 /// stdin/stdout上のJSON-RPC 2.0によるMCPサーバー。
 /// Protocol version: 2024-11-05
 /// </summary>
-public partial class McpServer
+public partial class McpServer : IDisposable
 {
     private readonly string _dbPath;
     private readonly bool _dbPathExplicit;
@@ -21,6 +21,21 @@ public partial class McpServer
     private readonly JsonSerializerOptions _jsonOptions;
     private readonly Func<JsonNode, string> _serializeResponse;
     private bool _running = true;
+    // Per-session DbContext reused across MCP tool calls. Holding the connection open
+    // avoids reopening SQLite, reapplying pragmas, and re-registering every SQL function
+    // on each invocation (issue #1494).
+    // セッション内で MCP ツール呼び出しごとに再利用する DbContext。接続再開・PRAGMA 再適用・
+    // SQL 関数再登録のコストを毎回払わないために保持する（#1494）。
+    private DbContext? _sharedDb;
+    // TryMigrateForRead is a read-path concern (legacy / read-only sandbox DBs). It is
+    // idempotent but does run PRAGMA table_info + CREATE INDEX IF NOT EXISTS round trips,
+    // so we run it once per session. Write tools (`index`, `backfill_fold`) cover the same
+    // surface via InitializeSchema, which also flips this flag through MarkSharedDbMigrated.
+    // TryMigrateForRead は read path 向けの遅延移行で、レガシー DB / read-only サンドボックス
+    // でのみ意味を持つ。冪等だが PRAGMA table_info などの往復が発生するため、セッションで一度だけ
+    // 実行する。書き込みツールは InitializeSchema で同等以上の DDL を流すため、そこでフラグを立てる。
+    private bool _sharedDbReadMigrated;
+    private bool _disposed;
 
     private const string ProtocolVersion = "2025-03-26";
     private const int MaxLimit = 200;
@@ -277,12 +292,67 @@ public partial class McpServer
         // CLI と同じく file: URI を受け付け、サンドボックス用の escape hatch に到達できるようにする。
         var isUri = _dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase);
         if (!isUri && !File.Exists(_dbPath))
+        {
+            // Drop any stale cached context so the next tool call can re-open after the user
+            // creates the DB (e.g. via an external `cdidx index`). Without this, a missed
+            // file lookup would leave a closed/disposed handle blocking later open attempts.
+            // ユーザーが後から DB を作った場合に再オープンできるよう、キャッシュをここで破棄。
+            CloseSharedDb();
             return CreateToolErrorResponse(true, id, $"Database not found: {_dbPath}. Run 'cdidx index <projectPath>' first.");
+        }
 
-        using var db = new DbContext(_dbPath);
-        db.TryMigrateForRead();
+        var db = GetOrOpenSharedDb();
+        if (!_sharedDbReadMigrated)
+        {
+            db.TryMigrateForRead();
+            _sharedDbReadMigrated = true;
+        }
         var reader = new DbReader(db.Connection, db.IsReadOnly);
         return action(reader);
+    }
+
+    /// <summary>
+    /// Open the per-session DbContext on first use and reuse it on every subsequent call.
+    /// Centralising the open lets us pay the connection setup, pragma application, and SQL
+    /// function registration once per MCP session instead of once per tool invocation
+    /// (#1494). The MCP loop is single-threaded, so no locking is required.
+    /// MCP セッション初回呼び出し時に DbContext を開き、以後は再利用する。接続セットアップや
+    /// PRAGMA・SQL 関数登録のコストを毎ツール呼び出しごとに払わないようにする（#1494）。
+    /// MCP ループは単一スレッドのためロック不要。
+    /// </summary>
+    internal DbContext GetOrOpenSharedDb()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (_sharedDb != null)
+            return _sharedDb;
+
+        _sharedDb = new DbContext(_dbPath);
+        return _sharedDb;
+    }
+
+    /// <summary>
+    /// Mark the shared DbContext as already covered by `TryMigrateForRead`. Write tools that
+    /// run `InitializeSchema` reuse the same connection, so the read path can skip the
+    /// migration round trip on later calls.
+    /// 書き込みツールが InitializeSchema を流した後の共有 DbContext に対し、read path の
+    /// TryMigrateForRead を省略するためのマーカ。
+    /// </summary>
+    internal void MarkSharedDbMigrated() => _sharedDbReadMigrated = true;
+
+    private void CloseSharedDb()
+    {
+        _sharedDb?.Dispose();
+        _sharedDb = null;
+        _sharedDbReadMigrated = false;
+    }
+
+    public void Dispose()
+    {
+        if (_disposed)
+            return;
+        _disposed = true;
+        CloseSharedDb();
+        GC.SuppressFinalize(this);
     }
 
     // --- JSON-RPC helpers / JSON-RPCヘルパー ---
