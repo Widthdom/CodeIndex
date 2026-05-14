@@ -450,6 +450,14 @@ public class DbContext : IDisposable
     public const int SqlGraphContractVersion = 1;
     public const string SqlGraphContractVersionMetaKey = "sql_graph_contract_version";
     public const string IndexedProjectRootMetaKey = "indexed_project_root";
+    // Persist the git HEAD commit captured at index time so queries can detect a
+    // worktree branch / HEAD switch (e.g. `git switch other-branch` inside a worktree)
+    // that silently invalidates the on-disk index without triggering `--check`.
+    // Issue #1512.
+    // index 時点の git HEAD を保存し、queries で worktree の branch / HEAD 切替
+    // (例: worktree 内の `git switch other-branch`) を検出可能にする。
+    // `--check` を回さなくても自動で気付けるようにするための meta。Issue #1512。
+    public const string IndexedGitHeadMetaKey = "indexed_git_head";
     // Authoritative `symbols.is_metadata_target` flag readiness, per language. Stamped at the
     // end of a successful index pass once the writer's metadata-target resolver has classified
     // every class-like row for that language. Readers fall back to the legacy heuristic when

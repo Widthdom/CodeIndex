@@ -10110,6 +10110,91 @@ jobs:
     }
 
     [Fact]
+    public void RunStatus_Json_ReportsWorktreeHeadChangedWhenIndexedHeadDiffersFromRuntime()
+    {
+        // #1512: after `git worktree add` / `git switch` inside a worktree, the runtime HEAD
+        // diverges from the HEAD captured at index time. status JSON must surface that so MCP /
+        // automation clients can warn before issuing further queries against a stale index.
+        // #1512: worktree branch / HEAD 切替後、runtime HEAD は index 時点の HEAD と乖離する。
+        // status JSON でこれを surface し、後続クエリ前に stale を検知可能にする。
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_worktree_head_changed_json");
+        try
+        {
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App {}\n");
+            TestProjectHelper.RunGit(projectRoot, "add", "app.cs");
+            TestProjectHelper.RunGit(projectRoot, "commit", "-m", "initial");
+
+            Assert.Equal(CommandExitCodes.Success, IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions));
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var staleHead = new string('b', 40);
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.SetMeta(DbContext.IndexedGitHeadMetaKey, staleHead);
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(staleHead, json.GetProperty("indexed_git_head").GetString());
+            Assert.True(json.GetProperty("worktree_head_changed").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunStatus_HumanOutput_WarnsWhenWorktreeHeadHasSwitchedSinceIndex()
+    {
+        // #1512: surface a `WARN` line plus an Indexed-HEAD echo and a ready-to-run reindex
+        // command when the runtime HEAD no longer matches the HEAD captured at index time.
+        // #1512: index 時点と runtime の HEAD が異なるとき、`WARN` 行と Indexed-HEAD・再 index コマンド
+        // を出力する。
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_worktree_head_changed_human");
+        try
+        {
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App {}\n");
+            TestProjectHelper.RunGit(projectRoot, "add", "app.cs");
+            TestProjectHelper.RunGit(projectRoot, "commit", "-m", "initial");
+
+            Assert.Equal(CommandExitCodes.Success, IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions));
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var staleHead = new string('c', 40);
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.SetMeta(DbContext.IndexedGitHeadMetaKey, staleHead);
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Contains("WARN    : worktree HEAD changed since the index was built", stdout);
+            Assert.Contains(staleHead[..12], stdout);
+            Assert.Contains("cdidx index", stdout);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunStatus_HumanOutput_WarnsWhenOnlyFoldReadinessIsDegraded()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_fold_only_human");

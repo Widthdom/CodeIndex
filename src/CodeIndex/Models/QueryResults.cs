@@ -249,6 +249,28 @@ public class StatusResult
     public string? ProjectRoot { get; set; }
     public string? GitHead { get; set; }
     public bool? GitIsDirty { get; set; }
+    /// <summary>
+    /// Git HEAD commit captured at index time. Compared with the runtime `GitHead` to
+    /// surface a worktree branch / HEAD switch that silently invalidates the on-disk
+    /// index without requiring a `--check` workspace scan. Null when the DB has no
+    /// `indexed_git_head` meta (legacy DBs or projects indexed outside a git checkout).
+    /// Issue #1512.
+    /// index 時点で記録された git HEAD コミット。runtime の `GitHead` と突き合わせて、
+    /// `--check` を介さずに worktree 内の branch / HEAD 切替を検出するために使う。
+    /// </summary>
+    [JsonPropertyName("indexed_git_head")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? IndexedGitHead { get; set; }
+    /// <summary>
+    /// True when the persisted `IndexedGitHead` differs from the runtime `GitHead`,
+    /// indicating that the index was built against a different branch / commit and a
+    /// re-index is needed to keep results trustworthy. Null when comparison is not
+    /// possible (no persisted head, no runtime head). Issue #1512.
+    /// index 時の HEAD と runtime の HEAD が異なれば true。比較不能なら null。
+    /// </summary>
+    [JsonPropertyName("worktree_head_changed")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? WorktreeHeadChanged { get; set; }
     public Dictionary<string, long> Languages { get; set; } = new();
     public Dictionary<string, long>? SymbolKinds { get; set; }
     public List<string>? GraphSupportedLanguages { get; set; }
@@ -356,6 +378,12 @@ public class RepoMapResult
     public string? ProjectRoot { get; set; }
     public string? GitHead { get; set; }
     public bool? GitIsDirty { get; set; }
+    [JsonPropertyName("indexed_git_head")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? IndexedGitHead { get; set; }
+    [JsonPropertyName("worktree_head_changed")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? WorktreeHeadChanged { get; set; }
     public List<RepoLanguageResult> Languages { get; set; } = [];
     public List<RepoModuleResult> Modules { get; set; } = [];
     public List<RepoFileSummaryResult> TopFiles { get; set; } = [];
@@ -421,6 +449,12 @@ public class SymbolAnalysisResult
     public string? ProjectRoot { get; set; }
     public string? GitHead { get; set; }
     public bool? GitIsDirty { get; set; }
+    [JsonPropertyName("indexed_git_head")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? IndexedGitHead { get; set; }
+    [JsonPropertyName("worktree_head_changed")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? WorktreeHeadChanged { get; set; }
     public string? GraphLanguage { get; set; }
     public bool? GraphSupported { get; set; }
     public string? GraphSupportReason { get; set; }

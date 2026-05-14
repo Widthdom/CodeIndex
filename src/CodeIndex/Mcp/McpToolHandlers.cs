@@ -1557,6 +1557,14 @@ public partial class McpServer
         var priorHotspotFamilyVersions = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyVersionMetaKey);
         var priorHotspotFamilyMarkerFingerprints = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyMarkerFingerprintMetaKey);
         var priorIndexedProjectRoot = db.GetMetaString(DbContext.IndexedProjectRootMetaKey);
+        // Persist git HEAD alongside the indexed project root so subsequent queries can
+        // detect a worktree branch / HEAD switch (`git switch other-branch` inside the
+        // worktree) without needing a `--check` workspace scan. Captured before any
+        // writes so partial failures keep the metadata in sync with the on-disk index.
+        // Issue #1512.
+        // worktree 内の HEAD 切替検出のため、indexed_project_root と並べて HEAD も保存する。
+        var priorIndexedGitHead = db.GetMetaString(DbContext.IndexedGitHeadMetaKey);
+        var currentGitHead = GitHelper.TryGetHeadCommit(projectPath);
 
         // On --rebuild, clear readiness before DropAll so a crash during the window
         // (empty tables recreated, MarkReady not yet run) cannot leave old trust bits
@@ -1592,6 +1600,11 @@ public partial class McpServer
             ? null
             : Path.GetFullPath(priorIndexedProjectRoot);
         var projectRootWritten = PathsEqual(normalizedPriorIndexedProjectRoot, normalizedProjectPath);
+        // Track persisted HEAD freshness in lockstep with `projectRootWritten`. Only emit
+        // a fresh `indexed_git_head` meta row when the captured HEAD differs from the
+        // persisted value, so explicit-DB no-op refreshes don't churn metadata. #1512.
+        // 永続 HEAD と runtime HEAD の差分があるときだけ書き込む。
+        var indexedHeadWritten = string.Equals(priorIndexedGitHead, currentGitHead, StringComparison.OrdinalIgnoreCase);
 
         static bool PathsEqual(string? left, string? right)
         {
@@ -1606,11 +1619,16 @@ public partial class McpServer
 
         void WriteProjectRootOnce()
         {
-            if (projectRootWritten)
-                return;
-
-            writer.SetMeta(DbContext.IndexedProjectRootMetaKey, normalizedProjectPath);
-            projectRootWritten = true;
+            if (!projectRootWritten)
+            {
+                writer.SetMeta(DbContext.IndexedProjectRootMetaKey, normalizedProjectPath);
+                projectRootWritten = true;
+            }
+            if (!indexedHeadWritten)
+            {
+                writer.SetMeta(DbContext.IndexedGitHeadMetaKey, currentGitHead);
+                indexedHeadWritten = true;
+            }
         }
 
         // First mutation point — demote readiness just before any write.

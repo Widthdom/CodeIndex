@@ -1707,6 +1707,8 @@ public static class QueryCommandRunner
                     Console.WriteLine($"Git HEAD : {status.GitHead}");
                 if (status.GitIsDirty != null)
                     Console.WriteLine($"Git Dirty: {status.GitIsDirty}");
+                if (status.IndexedGitHead != null && !string.Equals(status.IndexedGitHead, status.GitHead, StringComparison.OrdinalIgnoreCase))
+                    Console.WriteLine($"Idx HEAD : {status.IndexedGitHead}");
                 if (status.WorkspaceCheck != null)
                     WriteWorkspaceCheck(status.WorkspaceCheck);
                 if (status.Languages.Count > 0)
@@ -1723,6 +1725,8 @@ public static class QueryCommandRunner
                 }
                 if (status.GraphSupportedLanguages is { Count: > 0 })
                     Console.WriteLine($"Graph   : {status.GraphSupportedLanguages.Count} languages ({string.Join(", ", status.GraphSupportedLanguages)})");
+                if (status.WorktreeHeadChanged == true)
+                    Console.WriteLine($"WARN    : worktree HEAD changed since the index was built ({ShortSha(status.IndexedGitHead)} -> {ShortSha(status.GitHead)}). Run `{BuildReindexRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit)}` to refresh the index for the current branch.");
                 if (!status.GraphTableAvailable)
                     Console.WriteLine("WARN    : symbol_references table missing — reference / caller / callee / unused counts are degraded to 0.");
                 if (!status.IssuesTableAvailable)
@@ -3637,6 +3641,13 @@ public static class QueryCommandRunner
 
     private static string FormatSamples(IReadOnlyList<string> samples)
         => samples.Count == 0 ? string.Empty : $" ({string.Join(", ", samples)})";
+
+    private static string ShortSha(string? sha)
+    {
+        if (string.IsNullOrWhiteSpace(sha))
+            return "<unknown>";
+        return sha.Length <= 12 ? sha : sha[..12];
+    }
 
     private static string BuildFoldBackfillCommand(string dbPath, bool dbPathExplicit)
     {

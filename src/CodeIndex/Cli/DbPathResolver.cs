@@ -139,6 +139,19 @@ public static class DbPathResolver
     }
 
     private static string? TryReadIndexedProjectRoot(string dbPath)
+        => TryReadMetaString(dbPath, CodeIndex.Database.DbContext.IndexedProjectRootMetaKey);
+
+    /// <summary>
+    /// Best-effort read of the persisted git HEAD commit stamped at index time.
+    /// Returns null when the DB does not expose `indexed_git_head` (legacy DBs or
+    /// projects indexed outside a git checkout).
+    /// index 時点で保存された git HEAD コミットを best-effort で読む。legacy DB や
+    /// git 外プロジェクトでは null を返す。
+    /// </summary>
+    public static string? TryReadIndexedGitHead(string dbPath)
+        => TryReadMetaString(dbPath, CodeIndex.Database.DbContext.IndexedGitHeadMetaKey);
+
+    private static string? TryReadMetaString(string dbPath, string key)
     {
         try
         {
@@ -146,7 +159,7 @@ public static class DbPathResolver
             connection.Open();
             using var cmd = connection.CreateCommand();
             cmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = @key";
-            cmd.Parameters.AddWithValue("@key", CodeIndex.Database.DbContext.IndexedProjectRootMetaKey);
+            cmd.Parameters.AddWithValue("@key", key);
             var raw = cmd.ExecuteScalar();
             return raw is string value && !string.IsNullOrWhiteSpace(value) ? value : null;
         }

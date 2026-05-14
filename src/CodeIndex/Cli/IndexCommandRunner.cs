@@ -258,6 +258,13 @@ public static class IndexCommandRunner
         var priorHotspotFamilyVersions = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyVersionMetaKey);
         var priorHotspotFamilyMarkerFingerprints = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyMarkerFingerprintMetaKey);
         var priorIndexedProjectRoot = db.GetMetaString(DbContext.IndexedProjectRootMetaKey);
+        // Persist git HEAD alongside `indexed_project_root` so queries can flag a per-
+        // worktree branch / HEAD switch (e.g. `git switch` inside an indexed worktree)
+        // without forcing the user to run `status --check`. Captured once up-front so the
+        // same HEAD value flows through both update and full-scan paths. Issue #1512.
+        // worktree 内の HEAD 切替検出のため、`indexed_project_root` と並べて HEAD も保存する。
+        var priorIndexedGitHead = db.GetMetaString(DbContext.IndexedGitHeadMetaKey);
+        var currentGitHead = GitHelper.TryGetHeadCommit(options.ProjectPath);
 
         // Don't demote readiness yet. A transient usage error in update-mode preflight
         // (bad --commits hash, git unavailable, etc.) would permanently downgrade a healthy
@@ -284,8 +291,8 @@ public static class IndexCommandRunner
         var projectRoot = Path.GetFullPath(options.ProjectPath);
 
         return isUpdateMode
-            ? RunUpdateMode(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion, priorFoldFingerprint, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot)
-            : RunFullScan(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorFoldVersion, priorFoldFingerprint, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot);
+            ? RunUpdateMode(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion, priorFoldFingerprint, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedGitHead, currentGitHead)
+            : RunFullScan(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorFoldVersion, priorFoldFingerprint, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedGitHead, currentGitHead);
     }
 
     public static int RunBackfillFold(string[] cmdArgs, JsonSerializerOptions jsonOptions)
@@ -533,7 +540,9 @@ public static class IndexCommandRunner
         IReadOnlyDictionary<string, string?> priorHotspotFamilyVersions,
         IReadOnlyDictionary<string, string?> priorHotspotFamilyMarkerFingerprints,
         IReadOnlyDictionary<string, string?> currentHotspotFamilyMarkerFingerprints,
-        string? priorIndexedProjectRoot)
+        string? priorIndexedProjectRoot,
+        string? priorIndexedGitHead,
+        string? currentGitHead)
     {
         var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
         var currentSqlGraphContractVersion = DbContext.SqlGraphContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -610,7 +619,9 @@ public static class IndexCommandRunner
                 priorHotspotFamilyVersions,
                 priorHotspotFamilyMarkerFingerprints,
                 currentHotspotFamilyMarkerFingerprints,
-                priorIndexedProjectRoot);
+                priorIndexedProjectRoot,
+                priorIndexedGitHead,
+                currentGitHead);
         }
 
         if (!options.Json)
@@ -627,6 +638,11 @@ public static class IndexCommandRunner
             ? null
             : Path.GetFullPath(priorIndexedProjectRoot);
         var projectRootWritten = PathsEqual(normalizedPriorIndexedProjectRoot, normalizedProjectRoot);
+        // Track whether the persisted git HEAD already matches the runtime HEAD. We only
+        // write a meta row when the value actually drifted so read-only or explicit-DB
+        // sessions don't churn metadata on every no-op refresh. Issue #1512.
+        // 永続 HEAD と runtime HEAD が一致しているかを追跡。差分があるときだけ書き込む。
+        var indexedHeadWritten = string.Equals(priorIndexedGitHead, currentGitHead, StringComparison.OrdinalIgnoreCase);
         var ftsMutated = false;
         var purgedRefs = 0;
         var supportedGraphLanguages = ReferenceExtractor.GetSupportedLanguages();
@@ -657,11 +673,16 @@ public static class IndexCommandRunner
 
         void WriteProjectRootOnce()
         {
-            if (projectRootWritten)
-                return;
-
-            writer.SetMeta(DbContext.IndexedProjectRootMetaKey, normalizedProjectRoot);
-            projectRootWritten = true;
+            if (!projectRootWritten)
+            {
+                writer.SetMeta(DbContext.IndexedProjectRootMetaKey, normalizedProjectRoot);
+                projectRootWritten = true;
+            }
+            if (!indexedHeadWritten)
+            {
+                writer.SetMeta(DbContext.IndexedGitHeadMetaKey, currentGitHead);
+                indexedHeadWritten = true;
+            }
         }
 
         void RecordScanErrors(IEnumerable<FileIndexer.ScanError> scanErrors)
@@ -1421,7 +1442,9 @@ public static class IndexCommandRunner
         IReadOnlyDictionary<string, string?> priorHotspotFamilyVersions,
         IReadOnlyDictionary<string, string?> priorHotspotFamilyMarkerFingerprints,
         IReadOnlyDictionary<string, string?> currentHotspotFamilyMarkerFingerprints,
-        string? priorIndexedProjectRoot)
+        string? priorIndexedProjectRoot,
+        string? priorIndexedGitHead,
+        string? currentGitHead)
     {
         var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
         _ = priorMetadataTargetCsharp; // full-scan resolver runs unconditionally on success / 成功時に常に再解決するため不要
@@ -1430,6 +1453,12 @@ public static class IndexCommandRunner
             ? null
             : Path.GetFullPath(priorIndexedProjectRoot);
         var projectRootWritten = PathsEqual(normalizedPriorIndexedProjectRoot, normalizedProjectRoot);
+        // Mirror update-mode: only write a fresh `indexed_git_head` row when the persisted
+        // value drifted from the current HEAD, so explicit-DB no-op refreshes don't churn
+        // metadata. Issue #1512.
+        // 永続 HEAD が runtime と一致していれば書かない。explicit DB の no-op refresh で
+        // metadata が churn しないようにする。
+        var indexedHeadWritten = string.Equals(priorIndexedGitHead, currentGitHead, StringComparison.OrdinalIgnoreCase);
         var currentCSharpSymbolNameContractVersion = DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var csharpSymbolNameContractMatchesCurrent = priorCSharpSymbolNameContractVersion == currentCSharpSymbolNameContractVersion;
         var currentSqlGraphContractVersion = DbContext.SqlGraphContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -1441,11 +1470,16 @@ public static class IndexCommandRunner
 
         void WriteProjectRootOnce()
         {
-            if (projectRootWritten)
-                return;
-
-            writer.SetMeta(DbContext.IndexedProjectRootMetaKey, normalizedProjectRoot);
-            projectRootWritten = true;
+            if (!projectRootWritten)
+            {
+                writer.SetMeta(DbContext.IndexedProjectRootMetaKey, normalizedProjectRoot);
+                projectRootWritten = true;
+            }
+            if (!indexedHeadWritten)
+            {
+                writer.SetMeta(DbContext.IndexedGitHeadMetaKey, currentGitHead);
+                indexedHeadWritten = true;
+            }
         }
 
         CancellationTokenSource? spinnerCts = null;

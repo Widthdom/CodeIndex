@@ -1546,6 +1546,7 @@ AI agent の作業開始時はこれを先に実行し、`.cdidx/codeindex.db` �
 - SQL graph: `sql_graph_contract_ready`、`sql_graph_contract_degraded_reason`
 - hotspot metadata: `hotspot_family_ready`、`hotspot_family_degraded_reason`
 - C# metadata: `csharp_symbol_name_ready`、`csharp_metadata_target_ready`
+- worktree HEAD: `indexed_git_head`（index 構築時に保存した HEAD コミット）、`worktree_head_changed`（現在の HEAD と差分がある場合 `true`。`git worktree add` / worktree 内の `git switch` 検出に使う。`#1512`）
 
 各 flag の対処は機械的に判断できます。
 
