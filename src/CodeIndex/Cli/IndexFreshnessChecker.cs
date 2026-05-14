@@ -83,10 +83,33 @@ internal static class IndexFreshnessChecker
             result.MatchedFileCount++;
         }
 
-        foreach (var path in indexed.Keys.Except(workspace.Keys, StringComparer.Ordinal).OrderBy(path => path, StringComparer.Ordinal))
+        var missingCandidates = indexed.Keys
+            .Except(workspace.Keys, StringComparer.Ordinal)
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToList();
+
+        // Skip-worktree paths are intentionally absent from disk (sparse-checkout cone/non-cone,
+        // partial clone, or manual update-index --skip-worktree). Reclassify them so the freshness
+        // gate stops flagging them as "missing" and rebuilds.
+        // skip-worktree のパスは意図的に worktree から外されている(sparse-checkout cone/non-cone、
+        // partial clone、手動の update-index --skip-worktree)。これらを "missing" から切り分け、
+        // 不要な rebuild トリガーを止める。
+        HashSet<string>? skipWorktreePaths = null;
+        if (missingCandidates.Count > 0)
+            skipWorktreePaths = GitHelper.TryGetSkipWorktreePaths(projectRoot);
+
+        foreach (var path in missingCandidates)
         {
-            result.MissingFileCount++;
-            AddSample(result.MissingFiles, path);
+            if (skipWorktreePaths != null && skipWorktreePaths.Contains(path))
+            {
+                result.OutsideSparseConeFileCount++;
+                AddSample(result.OutsideSparseConeFiles, path);
+            }
+            else
+            {
+                result.MissingFileCount++;
+                AddSample(result.MissingFiles, path);
+            }
         }
 
         result.Checked = result.ScanErrorCount == 0;

@@ -503,7 +503,7 @@ Languages:
 
 - scans the current indexable files with the same `FileIndexer` path filters and ignore rules used for indexing;
 - recomputes raw-byte SHA256 checksums and compares them with the DB's saved checksums;
-- reports `index_matches_workspace` plus `workspace_check.changed_files`, `missing_files`, `unindexed_files`, `unverifiable_files`, and `scan_errors`;
+- reports `index_matches_workspace` plus `workspace_check.changed_files`, `missing_files`, `outside_sparse_cone_files`, `unindexed_files`, `unverifiable_files`, and `scan_errors`. Indexed paths whose git index entry is flagged skip-worktree (sparse-checkout cone/non-cone, partial clone, or manual `git update-index --skip-worktree`) land in `outside_sparse_cone_files` and do not fail the freshness gate;
 - exits `0` only when the DB exactly matches the current workspace. Stale indexes exit `5`.
 
 Run it at the start of AI-agent work to decide whether `.cdidx/codeindex.db` can be trusted without reindexing.
@@ -1535,7 +1535,7 @@ Languages:
 
 - indexing と同じ `FileIndexer` の path filter / ignore rule で、現在 index 対象になるファイルを走査します。
 - raw bytes の SHA256 を再計算し、DB に保存された checksum と比較します。
-- `index_matches_workspace` と `workspace_check.changed_files`、`missing_files`、`unindexed_files`、`unverifiable_files`、`scan_errors` を返します。
+- `index_matches_workspace` と `workspace_check.changed_files`、`missing_files`、`outside_sparse_cone_files`、`unindexed_files`、`unverifiable_files`、`scan_errors` を返します。git index で skip-worktree ビットが立っているパス (sparse-checkout cone/non-cone、partial clone、`git update-index --skip-worktree`) は `outside_sparse_cone_files` に分類され、freshness の判定を失敗させません。
 - DB が現在の workspace と完全一致するときだけ終了コード `0`、stale な index では終了コード `5` です。
 
 AI agent の作業開始時はこれを先に実行し、`.cdidx/codeindex.db` を再構築せず信頼できるか判断してください。
