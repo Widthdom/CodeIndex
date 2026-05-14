@@ -98,6 +98,8 @@ public static class QueryCommandRunner
             Console.Error.WriteLine(exactError);
             return CommandExitCodes.UsageError;
         }
+        if (TryWriteBlankQueryError(options, "search"))
+            return CommandExitCodes.UsageError;
         if (options.Query == null)
         {
             WriteUsageError(
@@ -190,6 +192,8 @@ public static class QueryCommandRunner
                 : "0");
             return CommandExitCodes.Success;
         }
+        if (TryWriteBlankQueryError(options, "definition"))
+            return CommandExitCodes.UsageError;
         if (string.IsNullOrWhiteSpace(options.Query))
         {
             WriteUsageError(
@@ -327,6 +331,8 @@ public static class QueryCommandRunner
             Console.Error.WriteLine(exactError);
             return CommandExitCodes.UsageError;
         }
+        if (TryWriteBlankQueryError(options, "references"))
+            return CommandExitCodes.UsageError;
         if (string.IsNullOrWhiteSpace(options.Query))
         {
             WriteUsageError(
@@ -449,6 +455,8 @@ public static class QueryCommandRunner
             Console.Error.WriteLine(exactError);
             return CommandExitCodes.UsageError;
         }
+        if (TryWriteBlankQueryError(options, "callers"))
+            return CommandExitCodes.UsageError;
         if (string.IsNullOrWhiteSpace(options.Query))
         {
             WriteUsageError(
@@ -571,6 +579,8 @@ public static class QueryCommandRunner
             Console.Error.WriteLine(exactError);
             return CommandExitCodes.UsageError;
         }
+        if (TryWriteBlankQueryError(options, "callees"))
+            return CommandExitCodes.UsageError;
         if (string.IsNullOrWhiteSpace(options.Query))
         {
             WriteUsageError(
@@ -1043,6 +1053,13 @@ public static class QueryCommandRunner
             Console.Error.WriteLine(FindUsage);
             return CommandExitCodes.UsageError;
         }
+        if (options.Query is not null && string.IsNullOrWhiteSpace(options.Query))
+        {
+            Console.Error.WriteLine("Error: find query cannot be empty or whitespace-only");
+            Console.Error.WriteLine("Hint: Pass a non-empty value after `find`; empty or whitespace-only arguments (e.g. `\"\"` or `\"   \"`) are rejected.");
+            Console.Error.WriteLine(FindUsage);
+            return CommandExitCodes.UsageError;
+        }
         if (string.IsNullOrWhiteSpace(options.Query))
         {
             Console.Error.WriteLine("Error: find requires a query argument");
@@ -1334,6 +1351,8 @@ public static class QueryCommandRunner
             Console.Error.WriteLine(exactError);
             return CommandExitCodes.UsageError;
         }
+        if (TryWriteBlankQueryError(options, "inspect"))
+            return CommandExitCodes.UsageError;
         if (string.IsNullOrWhiteSpace(options.Query))
         {
             WriteUsageError(
@@ -1756,6 +1775,8 @@ public static class QueryCommandRunner
         if (TryWriteUnsupportedOptionError("impact", cmdArgs, ["--", "--query", "--db", "--json", "--limit", "--top", "--lang", "--count", "--path", "--exclude-path", "--exclude-tests", "--depth"], options.Query))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "impact"))
+            return CommandExitCodes.UsageError;
+        if (TryWriteBlankQueryError(options, "impact"))
             return CommandExitCodes.UsageError;
         if (string.IsNullOrWhiteSpace(options.Query))
         {
@@ -3312,6 +3333,25 @@ public static class QueryCommandRunner
         Console.Error.WriteLine($"Error: {message}");
         Console.Error.WriteLine($"Hint: {hint}");
         Console.Error.WriteLine($"Usage: {usage}");
+    }
+
+    // Reject queries that were supplied but resolve to empty / whitespace-only text so the user gets
+    // a distinct error instead of the generic "<cmd> requires a query argument" message that fires
+    // when the positional was actually missing. The null case is left to the existing missing-query
+    // checks in each runner (issue #1505).
+    // 入力されたクエリが空白のみ・空文字に正規化されたケースを「引数未指定」とは区別して
+    // 専用エラーで弾く。null（未指定）は各 runner の既存チェックに委ねる (issue #1505)。
+    private static bool TryWriteBlankQueryError(QueryCommandOptions options, string commandName)
+    {
+        if (options.Query is null)
+            return false;
+        if (!string.IsNullOrWhiteSpace(options.Query))
+            return false;
+        WriteUsageError(
+            $"{commandName} query cannot be empty or whitespace-only",
+            GetUsageLineOrThrow(commandName),
+            $"Pass a non-empty value after `{commandName}`; empty or whitespace-only arguments (e.g. `\"\"` or `\"   \"`) are rejected.");
+        return true;
     }
 
     private static void WriteValidationError(string message, string hint)

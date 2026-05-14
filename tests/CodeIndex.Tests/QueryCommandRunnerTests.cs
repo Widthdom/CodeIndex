@@ -26662,17 +26662,86 @@ jobs:
     }
 
     [Fact]
-    public void RunInspect_BlankQueryReturnsUsageError()
+    public void RunInspect_BlankQueryReturnsDistinctUsageError()
     {
         var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
             ["   "],
             _jsonOptions));
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
-        Assert.Contains("Error: inspect requires a symbol query argument", stderr);
-        Assert.Contains("Hint: Add the symbol you want to inspect", stderr);
+        Assert.Contains("Error: inspect query cannot be empty or whitespace-only", stderr);
+        Assert.DoesNotContain("inspect requires a symbol query argument", stderr);
+        Assert.Contains("empty or whitespace-only arguments", stderr);
         Assert.Contains($"Usage: {ConsoleUi.GetUsageLine("inspect")}", stderr);
     }
+
+    [Theory]
+    [InlineData("search")]
+    [InlineData("definition")]
+    [InlineData("references")]
+    [InlineData("callers")]
+    [InlineData("callees")]
+    [InlineData("impact")]
+    public void QueryCommands_WhitespaceQueryReturnUsageErrorWithDistinctMessage(string commandName)
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => RunQueryCommand(commandName, ["   "]));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains($"Error: {commandName} query cannot be empty or whitespace-only", stderr);
+        Assert.DoesNotContain($"{commandName} requires a", stderr);
+        Assert.Contains($"Usage: {ConsoleUi.GetUsageLine(commandName)}", stderr);
+    }
+
+    [Theory]
+    [InlineData("search", "search requires a query argument")]
+    [InlineData("definition", "definition requires a symbol query argument")]
+    [InlineData("references", "references requires a symbol query argument")]
+    [InlineData("callers", "callers requires a symbol query argument")]
+    [InlineData("callees", "callees requires a caller query argument")]
+    [InlineData("impact", "impact requires a symbol query argument")]
+    public void QueryCommands_MissingQueryStillReportsRequiresArgument(string commandName, string expectedMessage)
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => RunQueryCommand(commandName, []));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains($"Error: {expectedMessage}", stderr);
+        Assert.DoesNotContain("query cannot be empty or whitespace-only", stderr);
+    }
+
+    [Fact]
+    public void RunFind_WhitespaceQueryReturnsDistinctUsageError()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+            ["   ", "--path", "src/**/*.cs"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("Error: find query cannot be empty or whitespace-only", stderr);
+        Assert.DoesNotContain("find requires a query argument", stderr);
+    }
+
+    [Fact]
+    public void RunFind_MissingQueryStillReportsRequiresArgument()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+            ["--path", "src/**/*.cs"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("Error: find requires a query argument", stderr);
+        Assert.DoesNotContain("query cannot be empty or whitespace-only", stderr);
+    }
+
+    private int RunQueryCommand(string commandName, string[] args) => commandName switch
+    {
+        "search" => QueryCommandRunner.RunSearch(args, _jsonOptions),
+        "definition" => QueryCommandRunner.RunDefinition(args, _jsonOptions),
+        "references" => QueryCommandRunner.RunReferences(args, _jsonOptions),
+        "callers" => QueryCommandRunner.RunCallers(args, _jsonOptions),
+        "callees" => QueryCommandRunner.RunCallees(args, _jsonOptions),
+        "impact" => QueryCommandRunner.RunImpact(args, _jsonOptions),
+        _ => throw new InvalidOperationException($"Unsupported command: {commandName}"),
+    };
 
     [Fact]
     public void RunInspect_BareVerbatimQueryWithExactReturnsUsageError()
