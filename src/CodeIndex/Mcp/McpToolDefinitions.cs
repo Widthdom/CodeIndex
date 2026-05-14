@@ -260,7 +260,7 @@ public partial class McpServer
                     ["properties"] = new JsonObject
                     {
                         ["query"] = new JsonObject { ["type"] = "string", ["description"] = "Symbol name to analyze impact for" },
-                        ["maxDepth"] = new JsonObject { ["type"] = "integer", ["description"] = "Max BFS depth (default: 5; 0 resolves the symbol without traversing callers)", ["default"] = 5, ["minimum"] = 0 },
+                        ["maxDepth"] = new JsonObject { ["type"] = "integer", ["description"] = "Max BFS depth, inclusive (default: 5; maxDepth: N returns callers at depth 1..N, so a chain A→B→C→D queried against D with maxDepth: 2 yields C at depth 1 and B at depth 2; 0 resolves the symbol without traversing callers)", ["default"] = 5, ["minimum"] = 0 },
                         ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max total callers or heuristic file-level dependency hints to return (default: 50). Check `truncated` when the limit is reached.", ["default"] = 50 },
                         ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language" },
                         ["path"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Prefer or restrict paths containing this text. Accepts a single string or an array; multiple values are OR'd together." },

@@ -782,8 +782,13 @@ public partial class DbReader
     /// <summary>
     /// Compute transitive callers of a symbol using BFS with exact matching.
     /// Returns each unique caller in the call chain with its depth from the root symbol.
-    /// Truncation is signaled via the Truncated property in results.
+    /// The <paramref name="maxDepth"/> bound is inclusive: when <paramref name="maxDepth"/> is N,
+    /// callers at depth 1 through N are returned (so a chain A→B→C→D queried against D with
+    /// <c>maxDepth: 2</c> yields C at depth 1 and B at depth 2). Truncation is signaled via the
+    /// Truncated property in results.
     /// 完全一致の BFS でシンボルの推移的呼び出し元を算出。各呼び出し元とルートシンボルからの深さを返す。
+    /// <paramref name="maxDepth"/> は inclusive で、N を指定すると depth 1〜N の caller を返す
+    /// (例: A→B→C→D のチェーンで D を <c>maxDepth: 2</c> 検索すると C(depth=1) と B(depth=2) を返す)。
     /// 結果が切り詰められた場合は Truncated フラグで通知する。
     /// </summary>
     public (List<ImpactResult> Results, bool Truncated) GetTransitiveCallers(string symbolName, int maxDepth = 5, int limit = 50, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
@@ -852,6 +857,12 @@ public partial class DbReader
                         ReferenceCount = caller.ReferenceCount,
                     });
 
+                    // Only recurse if the just-added caller (at depth + 1) is strictly below
+                    // maxDepth, so that the next BFS step can reach depth + 2 ≤ maxDepth.
+                    // This keeps the maxDepth bound inclusive of depth = maxDepth results.
+                    // 追加した caller (depth + 1) が maxDepth より小さいときだけ再帰し、
+                    // 次の BFS で depth + 2 ≤ maxDepth まで到達できるようにする。
+                    // これにより maxDepth は inclusive な上限として機能する。
                     if (caller.CallerName != null
                         && caller.CallerName != SyntheticTopLevelCallerName
                         && depth + 1 < maxDepth)
@@ -880,8 +891,11 @@ public partial class DbReader
     /// <summary>
     /// Analyze impact for a query by combining transitive callers with symbol-resolution
     /// metadata and a class-like file-dependency fallback when symbol-level callers are absent.
+    /// The <paramref name="maxDepth"/> bound is inclusive (callers at depth 1..N are returned);
+    /// <c>maxDepth: 0</c> short-circuits to symbol resolution only.
     /// impact 用に caller BFS と解決メタデータを束ね、class 系で caller 不在なら
-    /// file dependency をフォールバックとして返す。
+    /// file dependency をフォールバックとして返す。<paramref name="maxDepth"/> は inclusive で
+    /// N 指定時は depth 1〜N の caller を返し、<c>maxDepth: 0</c> は symbol 解決のみで終了する。
     /// </summary>
     public ImpactAnalysisResult AnalyzeImpact(string symbolName, int maxDepth = 5, int limit = 50, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
     {

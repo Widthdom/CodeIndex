@@ -995,7 +995,7 @@ Once configured, the AI can directly call these tools:
 | `outline` | Show all symbols in a single file with line numbers, signatures, and container-depth nesting |
 | `status` | Database statistics |
 | `deps` | File-level dependency edges from the reference graph |
-| `impact_analysis` | Compute transitive callers of a symbol; use `maxDepth: 0` to resolve the symbol only, or rely on single-type fallback to heuristic file-level dependency hints and partial-definition hints |
+| `impact_analysis` | Compute transitive callers of a symbol (inclusive `maxDepth`: `maxDepth: N` returns callers at depth 1..N — a chain A→B→C→D queried against D with `maxDepth: 2` yields C at depth 1 and B at depth 2); use `maxDepth: 0` to resolve the symbol only, or rely on single-type fallback to heuristic file-level dependency hints and partial-definition hints |
 | `unused_symbols` | Find symbols defined but never referenced, with confidence buckets for dead-code triage |
 | `symbol_hotspots` | Find high-impact symbols; unique names use codebase-wide counts, duplicate-name families fall back conservatively |
 | `batch_query` | Execute multiple queries in a single call (MCP only, max 10) |
@@ -2020,7 +2020,7 @@ OpenAI Codex CLI (`codex.json` または `~/.codex/config.json`):
 | `outline` | 1ファイルの全シンボルを行番号・シグネチャ・コンテナ深さに応じたネスト付きで表示 |
 | `status` | データベース統計情報 |
 | `deps` | 参照グラフからファイル間依存エッジを表示 |
-| `impact_analysis` | シンボルの推移的 caller を算出し、`maxDepth: 0` で symbol 解決のみを行い、単一定義の型は heuristic な file-level dependency hint にフォールバックし、複数定義時はヒントも返す |
+| `impact_analysis` | シンボルの推移的 caller を算出（`maxDepth` は inclusive で、`maxDepth: N` 指定時は depth 1〜N の caller を返す。例: A→B→C→D のチェーンで D を `maxDepth: 2` 検索すると C(depth=1) と B(depth=2) が返る）。`maxDepth: 0` で symbol 解決のみを行い、単一定義の型は heuristic な file-level dependency hint にフォールバックし、複数定義時はヒントも返す |
 | `unused_symbols` | 定義されているが参照されていないシンボルを bucket 付きで検索（デッドコード検出向け） |
 | `symbol_hotspots` | 影響の大きいシンボルを検索。一意名は codebase 全体件数、同名ファミリーは保守的に縮退 |
 | `batch_query` | 複数クエリを1回で実行（MCP専用、最大10件） |

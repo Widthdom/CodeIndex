@@ -9138,6 +9138,57 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetTransitiveCallers_MaxDepthIsInclusiveAcrossChain()
+    {
+        // Regression for #1879: an audit suspected an off-by-one in the depth bound
+        // (i.e. that --depth=2 would only reach depth 1). Verify with a 3-hop chain
+        // ImpactNodeA → ImpactNodeB → ImpactNodeC → ImpactLeaf that maxDepth is inclusive:
+        //  - maxDepth=1 returns only the direct caller (ImpactNodeC at depth 1);
+        //  - maxDepth=2 also returns ImpactNodeB at depth 2;
+        //  - maxDepth=3 also returns ImpactNodeA at depth 3.
+        // #1879 回帰: maxDepth が inclusive であること (--depth=2 が depth 2 まで到達する) を
+        // 3-hop チェーン ImpactNodeA → ImpactNodeB → ImpactNodeC → ImpactLeaf で確認する。
+        InsertIndexedFile("src/impact_depth_chain.cs", "csharp",
+            """
+            public static class ImpactDepthChain
+            {
+                public static void ImpactLeaf() { }
+                public static void ImpactNodeC() { ImpactLeaf(); }
+                public static void ImpactNodeB() { ImpactNodeC(); }
+                public static void ImpactNodeA() { ImpactNodeB(); }
+            }
+            """);
+
+        var (depth1, truncated1) = _reader.GetTransitiveCallers(
+            "ImpactLeaf", maxDepth: 1, limit: 20, lang: "csharp", pathPatterns: ["impact_depth_chain"]);
+        var (depth2, truncated2) = _reader.GetTransitiveCallers(
+            "ImpactLeaf", maxDepth: 2, limit: 20, lang: "csharp", pathPatterns: ["impact_depth_chain"]);
+        var (depth3, truncated3) = _reader.GetTransitiveCallers(
+            "ImpactLeaf", maxDepth: 3, limit: 20, lang: "csharp", pathPatterns: ["impact_depth_chain"]);
+
+        Assert.False(truncated1);
+        Assert.False(truncated2);
+        Assert.False(truncated3);
+
+        var depth1Pairs = depth1.Select(r => (r.CallerName, r.Depth)).ToArray();
+        Assert.Equal(new (string?, int)[] { ("ImpactNodeC", 1) }, depth1Pairs);
+
+        var depth2Pairs = depth2
+            .Select(r => (r.CallerName, r.Depth))
+            .OrderBy(p => p.Depth)
+            .ToArray();
+        Assert.Equal(new (string?, int)[] { ("ImpactNodeC", 1), ("ImpactNodeB", 2) }, depth2Pairs);
+
+        var depth3Pairs = depth3
+            .Select(r => (r.CallerName, r.Depth))
+            .OrderBy(p => p.Depth)
+            .ToArray();
+        Assert.Equal(
+            new (string?, int)[] { ("ImpactNodeC", 1), ("ImpactNodeB", 2), ("ImpactNodeA", 3) },
+            depth3Pairs);
+    }
+
+    [Fact]
     public void AnalyzeImpact_ClassSymbolReturnsHeuristicFileDependencyHints()
     {
         InsertIndexedFile("src/FolderDiffService.cs", "csharp",

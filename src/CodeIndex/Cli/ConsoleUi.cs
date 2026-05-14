@@ -402,7 +402,7 @@ public static class ConsoleUi
         Console.WriteLine("  --kind <kind>              definition/symbols/hotspots/unused: symbol kind; references: reference kind (call/instantiate/subscribe/attribute/annotation); callers/callees: call-graph kinds only (call/instantiate/subscribe — metadata kinds rejected, use references instead); validate: issue kind");
         Console.WriteLine("  --count                    Count only; search/definition/references/callers/callees/symbols/files/find/unused ignore --limit, impact/hotspots still use visible page counts");
         Console.WriteLine("  --since <datetime>         Filter to files modified since this timestamp (ISO 8601)");
-        Console.WriteLine("  --depth <n>                Max BFS depth for impact analysis (default: 5)");
+        Console.WriteLine("  --depth <n>                Max BFS depth for impact analysis, inclusive (default: 5; --depth 2 returns callers at depth 1 and 2; --depth 0 resolves the symbol without traversing callers)");
         Console.WriteLine("  --reverse                  Reverse direction for deps (show dependents)");
         Console.WriteLine("  --group-by-name            hotspots: collapse rows sharing (name, kind) across files into one line");
         Console.WriteLine("  Note: if a query itself starts with '-', pass it with --query <query> or -- <query>; for option values that start with '--', use --opt=<value>.");
