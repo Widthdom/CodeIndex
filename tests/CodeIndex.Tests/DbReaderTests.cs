@@ -6096,6 +6096,99 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void ReferenceKindMatrix_DepsKeepsMetadataInBothDirections_CallersExcludesMetadata()
+    {
+        // Regression for issue #1882 — pins the intentional reference_kind filter
+        // split between the call graph and the dependency graph:
+        //   * `deps` (forward AND reverse, single `GetFileDependencies` SQL)
+        //     keeps `attribute` / `annotation` rows as compile-time edges.
+        //   * `callers` (and the transitive impact BFS that reuses
+        //     `CallGraphReferenceKindsSql`) drops metadata kinds.
+        // The reconciliation path documented in DEVELOPER_GUIDE.md's
+        // reference_kind filtering matrix is `references --kind attribute`
+        // (i.e. `SearchReferences(referenceKind: "attribute")`), which still
+        // surfaces the metadata-only edge that the call-graph view drops.
+        // issue #1882 リグレッション — 呼び出しグラフと依存グラフで
+        // reference_kind フィルタが意図的に異なる契約を固定する:
+        //   * `deps` は前進 / 逆方向で同じ `GetFileDependencies` SQL を共有し、
+        //     `attribute` / `annotation` も compile-time エッジとして残す。
+        //   * `callers` (および `CallGraphReferenceKindsSql` を再利用する
+        //     `impact` BFS) は metadata 種別を除外する。
+        // 差分を埋める導線は DEVELOPER_GUIDE.md の対応表に記載した
+        // `references --kind attribute` (`SearchReferences(referenceKind:
+        // "attribute")`) で、call-graph 側が落とした metadata エッジを救う。
+        InsertIndexedFile("src/MatrixTarget.cs", "csharp",
+            """
+            using System;
+
+            [AttributeUsage(AttributeTargets.Class)]
+            public class MatrixTarget : Attribute
+            {
+                public MatrixTarget(Type t) { }
+            }
+            """);
+        InsertIndexedFile("src/MatrixAnnotated.cs", "csharp",
+            """
+            [MatrixTarget(typeof(int))]
+            public class MatrixAnnotated
+            {
+            }
+            """);
+        InsertIndexedFile("src/MatrixRuntimeCaller.cs", "csharp",
+            """
+            public class MatrixRuntimeCaller
+            {
+                public void Do()
+                {
+                    var x = new MatrixTarget(typeof(int));
+                }
+            }
+            """);
+
+        // Forward deps: both the runtime `new MatrixTarget(...)` edge and the
+        // metadata `[MatrixTarget(...)]` edge surface as compile-time
+        // dependencies of MatrixTarget.cs.
+        // 前進 deps: runtime の `new MatrixTarget(...)` と metadata の
+        // `[MatrixTarget(...)]` の両方が MatrixTarget.cs への依存として現れる。
+        var forward = _reader.GetFileDependencies(limit: 10, lang: "csharp", pathPatterns: ["Matrix"]);
+        Assert.Contains(forward, d => d.SourcePath == "src/MatrixAnnotated.cs" && d.TargetPath == "src/MatrixTarget.cs");
+        Assert.Contains(forward, d => d.SourcePath == "src/MatrixRuntimeCaller.cs" && d.TargetPath == "src/MatrixTarget.cs");
+
+        // Reverse deps share the same SQL function. `reverse: true` only flips
+        // which side path filters apply to, so the reference_kind set must be
+        // identical between directions. This assertion pins that the two
+        // directions cannot drift apart and start filtering metadata
+        // asymmetrically.
+        // 逆方向 deps は同じ SQL 関数を共有する。`reverse: true` は path filter の
+        // 当て先を source / target で入れ替えるだけのため、reference_kind 集合は
+        // 前進と同一でなければならない。前進 / 逆方向の filter が乖離して
+        // metadata の扱いが非対称になる事態を防ぐ assertion。
+        var reverse = _reader.GetFileDependencies(limit: 10, lang: "csharp", pathPatterns: ["MatrixTarget"], reverse: true);
+        Assert.Contains(reverse, d => d.SourcePath == "src/MatrixAnnotated.cs" && d.TargetPath == "src/MatrixTarget.cs");
+        Assert.Contains(reverse, d => d.SourcePath == "src/MatrixRuntimeCaller.cs" && d.TargetPath == "src/MatrixTarget.cs");
+
+        // Callers: call-graph contract excludes metadata kinds via
+        // `CallGraphReferenceKindsSql`, so only the runtime instantiate site
+        // is reported. The `[MatrixTarget(...)]` row on MatrixAnnotated must
+        // NOT appear as a caller.
+        // callers: call-graph 契約は `CallGraphReferenceKindsSql` で metadata を
+        // 除外するため、runtime の instantiate サイトのみが返る。
+        // MatrixAnnotated の `[MatrixTarget(...)]` は caller に出てはならない。
+        var callers = _reader.GetCallers("MatrixTarget", lang: "csharp", exact: true, pathPatterns: ["Matrix"]);
+        Assert.Contains(callers, c => c.CallerName == "Do");
+        Assert.DoesNotContain(callers, c => c.CallerName == "MatrixAnnotated");
+
+        // `references --kind attribute` is the documented reconciliation path:
+        // it surfaces the `[MatrixTarget(...)]` metadata-only edge that the
+        // call-graph view intentionally drops.
+        // 差分を埋める `references --kind attribute` は、call-graph 側が落とした
+        // `[MatrixTarget(...)]` metadata エッジを返す。
+        var attrRefs = _reader.SearchReferences("MatrixTarget", limit: 10, lang: "csharp", referenceKind: "attribute", exact: true, pathPatterns: ["Matrix"]);
+        Assert.Contains(attrRefs, r => r.Path == "src/MatrixAnnotated.cs" && r.ReferenceKind == "attribute");
+        Assert.DoesNotContain(attrRefs, r => r.Path == "src/MatrixRuntimeCaller.cs");
+    }
+
+    [Fact]
     public void GetFileDependencies_MatchesCSharpAttributeSuffixConvention()
     {
         // issue #293 follow-up: C# convention — a class `FooAttribute` is used in
