@@ -1513,6 +1513,40 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_Css_IdSelectors_AreReferenced()
+    {
+        const string content = """
+            #header { color: blue; }
+            body #header { padding: 0; }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "css", content);
+        var references = ReferenceExtractor.Extract(1, "css", content, symbols);
+
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "#header"
+            && reference.ReferenceKind == "reference"));
+    }
+
+    [Fact]
+    public void Extract_Css_HexColorLiterals_DoNotEmitIdReferences()
+    {
+        const string content = """
+            .card {
+                color: #fff;
+                background: #abc123;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "css", content);
+        var references = ReferenceExtractor.Extract(1, "css", content, symbols);
+
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName.StartsWith("#")
+            && reference.ReferenceKind == "reference");
+    }
+
+    [Fact]
     public void Extract_Terraform_DottedReferences_AreReferenced()
     {
         const string content = """
