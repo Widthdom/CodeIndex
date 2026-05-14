@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using CodeIndex.Indexer;
 using Microsoft.Data.Sqlite;
 
@@ -653,7 +654,49 @@ public partial class DbReader
         if (!string.IsNullOrWhiteSpace(lang) && string.Equals(lang, "javascript", StringComparison.OrdinalIgnoreCase))
             return NormalizeJavaScriptSymbolSearchQuery(query);
 
+        // Terraform dotted prefixes (var.X / local.X / module.X / data.TYPE.X) are stored as bare names in
+        // the references and symbols tables. Strip the prefix so queries pasted from HCL still resolve.
+        // Terraform の dotted prefix（var.X / local.X / module.X / data.TYPE.X）は参照/シンボルの bare 名で格納されるため、
+        // HCL からそのまま貼り付けたクエリでも解決できるよう prefix を取り除く。
+        var terraformNormalized = NormalizeTerraformDottedQuery(query, lang);
+        if (terraformNormalized != null)
+            return terraformNormalized;
+
         return NormalizeCSharpVerbatimQuery(query, lang);
+    }
+
+    private static readonly Regex TerraformVarLocalModuleQueryRegex = new(
+        @"^(?:var|local|module)\.(?<name>[A-Za-z_]\w*)(?:\..*)?$",
+        RegexOptions.Compiled);
+
+    private static readonly Regex TerraformDataQueryRegex = new(
+        @"^data\.[A-Za-z_]\w*\.(?<name>[A-Za-z_]\w*)(?:\..*)?$",
+        RegexOptions.Compiled);
+
+    private static string? NormalizeTerraformDottedQuery(string? query, string? lang)
+    {
+        if (!string.IsNullOrWhiteSpace(lang)
+            && !string.Equals(lang, "terraform", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(query))
+            return null;
+
+        var trimmed = query.Trim();
+        if (trimmed.Length == 0)
+            return null;
+
+        var simpleMatch = TerraformVarLocalModuleQueryRegex.Match(trimmed);
+        if (simpleMatch.Success)
+            return simpleMatch.Groups["name"].Value;
+
+        var dataMatch = TerraformDataQueryRegex.Match(trimmed);
+        if (dataMatch.Success)
+            return dataMatch.Groups["name"].Value;
+
+        return null;
     }
 
     private static string? ComputeSwiftBacktickAlias(string? query, string? lang)

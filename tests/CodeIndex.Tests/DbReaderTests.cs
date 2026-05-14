@@ -279,6 +279,59 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SearchReferences_TerraformDottedQueriesResolveToBareNames_Issue1502()
+    {
+        // Issue #1502: references stored by the Terraform extractor use bare symbol names
+        // (e.g. "instances", "regions", "max_size"), but users naturally query the HCL form
+        // (`var.instances`, `local.regions`). Without prefix normalization at the query
+        // layer, `cdidx references var.instances` returned nothing.
+        // Issue #1502: Terraform extractor は bare 名（"instances" 等）で参照を格納するが、
+        // 利用者は HCL 形式（`var.instances` 等）で問い合わせる。クエリ層で prefix を
+        // 取り除かないと、`cdidx references var.instances` が空になる。
+        InsertIndexedFile(
+            "main.tf",
+            "terraform",
+            """
+            variable "instances" {
+              type = map(object({ size = string }))
+            }
+
+            variable "max_size" {
+              type = number
+            }
+
+            locals {
+              regions = ["us-east-1", "us-west-2"]
+              suffix  = "demo"
+            }
+
+            output "ids" {
+              value = var.max_size
+            }
+
+            resource "aws_instance" "fleet" {
+              for_each = var.instances
+              count    = length(local.regions)
+              tags     = local.suffix
+            }
+            """);
+
+        var varInstances = _reader.SearchReferences("var.instances", lang: "terraform", exact: true);
+        Assert.Contains(varInstances, reference => reference.SymbolName == "instances" && reference.Path == "main.tf");
+
+        var localRegions = _reader.SearchReferences("local.regions", lang: "terraform", exact: true);
+        Assert.Contains(localRegions, reference => reference.SymbolName == "regions" && reference.Path == "main.tf");
+
+        var varMaxSize = _reader.SearchReferences("var.max_size", lang: "terraform", exact: true);
+        Assert.Contains(varMaxSize, reference => reference.SymbolName == "max_size" && reference.Path == "main.tf");
+
+        // Lang inference also works when caller omits lang (extension-only path).
+        // lang を省略した場合（拡張子推論のみ）も解決できることを確認する。
+        var inferredLocalSuffix = _reader.SearchReferences("local.suffix", lang: null, exact: true);
+        Assert.Contains(inferredLocalSuffix, reference => reference.SymbolName == "suffix" && reference.Path == "main.tf");
+    }
+
+    [Fact]
     public void SearchSymbols_JavaScriptCommonJsBracketExportQueriesResolveToLeafNames()
     {
         InsertIndexedFile(

@@ -1698,6 +1698,51 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_Terraform_VarOrLocal_AsRawObject_IsReferenced_Issue1502()
+    {
+        const string content = """
+            variable "instances" {
+              type = map(object({ size = string }))
+            }
+
+            variable "max_size" {
+              type = number
+            }
+
+            locals {
+              regions = ["us-east-1", "us-west-2"]
+              suffix  = "demo"
+            }
+
+            output "ids" {
+              value = var.max_size
+            }
+
+            resource "aws_instance" "fleet" {
+              for_each = var.instances
+              count    = length(local.regions)
+              tags     = local.suffix
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "terraform", content);
+        var references = ReferenceExtractor.Extract(1, "terraform", content, symbols);
+
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "instances"
+            && reference.ReferenceKind == "reference"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "max_size"
+            && reference.ReferenceKind == "reference"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "regions"
+            && reference.ReferenceKind == "reference"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "suffix"
+            && reference.ReferenceKind == "reference"));
+    }
+
+    [Fact]
     public void Extract_CsharpExpressionBodiedMembers_AttributeToIndividualMember()
     {
         // issue #233: expression-bodied methods and properties must attribute their
