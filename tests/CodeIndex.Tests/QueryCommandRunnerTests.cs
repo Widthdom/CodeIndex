@@ -1881,6 +1881,155 @@ jobs:
         Assert.DoesNotContain("Unhandled exception", stderr);
     }
 
+    // Issue #1507: missing-value errors for CLI flags must append a per-flag `Hint:` line that
+    // shows the expected value type or range (e.g. positive integer, glob pattern, language id),
+    // so users do not need to consult `--help` for trivial mistakes. The hint is sourced from
+    // a single per-flag metadata table so every command surfaces consistent guidance.
+    // Issue #1507: 値欠如エラーには、フラグごとに期待する値の型/範囲を示す `Hint:` 行を
+    // 追記する（例: 正の整数、glob、言語識別子）。`--help` を見なくてもユーザーが復旧できる。
+    // ヒントは単一のメタデータテーブルから供給され、コマンド間で一貫した案内を出す。
+    [Theory]
+    [InlineData(new[] { "QueryCommandRunner", "--limit" }, "search", "--limit", "pass a positive integer", "--limit 20")]
+    [InlineData(new[] { "QueryCommandRunner", "--top" }, "search", "--limit", "pass a positive integer", "--limit 20")]
+    [InlineData(new[] { "QueryCommandRunner", "--db" }, "search", "--db", "pass a path to a CodeIndex SQLite database", ".cdidx/codeindex.db")]
+    [InlineData(new[] { "QueryCommandRunner", "--lang" }, "search", "--lang", "pass a language identifier", "--lang csharp")]
+    [InlineData(new[] { "QueryCommandRunner", "--path" }, "search", "--path", "pass a glob-style path pattern", "--path src/**")]
+    [InlineData(new[] { "QueryCommandRunner", "--exclude-path" }, "search", "--exclude-path", "pass a glob-style path pattern to exclude", "--exclude-path tests/**")]
+    [InlineData(new[] { "QueryCommandRunner", "--snippet-lines" }, "search", "--snippet-lines", "pass an integer between 1 and 20", "--snippet-lines 8")]
+    [InlineData(new[] { "QueryCommandRunner", "--max-line-width" }, "search", "--max-line-width", "pass a non-negative integer", "--max-line-width 512")]
+    public void RunSearch_MissingOptionValueAppendsPerFlagHint_Issue1507(
+        string[] args,
+        string command,
+        string optionName,
+        string expectedHintFragment,
+        string expectedExampleFragment)
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(args, _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains($"Error: {optionName} requires a value.", stderr);
+        Assert.Contains($"Hint: {expectedHintFragment}", stderr);
+        Assert.Contains(expectedExampleFragment, stderr);
+        Assert.Contains($"Usage: {ConsoleUi.GetUsageLine(command)}", stderr);
+    }
+
+    // Issue #1507: command-specific value-taking flags should also surface the per-flag hint, so
+    // commands that wire through TryReadStringOptionValue / TryReadRawOptionValue stay consistent
+    // with the search-side coverage.
+    // Issue #1507: コマンド固有の値取りフラグも同じテーブル経由でヒントを表示する。
+    [Fact]
+    public void RunSymbols_MissingNameValueShowsPerFlagHint_Issue1507()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(["--name"], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("Error: --name requires a value.", stderr);
+        Assert.Contains("Hint: pass a literal symbol name", stderr);
+        Assert.Contains("--name UserService", stderr);
+    }
+
+    [Fact]
+    public void RunImpact_MissingDepthValueShowsPerFlagHint_Issue1507()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(["QueryCommandRunner", "--depth"], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("Error: --depth requires a value.", stderr);
+        Assert.Contains("Hint: pass a non-negative integer", stderr);
+        Assert.Contains("--depth 5", stderr);
+    }
+
+    [Fact]
+    public void RunDefinition_MissingKindValueShowsPerFlagHint_Issue1507()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(["QueryCommandRunner", "--kind"], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("Error: --kind requires a value.", stderr);
+        Assert.Contains("Hint: pass a kind identifier", stderr);
+        Assert.Contains("--kind function", stderr);
+    }
+
+    [Fact]
+    public void RunExcerpt_MissingStartValueShowsPerFlagHint_Issue1507()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(["src/CodeIndex/Program.cs", "--start"], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("Error: --start requires a value.", stderr);
+        Assert.Contains("Hint: pass a 1-based line number", stderr);
+        Assert.Contains("--start 10", stderr);
+    }
+
+    [Fact]
+    public void RunFiles_MissingSinceValueShowsPerFlagHint_Issue1507()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(["--since"], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("Error: --since requires a value.", stderr);
+        Assert.Contains("Hint: pass an ISO 8601 datetime", stderr);
+        Assert.Contains("--since 2024-01-01", stderr);
+    }
+
+    // Issue #1507: when a separated `--db --foo` shape rejects the next token as a recognized
+    // option, both the inline-form hint AND the per-flag hint must surface so users know why
+    // the parser stopped *and* what value to pass.
+    // Issue #1507: `--db --foo` のような separated dashed literal が拒否されたときは、
+    // inline-form ヒント (`--db=<value>` 形式) と、フラグ別の値ヒントを両方表示する。
+    [Fact]
+    public void RunSearch_DbDoubleDashLiteralKeepsBothHints_Issue1507()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["QueryCommandRunner", "--db", "--mystery"], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("Error: --db requires a value.", stderr);
+        Assert.Contains("Hint: if the literal value starts with `--`, pass it as `--db=<value>`.", stderr);
+        Assert.Contains("Hint: pass a path to a CodeIndex SQLite database", stderr);
+    }
+
+    // Issue #1507: `find` validates its options through ValidateFindArgs (separate path from
+    // ParseArgs), so the per-flag hint table must apply there too. Otherwise users running
+    // `cdidx find foo --path` would still see the bare "requires a value" message.
+    // Issue #1507: `find` は ValidateFindArgs 経由で値検証する独自経路を持つので、
+    // この経路でもフラグ別ヒントを表示する。
+    [Fact]
+    public void RunFind_MissingPathValueShowsPerFlagHint_Issue1507()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue1507_find_missing_path");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["foo", "--db", dbPath, "--path"], _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("Error: --path requires a value.", stderr);
+            Assert.Contains("Hint: pass a glob-style path pattern", stderr);
+            Assert.Contains("--path src/**", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    // Issue #1507: `WithDb` surfaces the missing --db error when ParseArgs accepted an empty
+    // DbPath (e.g. via the CLI default fallback being cleared). Even at this late site the
+    // per-flag hint must come from the same metadata table, not a hard-coded one-off string.
+    // Issue #1507: WithDb 経路の missing --db エラーも、同じメタデータテーブル由来のヒントを使う。
+    [Fact]
+    public void WithDb_BlankDbPathSurfacesPerFlagHint_Issue1507()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["QueryCommandRunner", "--db="], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("Error: --db requires a value.", stderr);
+        Assert.Contains("Hint: pass a path to a CodeIndex SQLite database", stderr);
+    }
+
     [Theory]
     [InlineData("search-extra", "unexpected extra positional argument(s) for search")]
     [InlineData("excerpt-extra", "unexpected extra positional argument(s) for excerpt")]
