@@ -130,6 +130,10 @@ internal sealed class IndexFullScanJsonResult
     public string? DegradedReason { get; init; }
     public string? RecommendedAction { get; init; }
     public string? AlternativeAction { get; init; }
+    public bool HeadChanged { get; init; }
+    public string? PriorIndexedHeadCommit { get; init; }
+    public string? CurrentHeadCommit { get; init; }
+    public string? HeadChangeNotice { get; init; }
     public List<CliJsonMessage>? Errors { get; init; }
     public List<CliJsonMessage>? Warnings { get; init; }
     public long ElapsedMs { get; init; }

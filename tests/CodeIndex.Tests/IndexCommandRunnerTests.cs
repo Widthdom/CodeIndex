@@ -4772,6 +4772,259 @@ public class IndexCommandRunnerTests
         }
     }
 
+    // Issue #1508: full scans must capture the current HEAD so a subsequent default
+    // incremental run after `git switch <branch>` can detect that the DB no longer
+    // mirrors the worktree and recommend `--rebuild`.
+    // Issue #1508: full scan が HEAD を保存することで、後続の incremental が branch 切替を検知できる。
+    [Fact]
+    public void Run_FullScan_PersistsCurrentHeadCommit()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            RunGit(projectRoot, "init");
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }\n");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "init");
+            var expectedHead = RunGitCaptureStdOut(projectRoot, "rev-parse", "HEAD").Trim();
+
+            var exitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using var db = new DbContext(dbPath);
+            Assert.Equal(expectedHead, db.GetMetaString(DbContext.IndexedHeadCommitMetaKey));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_AfterBranchSwitch_JsonReportsHeadChangedAndWarning()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            RunGit(projectRoot, "init");
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }\n");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "init");
+            var firstHead = RunGitCaptureStdOut(projectRoot, "rev-parse", "HEAD").Trim();
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            // Branch + commit to advance HEAD without changing on-disk app.cs.
+            // ブランチ作成と新規コミットで HEAD だけを動かす。
+            RunGit(projectRoot, "checkout", "-b", "feature");
+            File.WriteAllText(Path.Combine(projectRoot, "feature.cs"), "public class Feature { }\n");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "feature");
+            var secondHead = RunGitCaptureStdOut(projectRoot, "rev-parse", "HEAD").Trim();
+            Assert.NotEqual(firstHead, secondHead);
+
+            // A subsequent default incremental full scan should flag the HEAD change.
+            // 既定の incremental full scan が HEAD 差分を通知する。
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.True(json.GetProperty("head_changed").GetBoolean());
+            Assert.Equal(firstHead, json.GetProperty("prior_indexed_head_commit").GetString());
+            Assert.Equal(secondHead, json.GetProperty("current_head_commit").GetString());
+            var notice = json.GetProperty("head_change_notice").GetString();
+            Assert.NotNull(notice);
+            Assert.Contains("--rebuild", notice);
+
+            // After a successful re-scan the HEAD pointer should be updated to the new value.
+            // 再スキャン成功後は HEAD が新しい値に更新される。
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using var db = new DbContext(dbPath);
+            Assert.Equal(secondHead, db.GetMetaString(DbContext.IndexedHeadCommitMetaKey));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_LegacyDbWithoutCapturedHead_DoesNotReportHeadChange()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            RunGit(projectRoot, "init");
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }\n");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "init");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            // Simulate a legacy DB by removing the captured HEAD meta row.
+            // legacy DB を再現するため HEAD メタを削除する。
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var conn = OpenNonPoolingConnection(dbPath))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "DELETE FROM codeindex_meta WHERE key = @key";
+                cmd.Parameters.AddWithValue("@key", DbContext.IndexedHeadCommitMetaKey);
+                cmd.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.False(json.GetProperty("head_changed").GetBoolean());
+            Assert.Equal(JsonValueKind.Null, json.GetProperty("prior_indexed_head_commit").ValueKind);
+            Assert.Equal(JsonValueKind.Null, json.GetProperty("head_change_notice").ValueKind);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_NonGitWorkspace_DoesNotReportHeadChange()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.False(json.GetProperty("head_changed").GetBoolean());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_Rebuild_DoesNotReportHeadChangeEvenIfHeadDiffers()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            RunGit(projectRoot, "init");
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }\n");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "init");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            RunGit(projectRoot, "checkout", "-b", "feature");
+            File.WriteAllText(Path.Combine(projectRoot, "feature.cs"), "public class Feature { }\n");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "feature");
+
+            // --rebuild already wipes the DB, so HEAD divergence is irrelevant on that path.
+            // --rebuild は DB を消すため HEAD 差分の警告は不要。
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--rebuild", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.False(json.GetProperty("head_changed").GetBoolean());
+            Assert.Equal(JsonValueKind.Null, json.GetProperty("head_change_notice").ValueKind);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_DoesNotOverwriteIndexedHeadCommit()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            RunGit(projectRoot, "init");
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } }\n");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "init");
+            var initialHead = RunGitCaptureStdOut(projectRoot, "rev-parse", "HEAD").Trim();
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            RunGit(projectRoot, "checkout", "-b", "feature");
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } public void Extra() { } }\n");
+            File.SetLastWriteTimeUtc(sourcePath, DateTime.UtcNow.AddSeconds(2));
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "feature");
+
+            // `--files` is a user-driven partial update. It must NOT republish the captured
+            // HEAD; the next default full scan is what advances the stale marker. Issue #1508.
+            // `--files` は利用者指定の部分更新。HEAD を進めず、次の full scan で初めて更新する。
+            var (updateExitCode, _) = RunAndCaptureJson([projectRoot, "--files", "app.cs", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using var db = new DbContext(dbPath);
+            Assert.Equal(initialHead, db.GetMetaString(DbContext.IndexedHeadCommitMetaKey));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunStatusCheck_AfterBranchSwitch_ReportsHeadChanged()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            RunGit(projectRoot, "init");
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }\n");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "init");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            // Advance HEAD without touching the only indexed file. Without HEAD-aware
+            // freshness, status --check would erroneously report matches_workspace=true.
+            // HEAD だけを進めて唯一のインデックス対象ファイルを変更しない。HEAD 認識がないと
+            // status --check は matches_workspace=true を誤って返してしまう。
+            RunGit(projectRoot, "checkout", "-b", "feature");
+            File.WriteAllText(Path.Combine(projectRoot, "feature.cs"), "public class Feature { }\n");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "feature");
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (_, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--check", "--json"]);
+            var check = statusJson.GetProperty("workspace_check");
+            Assert.True(check.GetProperty("head_changed").GetBoolean());
+            Assert.False(check.GetProperty("matches_workspace").GetBoolean());
+            // The status check reports the most specific reason first: an unindexed workspace
+            // file outranks `head_changed`, but the head_changed flag still flips so callers
+            // know to rerun `--rebuild`. Issue #1508.
+            // 不一致は具体的な reason を優先表示する。HEAD 差分は head_changed フラグで通知する。
+            Assert.Equal("unindexed_workspace_files", check.GetProperty("reason").GetString());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
     private (int ExitCode, JsonElement Json) RunAndCaptureJson(string[] args)
     {
         lock (TestConsoleLock.Gate)

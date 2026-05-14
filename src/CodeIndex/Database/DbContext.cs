@@ -450,6 +450,18 @@ public class DbContext : IDisposable
     public const int SqlGraphContractVersion = 1;
     public const string SqlGraphContractVersionMetaKey = "sql_graph_contract_version";
     public const string IndexedProjectRootMetaKey = "indexed_project_root";
+    // Git HEAD commit captured at the end of the most recent full-scan index run (`--rebuild` or
+    // the default incremental full scan). Reading this back lets the CLI detect that a user
+    // ran `cdidx index <projectPath>` after switching branches / commits, where the DB still
+    // mirrors the previously-indexed worktree even though the on-disk file set has diverged.
+    // Partial update modes (`--commits` / `--files`) deliberately do NOT touch this key, so a
+    // post-branch-switch partial refresh still surfaces as stale until a real full scan
+    // republishes the captured HEAD. Issue #1508.
+    // 直近の full-scan 成功時点で記録した git HEAD。`cdidx index` 後にブランチが切り替わると
+    // DB は旧 worktree のスナップショットのまま残るため、ここを比較して「rebuild を勧める」
+    // 警告を出す。partial update (`--commits` / `--files`) は本キーを更新せず、後続の
+    // full scan が改めて記録する。Issue #1508。
+    public const string IndexedHeadCommitMetaKey = "indexed_head_commit";
     // Authoritative `symbols.is_metadata_target` flag readiness, per language. Stamped at the
     // end of a successful index pass once the writer's metadata-target resolver has classified
     // every class-like row for that language. Readers fall back to the legacy heuristic when

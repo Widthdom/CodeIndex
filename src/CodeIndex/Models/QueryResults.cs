@@ -105,6 +105,11 @@ public class IndexFreshnessCheckResult
     public List<string> UnindexedFiles { get; set; } = [];
     public List<string> UnverifiableFiles { get; set; } = [];
     public List<string> ScanErrors { get; set; } = [];
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? IndexedHeadCommit { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? WorkspaceHeadCommit { get; set; }
+    public bool HeadChanged { get; set; }
 }
 
 public class DefinitionResult : SymbolResult

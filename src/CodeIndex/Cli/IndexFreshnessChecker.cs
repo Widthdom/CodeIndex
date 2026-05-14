@@ -22,9 +22,21 @@ internal static class IndexFreshnessChecker
         var indexed = reader.GetIndexedFileSnapshots()
             .ToDictionary(file => file.Path, StringComparer.Ordinal);
         var workspace = new Dictionary<string, string>(StringComparer.Ordinal);
+        var indexedHeadCommit = reader.GetMetaString(DbContext.IndexedHeadCommitMetaKey);
+        var workspaceHeadCommit = GitHelper.TryGetHeadCommit(projectRoot);
+        // Only treat HEAD as diverged when we have both sides to compare. A legacy DB (no
+        // captured HEAD) or a non-git workspace (no current HEAD) intentionally degrades to
+        // "no signal" rather than spuriously flagging every status check as stale.
+        // 比較材料が揃ったときのみ HEAD 不一致と判定する。片側でも欠ければ意図せず stale 化しない。
+        var headChanged = !string.IsNullOrWhiteSpace(indexedHeadCommit)
+            && !string.IsNullOrWhiteSpace(workspaceHeadCommit)
+            && !string.Equals(indexedHeadCommit, workspaceHeadCommit, StringComparison.Ordinal);
         var result = new IndexFreshnessCheckResult
         {
             IndexedFileCount = indexed.Count,
+            IndexedHeadCommit = string.IsNullOrWhiteSpace(indexedHeadCommit) ? null : indexedHeadCommit,
+            WorkspaceHeadCommit = string.IsNullOrWhiteSpace(workspaceHeadCommit) ? null : workspaceHeadCommit,
+            HeadChanged = headChanged,
         };
 
         var ignoreCase = GitHelper.ResolveIgnoreCase(projectRoot);
@@ -91,6 +103,7 @@ internal static class IndexFreshnessChecker
 
         result.Checked = result.ScanErrorCount == 0;
         result.MatchesWorkspace = result.Checked
+            && !result.HeadChanged
             && result.ChangedFileCount == 0
             && result.MissingFileCount == 0
             && result.UnindexedFileCount == 0
@@ -111,6 +124,15 @@ internal static class IndexFreshnessChecker
             return "missing_indexed_files";
         if (result.UnindexedFileCount > 0)
             return "unindexed_workspace_files";
+        // HEAD divergence with otherwise-matching files is still stale: a partial rebuild after
+        // checkout may leave the DB byte-equal for surviving files while missing branch-specific
+        // additions / deletions that the per-file scan cannot prove. Emit this as the lowest
+        // priority so an actual file mismatch above takes precedence and the message stays
+        // specific. Issue #1508.
+        // ファイル単位の不一致がない場合でも HEAD が変わっていれば stale 扱い。優先度は最後で、
+        // 実ファイル差分の reason が立っているときはそちらを優先表示する。Issue #1508。
+        if (result.HeadChanged)
+            return "head_changed";
         return "matched";
     }
 

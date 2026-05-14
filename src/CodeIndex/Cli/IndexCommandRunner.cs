@@ -258,6 +258,11 @@ public static class IndexCommandRunner
         var priorHotspotFamilyVersions = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyVersionMetaKey);
         var priorHotspotFamilyMarkerFingerprints = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyMarkerFingerprintMetaKey);
         var priorIndexedProjectRoot = db.GetMetaString(DbContext.IndexedProjectRootMetaKey);
+        // Captured BEFORE `--rebuild` drops the DB so an incremental run can warn the user when
+        // the worktree's HEAD has moved since the previously indexed snapshot. Issue #1508.
+        // `--rebuild` が DB を消す前に取り出す。incremental 経路で HEAD 差分を検知して警告するのに使う。
+        var priorIndexedHeadCommit = db.GetMetaString(DbContext.IndexedHeadCommitMetaKey);
+        var currentHeadCommit = GitHelper.TryGetHeadCommit(options.ProjectPath);
 
         // Don't demote readiness yet. A transient usage error in update-mode preflight
         // (bad --commits hash, git unavailable, etc.) would permanently downgrade a healthy
@@ -284,8 +289,8 @@ public static class IndexCommandRunner
         var projectRoot = Path.GetFullPath(options.ProjectPath);
 
         return isUpdateMode
-            ? RunUpdateMode(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion, priorFoldFingerprint, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot)
-            : RunFullScan(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorFoldVersion, priorFoldFingerprint, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot);
+            ? RunUpdateMode(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion, priorFoldFingerprint, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit)
+            : RunFullScan(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorFoldVersion, priorFoldFingerprint, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit);
     }
 
     public static int RunBackfillFold(string[] cmdArgs, JsonSerializerOptions jsonOptions)
@@ -533,7 +538,9 @@ public static class IndexCommandRunner
         IReadOnlyDictionary<string, string?> priorHotspotFamilyVersions,
         IReadOnlyDictionary<string, string?> priorHotspotFamilyMarkerFingerprints,
         IReadOnlyDictionary<string, string?> currentHotspotFamilyMarkerFingerprints,
-        string? priorIndexedProjectRoot)
+        string? priorIndexedProjectRoot,
+        string? priorIndexedHeadCommit,
+        string? currentHeadCommit)
     {
         var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
         var currentSqlGraphContractVersion = DbContext.SqlGraphContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -610,7 +617,9 @@ public static class IndexCommandRunner
                 priorHotspotFamilyVersions,
                 priorHotspotFamilyMarkerFingerprints,
                 currentHotspotFamilyMarkerFingerprints,
-                priorIndexedProjectRoot);
+                priorIndexedProjectRoot,
+                priorIndexedHeadCommit,
+                currentHeadCommit);
         }
 
         if (!options.Json)
@@ -1421,7 +1430,9 @@ public static class IndexCommandRunner
         IReadOnlyDictionary<string, string?> priorHotspotFamilyVersions,
         IReadOnlyDictionary<string, string?> priorHotspotFamilyMarkerFingerprints,
         IReadOnlyDictionary<string, string?> currentHotspotFamilyMarkerFingerprints,
-        string? priorIndexedProjectRoot)
+        string? priorIndexedProjectRoot,
+        string? priorIndexedHeadCommit,
+        string? currentHeadCommit)
     {
         var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
         _ = priorMetadataTargetCsharp; // full-scan resolver runs unconditionally on success / 成功時に常に再解決するため不要
@@ -1438,6 +1449,27 @@ public static class IndexCommandRunner
             priorHotspotFamilyVersions,
             priorHotspotFamilyMarkerFingerprints,
             currentHotspotFamilyMarkerFingerprints);
+
+        // Detect HEAD divergence on the default incremental path (no `--rebuild`). `--rebuild`
+        // already wipes the DB, so the prior captured HEAD is irrelevant there. We only signal
+        // when both sides are known so legacy DBs / non-git workspaces never spuriously trigger.
+        // Issue #1508.
+        // 既定の incremental 経路で HEAD 差分を検出する。`--rebuild` は DB を消すので比較不要。
+        // 双方の HEAD が分かるときのみ警告し、legacy DB / 非 git workspace では誤検知させない。
+        var headChangeDetected = !options.Rebuild
+            && !string.IsNullOrWhiteSpace(priorIndexedHeadCommit)
+            && !string.IsNullOrWhiteSpace(currentHeadCommit)
+            && !string.Equals(priorIndexedHeadCommit, currentHeadCommit, StringComparison.Ordinal);
+        string? headChangeNotice = null;
+        if (headChangeDetected)
+        {
+            headChangeNotice =
+                $"Indexed HEAD changed since the last full scan (was {priorIndexedHeadCommit}, now {currentHeadCommit}). " +
+                $"Incremental indexing only refreshes files it can scan in the current worktree, so rows for files that exist only on the previously indexed branch may remain. " +
+                $"Run `cdidx index {QuoteCommandArgument(projectRoot)} --rebuild` to fully refresh the index.";
+            if (!options.Json)
+                ConsoleUi.PrintWarning(headChangeNotice);
+        }
 
         void WriteProjectRootOnce()
         {
@@ -1781,6 +1813,15 @@ public static class IndexCommandRunner
             // metadata ahead of the success markers.
             // no-op full-scan の explicit DB root backfill は readiness stamp 後に限定する。
             WriteProjectRootOnce();
+            // Persist the current HEAD only after the run is fully successful (errors == 0).
+            // We deliberately only stamp on full scans (rebuild or default incremental). Update
+            // mode (`--commits` / `--files`) leaves the captured HEAD untouched so the next
+            // default scan can still detect "branch moved since the last full scan." A
+            // best-effort `null` from a non-git workspace simply clears the field. Issue #1508.
+            // フル成功時のみ HEAD を記録する。partial update は HEAD を触らないので、後続の
+            // full scan が「直近 full scan からブランチが動いた」をきちんと検知できる。
+            // 非 git workspace で null になった場合はキーごとクリアされる。Issue #1508。
+            writer.SetMeta(DbContext.IndexedHeadCommitMetaKey, currentHeadCommit);
         }
         stopwatch.Stop();
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
@@ -1838,6 +1879,10 @@ public static class IndexCommandRunner
                 DegradedReason = foldOnlyRemediation?.DegradedReason,
                 RecommendedAction = foldOnlyRemediation?.RecommendedAction,
                 AlternativeAction = foldOnlyRemediation?.AlternativeAction,
+                HeadChanged = headChangeDetected,
+                PriorIndexedHeadCommit = priorIndexedHeadCommit,
+                CurrentHeadCommit = currentHeadCommit,
+                HeadChangeNotice = headChangeNotice,
                 Errors = errorList.Count > 0 ? errorList : null,
                 Warnings = warningList.Count > 0 ? warningList : null,
                 ElapsedMs = stopwatch.ElapsedMilliseconds,
