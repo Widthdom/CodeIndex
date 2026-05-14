@@ -1069,6 +1069,8 @@ public static class IndexCommandRunner
                 foldReadyAfter = true;
             }
         }
+        if (errors == 0)
+            StampIndexedHeadMetadata(writer, projectRoot);
         stopwatch.Stop();
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
         var signalReader = new DbReader(writer.Connection);
@@ -1386,6 +1388,36 @@ public static class IndexCommandRunner
         {
             error = ex.Message;
             return false;
+        }
+    }
+
+    // Issue #1509: stamp the Git HEAD commit, branch, and UTC timestamp into
+    // codeindex_meta so cross-session staleness ("the DB was indexed at commit X but
+    // you're now at Y, N commits ahead") is detectable by `status` / consumers. Only
+    // called when the index run completed without per-file errors so the stamp always
+    // reflects an authoritative DB state. When git is unavailable (no repo, no `git`
+    // binary, etc.) the keys are written as NULL so a stale stamp from a prior repo
+    // state can't masquerade as current. Failures here must not block index success —
+    // the index data itself is valid; the metadata stamp is best-effort. Issue #1509.
+    // #1509: 成功 index 末尾で HEAD / branch / timestamp を codeindex_meta に保存する。
+    // git 不在時は NULL stamp、stamp 自体の例外は warn せず無視（index 本体は成功）。
+    private static void StampIndexedHeadMetadata(DbWriter writer, string projectRoot)
+    {
+        try
+        {
+            var headSha = GitHelper.TryGetHeadCommit(projectRoot);
+            var headBranch = GitHelper.TryGetHeadBranch(projectRoot);
+            var timestamp = headSha != null
+                ? DateTime.UtcNow.ToString("o", System.Globalization.CultureInfo.InvariantCulture)
+                : null;
+            writer.SetMeta(DbContext.IndexedHeadShaMetaKey, headSha);
+            writer.SetMeta(DbContext.IndexedHeadBranchMetaKey, headBranch);
+            writer.SetMeta(DbContext.IndexedHeadTimestampMetaKey, timestamp);
+        }
+        catch
+        {
+            // Best-effort metadata only; never fail an otherwise-successful index run.
+            // best-effort であり、stamp の失敗で index 全体を失敗扱いにしない。
         }
     }
 
@@ -1781,6 +1813,7 @@ public static class IndexCommandRunner
             // metadata ahead of the success markers.
             // no-op full-scan の explicit DB root backfill は readiness stamp 後に限定する。
             WriteProjectRootOnce();
+            StampIndexedHeadMetadata(writer, projectRoot);
         }
         stopwatch.Stop();
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();

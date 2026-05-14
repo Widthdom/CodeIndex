@@ -957,7 +957,16 @@ This exercises the entire stack end-to-end.
    fall back to `codeindex_meta.indexed_project_root` when present and
    otherwise leave `project_root` / `git_head` / `git_is_dirty` unset on
    legacy DBs that have no stored root metadata, even when the explicit
-   path itself looks like `.../.cdidx/codeindex.db`.
+   path itself looks like `.../.cdidx/codeindex.db`. After a successful
+   index, `IndexCommandRunner` also stamps `codeindex_meta.indexed_head_sha`,
+   `indexed_head_branch`, and `indexed_head_timestamp` (best-effort; a
+   failing `git` invocation never fails the index), and `status` surfaces
+   them as `indexed_head_sha` / `indexed_head_branch` / `indexed_head_timestamp`
+   plus a derived `commits_ahead_of_indexed_head` count computed at query
+   time via `git merge-base --is-ancestor` + `git rev-list --count`.
+   `commits_ahead_of_indexed_head` is `null` when the indexed SHA is
+   unknown or no longer reachable from `HEAD` (force-push / divergent
+   history) so consumers do not misread a divergent worktree as fresh.
 4. **Open SQLite.** `IndexCommandRunner` constructs
    `new DbContext(dbPath)`, which calls `new SqliteConnection(...)`.
    **This is when the native library is resolved.** `SqliteConnection`'s
@@ -1939,7 +1948,7 @@ flowchart TD
 
 1. **バイナリ起動。** 自己完結型ホストがマネージエントリポイント（`Program.Main`）を解決。
 2. **CLI ルーティング。** `Program.cs` が `IndexCommandRunner.Run(args, jsonOptions)` に振り分け。
-3. **DB パス解決。** `DbPathResolver` が `--db` 指定が無い限り `<projectPath>/.cdidx/codeindex.db` を算出し、`.cdidx/` ディレクトリを作成する。同じヘルパーは `status` / `map` / `inspect` の query-time workspace root 解決も担う。`--db` を付けない query は既定の `.cdidx/codeindex.db` sibling path をそのまま正とし、explicit DB は `codeindex_meta.indexed_project_root` を読む。保存済み root metadata を持たない legacy explicit DB は、明示パス自体が `.../.cdidx/codeindex.db` でも `project_root` / `git_head` / `git_is_dirty` を未設定のまま返す。
+3. **DB パス解決。** `DbPathResolver` が `--db` 指定が無い限り `<projectPath>/.cdidx/codeindex.db` を算出し、`.cdidx/` ディレクトリを作成する。同じヘルパーは `status` / `map` / `inspect` の query-time workspace root 解決も担う。`--db` を付けない query は既定の `.cdidx/codeindex.db` sibling path をそのまま正とし、explicit DB は `codeindex_meta.indexed_project_root` を読む。保存済み root metadata を持たない legacy explicit DB は、明示パス自体が `.../.cdidx/codeindex.db` でも `project_root` / `git_head` / `git_is_dirty` を未設定のまま返す。index 成功時には `IndexCommandRunner` が `codeindex_meta.indexed_head_sha` / `indexed_head_branch` / `indexed_head_timestamp` も best-effort で stamp する（`git` 失敗は index 成功を妨げない）。`status` はこれらを `indexed_head_sha` / `indexed_head_branch` / `indexed_head_timestamp` として返し、query 時に `git merge-base --is-ancestor` + `git rev-list --count` で算出する `commits_ahead_of_indexed_head` も付与する。indexed SHA が未知、または force-push / divergent history で現 `HEAD` の祖先でなくなった場合は `null` を返し、consumer が divergent worktree を「最新」と誤読しないようにする。
 4. **SQLite オープン。** `IndexCommandRunner` が `new DbContext(dbPath)` を構築し、内部で `new SqliteConnection(...)` が呼ばれる。**ネイティブライブラリの解決はこの時点で行われる。** `SqliteConnection` の静的コンストラクタが `SQLitePCL.Batteries_V2.Init()` を呼び、それが `SQLite3Provider_e_sqlite3` 上で `sqlite3_libversion_number()` を起動し、`e_sqlite3` への P/Invoke に到達する。Linux の .NET 動的ローダは次の順で探す（失敗時のエラーメッセージを参照）:
    - `${apphost_dir}/libe_sqlite3.so`
    - `${apphost_dir}/e_sqlite3.so`（および `lib` プレフィックスなしのバリエーション）

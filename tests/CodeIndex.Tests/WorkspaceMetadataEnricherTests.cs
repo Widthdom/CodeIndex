@@ -252,6 +252,59 @@ public class WorkspaceMetadataEnricherTests
         }
     }
 
+    [Fact]
+    public void Enrich_StatusResult_PopulatesCommitsAheadWhenIndexedHeadShaIsAncestor()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_workspace_ahead_count");
+        try
+        {
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), "class App {}\n");
+            TestProjectHelper.RunGit(projectRoot, "add", "src/app.cs");
+            TestProjectHelper.RunGit(projectRoot, "commit", "-m", "initial");
+            var indexedSha = TestProjectHelper.RunGit(projectRoot, "rev-parse", "HEAD").Trim();
+
+            File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), "class App { void A() {} }\n");
+            TestProjectHelper.RunGit(projectRoot, "add", "src/app.cs");
+            TestProjectHelper.RunGit(projectRoot, "commit", "-m", "second");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), "class App { void B() {} }\n");
+            TestProjectHelper.RunGit(projectRoot, "add", "src/app.cs");
+            TestProjectHelper.RunGit(projectRoot, "commit", "-m", "third");
+
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var status = new StatusResult { IndexedHeadSha = indexedSha };
+
+            WorkspaceMetadataEnricher.Enrich(status, dbPath);
+
+            Assert.Equal(projectRoot, status.ProjectRoot);
+            Assert.Equal(2, status.CommitsAheadOfIndexedHead);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Enrich_StatusResult_LeavesCommitsAheadNullWhenIndexedHeadShaIsMissing()
+    {
+        var (projectRoot, dbPath, _) = CreateDirtyGitProject("cdidx_workspace_ahead_no_sha");
+        try
+        {
+            var status = new StatusResult();
+
+            WorkspaceMetadataEnricher.Enrich(status, dbPath);
+
+            Assert.Equal(projectRoot, status.ProjectRoot);
+            Assert.Null(status.CommitsAheadOfIndexedHead);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     private static (string ProjectRoot, string DbPath, string HeadCommit) CreateDirtyGitProject(string prefix)
     {
         var projectRoot = TestProjectHelper.CreateTempProject(prefix);

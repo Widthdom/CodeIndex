@@ -100,6 +100,94 @@ public static class GitHelper
     }
 
     /// <summary>
+    /// Try to resolve the current branch short name. Returns null on detached HEAD
+    /// (`git rev-parse --abbrev-ref HEAD` prints `HEAD` in that state, which we treat
+    /// as "no branch" so callers can render it as detached without misclassifying it
+    /// as the literal branch name "HEAD"). Issue #1509.
+    /// 現在のブランチ短縮名を安全に取得する。detached HEAD は null 扱いにして、
+    /// 文字列 "HEAD" を誤ってブランチ名として永続化しないようにする。
+    /// </summary>
+    public static string? TryGetHeadBranch(string projectRoot)
+    {
+        var output = TryRunGit(projectRoot, "rev-parse", "--abbrev-ref", "HEAD");
+        var value = output?.Trim();
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+        return string.Equals(value, "HEAD", StringComparison.Ordinal) ? null : value;
+    }
+
+    /// <summary>
+    /// Try to count how many commits the current HEAD is ahead of <paramref name="baseCommit"/>.
+    /// Returns null when git is unavailable, when either side cannot be resolved, or when
+    /// the two commits are not on a linear ancestor relationship (e.g. force-push rewrite).
+    /// 0 means "indexed HEAD equals current HEAD". A positive number means current HEAD is
+    /// N commits ahead of the indexed commit. Issue #1509.
+    /// 現在の HEAD が指定 commit より何コミット進んでいるかを安全に数える。git が無い、
+    /// commit が解決できない、または線形な祖先関係に無い場合は null を返す。
+    /// </summary>
+    public static int? TryCountCommitsAhead(string projectRoot, string baseCommit)
+    {
+        if (string.IsNullOrWhiteSpace(baseCommit))
+            return null;
+        if (baseCommit.StartsWith('-') || !Regex.IsMatch(baseCommit, @"^[a-zA-Z0-9_./^~\-]+$"))
+            return null;
+
+        var headSha = TryGetHeadCommit(projectRoot);
+        if (string.IsNullOrWhiteSpace(headSha))
+            return null;
+
+        // Identical commit short-circuit: rev-list would print 0, but avoid spawning git
+        // for the common "index is current" path.
+        // 同一 commit のショートカット。よくある「index が最新」パスで git 起動を避ける。
+        if (string.Equals(headSha, baseCommit, StringComparison.OrdinalIgnoreCase))
+            return 0;
+
+        // Require the indexed commit to be an ancestor of HEAD. Otherwise "ahead by N"
+        // is misleading (history rewrite, divergent branch, indexed commit was a future
+        // branch tip, etc.). rev-list will succeed with exit=0 but a misleading count.
+        // indexed commit が現在 HEAD の祖先である場合のみ「N コミット進んでいる」の解釈が
+        // 成立するので、merge-base --is-ancestor で検証する。
+        if (!TryRunGitForExitCode(projectRoot, "merge-base", "--is-ancestor", baseCommit, "HEAD"))
+            return null;
+
+        var output = TryRunGit(projectRoot, "rev-list", "--count", $"{baseCommit}..HEAD");
+        if (output == null)
+            return null;
+        var trimmed = output.Trim();
+        return int.TryParse(trimmed, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var count)
+            ? count
+            : null;
+    }
+
+    private static bool TryRunGitForExitCode(string projectRoot, params string[] args)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = "git",
+                WorkingDirectory = projectRoot,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+            foreach (var arg in args)
+                psi.ArgumentList.Add(arg);
+
+            // Reuse the shared event-driven drainer (PR #1497) so we don't reintroduce
+            // sync-over-async on git's stderr pipe. We only care about exit code here.
+            // #1497 で導入した共有 drainer を使い、stderr の sync-over-async を再導入しない。
+            var result = RunProcessCapturingOutput(psi);
+            return result != null && result.Value.ExitCode == 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
     /// Try to resolve the repository root that contains the project path.
     /// projectPath を含むリポジトリのルートを安全に取得する。
     /// </summary>

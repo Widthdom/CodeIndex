@@ -406,6 +406,14 @@ public partial class DbReader
                 langs[reader.GetString(0)] = reader.GetInt64(1);
         }
 
+        // #1509: pull persisted HEAD metadata while the SHARED snapshot is open so the
+        // recorded SHA / branch / timestamp can't drift relative to the counts and freshness
+        // reported by the same status call.
+        // #1509: 同じ snapshot 内で HEAD metadata を引き、counts / freshness と整合させる。
+        var indexedHeadSha = TryGetMetaStringInternal(DbContext.IndexedHeadShaMetaKey);
+        var indexedHeadBranch = TryGetMetaStringInternal(DbContext.IndexedHeadBranchMetaKey);
+        var indexedHeadTimestamp = ParseMetaDateTime(TryGetMetaStringInternal(DbContext.IndexedHeadTimestampMetaKey));
+
         var result = new StatusResult
         {
             Files = files,
@@ -414,6 +422,9 @@ public partial class DbReader
             References = references,
             IndexedAt = freshness.IndexedAt,
             LatestModified = freshness.LatestModified,
+            IndexedHeadSha = indexedHeadSha,
+            IndexedHeadBranch = indexedHeadBranch,
+            IndexedHeadTimestamp = indexedHeadTimestamp,
             Languages = langs,
             GraphTableAvailable = _hasReferencesTable,
             IssuesTableAvailable = _hasIssuesTable,
@@ -488,5 +499,46 @@ public partial class DbReader
             return null;
 
         return ParseDateTimeValue(value);
+    }
+
+    // Inline codeindex_meta lookup that returns null when the table or row is missing.
+    // Matches the static TryGetMetaString in DbReader.cs but uses the live connection so
+    // callers inside an open transaction read against the same snapshot. Issue #1509.
+    // codeindex_meta の inline 参照。テーブル欠落・行欠落は null 返却。
+    private string? TryGetMetaStringInternal(string key)
+    {
+        try
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = @key";
+            cmd.Parameters.AddWithValue("@key", key);
+            return cmd.ExecuteScalar() as string;
+        }
+        catch (SqliteException)
+        {
+            return null;
+        }
+    }
+
+    // Parse an ISO-8601 UTC timestamp persisted via SetMeta. Returns null when the raw
+    // value is missing or malformed so a partial / legacy stamp degrades gracefully.
+    // The stamp is always written as a UTC "o" round-trip string, so RoundtripKind alone
+    // preserves the offset / Kind without AssumeUniversal (which conflicts with RoundtripKind).
+    // ISO-8601 UTC 文字列を DateTime にする。欠落・解析失敗は null。
+    // stamp は常に UTC "o" 形式なので RoundtripKind だけで Kind / offset を維持する
+    // （AssumeUniversal と併用すると ArgumentException）。
+    private static DateTime? ParseMetaDateTime(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            return null;
+        if (DateTime.TryParse(
+                raw,
+                System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.RoundtripKind,
+                out var value))
+        {
+            return value.Kind == DateTimeKind.Utc ? value : value.ToUniversalTime();
+        }
+        return null;
     }
 }

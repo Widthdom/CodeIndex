@@ -9,7 +9,18 @@ namespace CodeIndex.Cli;
 public static class WorkspaceMetadataEnricher
 {
     public static void Enrich(StatusResult status, string dbPath, bool dbPathExplicit = false) =>
-        Apply(dbPath, dbPathExplicit, (root, head, dirty) => { status.ProjectRoot = root; status.GitHead = head; status.GitIsDirty = dirty; });
+        Apply(dbPath, dbPathExplicit, (root, head, dirty) =>
+        {
+            status.ProjectRoot = root;
+            status.GitHead = head;
+            status.GitIsDirty = dirty;
+            // #1509: compare the current HEAD against the SHA stamped at index time. Only
+            // makes sense when both sides are known; otherwise leave the field null so the
+            // CLI/MCP consumer can render "indexed at <sha>" without a misleading 0/N hint.
+            // #1509: index 時 HEAD と現 HEAD を比較し、両方判明している時のみ N を載せる。
+            if (root != null && !string.IsNullOrWhiteSpace(status.IndexedHeadSha))
+                status.CommitsAheadOfIndexedHead = GitHelper.TryCountCommitsAhead(root, status.IndexedHeadSha);
+        });
 
     public static void Enrich(RepoMapResult map, string dbPath, bool dbPathExplicit = false) =>
         Apply(dbPath, dbPathExplicit, (root, head, dirty) => { map.ProjectRoot = root; map.GitHead = head; map.GitIsDirty = dirty; });

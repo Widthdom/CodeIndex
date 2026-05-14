@@ -24,6 +24,7 @@ The `.codex/workflows/` directory is a shared workflow library for all coding ag
 
 - `status --json` and related JSON/MCP payloads currently expose the trust fields documented in `README.md` and `DEVELOPER_GUIDE.md`, including `fold_ready`, `fold_ready_reason`, `graph_table_available`, `issues_table_available`, `sql_graph_contract_ready`, `sql_graph_contract_degraded_reason`, `hotspot_family_ready`, `hotspot_family_degraded_reason`, `csharp_symbol_name_ready`, and `csharp_metadata_target_ready`.
 - When `fold_ready` is the only degraded readiness bit, the CLI also adds `degraded_reason`, `recommended_action`, and `alternative_action`.
+- `status` also surfaces indexed-HEAD freshness via `indexed_head_sha`, `indexed_head_branch`, `indexed_head_timestamp`, and `commits_ahead_of_indexed_head`. They are stamped by `cdidx index` on success (best-effort; never blocks an otherwise-successful index) and omitted on non-git workspaces, detached HEAD (branch only), or legacy DBs created before this contract.
 - Keep the three docs synchronized if this contract changes.
 
 ## Reference Extraction

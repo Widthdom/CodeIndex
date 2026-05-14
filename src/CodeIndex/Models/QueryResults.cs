@@ -249,6 +249,37 @@ public class StatusResult
     public string? ProjectRoot { get; set; }
     public string? GitHead { get; set; }
     public bool? GitIsDirty { get; set; }
+    /// <summary>
+    /// Full Git commit SHA stamped into `codeindex_meta` at the end of the last successful
+    /// index run. Null when the DB is legacy (no `codeindex_meta` row written by issue #1509)
+    /// or the project root was not inside a Git repository when indexed.
+    /// 最後に成功した index 実行で記録された Git HEAD コミット SHA。
+    /// </summary>
+    [JsonPropertyName("indexed_head_sha")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? IndexedHeadSha { get; set; }
+    /// <summary>
+    /// Branch short name (e.g. `main`) captured at the same time as <see cref="IndexedHeadSha"/>.
+    /// Null when the branch could not be resolved (detached HEAD) or the DB was indexed before
+    /// issue #1509 introduced this metadata.
+    /// 同 stamp 時のブランチ短縮名。detached HEAD・旧 DB では null。
+    /// </summary>
+    [JsonPropertyName("indexed_head_branch")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? IndexedHeadBranch { get; set; }
+    [JsonPropertyName("indexed_head_timestamp")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public DateTime? IndexedHeadTimestamp { get; set; }
+    /// <summary>
+    /// Number of commits the current Git HEAD is ahead of <see cref="IndexedHeadSha"/>.
+    /// 0 means the index was built against the commit currently checked out. A positive
+    /// number means the worktree has advanced since indexing. Null when the comparison
+    /// is not meaningful (no stamp, non-linear history, git unavailable, etc.).
+    /// 現在 HEAD が記録時 HEAD より何コミット進んでいるか。比較不能時は null。
+    /// </summary>
+    [JsonPropertyName("commits_ahead_of_indexed_head")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? CommitsAheadOfIndexedHead { get; set; }
     public Dictionary<string, long> Languages { get; set; } = new();
     public Dictionary<string, long>? SymbolKinds { get; set; }
     public List<string>? GraphSupportedLanguages { get; set; }

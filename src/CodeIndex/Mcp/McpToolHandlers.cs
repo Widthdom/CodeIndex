@@ -1745,6 +1745,26 @@ public partial class McpServer
             // readiness is stamped, preserving the failure-path safety contract.
             // MCP の no-op full-scan root backfill も readiness stamp 後に限定する。
             WriteProjectRootOnce();
+            // #1509: persist the HEAD/branch/timestamp that this clean index reflects so
+            // status / consumers can detect cross-session staleness. Same best-effort
+            // contract as the CLI path — git unavailability writes NULL stamps and stamp
+            // exceptions never fail the index itself.
+            // #1509: HEAD / branch / timestamp を保存し、cross-session staleness 検出を可能にする。
+            try
+            {
+                var headSha = GitHelper.TryGetHeadCommit(projectPath);
+                var headBranch = GitHelper.TryGetHeadBranch(projectPath);
+                var timestamp = headSha != null
+                    ? DateTime.UtcNow.ToString("o", System.Globalization.CultureInfo.InvariantCulture)
+                    : null;
+                writer.SetMeta(DbContext.IndexedHeadShaMetaKey, headSha);
+                writer.SetMeta(DbContext.IndexedHeadBranchMetaKey, headBranch);
+                writer.SetMeta(DbContext.IndexedHeadTimestampMetaKey, timestamp);
+            }
+            catch
+            {
+                // Best-effort; never fail an otherwise-successful index run.
+            }
         }
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
 

@@ -226,6 +226,114 @@ public class GitHelperTests : IDisposable
     }
 
     [Fact]
+    public void TryGetHeadBranch_ReturnsBranchShortName()
+    {
+        var repoDir = CreateGitRepo();
+        File.WriteAllText(Path.Combine(repoDir, "tracked.txt"), "v1\n");
+        RunGit(repoDir, "add", "tracked.txt");
+        RunGit(repoDir, "commit", "-m", "initial");
+
+        // Force a deterministic branch name so the assertion isn't sensitive to the
+        // local `init.defaultBranch` setting on the dev machine.
+        // ローカル設定の影響を避けるためブランチを明示的に切り替える。
+        RunGit(repoDir, "switch", "-c", "feature");
+
+        Assert.Equal("feature", GitHelper.TryGetHeadBranch(repoDir));
+    }
+
+    [Fact]
+    public void TryGetHeadBranch_ReturnsNullOnDetachedHead()
+    {
+        var repoDir = CreateGitRepo();
+        File.WriteAllText(Path.Combine(repoDir, "tracked.txt"), "v1\n");
+        RunGit(repoDir, "add", "tracked.txt");
+        RunGit(repoDir, "commit", "-m", "initial");
+        var sha = RunGit(repoDir, "rev-parse", "HEAD").Trim();
+        // `git checkout <sha>` detaches HEAD; rev-parse --abbrev-ref then prints "HEAD".
+        // We must not surface that literal "HEAD" as a real branch name. Issue #1509.
+        // detached HEAD では文字列 "HEAD" を branch 名として誤って返さないことを保証する。
+        RunGit(repoDir, "checkout", "--detach", sha);
+
+        Assert.Null(GitHelper.TryGetHeadBranch(repoDir));
+    }
+
+    [Fact]
+    public void TryCountCommitsAhead_ReturnsZeroWhenIndexedShaEqualsCurrent()
+    {
+        var repoDir = CreateGitRepo();
+        File.WriteAllText(Path.Combine(repoDir, "tracked.txt"), "v1\n");
+        RunGit(repoDir, "add", "tracked.txt");
+        RunGit(repoDir, "commit", "-m", "initial");
+        var sha = RunGit(repoDir, "rev-parse", "HEAD").Trim();
+
+        Assert.Equal(0, GitHelper.TryCountCommitsAhead(repoDir, sha));
+    }
+
+    [Fact]
+    public void TryCountCommitsAhead_CountsCommitsBetweenIndexedAndCurrentHead()
+    {
+        var repoDir = CreateGitRepo();
+        File.WriteAllText(Path.Combine(repoDir, "tracked.txt"), "v1\n");
+        RunGit(repoDir, "add", "tracked.txt");
+        RunGit(repoDir, "commit", "-m", "initial");
+        var indexedSha = RunGit(repoDir, "rev-parse", "HEAD").Trim();
+
+        File.WriteAllText(Path.Combine(repoDir, "tracked.txt"), "v2\n");
+        RunGit(repoDir, "add", "tracked.txt");
+        RunGit(repoDir, "commit", "-m", "second");
+        File.WriteAllText(Path.Combine(repoDir, "tracked.txt"), "v3\n");
+        RunGit(repoDir, "add", "tracked.txt");
+        RunGit(repoDir, "commit", "-m", "third");
+
+        Assert.Equal(2, GitHelper.TryCountCommitsAhead(repoDir, indexedSha));
+    }
+
+    [Fact]
+    public void TryCountCommitsAhead_ReturnsNullWhenIndexedShaIsNotAncestor()
+    {
+        var repoDir = CreateGitRepo();
+        File.WriteAllText(Path.Combine(repoDir, "tracked.txt"), "base\n");
+        RunGit(repoDir, "add", "tracked.txt");
+        RunGit(repoDir, "commit", "-m", "base");
+        var defaultBranch = RunGit(repoDir, "rev-parse", "--abbrev-ref", "HEAD").Trim();
+
+        // Create a divergent commit, capture its SHA, then switch back to the
+        // original branch so the diverged commit is no longer reachable from HEAD.
+        // "Ahead by N" is not meaningful here, so the helper must report null
+        // instead of a misleading 0.
+        // 非祖先 commit に対しては「N コミット進んでいる」は意味を成さないので null を返す。
+        RunGit(repoDir, "switch", "-c", "divergent");
+        File.WriteAllText(Path.Combine(repoDir, "tracked.txt"), "divergent\n");
+        RunGit(repoDir, "add", "tracked.txt");
+        RunGit(repoDir, "commit", "-m", "divergent");
+        var divergentSha = RunGit(repoDir, "rev-parse", "HEAD").Trim();
+
+        // Switch back to the original branch and add another commit on its lineage.
+        RunGit(repoDir, "switch", defaultBranch);
+        File.WriteAllText(Path.Combine(repoDir, "tracked.txt"), "after\n");
+        RunGit(repoDir, "add", "tracked.txt");
+        RunGit(repoDir, "commit", "-m", "after");
+
+        Assert.Null(GitHelper.TryCountCommitsAhead(repoDir, divergentSha));
+    }
+
+    [Fact]
+    public void TryCountCommitsAhead_RejectsArgumentInjectionAttempts()
+    {
+        var repoDir = CreateGitRepo();
+        File.WriteAllText(Path.Combine(repoDir, "tracked.txt"), "v1\n");
+        RunGit(repoDir, "add", "tracked.txt");
+        RunGit(repoDir, "commit", "-m", "initial");
+
+        // The helper must reject values that look like git options, mirroring the
+        // existing GetChangedFilesFromCommit validation, so a caller cannot smuggle
+        // `--exec` or similar payloads through the stamped indexed_head_sha.
+        // 永続化された stamp 経由で git オプションが流れ込まないよう dash 始まりを拒否する。
+        Assert.Null(GitHelper.TryCountCommitsAhead(repoDir, "--upload-pack=evil"));
+        Assert.Null(GitHelper.TryCountCommitsAhead(repoDir, string.Empty));
+    }
+
+    [Fact]
     public void TryIsWorktreeDirty_DetectsModifiedFiles()
     {
         var repoDir = CreateGitRepo();

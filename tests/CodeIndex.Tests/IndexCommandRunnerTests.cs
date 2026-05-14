@@ -147,6 +147,108 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_GitRepo_PersistsIndexedHeadMetadata()
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_head_meta_{Guid.NewGuid():N}.db");
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('hello')\n");
+            RunGit(projectRoot, "init");
+            RunGit(projectRoot, "checkout", "-B", "main");
+            RunGit(projectRoot, "add", "app.py");
+            RunGit(projectRoot, "commit", "-m", "initial");
+
+            var expectedSha = RunGitCaptureStdOut(projectRoot, "rev-parse", "HEAD").Trim();
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--db", dbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+
+            using var db = new DbContext(dbPath);
+            Assert.Equal(expectedSha, db.GetMetaString(DbContext.IndexedHeadShaMetaKey));
+            Assert.Equal("main", db.GetMetaString(DbContext.IndexedHeadBranchMetaKey));
+            var stamp = db.GetMetaString(DbContext.IndexedHeadTimestampMetaKey);
+            Assert.False(string.IsNullOrWhiteSpace(stamp));
+            Assert.True(
+                DateTime.TryParse(stamp, System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.RoundtripKind, out _),
+                $"timestamp not ISO-8601 parseable: {stamp}");
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void Run_NonGitRepo_DoesNotPersistIndexedHeadMetadata()
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_head_meta_none_{Guid.NewGuid():N}.db");
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('hello')\n");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--db", dbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+
+            using var db = new DbContext(dbPath);
+            Assert.Null(db.GetMetaString(DbContext.IndexedHeadShaMetaKey));
+            Assert.Null(db.GetMetaString(DbContext.IndexedHeadBranchMetaKey));
+            Assert.Null(db.GetMetaString(DbContext.IndexedHeadTimestampMetaKey));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void Run_GitRepo_DetachedHead_PersistsShaButNotBranch()
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_head_meta_detached_{Guid.NewGuid():N}.db");
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('hello')\n");
+            RunGit(projectRoot, "init");
+            RunGit(projectRoot, "checkout", "-B", "main");
+            RunGit(projectRoot, "add", "app.py");
+            RunGit(projectRoot, "commit", "-m", "initial");
+
+            var expectedSha = RunGitCaptureStdOut(projectRoot, "rev-parse", "HEAD").Trim();
+            RunGit(projectRoot, "checkout", "--detach", expectedSha);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--db", dbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+
+            using var db = new DbContext(dbPath);
+            Assert.Equal(expectedSha, db.GetMetaString(DbContext.IndexedHeadShaMetaKey));
+            Assert.Null(db.GetMetaString(DbContext.IndexedHeadBranchMetaKey));
+            Assert.False(string.IsNullOrWhiteSpace(db.GetMetaString(DbContext.IndexedHeadTimestampMetaKey)));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
     public void Run_PlainPathContainingImmutableSuffix_IndexesSuccessfully()
     {
         if (OperatingSystem.IsWindows())

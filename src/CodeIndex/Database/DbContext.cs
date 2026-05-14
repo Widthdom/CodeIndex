@@ -450,6 +450,18 @@ public class DbContext : IDisposable
     public const int SqlGraphContractVersion = 1;
     public const string SqlGraphContractVersionMetaKey = "sql_graph_contract_version";
     public const string IndexedProjectRootMetaKey = "indexed_project_root";
+    // #1509: full Git HEAD commit and short branch name captured at the end of every
+    // successful index run, plus the UTC timestamp of that stamp. Together they let
+    // `status` (and any future cross-session staleness check) decide whether the index
+    // was built against the commit currently checked out, or whether the working tree
+    // has advanced since indexing. Stored as plain strings to keep DbReader's inline
+    // codeindex_meta lookup degradation behavior intact on legacy / read-only DBs.
+    // #1509: 成功 index の終端で HEAD commit / branch 名 / stamp 時刻を保存する。
+    // これにより status などが「DB の HEAD が現在の HEAD と何コミットズレているか」を
+    // 検出できる。codeindex_meta が無い legacy DB では reader 側で null フォールバックする。
+    public const string IndexedHeadShaMetaKey = "indexed_head_sha";
+    public const string IndexedHeadBranchMetaKey = "indexed_head_branch";
+    public const string IndexedHeadTimestampMetaKey = "indexed_head_timestamp";
     // Authoritative `symbols.is_metadata_target` flag readiness, per language. Stamped at the
     // end of a successful index pass once the writer's metadata-target resolver has classified
     // every class-like row for that language. Readers fall back to the legacy heuristic when

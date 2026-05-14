@@ -1707,6 +1707,17 @@ public static class QueryCommandRunner
                     Console.WriteLine($"Git HEAD : {status.GitHead}");
                 if (status.GitIsDirty != null)
                     Console.WriteLine($"Git Dirty: {status.GitIsDirty}");
+                if (status.IndexedHeadSha != null)
+                {
+                    var branchSuffix = string.IsNullOrWhiteSpace(status.IndexedHeadBranch)
+                        ? string.Empty
+                        : $" (branch {status.IndexedHeadBranch})";
+                    Console.WriteLine($"Idx HEAD : {status.IndexedHeadSha}{branchSuffix}");
+                }
+                if (status.IndexedHeadTimestamp != null)
+                    Console.WriteLine($"Idx Stamp: {status.IndexedHeadTimestamp:O}");
+                if (status.CommitsAheadOfIndexedHead is { } ahead && ahead > 0)
+                    Console.WriteLine($"Idx Drift: workspace is {ahead} commit(s) ahead of indexed HEAD — rerun `cdidx index .` to refresh.");
                 if (status.WorkspaceCheck != null)
                     WriteWorkspaceCheck(status.WorkspaceCheck);
                 if (status.Languages.Count > 0)
