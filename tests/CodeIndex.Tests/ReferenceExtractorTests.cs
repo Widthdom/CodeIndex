@@ -796,6 +796,116 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_Shell_DetectsCallsInsideCommandSubstitution()
+    {
+        const string content = """
+            helper() {
+              echo helper
+            }
+
+            other() {
+              echo other
+            }
+
+            run() {
+              result=$(helper)
+              count=$(helper arg)
+              if [ -n "$(other)" ]; then
+                :
+              fi
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "shell", content);
+        var references = ReferenceExtractor.Extract(1, "shell", content, symbols);
+
+        Assert.Equal(3, references.Count(reference => reference.ReferenceKind == "call"));
+        Assert.Equal(2, references.Count(reference =>
+            reference.SymbolName == "helper"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "run"));
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "other"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "run");
+    }
+
+    [Fact]
+    public void Extract_Shell_DetectsCallsInsideBackticks()
+    {
+        const string content = """
+            helper() {
+              echo helper
+            }
+
+            run() {
+              output=`helper arg`
+              echo "wrapped `helper`"
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "shell", content);
+        var references = ReferenceExtractor.Extract(1, "shell", content, symbols);
+
+        Assert.Equal(2, references.Count(reference => reference.ReferenceKind == "call"));
+        Assert.Equal(2, references.Count(reference =>
+            reference.SymbolName == "helper"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "run"));
+    }
+
+    [Fact]
+    public void Extract_Shell_DetectsCallsInsideNestedCommandSubstitution()
+    {
+        const string content = """
+            outer() {
+              echo outer
+            }
+
+            inner() {
+              echo inner
+            }
+
+            run() {
+              result=$(outer $(inner))
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "shell", content);
+        var references = ReferenceExtractor.Extract(1, "shell", content, symbols);
+
+        Assert.Equal(2, references.Count(reference => reference.ReferenceKind == "call"));
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "outer"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "run");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "inner"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "run");
+    }
+
+    [Fact]
+    public void Extract_Shell_IgnoresSingleQuotedCommandSubstitutionLookAlikes()
+    {
+        const string content = """
+            helper() {
+              echo helper
+            }
+
+            run() {
+              literal='$(helper)'
+              also='`helper`'
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "shell", content);
+        var references = ReferenceExtractor.Extract(1, "shell", content, symbols);
+
+        Assert.Empty(references.Where(reference => reference.ReferenceKind == "call"));
+    }
+
+    [Fact]
     public void Extract_Perl_DetectsCallsAndIgnoresHashComments()
     {
         const string content = """
