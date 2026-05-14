@@ -211,6 +211,42 @@ public class GitHelperTests : IDisposable
     }
 
     [Fact]
+    public async Task GetChangedFilesFromCommit_HandlesLargeOutputWithoutDeadlock()
+    {
+        // Regression for #1497: the helper must read stdout/stderr concurrently so a commit
+        // whose changed-file list exceeds the OS pipe buffer (typically 64 KiB) cannot
+        // deadlock the process. Each filename is long enough that ~2000 files easily push
+        // diff-tree --name-only output past the buffer threshold.
+        // #1497 リグレッション: stdout/stderr を同時に汲み出すため、変更ファイル一覧が
+        // パイプバッファ（通常 64KiB）を超えるコミットでもデッドロックしない。
+        var repoDir = CreateGitRepo();
+
+        const int fileCount = 2000;
+        var expected = new List<string>(fileCount);
+        for (var i = 0; i < fileCount; i++)
+        {
+            var name = $"file_with_a_reasonably_long_name_to_exceed_pipe_buffer_{i:0000}.txt";
+            File.WriteAllText(Path.Combine(repoDir, name), "x\n");
+            expected.Add(name);
+        }
+        RunGit(repoDir, "add", "-A");
+        RunGit(repoDir, "commit", "-m", "many files");
+
+        var commitId = RunGit(repoDir, "rev-parse", "HEAD").Trim();
+
+        // Cap the call so a regression (deadlocked process) fails loudly instead of hanging
+        // the test runner indefinitely.
+        // リグレッションでデッドロックしてもテストランナーを止めないようタイムアウトする。
+        var task = Task.Run(() => GitHelper.GetChangedFilesFromCommit(repoDir, commitId));
+        var completed = await Task.WhenAny(task, Task.Delay(TimeSpan.FromSeconds(30)));
+        Assert.True(completed == task,
+            "GetChangedFilesFromCommit deadlocked on large diff-tree output");
+
+        Assert.Equal(expected.OrderBy(x => x).ToArray(),
+            (await task).OrderBy(x => x).ToArray());
+    }
+
+    [Fact]
     public void TryGetHeadCommit_ReturnsHeadCommitForRepo()
     {
         var repoDir = CreateGitRepo();

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 using System.Text.RegularExpressions;
 using CodeIndex.Indexer;
 
@@ -76,17 +77,10 @@ public static class GitHelper
         psi.ArgumentList.Add("--name-only");
         psi.ArgumentList.Add(commitId);
 
-        using var process = Process.Start(psi)
+        var (exitCode, output, error) = RunProcessCapturingOutput(psi)
             ?? throw new InvalidOperationException("Failed to start git process / gitプロセスの起動に失敗");
-        // Read stderr asynchronously to avoid deadlock when stderr buffer fills
-        // before stdout is fully consumed. See: MS docs on Process.StandardOutput.
-        // stderrバッファが満杯になった時のデッドロックを防ぐため非同期で読む。
-        var errorTask = process.StandardError.ReadToEndAsync();
-        var output = process.StandardOutput.ReadToEnd();
-        var error = errorTask.GetAwaiter().GetResult();
-        process.WaitForExit();
 
-        if (process.ExitCode != 0)
+        if (exitCode != 0)
             throw new InvalidOperationException($"git diff-tree failed for commit {commitId}: {error.Trim()}");
 
         return output.Split('\n', StringSplitOptions.RemoveEmptyEntries)
@@ -185,21 +179,44 @@ public static class GitHelper
                 }
             }
 
-            using var process = Process.Start(psi);
-            if (process == null)
+            var result = RunProcessCapturingOutput(psi);
+            if (result == null)
                 return null;
 
-            var errorTask = process.StandardError.ReadToEndAsync();
-            var output = process.StandardOutput.ReadToEnd();
-            var error = errorTask.GetAwaiter().GetResult();
-            process.WaitForExit();
-
-            return process.ExitCode == 0 ? output : null;
+            var (exitCode, output, _) = result.Value;
+            return exitCode == 0 ? output : null;
         }
         catch
         {
             return null;
         }
+    }
+
+    // Drain stdout and stderr concurrently via Process's own event-based reader threads so a
+    // full stderr pipe buffer cannot deadlock a blocking stdout read. Returns null if the
+    // process fails to start; otherwise the caller decides how to interpret the exit code.
+    // stdoutとstderrを同時に汲み出す。Process自前のイベントスレッドを使うことで
+    // stderrパイプ満杯による stdout 読み取りデッドロックを防ぎ、
+    // 非同期APIを GetAwaiter().GetResult() で待つ sync-over-async も避ける。
+    private static (int ExitCode, string Output, string Error)? RunProcessCapturingOutput(ProcessStartInfo psi)
+    {
+        using var process = new Process { StartInfo = psi };
+        var stdout = new StringBuilder();
+        var stderr = new StringBuilder();
+        // Always terminate captured lines with '\n' (not Environment.NewLine) so callers that
+        // split on '\n' see identical output on Windows and POSIX — git writes LF-only to pipes.
+        // キャプチャ行は常に '\n' 区切りにし、Windows/POSIX 双方で git のパイプ出力(LF)と一致させる。
+        process.OutputDataReceived += (_, e) => { if (e.Data != null) stdout.Append(e.Data).Append('\n'); };
+        process.ErrorDataReceived += (_, e) => { if (e.Data != null) stderr.Append(e.Data).Append('\n'); };
+
+        if (!process.Start())
+            return null;
+
+        process.BeginOutputReadLine();
+        process.BeginErrorReadLine();
+        process.WaitForExit();
+
+        return (process.ExitCode, stdout.ToString(), stderr.ToString());
     }
 
     private static bool ProbeFileSystemIgnoreCase(string projectRoot)
