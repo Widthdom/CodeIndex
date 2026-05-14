@@ -3627,6 +3627,8 @@ public static class QueryCommandRunner
             Console.WriteLine($"  Changed indexed files : {check.ChangedFileCount:N0}{FormatSamples(check.ChangedFiles)}");
         if (check.MissingFileCount > 0)
             Console.WriteLine($"  Missing indexed files : {check.MissingFileCount:N0}{FormatSamples(check.MissingFiles)}");
+        if (check.OutsideSparseConeFileCount > 0)
+            Console.WriteLine($"  Outside sparse cone : {check.OutsideSparseConeFileCount:N0}{FormatSamples(check.OutsideSparseConeFiles)}");
         if (check.UnindexedFileCount > 0)
             Console.WriteLine($"  Unindexed workspace files : {check.UnindexedFileCount:N0}{FormatSamples(check.UnindexedFiles)}");
         if (check.UnverifiableFileCount > 0)

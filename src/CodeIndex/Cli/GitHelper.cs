@@ -136,6 +136,48 @@ public static class GitHelper
         return output == null ? null : output.Length > 0;
     }
 
+    /// <summary>
+    /// Return the set of tracked paths whose skip-worktree bit is set, scoped to
+    /// the directory the call was made from. Paths are forward-slash separated and
+    /// relative to <paramref name="projectRoot"/>, matching DB / scan-result path form.
+    /// Returns null when git is unavailable; returns an empty set when no entry is
+    /// flagged. Skip-worktree is the mechanism git uses for sparse-checkout (cone or
+    /// non-cone), partial clones, and manual <c>git update-index --skip-worktree</c>.
+    /// projectRoot 配下の git index で skip-worktree ビットを持つトラッキング対象パスを返す。
+    /// 区切り文字は forward slash、projectRoot からの相対表現で DB と揃える。
+    /// git が無い場合は null、該当無しは空集合を返す。sparse-checkout(cone/non-cone)・partial
+    /// clone・手動 update-index --skip-worktree がいずれも同じビットを使うのを横断的に拾う。
+    /// </summary>
+    public static HashSet<string>? TryGetSkipWorktreePaths(string projectRoot)
+        => TryGetSkipWorktreePaths(projectRoot, gitEnvironmentOverrides: null);
+
+    internal static HashSet<string>? TryGetSkipWorktreePaths(
+        string projectRoot,
+        IReadOnlyDictionary<string, string?>? gitEnvironmentOverrides)
+    {
+        var output = TryRunGit(
+            projectRoot,
+            gitEnvironmentOverrides,
+            "-c",
+            "core.quotePath=false",
+            "ls-files",
+            "-t");
+        if (output == null)
+            return null;
+
+        var paths = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var rawLine in output.Split('\n'))
+        {
+            var line = rawLine.TrimEnd('\r');
+            // Format: "<flag> <path>". 'S' (uppercase) marks skip-worktree.
+            // 形式: "<flag> <path>"。'S'(大文字) が skip-worktree を表す。
+            if (line.Length < 3 || line[1] != ' ' || line[0] != 'S')
+                continue;
+            paths.Add(FileIndexer.NormalizePathSeparators(line[2..]));
+        }
+        return paths;
+    }
+
     internal static string? TryGetRepositoryRoot(string projectPath, IReadOnlyDictionary<string, string?>? gitEnvironmentOverrides)
     {
         var cdup = TryRunGit(projectPath, gitEnvironmentOverrides, "rev-parse", "--show-cdup");

@@ -27994,6 +27994,137 @@ jobs:
     }
 
     [Fact]
+    public void RunStatus_CheckJson_ReclassifiesSkipWorktreePathsAsOutsideSparseCone()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_status_check_sparse_cone");
+        try
+        {
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            var insidePath = Path.Combine(projectRoot, "src", "inside.cs");
+            var outsidePath = Path.Combine(projectRoot, "src", "outside.cs");
+            File.WriteAllText(insidePath, "class Inside {}\n");
+            File.WriteAllText(outsidePath, "class Outside {}\n");
+            TestProjectHelper.RunGit(projectRoot, "add", "src/inside.cs", "src/outside.cs");
+            TestProjectHelper.RunGit(projectRoot, "commit", "-m", "initial");
+
+            // Flag src/outside.cs skip-worktree and remove it from disk to mimic a sparse-checkout
+            // working tree. The freshness checker must classify it as "outside sparse cone",
+            // not as a true "missing" file.
+            // src/outside.cs に skip-worktree を立て disk からも消し sparse-checkout を再現する。
+            // freshness checker は "outside sparse cone" として分類し "missing" を立ててはいけない。
+            TestProjectHelper.RunGit(projectRoot, "update-index", "--skip-worktree", "src/outside.cs");
+            File.Delete(outsidePath);
+
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/inside.cs", "csharp", "class Inside {}\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/outside.cs", "csharp", "class Outside {}\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath, "--check", "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var check = document.RootElement.GetProperty("workspace_check");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(document.RootElement.GetProperty("index_matches_workspace").GetBoolean());
+            Assert.Equal(0, check.GetProperty("missing_file_count").GetInt32());
+            Assert.Equal(1, check.GetProperty("outside_sparse_cone_file_count").GetInt32());
+            Assert.Equal("src/outside.cs", check.GetProperty("outside_sparse_cone_files")[0].GetString());
+            Assert.Equal("matched", check.GetProperty("reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunStatus_CheckJson_KeepsTrulyMissingFilesSeparateFromSparseCone()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_status_check_sparse_mix");
+        try
+        {
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            var keptPath = Path.Combine(projectRoot, "src", "kept.cs");
+            var sparsePath = Path.Combine(projectRoot, "src", "sparse.cs");
+            File.WriteAllText(keptPath, "class Kept {}\n");
+            File.WriteAllText(sparsePath, "class Sparse {}\n");
+            TestProjectHelper.RunGit(projectRoot, "add", "src/kept.cs", "src/sparse.cs");
+            TestProjectHelper.RunGit(projectRoot, "commit", "-m", "initial");
+
+            // src/sparse.cs is skip-worktree → outside cone. src/deleted.cs is indexed only,
+            // never tracked by git → must remain a real "missing" entry.
+            // src/sparse.cs は skip-worktree → cone 外。src/deleted.cs は DB のみで git 追跡無し
+            // → 本当の "missing" として残らなければならない。
+            TestProjectHelper.RunGit(projectRoot, "update-index", "--skip-worktree", "src/sparse.cs");
+            File.Delete(sparsePath);
+
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/kept.cs", "csharp", "class Kept {}\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/sparse.cs", "csharp", "class Sparse {}\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/deleted.cs", "csharp", "class Deleted {}\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath, "--check", "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var check = document.RootElement.GetProperty("workspace_check");
+
+            Assert.Equal(CommandExitCodes.StaleIndex, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.False(document.RootElement.GetProperty("index_matches_workspace").GetBoolean());
+            Assert.Equal(1, check.GetProperty("missing_file_count").GetInt32());
+            Assert.Equal("src/deleted.cs", check.GetProperty("missing_files")[0].GetString());
+            Assert.Equal(1, check.GetProperty("outside_sparse_cone_file_count").GetInt32());
+            Assert.Equal("src/sparse.cs", check.GetProperty("outside_sparse_cone_files")[0].GetString());
+            Assert.Equal("missing_indexed_files", check.GetProperty("reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunStatus_CheckHuman_PrintsOutsideSparseConeRow()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_status_check_sparse_human");
+        try
+        {
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            var sparsePath = Path.Combine(projectRoot, "src", "sparse.cs");
+            File.WriteAllText(sparsePath, "class Sparse {}\n");
+            TestProjectHelper.RunGit(projectRoot, "add", "src/sparse.cs");
+            TestProjectHelper.RunGit(projectRoot, "commit", "-m", "initial");
+            TestProjectHelper.RunGit(projectRoot, "update-index", "--skip-worktree", "src/sparse.cs");
+            File.Delete(sparsePath);
+
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/sparse.cs", "csharp", "class Sparse {}\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath, "--check"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Contains("Outside sparse cone : 1", stdout);
+            Assert.Contains("src/sparse.cs", stdout);
+            Assert.DoesNotContain("Missing indexed files", stdout);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunStatus_CheckJson_UsesRepositoryRootIgnoreRulesForSubdirectoryIndex()
     {
         var repoRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_status_check_parent_ignore");
