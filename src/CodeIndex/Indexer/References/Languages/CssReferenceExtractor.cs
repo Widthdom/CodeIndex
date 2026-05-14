@@ -15,6 +15,10 @@ internal static class CssReferenceExtractor
         @"@extend\s+(?<name>[%.][A-Za-z_][\w-]*)",
         RegexOptions.Compiled);
 
+    private static readonly Regex ScssIncludeReferenceRegex = new(
+        @"@include\s+(?<name>[A-Za-z_][\w-]*)",
+        RegexOptions.Compiled);
+
     private static readonly Regex CssCustomPropertyReferenceRegex = new(@"\bvar\(\s*--(?<name>[\w-]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex CssAnimationNameValueRegex = new(@"\banimation-name\s*:\s*(?<value>[^;{}]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex CssAnimationShorthandValueRegex = new(@"\banimation\s*:\s*(?<value>[^;{}]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -26,6 +30,10 @@ internal static class CssReferenceExtractor
     // `#fff` のような文字だけの hex color は曖昧なので、呼び出し側でセレクタ位置の
     // コンテキストをさらに要求して除外する。
     private static readonly Regex CssIdSelectorReferenceRegex = new(@"(?<![A-Za-z0-9_-])#(?<name>[A-Za-z_-][\w-]*)", RegexOptions.Compiled);
+    private static readonly Regex CssImportReferenceRegex = new(
+        @"@import\s+(?:url\(\s*)?(?:""(?<name>[^""]+)""|'(?<name>[^']+)'|(?<name>[^\s)""';]+))",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex CssInlineBlockCommentRegex = new(@"/\*.*?\*/", RegexOptions.Compiled);
 
     private static readonly ReferencePattern[] CssReferencePatterns =
     [
@@ -36,6 +44,7 @@ internal static class CssReferenceExtractor
     [
         new(ScssVariableReferenceRegex, "call", SkipVariableDeclarations: true),
         new(ScssExtendReferenceRegex, "call"),
+        new(ScssIncludeReferenceRegex, "call"),
     ];
 
     private static readonly HashSet<string> CssAnimationShorthandIgnoredTokens = new(StringComparer.OrdinalIgnoreCase)
@@ -49,6 +58,7 @@ internal static class CssReferenceExtractor
 
     public static void EmitCss(
         string preparedLine,
+        string originalLine,
         string context,
         int lineNumber,
         List<ReferenceRecord> references,
@@ -97,6 +107,31 @@ internal static class CssReferenceExtractor
             fileId,
             definitionNames,
             container);
+
+        // `@import "theme.css";` paths are stripped by the shared string-literal masker, so the
+        // regex must scan the original (comment-stripped) line. Comment-strip locally to avoid
+        // false positives on `/* @import "fake.css"; */`.
+        // 共有の文字列リテラルマスカーが `@import "theme.css";` のパスを潰すため、@import の
+        // パターンは元行（ブロックコメント除去後）に対して走らせる。`/* @import "fake.css"; */`
+        // のような偽陽性を避けるため、ここでローカルに `/* */` を除去する。
+        var importScanLine = CssInlineBlockCommentRegex.Replace(originalLine, " ");
+        foreach (Match match in CssImportReferenceRegex.Matches(importScanLine))
+        {
+            var nameGroup = match.Groups["name"];
+            if (!nameGroup.Success || nameGroup.Value.Length == 0)
+                continue;
+
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                nameGroup.Value,
+                nameGroup.Index,
+                "import",
+                context,
+                lineNumber,
+                container);
+        }
     }
 
     public static void EmitScss(

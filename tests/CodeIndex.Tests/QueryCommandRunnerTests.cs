@@ -11178,7 +11178,9 @@ jobs:
             Assert.Equal(CommandExitCodes.NotFound, exitCode);
             Assert.Contains("symbol kind", stderr);
             Assert.Contains("filters by reference kind", stderr);
-            Assert.Contains("call, instantiate, subscribe", stderr);
+            Assert.Contains("call", stderr);
+            Assert.Contains("instantiate", stderr);
+            Assert.Contains("subscribe", stderr);
         }
         finally
         {

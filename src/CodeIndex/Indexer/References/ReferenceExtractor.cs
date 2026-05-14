@@ -1829,6 +1829,7 @@ public static partial class ReferenceExtractor
             {
                 CssReferenceExtractor.EmitCss(
                     preparedLine,
+                    originalLine,
                     context,
                     lineNumber,
                     references,

@@ -3685,7 +3685,7 @@ public static class QueryCommandRunner
     // 宣言型、generic 制約、`throws`、`is`/`as`/`instanceof`、XML-doc `cref` 対象向けに出力する
     // compile-time な `type_reference` エッジを含む。
     private static readonly string[] AllValidReferenceKinds =
-        ["annotation", "attribute", "call", "instantiate", "subscribe", "type_reference"];
+        ["annotation", "attribute", "call", "import", "instantiate", "subscribe", "type_reference"];
     // Reference kinds that `callers` / `callees` can legitimately return. Metadata kinds
     // (`attribute` / `annotation`) and type-position edges (`type_reference`) are structurally
     // not call-graph edges, so those queries are rejected at the CLI / MCP boundary.
