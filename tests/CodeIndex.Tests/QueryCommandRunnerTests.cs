@@ -19,7 +19,7 @@ public class QueryCommandRunnerTests
     };
 
     [Fact]
-    public void ParseArgs_ParsesFiltersFlagsAndClampsSnippetLines()
+    public void ParseArgs_ParsesFiltersFlagsAndAcceptsMaxSnippetLines()
     {
         var options = QueryCommandRunner.ParseArgs(
         [
@@ -41,7 +41,7 @@ public class QueryCommandRunnerTests
             "--focus-line", "9",
             "--focus-column", "33",
             "--focus-length", "6",
-            "--snippet-lines", "99",
+            "--snippet-lines", $"{SearchSnippetFormatter.MaxSnippetLines}",
             "--max-line-width", "77",
         ], jsonDefault: true);
 
@@ -1730,6 +1730,81 @@ jobs:
         Assert.Contains("Error: --after requires a non-negative integer", options.ParseError);
         Assert.Contains("Error: --snippet-lines requires a positive integer", options.ParseError);
         Assert.Equal(string.Empty, stderr);
+    }
+
+    // Regression lock for #1503: numeric CLI flags must reject values above the documented
+    // per-flag upper bound with a clear message naming the cap, instead of silently allowing
+    // `int.MaxValue` or quietly clamping (e.g. `--snippet-lines 999999` previously folded down
+    // to 20). The cap surfaces typos as parse errors rather than huge allocations or hidden clamps.
+    // #1503 の回帰ロック: 数値 CLI フラグは documented な上限を超えた値を、上限を明示した
+    // エラーで拒否しなければならない。以前は `int.MaxValue` まで通したり silent に clamp
+    // していた（例: `--snippet-lines 999999` が黙って 20 に丸められていた）。上限を超えた
+    // 入力をパーズエラーとして見せることで、巨大確保や隠れた clamp ではなくユーザーのタイポ
+    // として顕在化させる。
+    [Theory]
+    [InlineData("--limit", "10001", 10_000)]
+    [InlineData("--snippet-lines", "21", 20)]
+    [InlineData("--snippet-lines", "999999", 20)]
+    [InlineData("--start", "10000001", 10_000_000)]
+    [InlineData("--end", "10000001", 10_000_000)]
+    [InlineData("--focus-line", "10000001", 10_000_000)]
+    [InlineData("--focus-column", "100001", 100_000)]
+    [InlineData("--focus-length", "100001", 100_000)]
+    public void ParseArgs_PositiveIntOverUpperBoundIsRejected_Issue1503(string flag, string value, int expectedMax)
+    {
+        var options = QueryCommandRunner.ParseArgs(
+            ["needle", flag, value],
+            jsonDefault: false,
+            allowNamedQuery: true);
+
+        Assert.NotNull(options.ParseError);
+        Assert.Contains($"{flag} must be less than or equal to {expectedMax}", options.ParseError!);
+        Assert.Contains($"got '{value}'", options.ParseError!);
+    }
+
+    [Theory]
+    [InlineData("--depth", "65", 64)]
+    [InlineData("--before", "1001", 1_000)]
+    [InlineData("--after", "1001", 1_000)]
+    [InlineData("--max-line-width", "4097", 4096)]
+    public void ParseArgs_NonNegativeIntOverUpperBoundIsRejected_Issue1503(string flag, string value, int expectedMax)
+    {
+        var options = QueryCommandRunner.ParseArgs(
+            ["needle", flag, value],
+            jsonDefault: false,
+            allowNamedQuery: true);
+
+        Assert.NotNull(options.ParseError);
+        Assert.Contains($"{flag} must be less than or equal to {expectedMax}", options.ParseError!);
+        Assert.Contains($"got '{value}'", options.ParseError!);
+    }
+
+    [Theory]
+    [InlineData("--limit", "10000")]
+    [InlineData("--snippet-lines", "20")]
+    [InlineData("--depth", "64")]
+    [InlineData("--before", "1000")]
+    [InlineData("--after", "1000")]
+    public void ParseArgs_AtUpperBoundIsAccepted_Issue1503(string flag, string value)
+    {
+        var options = QueryCommandRunner.ParseArgs(
+            ["needle", flag, value],
+            jsonDefault: false,
+            allowNamedQuery: true);
+
+        Assert.Null(options.ParseError);
+    }
+
+    [Fact]
+    public void ParseArgs_ExactMaxSnippetLinesIsNotRejected_Issue1503()
+    {
+        var options = QueryCommandRunner.ParseArgs(
+            ["needle", "--snippet-lines", $"{SearchSnippetFormatter.MaxSnippetLines}"],
+            jsonDefault: false,
+            allowNamedQuery: true);
+
+        Assert.Null(options.ParseError);
+        Assert.Equal(SearchSnippetFormatter.MaxSnippetLines, options.SnippetLines);
     }
 
     [Fact]
@@ -26205,6 +26280,21 @@ jobs:
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
         Assert.Contains("--limit requires a positive integer", stderr);
+    }
+
+    [Theory]
+    [InlineData("--limit", "10001", 10_000)]
+    [InlineData("--before", "1001", 1_000)]
+    [InlineData("--after", "1001", 1_000)]
+    public void RunFind_RejectsNumericFlagAboveUpperBound_Issue1503(string flag, string value, int expectedMax)
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+            ["FindUsage", "--path", "src/CodeIndex/Cli/QueryCommandRunner.cs", flag, value],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains($"must be less than or equal to {expectedMax}", stderr);
+        Assert.Contains($"got '{value}'", stderr);
     }
 
     [Fact]

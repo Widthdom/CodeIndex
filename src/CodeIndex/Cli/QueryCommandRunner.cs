@@ -1180,12 +1180,22 @@ public static class QueryCommandRunner
                 }
                 if ((arg == "--limit" || arg == "--top") && (!int.TryParse(value, out var limit) || limit <= 0))
                     return $"Error: {arg} requires a positive integer, got '{value}'";
+                if ((arg == "--limit" || arg == "--top")
+                    && int.TryParse(value, out var limitCeil)
+                    && NumericFlagUpperBounds.TryGetValue("--limit", out var limitMax)
+                    && limitCeil > limitMax)
+                    return $"Error: --limit must be less than or equal to {limitMax}, got '{value}'.";
                 if (arg == "--max-line-width" && (!int.TryParse(value, out var widthValue) || widthValue < 0))
                     return $"Error: {arg} requires a non-negative integer, got '{value}'";
                 if (arg == "--max-line-width" && int.TryParse(value, out var widthCeil) && widthCeil > LineWidthFormatter.MaxAllowedLineWidth)
                     return $"Error: --max-line-width must be less than or equal to {LineWidthFormatter.MaxAllowedLineWidth} (got '{value}').";
                 if ((arg == "--before" || arg == "--after") && (!int.TryParse(value, out var context) || context < 0))
                     return $"Error: {arg} requires a non-negative integer, got '{value}'";
+                if ((arg == "--before" || arg == "--after")
+                    && int.TryParse(value, out var contextCeil)
+                    && NumericFlagUpperBounds.TryGetValue(arg, out var contextMax)
+                    && contextCeil > contextMax)
+                    return $"Error: {arg} must be less than or equal to {contextMax}, got '{value}'.";
                 if (arg == "--query")
                 {
                     queryCount++;
@@ -2976,7 +2986,7 @@ public static class QueryCommandRunner
                     else if (TryParsePositiveInt(snippetLinesValue!, "--snippet-lines", out var parsedSnippetLines, out var snippetLinesError))
                     {
                         WarnIfDuplicateSingleValueOption("--snippet-lines", snippetLinesValue!);
-                        snippetLines = SearchSnippetFormatter.ClampSnippetLines(parsedSnippetLines);
+                        snippetLines = parsedSnippetLines;
                     }
                     else
                         AddParseError(snippetLinesError!);
@@ -2986,13 +2996,8 @@ public static class QueryCommandRunner
                         AddParseError(missingMaxLineWidthError!);
                     else if (TryParseNonNegativeInt(maxLineWidthValue!, "--max-line-width", out var parsedMaxLineWidth, out var maxLineWidthError))
                     {
-                        if (parsedMaxLineWidth > LineWidthFormatter.MaxAllowedLineWidth)
-                            AddParseError($"--max-line-width must be less than or equal to {LineWidthFormatter.MaxAllowedLineWidth} (got '{maxLineWidthValue}').");
-                        else
-                        {
-                            WarnIfDuplicateSingleValueOption("--max-line-width", maxLineWidthValue!);
-                            maxLineWidth = parsedMaxLineWidth;
-                        }
+                        WarnIfDuplicateSingleValueOption("--max-line-width", maxLineWidthValue!);
+                        maxLineWidth = parsedMaxLineWidth;
                     }
                     else
                         AddParseError(maxLineWidthError!);
@@ -4066,33 +4071,70 @@ public static class QueryCommandRunner
         Console.Error.WriteLine($"Hint: run `{BuildSqlGraphContractRepairCommand(reader, options)}` to refresh SQL graph rows before trusting SQL graph/dependency results.");
     }
 
+    // Per-flag upper bounds for numeric CLI options. Without a cap, `--limit 2147483647` or
+    // `--snippet-lines 999999` previously parsed silently and either ran with the absurd value
+    // (huge allocations / output) or got quietly clamped (e.g. snippet-lines down to 20 with no
+    // signal), hiding typos from users. Each cap below is the documented user-facing maximum.
+    // 数値 CLI フラグごとの上限値。上限が無いと `--limit 2147483647` や
+    // `--snippet-lines 999999` が黙って通り、巨大確保/出力をそのまま走らせるか silent に clamp
+    // されてユーザーのタイポを隠していた。下の値は各フラグのドキュメント上の最大値。
+    internal static readonly IReadOnlyDictionary<string, int> NumericFlagUpperBounds =
+        new Dictionary<string, int>(StringComparer.Ordinal)
+        {
+            ["--limit"] = 10_000,
+            ["--snippet-lines"] = SearchSnippetFormatter.MaxSnippetLines,
+            ["--max-line-width"] = LineWidthFormatter.MaxAllowedLineWidth,
+            ["--depth"] = 64,
+            ["--before"] = 1_000,
+            ["--after"] = 1_000,
+            ["--start"] = 10_000_000,
+            ["--end"] = 10_000_000,
+            ["--focus-line"] = 10_000_000,
+            ["--focus-column"] = 100_000,
+            ["--focus-length"] = 100_000,
+        };
+
     private static bool TryParsePositiveInt(string rawValue, string optionName, out int value, out string? error)
     {
         if (string.Equals(optionName, "--max-line-width", StringComparison.Ordinal))
             return TryParseNonNegativeInt(rawValue, optionName, out value, out error);
 
-        if (int.TryParse(rawValue, out value) && value > 0)
+        if (!int.TryParse(rawValue, out value) || value <= 0)
         {
-            error = null;
-            return true;
+            value = 0;
+            error = $"Error: {optionName} requires a positive integer, got '{rawValue}'. Hint: retry with `{optionName} 1` or another positive integer.";
+            return false;
         }
 
-        value = 0;
-        error = $"Error: {optionName} requires a positive integer, got '{rawValue}'. Hint: retry with `{optionName} 1` or another positive integer.";
-        return false;
+        if (NumericFlagUpperBounds.TryGetValue(optionName, out var maxAllowed) && value > maxAllowed)
+        {
+            error = $"Error: {optionName} must be less than or equal to {maxAllowed}, got '{rawValue}'. Hint: retry with `{optionName} {maxAllowed}` or a smaller positive integer.";
+            value = 0;
+            return false;
+        }
+
+        error = null;
+        return true;
     }
 
     private static bool TryParseNonNegativeInt(string rawValue, string optionName, out int value, out string? error)
     {
-        if (int.TryParse(rawValue, out value) && value >= 0)
+        if (!int.TryParse(rawValue, out value) || value < 0)
         {
-            error = null;
-            return true;
+            value = 0;
+            error = $"Error: {optionName} requires a non-negative integer, got '{rawValue}'. Hint: retry with `{optionName} 0` or another non-negative integer.";
+            return false;
         }
 
-        value = 0;
-        error = $"Error: {optionName} requires a non-negative integer, got '{rawValue}'. Hint: retry with `{optionName} 0` or another non-negative integer.";
-        return false;
+        if (NumericFlagUpperBounds.TryGetValue(optionName, out var maxAllowed) && value > maxAllowed)
+        {
+            error = $"Error: {optionName} must be less than or equal to {maxAllowed}, got '{rawValue}'. Hint: retry with `{optionName} {maxAllowed}` or a smaller non-negative integer.";
+            value = 0;
+            return false;
+        }
+
+        error = null;
+        return true;
     }
 
     private static bool TryReadRawOptionValue(string[] args, ref int index, string optionName, string? inlineValue, out string? value, out string? error)
