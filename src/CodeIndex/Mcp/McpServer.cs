@@ -26,6 +26,11 @@ public partial class McpServer
     private const int MaxLimit = 200;
     private const int MaxQueryLength = 1000;
     private const int MaxLineLength = 1_000_000; // 1 MB per JSON-RPC message / 1メッセージあたり最大1MB
+    // Stdio buffer for the JSON-RPC loop. Sized to fit typical large MCP payloads (e.g. batch_query)
+    // in a single read so the StreamReader does not grow from its 1 KB default toward MaxLineLength.
+    // JSON-RPCループのstdioバッファ。大きめのMCPペイロードを1回の読み取りで吸収し、
+    // StreamReaderのデフォルト1KBから繰り返し拡張されるのを避けるサイズ。
+    private const int StdioBufferSize = 64 * 1024;
 
     public McpServer(string dbPath, string version, bool dbPathExplicit = false)
         : this(dbPath, version, dbPathExplicit, null)
@@ -58,8 +63,8 @@ public partial class McpServer
 
         using var stdin = Console.OpenStandardInput();
         using var stdout = Console.OpenStandardOutput();
-        using var reader = new StreamReader(stdin, Encoding.UTF8);
-        using var writer = new StreamWriter(stdout, new UTF8Encoding(false)) { AutoFlush = true };
+        using var reader = new StreamReader(stdin, Encoding.UTF8, detectEncodingFromByteOrderMarks: true, bufferSize: StdioBufferSize);
+        using var writer = new StreamWriter(stdout, new UTF8Encoding(false), bufferSize: StdioBufferSize) { AutoFlush = true };
 
         while (_running)
         {
