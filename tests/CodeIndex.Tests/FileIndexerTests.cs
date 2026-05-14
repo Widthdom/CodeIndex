@@ -1983,6 +1983,160 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void ScanFiles_DescendsIntoSubmoduleHostedUnderSkipDir()
+    {
+        // .gitmodules declared submodule under a SkipDirs-named directory (e.g. vendor/foo)
+        // must remain visible: SkipDirs is overridden along the path to the submodule, but
+        // unrelated files inside the SkipDir ancestor itself stay excluded. Closes #1511.
+        // SkipDirs 名のディレクトリ配下に .gitmodules で宣言された submodule（例: vendor/foo）は
+        // 可視化される必要がある。SkipDirs は submodule までの経路でのみ上書きされ、SkipDirs
+        // 祖先自身の無関係なファイルは引き続き除外される。Closes #1511.
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(Path.Combine(tempDir, "app.py"), "print('hello')");
+
+            // .gitmodules at project root declaring submodule path "vendor/foo"
+            File.WriteAllText(
+                Path.Combine(tempDir, ".gitmodules"),
+                "[submodule \"foo\"]\n\tpath = vendor/foo\n\turl = https://example.invalid/foo.git\n");
+
+            var vendorDir = Path.Combine(tempDir, "vendor");
+            Directory.CreateDirectory(vendorDir);
+            // File sitting directly in the SkipDir ancestor — must NOT be indexed
+            // SkipDirs 祖先直下のファイル — 索引されてはいけない
+            File.WriteAllText(Path.Combine(vendorDir, "vendor_dep.py"), "x = 1");
+
+            var submoduleDir = Path.Combine(vendorDir, "foo");
+            Directory.CreateDirectory(submoduleDir);
+            File.WriteAllText(Path.Combine(submoduleDir, "lib.py"), "def f(): pass");
+            Directory.CreateDirectory(Path.Combine(submoduleDir, "src"));
+            File.WriteAllText(Path.Combine(submoduleDir, "src", "nested.py"), "def g(): pass");
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles();
+
+            var rel = files.Select(f => Path.GetRelativePath(tempDir, f).Replace('\\', '/')).ToHashSet();
+            Assert.Contains("app.py", rel);
+            Assert.Contains("vendor/foo/lib.py", rel);
+            Assert.Contains("vendor/foo/src/nested.py", rel);
+            Assert.DoesNotContain("vendor/vendor_dep.py", rel);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_RespectsSubmoduleGitignore()
+    {
+        // Submodules brought back into the scan must still honor their own .gitignore so
+        // build artifacts inside the submodule remain excluded.
+        // 可視化された submodule も自身の .gitignore を尊重し、submodule 配下のビルド成果物などは
+        // 引き続き除外されること。
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(
+                Path.Combine(tempDir, ".gitmodules"),
+                "[submodule \"foo\"]\n\tpath = vendor/foo\n\turl = https://example.invalid/foo.git\n");
+
+            var submoduleDir = Path.Combine(tempDir, "vendor", "foo");
+            Directory.CreateDirectory(submoduleDir);
+            File.WriteAllText(Path.Combine(submoduleDir, "lib.py"), "def f(): pass");
+            File.WriteAllText(Path.Combine(submoduleDir, ".gitignore"), "generated.py\n");
+            File.WriteAllText(Path.Combine(submoduleDir, "generated.py"), "# generated");
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles();
+
+            var rel = files.Select(f => Path.GetRelativePath(tempDir, f).Replace('\\', '/')).ToHashSet();
+            Assert.Contains("vendor/foo/lib.py", rel);
+            Assert.DoesNotContain("vendor/foo/generated.py", rel);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_StillSkipsSkipDirWithoutMatchingSubmodule()
+    {
+        // .gitmodules declaring a submodule elsewhere must not relax SkipDirs for unrelated
+        // SkipDir-named directories. vendor/ without a declared submodule stays skipped.
+        // .gitmodules が別の場所の submodule を宣言していても、無関係な SkipDirs 名ディレクトリ
+        // (submodule が宣言されていない vendor/ 等) は引き続きスキップされること。
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(
+                Path.Combine(tempDir, ".gitmodules"),
+                "[submodule \"foo\"]\n\tpath = third_party/foo\n\turl = https://example.invalid/foo.git\n");
+
+            var submoduleDir = Path.Combine(tempDir, "third_party", "foo");
+            Directory.CreateDirectory(submoduleDir);
+            File.WriteAllText(Path.Combine(submoduleDir, "lib.py"), "def f(): pass");
+
+            var vendorDir = Path.Combine(tempDir, "vendor");
+            Directory.CreateDirectory(vendorDir);
+            File.WriteAllText(Path.Combine(vendorDir, "dep.py"), "x = 1");
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles();
+
+            var rel = files.Select(f => Path.GetRelativePath(tempDir, f).Replace('\\', '/')).ToHashSet();
+            Assert.Contains("third_party/foo/lib.py", rel);
+            Assert.DoesNotContain("vendor/dep.py", rel);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void EvaluatePathFilter_AllowsFilesUnderSubmoduleHostedInSkipDir()
+    {
+        // PathFilter must agree with the walker: files under a submodule declared in
+        // .gitmodules are not classified as ExcludedByDefaultDirectory even when an
+        // ancestor segment matches SkipDirs. This keeps update-mode (--files / --commits)
+        // consistent with full scan output.
+        // パスフィルタは walker と整合する必要がある: .gitmodules で宣言された submodule
+        // 配下のファイルは、祖先が SkipDirs に該当しても ExcludedByDefaultDirectory に
+        // 分類されない。これにより --files / --commits のような更新モードでも
+        // フルスキャンと挙動が一致する。
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(
+                Path.Combine(tempDir, ".gitmodules"),
+                "[submodule \"foo\"]\n\tpath = vendor/foo\n");
+
+            var submoduleDir = Path.Combine(tempDir, "vendor", "foo");
+            Directory.CreateDirectory(submoduleDir);
+            var libPath = Path.Combine(submoduleDir, "lib.py");
+            File.WriteAllText(libPath, "def f(): pass");
+
+            var unrelatedPath = Path.Combine(tempDir, "vendor", "dep.py");
+            File.WriteAllText(unrelatedPath, "x = 1");
+
+            var indexer = new FileIndexer(tempDir);
+            Assert.Equal(FileIndexer.PathFilterKind.None, indexer.EvaluatePathFilter(libPath).FilterKind);
+            Assert.Equal(FileIndexer.PathFilterKind.ExcludedByDefaultDirectory, indexer.EvaluatePathFilter(unrelatedPath).FilterKind);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
     public void BuildRecord_CrlfNormalizedToLf()
     {
         // CRLF line endings in files should be normalized to LF
