@@ -1735,12 +1735,53 @@ public class FileIndexer
     /// </summary>
     internal static string StripLineLeadingBom(string content)
     {
-        if (string.IsNullOrEmpty(content) || !content.Contains('\uFEFF'))
+        if (string.IsNullOrEmpty(content))
             return content;
-        var sb = new StringBuilder(content.Length);
+        // Fast path: BOM-free files (the dominant case) skip the line-tracking
+        // scan and return the input unchanged so no StringBuilder is allocated.
+        // 高速パス: BOM が一切無いファイル (支配的ケース) は行頭追跡走査を回避し、
+        // 入力をそのまま返して StringBuilder を確保しない。
+        if (!content.Contains('\uFEFF'))
+            return content;
+
+        // U+FEFF is present somewhere. Locate the first *line-leading* BOM in a
+        // single pass; if every occurrence is mid-line (intentional ZWNBSP
+        // inside string literals etc.), return the input unchanged so the
+        // no-strip path also avoids any allocation.
+        // U+FEFF が含まれている。最初の「行頭」 BOM を 1 パスで探し、行頭以外
+        // のみ (文字列リテラル内の意図的な ZWNBSP 等) であれば入力をそのまま
+        // 返し、「剥がし不要」のケースでも割り当てを発生させない。
+        int firstStripIndex = -1;
         bool atLineStart = true;
-        foreach (char c in content)
+        for (int i = 0; i < content.Length; i++)
         {
+            char c = content[i];
+            if (c == '\uFEFF' && atLineStart)
+            {
+                firstStripIndex = i;
+                break;
+            }
+            atLineStart = c == '\n';
+        }
+        if (firstStripIndex < 0)
+            return content;
+
+        // Allocate only after at least one line-leading BOM is confirmed. The
+        // capacity accounts for stripping at least the BOM at firstStripIndex.
+        // 少なくとも 1 つの行頭 BOM が確定した時点で初めて確保する。容量は
+        // firstStripIndex の BOM を必ず剥がす分を差し引いた値にしておく。
+        var sb = new StringBuilder(content.Length - 1);
+        if (firstStripIndex > 0)
+            sb.Append(content, 0, firstStripIndex);
+        // The char at firstStripIndex is itself a line-leading BOM; resume
+        // after it with atLineStart = true so consecutive BOMs at the same
+        // logical position (e.g. multiple BOMs right after `\n`) are stripped.
+        // firstStripIndex の文字自体が行頭 BOM。直後から再開し atLineStart を
+        // true に戻すことで `\n` 直後に連続する BOM も同じ論理位置として剥がす。
+        atLineStart = true;
+        for (int i = firstStripIndex + 1; i < content.Length; i++)
+        {
+            char c = content[i];
             if (c == '\uFEFF' && atLineStart)
                 continue;
             sb.Append(c);

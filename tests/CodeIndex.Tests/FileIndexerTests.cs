@@ -2114,6 +2114,75 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void StripLineLeadingBom_BomFreeContent_ReturnsSameInstance()
+    {
+        // BOM-free content (the dominant case) must hit the fast path and
+        // return the same string instance, asserting no StringBuilder is
+        // allocated. Closes #1495.
+        // BOM が無いファイル (支配的ケース) は高速パスで同じ string インスタンスを
+        // 返し、StringBuilder を割り当てないことを保証する。Closes #1495.
+        var input = "using System;\nnamespace Plain;\nclass C { }\n";
+        var output = FileIndexer.StripLineLeadingBom(input);
+        Assert.Same(input, output);
+    }
+
+    [Fact]
+    public void StripLineLeadingBom_MidLineBomOnly_ReturnsSameInstance()
+    {
+        // Content that carries U+FEFF only mid-line (intentional ZWNBSP in a
+        // string literal, identifier, or comment — never line-leading) must
+        // also hit the no-allocation path and return the same instance, so
+        // the no-op case never pays the StringBuilder cost. Closes #1495.
+        // 行頭以外にのみ U+FEFF を含むファイル (文字列リテラル内の意図的な ZWNBSP 等)
+        // も割り当て無しのパスを通り、同じインスタンスを返すことを保証する。Closes #1495.
+        var input = "var s = \"A\uFEFFB\";\nvar t = \"\uFEFF\";\n";
+        var output = FileIndexer.StripLineLeadingBom(input);
+        Assert.Same(input, output);
+        // Mid-line U+FEFF stays verbatim so the source-of-truth payload is
+        // not silently corrupted for code that embeds ZWNBSP intentionally.
+        // 行頭以外の U+FEFF はそのまま保持し、意図的に ZWNBSP を埋め込んだ
+        // コードの payload を破壊しないことを併せて確認する。
+        Assert.Contains('\uFEFF', output);
+    }
+
+    [Fact]
+    public void StripLineLeadingBom_EmptyContent_ReturnsSameInstance()
+    {
+        // Empty input must short-circuit before any scan or allocation.
+        // 空入力は走査・割り当ての前に短絡することを保証する。
+        Assert.Same(string.Empty, FileIndexer.StripLineLeadingBom(string.Empty));
+    }
+
+    [Fact]
+    public void StripLineLeadingBom_LineLeadingBoms_StrippedWhileMidLineBomPreserved()
+    {
+        // File-leading and post-newline BOMs are stripped, while mid-line
+        // U+FEFF inside a literal is preserved verbatim. This pins the
+        // narrowed #183 contract through the new deferred-allocation path.
+        // 先頭 BOM および `\n` 直後の BOM は剥がし、行内の U+FEFF は
+        // そのまま保持することを確認する。#183 で狭められた契約を新パスで再固定。
+        var input = "\uFEFFline1\n\uFEFFline2 has \"A\uFEFFB\"\nline3\n";
+        var output = FileIndexer.StripLineLeadingBom(input);
+
+        Assert.Equal("line1\nline2 has \"A\uFEFFB\"\nline3\n", output);
+    }
+
+    [Fact]
+    public void StripLineLeadingBom_ConsecutiveLineLeadingBoms_AllStripped()
+    {
+        // Multiple BOMs sharing the same logical line-start (e.g. a doubled
+        // BOM at offset 0 from accidental tool concatenation) must all be
+        // stripped, matching the original foreach loop's invariant that
+        // skipping a BOM does not reset `atLineStart`.
+        // 同じ論理行頭に重なる連続 BOM (オフセット 0 の二重 BOM 等) は全て
+        // 剥がす。元実装の「BOM スキップで atLineStart を更新しない」契約を保つ。
+        var input = "\uFEFF\uFEFFhello\n\uFEFF\uFEFFworld\n";
+        var output = FileIndexer.StripLineLeadingBom(input);
+
+        Assert.Equal("hello\nworld\n", output);
+    }
+
+    [Fact]
     public void BuildRecord_ThrowsForOversizedFile()
     {
         // Files exceeding 10 MB should throw InvalidOperationException
