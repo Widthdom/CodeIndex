@@ -8904,6 +8904,92 @@ jobs:
         }
     }
 
+    [Theory]
+    [InlineData("--exact", "--exact-substring")]
+    [InlineData("--exact", "--exact-name")]
+    [InlineData("--exact-substring", "--exact-name")]
+    public void RunSearch_RejectsCombinedExactFlags(string first, string second)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_combined_exact");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["needle", "--db", dbPath, first, second],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("pass only one of --exact, --exact-substring, --exact-name", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_RejectsAllThreeExactFlagsTogether()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_triple_exact");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["needle", "--db", dbPath, "--exact", "--exact-substring", "--exact-name"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("pass only one of --exact, --exact-substring, --exact-name", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("--exact", "--exact-name")]
+    [InlineData("--exact", "--exact-substring")]
+    [InlineData("--exact-substring", "--exact-name")]
+    public void RunDefinition_RejectsCombinedExactFlags(string first, string second)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_definition_combined_exact");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                ["Run", "--db", dbPath, first, second],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("pass only one of --exact, --exact-substring, --exact-name", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbols_RejectsCombinedExactAndExactName()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_combined_exact_name");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Run", "--db", dbPath, "--exact", "--exact-name"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("pass only one of --exact, --exact-substring, --exact-name", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Fact]
     public void RunSearch_WithJsonOutputsCompactSnippetMetadata()
     {

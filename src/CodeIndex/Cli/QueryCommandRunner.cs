@@ -3066,6 +3066,11 @@ public static class QueryCommandRunner
 
     private static bool TryResolveSearchExactMode(QueryCommandOptions options, out bool exact, out string? error)
     {
+        if (!TryRejectMultipleExactFlags(options, out error))
+        {
+            exact = false;
+            return false;
+        }
         if (options.ExactName)
         {
             exact = false;
@@ -3080,6 +3085,11 @@ public static class QueryCommandRunner
 
     private static bool TryResolveNameExactMode(QueryCommandOptions options, string commandName, out bool exact, out string? error)
     {
+        if (!TryRejectMultipleExactFlags(options, out error))
+        {
+            exact = false;
+            return false;
+        }
         if (options.ExactSubstring)
         {
             exact = false;
@@ -3088,6 +3098,19 @@ public static class QueryCommandRunner
         }
 
         exact = options.Exact || options.ExactName;
+        error = null;
+        return true;
+    }
+
+    private static bool TryRejectMultipleExactFlags(QueryCommandOptions options, out string? error)
+    {
+        var count = (options.Exact ? 1 : 0) + (options.ExactSubstring ? 1 : 0) + (options.ExactName ? 1 : 0);
+        if (count > 1)
+        {
+            error = "Error: pass only one of --exact, --exact-substring, --exact-name.";
+            return false;
+        }
+
         error = null;
         return true;
     }

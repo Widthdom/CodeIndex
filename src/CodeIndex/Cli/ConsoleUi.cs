@@ -396,7 +396,7 @@ public static class ConsoleUi
         Console.WriteLine("  --focus-column <n>         excerpt: column to keep centered when clamping (must be within the focused line)");
         Console.WriteLine("  --focus-length <n>         excerpt: width of the focused span (default: 1, requires --focus-column)");
         Console.WriteLine("  --fts                      Use raw FTS5 query syntax for search (trailing * is a prefix shorthand in literal-safe mode)");
-        Console.WriteLine("  --exact                    Backward-compatible shorthand. Prefer --exact-substring for search, keep --exact for find, and prefer --exact-name for symbols/definition/references/callers/callees/inspect.");
+        Console.WriteLine("  --exact                    Backward-compatible shorthand. Prefer --exact-substring for search, keep --exact for find, and prefer --exact-name for symbols/definition/references/callers/callees/inspect. Pass at most one of --exact, --exact-substring, --exact-name; combining two or more is rejected.");
         Console.WriteLine("  --exact-substring          Search only: case-sensitive exact substring (no FTS5)");
         Console.WriteLine("  --exact-name               symbols/definition/references/callers/callees/inspect: NFKC + Unicode CaseFold exact name match (legacy/stale-fold DBs fall back to ASCII NOCASE; use `cdidx backfill-fold` or check `status --json` fold_ready)");
         Console.WriteLine("  --kind <kind>              definition/symbols/hotspots/unused: symbol kind; references: reference kind (call/instantiate/subscribe/attribute/annotation); callers/callees: call-graph kinds only (call/instantiate/subscribe — metadata kinds rejected, use references instead); validate: issue kind");
