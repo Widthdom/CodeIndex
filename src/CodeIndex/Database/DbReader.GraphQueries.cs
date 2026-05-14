@@ -1305,28 +1305,44 @@ public partial class DbReader
         var filtered = new List<FileDependencyResult>();
         foreach (var candidate in candidates)
         {
-            // Metadata-only consumers (attribute / annotation sites like `[MyAudit]` or
-            // `@Inject(User.class)`) legitimately lack structured type evidence in the
-            // source file. Bypass the evidence guard for those edges only when the
-            // class-like target is unambiguous so deps/impact can surface pure-attribute
-            // consumers without over-attributing same-named targets.
-            // metadata 専用の参照 (`[MyAudit]` や `@Inject(User.class)` のような attribute /
-            // annotation 利用) は、source 側のファイルに structured な型利用が無くても
-            // 正当な依存となるが、class-like target が一意に決まるときだけ evidence guard
-            // をスキップする。曖昧なときは下の evidence 要求へフォールスルーさせ、
-            // 同名 target への誤帰属を防ぐ。
-            if (candidate.HasMetadataRef && metadataBypassSafe)
+            // Evidence anchoring precedes the metadata bypass: an in-file `call` /
+            // `instantiate` reference to `definition.Name` (or structured type evidence
+            // such as a parameter or return-type token) pins the source/target pair
+            // unambiguously, so the looser metadata widening is unnecessary. Falling
+            // through to the bypass only when no such anchor exists keeps pure
+            // attribute / annotation consumers visible without over-attributing edges
+            // that the call graph already proves.
+            // evidence anchoring を metadata bypass より先に評価する。`definition.Name`
+            // への `call` / `instantiate` 参照、または structured type evidence
+            // (引数 / return 型での出現) がファイル内にあれば source→target の関係は
+            // 一意に固定されるので、より緩い metadata widening は不要。anchor が無い
+            // ときだけ bypass にフォールスルーすることで、純粋な attribute / annotation
+            // consumer の表示を維持しつつ、call graph で既に確定しているエッジを
+            // 過剰に metadata 経由で広げないようにする。
+            if (!evidenceCache.TryGetValue(candidate.SourceFileId, out var hasEvidence))
+            {
+                hasEvidence = SourceFileHasInvokeReferenceTo(candidate.SourceFileId, definition.Name)
+                              || SourceFileHasStructuredTypeEvidence(candidate.SourceFileId, definition.Name);
+                evidenceCache[candidate.SourceFileId] = hasEvidence;
+            }
+            if (hasEvidence)
             {
                 filtered.Add(candidate.Edge);
                 continue;
             }
-            if (!evidenceCache.TryGetValue(candidate.SourceFileId, out var hasEvidence))
+            // Pure metadata-only consumers (`[MyAudit]` / `@Inject(User.class)`) legitimately
+            // lack any anchor in the source file beyond the attribute / annotation use itself.
+            // For those, bypass the evidence guard only when the class-like target is
+            // unambiguous so deps/impact can still surface them without over-attributing
+            // same-named targets in the ambiguous case.
+            // anchor が一つも無い純粋な metadata consumer (`[MyAudit]` / `@Inject(User.class)`)
+            // のみ、class-like target が一意な場合に限り evidence guard を skip して
+            // 拾い上げる。曖昧なときは引き続き edge を落とし、同名 target への誤帰属を
+            // 防ぐ。
+            if (candidate.HasMetadataRef && metadataBypassSafe)
             {
-                hasEvidence = SourceFileHasStructuredTypeEvidence(candidate.SourceFileId, definition.Name);
-                evidenceCache[candidate.SourceFileId] = hasEvidence;
-            }
-            if (hasEvidence)
                 filtered.Add(candidate.Edge);
+            }
         }
 
         var truncated = filtered.Count > limit;
@@ -1476,6 +1492,37 @@ public partial class DbReader
         }
 
         return false;
+    }
+
+    // A `call` or `instantiate` reference to `typeName` inside the source file is a stronger
+    // anchor than structured type evidence (signature / return-type tokens). When such a
+    // reference exists, the source/target relationship is pinned by the call graph itself,
+    // so `GetFileDependencyHintsToResolvedType` does not need to widen via the looser
+    // metadata bypass. Symbol-name match is intentionally exact (no suffix-strip alias)
+    // because callable references already carry the authoritative name — applying the C#
+    // `[Foo]` → `FooAttribute` alias here would let an unrelated `Foo()` method call
+    // anchor `impact FooAttribute` and over-report blast radius (issue #1881).
+    // `typeName` への `call` / `instantiate` 参照は signature / return 型のトークンより強い
+    // anchor で、call graph 自体が source/target の関係を確定するため metadata bypass を
+    // 経由した widening は不要になる。比較は厳密一致のみで行う：callable な参照は
+    // 既に authoritative な名前を保持しているため、C# の `[Foo]` → `FooAttribute` のような
+    // suffix alias を適用すると、無関係な `Foo()` 呼び出しが `impact FooAttribute` を
+    // 不当に anchor してしまい blast radius を過大報告する (issue #1881)。
+    private bool SourceFileHasInvokeReferenceTo(long fileId, string typeName)
+    {
+        if (!_hasReferencesTable || string.IsNullOrWhiteSpace(typeName))
+            return false;
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = $@"
+            SELECT 1
+            FROM symbol_references r
+            WHERE r.file_id = @fileId
+              AND r.symbol_name = @typeName
+              AND r.reference_kind IN {InvokeReferenceKindsSql}
+            LIMIT 1";
+        cmd.Parameters.AddWithValue("@fileId", fileId);
+        cmd.Parameters.AddWithValue("@typeName", typeName);
+        return cmd.ExecuteScalar() != null;
     }
 
     private static bool SymbolProvidesStructuredTypeEvidence(string symbolName, string? signature, string? returnType, string typeName)
