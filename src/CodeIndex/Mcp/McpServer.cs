@@ -63,11 +63,11 @@ public partial class McpServer
 
         while (_running)
         {
-            var line = await reader.ReadLineAsync();
+            var line = await reader.ReadLineAsync().ConfigureAwait(false);
             if (line == null)
                 break; // stdin closed / stdinが閉じられた
 
-            await ProcessLineAsync(line, writer);
+            await ProcessLineAsync(line, writer).ConfigureAwait(false);
         }
 
         Console.Error.WriteLine("[cdidx-mcp] Server stopped. Restart `cdidx mcp` when your client reconnects.");
@@ -88,7 +88,7 @@ public partial class McpServer
         {
             Console.Error.WriteLine(BuildOversizedMessageLog(line.Length));
             var errorResponse = CreateErrorResponse(null, -32700, "Message too large");
-            await writer.WriteLineAsync(errorResponse.ToJsonString(_jsonOptions));
+            await writer.WriteLineAsync(errorResponse.ToJsonString(_jsonOptions)).ConfigureAwait(false);
             return;
         }
 
@@ -102,7 +102,7 @@ public partial class McpServer
             var response = HandleMessage(request);
             if (response != null)
             {
-                await writer.WriteLineAsync(_serializeResponse(response));
+                await writer.WriteLineAsync(_serializeResponse(response)).ConfigureAwait(false);
             }
         }
         catch (JsonException ex)
@@ -110,7 +110,7 @@ public partial class McpServer
             // Parse error / パースエラー
             Console.Error.WriteLine(BuildJsonParseErrorLog(ex.Message));
             var errorResponse = CreateErrorResponse(null, -32700, "Parse error");
-            await writer.WriteLineAsync(errorResponse.ToJsonString(_jsonOptions));
+            await writer.WriteLineAsync(errorResponse.ToJsonString(_jsonOptions)).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -118,7 +118,7 @@ public partial class McpServer
             if (request is JsonObject requestObj && requestObj.TryGetPropertyValue("id", out var requestId))
             {
                 var errorResponse = CreateErrorResponse(true, requestId, -32603, ex.Message);
-                await writer.WriteLineAsync(errorResponse.ToJsonString(_jsonOptions));
+                await writer.WriteLineAsync(errorResponse.ToJsonString(_jsonOptions)).ConfigureAwait(false);
             }
         }
     }
