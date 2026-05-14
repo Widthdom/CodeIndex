@@ -2380,6 +2380,54 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_DockerfileReferences_IndexErrorIfUnsetBracedArgVariables()
+    {
+        const string content = """
+            ARG REQUIRED_VAR
+            RUN echo ${REQUIRED_VAR:?must be set}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
+
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "REQUIRED_VAR"
+            && reference.ReferenceKind == "reference"));
+    }
+
+    [Fact]
+    public void Extract_DockerfileReferences_IndexUseAlternateBracedArgVariables()
+    {
+        const string content = """
+            ARG FEATURE_FLAG
+            RUN echo ${FEATURE_FLAG:+--enable}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
+
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "FEATURE_FLAG"
+            && reference.ReferenceKind == "reference"));
+    }
+
+    [Fact]
+    public void Extract_DockerfileReferences_IndexAssignDefaultBracedArgVariables()
+    {
+        const string content = """
+            ARG PORT
+            RUN echo ${PORT:=8080}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
+
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "PORT"
+            && reference.ReferenceKind == "reference"));
+    }
+
+    [Fact]
     public void Extract_DockerfileReferences_IgnoresEscapedUnbracedVariables()
     {
         const string content = """
