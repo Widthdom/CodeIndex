@@ -1271,7 +1271,8 @@ public partial class McpServer
         if (IsBareVerbatimQueryToken(query))
             return CreateToolErrorResponse(id, "Add a real symbol name after the command; bare verbatim prefixes like `@` are not valid queries.");
 
-        var maxDepth = Math.Clamp(args?["maxDepth"]?.GetValue<int>() ?? 5, 0, 10);
+        var maxDepthRequested = args?["maxDepth"]?.GetValue<int>() ?? 5;
+        var maxDepth = Math.Clamp(maxDepthRequested, 0, MaxImpactDepth);
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 50);
         var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
         var pathPatterns = ReadPathList(args, "path");
@@ -1306,6 +1307,7 @@ public partial class McpServer
                 ["hint_count"] = hintCount,
                 ["hint_file_count"] = hintFileCount,
                 ["max_depth"] = maxDepth,
+                ["max_depth_requested"] = maxDepthRequested,
                 ["actual_depth"] = maxActualDepth,
                 ["truncated"] = analysis.Truncated,
                 ["impact_mode"] = analysis.ImpactMode,
@@ -1321,6 +1323,12 @@ public partial class McpServer
                 ["graph_table_available"] = analysis.GraphTableAvailable,
             };
             AddSqlGraphContractSignal(payload, sqlGraphSignal);
+            string? maxDepthClampWarning = null;
+            if (maxDepthRequested != maxDepth)
+            {
+                maxDepthClampWarning = $"maxDepth was clamped from {maxDepthRequested} to {maxDepth} (server cap is [0, {MaxImpactDepth}]).";
+                payload["warnings"] = new JsonArray { maxDepthClampWarning };
+            }
             if (analysis.ZeroResultReason != null)
                 payload["zero_result_reason"] = analysis.ZeroResultReason;
             if (analysis.Suggestion != null)
@@ -1334,6 +1342,8 @@ public partial class McpServer
                     + (analysis.Truncated ? " Results truncated — increase limit for more." : ""),
                 _ => "No impact found.",
             };
+            if (maxDepthClampWarning != null)
+                summary += $" Warning: {maxDepthClampWarning}";
 
             if (count == 0)
             {

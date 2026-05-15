@@ -2001,6 +2001,58 @@ public class McpServerTests : IDisposable
         Assert.Equal("Use `cdidx impact <symbol> --depth 1` or higher to traverse callers.", structured["suggestion"]!.GetValue<string>());
     }
 
+    // #1534: requests above the server cap (50) must surface a warning and `max_depth_requested`
+    // instead of silently clamping, so agents can react (raise the cap, accept partial depth, etc.).
+    // #1534: サーバー上限 (50) を超える maxDepth は黙ってクランプせず、warnings と
+    // max_depth_requested で通知し、エージェントが対応できるようにする。
+    [Fact]
+    public void ToolsCall_ImpactAnalysis_MaxDepthAboveCapSurfacesWarningAndRequestedValue()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"impact_analysis","arguments":{"query":"Run","maxDepth":100}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.Equal(50, structured["max_depth"]!.GetValue<int>());
+        Assert.Equal(100, structured["max_depth_requested"]!.GetValue<int>());
+        var warnings = structured["warnings"]!.AsArray();
+        Assert.Single(warnings);
+        var warning = warnings[0]!.GetValue<string>();
+        Assert.Contains("maxDepth was clamped from 100 to 50", warning);
+        Assert.Contains("[0, 50]", warning);
+        var summaryText = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("maxDepth was clamped from 100 to 50", summaryText);
+    }
+
+    [Fact]
+    public void ToolsCall_ImpactAnalysis_MaxDepthWithinCapDoesNotEmitWarning()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"impact_analysis","arguments":{"query":"Run","maxDepth":50}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.Equal(50, structured["max_depth"]!.GetValue<int>());
+        Assert.Equal(50, structured["max_depth_requested"]!.GetValue<int>());
+        Assert.Null(structured["warnings"]);
+    }
+
+    [Fact]
+    public void ToolsList_ImpactAnalysisMaxDepthSchemaDocumentsCap()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var tools = response["result"]!["tools"]!.AsArray();
+        var impactTool = tools.First(t => t!["name"]!.GetValue<string>() == "impact_analysis")!;
+        var maxDepthSchema = impactTool["inputSchema"]!["properties"]!["maxDepth"]!;
+
+        Assert.Equal(50, maxDepthSchema["maximum"]!.GetValue<int>());
+        Assert.Equal(0, maxDepthSchema["minimum"]!.GetValue<int>());
+        var description = maxDepthSchema["description"]!.GetValue<string>();
+        Assert.Contains("Server-side cap", description);
+        Assert.Contains("warnings", description);
+        Assert.Contains("max_depth_requested", description);
+    }
+
     [Fact]
     public void ToolsCall_ImpactAnalysis_ExcludeTestsIgnoresOutOfScopeDuplicateDefinitions()
     {
