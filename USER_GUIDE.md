@@ -327,6 +327,16 @@ cdidx backfill-fold
 
 This recomputes `name_folded` / `*_folded` columns from the existing DB rows and stamps `fold_ready` without reparsing source files. The target must already be an existing CodeIndex DB; blank or missing paths are rejected instead of creating a new database.
 
+If you suspect the SQLite file itself is corrupted (queries crashing with a SQLite error, unexpected `database disk image is malformed` messages), you can probe it explicitly:
+
+```bash
+cdidx db --integrity-check                              # run PRAGMA integrity_check
+cdidx db --integrity-check --db ./.cdidx/codeindex.db   # point at a specific DB
+cdidx db --integrity-check --json                       # machine-readable result
+```
+
+This opens the database read-only, runs SQLite's `PRAGMA integrity_check`, and prints whether the file is `ok` or lists the failures. Exit codes are stable for scripting: `0` clean, `2` (NotFound) when the file does not exist, `3` (DatabaseError) when corruption is detected. SQLite does not offer a general-purpose repair primitive — if the check fails, recover by rebuilding with `cdidx index <projectPath> --rebuild`.
+
 ### Search code
 
 ```bash
@@ -1361,6 +1371,16 @@ cdidx backfill-fold
 ```
 
 これは既存 DB 行から `name_folded` / `*_folded` 列を再計算し、ソース再解析なしで `fold_ready` を stamp します。対象は既存の CodeIndex DB に限られ、空のDBや存在しないパスを指定しても新規作成せず拒否します。
+
+SQLite ファイル自体が破損していると疑われる場合（クエリが SQLite エラーで落ちる、`database disk image is malformed` といったメッセージが出る等）には、整合性を明示的に確認できます:
+
+```bash
+cdidx db --integrity-check                              # PRAGMA integrity_check を実行
+cdidx db --integrity-check --db ./.cdidx/codeindex.db   # 特定 DB を指定
+cdidx db --integrity-check --json                       # 機械可読な結果
+```
+
+DB を read-only で開いて SQLite の `PRAGMA integrity_check` を実行し、`ok` か、検出された破損行の一覧を出力します。終了コードは安定しており、`0` = 健全、`2` (NotFound) = ファイル無し、`3` (DatabaseError) = 破損検出です。SQLite には汎用的な修復プリミティブが無いため、チェックが失敗した場合は `cdidx index <projectPath> --rebuild` で再構築するのが推奨復旧手段です。
 
 ### コード検索
 

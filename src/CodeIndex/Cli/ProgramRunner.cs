@@ -87,6 +87,7 @@ internal static class ProgramRunner
                 "hotspots" => QueryCommandRunner.RunHotspots(args[1..], jsonOptions),
                 "index" => IndexCommandRunner.Run(args[1..], jsonOptions),
                 "backfill-fold" => IndexCommandRunner.RunBackfillFold(args[1..], jsonOptions),
+                "db" => DbCommandRunner.RunIntegrityCheck(args[1..], jsonOptions),
                 _ when IsProjectPathArg(args[0])
                     => IndexCommandRunner.Run(args, jsonOptions),
                 _ => ShowError(args, $"Unknown command: {args[0]}")
