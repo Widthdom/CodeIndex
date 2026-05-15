@@ -1,6 +1,6 @@
 # Claude Code Entry Point
 
-Read `AGENT_GUIDE.md` first. It is the shared source of truth for CodeIndex agent behavior.
+Read `AGENT_GUIDE.md` first. It is the shared source of truth for CodeIndex agent behavior, including Claude Code-specific notes, the search/indexing policy, and the status and reference-extraction contracts.
 
 For task-specific procedures, read the relevant workflow in `.codex/workflows/`:
 
@@ -14,21 +14,4 @@ For task-specific procedures, read the relevant workflow in `.codex/workflows/`:
 
 The `.codex/workflows/` directory is a shared workflow library for all coding agents, not only Codex.
 
-## Claude Code Notes
-
-- Follow the repository-tracked `.claude/settings.json` and `.claude/hooks/bash-guard.py` policy files when running in Claude Code.
-- Do not edit those policy files during ordinary implementation work unless the task is explicitly about Claude Code guard behavior.
-- For shell search and navigation, prefer the built-in Grep / Glob tools or the locally built `cdidx` binary described in `AGENT_GUIDE.md`.
-
-## Status Contract
-
-- `status --json` and related JSON/MCP payloads currently expose the trust fields documented in `README.md` and `DEVELOPER_GUIDE.md`, including `fold_ready`, `fold_ready_reason`, `graph_table_available`, `issues_table_available`, `sql_graph_contract_ready`, `sql_graph_contract_degraded_reason`, `hotspot_family_ready`, `hotspot_family_degraded_reason`, `csharp_symbol_name_ready`, `csharp_metadata_target_ready`, `indexed_head_commit`, `worktree_head_changed`, `index_writer_version`, `index_newer_than_reader`, and `index_newer_than_reader_reason`.
-- When `fold_ready` is the only degraded readiness bit, the CLI also adds `degraded_reason`, `recommended_action`, and `alternative_action`.
-- `index_writer_version` records the `cdidx` version that last wrote to the DB (stamped into `codeindex_meta` as `cdidx_writer_version` on every full scan, update, and MCP index). `index_newer_than_reader` flips to `true` whenever any persisted numeric contract stamp in `codeindex_meta` (or unknown `PRAGMA user_version` readiness bits) exceeds the current binary's compiled maximum, so an older CLI re-opening a DB written by a newer CLI degrades loudly with an audit trail instead of silently dropping back to text-search fallbacks. `index_newer_than_reader_reason` enumerates the specific newer-than-reader stamps.
-- `status` also surfaces indexed-HEAD freshness via `indexed_head_sha`, `indexed_head_branch`, `indexed_head_timestamp`, and `commits_ahead_of_indexed_head`. They are stamped by `cdidx index` on every successful run (full scan AND partial update, distinct from `indexed_head_commit` which is full-scan only) on a best-effort basis (never blocks an otherwise-successful index) and omitted on non-git workspaces, detached HEAD (branch only), or legacy DBs created before this contract.
-- Keep the three docs synchronized if this contract changes.
-
-## Reference Extraction
-
-- Dockerfile multi-stage builds now emit `call`-kind reference edges for `FROM <stage> AS <new>` and `COPY --from=<stage>` when the source name matches a named stage in the same file, so `callers` and `impact` can follow stage dependencies instead of treating intermediate stages as unused.
-- Rust macro invocations (`name!(...)` / `name![...]` / `name!{...}`) now emit `call`-kind reference edges, while the `macro_rules!` declaration keyword remains suppressed so macro definitions do not double-count as calls.
+Do not duplicate workflow or policy rules in this file. Update `AGENT_GUIDE.md` or the relevant workflow file instead.

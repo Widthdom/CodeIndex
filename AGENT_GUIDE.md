@@ -18,12 +18,19 @@ For implementation tasks:
 
 ## Search and Indexing Rules
 
-For code search, do not use `grep`, `rg`, `python`, or a globally installed `cdidx`.
-Use the locally built CodeIndex binary from this repository:
+For CodeIndex work, dogfood the project-built CodeIndex binary.
+
+Do not use `grep`, `rg`, `ripgrep`, `ag`, `ack`, `find`, `fd`, `locate`, `git grep`, Python scripts, or a globally installed `cdidx` for code search or repository discovery. Use the locally built CodeIndex binary from this repository:
 
 ```bash
 dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll
 ```
+
+Examples:
+
+- `dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll search SymbolExtractor`
+- `dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll symbols --lang csharp`
+- `dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll inspect src/CodeIndex/Indexer/SymbolExtractor.cs`
 
 Before implementation, first check whether the local index already matches the current workspace:
 
@@ -33,7 +40,15 @@ dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll status --check --json
 
 If the command exits `0` and reports `index_matches_workspace: true`, you may trust the existing `.cdidx/codeindex.db` without rebuilding it. If it exits with stale-index status or reports mismatched `workspace_check` counts, refresh the local index as documented by the project guidance. If the exact index-refresh command is documented elsewhere, use that documented command instead of inventing a new one.
 
-This rule applies to code search and repository understanding. It does not forbid Git commands, build tools, test runners, package managers, or small shell checks that are not being used to search implementation code.
+This rule applies to code search and repository understanding. It does not forbid Git commands, build tools, test runners, package managers, or small shell checks that are not being used to search implementation code. Enforcement of forbidden tools is provided separately by the Claude and Codex guard hooks.
+
+## Tool-Specific Notes
+
+### Claude Code
+
+- Follow the repository-tracked `.claude/settings.json` and `.claude/hooks/bash-guard.py` policy files when running in Claude Code.
+- Do not edit those policy files during ordinary implementation work unless the task is explicitly about Claude Code guard behavior.
+- For shell search and navigation, prefer the built-in Grep / Glob tools or the locally built `cdidx` binary described above.
 
 ## Scope Rules
 
@@ -94,6 +109,19 @@ Reviews must focus on blocking/actionable issues, not nitpicks.
 
 Follow `.codex/workflows/pr-finalize.md`.
 CI watching must be bounded. Do not loop indefinitely.
+
+## Status Contract
+
+- `status --json` and related JSON/MCP payloads currently expose the trust fields documented in `README.md` and `DEVELOPER_GUIDE.md`, including `fold_ready`, `fold_ready_reason`, `graph_table_available`, `issues_table_available`, `sql_graph_contract_ready`, `sql_graph_contract_degraded_reason`, `hotspot_family_ready`, `hotspot_family_degraded_reason`, `csharp_symbol_name_ready`, `csharp_metadata_target_ready`, `indexed_head_commit`, `worktree_head_changed`, `index_writer_version`, `index_newer_than_reader`, and `index_newer_than_reader_reason`.
+- When `fold_ready` is the only degraded readiness bit, the CLI also adds `degraded_reason`, `recommended_action`, and `alternative_action`.
+- `index_writer_version` records the `cdidx` version that last wrote to the DB (stamped into `codeindex_meta` as `cdidx_writer_version` on every full scan, update, and MCP index). `index_newer_than_reader` flips to `true` whenever any persisted numeric contract stamp in `codeindex_meta` (or unknown `PRAGMA user_version` readiness bits) exceeds the current binary's compiled maximum, so an older CLI re-opening a DB written by a newer CLI degrades loudly with an audit trail instead of silently dropping back to text-search fallbacks. `index_newer_than_reader_reason` enumerates the specific newer-than-reader stamps.
+- `status` also surfaces indexed-HEAD freshness via `indexed_head_sha`, `indexed_head_branch`, `indexed_head_timestamp`, and `commits_ahead_of_indexed_head`. They are stamped by `cdidx index` on every successful run (full scan AND partial update, distinct from `indexed_head_commit` which is full-scan only) on a best-effort basis (never blocks an otherwise-successful index) and omitted on non-git workspaces, detached HEAD (branch only), or legacy DBs created before this contract.
+- Keep `README.md`, `DEVELOPER_GUIDE.md`, and this file synchronized if this contract changes.
+
+## Reference Extraction
+
+- Dockerfile multi-stage builds now emit `call`-kind reference edges for `FROM <stage> AS <new>` and `COPY --from=<stage>` when the source name matches a named stage in the same file, so `callers` and `impact` can follow stage dependencies instead of treating intermediate stages as unused.
+- Rust macro invocations (`name!(...)` / `name![...]` / `name!{...}`) now emit `call`-kind reference edges, while the `macro_rules!` declaration keyword remains suppressed so macro definitions do not double-count as calls.
 
 ## When You Cannot Complete an Operation
 

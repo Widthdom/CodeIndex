@@ -1,6 +1,6 @@
 # Codex Entry Point
 
-Read `AGENT_GUIDE.md` first. It is the shared source of truth for CodeIndex agent behavior.
+Read `AGENT_GUIDE.md` first. It is the shared source of truth for CodeIndex agent behavior, including the code search and safety policy that forbids `grep`/`rg`/`find`/etc. in favor of the locally built `cdidx` binary.
 
 For task-specific procedures, read the relevant workflow in `.codex/workflows/`:
 
@@ -12,24 +12,4 @@ For task-specific procedures, read the relevant workflow in `.codex/workflows/`:
 - PR finalization and CI checks: `.codex/workflows/pr-finalize.md`
 - related/new issue scope control: `.codex/workflows/issue-scope.md`
 
-Do not duplicate workflow rules in this file. Update the shared files instead.
-
-## Code search and safety policy
-
-For CodeIndex work, dogfood the project-built CodeIndex binary.
-
-Do not use grep, rg, ripgrep, ag, ack, find, fd, locate, git grep, Python scripts,
-or a globally installed cdidx for code search or repository discovery.
-
-Use:
-
-`dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll`
-
-Examples:
-
-- `dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll search SymbolExtractor`
-- `dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll symbols --lang csharp`
-- `dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll inspect src/CodeIndex/Indexer/SymbolExtractor.cs`
-
-This instruction is a workflow rule. Enforcement is provided separately by the
-Claude and Codex guard hooks.
+Do not duplicate workflow or policy rules in this file. Update `AGENT_GUIDE.md` or the relevant workflow file instead.
