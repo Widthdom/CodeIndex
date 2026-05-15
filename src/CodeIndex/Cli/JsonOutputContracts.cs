@@ -24,6 +24,11 @@ internal sealed record CommandErrorJsonResult(
     [property: JsonPropertyName("message")] string Message,
     [property: JsonPropertyName("hint")] string? Hint);
 
+internal sealed record DbIntegrityCheckJsonResult(
+    [property: JsonPropertyName("db_path")] string DbPath,
+    [property: JsonPropertyName("ok")] bool Ok,
+    [property: JsonPropertyName("issues")] List<string> Issues);
+
 internal sealed record QueryCountJsonResult(
     [property: JsonPropertyName("count")] int Count);
 
@@ -169,6 +174,7 @@ internal sealed record GroupedSymbolHotspotJsonResult(
 [JsonSerializable(typeof(CliJsonMessage))]
 [JsonSerializable(typeof(CompactSearchResult))]
 [JsonSerializable(typeof(CommandErrorJsonResult))]
+[JsonSerializable(typeof(DbIntegrityCheckJsonResult))]
 [JsonSerializable(typeof(DefinitionResult))]
 [JsonSerializable(typeof(Dictionary<string, int>))]
 [JsonSerializable(typeof(Dictionary<string, long>))]
