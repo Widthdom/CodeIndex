@@ -14218,6 +14218,127 @@ public class DbReaderTests : IDisposable
         }
     }
 
+    [Fact]
+    public void Search_RanksFilesWithExactSymbolMatchBeforeFilesWithout_Issue1520()
+    {
+        // Issue #1520: the search ORDER BY uses a per-file "exact symbol match" bucket so that
+        // FTS hits inside files where a symbol named exactly like the query exists float above
+        // files where the query only appears textually. Pin the observable ordering after
+        // materializing the EXISTS predicate into a derived-table LEFT JOIN.
+        // Issue #1520: ORDER BY のシンボル一致バケットをサブクエリ→LEFT JOIN 化したため、
+        // ランキングが従来通りに維持されることを観測ベースで pin する。
+        const string token = "rank_match_token_1520";
+        InsertIndexedFile(
+            "src/rank_text_only.py",
+            "python",
+            $"# bare mention only\nresult = {token}\n");
+        InsertIndexedFile(
+            "src/rank_symbol_hit.py",
+            "python",
+            $"def {token}():\n    return None\n");
+
+        var results = _reader.Search(token);
+
+        Assert.True(results.Count >= 2);
+        var symbolHitIndex = results.FindIndex(r => r.Path == "src/rank_symbol_hit.py");
+        var textOnlyIndex = results.FindIndex(r => r.Path == "src/rank_text_only.py");
+        Assert.True(symbolHitIndex >= 0, "file with the exact-symbol match should appear in results");
+        Assert.True(textOnlyIndex >= 0, "file with the textual-only match should appear in results");
+        Assert.True(symbolHitIndex < textOnlyIndex,
+            $"file with the exact-symbol match ranked at {symbolHitIndex} should precede textual-only at {textOnlyIndex}");
+    }
+
+    [Fact]
+    public void Search_RanksFilesWithPrefixSymbolMatchBeforeFilesWithout_Issue1520()
+    {
+        // Issue #1520: prefix bucket must still favor files that own a symbol whose name starts
+        // with the query (e.g. `auth*` matches an `authenticate` function declaration) over
+        // files that only contain the literal substring in chunk text.
+        // Issue #1520: prefix バケットも、シンボル名が query で始まるファイルを優先する挙動を維持する。
+        const string prefix = "prefix1520";
+        InsertIndexedFile(
+            "src/prefix_text_only.py",
+            "python",
+            $"# textual mention: {prefix}_lookup is just a string here.\n");
+        InsertIndexedFile(
+            "src/prefix_symbol_hit.py",
+            "python",
+            $"def {prefix}_handler():\n    return None\n");
+
+        var results = _reader.Search(prefix);
+
+        Assert.True(results.Count >= 2);
+        var symbolHitIndex = results.FindIndex(r => r.Path == "src/prefix_symbol_hit.py");
+        var textOnlyIndex = results.FindIndex(r => r.Path == "src/prefix_text_only.py");
+        Assert.True(symbolHitIndex >= 0);
+        Assert.True(textOnlyIndex >= 0);
+        Assert.True(symbolHitIndex < textOnlyIndex,
+            $"file with the prefix-symbol match ranked at {symbolHitIndex} should precede textual-only at {textOnlyIndex}");
+    }
+
+    [Fact]
+    public void SearchRankingBuckets_DoNotEmbedCorrelatedExistsInOrderBy_Issue1520()
+    {
+        // Issue #1520: the ranking constants must not embed a correlated EXISTS subquery
+        // against `symbols` that references the outer `f.id`. Such a subquery is re-evaluated
+        // per FTS hit before the LIMIT, turning a fast search into an O(N x M) sort.
+        // Issue #1520: ranking 定数に外側 f.id を参照する EXISTS を埋め戻していないことを固定する。
+        Assert.DoesNotContain("EXISTS", DbReader.ExactSymbolMatchOrder, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("EXISTS", DbReader.PrefixSymbolMatchOrder, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("FROM symbols", DbReader.ExactSymbolMatchOrder, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("FROM symbols", DbReader.PrefixSymbolMatchOrder, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("exact_symbol_match", DbReader.ExactSymbolMatchOrder, StringComparison.Ordinal);
+        Assert.Contains("prefix_symbol_match", DbReader.PrefixSymbolMatchOrder, StringComparison.Ordinal);
+        Assert.Contains("LEFT JOIN", DbReader.SearchSymbolMatchJoinsSql, StringComparison.Ordinal);
+        Assert.Contains("SELECT DISTINCT file_id FROM symbols", DbReader.SearchSymbolMatchJoinsSql, StringComparison.Ordinal);
+        // The materialized lookup must stay SARGable (no `lower(name)` wrapping).
+        Assert.DoesNotContain("lower(", DbReader.SearchSymbolMatchJoinsSql, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Search_OrderByPlanDoesNotReScanSymbolsPerRow_Issue1520()
+    {
+        // Issue #1520: EXPLAIN QUERY PLAN of the full search SQL must show the ranking
+        // subqueries materialized once instead of re-scanning `symbols` correlated by `f.id`.
+        // Modern SQLite reports a single "MATERIALIZE" or "CO-ROUTINE" step for SELECT DISTINCT
+        // subqueries in FROM; the regression would surface a "CORRELATED SCALAR SUBQUERY"
+        // (or repeated "SEARCH symbols ... USING INDEX idx_symbols_file") instead.
+        // Issue #1520: EXPLAIN QUERY PLAN に CORRELATED SCALAR SUBQUERY が現れないことを固定する。
+        const string sql = @"
+            SELECT f.path, f.lang, c.start_line, c.end_line, c.content, rank
+            FROM fts_chunks
+            JOIN chunks c ON fts_chunks.rowid = c.id
+            JOIN files f ON c.file_id = f.id
+            LEFT JOIN (
+                SELECT DISTINCT file_id FROM symbols
+                WHERE name = @rankingQuery COLLATE NOCASE
+            ) AS exact_symbol_match ON exact_symbol_match.file_id = f.id
+            LEFT JOIN (
+                SELECT DISTINCT file_id FROM symbols
+                WHERE name LIKE @rankingQueryPrefix ESCAPE '\' COLLATE NOCASE
+            ) AS prefix_symbol_match ON prefix_symbol_match.file_id = f.id
+            WHERE fts_chunks MATCH @query
+            ORDER BY
+                CASE WHEN exact_symbol_match.file_id IS NULL THEN 1 ELSE 0 END,
+                CASE WHEN prefix_symbol_match.file_id IS NULL THEN 1 ELSE 0 END,
+                rank
+            LIMIT 10";
+
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = "EXPLAIN QUERY PLAN " + sql;
+        cmd.Parameters.AddWithValue("@query", "authenticate");
+        cmd.Parameters.AddWithValue("@rankingQuery", "authenticate");
+        cmd.Parameters.AddWithValue("@rankingQueryPrefix", "authenticate%");
+
+        var plan = new StringBuilder();
+        using (var reader = cmd.ExecuteReader())
+            while (reader.Read())
+                plan.AppendLine(reader.GetString(3));
+
+        var planText = plan.ToString();
+        Assert.DoesNotContain("CORRELATED", planText);
+    }
+
     private static SqliteConnection CreateLegacyReferenceConnection(string legacyPath)
     {
         var db = new DbContext(legacyPath);

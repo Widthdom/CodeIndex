@@ -167,26 +167,34 @@ public partial class DbReader
             WHEN 'fileprivate' THEN 3
             ELSE 4
         END";
-    private const string ExactSymbolMatchOrder = @"
-        CASE
-            WHEN EXISTS (
-                SELECT 1
-                FROM symbols sx
-                WHERE sx.file_id = f.id
-                  AND lower(sx.name) = lower(@rankingQuery)
-            ) THEN 0
-            ELSE 1
-        END";
-    private const string PrefixSymbolMatchOrder = @"
-        CASE
-            WHEN EXISTS (
-                SELECT 1
-                FROM symbols sx
-                WHERE sx.file_id = f.id
-                  AND lower(sx.name) LIKE lower(@rankingQueryPrefix) ESCAPE '\'
-            ) THEN 0
-            ELSE 1
-        END";
+    // Bucket ordering for files whose symbols exactly / prefix-match the ranking query.
+    // Issue #1520: previously each bucket embedded a correlated `EXISTS (... lower(name) = lower(@q))`
+    // subquery inside ORDER BY. SQLite re-evaluated it per FTS hit, and `lower(col)` defeated the
+    // `idx_symbols_name_nocase` / `idx_symbols_name_folded` indexes, producing an O(N*M) plan that
+    // degraded `cdidx search` latency on large indexes. The bucket value is now sourced from a
+    // dedicated LEFT JOIN against a derived table that pre-aggregates matching `file_id`s exactly
+    // once per query, using SARGable `name COLLATE NOCASE` / `name LIKE ... COLLATE NOCASE`
+    // predicates so the planner can use the existing indexes.
+    // バケット順位は LEFT JOIN 結果の NULL 判定だけで決まり、`f.id` ごとの再評価は不要。
+    internal const string ExactSymbolMatchOrder =
+        "CASE WHEN exact_symbol_match.file_id IS NULL THEN 1 ELSE 0 END";
+    internal const string PrefixSymbolMatchOrder =
+        "CASE WHEN prefix_symbol_match.file_id IS NULL THEN 1 ELSE 0 END";
+
+    // Derived-table joins that supply the per-file boolean buckets referenced by the ranking
+    // ORDER BY constants above. SELECT DISTINCT keeps SQLite from flattening the subqueries
+    // back into the outer query, so each predicate runs once per query instead of once per row.
+    // 派生テーブルの SELECT DISTINCT により SQLite はサブクエリをフラット化せず、述語は 1 回だけ
+    // 評価される。
+    internal const string SearchSymbolMatchJoinsSql = @"
+        LEFT JOIN (
+            SELECT DISTINCT file_id FROM symbols
+            WHERE name = @rankingQuery COLLATE NOCASE
+        ) AS exact_symbol_match ON exact_symbol_match.file_id = f.id
+        LEFT JOIN (
+            SELECT DISTINCT file_id FROM symbols
+            WHERE name LIKE @rankingQueryPrefix ESCAPE '\' COLLATE NOCASE
+        ) AS prefix_symbol_match ON prefix_symbol_match.file_id = f.id";
     private const string PathTextMatchOrder = @"
         CASE
             WHEN instr(lower(f.path), lower(@rankingQuery)) > 0 THEN 0

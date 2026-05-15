@@ -298,7 +298,7 @@ public partial class DbReader
                 SELECT f.path, f.lang, c.start_line, c.end_line, c.content,
                        0.0 AS rank
                 FROM chunks c
-                JOIN files f ON c.file_id = f.id
+                JOIN files f ON c.file_id = f.id{SearchSymbolMatchJoinsSql}
                 WHERE instr(
                     {GetExactSearchTextSql("c.content", "f.lang")},
                     {GetExactSearchTextSql("@exactQuery", "f.lang")}
@@ -307,12 +307,12 @@ public partial class DbReader
         else
         {
             var sanitizedQuery = rawQuery ? query : SanitizeFtsQuery(normalizedQuery);
-            sql = @"
+            sql = $@"
                 SELECT f.path, f.lang, c.start_line, c.end_line, c.content,
                        rank
                 FROM fts_chunks
                 JOIN chunks c ON fts_chunks.rowid = c.id
-                JOIN files f ON c.file_id = f.id";
+                JOIN files f ON c.file_id = f.id{SearchSymbolMatchJoinsSql}";
             sql += " WHERE fts_chunks MATCH @query";
             cmd.Parameters.AddWithValue("@query", sanitizedQuery);
         }
@@ -376,7 +376,7 @@ public partial class DbReader
                 SELECT f.path, c.start_line, c.end_line,
                        0.0 AS rank
                 FROM chunks c
-                JOIN files f ON c.file_id = f.id
+                JOIN files f ON c.file_id = f.id{SearchSymbolMatchJoinsSql}
                 WHERE instr(
                     {GetExactSearchTextSql("c.content", "f.lang")},
                     {GetExactSearchTextSql("@exactQuery", "f.lang")}
@@ -385,12 +385,12 @@ public partial class DbReader
         else
         {
             var sanitizedQuery = rawQuery ? query : SanitizeFtsQuery(normalizedQuery);
-            sql = @"
+            sql = $@"
                 SELECT f.path, c.start_line, c.end_line,
                        rank
                 FROM fts_chunks
                 JOIN chunks c ON fts_chunks.rowid = c.id
-                JOIN files f ON c.file_id = f.id";
+                JOIN files f ON c.file_id = f.id{SearchSymbolMatchJoinsSql}";
             sql += " WHERE fts_chunks MATCH @query";
             cmd.Parameters.AddWithValue("@query", sanitizedQuery);
         }
