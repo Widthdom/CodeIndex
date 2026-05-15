@@ -913,6 +913,21 @@ public class DbWriter
     }
 
     /// <summary>
+    /// Stamp the cdidx version string that wrote the most recent successful end-of-index
+    /// pass. Readers compare this against their own binary version (and each persisted
+    /// contract version) to surface forward-compatibility warnings when an older cdidx
+    /// opens a DB last written by a newer cdidx. Issue #1515.
+    /// 成功 index 末尾で書き込みを行った cdidx の version を stamp する。reader は自身の
+    /// version と各 contract version と突き合わせて forward-compat 警告を出す。Issue #1515。
+    /// </summary>
+    public void WriteCdidxWriterVersion(string version)
+    {
+        if (string.IsNullOrWhiteSpace(version))
+            return;
+        SetMeta(DbContext.CdidxWriterVersionMetaKey, version);
+    }
+
+    /// <summary>
     /// Demote metadata-target trust for every known language. Called at the start of any
     /// indexing run that may leave the resolver output partially stale so readers fall back
     /// to the legacy heuristic until a successful run restamps the current version.

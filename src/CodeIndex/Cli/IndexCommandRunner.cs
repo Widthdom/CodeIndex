@@ -1080,6 +1080,7 @@ public static class IndexCommandRunner
                 writer.MarkFoldReady();
                 foldReadyAfter = true;
             }
+            writer.WriteCdidxWriterVersion(ConsoleUi.LoadVersion());
         }
         stopwatch.Stop();
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
@@ -1810,6 +1811,8 @@ public static class IndexCommandRunner
             }
             else
                 foldReadyReasonAfter = GetFoldReadyReason(backfillReady, foldVersionMatchesCurrent, foldFingerprintMatchesCurrent);
+
+            writer.WriteCdidxWriterVersion(ConsoleUi.LoadVersion());
 
             // Successful no-op full scans should repair stale / missing explicit-DB roots
             // only after readiness stamps succeed, so an interruption cannot rewrite trust

@@ -81,6 +81,16 @@ public partial class DbReader
     // globally disabling families for unrelated marker types.
     // authoritative な hotspot family semantics を保持する言語集合。
     internal readonly HashSet<string> _hotspotFamilyReadyLanguages;
+    // Issue #1515: forward-compat sentinel. `_indexWriterVersion` is the cdidx version
+    // string the writer last stamped (null on legacy DBs). `_indexNewerThanReader` is
+    // true when any persisted numeric contract version exceeds this binary's compiled
+    // constants, signaling the DB was written by a newer cdidx and the existing
+    // string.Equals(stored, current) gates are silently degrading. `_indexNewerThanReaderReason`
+    // names the contracts that exceed so status output can tell the user why.
+    // Issue #1515: 「より新しい cdidx が書いた DB を旧 cdidx が開いた」状態の検知用。
+    internal readonly string? _indexWriterVersion;
+    internal readonly bool _indexNewerThanReader;
+    internal readonly string? _indexNewerThanReaderReason;
     internal const string TestPathCondition = @"
         (
             lower(f.path) LIKE 'tests/%' OR
@@ -290,6 +300,53 @@ public partial class DbReader
         // end-of-run readiness bit counts. Pre-upgrade DBs need a `cdidx index` re-run to
         // get stamped — degradation is safer than silent false-clean zeroes.
         // 行存在のフォールバックは意図的に採用しない。途中までのデータでも trusted に見えてしまうため。
+
+        // Issue #1515: read the writer-version audit string and compute the forward-compat
+        // sentinel from every numeric contract version persisted in the DB. The existing
+        // string.Equals(stored, current) gates degrade silently on a "stored > current"
+        // mismatch (older cdidx opens a DB written by a newer cdidx); this comparison
+        // surfaces the asymmetry so status output can warn loudly instead.
+        // Issue #1515: 旧 cdidx が新 cdidx 製 DB を開いたケースを明示的に検知する。
+        _indexWriterVersion = TryGetMetaString(_conn, DbContext.CdidxWriterVersionMetaKey);
+        (_indexNewerThanReader, _indexNewerThanReaderReason) = DetectNewerThanReaderContracts(_conn, userVersion);
+    }
+
+    private static (bool Newer, string? Reason) DetectNewerThanReaderContracts(SqliteConnection conn, int userVersion)
+    {
+        var newerContracts = new List<string>();
+        // Numeric contract stamps. Each pair maps the persisted meta key to the binary's
+        // current compiled max. "stored > current" means this binary cannot fully read
+        // the contract a newer cdidx wrote.
+        // 数値で stamp される contract version は「stored > current」のときだけ未来 DB と判断する。
+        AppendIfStoredGreater(conn, DbContext.GetMetadataTargetVersionMetaKey("csharp"), DbContext.MetadataTargetVersion, "metadata_target_version_csharp", newerContracts);
+        AppendIfStoredGreater(conn, DbContext.CSharpSymbolNameContractVersionMetaKey, DbContext.CSharpSymbolNameContractVersion, "csharp_symbol_name_contract_version", newerContracts);
+        AppendIfStoredGreater(conn, DbContext.SqlGraphContractVersionMetaKey, DbContext.SqlGraphContractVersion, "sql_graph_contract_version", newerContracts);
+        AppendIfStoredGreater(conn, "fold_key_version", NameFold.Version, "fold_key_version", newerContracts);
+        foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
+            AppendIfStoredGreater(conn, DbContext.GetHotspotFamilyVersionMetaKey(lang), DbContext.HotspotFamilyVersion, $"hotspot_family_version_{lang}", newerContracts);
+
+        // PRAGMA user_version is a bitmap of readiness flags. A bit outside the known
+        // `CurrentSchemaVersion` mask means a newer cdidx introduced a readiness flag this
+        // binary does not understand, so any subsystem gated on that bit is invisible here.
+        // CurrentSchemaVersion マスク外の bit は未知の readiness なので未来 DB として扱う。
+        var unknownReadyBits = userVersion & ~DbContext.CurrentSchemaVersion;
+        if (unknownReadyBits != 0)
+            newerContracts.Add($"user_version_bits=0x{unknownReadyBits:X}");
+
+        if (newerContracts.Count == 0)
+            return (false, null);
+        return (true, "DB was written by a newer cdidx than this binary; contracts newer than reader: " + string.Join(", ", newerContracts) + ". Upgrade cdidx, or rebuild the index with the current binary to clear the warning.");
+    }
+
+    private static void AppendIfStoredGreater(SqliteConnection conn, string metaKey, int currentMax, string label, List<string> sink)
+    {
+        var raw = TryGetMetaString(conn, metaKey);
+        if (raw is null)
+            return;
+        if (!int.TryParse(raw, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var stored))
+            return;
+        if (stored > currentMax)
+            sink.Add($"{label}={stored}>{currentMax}");
     }
 
     internal HotspotFamilySignal GetHotspotFamilySignal(string? lang)

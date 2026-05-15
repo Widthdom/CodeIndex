@@ -425,6 +425,9 @@ public partial class DbReader
             SqlGraphContractDegradedReason = sqlGraphContractSignal.DegradedReason,
             FoldReady = _foldReady,
             FoldReadyReason = foldReadyReason,
+            IndexWriterVersion = _indexWriterVersion,
+            IndexNewerThanReader = _indexNewerThanReader,
+            IndexNewerThanReaderReason = _indexNewerThanReaderReason,
         };
         // Commit the read-only snapshot explicitly so the SHARED lock is released promptly.
         // read-only なので rollback でも同じだが、明示 commit して SHARED lock を早期解放する。

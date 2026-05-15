@@ -1727,6 +1727,16 @@ public static class QueryCommandRunner
                     Console.WriteLine($"Graph   : {status.GraphSupportedLanguages.Count} languages ({string.Join(", ", status.GraphSupportedLanguages)})");
                 if (status.WorktreeHeadChanged == true)
                     Console.WriteLine($"WARN    : worktree HEAD changed since the index was built ({ShortSha(status.IndexedHeadCommit)} -> {ShortSha(status.GitHead)}). Run `{BuildReindexRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit)}` to refresh the index for the current branch.");
+                if (status.IndexNewerThanReader)
+                {
+                    var reason = status.IndexNewerThanReaderReason ?? "DB was written by a newer cdidx than this binary.";
+                    var writerLabel = status.IndexWriterVersion is { Length: > 0 } writerVersion
+                        ? $" (DB writer: cdidx v{writerVersion}; reader: cdidx v{status.Version ?? "unknown"})"
+                        : status.Version is { Length: > 0 } readerVersion
+                            ? $" (reader: cdidx v{readerVersion})"
+                            : "";
+                    Console.WriteLine($"WARN    : {reason}{writerLabel}");
+                }
                 if (!status.GraphTableAvailable)
                     Console.WriteLine("WARN    : symbol_references table missing — reference / caller / callee / unused counts are degraded to 0.");
                 if (!status.IssuesTableAvailable)
@@ -3572,7 +3582,8 @@ public static class QueryCommandRunner
            || !status.HotspotFamilyReady
            || !status.CSharpSymbolNameReady
            || !status.CSharpMetadataTargetReady
-           || !status.FoldReady;
+           || !status.FoldReady
+           || status.IndexNewerThanReader;
 
     private static bool IsFoldOnlyReadinessDegraded(StatusResult status)
         => !status.FoldReady

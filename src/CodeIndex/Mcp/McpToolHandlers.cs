@@ -1749,6 +1749,8 @@ public partial class McpServer
                 foldReadyReason = "stale_fold_key_fingerprint";
             }
 
+            writer.WriteCdidxWriterVersion(_version);
+
             // Successful no-op MCP full scans should repair explicit-DB roots only after
             // readiness is stamped, preserving the failure-path safety contract.
             // MCP の no-op full-scan root backfill も readiness stamp 後に限定する。

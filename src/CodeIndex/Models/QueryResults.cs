@@ -371,6 +371,27 @@ public class StatusResult
     [JsonPropertyName("alternative_action")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? AlternativeAction { get; set; }
+    /// <summary>
+    /// The cdidx version string that wrote the most recent successful end-of-index pass
+    /// for this DB, stamped from `codeindex_meta.cdidx_writer_version`. Null on legacy
+    /// DBs that predate the audit-trail stamp (Issue #1515).
+    /// 最後に index 成功末尾を書き込んだ cdidx の version 文字列。stamp が無い旧 DB では null。
+    /// </summary>
+    [JsonPropertyName("index_writer_version")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? IndexWriterVersion { get; set; }
+    /// <summary>
+    /// True when this DB persists at least one contract version that is strictly newer
+    /// than the constants compiled into this cdidx binary, signaling the DB was written
+    /// by a newer cdidx and existing string.Equals readiness gates are silently
+    /// degrading. The reason names the specific contracts that exceed (Issue #1515).
+    /// より新しい cdidx で書かれた DB を旧 cdidx が開いたときに true。
+    /// </summary>
+    [JsonPropertyName("index_newer_than_reader")]
+    public bool IndexNewerThanReader { get; set; }
+    [JsonPropertyName("index_newer_than_reader_reason")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? IndexNewerThanReaderReason { get; set; }
 }
 
 public class RepoMapResult

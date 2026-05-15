@@ -22,8 +22,9 @@ The `.codex/workflows/` directory is a shared workflow library for all coding ag
 
 ## Status Contract
 
-- `status --json` and related JSON/MCP payloads currently expose the trust fields documented in `README.md` and `DEVELOPER_GUIDE.md`, including `fold_ready`, `fold_ready_reason`, `graph_table_available`, `issues_table_available`, `sql_graph_contract_ready`, `sql_graph_contract_degraded_reason`, `hotspot_family_ready`, `hotspot_family_degraded_reason`, `csharp_symbol_name_ready`, `csharp_metadata_target_ready`, `indexed_head_commit`, and `worktree_head_changed`.
+- `status --json` and related JSON/MCP payloads currently expose the trust fields documented in `README.md` and `DEVELOPER_GUIDE.md`, including `fold_ready`, `fold_ready_reason`, `graph_table_available`, `issues_table_available`, `sql_graph_contract_ready`, `sql_graph_contract_degraded_reason`, `hotspot_family_ready`, `hotspot_family_degraded_reason`, `csharp_symbol_name_ready`, `csharp_metadata_target_ready`, `indexed_head_commit`, `worktree_head_changed`, `index_writer_version`, `index_newer_than_reader`, and `index_newer_than_reader_reason`.
 - When `fold_ready` is the only degraded readiness bit, the CLI also adds `degraded_reason`, `recommended_action`, and `alternative_action`.
+- `index_writer_version` records the `cdidx` version that last wrote to the DB (stamped into `codeindex_meta` as `cdidx_writer_version` on every full scan, update, and MCP index). `index_newer_than_reader` flips to `true` whenever any persisted numeric contract stamp in `codeindex_meta` (or unknown `PRAGMA user_version` readiness bits) exceeds the current binary's compiled maximum, so an older CLI re-opening a DB written by a newer CLI degrades loudly with an audit trail instead of silently dropping back to text-search fallbacks. `index_newer_than_reader_reason` enumerates the specific newer-than-reader stamps.
 - Keep the three docs synchronized if this contract changes.
 
 ## Reference Extraction

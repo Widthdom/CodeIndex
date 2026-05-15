@@ -559,6 +559,15 @@ public class DbContext : IDisposable
     // republish するまで reader を legacy 経路へ縮退させる。
     public const int MetadataTargetVersion = 6;
     public static string GetMetadataTargetVersionMetaKey(string lang) => $"metadata_target_version_{lang}";
+    // Audit trail: cdidx version string (e.g. "1.22.0") that produced the most recent
+    // successful end-of-index pass on this DB. Readers use it to surface "DB written by
+    // a newer cdidx" warnings when any persisted contract version exceeds this binary's
+    // compiled max so silent rollback / mixed-version-team degradation becomes visible.
+    // Issue #1515.
+    // 監査用: 成功 index の末尾に書き込んだ cdidx の version 文字列。reader はここと
+    // 各種 contract version の比較で「より新しい cdidx が書いた DB」を検知し、
+    // 黙って縮退するのではなく status で警告するために利用する。Issue #1515。
+    public const string CdidxWriterVersionMetaKey = "cdidx_writer_version";
 
     public int GetUserVersion()
     {

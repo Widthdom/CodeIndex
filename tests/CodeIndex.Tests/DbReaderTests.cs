@@ -10177,6 +10177,101 @@ public class DbReaderTests : IDisposable
         Assert.True(status.CSharpMetadataTargetReady);
     }
 
+    [Fact]
+    public void GetStatus_ExposesIndexWriterVersionStampedByWriter()
+    {
+        // Issue #1515: WriteCdidxWriterVersion stores the cdidx version that wrote the most
+        // recent successful index pass. Pinned so `status --json` can surface "indexed by
+        // v1.22.0, you are on v1.21.0" against the reader's own version.
+        // Issue #1515: writer.WriteCdidxWriterVersion で stamp した version を status に出す。
+        _writer.WriteCdidxWriterVersion("1.22.0");
+        var freshReader = new DbReader(_db.Connection);
+
+        var status = freshReader.GetStatus();
+
+        Assert.Equal("1.22.0", status.IndexWriterVersion);
+    }
+
+    [Fact]
+    public void GetStatus_ReportsLegacyDbWithoutWriterVersionStamp()
+    {
+        // Issue #1515: a DB that was never end-of-index-stamped (legacy or pre-1515 binary)
+        // must surface `index_writer_version` as null so AI clients can tell "we don't know
+        // who wrote this" apart from "this version wrote it". The forward-compat sentinel
+        // should also stay false because no numeric contract stored exceeds the reader's max.
+        // Issue #1515: stamp 無し DB では writer_version=null + newer_than_reader=false。
+        ClearMetaStamp(DbContext.CdidxWriterVersionMetaKey);
+        var freshReader = new DbReader(_db.Connection);
+
+        var status = freshReader.GetStatus();
+
+        Assert.Null(status.IndexWriterVersion);
+        Assert.False(status.IndexNewerThanReader);
+        Assert.Null(status.IndexNewerThanReaderReason);
+    }
+
+    [Fact]
+    public void GetStatus_FlagsIndexNewerThanReaderWhenCSharpMetadataVersionExceedsCurrent()
+    {
+        // Issue #1515: the existing string.Equals readiness gate silently degraded when a
+        // newer cdidx wrote `metadata_target_version_csharp` = current+1 and an older cdidx
+        // re-opened the DB. The new forward-compat sentinel must flip to true with a reason
+        // that names the offending contract so `status` can WARN loudly instead of pretending
+        // the DB is merely "degraded due to stale stamp".
+        // Issue #1515: stored > current の数値 contract を「未来 DB」として明示する。
+        _writer.SetMeta(
+            DbContext.GetMetadataTargetVersionMetaKey("csharp"),
+            (DbContext.MetadataTargetVersion + 1).ToString(System.Globalization.CultureInfo.InvariantCulture));
+        _writer.WriteCdidxWriterVersion("9.99.0");
+        var freshReader = new DbReader(_db.Connection);
+
+        var status = freshReader.GetStatus();
+
+        Assert.True(status.IndexNewerThanReader);
+        Assert.NotNull(status.IndexNewerThanReaderReason);
+        Assert.Contains("metadata_target_version_csharp", status.IndexNewerThanReaderReason);
+        Assert.Equal("9.99.0", status.IndexWriterVersion);
+    }
+
+    [Fact]
+    public void GetStatus_FlagsIndexNewerThanReaderWhenUserVersionCarriesUnknownReadyBit()
+    {
+        // Issue #1515: a future cdidx may introduce a new readiness bit beyond
+        // `DbContext.CurrentSchemaVersion`. PRAGMA user_version values with bits outside that
+        // mask therefore indicate the DB was written by a newer binary, even if every numeric
+        // meta contract still equals the older binary's compiled max.
+        // Issue #1515: CurrentSchemaVersion マスク外の bit も「未来 DB」シグナルにする。
+        var unknownBit = (DbContext.CurrentSchemaVersion + 1) | DbContext.CurrentSchemaVersion;
+        using (var cmd = _db.Connection.CreateCommand())
+        {
+            cmd.CommandText = $"PRAGMA user_version = {unknownBit}";
+            cmd.ExecuteNonQuery();
+        }
+        var freshReader = new DbReader(_db.Connection);
+
+        var status = freshReader.GetStatus();
+
+        Assert.True(status.IndexNewerThanReader);
+        Assert.NotNull(status.IndexNewerThanReaderReason);
+        Assert.Contains("user_version_bits", status.IndexNewerThanReaderReason);
+    }
+
+    [Fact]
+    public void GetStatus_DoesNotFlagIndexNewerThanReaderWhenAllStoredVersionsMatchCurrent()
+    {
+        // Negative pin: a DB whose stamps all equal this binary's compiled constants must
+        // never trip the forward-compat sentinel. Keeps the existing "stored == current"
+        // happy path observably distinct from the new "stored > current" warning, so AI
+        // clients can rely on the flag instead of false-positive degraded reasons.
+        // Issue #1515: stored == current の通常 DB では新フラグは false のまま。
+        var freshReader = new DbReader(_db.Connection);
+
+        var status = freshReader.GetStatus();
+
+        Assert.False(status.IndexNewerThanReader);
+        Assert.Null(status.IndexNewerThanReaderReason);
+    }
+
     private void ClearMetaStamp(string key)
     {
         using var cmd = _db.Connection.CreateCommand();
