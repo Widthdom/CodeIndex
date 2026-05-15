@@ -97,14 +97,21 @@ public class IndexFreshnessCheckResult
     public int MatchedFileCount { get; set; }
     public int ChangedFileCount { get; set; }
     public int MissingFileCount { get; set; }
+    public int OutsideSparseConeFileCount { get; set; }
     public int UnindexedFileCount { get; set; }
     public int UnverifiableFileCount { get; set; }
     public int ScanErrorCount { get; set; }
     public List<string> ChangedFiles { get; set; } = [];
     public List<string> MissingFiles { get; set; } = [];
+    public List<string> OutsideSparseConeFiles { get; set; } = [];
     public List<string> UnindexedFiles { get; set; } = [];
     public List<string> UnverifiableFiles { get; set; } = [];
     public List<string> ScanErrors { get; set; } = [];
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? IndexedHeadCommit { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? WorkspaceHeadCommit { get; set; }
+    public bool HeadChanged { get; set; }
 }
 
 public class DefinitionResult : SymbolResult
@@ -250,23 +257,24 @@ public class StatusResult
     public string? GitHead { get; set; }
     public bool? GitIsDirty { get; set; }
     /// <summary>
-    /// Git HEAD commit captured at index time. Compared with the runtime `GitHead` to
-    /// surface a worktree branch / HEAD switch that silently invalidates the on-disk
-    /// index without requiring a `--check` workspace scan. Null when the DB has no
-    /// `indexed_git_head` meta (legacy DBs or projects indexed outside a git checkout).
-    /// Issue #1512.
-    /// index 時点で記録された git HEAD コミット。runtime の `GitHead` と突き合わせて、
-    /// `--check` を介さずに worktree 内の branch / HEAD 切替を検出するために使う。
+    /// Git HEAD commit captured at the end of the most recent successful full-scan
+    /// index run (Issue #1508). Compared with the runtime `GitHead` to surface a
+    /// worktree branch / HEAD switch that silently invalidates the on-disk index
+    /// without requiring a `--check` workspace scan. Null when the DB has no
+    /// `indexed_head_commit` meta (legacy DBs or projects indexed outside a git
+    /// checkout). Issues #1508 / #1512.
+    /// 直近 full-scan 成功時点で記録された git HEAD。runtime の `GitHead` と突き合わせ、
+    /// `--check` を介さずに worktree 内の branch / HEAD 切替を検出する。
     /// </summary>
-    [JsonPropertyName("indexed_git_head")]
+    [JsonPropertyName("indexed_head_commit")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? IndexedGitHead { get; set; }
+    public string? IndexedHeadCommit { get; set; }
     /// <summary>
-    /// True when the persisted `IndexedGitHead` differs from the runtime `GitHead`,
+    /// True when the persisted `IndexedHeadCommit` differs from the runtime `GitHead`,
     /// indicating that the index was built against a different branch / commit and a
     /// re-index is needed to keep results trustworthy. Null when comparison is not
     /// possible (no persisted head, no runtime head). Issue #1512.
-    /// index 時の HEAD と runtime の HEAD が異なれば true。比較不能なら null。
+    /// 永続 HEAD と runtime HEAD が異なれば true。比較不能なら null。
     /// </summary>
     [JsonPropertyName("worktree_head_changed")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -378,9 +386,9 @@ public class RepoMapResult
     public string? ProjectRoot { get; set; }
     public string? GitHead { get; set; }
     public bool? GitIsDirty { get; set; }
-    [JsonPropertyName("indexed_git_head")]
+    [JsonPropertyName("indexed_head_commit")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? IndexedGitHead { get; set; }
+    public string? IndexedHeadCommit { get; set; }
     [JsonPropertyName("worktree_head_changed")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? WorktreeHeadChanged { get; set; }
@@ -449,9 +457,9 @@ public class SymbolAnalysisResult
     public string? ProjectRoot { get; set; }
     public string? GitHead { get; set; }
     public bool? GitIsDirty { get; set; }
-    [JsonPropertyName("indexed_git_head")]
+    [JsonPropertyName("indexed_head_commit")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? IndexedGitHead { get; set; }
+    public string? IndexedHeadCommit { get; set; }
     [JsonPropertyName("worktree_head_changed")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? WorktreeHeadChanged { get; set; }

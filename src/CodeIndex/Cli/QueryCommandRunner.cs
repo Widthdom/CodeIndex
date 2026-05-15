@@ -1707,8 +1707,8 @@ public static class QueryCommandRunner
                     Console.WriteLine($"Git HEAD : {status.GitHead}");
                 if (status.GitIsDirty != null)
                     Console.WriteLine($"Git Dirty: {status.GitIsDirty}");
-                if (status.IndexedGitHead != null && !string.Equals(status.IndexedGitHead, status.GitHead, StringComparison.OrdinalIgnoreCase))
-                    Console.WriteLine($"Idx HEAD : {status.IndexedGitHead}");
+                if (status.IndexedHeadCommit != null && !string.Equals(status.IndexedHeadCommit, status.GitHead, StringComparison.OrdinalIgnoreCase))
+                    Console.WriteLine($"Idx HEAD : {status.IndexedHeadCommit}");
                 if (status.WorkspaceCheck != null)
                     WriteWorkspaceCheck(status.WorkspaceCheck);
                 if (status.Languages.Count > 0)
@@ -1726,7 +1726,7 @@ public static class QueryCommandRunner
                 if (status.GraphSupportedLanguages is { Count: > 0 })
                     Console.WriteLine($"Graph   : {status.GraphSupportedLanguages.Count} languages ({string.Join(", ", status.GraphSupportedLanguages)})");
                 if (status.WorktreeHeadChanged == true)
-                    Console.WriteLine($"WARN    : worktree HEAD changed since the index was built ({ShortSha(status.IndexedGitHead)} -> {ShortSha(status.GitHead)}). Run `{BuildReindexRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit)}` to refresh the index for the current branch.");
+                    Console.WriteLine($"WARN    : worktree HEAD changed since the index was built ({ShortSha(status.IndexedHeadCommit)} -> {ShortSha(status.GitHead)}). Run `{BuildReindexRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit)}` to refresh the index for the current branch.");
                 if (!status.GraphTableAvailable)
                     Console.WriteLine("WARN    : symbol_references table missing — reference / caller / callee / unused counts are degraded to 0.");
                 if (!status.IssuesTableAvailable)
@@ -3631,6 +3631,8 @@ public static class QueryCommandRunner
             Console.WriteLine($"  Changed indexed files : {check.ChangedFileCount:N0}{FormatSamples(check.ChangedFiles)}");
         if (check.MissingFileCount > 0)
             Console.WriteLine($"  Missing indexed files : {check.MissingFileCount:N0}{FormatSamples(check.MissingFiles)}");
+        if (check.OutsideSparseConeFileCount > 0)
+            Console.WriteLine($"  Outside sparse cone : {check.OutsideSparseConeFileCount:N0}{FormatSamples(check.OutsideSparseConeFiles)}");
         if (check.UnindexedFileCount > 0)
             Console.WriteLine($"  Unindexed workspace files : {check.UnindexedFileCount:N0}{FormatSamples(check.UnindexedFiles)}");
         if (check.UnverifiableFileCount > 0)

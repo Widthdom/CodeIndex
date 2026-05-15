@@ -142,14 +142,16 @@ public static class DbPathResolver
         => TryReadMetaString(dbPath, CodeIndex.Database.DbContext.IndexedProjectRootMetaKey);
 
     /// <summary>
-    /// Best-effort read of the persisted git HEAD commit stamped at index time.
-    /// Returns null when the DB does not expose `indexed_git_head` (legacy DBs or
-    /// projects indexed outside a git checkout).
-    /// index 時点で保存された git HEAD コミットを best-effort で読む。legacy DB や
-    /// git 外プロジェクトでは null を返す。
+    /// Best-effort read of the persisted git HEAD commit stamped at the end of the
+    /// most recent successful full-scan index run. Returns null when the DB does not
+    /// expose `indexed_head_commit` (legacy DBs or projects indexed outside a git
+    /// checkout). Used at `status` time to surface a worktree branch / HEAD switch
+    /// via `worktree_head_changed`. Issues #1508 / #1512.
+    /// 直近 full-scan 成功時点で保存された git HEAD を best-effort で読む。legacy DB や
+    /// git 外プロジェクトでは null。`status` で worktree HEAD の切替検知に使う。
     /// </summary>
-    public static string? TryReadIndexedGitHead(string dbPath)
-        => TryReadMetaString(dbPath, CodeIndex.Database.DbContext.IndexedGitHeadMetaKey);
+    public static string? TryReadIndexedHeadCommit(string dbPath)
+        => TryReadMetaString(dbPath, CodeIndex.Database.DbContext.IndexedHeadCommitMetaKey);
 
     private static string? TryReadMetaString(string dbPath, string key)
     {

@@ -503,8 +503,10 @@ Languages:
 
 - scans the current indexable files with the same `FileIndexer` path filters and ignore rules used for indexing;
 - recomputes raw-byte SHA256 checksums and compares them with the DB's saved checksums;
-- reports `index_matches_workspace` plus `workspace_check.changed_files`, `missing_files`, `unindexed_files`, `unverifiable_files`, and `scan_errors`;
+- reports `index_matches_workspace` plus `workspace_check.changed_files`, `missing_files`, `outside_sparse_cone_files`, `unindexed_files`, `unverifiable_files`, `scan_errors`, and `head_changed` (with `indexed_head_commit` / `workspace_head_commit` when the worktree HEAD has moved since the last full scan). Indexed paths whose git index entry is flagged skip-worktree (sparse-checkout cone/non-cone, partial clone, or manual `git update-index --skip-worktree`) land in `outside_sparse_cone_files` and do not fail the freshness gate;
 - exits `0` only when the DB exactly matches the current workspace. Stale indexes exit `5`.
+
+`cdidx index <projectPath>` also detects the same HEAD movement on incremental runs: if the recorded HEAD differs from the workspace HEAD it emits a `head_changed` warning recommending `cdidx index <projectPath> --rebuild` (and exposes `head_changed`, `prior_indexed_head_commit`, `current_head_commit`, and `head_change_notice` in `--json` output). `--commits` / `--files` partial updates deliberately preserve the captured HEAD so the staleness signal survives until a real full scan reindexes the worktree.
 
 Run it at the start of AI-agent work to decide whether `.cdidx/codeindex.db` can be trusted without reindexing.
 
@@ -1535,8 +1537,10 @@ Languages:
 
 - indexing と同じ `FileIndexer` の path filter / ignore rule で、現在 index 対象になるファイルを走査します。
 - raw bytes の SHA256 を再計算し、DB に保存された checksum と比較します。
-- `index_matches_workspace` と `workspace_check.changed_files`、`missing_files`、`unindexed_files`、`unverifiable_files`、`scan_errors` を返します。
+- `index_matches_workspace` と `workspace_check.changed_files`、`missing_files`、`outside_sparse_cone_files`、`unindexed_files`、`unverifiable_files`、`scan_errors`、`head_changed` を返します（前回 full scan 時から worktree の HEAD が動いている場合は `indexed_head_commit` と `workspace_head_commit` も併記します）。git index で skip-worktree ビットが立っているパス (sparse-checkout cone/non-cone、partial clone、`git update-index --skip-worktree`) は `outside_sparse_cone_files` に分類され、freshness の判定を失敗させません。
 - DB が現在の workspace と完全一致するときだけ終了コード `0`、stale な index では終了コード `5` です。
+
+`cdidx index <projectPath>` も incremental 実行時に同じ HEAD 変化を検知します。記録済み HEAD と worktree の HEAD が異なる場合は `cdidx index <projectPath> --rebuild` を推奨する `head_changed` 警告を表示し、`--json` 出力には `head_changed`、`prior_indexed_head_commit`、`current_head_commit`、`head_change_notice` を含めます。`--commits` / `--files` の部分更新は記録 HEAD を意図的に維持するため、次の full scan が worktree を再インデックスするまで stale 通知が継続します。
 
 AI agent の作業開始時はこれを先に実行し、`.cdidx/codeindex.db` を再構築せず信頼できるか判断してください。
 
@@ -1546,7 +1550,7 @@ AI agent の作業開始時はこれを先に実行し、`.cdidx/codeindex.db` �
 - SQL graph: `sql_graph_contract_ready`、`sql_graph_contract_degraded_reason`
 - hotspot metadata: `hotspot_family_ready`、`hotspot_family_degraded_reason`
 - C# metadata: `csharp_symbol_name_ready`、`csharp_metadata_target_ready`
-- worktree HEAD: `indexed_git_head`（index 構築時に保存した HEAD コミット）、`worktree_head_changed`（現在の HEAD と差分がある場合 `true`。`git worktree add` / worktree 内の `git switch` 検出に使う。`#1512`）
+- worktree HEAD: `indexed_head_commit`（直近 full-scan 成功時点で保存した HEAD コミット。#1508）、`worktree_head_changed`（現在の HEAD と差分がある場合 `true`。`git worktree add` / worktree 内の `git switch` 検出に使う。`#1512`）
 
 各 flag の対処は機械的に判断できます。
 

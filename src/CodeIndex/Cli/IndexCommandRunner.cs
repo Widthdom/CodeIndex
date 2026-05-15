@@ -258,13 +258,14 @@ public static class IndexCommandRunner
         var priorHotspotFamilyVersions = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyVersionMetaKey);
         var priorHotspotFamilyMarkerFingerprints = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyMarkerFingerprintMetaKey);
         var priorIndexedProjectRoot = db.GetMetaString(DbContext.IndexedProjectRootMetaKey);
-        // Persist git HEAD alongside `indexed_project_root` so queries can flag a per-
-        // worktree branch / HEAD switch (e.g. `git switch` inside an indexed worktree)
-        // without forcing the user to run `status --check`. Captured once up-front so the
-        // same HEAD value flows through both update and full-scan paths. Issue #1512.
-        // worktree 内の HEAD 切替検出のため、`indexed_project_root` と並べて HEAD も保存する。
-        var priorIndexedGitHead = db.GetMetaString(DbContext.IndexedGitHeadMetaKey);
-        var currentGitHead = GitHelper.TryGetHeadCommit(options.ProjectPath);
+        // Captured BEFORE `--rebuild` drops the DB so an incremental run can warn the user when
+        // the worktree's HEAD has moved since the previously indexed snapshot. The same value
+        // is read at `status` time (without `--check`) to surface a worktree branch / HEAD
+        // switch via `worktree_head_changed`. Issues #1508 and #1512.
+        // `--rebuild` が DB を消す前に取り出す。incremental 経路で HEAD 差分を検知し、`status`
+        // (no `--check`) でも worktree の HEAD 切替検出に利用する。
+        var priorIndexedHeadCommit = db.GetMetaString(DbContext.IndexedHeadCommitMetaKey);
+        var currentHeadCommit = GitHelper.TryGetHeadCommit(options.ProjectPath);
 
         // Don't demote readiness yet. A transient usage error in update-mode preflight
         // (bad --commits hash, git unavailable, etc.) would permanently downgrade a healthy
@@ -291,8 +292,8 @@ public static class IndexCommandRunner
         var projectRoot = Path.GetFullPath(options.ProjectPath);
 
         return isUpdateMode
-            ? RunUpdateMode(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion, priorFoldFingerprint, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedGitHead, currentGitHead)
-            : RunFullScan(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorFoldVersion, priorFoldFingerprint, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedGitHead, currentGitHead);
+            ? RunUpdateMode(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion, priorFoldFingerprint, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit)
+            : RunFullScan(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorFoldVersion, priorFoldFingerprint, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit);
     }
 
     public static int RunBackfillFold(string[] cmdArgs, JsonSerializerOptions jsonOptions)
@@ -541,8 +542,8 @@ public static class IndexCommandRunner
         IReadOnlyDictionary<string, string?> priorHotspotFamilyMarkerFingerprints,
         IReadOnlyDictionary<string, string?> currentHotspotFamilyMarkerFingerprints,
         string? priorIndexedProjectRoot,
-        string? priorIndexedGitHead,
-        string? currentGitHead)
+        string? priorIndexedHeadCommit,
+        string? currentHeadCommit)
     {
         var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
         var currentSqlGraphContractVersion = DbContext.SqlGraphContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -620,8 +621,8 @@ public static class IndexCommandRunner
                 priorHotspotFamilyMarkerFingerprints,
                 currentHotspotFamilyMarkerFingerprints,
                 priorIndexedProjectRoot,
-                priorIndexedGitHead,
-                currentGitHead);
+                priorIndexedHeadCommit,
+                currentHeadCommit);
         }
 
         if (!options.Json)
@@ -638,11 +639,6 @@ public static class IndexCommandRunner
             ? null
             : Path.GetFullPath(priorIndexedProjectRoot);
         var projectRootWritten = PathsEqual(normalizedPriorIndexedProjectRoot, normalizedProjectRoot);
-        // Track whether the persisted git HEAD already matches the runtime HEAD. We only
-        // write a meta row when the value actually drifted so read-only or explicit-DB
-        // sessions don't churn metadata on every no-op refresh. Issue #1512.
-        // 永続 HEAD と runtime HEAD が一致しているかを追跡。差分があるときだけ書き込む。
-        var indexedHeadWritten = string.Equals(priorIndexedGitHead, currentGitHead, StringComparison.OrdinalIgnoreCase);
         var ftsMutated = false;
         var purgedRefs = 0;
         var supportedGraphLanguages = ReferenceExtractor.GetSupportedLanguages();
@@ -677,11 +673,6 @@ public static class IndexCommandRunner
             {
                 writer.SetMeta(DbContext.IndexedProjectRootMetaKey, normalizedProjectRoot);
                 projectRootWritten = true;
-            }
-            if (!indexedHeadWritten)
-            {
-                writer.SetMeta(DbContext.IndexedGitHeadMetaKey, currentGitHead);
-                indexedHeadWritten = true;
             }
         }
 
@@ -1443,8 +1434,8 @@ public static class IndexCommandRunner
         IReadOnlyDictionary<string, string?> priorHotspotFamilyMarkerFingerprints,
         IReadOnlyDictionary<string, string?> currentHotspotFamilyMarkerFingerprints,
         string? priorIndexedProjectRoot,
-        string? priorIndexedGitHead,
-        string? currentGitHead)
+        string? priorIndexedHeadCommit,
+        string? currentHeadCommit)
     {
         var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
         _ = priorMetadataTargetCsharp; // full-scan resolver runs unconditionally on success / 成功時に常に再解決するため不要
@@ -1453,12 +1444,6 @@ public static class IndexCommandRunner
             ? null
             : Path.GetFullPath(priorIndexedProjectRoot);
         var projectRootWritten = PathsEqual(normalizedPriorIndexedProjectRoot, normalizedProjectRoot);
-        // Mirror update-mode: only write a fresh `indexed_git_head` row when the persisted
-        // value drifted from the current HEAD, so explicit-DB no-op refreshes don't churn
-        // metadata. Issue #1512.
-        // 永続 HEAD が runtime と一致していれば書かない。explicit DB の no-op refresh で
-        // metadata が churn しないようにする。
-        var indexedHeadWritten = string.Equals(priorIndexedGitHead, currentGitHead, StringComparison.OrdinalIgnoreCase);
         var currentCSharpSymbolNameContractVersion = DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var csharpSymbolNameContractMatchesCurrent = priorCSharpSymbolNameContractVersion == currentCSharpSymbolNameContractVersion;
         var currentSqlGraphContractVersion = DbContext.SqlGraphContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -1468,17 +1453,33 @@ public static class IndexCommandRunner
             priorHotspotFamilyMarkerFingerprints,
             currentHotspotFamilyMarkerFingerprints);
 
+        // Detect HEAD divergence on the default incremental path (no `--rebuild`). `--rebuild`
+        // already wipes the DB, so the prior captured HEAD is irrelevant there. We only signal
+        // when both sides are known so legacy DBs / non-git workspaces never spuriously trigger.
+        // Issue #1508.
+        // 既定の incremental 経路で HEAD 差分を検出する。`--rebuild` は DB を消すので比較不要。
+        // 双方の HEAD が分かるときのみ警告し、legacy DB / 非 git workspace では誤検知させない。
+        var headChangeDetected = !options.Rebuild
+            && !string.IsNullOrWhiteSpace(priorIndexedHeadCommit)
+            && !string.IsNullOrWhiteSpace(currentHeadCommit)
+            && !string.Equals(priorIndexedHeadCommit, currentHeadCommit, StringComparison.Ordinal);
+        string? headChangeNotice = null;
+        if (headChangeDetected)
+        {
+            headChangeNotice =
+                $"Indexed HEAD changed since the last full scan (was {priorIndexedHeadCommit}, now {currentHeadCommit}). " +
+                $"Incremental indexing only refreshes files it can scan in the current worktree, so rows for files that exist only on the previously indexed branch may remain. " +
+                $"Run `cdidx index {QuoteCommandArgument(projectRoot)} --rebuild` to fully refresh the index.";
+            if (!options.Json)
+                ConsoleUi.PrintWarning(headChangeNotice);
+        }
+
         void WriteProjectRootOnce()
         {
             if (!projectRootWritten)
             {
                 writer.SetMeta(DbContext.IndexedProjectRootMetaKey, normalizedProjectRoot);
                 projectRootWritten = true;
-            }
-            if (!indexedHeadWritten)
-            {
-                writer.SetMeta(DbContext.IndexedGitHeadMetaKey, currentGitHead);
-                indexedHeadWritten = true;
             }
         }
 
@@ -1815,6 +1816,15 @@ public static class IndexCommandRunner
             // metadata ahead of the success markers.
             // no-op full-scan の explicit DB root backfill は readiness stamp 後に限定する。
             WriteProjectRootOnce();
+            // Persist the current HEAD only after the run is fully successful (errors == 0).
+            // We deliberately only stamp on full scans (rebuild or default incremental). Update
+            // mode (`--commits` / `--files`) leaves the captured HEAD untouched so the next
+            // default scan can still detect "branch moved since the last full scan." A
+            // best-effort `null` from a non-git workspace simply clears the field. Issue #1508.
+            // フル成功時のみ HEAD を記録する。partial update は HEAD を触らないので、後続の
+            // full scan が「直近 full scan からブランチが動いた」をきちんと検知できる。
+            // 非 git workspace で null になった場合はキーごとクリアされる。Issue #1508。
+            writer.SetMeta(DbContext.IndexedHeadCommitMetaKey, currentHeadCommit);
         }
         stopwatch.Stop();
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
@@ -1872,6 +1882,10 @@ public static class IndexCommandRunner
                 DegradedReason = foldOnlyRemediation?.DegradedReason,
                 RecommendedAction = foldOnlyRemediation?.RecommendedAction,
                 AlternativeAction = foldOnlyRemediation?.AlternativeAction,
+                HeadChanged = headChangeDetected,
+                PriorIndexedHeadCommit = priorIndexedHeadCommit,
+                CurrentHeadCommit = currentHeadCommit,
+                HeadChangeNotice = headChangeNotice,
                 Errors = errorList.Count > 0 ? errorList : null,
                 Warnings = warningList.Count > 0 ? warningList : null,
                 ElapsedMs = stopwatch.ElapsedMilliseconds,

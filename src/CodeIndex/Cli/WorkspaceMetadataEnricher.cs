@@ -14,7 +14,7 @@ public static class WorkspaceMetadataEnricher
             status.ProjectRoot = root;
             status.GitHead = head;
             status.GitIsDirty = dirty;
-            status.IndexedGitHead = indexedHead;
+            status.IndexedHeadCommit = indexedHead;
             status.WorktreeHeadChanged = headChanged;
         });
 
@@ -24,7 +24,7 @@ public static class WorkspaceMetadataEnricher
             map.ProjectRoot = root;
             map.GitHead = head;
             map.GitIsDirty = dirty;
-            map.IndexedGitHead = indexedHead;
+            map.IndexedHeadCommit = indexedHead;
             map.WorktreeHeadChanged = headChanged;
         });
 
@@ -34,7 +34,7 @@ public static class WorkspaceMetadataEnricher
             analysis.ProjectRoot = root;
             analysis.GitHead = head;
             analysis.GitIsDirty = dirty;
-            analysis.IndexedGitHead = indexedHead;
+            analysis.IndexedHeadCommit = indexedHead;
             analysis.WorktreeHeadChanged = headChanged;
         });
 
@@ -53,7 +53,7 @@ public static class WorkspaceMetadataEnricher
 
         var runtimeHead = GitHelper.TryGetHeadCommit(projectRoot);
         var dirty = GitHelper.TryIsWorktreeDirty(projectRoot);
-        var indexedHead = DbPathResolver.TryReadIndexedGitHead(dbPath);
+        var indexedHead = DbPathResolver.TryReadIndexedHeadCommit(dbPath);
         // Detect a per-worktree branch / HEAD switch by comparing the runtime HEAD against
         // the HEAD captured at index time. Only meaningful when both sides have a value —
         // legacy DBs or projects indexed outside git report null and must not trigger a

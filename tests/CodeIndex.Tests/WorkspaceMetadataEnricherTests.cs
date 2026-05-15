@@ -236,7 +236,7 @@ public class WorkspaceMetadataEnricherTests
             using (var db = new DbContext(dbPath))
             {
                 var writer = new DbWriter(db.Connection);
-                writer.SetMeta(DbContext.IndexedGitHeadMetaKey, staleHead);
+                writer.SetMeta(DbContext.IndexedHeadCommitMetaKey, staleHead);
             }
 
             var status = new StatusResult();
@@ -245,7 +245,7 @@ public class WorkspaceMetadataEnricherTests
 
             Assert.Equal(projectRoot, status.ProjectRoot);
             Assert.Equal(originalHead, status.GitHead);
-            Assert.Equal(staleHead, status.IndexedGitHead);
+            Assert.Equal(staleHead, status.IndexedHeadCommit);
             Assert.True(status.WorktreeHeadChanged);
         }
         finally
@@ -263,14 +263,14 @@ public class WorkspaceMetadataEnricherTests
             using (var db = new DbContext(dbPath))
             {
                 var writer = new DbWriter(db.Connection);
-                writer.SetMeta(DbContext.IndexedGitHeadMetaKey, originalHead);
+                writer.SetMeta(DbContext.IndexedHeadCommitMetaKey, originalHead);
             }
 
             var status = new StatusResult();
 
             WorkspaceMetadataEnricher.Enrich(status, dbPath);
 
-            Assert.Equal(originalHead, status.IndexedGitHead);
+            Assert.Equal(originalHead, status.IndexedHeadCommit);
             Assert.False(status.WorktreeHeadChanged);
         }
         finally
@@ -292,7 +292,7 @@ public class WorkspaceMetadataEnricherTests
 
             WorkspaceMetadataEnricher.Enrich(status, dbPath);
 
-            Assert.Null(status.IndexedGitHead);
+            Assert.Null(status.IndexedHeadCommit);
             Assert.Null(status.WorktreeHeadChanged);
         }
         finally
