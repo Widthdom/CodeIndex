@@ -577,6 +577,15 @@ public class DbContext : IDisposable
     // republish するまで reader を legacy 経路へ縮退させる。
     public const int MetadataTargetVersion = 6;
     public static string GetMetadataTargetVersionMetaKey(string lang) => $"metadata_target_version_{lang}";
+    // Audit trail: cdidx version string (e.g. "1.22.0") that produced the most recent
+    // successful end-of-index pass on this DB. Readers use it to surface "DB written by
+    // a newer cdidx" warnings when any persisted contract version exceeds this binary's
+    // compiled max so silent rollback / mixed-version-team degradation becomes visible.
+    // Issue #1515.
+    // 監査用: 成功 index の末尾に書き込んだ cdidx の version 文字列。reader はここと
+    // 各種 contract version の比較で「より新しい cdidx が書いた DB」を検知し、
+    // 黙って縮退するのではなく status で警告するために利用する。Issue #1515。
+    public const string CdidxWriterVersionMetaKey = "cdidx_writer_version";
 
     public int GetUserVersion()
     {
@@ -833,11 +842,22 @@ public class DbContext : IDisposable
     }
 
     /// <summary>
+    /// Latest opportunistic-migration failure captured by <see cref="TryMigrateForRead"/>.
+    /// Null when the most recent migration attempt completed every step (or was skipped on a
+    /// read-only connection). Callers can surface this to explain a later "no such column"
+    /// error coming out of a read path.
+    /// 直前の <see cref="TryMigrateForRead"/> 実行で発生した部分マイグレーション失敗の情報。
+    /// 全ステップ完了時、または読み取り専用接続でスキップされた場合は null。
+    /// </summary>
+    public DbMigrationFailure? LastMigrationFailure { get; private set; }
+
+    /// <summary>
     /// Attempt opportunistic schema migration for read-only query paths.
-    /// Failures (e.g. read-only filesystem) are silently ignored — the DbReader
-    /// fallback logic handles missing columns gracefully.
+    /// Failures are captured on <see cref="LastMigrationFailure"/> and a single
+    /// actionable warning is written to <see cref="Console.Error"/> so a later
+    /// "no such column" error can be tied back to the failing migration step.
     /// 読み取り専用クエリパス向けの機会的スキーマ移行を試みる。
-    /// 失敗（読み取り専用FS等）は無視する — DbReaderのフォールバックが欠損列を安全に処理する。
+    /// 失敗時は <see cref="LastMigrationFailure"/> に記録し、stderr に 1 行の警告を出す。
     /// </summary>
     public void TryMigrateForRead()
     {
@@ -848,91 +868,174 @@ public class DbContext : IDisposable
         // read-only 接続ではマイグレーション DDL 自体を走らせない。CANTOPEN が漏れて落ちるため。
         if (_isReadOnly) return;
 
+        LastMigrationFailure = null;
+
+        foreach (var (description, action) in BuildReadMigrationSteps())
+        {
+            try
+            {
+                action();
+            }
+            catch (SqliteException ex)
+            {
+                var failure = new DbMigrationFailure(
+                    description,
+                    ex.SqliteErrorCode,
+                    ex.Message,
+                    BuildMigrationSuggestedAction(ex.SqliteErrorCode));
+                LastMigrationFailure = failure;
+                EmitMigrationFailureWarning(failure);
+
+                // Read-only DB / filesystem / sandbox — stop further steps and degrade.
+                // Catches SQLITE_READONLY (8), SQLITE_IOERR (10), and SQLITE_CANTOPEN (14):
+                // some restricted environments report CANTOPEN when SQLite tries to create
+                // -journal side files for the DDL. DbReader.LoadColumns() / table-detection
+                // will drive the degraded read path; later read queries that hit a still-
+                // missing column will now have a single clear preceding diagnostic to refer to.
+                // 読み取り専用 DB・FS・サンドボックスでの DDL 失敗は縮退扱いで打ち切る。
+                if (IsReadOnlyOpenError(ex)) return;
+
+                // Other SQLite errors (e.g. corruption, full disk) are not opportunistic-
+                // migration concerns — preserve the existing surface-the-exception behavior.
+                // それ以外の SQLite エラーは従来通り上位に伝播させる。
+                throw;
+            }
+        }
+    }
+
+    private IEnumerable<(string Description, Action Action)> BuildReadMigrationSteps()
+    {
+        // The order here matches the legacy inline migration: tables before the columns and
+        // indexes that reference them, and fold columns before the folded indexes (#86).
+        // 並び順は legacy インラインマイグレーションと同じ。テーブル→列→index、fold 列→folded index。
+        yield return ("CREATE TABLE reference_lines", () => Execute(@"
+            CREATE TABLE IF NOT EXISTS reference_lines (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_id     INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                line        INTEGER NOT NULL,
+                context     TEXT NOT NULL,
+                UNIQUE(file_id, line)
+            )"));
+        yield return ("CREATE TABLE symbol_references", () => Execute(@"
+            CREATE TABLE IF NOT EXISTS symbol_references (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                symbol_name     TEXT,
+                reference_kind  TEXT,
+                line            INTEGER,
+                column_number   INTEGER,
+                context         TEXT,
+                reference_line_id INTEGER REFERENCES reference_lines(id),
+                container_kind  TEXT,
+                container_name  TEXT
+            )"));
+        yield return ("EnsureColumn symbol_references.reference_line_id",
+            () => EnsureColumn("symbol_references", "reference_line_id", "INTEGER REFERENCES reference_lines(id)"));
+        yield return ("CREATE INDEX idx_symbol_refs_name",
+            () => Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_name      ON symbol_references(symbol_name)"));
+        yield return ("CREATE INDEX idx_symbol_refs_file",
+            () => Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_file      ON symbol_references(file_id)"));
+        yield return ("CREATE INDEX idx_symbol_refs_container",
+            () => Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_container ON symbol_references(container_name)"));
+        yield return ("CREATE INDEX idx_reference_lines_file_line",
+            () => Execute("CREATE INDEX IF NOT EXISTS idx_reference_lines_file_line ON reference_lines(file_id, line)"));
+        yield return ("CREATE INDEX idx_symbol_refs_reference_line",
+            () => Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_reference_line ON symbol_references(reference_line_id)"));
+        yield return ("CREATE INDEX idx_symbol_refs_name_nocase",
+            () => Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_name_nocase      ON symbol_references(symbol_name COLLATE NOCASE)"));
+        yield return ("CREATE INDEX idx_symbol_refs_container_nocase",
+            () => Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_container_nocase ON symbol_references(container_name COLLATE NOCASE)"));
+
+        yield return ("EnsureColumn files.checksum",   () => EnsureColumn("files", "checksum", "TEXT"));
+        yield return ("EnsureColumn files.modified",   () => EnsureColumn("files", "modified", "DATETIME"));
+        yield return ("EnsureColumn files.indexed_at", () => EnsureColumn("files", "indexed_at", "DATETIME"));
+        yield return ("EnsureColumn symbols.start_line",               () => EnsureColumn("symbols", "start_line", "INTEGER"));
+        yield return ("EnsureColumn symbols.end_line",                 () => EnsureColumn("symbols", "end_line", "INTEGER"));
+        yield return ("EnsureColumn symbols.body_start_line",          () => EnsureColumn("symbols", "body_start_line", "INTEGER"));
+        yield return ("EnsureColumn symbols.body_end_line",            () => EnsureColumn("symbols", "body_end_line", "INTEGER"));
+        yield return ("EnsureColumn symbols.signature",                () => EnsureColumn("symbols", "signature", "TEXT"));
+        yield return ("EnsureColumn symbols.container_kind",           () => EnsureColumn("symbols", "container_kind", "TEXT"));
+        yield return ("EnsureColumn symbols.container_name",           () => EnsureColumn("symbols", "container_name", "TEXT"));
+        yield return ("EnsureColumn symbols.container_qualified_name", () => EnsureColumn("symbols", "container_qualified_name", "TEXT"));
+        yield return ("EnsureColumn symbols.family_key",               () => EnsureColumn("symbols", "family_key", "TEXT"));
+        yield return ("EnsureColumn symbols.visibility",               () => EnsureColumn("symbols", "visibility", "TEXT"));
+        yield return ("EnsureColumn symbols.return_type",              () => EnsureColumn("symbols", "return_type", "TEXT"));
+        yield return ("EnsureColumn symbols.is_metadata_target",       () => EnsureColumn("symbols", "is_metadata_target", "INTEGER"));
+        yield return ("CREATE INDEX idx_symbols_name_nocase",
+            () => Execute("CREATE INDEX IF NOT EXISTS idx_symbols_name_nocase ON symbols(name COLLATE NOCASE)"));
+
+        // #86: fold columns must be ensured BEFORE the folded indexes so CREATE INDEX does
+        // not fail on legacy DBs where the column did not exist yet.
+        // #86: folded 列を追加してから folded index を作らないと legacy DB でクラッシュする。
+        yield return ("EnsureColumn symbols.name_folded",                       () => EnsureColumn("symbols", "name_folded", "TEXT"));
+        yield return ("EnsureColumn symbol_references.symbol_name_folded",      () => EnsureColumn("symbol_references", "symbol_name_folded", "TEXT"));
+        yield return ("EnsureColumn symbol_references.container_name_folded",   () => EnsureColumn("symbol_references", "container_name_folded", "TEXT"));
+        yield return ("CREATE INDEX idx_symbols_name_folded",
+            () => Execute("CREATE INDEX IF NOT EXISTS idx_symbols_name_folded                ON symbols(name_folded)"));
+        yield return ("CREATE INDEX idx_symbol_refs_symbol_name_folded",
+            () => Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_symbol_name_folded     ON symbol_references(symbol_name_folded)"));
+        yield return ("CREATE INDEX idx_symbol_refs_container_name_folded",
+            () => Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_container_name_folded  ON symbol_references(container_name_folded)"));
+
+        yield return ("CREATE TABLE file_issues", () => Execute(@"
+            CREATE TABLE IF NOT EXISTS file_issues (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                kind            TEXT NOT NULL,
+                line            INTEGER NOT NULL DEFAULT 0,
+                message         TEXT NOT NULL
+            )"));
+        yield return ("CREATE TABLE codeindex_meta", () => Execute(@"
+            CREATE TABLE IF NOT EXISTS codeindex_meta (
+                key    TEXT PRIMARY KEY NOT NULL,
+                value  TEXT
+            )"));
+    }
+
+    private string BuildMigrationSuggestedAction(int sqliteErrorCode)
+    {
+        // 8 = SQLITE_READONLY, 10 = SQLITE_IOERR, 14 = SQLITE_CANTOPEN: classic restricted-
+        // mount signatures (network share, sandbox, WORM). Point the user at the same fix
+        // we already document for the read-only fallback so the message is actionable.
+        // 8/10/14 は restricted mount 系の典型シグネチャ。書き込み可能な場所での再実行を案内する。
+        if (sqliteErrorCode is 8 or 10 or 14)
+        {
+            var dbDir = TryGetDbDirectoryForSuggestion();
+            return dbDir is null
+                ? "Re-run cdidx on writable storage, or grant write access to the database directory (e.g. chmod +w on the .cdidx directory), so the schema migration can complete."
+                : $"Re-run cdidx on writable storage, or grant write access to '{dbDir}' (e.g. chmod +w '{dbDir}'), so the schema migration can complete.";
+        }
+
+        // Unknown SQLite codes — surface the code itself and point at integrity check.
+        // それ以外の SQLite エラーは integrity_check と error code を案内する。
+        return $"Inspect the database with 'sqlite3 <db> \"PRAGMA integrity_check\"' (SQLite error code {sqliteErrorCode}).";
+    }
+
+    private string? TryGetDbDirectoryForSuggestion()
+    {
         try
         {
-            Execute(@"
-                CREATE TABLE IF NOT EXISTS reference_lines (
-                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                    file_id     INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
-                    line        INTEGER NOT NULL,
-                    context     TEXT NOT NULL,
-                    UNIQUE(file_id, line)
-                )");
-            // Ensure the references table exists for older DBs missing it
-            // 古いDBに参照テーブルが無い場合に作成する
-            Execute(@"
-                CREATE TABLE IF NOT EXISTS symbol_references (
-                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-                    file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
-                    symbol_name     TEXT,
-                    reference_kind  TEXT,
-                    line            INTEGER,
-                    column_number   INTEGER,
-                    context         TEXT,
-                    reference_line_id INTEGER REFERENCES reference_lines(id),
-                    container_kind  TEXT,
-                    container_name  TEXT
-                )");
-            EnsureColumn("symbol_references", "reference_line_id", "INTEGER REFERENCES reference_lines(id)");
-            Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_name      ON symbol_references(symbol_name)");
-            Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_file      ON symbol_references(file_id)");
-            Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_container ON symbol_references(container_name)");
-            Execute("CREATE INDEX IF NOT EXISTS idx_reference_lines_file_line ON reference_lines(file_id, line)");
-            Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_reference_line ON symbol_references(reference_line_id)");
-            Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_name_nocase      ON symbol_references(symbol_name COLLATE NOCASE)");
-            Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_container_nocase ON symbol_references(container_name COLLATE NOCASE)");
-
-            EnsureColumn("files", "checksum", "TEXT");
-            EnsureColumn("files", "modified", "DATETIME");
-            EnsureColumn("files", "indexed_at", "DATETIME");
-            EnsureColumn("symbols", "start_line", "INTEGER");
-            EnsureColumn("symbols", "end_line", "INTEGER");
-            EnsureColumn("symbols", "body_start_line", "INTEGER");
-            EnsureColumn("symbols", "body_end_line", "INTEGER");
-            EnsureColumn("symbols", "signature", "TEXT");
-            EnsureColumn("symbols", "container_kind", "TEXT");
-            EnsureColumn("symbols", "container_name", "TEXT");
-            EnsureColumn("symbols", "container_qualified_name", "TEXT");
-            EnsureColumn("symbols", "family_key", "TEXT");
-            EnsureColumn("symbols", "visibility", "TEXT");
-            EnsureColumn("symbols", "return_type", "TEXT");
-            EnsureColumn("symbols", "is_metadata_target", "INTEGER");
-            Execute("CREATE INDEX IF NOT EXISTS idx_symbols_name_nocase ON symbols(name COLLATE NOCASE)");
-            // #86: fold columns must be ensured BEFORE the folded indexes so CREATE INDEX does
-            // not fail on legacy DBs where the column did not exist yet.
-            // #86: folded 列を追加してから folded index を作らないと legacy DB でクラッシュする。
-            EnsureColumn("symbols", "name_folded", "TEXT");
-            EnsureColumn("symbol_references", "symbol_name_folded", "TEXT");
-            EnsureColumn("symbol_references", "container_name_folded", "TEXT");
-            Execute("CREATE INDEX IF NOT EXISTS idx_symbols_name_folded                ON symbols(name_folded)");
-            Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_symbol_name_folded     ON symbol_references(symbol_name_folded)");
-            Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_container_name_folded  ON symbol_references(container_name_folded)");
-
-            // Ensure file_issues table for older DBs / 古いDBに file_issues テーブルが無い場合に作成
-            Execute(@"
-                CREATE TABLE IF NOT EXISTS file_issues (
-                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-                    file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
-                    kind            TEXT NOT NULL,
-                    line            INTEGER NOT NULL DEFAULT 0,
-                    message         TEXT NOT NULL
-                )");
-
-            // #86 codex third-pass review: metadata table for fold-algorithm version guard.
-            Execute(@"
-                CREATE TABLE IF NOT EXISTS codeindex_meta (
-                    key    TEXT PRIMARY KEY NOT NULL,
-                    value  TEXT
-                )");
+            var dataSource = _connection.DataSource;
+            if (string.IsNullOrEmpty(dataSource)) return null;
+            var fullPath = Path.GetFullPath(dataSource);
+            return Path.GetDirectoryName(fullPath);
         }
-        catch (SqliteException ex) when (IsReadOnlyOpenError(ex))
+        catch
         {
-            // Read-only DB / filesystem / sandbox — silently degrade. Catches SQLITE_READONLY
-            // (8), SQLITE_IOERR (10), and SQLITE_CANTOPEN (14): some restricted environments
-            // report CANTOPEN when SQLite tries to create -journal side files for the DDL.
-            // DbReader.LoadColumns() / table-detection will drive the degraded read path.
-            // 読み取り専用 DB・FS・サンドボックスでの DDL 失敗を全部縮退として扱う。
+            return null;
         }
+    }
+
+    private static void EmitMigrationFailureWarning(DbMigrationFailure failure)
+    {
+        // Single line so the next read attempt only sees one clear "migration partial" record
+        // even if multiple commands share the same process / log stream.
+        // 1 行に集約し、後続 read エラーと混在しても拾いやすい形にする。
+        Console.Error.WriteLine(
+            $"Warning: cdidx schema migration step \"{failure.Step}\" failed " +
+            $"(SQLite error {failure.SqliteErrorCode}: {failure.SqliteMessage.TrimEnd('.')}). " +
+            "Subsequent read queries may fail with 'no such column' until the migration completes. " +
+            failure.SuggestedAction);
     }
 
     private void EnsureColumn(string tableName, string columnName, string definition)
@@ -972,3 +1075,16 @@ public class DbContext : IDisposable
         _connection.Dispose();
     }
 }
+
+/// <summary>
+/// Captured information about a single failed step inside
+/// <see cref="DbContext.TryMigrateForRead"/>. Surfaced via
+/// <see cref="DbContext.LastMigrationFailure"/> so a later "no such column" error coming
+/// out of a read path can be traced back to the specific step that did not run.
+/// <see cref="DbContext.TryMigrateForRead"/> で失敗したステップの情報。
+/// </summary>
+public sealed record DbMigrationFailure(
+    string Step,
+    int SqliteErrorCode,
+    string SqliteMessage,
+    string SuggestedAction);
