@@ -72,35 +72,52 @@ internal static class ProgramRunner
                 return mcpExitCode;
             }
 
-            var exitCode = args[0] switch
+            var commandName = args[0];
+            var subArgs = args[1..];
+            Func<string[], int>? queryRunner = commandName switch
             {
-                "search" => QueryCommandRunner.RunSearch(args[1..], jsonOptions),
-                "definition" => QueryCommandRunner.RunDefinition(args[1..], jsonOptions),
-                "references" => QueryCommandRunner.RunReferences(args[1..], jsonOptions),
-                "callers" => QueryCommandRunner.RunCallers(args[1..], jsonOptions),
-                "callees" => QueryCommandRunner.RunCallees(args[1..], jsonOptions),
-                "symbols" => QueryCommandRunner.RunSymbols(args[1..], jsonOptions),
-                "files" => QueryCommandRunner.RunFiles(args[1..], jsonOptions),
-                "find" => QueryCommandRunner.RunFind(args[1..], jsonOptions),
-                "excerpt" => QueryCommandRunner.RunExcerpt(args[1..], jsonOptions),
-                "map" => QueryCommandRunner.RunMap(args[1..], jsonOptions),
-                "inspect" => QueryCommandRunner.RunInspect(args[1..], jsonOptions),
-                "outline" => QueryCommandRunner.RunOutline(args[1..], jsonOptions),
-                "status" => QueryCommandRunner.RunStatus(args[1..], jsonOptions, appVersion),
-                "validate" => QueryCommandRunner.RunValidate(args[1..], jsonOptions),
-                "languages" => QueryCommandRunner.RunLanguages(args[1..], jsonOptions),
-                "impact" => QueryCommandRunner.RunImpact(args[1..], jsonOptions),
-                "deps" => QueryCommandRunner.RunDeps(args[1..], jsonOptions),
-                "unused" => QueryCommandRunner.RunUnused(args[1..], jsonOptions),
-                "hotspots" => QueryCommandRunner.RunHotspots(args[1..], jsonOptions),
-                "index" => IndexCommandRunner.Run(args[1..], jsonOptions),
-                "backfill-fold" => IndexCommandRunner.RunBackfillFold(args[1..], jsonOptions),
-                "db" => DbCommandRunner.RunIntegrityCheck(args[1..], jsonOptions),
-                _ when IsProjectPathArg(args[0])
-                    => IndexCommandRunner.Run(args, jsonOptions),
-                _ => ShowError(args, $"Unknown command: {args[0]}")
+                "search" => a => QueryCommandRunner.RunSearch(a, jsonOptions),
+                "definition" => a => QueryCommandRunner.RunDefinition(a, jsonOptions),
+                "references" => a => QueryCommandRunner.RunReferences(a, jsonOptions),
+                "callers" => a => QueryCommandRunner.RunCallers(a, jsonOptions),
+                "callees" => a => QueryCommandRunner.RunCallees(a, jsonOptions),
+                "symbols" => a => QueryCommandRunner.RunSymbols(a, jsonOptions),
+                "files" => a => QueryCommandRunner.RunFiles(a, jsonOptions),
+                "find" => a => QueryCommandRunner.RunFind(a, jsonOptions),
+                "excerpt" => a => QueryCommandRunner.RunExcerpt(a, jsonOptions),
+                "map" => a => QueryCommandRunner.RunMap(a, jsonOptions),
+                "inspect" => a => QueryCommandRunner.RunInspect(a, jsonOptions),
+                "outline" => a => QueryCommandRunner.RunOutline(a, jsonOptions),
+                "status" => a => QueryCommandRunner.RunStatus(a, jsonOptions, appVersion),
+                "validate" => a => QueryCommandRunner.RunValidate(a, jsonOptions),
+                "languages" => a => QueryCommandRunner.RunLanguages(a, jsonOptions),
+                "impact" => a => QueryCommandRunner.RunImpact(a, jsonOptions),
+                "deps" => a => QueryCommandRunner.RunDeps(a, jsonOptions),
+                "unused" => a => QueryCommandRunner.RunUnused(a, jsonOptions),
+                "hotspots" => a => QueryCommandRunner.RunHotspots(a, jsonOptions),
+                _ => null,
             };
-            GlobalToolLog.Info($"command_complete exit_code={exitCode} command={args[0]}");
+
+            int exitCode;
+            if (queryRunner is not null)
+            {
+                exitCode = JsonEnvelopeWrapper.ShouldWrap(commandName, subArgs)
+                    ? JsonEnvelopeWrapper.RunWrapped(commandName, subArgs, appVersion, jsonOptions, queryRunner)
+                    : queryRunner(subArgs);
+            }
+            else
+            {
+                exitCode = commandName switch
+                {
+                    "index" => IndexCommandRunner.Run(subArgs, jsonOptions),
+                    "backfill-fold" => IndexCommandRunner.RunBackfillFold(subArgs, jsonOptions),
+                    "db" => DbCommandRunner.RunIntegrityCheck(subArgs, jsonOptions),
+                    _ when IsProjectPathArg(commandName)
+                        => IndexCommandRunner.Run(args, jsonOptions),
+                    _ => ShowError(args, $"Unknown command: {commandName}")
+                };
+            }
+            GlobalToolLog.Info($"command_complete exit_code={exitCode} command={commandName}");
             return exitCode;
         }
         catch (Exception ex)
