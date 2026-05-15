@@ -3,18 +3,29 @@
 This file is the shared, authoritative agent guide for CodeIndex.
 It is used by Codex, Claude Code, and any other coding agent working in this repository.
 
-`AGENTS.md` and `CLAUDE.md` are entry points only. Do not duplicate full workflows there.
-When this guide and an entry-point file disagree, this guide wins unless the difference is explicitly tool-specific.
+`AGENTS.md` and `CLAUDE.md` are thin entry points only; they just redirect here. **Any new rule, policy, workflow pointer, or contract note must be added to this file (or to a `.codex/workflows/*.md` workflow), not to `AGENTS.md` or `CLAUDE.md`.** Tool-specific guidance goes under `Tool-Specific Notes` in this file. When this guide and an entry-point file disagree, this guide wins.
 
 ## Read Order
 
 For implementation tasks:
 
-1. Read the agent entry point for your tool, if one was loaded automatically.
+1. Read the agent entry point for your tool, if one was loaded automatically (`AGENTS.md` for Codex, `CLAUDE.md` for Claude Code). Those files are thin entry points and only point here.
 2. Read this file.
-3. Read the relevant workflow in `.codex/workflows/`.
+3. Read the relevant workflow in `.codex/workflows/` (see the Workflow Index below).
 4. Read project-specific files referenced by that workflow, such as `SELF_IMPROVEMENT.md`, `DEVELOPER_GUIDE.md`, or `TESTING_GUIDE.md`.
 5. Read only the additional source files needed for the task.
+
+## Workflow Index
+
+Task-specific procedures live in `.codex/workflows/`. The directory is a shared workflow library for all coding agents, not only Codex.
+
+- issue fixing: `.codex/workflows/issue-fix.md`
+- changelog fragments: `.codex/workflows/changelog-fragment.md`
+- release changelog: `.codex/workflows/release-changelog.md`
+- adversarial review: `.codex/workflows/adversarial-review.md`
+- commit checks: `.codex/workflows/precommit.md`
+- PR finalization and CI checks: `.codex/workflows/pr-finalize.md`
+- related/new issue scope control: `.codex/workflows/issue-scope.md`
 
 ## Search and Indexing Rules
 
@@ -79,7 +90,7 @@ When editing changelog content, verify that both English and Japanese entries ar
 ## Documentation Rules
 
 - Treat documentation as part of the feature contract, not as optional cleanup.
-- If a change affects user-visible behavior, CLI/MCP output, flags, error messages, install/release behavior, or contributor/agent workflow, update the matching docs in the same change. For CodeIndex this usually means `README.md`, `DEVELOPER_GUIDE.md`, `TESTING_GUIDE.md`, `SELF_IMPROVEMENT.md`, `INTEGRATION_POLICY.md`, `CLAUDE.md`, `AGENT_GUIDE.md`, or the relevant `.codex/workflows/*.md` file.
+- If a change affects user-visible behavior, CLI/MCP output, flags, error messages, install/release behavior, or contributor/agent workflow, update the matching docs in the same change. For CodeIndex this usually means `README.md`, `DEVELOPER_GUIDE.md`, `TESTING_GUIDE.md`, `SELF_IMPROVEMENT.md`, `INTEGRATION_POLICY.md`, `AGENT_GUIDE.md`, or the relevant `.codex/workflows/*.md` file. Do not put agent workflow or policy content in `AGENTS.md` / `CLAUDE.md`; they are thin entry points.
 - Do not open or merge a PR with a user-visible change unless the required docs and changelog updates are present, or the PR body explicitly explains why no docs/changelog change is needed.
   - Changelog entries are required for user-visible or behavior-changing work. For ordinary implementation PRs, write the changelog entry as a bilingual fragment under `changelog.d/unreleased/`; do not update `CHANGELOG.md` directly as the default path.
   - Use issue-based fragment names and `issues:` front matter only when the work is actually tied to GitHub issues. For non-issue work, use a `+<slug>.<category>.md` fragment and omit `issues` entirely. Never write `issues: null` or `issues: []`.
