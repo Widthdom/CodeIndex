@@ -12421,6 +12421,21 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_PHP_GroupUseAliasHandlesTokenBoundariesAndPathsContainingAs()
+    {
+        var content = "<?php\nuse Foo\\{Bar\\As_thing as alias, Other\\Item\tas\tAliasedItem, Plain};\n";
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var imports = symbols.Where(s => s.Kind == "import").Select(s => s.Name).ToList();
+
+        Assert.Contains("alias", imports);
+        Assert.Contains("AliasedItem", imports);
+        Assert.Contains("Foo\\Plain", imports);
+        Assert.DoesNotContain(imports, name => name.Contains(" as ", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(imports, name => name.Contains('\t'));
+    }
+
+    [Fact]
     public void Extract_PHP_DetectsClassProperties()
     {
         var content = """
@@ -13403,6 +13418,20 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Client" && s.Line == 6 && s.StartColumn == 10);
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "crate::net::server::Server as NetServer");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "NetServer" && s.Line == 7 && s.StartColumn == 28);
+    }
+
+    [Fact]
+    public void Extract_Rust_UseAliasHandlesTokenBoundariesAndPathsContainingAs()
+    {
+        var content = "use crate::as_helpers::Inner\tas\tAliased;\nuse std::io::Result\n    as\n    IoResult;\n";
+
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+        var imports = symbols.Where(s => s.Kind == "import").Select(s => s.Name).ToList();
+
+        Assert.Contains("Aliased", imports);
+        Assert.Contains("Inner", imports);
+        Assert.Contains("IoResult", imports);
+        Assert.Contains("Result", imports);
     }
 
     [Fact]

@@ -244,7 +244,8 @@ public static partial class SymbolExtractor
             }
         }
 
-        var aliasIndex = FindTopLevelKeyword(text, " as ");
+        var asKeyword = FindTopLevelAsKeyword(text);
+        var aliasIndex = asKeyword.Start;
         var hasPathPrefix = !string.IsNullOrWhiteSpace(prefix);
 
         if (hasPathPrefix && text is not "self" and not "super" and not "crate" and not "*")
@@ -252,10 +253,12 @@ public static partial class SymbolExtractor
 
         if (aliasIndex >= 0)
         {
-            var alias = text[(aliasIndex + 4)..].Trim();
+            var afterKeyword = aliasIndex + asKeyword.Length;
+            var aliasTail = text[afterKeyword..];
+            var alias = aliasTail.Trim();
             if (alias.Length > 0)
             {
-                var aliasStart = bodyOffset + aliasIndex + 4 + (text[(aliasIndex + 4)..].Length - alias.Length);
+                var aliasStart = bodyOffset + afterKeyword + (aliasTail.Length - aliasTail.TrimStart().Length);
                 AddRustUseOccurrence(occurrences, alias, aliasStart, lineStarts, startLineNumber);
             }
         }
@@ -401,12 +404,15 @@ public static partial class SymbolExtractor
         return -1;
     }
 
-    private static int FindTopLevelKeyword(string text, string keyword)
+    private readonly record struct RustAsKeywordSpan(int Start, int Length);
+
+    private static RustAsKeywordSpan FindTopLevelAsKeyword(string text)
     {
         var braceDepth = 0;
-        for (var i = 0; i <= text.Length - keyword.Length; i++)
+        for (var i = 0; i < text.Length; i++)
         {
-            switch (text[i])
+            var ch = text[i];
+            switch (ch)
             {
                 case '{':
                     braceDepth++;
@@ -417,11 +423,28 @@ public static partial class SymbolExtractor
                     continue;
             }
 
-            if (braceDepth == 0 && text.AsSpan(i, keyword.Length).SequenceEqual(keyword))
-                return i;
+            if (braceDepth != 0 || !char.IsWhiteSpace(ch))
+                continue;
+
+            var asStart = i + 1;
+            while (asStart < text.Length && char.IsWhiteSpace(text[asStart]))
+                asStart++;
+
+            if (asStart + 2 > text.Length)
+                continue;
+            if (text[asStart] != 'a' || text[asStart + 1] != 's')
+                continue;
+            if (asStart + 2 >= text.Length || !char.IsWhiteSpace(text[asStart + 2]))
+                continue;
+
+            var endOfTrailingWs = asStart + 2;
+            while (endOfTrailingWs < text.Length && char.IsWhiteSpace(text[endOfTrailingWs]))
+                endOfTrailingWs++;
+
+            return new RustAsKeywordSpan(i, endOfTrailingWs - i);
         }
 
-        return -1;
+        return new RustAsKeywordSpan(-1, 0);
     }
 
     private static bool HasRustSymbol(List<SymbolRecord> symbols, long fileId, int lineNumber, string kind, string name)
