@@ -7518,6 +7518,74 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SearchSymbols_CSharpAmbiguousUsingExposureKeepsBothCandidatesIndividuallyAddressable_Issue1521()
+    {
+        // issue #1521: when two `using` directives both expose a same-named type
+        // (e.g. `using FooNs; using BarNs;` both exposing `Holder`), DbReader's
+        // base-type resolver iterated `GetActiveCSharpTypeNamespaces` — a HashSet
+        // of active namespaces — and returned the first match via FirstOrDefault,
+        // routing `class Derived : Holder` to whichever namespace bucket happened
+        // to enumerate first. The fix detects the ambiguity and declines to
+        // resolve rather than silently picking one. Both definitions remain
+        // individually addressable by their fully qualified names, and the
+        // deriving site stays reachable from a bare-name reference search.
+        // issue #1521: 2 つの using directive が同名型を公開する場合
+        // (`using FooNs; using BarNs;` の両方が `Holder` を露出)、DbReader の基底型
+        // 解決は `GetActiveCSharpTypeNamespaces` (active namespaces の HashSet) を
+        // 巡回して FirstOrDefault で最初の一致を返していたため、`class Derived :
+        // Holder` がどちらに routing されるかは namespace の bucket 列挙順に依存
+        // していた。本修正は曖昧性を検知して 1 つを silently 選ぶのではなく解決を
+        // 棄権する。両定義は完全修飾名で個別に到達可能で、bare 名の references
+        // 検索からも派生位置に到達できる。
+        InsertIndexedFile("src/FooNs/Holder.cs", "csharp",
+            """
+            namespace FooNs
+            {
+                public class Holder
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/BarNs/Holder.cs", "csharp",
+            """
+            namespace BarNs
+            {
+                public class Holder
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/Use/Derived.cs", "csharp",
+            """
+            using FooNs;
+            using BarNs;
+
+            namespace UseNs
+            {
+                public class Derived : Holder
+                {
+                }
+            }
+            """);
+
+        // Both Holder definitions are indexed and individually addressable by
+        // their declaring file — neither is silently dropped during indexing.
+        // 両 Holder 定義は宣言ファイル単位で個別に到達可能であり、indexing 時に
+        // silently 落とされることはない。
+        var holderSymbols = _reader.SearchSymbols("Holder", lang: "csharp", exact: true).ToList();
+        Assert.Contains(holderSymbols, symbol => symbol.Path == "src/FooNs/Holder.cs" && symbol.Kind == "class");
+        Assert.Contains(holderSymbols, symbol => symbol.Path == "src/BarNs/Holder.cs" && symbol.Kind == "class");
+
+        // The bare `Holder` reference at the deriving site is recorded and
+        // surfaces in references search regardless of dictionary enumeration
+        // order; the resolver no longer silently picks one specific namespace.
+        // 派生位置の bare `Holder` 参照は dictionary 列挙順に依らず references
+        // 検索に現れる。resolver が特定 namespace を silently 選ぶことはない。
+        var holderRefs = _reader.SearchReferences("Holder", lang: "csharp", exact: true).ToList();
+        Assert.Contains(holderRefs, reference => reference.Path == "src/Use/Derived.cs");
+    }
+
+    [Fact]
     public void GetFileDependencies_CSharpMetadataTargetResolverHandlesAliasColonColonQualifiedBase()
     {
         // issue #435 codex review iter 9: C# allows both `Alias.X` (member access)

@@ -576,13 +576,23 @@ public partial class DbReader
                 return CombineDbQualifiedName(activeContainingTypeScope.QualifiedName, shortName);
         }
 
+        string? resolvedActiveNamespace = null;
         foreach (var activeNamespace in GetActiveCSharpTypeNamespaces(path, lineNumber))
         {
             var exactNamespace = candidateNamespaces.FirstOrDefault(candidate =>
                 string.Equals(candidate.QualifiedName, activeNamespace, StringComparison.Ordinal));
-            if (exactNamespace != null)
-                return CombineDbQualifiedName(activeNamespace, shortName);
+            if (exactNamespace == null)
+                continue;
+            if (resolvedActiveNamespace != null
+                && !string.Equals(resolvedActiveNamespace, activeNamespace, StringComparison.Ordinal))
+            {
+                return null;
+            }
+            resolvedActiveNamespace = activeNamespace;
         }
+
+        if (resolvedActiveNamespace != null)
+            return CombineDbQualifiedName(resolvedActiveNamespace, shortName);
 
         return normalizedReference;
     }
