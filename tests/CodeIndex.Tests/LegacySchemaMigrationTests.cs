@@ -352,6 +352,131 @@ public class LegacySchemaMigrationTests : IDisposable
     }
 
     [Fact]
+    public void TryMigrateForRead_PartialDdlFailure_RecordsStepAndEmitsActionableWarning()
+    {
+        // Issue #1516: when a DDL step fails part-way through (restricted mount: WORM /
+        // sandbox / network share), the previous broad swallow left no trace. The next read
+        // would hit a cryptic `no such column` instead of an actionable "migration partial,
+        // re-run on writable storage" message. The new contract: capture the failing step
+        // and SQLite error code on the DbContext, and emit a single stderr warning that
+        // points at writable-storage recovery so the user has a concrete next action.
+        // #1516: 部分 DDL 失敗時にステップ名と SQLite error code を記録し、stderr に
+        // writable storage への誘導を 1 行で出すことで、後続の cryptic な「no such column」を
+        // 行動可能な診断に置き換える契約。
+        using var db = new DbContext(_dbPath);
+
+        // query_only = ON makes any DDL fail with SQLITE_READONLY (code 8) — the same surface
+        // as a real restricted-mount partial-migration failure. The first step in the read
+        // migration is `CREATE TABLE reference_lines`, which has no pre-existing table to
+        // satisfy `IF NOT EXISTS`, so it is the failing step here.
+        // query_only=ON で readonly-class 失敗を再現する。
+        using (var pragma = db.Connection.CreateCommand())
+        {
+            pragma.CommandText = "PRAGMA query_only = ON";
+            pragma.ExecuteNonQuery();
+        }
+
+        var originalError = Console.Error;
+        var capturedError = new StringWriter();
+        Console.SetError(capturedError);
+        try
+        {
+            db.TryMigrateForRead();
+        }
+        finally
+        {
+            Console.SetError(originalError);
+        }
+
+        // Structured failure: step description, SQLite error code, and an actionable hint
+        // are all available to callers (CLI, MCP, programmatic) without reparsing stderr.
+        // 構造化された失敗情報を呼び出し側へ提供する。
+        Assert.NotNull(db.LastMigrationFailure);
+        Assert.False(string.IsNullOrWhiteSpace(db.LastMigrationFailure!.Step));
+        Assert.Equal("CREATE TABLE reference_lines", db.LastMigrationFailure.Step);
+        Assert.Equal(8, db.LastMigrationFailure.SqliteErrorCode);
+        Assert.Contains("writable storage", db.LastMigrationFailure.SuggestedAction, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("chmod", db.LastMigrationFailure.SuggestedAction, StringComparison.OrdinalIgnoreCase);
+
+        // Single stderr line so the diagnostic is hard to miss but does not flood logs.
+        // 1 行の stderr 警告。
+        var stderr = capturedError.ToString();
+        Assert.Contains("schema migration step", stderr, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("CREATE TABLE reference_lines", stderr, StringComparison.Ordinal);
+        Assert.Contains("SQLite error 8", stderr, StringComparison.Ordinal);
+        Assert.Contains("no such column", stderr, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("writable storage", stderr, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void TryMigrateForRead_SuccessfulMigration_LeavesLastMigrationFailureNull()
+    {
+        // The diagnostic must stay opt-in: a normal migration on writable storage records
+        // nothing, so callers can use `LastMigrationFailure is not null` as a clean signal.
+        // 正常完了時は LastMigrationFailure が null のまま — シグナルとして利用できる契約。
+        using var db = new DbContext(_dbPath);
+
+        var originalError = Console.Error;
+        var capturedError = new StringWriter();
+        Console.SetError(capturedError);
+        try
+        {
+            db.TryMigrateForRead();
+        }
+        finally
+        {
+            Console.SetError(originalError);
+        }
+
+        Assert.Null(db.LastMigrationFailure);
+        Assert.DoesNotContain("schema migration step", capturedError.ToString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void TryMigrateForRead_PartialDdlFailure_FailureSurvivesForLaterInspection()
+    {
+        // The recorded failure must outlive the TryMigrateForRead call so a caller that hits
+        // a subsequent `no such column` SqliteException can read LastMigrationFailure to
+        // explain *why* the column is missing — i.e. the migration partially failed and the
+        // user should re-run on writable storage. This is the link the issue calls out:
+        // "Cryptic `no such column` errors instead of a single clear ... message".
+        // 失敗情報は呼び出し後も残り、後続の no-such-column エラーと突き合わせて原因を説明できる必要がある。
+        using var db = new DbContext(_dbPath);
+        using (var pragma = db.Connection.CreateCommand())
+        {
+            pragma.CommandText = "PRAGMA query_only = ON";
+            pragma.ExecuteNonQuery();
+        }
+
+        var originalError = Console.Error;
+        Console.SetError(new StringWriter());
+        try
+        {
+            db.TryMigrateForRead();
+        }
+        finally
+        {
+            Console.SetError(originalError);
+        }
+
+        // Failure outlives the call — caller can correlate downstream errors against it.
+        // TryMigrateForRead を抜けたあとも参照可能。
+        var failure = db.LastMigrationFailure;
+        Assert.NotNull(failure);
+        Assert.Equal(8, failure!.SqliteErrorCode);
+
+        // The migration aborted before adding `symbols.start_line`, so a query touching that
+        // column still fails with SQLITE_ERROR (code 1) `no such column`. The user-facing
+        // promise is that they no longer have to guess: LastMigrationFailure explains it.
+        // start_line 列を参照する read が "no such column" で失敗することを確認 — その文脈で
+        // LastMigrationFailure を見せれば原因が一目で分かる。
+        using var failingRead = db.Connection.CreateCommand();
+        failingRead.CommandText = "SELECT start_line FROM symbols LIMIT 1";
+        var ex = Assert.Throws<SqliteException>(() => failingRead.ExecuteReader());
+        Assert.Contains("no such column", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void DbContext_ReadOnlyFilesystem_FallsBackToReadOnlyOpen()
     {
         // Verify the DbContext read-only fallback for real — when the containing directory is
