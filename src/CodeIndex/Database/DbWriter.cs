@@ -828,14 +828,70 @@ public class DbWriter
     /// Readers require the bit, a version match, and a fingerprint match before trusting
     /// folded columns, so both intentional fold changes and runtime ICU / invariant-casing
     /// drift degrade safely to NOCASE until `--rebuild`. Issue #97.
+    ///
+    /// Re-verifies <see cref="AllFoldedColumnsBackfilled"/> inside a BEGIN IMMEDIATE
+    /// transaction so a concurrent writer cannot insert NULL-folded rows between the
+    /// caller's pre-check and this stamp. Returns false (and writes nothing) when the
+    /// re-verify fails, so callers can surface a friendly retry message instead of
+    /// silently advertising fold-trust to readers. Issue #1535.
     /// FoldReady bit + fold_key_version + fold_key_fingerprint を書く。runtime drift を含む
     /// silent mismatch を防ぎ、ズレた場合は `--rebuild` まで NOCASE fallback に降格する。
+    /// BEGIN IMMEDIATE で囲んだうえで再検証し、concurrent writer による NULL 行差し込みで
+    /// fold_ready が嘘になるのを防ぐ。Issue #1535。
     /// </summary>
-    public void MarkFoldReady()
+    /// <returns>True when the bit was actually stamped; false when re-verification failed.</returns>
+    public bool MarkFoldReady()
     {
-        SetReadyBit(DbContext.FoldReadyFlag);
-        SetMeta("fold_key_version", NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        SetMeta("fold_key_fingerprint", NameFold.Fingerprint());
+        bool ownTransaction = !IsInTransaction();
+        if (ownTransaction)
+            Execute("BEGIN IMMEDIATE");
+        try
+        {
+            if (!AllFoldedColumnsBackfilled())
+            {
+                if (ownTransaction)
+                {
+                    Execute("COMMIT");
+                    ownTransaction = false;
+                }
+                return false;
+            }
+
+            // Inline the SetReadyBit body. SetReadyBit opens its own BEGIN IMMEDIATE
+            // when not already in a DbWriter-tracked transaction, but our raw
+            // BEGIN IMMEDIATE above is not tracked in _transactionDepth, so a direct
+            // SetReadyBit call would attempt a nested BEGIN IMMEDIATE and fail.
+            // SetReadyBit は _transactionDepth ベースでしか外側 transaction を見ないため、
+            // 生 BEGIN IMMEDIATE 内では呼べない。内容を inline 展開する。
+            int current;
+            using (var read = _conn.CreateCommand())
+            {
+                read.CommandText = "PRAGMA user_version";
+                var raw = read.ExecuteScalar();
+                current = raw is long l ? (int)l : (raw is int i ? i : 0);
+            }
+            int next = current | DbContext.FoldReadyFlag;
+            if (next != current)
+                Execute($"PRAGMA user_version = {next}");
+
+            SetMeta("fold_key_version", NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            SetMeta("fold_key_fingerprint", NameFold.Fingerprint());
+
+            if (ownTransaction)
+            {
+                Execute("COMMIT");
+                ownTransaction = false;
+            }
+            return true;
+        }
+        catch
+        {
+            if (ownTransaction)
+            {
+                try { Execute("ROLLBACK"); } catch { /* best effort */ }
+            }
+            throw;
+        }
     }
 
     /// <summary>

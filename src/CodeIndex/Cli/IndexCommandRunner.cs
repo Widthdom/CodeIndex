@@ -385,7 +385,11 @@ public static class IndexCommandRunner
                 || storedFoldFingerprint != currentFoldFingerprint;
 
             var (symbols, symbolReferences) = writer.BackfillFoldedColumns(rewriteAll);
-            var verified = writer.AllFoldedColumnsBackfilled();
+            // MarkFoldReady re-verifies inside a BEGIN IMMEDIATE so a concurrent writer cannot
+            // insert NULL-folded rows between the verify and the stamp. Issue #1535.
+            // MarkFoldReady は BEGIN IMMEDIATE 内で再検証するため、concurrent writer による
+            // NULL 行差し込みで fold_ready が嘘になるのを防ぐ。Issue #1535。
+            var verified = writer.MarkFoldReady();
             if (!verified)
             {
                 return WriteCommandError(
@@ -396,7 +400,6 @@ public static class IndexCommandRunner
                     "Retry `cdidx backfill-fold`. If the DB still does not verify, rebuild it with `cdidx index <projectPath> --rebuild`.");
             }
 
-            writer.MarkFoldReady();
             var userVersionAfter = db.GetUserVersion();
 
             if (options.Json)
@@ -1125,8 +1128,11 @@ public static class IndexCommandRunner
                 && priorFoldVersion == currentFoldVersion
                 && priorFoldFingerprint == currentFoldFingerprint)
             {
-                writer.MarkFoldReady();
-                foldReadyAfter = true;
+                // MarkFoldReady re-verifies inside BEGIN IMMEDIATE; a concurrent NULL-folded
+                // insert during this restamp window leaves foldReadyAfter=false. Issue #1535.
+                // MarkFoldReady は BEGIN IMMEDIATE 内で再検証する。restamp 窓の concurrent
+                // 書き込みで NULL 行が残った場合は foldReadyAfter=false のまま。Issue #1535。
+                foldReadyAfter = writer.MarkFoldReady();
             }
             writer.WriteCdidxWriterVersion(ConsoleUi.LoadVersion());
         }
@@ -1886,8 +1892,18 @@ public static class IndexCommandRunner
             // user_version だけ落ちた current DB もここで回復させる。
             if (backfillReady && (skipped == 0 || canRestampExistingFoldTrust))
             {
-                writer.MarkFoldReady();
-                foldReadyAfter = true;
+                // MarkFoldReady re-verifies inside BEGIN IMMEDIATE; if a concurrent writer slipped
+                // in a NULL-folded row between the upfront check and this stamp, the stamp is
+                // skipped and we degrade to the legacy reason instead of silent misadvertisement.
+                // Issue #1535.
+                // BEGIN IMMEDIATE 内で再検証するため、concurrent writer による NULL 差し込みで
+                // stamp は失敗し、silent な fold-trust 誤広告ではなく legacy 理由に降格する。Issue #1535。
+                foldReadyAfter = writer.MarkFoldReady();
+                if (!foldReadyAfter)
+                {
+                    backfillReady = false;
+                    foldReadyReasonAfter = GetFoldReadyReason(false, foldVersionMatchesCurrent, foldFingerprintMatchesCurrent);
+                }
             }
             else
                 foldReadyReasonAfter = GetFoldReadyReason(backfillReady, foldVersionMatchesCurrent, foldFingerprintMatchesCurrent);

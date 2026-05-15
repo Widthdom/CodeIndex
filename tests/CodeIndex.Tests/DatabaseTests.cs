@@ -508,6 +508,59 @@ public class DatabaseTests : IDisposable
         Assert.Equal(1, files);
     }
 
+    [Fact]
+    public void MarkFoldReady_StampsFoldReadyWhenAllRowsBackfilled()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/fold_ok.py", Lang = "python", Size = 30, Lines = 3,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertSymbols([
+            new SymbolRecord { FileId = fileId, Kind = "function", Name = "Straße", Line = 1, StartLine = 1, EndLine = 1 },
+        ]);
+
+        var stamped = _writer.MarkFoldReady();
+
+        Assert.True(stamped);
+        Assert.Equal(DbContext.FoldReadyFlag, _db.GetUserVersion() & DbContext.FoldReadyFlag);
+    }
+
+    [Fact]
+    public void MarkFoldReady_LeavesFoldReadyUnsetWhenNullFoldedRowExists()
+    {
+        // Reproduces issue #1535: a concurrent writer inserting a NULL-folded row between
+        // an upfront verify and the FoldReady stamp can leave readers on the fold path with
+        // some rows still NULL. The fix re-verifies inside MarkFoldReady's BEGIN IMMEDIATE so
+        // this stamp is skipped and readers stay on NOCASE until backfill_fold is re-run.
+        // issue #1535 の再現: 上位の verify 後に concurrent writer が NULL 行を差し込んだ場合、
+        // 修正後の MarkFoldReady は再検証で stamp を取りやめ、reader を NOCASE に保つ。
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/fold_partial.py", Lang = "python", Size = 30, Lines = 3,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertSymbols([
+            new SymbolRecord { FileId = fileId, Kind = "function", Name = "Straße", Line = 1, StartLine = 1, EndLine = 1 },
+        ]);
+
+        // Simulate a concurrent NULL-folded insert that slipped in after the caller's
+        // upfront AllFoldedColumnsBackfilled check returned true.
+        // 上位の verify 直後に concurrent writer が NULL 行を入れたシナリオを再現する。
+        using (var cmd = _db.Connection.CreateCommand())
+        {
+            cmd.CommandText = "UPDATE symbols SET name_folded = NULL";
+            cmd.ExecuteNonQuery();
+        }
+
+        var stamped = _writer.MarkFoldReady();
+
+        Assert.False(stamped);
+        Assert.Equal(0, _db.GetUserVersion() & DbContext.FoldReadyFlag);
+        Assert.Null(_db.GetMetaString("fold_key_version"));
+        Assert.Null(_db.GetMetaString("fold_key_fingerprint"));
+    }
+
     public void Dispose()
     {
         _db.Dispose();

@@ -1753,8 +1753,15 @@ public partial class McpServer
             var canRestampExistingFoldTrust = foldVersionMatchesCurrent && foldFingerprintMatchesCurrent;
             if (backfillReady && (skipped == 0 || canRestampExistingFoldTrust))
             {
-                writer.MarkFoldReady();
-                foldReadyAfter = true;
+                // MarkFoldReady re-verifies inside BEGIN IMMEDIATE; a concurrent NULL-folded
+                // insert during this restamp window leaves foldReadyAfter=false and degrades
+                // to the legacy "missing_fold_backfill" reason instead of silent misadvertise.
+                // Issue #1535.
+                // BEGIN IMMEDIATE 内で再検証する。concurrent NULL 差し込みで stamp が失敗した
+                // 場合は missing_fold_backfill に降格する。Issue #1535。
+                foldReadyAfter = writer.MarkFoldReady();
+                if (!foldReadyAfter)
+                    foldReadyReason = "missing_fold_backfill";
             }
             else if (!backfillReady)
             {
@@ -1874,11 +1881,14 @@ public partial class McpServer
             var rewriteAll = storedFoldVersion != currentFoldVersion
                 || storedFoldFingerprint != currentFoldFingerprint;
             var (symbols, symbolReferences) = writer.BackfillFoldedColumns(rewriteAll);
-            var verified = writer.AllFoldedColumnsBackfilled();
+            // MarkFoldReady wraps its own re-verification in BEGIN IMMEDIATE, so a concurrent
+            // writer cannot insert NULL-folded rows between the verify and the stamp. Issue #1535.
+            // MarkFoldReady は BEGIN IMMEDIATE 内で再検証するため、concurrent writer による
+            // NULL 行差し込みで fold_ready が嘘になるのを防ぐ。Issue #1535。
+            var verified = writer.MarkFoldReady();
             if (!verified)
-                return CreateToolErrorResponse(id, "Folded-name backfill verification failed: some rows still have NULL folded values.");
+                return CreateToolErrorResponse(id, "Folded-name backfill verification failed: some rows still have NULL folded values. Re-run backfill_fold.");
 
-            writer.MarkFoldReady();
             var userVersionAfter = db.GetUserVersion();
 
             var payload = new JsonObject
