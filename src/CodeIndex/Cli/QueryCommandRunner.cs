@@ -1191,7 +1191,7 @@ public static class QueryCommandRunner
                 else
                 {
                     if (i + 1 >= args.Length)
-                        return $"Error: {arg} requires a value";
+                        return BuildMissingOptionValueError(arg);
                     value = args[i + 1];
                     i++;
                 }
@@ -1707,12 +1707,20 @@ public static class QueryCommandRunner
                     Console.WriteLine($"Git HEAD : {status.GitHead}");
                 if (status.GitIsDirty != null)
                     Console.WriteLine($"Git Dirty: {status.GitIsDirty}");
+                // #1509 surface: SHA / branch / timestamp / drift come from the per-success
+                // stamp (indexed_head_sha / _branch / _timestamp) and reflect last-touched HEAD
+                // regardless of update mode. #1508/#1512's IndexedHeadCommit (full-scan only)
+                // is rendered separately below when it disagrees with the runtime GitHead.
                 if (status.IndexedHeadSha != null)
                 {
                     var branchSuffix = string.IsNullOrWhiteSpace(status.IndexedHeadBranch)
                         ? string.Empty
                         : $" (branch {status.IndexedHeadBranch})";
                     Console.WriteLine($"Idx HEAD : {status.IndexedHeadSha}{branchSuffix}");
+                }
+                else if (status.IndexedHeadCommit != null && !string.Equals(status.IndexedHeadCommit, status.GitHead, StringComparison.OrdinalIgnoreCase))
+                {
+                    Console.WriteLine($"Idx HEAD : {status.IndexedHeadCommit}");
                 }
                 if (status.IndexedHeadTimestamp != null)
                     Console.WriteLine($"Idx Stamp: {status.IndexedHeadTimestamp:O}");
@@ -1734,6 +1742,8 @@ public static class QueryCommandRunner
                 }
                 if (status.GraphSupportedLanguages is { Count: > 0 })
                     Console.WriteLine($"Graph   : {status.GraphSupportedLanguages.Count} languages ({string.Join(", ", status.GraphSupportedLanguages)})");
+                if (status.WorktreeHeadChanged == true)
+                    Console.WriteLine($"WARN    : worktree HEAD changed since the index was built ({ShortSha(status.IndexedHeadCommit)} -> {ShortSha(status.GitHead)}). Run `{BuildReindexRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit)}` to refresh the index for the current branch.");
                 if (!status.GraphTableAvailable)
                     Console.WriteLine("WARN    : symbol_references table missing — reference / caller / callee / unused counts are degraded to 0.");
                 if (!status.IssuesTableAvailable)
@@ -3162,8 +3172,7 @@ public static class QueryCommandRunner
     {
         if (string.IsNullOrWhiteSpace(dbPath))
         {
-            Console.Error.WriteLine("Error: --db requires a value.");
-            Console.Error.WriteLine("Hint: pass a concrete database path with `--db <path>` or omit `--db` to use `.cdidx/codeindex.db`.");
+            Console.Error.WriteLine(BuildMissingOptionValueError("--db"));
             return CommandExitCodes.UsageError;
         }
 
@@ -3650,6 +3659,13 @@ public static class QueryCommandRunner
 
     private static string FormatSamples(IReadOnlyList<string> samples)
         => samples.Count == 0 ? string.Empty : $" ({string.Join(", ", samples)})";
+
+    private static string ShortSha(string? sha)
+    {
+        if (string.IsNullOrWhiteSpace(sha))
+            return "<unknown>";
+        return sha.Length <= 12 ? sha : sha[..12];
+    }
 
     private static string BuildFoldBackfillCommand(string dbPath, bool dbPathExplicit)
     {
@@ -4170,6 +4186,56 @@ public static class QueryCommandRunner
             ["--focus-length"] = 100_000,
         };
 
+    // Per-flag hints appended to "Error: <flag> requires a value." so users learn the expected
+    // value type or range without consulting `--help`. Routed through BuildMissingOptionValueError
+    // so every missing-value site reuses the same table and the messages stay consistent.
+    // 「<flag> requires a value.」 missing-value error に追記するフラグ別ヒント。
+    // すべての missing-value 経路を BuildMissingOptionValueError 経由にして、コマンド間で
+    // メッセージを揃え、ヒントの単一情報源を維持する。
+    private static readonly Dictionary<string, string> MissingOptionValueHints = new(StringComparer.Ordinal)
+    {
+        ["--db"] = "pass a path to a CodeIndex SQLite database, e.g. `--db .cdidx/codeindex.db`, or omit `--db` to use `.cdidx/codeindex.db`.",
+        ["--limit"] = "pass a positive integer, e.g. `--limit 20` (default 20).",
+        ["--top"] = "pass a positive integer, e.g. `--top 20` (alias for `--limit`, default 20).",
+        ["--lang"] = "pass a language identifier, e.g. `--lang csharp`. Run `cdidx languages` for the supported set.",
+        ["--query"] = "pass a search literal, e.g. `--query \"authenticate\"`. Use the `--query` form when the literal starts with `-`.",
+        ["--kind"] = "pass a kind identifier, e.g. `--kind function`. definition/symbols/hotspots/unused take a symbol kind; references/callers/callees take a reference kind such as `call`, `instantiate`, or `subscribe`. Run the command's `--help` for the kind list.",
+        ["--depth"] = "pass a non-negative integer, e.g. `--depth 5` (default 5).",
+        ["--path"] = "pass a glob-style path pattern, e.g. `--path src/**`. Repeat `--path` to add more patterns.",
+        ["--exclude-path"] = "pass a glob-style path pattern to exclude, e.g. `--exclude-path tests/**`. Repeat `--exclude-path` to add more.",
+        ["--since"] = "pass an ISO 8601 datetime, e.g. `--since 2024-01-01` or `--since 2024-01-01T00:00:00Z`.",
+        ["--start"] = "pass a 1-based line number, e.g. `--start 10`.",
+        ["--end"] = "pass a 1-based line number greater than or equal to `--start`, e.g. `--end 20`.",
+        ["--before"] = "pass a non-negative integer of context lines before each match, e.g. `--before 2`.",
+        ["--after"] = "pass a non-negative integer of context lines after each match, e.g. `--after 2`.",
+        ["--focus-line"] = "pass a 1-based line number to focus on, e.g. `--focus-line 12`.",
+        ["--focus-column"] = "pass a 1-based column number to keep visible, e.g. `--focus-column 80`.",
+        ["--focus-length"] = "pass a positive integer for the focused span width, e.g. `--focus-length 1` (default 1).",
+        ["--name"] = "pass a literal symbol name, e.g. `--name UserService`. Repeat `--name` to add more names.",
+        ["--snippet-lines"] = "pass an integer between 1 and 20, e.g. `--snippet-lines 8` (default 8).",
+        ["--max-line-width"] = "pass a non-negative integer (`0` disables clamping), e.g. `--max-line-width 512` (default 512).",
+    };
+
+    // Build a missing-value error string with optional caller-supplied hint lines first, then the
+    // per-flag hint from MissingOptionValueHints. Newline-separated so each Hint stays on its own
+    // line when written via Console.Error.WriteLine. Returns just the base error if no hint exists.
+    // 呼び出し元固有のヒント (例: inline-form) を先に、テーブル由来のフラグ別ヒントを後ろに追記する。
+    // Console.Error.WriteLine 経由で出力されたとき各 Hint が別行になるよう改行で連結する。
+    private static string BuildMissingOptionValueError(string optionName, params string?[] extraHintLines)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.Append("Error: ").Append(optionName).Append(" requires a value.");
+        foreach (var hint in extraHintLines)
+        {
+            if (string.IsNullOrEmpty(hint))
+                continue;
+            sb.Append('\n').Append(hint);
+        }
+        if (MissingOptionValueHints.TryGetValue(optionName, out var perFlagHint))
+            sb.Append('\n').Append("Hint: ").Append(perFlagHint);
+        return sb.ToString();
+    }
+
     private static bool TryParsePositiveInt(string rawValue, string optionName, out int value, out string? error)
     {
         if (string.Equals(optionName, "--max-line-width", StringComparison.Ordinal))
@@ -4225,7 +4291,7 @@ public static class QueryCommandRunner
         if (index + 1 >= args.Length)
         {
             value = null;
-            error = $"Error: {optionName} requires a value.";
+            error = BuildMissingOptionValueError(optionName);
             return false;
         }
 
@@ -4241,7 +4307,7 @@ public static class QueryCommandRunner
         if (IsRecognizedOptionToken(candidate))
         {
             value = null;
-            error = $"Error: {optionName} requires a value.";
+            error = BuildMissingOptionValueError(optionName);
             return false;
         }
 
@@ -4258,7 +4324,7 @@ public static class QueryCommandRunner
             if (string.IsNullOrWhiteSpace(inlineValue))
             {
                 value = null;
-                error = $"Error: {optionName} requires a value.";
+                error = BuildMissingOptionValueError(optionName);
                 return false;
             }
 
@@ -4270,7 +4336,7 @@ public static class QueryCommandRunner
         if (index + 1 >= args.Length)
         {
             value = null;
-            error = $"Error: {optionName} requires a value.";
+            error = BuildMissingOptionValueError(optionName);
             return false;
         }
 
@@ -4291,22 +4357,23 @@ public static class QueryCommandRunner
         if (!allowSeparatedDashPrefixedLiteralValue && IsRecognizedOptionToken(candidate))
         {
             value = null;
-            error = $"Error: {optionName} requires a value.";
+            error = BuildMissingOptionValueError(optionName);
             return false;
         }
         if (optionName != "--query" && IsRejectedSeparatedStringValue(candidate, allowSeparatedDashPrefixedLiteralValue))
         {
             value = null;
-            error = allowSeparatedDashPrefixedLiteralValue && candidate.StartsWith("--", StringComparison.Ordinal)
-                ? $"Error: {optionName} requires a value. Hint: if the literal value starts with `--`, pass it as `{optionName}=<value>`."
-                : $"Error: {optionName} requires a value.";
+            var inlineFormHint = allowSeparatedDashPrefixedLiteralValue && candidate.StartsWith("--", StringComparison.Ordinal)
+                ? $"Hint: if the literal value starts with `--`, pass it as `{optionName}=<value>`."
+                : null;
+            error = BuildMissingOptionValueError(optionName, inlineFormHint);
             return false;
         }
 
         if (string.IsNullOrWhiteSpace(candidate))
         {
             value = null;
-            error = $"Error: {optionName} requires a value.";
+            error = BuildMissingOptionValueError(optionName);
             return false;
         }
 

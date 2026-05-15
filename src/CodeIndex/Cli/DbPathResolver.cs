@@ -139,6 +139,21 @@ public static class DbPathResolver
     }
 
     private static string? TryReadIndexedProjectRoot(string dbPath)
+        => TryReadMetaString(dbPath, CodeIndex.Database.DbContext.IndexedProjectRootMetaKey);
+
+    /// <summary>
+    /// Best-effort read of the persisted git HEAD commit stamped at the end of the
+    /// most recent successful full-scan index run. Returns null when the DB does not
+    /// expose `indexed_head_commit` (legacy DBs or projects indexed outside a git
+    /// checkout). Used at `status` time to surface a worktree branch / HEAD switch
+    /// via `worktree_head_changed`. Issues #1508 / #1512.
+    /// 直近 full-scan 成功時点で保存された git HEAD を best-effort で読む。legacy DB や
+    /// git 外プロジェクトでは null。`status` で worktree HEAD の切替検知に使う。
+    /// </summary>
+    public static string? TryReadIndexedHeadCommit(string dbPath)
+        => TryReadMetaString(dbPath, CodeIndex.Database.DbContext.IndexedHeadCommitMetaKey);
+
+    private static string? TryReadMetaString(string dbPath, string key)
     {
         try
         {
@@ -146,7 +161,7 @@ public static class DbPathResolver
             connection.Open();
             using var cmd = connection.CreateCommand();
             cmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = @key";
-            cmd.Parameters.AddWithValue("@key", CodeIndex.Database.DbContext.IndexedProjectRootMetaKey);
+            cmd.Parameters.AddWithValue("@key", key);
             var raw = cmd.ExecuteScalar();
             return raw is string value && !string.IsNullOrWhiteSpace(value) ? value : null;
         }

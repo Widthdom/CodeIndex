@@ -456,11 +456,14 @@ public class DbContext : IDisposable
     // mirrors the previously-indexed worktree even though the on-disk file set has diverged.
     // Partial update modes (`--commits` / `--files`) deliberately do NOT touch this key, so a
     // post-branch-switch partial refresh still surfaces as stale until a real full scan
-    // republishes the captured HEAD. Issue #1508.
+    // republishes the captured HEAD. The same value is read at `status` time (without
+    // `--check`) to surface a worktree branch / HEAD switch via `worktree_head_changed`.
+    // Issues #1508 and #1512.
     // 直近の full-scan 成功時点で記録した git HEAD。`cdidx index` 後にブランチが切り替わると
     // DB は旧 worktree のスナップショットのまま残るため、ここを比較して「rebuild を勧める」
     // 警告を出す。partial update (`--commits` / `--files`) は本キーを更新せず、後続の
-    // full scan が改めて記録する。Issue #1508。
+    // full scan が改めて記録する。同じ値を `status` (no `--check`) でも参照し、
+    // `worktree_head_changed` として worktree の HEAD 切替を素早く通知する。Issues #1508 / #1512。
     public const string IndexedHeadCommitMetaKey = "indexed_head_commit";
     // #1509: full Git HEAD commit and short branch name captured at the end of every
     // successful index run (full scan AND partial update), plus the UTC timestamp of that

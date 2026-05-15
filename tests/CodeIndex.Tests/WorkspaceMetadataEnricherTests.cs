@@ -224,6 +224,84 @@ public class WorkspaceMetadataEnricherTests
     }
 
     [Fact]
+    public void Enrich_StatusResult_FlagsWorktreeHeadChangedWhenPersistedHeadDiffersFromRuntimeHead()
+    {
+        var (projectRoot, dbPath, originalHead) = CreateDirtyGitProject("cdidx_workspace_head_changed");
+        try
+        {
+            // Persist a fake "old" HEAD distinct from the runtime HEAD to simulate a per-worktree branch
+            // switch after the index was built.
+            // index 構築後のブランチ切替を模擬するため、現在の HEAD と異なる値を persisted HEAD として保存。
+            var staleHead = new string('a', 40);
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.SetMeta(DbContext.IndexedHeadCommitMetaKey, staleHead);
+            }
+
+            var status = new StatusResult();
+
+            WorkspaceMetadataEnricher.Enrich(status, dbPath);
+
+            Assert.Equal(projectRoot, status.ProjectRoot);
+            Assert.Equal(originalHead, status.GitHead);
+            Assert.Equal(staleHead, status.IndexedHeadCommit);
+            Assert.True(status.WorktreeHeadChanged);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Enrich_StatusResult_DoesNotFlagWorktreeHeadChangedWhenPersistedHeadMatchesRuntimeHead()
+    {
+        var (projectRoot, dbPath, originalHead) = CreateDirtyGitProject("cdidx_workspace_head_match");
+        try
+        {
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.SetMeta(DbContext.IndexedHeadCommitMetaKey, originalHead);
+            }
+
+            var status = new StatusResult();
+
+            WorkspaceMetadataEnricher.Enrich(status, dbPath);
+
+            Assert.Equal(originalHead, status.IndexedHeadCommit);
+            Assert.False(status.WorktreeHeadChanged);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Enrich_StatusResult_LeavesWorktreeHeadChangedNullWhenPersistedHeadMissing()
+    {
+        // Legacy DBs (indexed before #1512) and non-git projects must not produce a false-positive
+        // HEAD-switch warning when there is no persisted HEAD to compare against.
+        // #1512 以前の DB や非 git プロジェクトでは persisted HEAD が無いため、誤検出を回避する。
+        var (projectRoot, dbPath, _) = CreateDirtyGitProject("cdidx_workspace_head_missing");
+        try
+        {
+            var status = new StatusResult();
+
+            WorkspaceMetadataEnricher.Enrich(status, dbPath);
+
+            Assert.Null(status.IndexedHeadCommit);
+            Assert.Null(status.WorktreeHeadChanged);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Enrich_StatusResult_ExplicitProjectLocalDbLeavesWorkspaceMetadataNullWhenMetadataIsMissing()
     {
         var (projectRoot, dbPath, _) = CreateDirtyGitProject("cdidx_workspace_project_local_explicit");

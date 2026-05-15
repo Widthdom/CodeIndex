@@ -259,8 +259,11 @@ public static class IndexCommandRunner
         var priorHotspotFamilyMarkerFingerprints = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyMarkerFingerprintMetaKey);
         var priorIndexedProjectRoot = db.GetMetaString(DbContext.IndexedProjectRootMetaKey);
         // Captured BEFORE `--rebuild` drops the DB so an incremental run can warn the user when
-        // the worktree's HEAD has moved since the previously indexed snapshot. Issue #1508.
-        // `--rebuild` が DB を消す前に取り出す。incremental 経路で HEAD 差分を検知して警告するのに使う。
+        // the worktree's HEAD has moved since the previously indexed snapshot. The same value
+        // is read at `status` time (without `--check`) to surface a worktree branch / HEAD
+        // switch via `worktree_head_changed`. Issues #1508 and #1512.
+        // `--rebuild` が DB を消す前に取り出す。incremental 経路で HEAD 差分を検知し、`status`
+        // (no `--check`) でも worktree の HEAD 切替検出に利用する。
         var priorIndexedHeadCommit = db.GetMetaString(DbContext.IndexedHeadCommitMetaKey);
         var currentHeadCommit = GitHelper.TryGetHeadCommit(options.ProjectPath);
 
@@ -666,11 +669,11 @@ public static class IndexCommandRunner
 
         void WriteProjectRootOnce()
         {
-            if (projectRootWritten)
-                return;
-
-            writer.SetMeta(DbContext.IndexedProjectRootMetaKey, normalizedProjectRoot);
-            projectRootWritten = true;
+            if (!projectRootWritten)
+            {
+                writer.SetMeta(DbContext.IndexedProjectRootMetaKey, normalizedProjectRoot);
+                projectRootWritten = true;
+            }
         }
 
         void RecordScanErrors(IEnumerable<FileIndexer.ScanError> scanErrors)
@@ -1505,11 +1508,11 @@ public static class IndexCommandRunner
 
         void WriteProjectRootOnce()
         {
-            if (projectRootWritten)
-                return;
-
-            writer.SetMeta(DbContext.IndexedProjectRootMetaKey, normalizedProjectRoot);
-            projectRootWritten = true;
+            if (!projectRootWritten)
+            {
+                writer.SetMeta(DbContext.IndexedProjectRootMetaKey, normalizedProjectRoot);
+                projectRootWritten = true;
+            }
         }
 
         CancellationTokenSource? spinnerCts = null;

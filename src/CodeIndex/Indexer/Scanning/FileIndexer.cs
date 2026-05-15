@@ -357,6 +357,20 @@ public class FileIndexer
     private readonly string _ignoreRuleRoot;
     private readonly IReadOnlyList<string> _ancestorIgnoreDirectories;
     private readonly bool _ignoreCase;
+    // Submodule working-tree paths declared in <ignoreRuleRoot>/.gitmodules, relative to
+    // _projectRoot and slash-normalized. Used to override SkipDirs so that submodules
+    // hosted under SkipDirs-named directories (e.g. vendor/foo) remain visible to the
+    // indexer. Empty when .gitmodules is missing or unreadable.
+    // <ignoreRuleRoot>/.gitmodules で宣言された submodule のワークツリーパス（_projectRoot 相対、
+    // スラッシュ正規化済み）。vendor/foo のように SkipDirs 名のディレクトリ配下にある submodule を
+    // 可視化するため SkipDirs を上書きする。.gitmodules が無い・読めない場合は空。
+    private readonly HashSet<string> _submodulePaths;
+    // Ancestor path prefixes of every entry in _submodulePaths (exclusive of the submodule
+    // itself). When such an ancestor matches SkipDirs we pass through it without indexing
+    // its direct files, descending only into the submodule branch.
+    // _submodulePaths 各要素の祖先パス（submodule 自身は含まない）。SkipDirs 名と一致した場合は
+    // 通過モードとしてその直下ファイルを索引せず、submodule 方向のみ降りる。
+    private readonly HashSet<string> _submoduleAncestorPaths;
 
     private sealed class IgnoreRuleSet
     {
@@ -849,6 +863,8 @@ public class FileIndexer
         _ignoreRuleRoot = NormalizeIgnoreRuleRoot(ignoreRuleRoot);
         _ancestorIgnoreDirectories = BuildAncestorIgnoreDirectories(_ignoreRuleRoot, _projectRoot);
         _ignoreCase = ignoreCase;
+        var pathComparer = _ignoreCase ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+        (_submodulePaths, _submoduleAncestorPaths) = LoadGitSubmodulePaths(_ignoreRuleRoot, _projectRoot, pathComparer);
     }
 
     private static bool ProbeFileSystemIgnoreCase(string projectRoot)
@@ -1308,13 +1324,37 @@ public class FileIndexer
             return new PathFilterResult(PathFilterKind.IgnoreRulesUnavailable, errors);
 
         var directorySegmentCount = isDirectory ? segments.Length : Math.Max(segments.Length - 1, 0);
+        // Mirror EnumerateDirectory's passthrough behavior so update-mode filters (--files /
+        // --commits) match a fresh full scan: when SkipDirs is overridden because we're
+        // routing toward a declared submodule, files/subdirs that do not themselves lead
+        // to a submodule must still be excluded.
+        // EnumerateDirectory の passthrough と挙動を一致させ、--files / --commits などの
+        // 更新モードのフィルタがフルスキャンと食い違わないようにする。submodule への通過のため
+        // SkipDirs を上書きした場合でも、submodule に到達しないファイル・サブディレクトリは
+        // 引き続き除外する。
+        var inSubmodulePassthrough = false;
         for (var i = 0; i < directorySegmentCount; i++)
         {
             var directoryName = segments[i];
             var childDirectory = Path.Combine(currentDirectory, directoryName);
+            var cumulativeRelPath = NormalizeIgnorePath(Path.GetRelativePath(_projectRoot, childDirectory));
+            var isSubmodule = _submodulePaths.Contains(cumulativeRelPath);
+            var isSubmoduleAncestor = _submoduleAncestorPaths.Contains(cumulativeRelPath);
 
             if (SkipDirs.Contains(directoryName))
+            {
+                if (!isSubmodule && !isSubmoduleAncestor)
+                    return new PathFilterResult(PathFilterKind.ExcludedByDefaultDirectory, errors);
+            }
+            else if (inSubmodulePassthrough && !isSubmodule && !isSubmoduleAncestor)
+            {
                 return new PathFilterResult(PathFilterKind.ExcludedByDefaultDirectory, errors);
+            }
+
+            if (isSubmodule)
+                inSubmodulePassthrough = false;
+            else if (isSubmoduleAncestor)
+                inSubmodulePassthrough = true;
 
             if (activeIgnoreRules.IsIgnored(childDirectory, isDirectory: true))
                 return new PathFilterResult(PathFilterKind.IgnoredByRules, errors);
@@ -1329,6 +1369,13 @@ public class FileIndexer
 
         if (isDirectory)
             return new PathFilterResult(PathFilterKind.None, errors);
+
+        // File directly inside a submodule-ancestor passthrough directory: walker would not
+        // index it, so neither should this filter.
+        // submodule 祖先（passthrough）に直接置かれているファイルは walker も索引しないため
+        // ここでも除外する。
+        if (inSubmodulePassthrough)
+            return new PathFilterResult(PathFilterKind.ExcludedByDefaultDirectory, errors);
 
         var fileName = Path.GetFileName(fullPath);
         if (SkipFiles.Contains(fileName))
@@ -1408,51 +1455,62 @@ public class FileIndexer
             if (!loadResult.IgnoreRulesAvailable)
                 return false;
 
-            foreach (var file in Directory.EnumerateFiles(dir))
+            // Submodule passthrough: we are inside a SkipDirs-named ancestor of a submodule
+            // (e.g. vendor/ on the way to vendor/foo). Honor SkipDirs for this directory's
+            // own files and unrelated subdirs while still descending toward the submodule.
+            // submodule の祖先で SkipDirs 名のディレクトリ（例: vendor/foo の vendor/）の場合は、
+            // 当該ディレクトリの直下ファイルおよび submodule と無関係なサブディレクトリには
+            // SkipDirs を適用しつつ、submodule 方向にだけ降りる。
+            var passthrough = IsSubmoduleAncestorPassthrough(dir);
+
+            if (!passthrough)
             {
-                var fileName = Path.GetFileName(file);
-
-                // Skip excluded file names / 除外ファイル名をスキップ
-                if (SkipFiles.Contains(fileName))
-                    continue;
-
-                if (activeIgnoreRules.IsIgnored(file, isDirectory: false))
-                    continue;
-
-                // GetFileIndexability also rejects file symlinks/reparse points so the update-mode
-                // (--files / --commits) path gets the same skip behavior without a second probe here.
-                // GetFileIndexability もファイル symlink / reparse point を拒否するため、
-                // update モード (--files / --commits) でも同じ skip 挙動が二重プローブ無しで効く。
-                var indexability = GetFileIndexability(file);
-                if (indexability == FileProbeStatus.ProbeFailed)
+                foreach (var file in Directory.EnumerateFiles(dir))
                 {
-                    var relativePath = ToRelativePath(file);
-                    errors.Add(new ScanError(relativePath, "Could not probe file for indexability/language."));
-                    probeFailedFilePaths.Add(relativePath);
-                    continue;
-                }
+                    var fileName = Path.GetFileName(file);
 
-                if (indexability != FileProbeStatus.Supported)
-                {
-                    nonIndexablePaths.Add(ToRelativePath(file));
-                    continue;
-                }
+                    // Skip excluded file names / 除外ファイル名をスキップ
+                    if (SkipFiles.Contains(fileName))
+                        continue;
 
-                // Include files with a known extension/filename or an extensionless recognized shebang
-                // 既知の拡張子・既知ファイル名、または拡張子なしで shebang を認識できるファイルを含める
-                var language = TryDetectLanguage(file);
-                if (language.Status == FileProbeStatus.ProbeFailed)
-                {
-                    var relativePath = ToRelativePath(file);
-                    errors.Add(new ScanError(relativePath, "Could not probe file for indexability/language."));
-                    probeFailedFilePaths.Add(relativePath);
-                    continue;
-                }
+                    if (activeIgnoreRules.IsIgnored(file, isDirectory: false))
+                        continue;
 
-                if (language.Status == FileProbeStatus.Supported)
-                    results.Add(file);
-                else
-                    nonIndexablePaths.Add(ToRelativePath(file));
+                    // GetFileIndexability also rejects file symlinks/reparse points so the update-mode
+                    // (--files / --commits) path gets the same skip behavior without a second probe here.
+                    // GetFileIndexability もファイル symlink / reparse point を拒否するため、
+                    // update モード (--files / --commits) でも同じ skip 挙動が二重プローブ無しで効く。
+                    var indexability = GetFileIndexability(file);
+                    if (indexability == FileProbeStatus.ProbeFailed)
+                    {
+                        var relativePath = ToRelativePath(file);
+                        errors.Add(new ScanError(relativePath, "Could not probe file for indexability/language."));
+                        probeFailedFilePaths.Add(relativePath);
+                        continue;
+                    }
+
+                    if (indexability != FileProbeStatus.Supported)
+                    {
+                        nonIndexablePaths.Add(ToRelativePath(file));
+                        continue;
+                    }
+
+                    // Include files with a known extension/filename or an extensionless recognized shebang
+                    // 既知の拡張子・既知ファイル名、または拡張子なしで shebang を認識できるファイルを含める
+                    var language = TryDetectLanguage(file);
+                    if (language.Status == FileProbeStatus.ProbeFailed)
+                    {
+                        var relativePath = ToRelativePath(file);
+                        errors.Add(new ScanError(relativePath, "Could not probe file for indexability/language."));
+                        probeFailedFilePaths.Add(relativePath);
+                        continue;
+                    }
+
+                    if (language.Status == FileProbeStatus.Supported)
+                        results.Add(file);
+                    else
+                        nonIndexablePaths.Add(ToRelativePath(file));
+                }
             }
 
             // A successful file listing proves the direct children of this directory.
@@ -1463,6 +1521,19 @@ public class FileIndexer
 
             foreach (var subDir in Directory.EnumerateDirectories(dir))
             {
+                // In passthrough mode, only descend into subdirectories that are themselves
+                // submodules or submodule ancestors. Treat siblings the same way SkipDirs
+                // would have treated them at this point.
+                // passthrough 中は、submodule 自体または submodule の祖先に該当する
+                // サブディレクトリのみ降りる。その他は本来 SkipDirs で止まっていた扱いに戻す。
+                if (passthrough && !IsSubmoduleOrAncestor(subDir))
+                {
+                    var subRelative = ToRelativePath(subDir);
+                    listedDirectories.Add(subRelative);
+                    fullyScannedDirectories.Add(subRelative);
+                    continue;
+                }
+
                 // Skip directory symlinks/reparse points to prevent infinite recursion on ancestor loops
                 // and duplicate indexing when a symlink points inside the same tree. Record the symlink
                 // itself as listed (for the immediate-parent purge path) AND as a prune prefix so the
@@ -1503,15 +1574,61 @@ public class FileIndexer
         return fullyScanned;
     }
 
-    private static PathFilterKind GetDirectoryFilterKind(string dir, IgnoreRuleSet activeIgnoreRules, bool isProjectRoot = false)
+    private PathFilterKind GetDirectoryFilterKind(string dir, IgnoreRuleSet activeIgnoreRules, bool isProjectRoot = false)
     {
-        var dirName = Path.GetFileName(Path.TrimEndingDirectorySeparator(dir));
-        if (!isProjectRoot && SkipDirs.Contains(dirName))
-            return PathFilterKind.ExcludedByDefaultDirectory;
+        if (!isProjectRoot)
+        {
+            var dirName = Path.GetFileName(Path.TrimEndingDirectorySeparator(dir));
+            if (SkipDirs.Contains(dirName) && !IsSubmoduleOrAncestor(dir))
+                return PathFilterKind.ExcludedByDefaultDirectory;
+        }
 
         return activeIgnoreRules.IsIgnored(dir, isDirectory: true)
             ? PathFilterKind.IgnoredByRules
             : PathFilterKind.None;
+    }
+
+    // True when relpath under _projectRoot matches a .gitmodules-declared submodule
+    // working-tree path or one of its ancestor directories. Allows the walker to
+    // descend through SkipDirs-named ancestors (e.g. vendor/) to reach declared
+    // submodules without dropping the broader SkipDirs policy elsewhere.
+    // _projectRoot 配下の相対パスが .gitmodules で宣言された submodule のワークツリーまたは
+    // その祖先ディレクトリに一致するときに true。vendor/ のような SkipDirs 名の祖先を
+    // 通過して submodule に到達できるよう、限定的に SkipDirs を上書きする。
+    private bool IsSubmoduleOrAncestor(string dir)
+    {
+        if (_submodulePaths.Count == 0)
+            return false;
+        var relPath = ToRelativePath(dir);
+        if (relPath.Length == 0)
+            return false;
+        return _submodulePaths.Contains(relPath) || _submoduleAncestorPaths.Contains(relPath);
+    }
+
+    private bool IsSubmoduleAncestorPassthrough(string dir)
+    {
+        if (_submoduleAncestorPaths.Count == 0)
+            return false;
+        var relPath = ToRelativePath(dir);
+        if (relPath.Length == 0)
+            return false;
+        if (_submodulePaths.Contains(relPath))
+            return false;
+        if (!_submoduleAncestorPaths.Contains(relPath))
+            return false;
+        // Passthrough propagates from any SkipDirs-named ancestor along the path. If no
+        // segment of relPath matches SkipDirs, this directory would have been walked
+        // normally without our override, so the override is not in effect here.
+        // SkipDirs 名の祖先からは下方向に passthrough を伝播する。relPath のどの segment も
+        // SkipDirs に該当しない場合、我々の上書き無しでも walker は通っていたはずなので
+        // ここでの上書きは効いていない。
+        var segments = relPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        foreach (var segment in segments)
+        {
+            if (SkipDirs.Contains(segment))
+                return true;
+        }
+        return false;
     }
 
     private IgnoreRuleLoadResult LoadIgnoreRulesForDirectory(
@@ -1607,6 +1724,125 @@ public class FileIndexer
         }
 
         return directories;
+    }
+
+    // Parse <ignoreRuleRoot>/.gitmodules and return submodule working-tree paths (and
+    // their ancestor directories) relative to projectRoot. Submodules outside projectRoot
+    // are dropped silently. Absent or unreadable .gitmodules yields empty sets so callers
+    // see the same shape as a non-submodule repository.
+    // <ignoreRuleRoot>/.gitmodules を解析し、projectRoot 相対の submodule ワークツリーパスと
+    // その祖先ディレクトリを返す。projectRoot 外の submodule は無視。.gitmodules が無い・
+    // 読めない場合は空集合を返し、submodule の無いリポジトリと同じ形を保つ。
+    private static (HashSet<string> Paths, HashSet<string> AncestorPaths) LoadGitSubmodulePaths(
+        string ignoreRuleRoot, string projectRoot, StringComparer pathComparer)
+    {
+        var submodulePaths = new HashSet<string>(pathComparer);
+        var ancestorPaths = new HashSet<string>(pathComparer);
+
+        var gitmodulesPath = Path.Combine(ignoreRuleRoot, ".gitmodules");
+        if (!File.Exists(gitmodulesPath))
+            return (submodulePaths, ancestorPaths);
+
+        string[] lines;
+        try
+        {
+            lines = File.ReadAllLines(gitmodulesPath);
+        }
+        catch (IOException)
+        {
+            return (submodulePaths, ancestorPaths);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return (submodulePaths, ancestorPaths);
+        }
+
+        foreach (var rawSubmodulePath in ParseSubmodulePathsFromGitmodules(lines))
+        {
+            string absolute;
+            try
+            {
+                absolute = Path.GetFullPath(Path.Combine(ignoreRuleRoot, rawSubmodulePath));
+            }
+            catch (ArgumentException)
+            {
+                continue;
+            }
+
+            var relativeToProject = NormalizeIgnorePath(Path.GetRelativePath(projectRoot, absolute));
+            if (relativeToProject.Length == 0
+                || relativeToProject == "."
+                || relativeToProject.StartsWith("../", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            submodulePaths.Add(relativeToProject);
+            var segments = relativeToProject.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            for (var i = 1; i < segments.Length; i++)
+                ancestorPaths.Add(string.Join('/', segments, 0, i));
+        }
+
+        return (submodulePaths, ancestorPaths);
+    }
+
+    // Tolerant .gitmodules reader: yields each declared submodule's "path = ..." value.
+    // Supports comments (# / ;), inline comments, surrounding double quotes, and
+    // ignores absolute or empty values. Quoted-string escapes are not expanded since
+    // submodule paths in practice are plain relative filesystem paths.
+    // .gitmodules を寛容に読み、各 submodule の "path = ..." 値を返す。コメント(# / ;)、
+    // インラインコメント、両端のダブルクオート、絶対パス・空値の除外をサポート。実用上の
+    // submodule パスは通常のファイル名なのでクォート内のエスケープは展開しない。
+    private static IEnumerable<string> ParseSubmodulePathsFromGitmodules(IEnumerable<string> lines)
+    {
+        var inSubmoduleSection = false;
+        foreach (var rawLine in lines)
+        {
+            var line = rawLine.Trim();
+            if (line.Length == 0)
+                continue;
+            if (line[0] == '#' || line[0] == ';')
+                continue;
+
+            if (line[0] == '[')
+            {
+                var endBracket = line.IndexOf(']');
+                if (endBracket < 0)
+                {
+                    inSubmoduleSection = false;
+                    continue;
+                }
+
+                var sectionHeader = line.Substring(1, endBracket - 1).Trim();
+                inSubmoduleSection = sectionHeader.StartsWith("submodule", StringComparison.OrdinalIgnoreCase)
+                    && sectionHeader.Length > "submodule".Length
+                    && char.IsWhiteSpace(sectionHeader["submodule".Length]);
+                continue;
+            }
+
+            if (!inSubmoduleSection)
+                continue;
+
+            var equalsIndex = line.IndexOf('=');
+            if (equalsIndex < 0)
+                continue;
+            var key = line.Substring(0, equalsIndex).Trim();
+            if (!string.Equals(key, "path", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var value = line[(equalsIndex + 1)..].Trim();
+            var commentIndex = value.IndexOfAny(['#', ';']);
+            if (commentIndex >= 0)
+                value = value[..commentIndex].Trim();
+            if (value.Length >= 2 && value[0] == '"' && value[^1] == '"')
+                value = value[1..^1];
+            if (value.Length == 0)
+                continue;
+            if (Path.IsPathRooted(value))
+                continue;
+
+            yield return value;
+        }
     }
 
     private static string NormalizeIgnorePath(string path)
