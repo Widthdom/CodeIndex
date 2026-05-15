@@ -1038,7 +1038,41 @@ public class DbContext : IDisposable
             failure.SuggestedAction);
     }
 
+    /// <summary>
+    /// Test seam: invoked between the initial PRAGMA-based column-existence check and the
+    /// ALTER TABLE ADD COLUMN statement in <see cref="EnsureColumn"/>. Lets a test
+    /// deterministically simulate a concurrent column-addition race so the catch-path
+    /// recovery introduced for issue #1532 can be exercised end-to-end. Production code
+    /// never assigns this; the field stays null in normal use.
+    /// 1532 番で導入した catch-path recovery を決定論的に検証するためのテスト用フック。
+    /// 本番コードからは設定されず、通常実行時は null のまま。
+    /// </summary>
+    internal Action? EnsureColumnBeforeAlterHookForTesting { get; set; }
+
     private void EnsureColumn(string tableName, string columnName, string definition)
+    {
+        if (ColumnExists(tableName, columnName))
+            return;
+
+        try
+        {
+            EnsureColumnBeforeAlterHookForTesting?.Invoke();
+            Execute($"ALTER TABLE {tableName} ADD COLUMN {columnName} {definition}");
+        }
+        catch (SqliteException) when (ColumnExists(tableName, columnName))
+        {
+            // Another process or an earlier partial migration may have added the
+            // column between our PRAGMA inspection and the ALTER. We re-check
+            // PRAGMA table_info instead of matching SQLite's English error text
+            // so a localized SQLite build or a future wording change can still
+            // be recognized as "already migrated" — only swallow the exception
+            // when the column is verifiably present (#1532).
+            // 列存在を PRAGMA で再確認することで、SQLite のロケール差や将来の
+            // メッセージ変更に依存せず「移行済み」を判定する (#1532)。
+        }
+    }
+
+    private bool ColumnExists(string tableName, string columnName)
     {
         using var cmd = _connection.CreateCommand();
         cmd.CommandText = $"PRAGMA table_info({tableName})";
@@ -1047,20 +1081,9 @@ public class DbContext : IDisposable
         while (reader.TrackedRead())
         {
             if (string.Equals(reader.GetString(1), columnName, StringComparison.OrdinalIgnoreCase))
-                return;
+                return true;
         }
-
-        try
-        {
-            Execute($"ALTER TABLE {tableName} ADD COLUMN {columnName} {definition}");
-        }
-        catch (SqliteException ex) when (ex.SqliteErrorCode == 1 &&
-                                         ex.Message.Contains("duplicate column name", StringComparison.OrdinalIgnoreCase))
-        {
-            // Another process or an earlier partial migration may have added the
-            // column after PRAGMA inspection. Treat it as already migrated.
-            // 別プロセスや直前の部分移行で列が追加済みの可能性があるため、移行済みとして扱う。
-        }
+        return false;
     }
 
     private string ExecuteScalar(string sql)

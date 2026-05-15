@@ -1348,4 +1348,156 @@ public class LegacySchemaMigrationTests : IDisposable
             try { Directory.Delete(dir, recursive: true); } catch { }
         }
     }
+
+    [Fact]
+    public void EnsureColumn_RecoversFromRacedAddColumn_RegardlessOfErrorMessageWording()
+    {
+        // Issue #1532 regression: the previous race-recovery catch in EnsureColumn keyed on
+        // `ex.Message.Contains("duplicate column name")` which is English-only and tied to
+        // SQLite's current wording. On a localized SQLite build or a future wording change
+        // the catch would miss, leaving the migration aborted with a half-applied schema
+        // that re-runs could not heal. The new recovery re-checks PRAGMA table_info inside
+        // the catch and only swallows if the column is verifiably present — independent of
+        // the exception message. This test exercises that catch path deterministically by
+        // injecting a concurrent ADD COLUMN between PRAGMA and ALTER via the test hook.
+        // #1532 回帰: 旧 catch は英語固有のメッセージ文字列に依存していたためロケール差や
+        // 文言変更で再帰経路を取りこぼし、半適用スキーマが残り再実行でも修復できなかった。
+        // 新しい復旧経路は PRAGMA table_info で列存在を再確認し、メッセージに依存しない。
+        var dir = Path.Combine(Path.GetTempPath(), $"codeindex_ensure_column_race_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var dbPath = Path.Combine(dir, "codeindex.db");
+        try
+        {
+            // Seed the legacy schema (lacks `symbols.start_line`). TryMigrateForRead will
+            // walk EnsureColumn for every added column, including this one.
+            // start_line を持たないレガシースキーマを seed する。
+            SeedLegacyDb(dbPath);
+
+            // Race the migration: when EnsureColumn for `symbols.start_line` reaches the
+            // pre-ALTER hook, a sibling connection adds the column first. The primary
+            // ALTER then fails with the duplicate-column error and the catch must recover
+            // by re-checking PRAGMA, *not* by parsing the SqliteException's message.
+            // EnsureColumn の ALTER 直前で別接続がカラムを追加する競合を再現する。
+            using var db = new DbContext(dbPath);
+            var hookFired = 0;
+            db.EnsureColumnBeforeAlterHookForTesting = () =>
+            {
+                if (Interlocked.Exchange(ref hookFired, 1) != 0) return;
+                using var altConn = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString);
+                altConn.Open();
+                using var alt = altConn.CreateCommand();
+                alt.CommandText = "ALTER TABLE symbols ADD COLUMN start_line INTEGER";
+                alt.ExecuteNonQuery();
+            };
+
+            // Must not throw — the catch must swallow the duplicate-column SqliteException
+            // based on the PRAGMA recheck, and the rest of TryMigrateForRead must continue
+            // so subsequent columns (`end_line`, `signature`, ...) are added as expected.
+            // 例外を伝播させず、後続列も全て追加されることを確認する。
+            db.TryMigrateForRead();
+            Assert.Equal(1, hookFired);
+
+            // The raced column is present (added by the sibling connection) and the rest
+            // of the migration completed — no half-applied schema, no LastMigrationFailure.
+            // raced 列が存在し、他の追加列も揃っており、半適用が残らないことを確認する。
+            Assert.Null(db.LastMigrationFailure);
+            using (var check = db.Connection.CreateCommand())
+            {
+                check.CommandText = "PRAGMA table_info(symbols)";
+                using var r = check.ExecuteReader();
+                var cols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                while (r.Read()) cols.Add(r.GetString(1));
+                Assert.Contains("start_line", cols);
+                Assert.Contains("end_line", cols);
+                Assert.Contains("signature", cols);
+                Assert.Contains("container_kind", cols);
+            }
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void EnsureColumn_AlterFailureWithoutColumnPresent_PropagatesInsteadOfBeingSwallowed()
+    {
+        // Companion guarantee: the new catch is gated on `ColumnExists` returning true. If
+        // ALTER fails for an unrelated reason and the column is genuinely still absent,
+        // the SqliteException must propagate up to TryMigrateForRead's outer handler so
+        // LastMigrationFailure / the #1516 diagnostic warning fire instead of silently
+        // producing a broken DB. We inject a synthetic SqliteException at the pre-ALTER
+        // hook to simulate any non-duplicate-column failure mode — including one with a
+        // localized / future wording — and assert it is NOT swallowed because the column
+        // was never added.
+        // ALTER が duplicate-column 以外の理由で失敗し、かつカラムが実在しない場合は、
+        // 新 catch（ColumnExists 判定）でも握り潰されず TryMigrateForRead に伝播し
+        // LastMigrationFailure に記録される必要がある。
+        var dir = Path.Combine(Path.GetTempPath(), $"codeindex_ensure_column_propagate_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var dbPath = Path.Combine(dir, "codeindex.db");
+        try
+        {
+            SeedLegacyDb(dbPath);
+
+            using var db = new DbContext(dbPath);
+
+            // Throw a synthetic SqliteException right before ALTER. The column never gets
+            // added, so ColumnExists in the catch filter returns false and the exception
+            // escapes EnsureColumn. Importantly, the message intentionally does NOT contain
+            // "duplicate column name" — proving the new code does not depend on it.
+            // ALTER 直前で偽の SqliteException を投げる。カラムは追加されないので
+            // ColumnExists==false となり例外が伝播する。メッセージにはあえて英語の
+            // "duplicate column name" を含めず、新コードが文字列依存していないことを示す。
+            db.EnsureColumnBeforeAlterHookForTesting = () =>
+            {
+                throw CreateSyntheticSqliteError(1, "synthetic non-duplicate failure for #1532 regression");
+            };
+
+            var originalError = Console.Error;
+            Console.SetError(new StringWriter());
+            SqliteException? thrown;
+            try
+            {
+                thrown = Assert.Throws<SqliteException>(() => db.TryMigrateForRead());
+            }
+            finally
+            {
+                Console.SetError(originalError);
+            }
+
+            // The exception propagates out of EnsureColumn into TryMigrateForRead's outer
+            // catch, which records the failing step and re-throws (non-readonly code paths
+            // surface to callers per the existing #1516 contract). start_line stays absent
+            // — no false recovery, no half-applied silent success.
+            // EnsureColumn の catch をすり抜けて外側に届き、step が記録され再 throw される。
+            Assert.Contains("synthetic non-duplicate failure", thrown.Message, StringComparison.Ordinal);
+            Assert.NotNull(db.LastMigrationFailure);
+            Assert.Equal(1, db.LastMigrationFailure!.SqliteErrorCode);
+            using var check = db.Connection.CreateCommand();
+            check.CommandText = "PRAGMA table_info(symbols)";
+            using var r = check.ExecuteReader();
+            var cols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            while (r.Read()) cols.Add(r.GetString(1));
+            Assert.DoesNotContain("start_line", cols);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
+    private static SqliteException CreateSyntheticSqliteError(int errorCode, string message)
+    {
+        var exception = Activator.CreateInstance(
+            typeof(SqliteException),
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+            binder: null,
+            args: [message, errorCode],
+            culture: null) as SqliteException;
+
+        return exception ?? throw new InvalidOperationException("Failed to create synthetic SqliteException.");
+    }
 }
