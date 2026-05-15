@@ -993,13 +993,13 @@ public partial class McpServer
             return CreateToolErrorResponse(id, "endLine must be greater than or equal to startLine");
 
         var beforeValue = args?["before"]?.GetValue<int>();
-        if (beforeValue.HasValue && beforeValue.Value < 0)
-            return CreateToolErrorResponse(id, "before must be greater than or equal to 0");
+        if (beforeValue.HasValue && (beforeValue.Value < 0 || beforeValue.Value > MaxContextLines))
+            return CreateToolErrorResponse(id, $"before must be in [0, {MaxContextLines}]");
         var before = beforeValue ?? 0;
 
         var afterValue = args?["after"]?.GetValue<int>();
-        if (afterValue.HasValue && afterValue.Value < 0)
-            return CreateToolErrorResponse(id, "after must be greater than or equal to 0");
+        if (afterValue.HasValue && (afterValue.Value < 0 || afterValue.Value > MaxContextLines))
+            return CreateToolErrorResponse(id, $"after must be in [0, {MaxContextLines}]");
         var after = afterValue ?? 0;
 
         var focusLine = args?["focusLine"]?.GetValue<int>();
@@ -1026,8 +1026,15 @@ public partial class McpServer
                 var file = reader.GetFileByPath(path);
                 if (file != null)
                 {
-                    var requestedStart = Math.Max(1, startLine.Value - before);
-                    var requestedEnd = Math.Min(file.Lines, endLine + after);
+                    // `before` is bounded by MaxContextLines and `startLine` by `int.MaxValue`, but
+                    // `endLine` is caller-supplied: int + int can still overflow when endLine is
+                    // close to `int.MaxValue`. Use long intermediates so the clamp sees the real
+                    // window before narrowing back to int (#1528).
+                    // `before` は MaxContextLines、`startLine` は `int.MaxValue` で押さえているが、
+                    // `endLine` は呼び出し側入力で `int.MaxValue` 近傍なら int 同士の加算が overflow し得る。
+                    // long 中間変数で実窓を確定させてから int に戻す（#1528）。
+                    var requestedStart = (int)Math.Max(1L, (long)startLine.Value - before);
+                    var requestedEnd = (int)Math.Min(file.Lines, (long)endLine + after);
                     if (focusLine.Value < requestedStart || focusLine.Value > requestedEnd)
                         return CreateToolErrorResponse(id, $"focusLine ({focusLine.Value}) must be within the returned excerpt range ({requestedStart}-{requestedEnd})");
                 }

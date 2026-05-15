@@ -40,6 +40,14 @@ public partial class McpServer : IDisposable
     private const string ProtocolVersion = "2025-03-26";
     private const int MaxLimit = 200;
     private const int MaxQueryLength = 1000;
+    // Per-call cap on the `before` / `after` context-line parameters accepted by `excerpt`.
+    // Without an upper bound, `int.MaxValue` previously drove `startLine - before` into underflow
+    // and `endLine + after` into overflow before `Math.Max/Min` clamped, so the slice path saw
+    // nonsensical ranges. Mirrors the CLI `--before` / `--after` cap (#1528).
+    // `excerpt` が受け取る `before` / `after` の上限。上限が無いと `int.MaxValue` で
+    // `startLine - before` が underflow、`endLine + after` が overflow し、`Math.Max/Min` で clamp
+    // する前に slice 経路が破綻していたため、CLI の `--before` / `--after` 上限と揃える（#1528）。
+    private const int MaxContextLines = 1000;
     private const int MaxLineLength = 1_000_000; // 1 MB per JSON-RPC message / 1メッセージあたり最大1MB
     // Stdio buffer for the JSON-RPC loop. Sized to fit typical large MCP payloads (e.g. batch_query)
     // in a single read so the StreamReader does not grow from its 1 KB default toward MaxLineLength.

@@ -244,10 +244,17 @@ public partial class DbReader
             before = 0;
         if (after < 0)
             after = 0;
-        var requestedStart = Math.Max(1, startLine - before);
-        if (!TryLoadIndexedFileLines(path, out var lang, out var totalLines, out var lineMap, requestedStart, endLine + after))
+        // `endLine` + `after` (and `startLine` - `before`) come from untrusted MCP callers in
+        // some entry points and can overflow int when endLine is near `int.MaxValue`. Clamp via
+        // long intermediates so the subsequent `Math.Max/Min` sees the real window (#1528).
+        // 一部の MCP 経路では `endLine` + `after`（および `startLine` - `before`）が信頼できない
+        // 入力で、`int.MaxValue` 近傍の endLine だと int 加算で overflow する。long 中間で実窓を
+        // 確定させてから clamp する（#1528）。
+        var requestedStart = (int)Math.Max(1L, (long)startLine - before);
+        var requestedEndCeiling = (int)Math.Min(int.MaxValue, (long)endLine + after);
+        if (!TryLoadIndexedFileLines(path, out var lang, out var totalLines, out var lineMap, requestedStart, requestedEndCeiling))
             return null;
-        var requestedEnd = Math.Min(totalLines, endLine + after);
+        var requestedEnd = Math.Min(totalLines, requestedEndCeiling);
 
         var selectedLines = Enumerable.Range(requestedStart, requestedEnd - requestedStart + 1)
             .Where(lineMap.ContainsKey)
@@ -304,10 +311,11 @@ public partial class DbReader
         if (after < 0)
             after = 0;
 
-        var requestedStart = Math.Max(1, startLine - before);
-        if (!TryLoadIndexedFileLines(path, out _, out var totalLines, out var lineMap, requestedStart, endLine + after))
+        var requestedStart = (int)Math.Max(1L, (long)startLine - before);
+        var requestedEndCeiling = (int)Math.Min(int.MaxValue, (long)endLine + after);
+        if (!TryLoadIndexedFileLines(path, out _, out var totalLines, out var lineMap, requestedStart, requestedEndCeiling))
             return null;
-        var requestedEnd = Math.Min(totalLines, endLine + after);
+        var requestedEnd = Math.Min(totalLines, requestedEndCeiling);
 
         if (focusLine.Value < requestedStart || focusLine.Value > requestedEnd)
             return null;

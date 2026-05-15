@@ -3071,7 +3071,7 @@ public class McpServerTests : IDisposable
         var response = _server.HandleMessage(request)!;
 
         Assert.True(response["result"]!["isError"]!.GetValue<bool>());
-        Assert.Equal("before must be greater than or equal to 0", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+        Assert.Equal("before must be in [0, 1000]", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
     }
 
     [Fact]
@@ -3083,7 +3083,50 @@ public class McpServerTests : IDisposable
         var response = _server.HandleMessage(request)!;
 
         Assert.True(response["result"]!["isError"]!.GetValue<bool>());
-        Assert.Equal("after must be greater than or equal to 0", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+        Assert.Equal("after must be in [0, 1000]", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Excerpt_BeforeAboveCapReturnsError()
+    {
+        InsertIndexedFile("dist/data-before-overflow.txt", "text", "line one\nline two");
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"excerpt","arguments":{"path":"dist/data-before-overflow.txt","startLine":1,"before":2147483647}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+        Assert.Equal("before must be in [0, 1000]", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Excerpt_AfterAboveCapReturnsError()
+    {
+        InsertIndexedFile("dist/data-after-overflow.txt", "text", "line one\nline two");
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"excerpt","arguments":{"path":"dist/data-after-overflow.txt","startLine":1,"after":2147483647}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+        Assert.Equal("after must be in [0, 1000]", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Excerpt_HugeEndLineDoesNotOverflow()
+    {
+        InsertIndexedFile("dist/data-endline-overflow.txt", "text", "line one\nline two\nline three");
+
+        // endLine close to int.MaxValue + bounded `after` would overflow int addition and
+        // wrap to a negative number before Math.Min clamped, masking the real file size.
+        // Validate the handler returns a sane excerpt instead (#1528).
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"excerpt","arguments":{"path":"dist/data-endline-overflow.txt","startLine":1,"endLine":2147483647,"after":1000}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.False(response["result"]?["isError"]?.GetValue<bool>() ?? false);
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal("dist/data-endline-overflow.txt", structured["path"]!.GetValue<string>());
+        Assert.Equal(1, structured["startLine"]!.GetValue<int>());
+        Assert.Equal(3, structured["endLine"]!.GetValue<int>());
+        Assert.Contains("line three", structured["content"]!.GetValue<string>());
     }
 
     [Fact]
