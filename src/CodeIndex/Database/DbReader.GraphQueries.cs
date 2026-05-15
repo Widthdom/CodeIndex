@@ -785,13 +785,15 @@ public partial class DbReader
     /// The <paramref name="maxDepth"/> bound is inclusive: when <paramref name="maxDepth"/> is N,
     /// callers at depth 1 through N are returned (so a chain A→B→C→D queried against D with
     /// <c>maxDepth: 2</c> yields C at depth 1 and B at depth 2). Truncation is signaled via the
-    /// Truncated property in results.
+    /// Truncated property in results. When Truncated is true, TruncatedReason distinguishes
+    /// user_limit (raise <c>--limit</c>) from safety_cap (pathological graph). See Issue #1533.
     /// 完全一致の BFS でシンボルの推移的呼び出し元を算出。各呼び出し元とルートシンボルからの深さを返す。
     /// <paramref name="maxDepth"/> は inclusive で、N を指定すると depth 1〜N の caller を返す
     /// (例: A→B→C→D のチェーンで D を <c>maxDepth: 2</c> 検索すると C(depth=1) と B(depth=2) を返す)。
-    /// 結果が切り詰められた場合は Truncated フラグで通知する。
+    /// 結果が切り詰められた場合は Truncated フラグで通知し、TruncatedReason で
+    /// user_limit (--limit 到達、緩和で増える) と safety_cap (病的グラフ、--limit 緩和では解消しない) を区別する (#1533)。
     /// </summary>
-    public (List<ImpactResult> Results, bool Truncated) GetTransitiveCallers(string symbolName, int maxDepth = 5, int limit = 50, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
+    public (List<ImpactResult> Results, bool Truncated, string? TruncatedReason) GetTransitiveCallers(string symbolName, int maxDepth = 5, int limit = 50, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
     {
         // Resolve the symbol name through definitions first so case-mismatched queries
         // like "run" find the actual "Run" symbol. Falls back to user input if not found.
@@ -805,6 +807,12 @@ public partial class DbReader
         queue.Enqueue((resolvedName, 0));
         visited.Add(resolvedName);
         var truncated = false;
+        // truncatedReason tracks the *strongest* signal observed: safety_cap wins over
+        // user_limit because it tells callers that raising --limit alone will not help
+        // (the input graph is likely pathological). See Issue #1533.
+        // truncatedReason は強い方の信号を保持する: safety_cap は --limit を緩和しても解消しない
+        // ことを示すため、user_limit より優先する (#1533)。
+        string? truncatedReason = null;
         // Safety cap to prevent infinite loops on pathological graphs / 病的グラフでの無限ループ防止
         const int maxFetchIterations = 1000;
 
@@ -836,6 +844,7 @@ public partial class DbReader
                     if (results.Count >= limit)
                     {
                         truncated = true;
+                        truncatedReason ??= ImpactTruncatedReasons.UserLimit;
                         break;
                     }
 
@@ -879,13 +888,19 @@ public partial class DbReader
 
             // If fetch iteration cap was hit, mark as truncated / フェッチ反復上限に達した場合も truncated
             if (fetchIterations >= maxFetchIterations)
+            {
                 truncated = true;
+                truncatedReason = ImpactTruncatedReasons.SafetyCap;
+            }
         }
 
         if (queue.Count > 0 && results.Count >= limit)
+        {
             truncated = true;
+            truncatedReason ??= ImpactTruncatedReasons.UserLimit;
+        }
 
-        return (results, truncated);
+        return (results, truncated, truncatedReason);
     }
 
     /// <summary>
@@ -937,6 +952,7 @@ public partial class DbReader
                 Callers = [],
                 FileImpacts = [],
                 Truncated = false,
+                TruncatedReason = null,
                 GraphTableAvailable = _hasReferencesTable,
                 ZeroResultReason = definitions.Count == 0 ? "no_matching_definition" : "depth_zero",
                 Suggestion = definitions.Count == 0
@@ -945,7 +961,7 @@ public partial class DbReader
             };
         }
 
-        var (callers, truncated) = GetTransitiveCallers(symbolName, maxDepth, limit, lang, pathPatterns, excludePathPatterns, excludeTests);
+        var (callers, truncated, truncatedReason) = GetTransitiveCallers(symbolName, maxDepth, limit, lang, pathPatterns, excludePathPatterns, excludeTests);
 
         var impactMode = "callers";
         var fileImpacts = new List<FileDependencyResult>();
@@ -974,7 +990,17 @@ public partial class DbReader
                     var fallbackNames = ResolveImpactFallbackNames(fallbackDefinitions[0]);
                     var (hintResults, hintTruncated) = GetFileDependencyHintsToResolvedType(fallbackDefinitions[0], fallbackNames, limit, lang, pathPatterns, excludePathPatterns, excludeTests);
                     fileImpacts = hintResults;
-                    truncated |= hintTruncated;
+                    if (hintTruncated)
+                    {
+                        truncated = true;
+                        // Heuristic hints can only be capped by the user-supplied --limit, so this
+                        // path never escalates to safety_cap. Leave any pre-existing reason
+                        // (e.g. safety_cap propagated from the caller BFS above) intact since it
+                        // is the stronger signal. Issue #1533.
+                        // ヒント側の truncation は --limit による cap のみ。caller BFS で
+                        // safety_cap が立っていればそちらを優先する (#1533)。
+                        truncatedReason ??= ImpactTruncatedReasons.UserLimit;
+                    }
                     if (fileImpacts.Count > 0)
                     {
                         impactMode = "file_dependency_hints";
@@ -1017,6 +1043,7 @@ public partial class DbReader
             Callers = callers,
             FileImpacts = fileImpacts,
             Truncated = truncated,
+            TruncatedReason = truncated ? truncatedReason : null,
             GraphTableAvailable = _hasReferencesTable,
             ZeroResultReason = zeroResultReason,
             Suggestion = suggestion,

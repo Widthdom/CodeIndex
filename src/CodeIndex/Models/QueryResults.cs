@@ -238,11 +238,40 @@ public class ImpactAnalysisResult
     public List<ImpactResult> Callers { get; set; } = [];
     public List<FileDependencyResult> FileImpacts { get; set; } = [];
     public bool Truncated { get; set; }
+    /// <summary>
+    /// Distinguishes between truncation kinds when <see cref="Truncated"/> is true so callers
+    /// can decide whether to retry with a higher <c>--limit</c> or treat the input graph as
+    /// pathological. Known values:
+    /// <list type="bullet">
+    /// <item><c>user_limit</c>: the caller-supplied <c>--limit</c> was reached. Raising
+    /// <c>--limit</c> will return more results.</item>
+    /// <item><c>safety_cap</c>: an internal safety cap fired (e.g. the per-symbol fetch
+    /// iteration ceiling). The graph is likely cyclic / runaway; raising <c>--limit</c>
+    /// alone will not help.</item>
+    /// </list>
+    /// <c>null</c> whenever <see cref="Truncated"/> is false. Issue #1533.
+    /// </summary>
+    [JsonPropertyName("truncated_reason")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? TruncatedReason { get; set; }
     public bool GraphTableAvailable { get; set; } = true;
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? ZeroResultReason { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Suggestion { get; set; }
+}
+
+/// <summary>
+/// Canonical <c>truncated_reason</c> values shared between <see cref="ImpactAnalysisResult"/>,
+/// CLI JSON, and MCP output. Issue #1533.
+/// </summary>
+public static class ImpactTruncatedReasons
+{
+    /// <summary>User-supplied <c>--limit</c> reached.</summary>
+    public const string UserLimit = "user_limit";
+
+    /// <summary>Internal safety cap fired on a pathological graph.</summary>
+    public const string SafetyCap = "safety_cap";
 }
 
 public class StatusResult

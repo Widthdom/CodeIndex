@@ -3399,9 +3399,10 @@ public class DbReaderTests : IDisposable
             },
         ]);
 
-        var (results, truncated) = _reader.GetTransitiveCallers("ＣＡＦÉ_ＩＮＩＴ", maxDepth: 1, limit: 10);
+        var (results, truncated, truncatedReason) = _reader.GetTransitiveCallers("ＣＡＦÉ_ＩＮＩＴ", maxDepth: 1, limit: 10);
 
         Assert.False(truncated);
+        Assert.Null(truncatedReason);
         var caller = Assert.Single(results);
         Assert.Equal("src/bootstrap.py", caller.Path);
         Assert.Equal("bootstrap", caller.CallerName);
@@ -3426,9 +3427,10 @@ public class DbReaderTests : IDisposable
             Run();
             """);
 
-        var (results, truncated) = _reader.GetTransitiveCallers("Run", maxDepth: 3, limit: 10, lang: "csharp", pathPatterns: ["Program.cs"]);
+        var (results, truncated, truncatedReason) = _reader.GetTransitiveCallers("Run", maxDepth: 3, limit: 10, lang: "csharp", pathPatterns: ["Program.cs"]);
 
         Assert.False(truncated);
+        Assert.Null(truncatedReason);
         var caller = Assert.Single(results);
         Assert.Equal("src/Program.cs", caller.Path);
         Assert.Equal("function", caller.CallerKind);
@@ -3668,8 +3670,9 @@ public class DbReaderTests : IDisposable
         Assert.Equal("instantiate", callee.ReferenceKind);
         Assert.Equal(1, callee.ReferenceCount);
 
-        var (impact, truncated) = _reader.GetTransitiveCallers("Target", maxDepth: 1, limit: 10, lang: "csharp", pathPatterns: ["constructor_fixture"]);
+        var (impact, truncated, truncatedReason) = _reader.GetTransitiveCallers("Target", maxDepth: 1, limit: 10, lang: "csharp", pathPatterns: ["constructor_fixture"]);
         Assert.False(truncated);
+        Assert.Null(truncatedReason);
         var impactCaller = Assert.Single(impact);
         Assert.Equal("Run", impactCaller.CallerName);
         Assert.Equal(1, impactCaller.ReferenceCount);
@@ -3722,10 +3725,12 @@ public class DbReaderTests : IDisposable
         Assert.Equal("fn_GetOrderItems", qualifiedCallee.CalleeName);
         Assert.Equal(1, _reader.CountCallees("usp_GetOrders", lang: "sql", exact: true, pathPatterns: ["sql_name_mismatch_fixture"]));
 
-        var (bareImpact, bareTruncated) = _reader.GetTransitiveCallers("fn_GetOrderItems", maxDepth: 1, limit: 10, lang: "sql", pathPatterns: ["sql_name_mismatch_fixture"]);
-        var (qualifiedImpact, qualifiedTruncated) = _reader.GetTransitiveCallers("dbo.fn_GetOrderItems", maxDepth: 1, limit: 10, lang: "sql", pathPatterns: ["sql_name_mismatch_fixture"]);
+        var (bareImpact, bareTruncated, bareTruncatedReason) = _reader.GetTransitiveCallers("fn_GetOrderItems", maxDepth: 1, limit: 10, lang: "sql", pathPatterns: ["sql_name_mismatch_fixture"]);
+        var (qualifiedImpact, qualifiedTruncated, qualifiedTruncatedReason) = _reader.GetTransitiveCallers("dbo.fn_GetOrderItems", maxDepth: 1, limit: 10, lang: "sql", pathPatterns: ["sql_name_mismatch_fixture"]);
         Assert.False(bareTruncated);
         Assert.False(qualifiedTruncated);
+        Assert.Null(bareTruncatedReason);
+        Assert.Null(qualifiedTruncatedReason);
         Assert.Equal("dbo.usp_GetOrders", Assert.Single(bareImpact).CallerName);
         Assert.Equal("dbo.usp_GetOrders", Assert.Single(qualifiedImpact).CallerName);
 
@@ -9469,10 +9474,11 @@ public class DbReaderTests : IDisposable
             }
             """);
 
-        var (impact, truncated) = _reader.GetTransitiveCallers(
+        var (impact, truncated, truncatedReason) = _reader.GetTransitiveCallers(
             "Changed", maxDepth: 2, limit: 10, lang: "csharp", pathPatterns: ["impact_subscribe_"]);
 
         Assert.False(truncated);
+        Assert.Null(truncatedReason);
         var caller = Assert.Single(impact);
         Assert.Equal("Hook", caller.CallerName);
     }
@@ -9514,9 +9520,10 @@ public class DbReaderTests : IDisposable
             ]);
         }
 
-        var (results, truncated) = _reader.GetTransitiveCallers("authenticate", maxDepth: 1, limit: 300);
+        var (results, truncated, truncatedReason) = _reader.GetTransitiveCallers("authenticate", maxDepth: 1, limit: 300);
 
         Assert.False(truncated);
+        Assert.Null(truncatedReason);
         Assert.Equal(callerCount, results.Count);
         Assert.Equal(callerCount, results.Select(result => $"{result.Path}:{result.CallerName}").Distinct(StringComparer.Ordinal).Count());
         Assert.All(results, result => Assert.Equal(1, result.Depth));
@@ -9544,16 +9551,19 @@ public class DbReaderTests : IDisposable
             }
             """);
 
-        var (depth1, truncated1) = _reader.GetTransitiveCallers(
+        var (depth1, truncated1, truncatedReason1) = _reader.GetTransitiveCallers(
             "ImpactLeaf", maxDepth: 1, limit: 20, lang: "csharp", pathPatterns: ["impact_depth_chain"]);
-        var (depth2, truncated2) = _reader.GetTransitiveCallers(
+        var (depth2, truncated2, truncatedReason2) = _reader.GetTransitiveCallers(
             "ImpactLeaf", maxDepth: 2, limit: 20, lang: "csharp", pathPatterns: ["impact_depth_chain"]);
-        var (depth3, truncated3) = _reader.GetTransitiveCallers(
+        var (depth3, truncated3, truncatedReason3) = _reader.GetTransitiveCallers(
             "ImpactLeaf", maxDepth: 3, limit: 20, lang: "csharp", pathPatterns: ["impact_depth_chain"]);
 
         Assert.False(truncated1);
         Assert.False(truncated2);
         Assert.False(truncated3);
+        Assert.Null(truncatedReason1);
+        Assert.Null(truncatedReason2);
+        Assert.Null(truncatedReason3);
 
         var depth1Pairs = depth1.Select(r => (r.CallerName, r.Depth)).ToArray();
         Assert.Equal(new (string?, int)[] { ("ImpactNodeC", 1) }, depth1Pairs);
@@ -9571,6 +9581,125 @@ public class DbReaderTests : IDisposable
         Assert.Equal(
             new (string?, int)[] { ("ImpactNodeC", 1), ("ImpactNodeB", 2), ("ImpactNodeA", 3) },
             depth3Pairs);
+    }
+
+    [Fact]
+    public void GetTransitiveCallers_LimitSmallerThanCallerCount_ReportsUserLimitReason()
+    {
+        // #1533: when truncation is caused by --limit, the reason must be "user_limit"
+        // so callers know that raising --limit is the right remediation.
+        // #1533: --limit による打ち切り時は理由 "user_limit" を返し、--limit を上げれば
+        // 解消することを伝える。
+        const int callerCount = 8;
+        for (int i = 0; i < callerCount; i++)
+        {
+            var callerFileId = _writer.UpsertFile(new FileRecord
+            {
+                Path = $"src/limit_caller_{i:D2}.py",
+                Lang = "python",
+                Size = 96,
+                Lines = 2,
+                Modified = new DateTime(2026, 5, 15, 0, 0, 0, DateTimeKind.Utc),
+            });
+            _writer.InsertChunks([new ChunkRecord
+            {
+                FileId = callerFileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 2,
+                Content = $"def caller_{i:D2}():\n    return target()\n",
+            }]);
+            _writer.InsertReferences([
+                new ReferenceRecord
+                {
+                    FileId = callerFileId,
+                    SymbolName = "target",
+                    ReferenceKind = "call",
+                    Line = 2,
+                    Column = 12,
+                    Context = "return target()",
+                    ContainerKind = "function",
+                    ContainerName = $"caller_{i:D2}",
+                },
+            ]);
+        }
+
+        var (results, truncated, truncatedReason) = _reader.GetTransitiveCallers("target", maxDepth: 1, limit: 3);
+
+        Assert.True(truncated);
+        Assert.Equal(ImpactTruncatedReasons.UserLimit, truncatedReason);
+        Assert.Equal(3, results.Count);
+    }
+
+    [Fact]
+    public void AnalyzeImpact_UserLimitTruncation_PropagatesTruncatedReason()
+    {
+        // #1533: AnalyzeImpact must surface the truncated_reason returned by
+        // GetTransitiveCallers so the CLI/MCP layer can give actionable retry advice.
+        // #1533: AnalyzeImpact は GetTransitiveCallers の truncated_reason を
+        // そのまま伝搬して CLI/MCP 側で適切な再試行ガイダンスを出せるようにする。
+        const int callerCount = 6;
+        for (int i = 0; i < callerCount; i++)
+        {
+            var callerFileId = _writer.UpsertFile(new FileRecord
+            {
+                Path = $"src/impact_limit_caller_{i:D2}.py",
+                Lang = "python",
+                Size = 96,
+                Lines = 2,
+                Modified = new DateTime(2026, 5, 15, 0, 0, 0, DateTimeKind.Utc),
+            });
+            _writer.InsertChunks([new ChunkRecord
+            {
+                FileId = callerFileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 2,
+                Content = $"def impact_caller_{i:D2}():\n    return widget_op()\n",
+            }]);
+            _writer.InsertReferences([
+                new ReferenceRecord
+                {
+                    FileId = callerFileId,
+                    SymbolName = "widget_op",
+                    ReferenceKind = "call",
+                    Line = 2,
+                    Column = 12,
+                    Context = "return widget_op()",
+                    ContainerKind = "function",
+                    ContainerName = $"impact_caller_{i:D2}",
+                },
+            ]);
+        }
+
+        var analysis = _reader.AnalyzeImpact("widget_op", maxDepth: 1, limit: 2);
+
+        Assert.True(analysis.Truncated);
+        Assert.Equal(ImpactTruncatedReasons.UserLimit, analysis.TruncatedReason);
+        Assert.Equal(2, analysis.Callers.Count);
+    }
+
+    [Fact]
+    public void AnalyzeImpact_NotTruncated_LeavesTruncatedReasonNull()
+    {
+        // #1533: truncated_reason must be omitted (null) when truncated is false so
+        // downstream consumers do not need to ignore stale reason strings.
+        // #1533: truncated が false のときは truncated_reason を null にして、
+        // 利用側が古い理由文字列を無視する必要がないようにする。
+        InsertIndexedFile("src/impact_no_truncate.cs", "csharp",
+            """
+            public static class NoTruncateChain
+            {
+                public static void Leaf() { }
+                public static void Caller() { Leaf(); }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact("Leaf", maxDepth: 1, limit: 50, lang: "csharp", pathPatterns: ["impact_no_truncate"]);
+
+        Assert.False(analysis.Truncated);
+        Assert.Null(analysis.TruncatedReason);
+        Assert.Single(analysis.Callers);
     }
 
     [Fact]

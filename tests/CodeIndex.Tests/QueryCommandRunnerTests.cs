@@ -24274,6 +24274,92 @@ jobs:
     }
 
     [Fact]
+    public void RunImpact_UserLimitTruncation_EmitsTruncatedReasonInJson()
+    {
+        // #1533: when impact truncates because the user-supplied --limit was reached,
+        // the JSON payload exposes truncated_reason="user_limit" so AI/MCP consumers
+        // can offer the correct retry advice (raise --limit).
+        // #1533: --limit による打ち切り時、JSON に truncated_reason="user_limit" を含めて
+        // AI/MCP クライアントが「--limit を上げる」適切な再試行案内を出せるようにする。
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_impact_user_limit_reason");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/lib.py", "python",
+                """
+                def target():
+                    return 0
+                """);
+            for (int i = 0; i < 6; i++)
+            {
+                TestProjectHelper.InsertIndexedFile(dbPath, $"src/caller_{i:D2}.py", "python",
+                    $$"""
+                    def caller_{{i:D2}}():
+                        return target()
+                    """);
+            }
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["target", "--db", dbPath, "--json", "--limit", "2"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(json.GetProperty("truncated").GetBoolean());
+            Assert.Equal("user_limit", json.GetProperty("truncated_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunImpact_NotTruncated_OmitsTruncatedReasonFromJson()
+    {
+        // #1533: when truncated=false the truncated_reason field is omitted, so
+        // schema consumers can rely on its presence to mean an actionable truncation.
+        // #1533: truncated=false のときは truncated_reason フィールドを省略し、
+        // スキーマ利用側が「フィールドが存在する＝対応すべき打ち切り」と判断できるようにする。
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_impact_no_truncate_reason");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/lib.py", "python",
+                """
+                def target():
+                    return 0
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/single_caller.py", "python",
+                """
+                def caller():
+                    return target()
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["target", "--db", dbPath, "--json", "--limit", "10"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.False(json.GetProperty("truncated").GetBoolean());
+            Assert.False(json.TryGetProperty("truncated_reason", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunImpact_FoldEquivalentClassDefinitionsJsonReportAmbiguity()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_impact_fold_siblings");

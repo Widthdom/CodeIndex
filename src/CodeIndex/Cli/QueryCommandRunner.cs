@@ -1891,6 +1891,8 @@ public static class QueryCommandRunner
                                 zeroPayload["max_depth"] = maxDepth;
                                 zeroPayload["actual_depth"] = 0;
                                 zeroPayload["truncated"] = analysis.Truncated;
+                                if (analysis.TruncatedReason != null)
+                                    zeroPayload["truncated_reason"] = analysis.TruncatedReason;
                                 zeroPayload["impact_mode"] = analysis.ImpactMode;
                                 zeroPayload["heuristic"] = analysis.Heuristic;
                                 zeroPayload["file_impacts"] = new JsonArray();
@@ -1978,6 +1980,8 @@ public static class QueryCommandRunner
                             zeroPayload["max_depth"] = maxDepth;
                             zeroPayload["actual_depth"] = 0;
                             zeroPayload["truncated"] = analysis.Truncated;
+                            if (analysis.TruncatedReason != null)
+                                zeroPayload["truncated_reason"] = analysis.TruncatedReason;
                             zeroPayload["impact_mode"] = analysis.ImpactMode;
                             zeroPayload["heuristic"] = analysis.Heuristic;
                             zeroPayload["file_impacts"] = new JsonArray();
@@ -2025,6 +2029,8 @@ public static class QueryCommandRunner
                         ["hint_file_count"] = hintFileCount,
                         ["truncated"] = analysis.Truncated,
                     };
+                    if (analysis.TruncatedReason != null)
+                        payload["truncated_reason"] = analysis.TruncatedReason;
                     AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
                     Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
@@ -2061,6 +2067,8 @@ public static class QueryCommandRunner
                     ["has_multiple_definition_files"] = analysis.HasMultipleDefinitionFiles,
                     ["definitions"] = JsonSerializer.SerializeToNode(analysis.Definitions, CliJsonSerializerContextFactory.Create(jsonOptions).ListSymbolResult),
                 };
+                if (analysis.TruncatedReason != null)
+                    payload["truncated_reason"] = analysis.TruncatedReason;
                 if (analysis.Suggestion != null)
                     payload["suggestion"] = analysis.Suggestion;
                 AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
@@ -2092,7 +2100,11 @@ public static class QueryCommandRunner
                     }
                 }
 
-                var truncNote = analysis.Truncated ? " [TRUNCATED]" : "";
+                var truncNote = analysis.Truncated
+                    ? analysis.TruncatedReason != null
+                        ? $" [TRUNCATED: {analysis.TruncatedReason}]"
+                        : " [TRUNCATED]"
+                    : "";
                 if (hasHeuristicHints)
                     Console.Error.WriteLine($"\n({hintCount} heuristic dependency hints across {hintFileCount} files{truncNote})");
                 else
