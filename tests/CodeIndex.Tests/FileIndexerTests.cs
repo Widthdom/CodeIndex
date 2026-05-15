@@ -2360,6 +2360,72 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void BuildRecord_AcceptsFileAtSizeLimitBoundary()
+    {
+        // Regression for #1529: the TOCTOU fix reads through one FileStream and caps the
+        // accumulator at MaxFileSize. A file at exactly 10 MB must still be accepted so
+        // the boundary contract documented by the oversize test stays symmetric (>10MB
+        // throws, ==10MB succeeds).
+        // #1529 のリグレッション: TOCTOU 修正で 1 本の FileStream を通して MaxFileSize で
+        // 累積バッファを打ち切る実装にした際、ちょうど 10 MB のファイルは引き続き受け
+        // 入れる必要がある (>10MB が throw / ==10MB が成功という対称契約を維持)。
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var filePath = Path.Combine(tempDir, "boundary.py");
+            // Exactly MaxFileSize bytes — ASCII so UTF-8 decode succeeds without warning.
+            // ちょうど MaxFileSize バイト — ASCII なら UTF-8 デコードで警告無く成功する。
+            var data = new byte[10 * 1024 * 1024];
+            for (int i = 0; i < data.Length; i++)
+                data[i] = (byte)'a';
+            File.WriteAllBytes(filePath, data);
+
+            var indexer = new FileIndexer(tempDir);
+            var (record, content, _) = indexer.BuildRecord(filePath);
+
+            Assert.Equal(data.Length, record.Size);
+            Assert.Equal(data.Length, content.Length);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void BuildRecord_RecordSizeReflectsBytesActuallyRead()
+    {
+        // Regression for #1529: with the FileStream-based read path, record.Size must
+        // come from the bytes streamed through the open handle rather than from a
+        // separate FileInfo.Length stat. Asserting record.Size against the byte count
+        // documents the contract that downstream consumers (status, freshness checks)
+        // see the same value the indexer actually ingested.
+        // #1529 のリグレッション: FileStream ベースの読み込み経路では record.Size は
+        // 別途取得した FileInfo.Length ではなく、オープンしたハンドル経由で実際に読み
+        // 込んだバイト数を反映しなければならない。`record.Size` をバイト数と突き合わ
+        // せることで、status や freshness check の下流が実際に取り込まれた値と一致
+        // することを契約として固定する。
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var filePath = Path.Combine(tempDir, "sized.py");
+            var payload = "print('hello world')\n"u8.ToArray();
+            File.WriteAllBytes(filePath, payload);
+
+            var indexer = new FileIndexer(tempDir);
+            var (record, _, _) = indexer.BuildRecord(filePath);
+
+            Assert.Equal(payload.Length, record.Size);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
     public void BuildRecord_ExtensionlessShebangScriptUsesDetectedLanguage()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");

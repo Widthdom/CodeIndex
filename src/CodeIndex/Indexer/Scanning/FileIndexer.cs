@@ -1882,16 +1882,59 @@ public class FileIndexer
             throw new InvalidOperationException("Only regular files can be indexed");
 
         var relativePath = Path.GetRelativePath(_projectRoot, absolutePath);
-        var info = new FileInfo(absolutePath);
 
-        // Skip files exceeding size limit to avoid OutOfMemoryException
-        // OOM防止のためサイズ上限を超えるファイルをスキップ
-        if (info.Length > MaxFileSize)
-            throw new InvalidOperationException($"File too large ({info.Length / 1024 / 1024} MB > {MaxFileSize / 1024 / 1024} MB limit)");
+        // Read raw bytes through a single FileStream and cap the accumulated payload at
+        // MaxFileSize so a file that grew between the size probe and the read can no
+        // longer bypass the cap. Splitting `FileInfo.Length` from `File.ReadAllBytes`
+        // left a TOCTOU window where an attacker (or any build/log emitter rapidly
+        // appending to a generated file) could grow a 1 MB file to multi-GB between
+        // stat and read and force the indexer into an OOM-sized allocation; reading
+        // through one open handle removes the second stat call, and the read loop's
+        // running total guarantees we never accumulate more than MaxFileSize bytes
+        // regardless of how aggressively a concurrent writer extends the file.
+        // ファイルを 1 本の FileStream で開き、MaxFileSize を上限として累積バッファを
+        // 制限することで、サイズ確認と読み込みの間にファイルが肥大化しても上限を
+        // 回避できないようにする。`FileInfo.Length` と `File.ReadAllBytes` を分離して
+        // いた従来実装では、stat と read の間に攻撃者 (もしくは自動生成ファイルを高速
+        // に追記し続けるビルド/ログ系) が 1 MB のファイルを数 GB まで肥大化させて
+        // インデクサに巨大確保を強制できる TOCTOU 経路があったが、1 本のオープン
+        // ハンドルで読むことで 2 回目の stat を排除し、ループ側の総バイト数チェック
+        // により並行追記がどれほど激しくても MaxFileSize 以上の確保は発生しない。
+        byte[] bytes;
+        long sizeBytes;
+        DateTime modifiedUtc;
+        using (var stream = new FileStream(
+            absolutePath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            bufferSize: 4096,
+            useAsync: false))
+        {
+            var initialLength = stream.Length;
+            if (initialLength > MaxFileSize)
+                throw new InvalidOperationException($"File too large ({initialLength / 1024 / 1024} MB > {MaxFileSize / 1024 / 1024} MB limit)");
 
-        // Read raw bytes and decode UTF-8; detect invalid sequences
-        // 生バイト読み込み後UTF-8デコード、不正シーケンスを検出
-        var bytes = File.ReadAllBytes(absolutePath);
+            // Pre-size the accumulator to the observed length but cap initial capacity
+            // at MaxFileSize so a tampered Length cannot force a huge up-front allocation.
+            // 初期容量は観測した長さに合わせるが MaxFileSize で打ち切り、Length を偽装
+            // されても巨大な事前確保を起こさないようにする。
+            var initialCapacity = (int)Math.Min(initialLength, MaxFileSize);
+            using var accumulator = new MemoryStream(initialCapacity);
+            var buffer = new byte[81920];
+            long total = 0;
+            int read;
+            while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
+            {
+                total += read;
+                if (total > MaxFileSize)
+                    throw new InvalidOperationException($"File too large (> {MaxFileSize / 1024 / 1024} MB limit; grew during read)");
+                accumulator.Write(buffer, 0, read);
+            }
+            bytes = accumulator.ToArray();
+            sizeBytes = total;
+            modifiedUtc = File.GetLastWriteTimeUtc(absolutePath);
+        }
 
         // Compute checksum from raw bytes to avoid re-encoding the string (~10MB saved for large files)
         // 文字列の再エンコードを回避するためraw bytesからチェックサムを算出（大ファイルで約10MB節約）
@@ -1952,10 +1995,10 @@ public class FileIndexer
         {
             Path = NormalizePathSeparators(relativePath),
             Lang = TryDetectLanguage(absolutePath, content).Language,
-            Size = info.Length,
+            Size = sizeBytes,
             Lines = lineCount,
             Checksum = checksum,
-            Modified = info.LastWriteTimeUtc,
+            Modified = modifiedUtc,
         };
 
         return (record, content, bytes, warning);
