@@ -30,6 +30,21 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void ParseArgs_ForceFlag_SetsForce()
+    {
+        var options = IndexCommandRunner.ParseArgs([".", "--force"]);
+        Assert.True(options.Force);
+        Assert.Equal(".", options.ProjectPath);
+    }
+
+    [Fact]
+    public void ParseArgs_NoForceFlag_DefaultsToFalse()
+    {
+        var options = IndexCommandRunner.ParseArgs(["."]);
+        Assert.False(options.Force);
+    }
+
+    [Fact]
     public void Run_HelpFlagReturnsSuccess()
     {
         int exitCode;
@@ -5495,5 +5510,182 @@ public class IndexCommandRunnerTests
             File.SetAttributes(dir, FileAttributes.Normal);
 
         File.SetAttributes(path, FileAttributes.Normal);
+    }
+
+    [Fact]
+    public void Run_LockHeldByAnotherHolder_RejectedWithHolderInfo()
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_lock_held_{Guid.NewGuid():N}.db");
+        var lockPath = dbPath + ".lock";
+        var infoPath = lockPath + ".info";
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('hi')\n");
+            Directory.CreateDirectory(Path.GetDirectoryName(lockPath)!);
+
+            // FileShare.None matches the holder mode IndexLock.Acquire uses, so a
+            // competing cdidx process gets EWOULDBLOCK on its acquire attempt.
+            // Sidecar .info file holds the metadata IndexLock.TryReadHolderInfo reads.
+            File.WriteAllText(infoPath, "pid=98765\nstarted_at=2026-05-15T10:00:00.000Z\nhost=test-host\nproject=/tmp/xyz\n");
+            using (var holder = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+            {
+                var (exitCode, _, stderr) = RunAndCaptureStreams([projectRoot, "--db", dbPath]);
+
+                Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+                Assert.Contains("another cdidx index is already running", stderr);
+                Assert.Contains("PID 98765", stderr);
+                Assert.Contains("--force", stderr);
+            }
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+            if (File.Exists(infoPath))
+                File.Delete(infoPath);
+            if (File.Exists(lockPath))
+                File.Delete(lockPath);
+        }
+    }
+
+    [Fact]
+    public void Run_LockHeldByAnotherHolder_JsonIncludesHint()
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_lock_json_{Guid.NewGuid():N}.db");
+        var lockPath = dbPath + ".lock";
+        var infoPath = lockPath + ".info";
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('hi')\n");
+            Directory.CreateDirectory(Path.GetDirectoryName(lockPath)!);
+
+            File.WriteAllText(infoPath, "pid=12345\nstarted_at=2026-05-15T10:00:00.000Z\nhost=h\nproject=/p\n");
+            using (var holder = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+            {
+                var (exitCode, json) = RunAndCaptureJson([projectRoot, "--db", dbPath, "--json"]);
+
+                Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+                Assert.Equal("error", json.GetProperty("status").GetString());
+                var message = json.GetProperty("message").GetString();
+                Assert.NotNull(message);
+                Assert.Contains("another cdidx index is already running", message);
+                Assert.Contains("PID 12345", message);
+                var hint = json.GetProperty("hint").GetString();
+                Assert.NotNull(hint);
+                Assert.Contains("--force", hint);
+            }
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+            if (File.Exists(infoPath))
+                File.Delete(infoPath);
+            if (File.Exists(lockPath))
+                File.Delete(lockPath);
+        }
+    }
+
+    [Fact]
+    public void Run_ForceFlag_BypassesLockEvenWhenHeld()
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_lock_force_{Guid.NewGuid():N}.db");
+        var lockPath = dbPath + ".lock";
+        var infoPath = lockPath + ".info";
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('hi')\n");
+            Directory.CreateDirectory(Path.GetDirectoryName(lockPath)!);
+
+            using (var holder = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+            {
+                var (exitCode, json) = RunAndCaptureJson([projectRoot, "--db", dbPath, "--force", "--json"]);
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal("success", json.GetProperty("status").GetString());
+            }
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+            if (File.Exists(infoPath))
+                File.Delete(infoPath);
+            if (File.Exists(lockPath))
+                File.Delete(lockPath);
+        }
+    }
+
+    [Fact]
+    public void Run_StaleLockFile_ReclaimedAndCleanedUpAfterSuccess()
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_lock_stale_{Guid.NewGuid():N}.db");
+        var lockPath = dbPath + ".lock";
+        var infoPath = lockPath + ".info";
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('hi')\n");
+            Directory.CreateDirectory(Path.GetDirectoryName(lockPath)!);
+
+            // Stale on-disk lockfile with no live holder; OS releases handles on
+            // process death so a fresh acquire must succeed and clean up after itself.
+            File.WriteAllText(lockPath, string.Empty);
+            File.WriteAllText(infoPath, "pid=99999\nstarted_at=2020-01-01T00:00:00.000Z\nhost=stale\nproject=/old\n");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--db", dbPath, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.False(File.Exists(lockPath), "lock file should be removed after a clean exit");
+            Assert.False(File.Exists(infoPath), "lock metadata sidecar should be removed after a clean exit");
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+            if (File.Exists(infoPath))
+                File.Delete(infoPath);
+            if (File.Exists(lockPath))
+                File.Delete(lockPath);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_DoesNotAcquireLock()
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_lock_dryrun_{Guid.NewGuid():N}.db");
+        var lockPath = dbPath + ".lock";
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('hi')\n");
+            Directory.CreateDirectory(Path.GetDirectoryName(lockPath)!);
+
+            // Hold the lockfile while running --dry-run to prove dry-run never tries to acquire.
+            using (var holder = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+            {
+                var (exitCode, json) = RunAndCaptureJson([projectRoot, "--db", dbPath, "--dry-run", "--json"]);
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal("dry_run", json.GetProperty("status").GetString());
+            }
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+            if (File.Exists(lockPath))
+                File.Delete(lockPath);
+        }
     }
 }

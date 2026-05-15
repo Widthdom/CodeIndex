@@ -228,7 +228,41 @@ public static class IndexCommandRunner
         if (!string.IsNullOrEmpty(dbDir))
             Directory.CreateDirectory(dbDir);
 
-        using var db = new DbContext(dbPath);
+        // Acquire a process-exclusive lock so concurrent `cdidx index` runs against the
+        // same DB cannot interleave schema/data writes and corrupt the database.
+        // `--force` bypasses the check for users who knowingly accept the risk.
+        // 同一 DB に対する `cdidx index` の同時実行が schema / data 書き込みを交錯させ
+        // DB を壊さないよう排他ロックを取る。`--force` はリスクを承知の場合に bypass。
+        var lockPath = IndexLock.GetLockPath(resolvedDbPath);
+        IndexLock? indexLock = null;
+        if (!options.Force)
+        {
+            try
+            {
+                indexLock = IndexLock.Acquire(lockPath, options.ProjectPath);
+            }
+            catch (IndexLockConflictException ex)
+            {
+                var holderDescription = DescribeLockHolder(ex.Holder);
+                var message = string.IsNullOrEmpty(holderDescription)
+                    ? "another cdidx index is already running on this database"
+                    : $"another cdidx index is already running on this database ({holderDescription})";
+                return WriteCommandError(
+                    options.Json,
+                    jsonOptions,
+                    message,
+                    CommandExitCodes.DatabaseError,
+                    "Wait for the running index to finish, or pass --force to bypass the lock if you are sure no other cdidx index is active.");
+            }
+        }
+        else if (!options.Json)
+        {
+            ConsoleUi.PrintWarning("--force bypasses the index lock; concurrent cdidx index runs may corrupt the database.");
+        }
+
+        using (indexLock)
+        {
+            using var db = new DbContext(dbPath);
 
         // Capture prior readiness BEFORE we clear it. Update mode (--commits / --files) only
         // touches a subset of files, so trust bits the DB did NOT previously carry must not
@@ -294,6 +328,15 @@ public static class IndexCommandRunner
         return isUpdateMode
             ? RunUpdateMode(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion, priorFoldFingerprint, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit)
             : RunFullScan(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorFoldVersion, priorFoldFingerprint, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit);
+        }
+    }
+
+    private static string DescribeLockHolder(IndexLockInfo? holder)
+    {
+        if (holder == null)
+            return string.Empty;
+        var startedLocal = holder.StartedAt.ToLocalTime();
+        return $"PID {holder.Pid.ToString(System.Globalization.CultureInfo.InvariantCulture)}, started {startedLocal.ToString("yyyy-MM-dd HH:mm:ss zzz", System.Globalization.CultureInfo.InvariantCulture)}";
     }
 
     public static int RunBackfillFold(string[] cmdArgs, JsonSerializerOptions jsonOptions)
@@ -403,6 +446,7 @@ public static class IndexCommandRunner
         bool verbose = false;
         bool json = false;
         bool dryRun = false;
+        bool force = false;
         string? easterEgg = null;
         int spinnerFlagCount = 0;
         bool randomSpinner = false;
@@ -427,6 +471,9 @@ public static class IndexCommandRunner
                     break;
                 case "--dry-run":
                     dryRun = true;
+                    break;
+                case "--force":
+                    force = true;
                     break;
                 case "--commits":
                     while (i + 1 < args.Length && !args[i + 1].StartsWith('-'))
@@ -482,6 +529,7 @@ public static class IndexCommandRunner
             UpdateFiles = updateFiles,
             EasterEgg = easterEgg,
             DryRun = dryRun,
+            Force = force,
         };
     }
 
@@ -2123,6 +2171,7 @@ public sealed class IndexCommandOptions
     public List<string> UpdateFiles { get; init; } = [];
     public string? EasterEgg { get; init; }
     public bool DryRun { get; init; }
+    public bool Force { get; init; }
 }
 
 public sealed class BackfillFoldCommandOptions
