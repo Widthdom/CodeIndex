@@ -450,15 +450,33 @@ public class DbContext : IDisposable
     public const int SqlGraphContractVersion = 1;
     public const string SqlGraphContractVersionMetaKey = "sql_graph_contract_version";
     public const string IndexedProjectRootMetaKey = "indexed_project_root";
+    // Git HEAD commit captured at the end of the most recent full-scan index run (`--rebuild` or
+    // the default incremental full scan). Reading this back lets the CLI detect that a user
+    // ran `cdidx index <projectPath>` after switching branches / commits, where the DB still
+    // mirrors the previously-indexed worktree even though the on-disk file set has diverged.
+    // Partial update modes (`--commits` / `--files`) deliberately do NOT touch this key, so a
+    // post-branch-switch partial refresh still surfaces as stale until a real full scan
+    // republishes the captured HEAD. Issue #1508.
+    // 直近の full-scan 成功時点で記録した git HEAD。`cdidx index` 後にブランチが切り替わると
+    // DB は旧 worktree のスナップショットのまま残るため、ここを比較して「rebuild を勧める」
+    // 警告を出す。partial update (`--commits` / `--files`) は本キーを更新せず、後続の
+    // full scan が改めて記録する。Issue #1508。
+    public const string IndexedHeadCommitMetaKey = "indexed_head_commit";
     // #1509: full Git HEAD commit and short branch name captured at the end of every
-    // successful index run, plus the UTC timestamp of that stamp. Together they let
-    // `status` (and any future cross-session staleness check) decide whether the index
-    // was built against the commit currently checked out, or whether the working tree
-    // has advanced since indexing. Stored as plain strings to keep DbReader's inline
+    // successful index run (full scan AND partial update), plus the UTC timestamp of that
+    // stamp. Together they let `status` (and any future cross-session staleness check)
+    // decide whether the index was built against the commit currently checked out, or
+    // whether the working tree has advanced since indexing. This is DIFFERENT from
+    // `IndexedHeadCommitMetaKey` above (#1508): that key only fires on full scans so it
+    // can drive "rebuild after branch switch" warnings, while these keys fire on every
+    // successful index so `commits_ahead_of_indexed_head` reflects the true last-touched
+    // HEAD regardless of update mode. Stored as plain strings to keep DbReader's inline
     // codeindex_meta lookup degradation behavior intact on legacy / read-only DBs.
-    // #1509: 成功 index の終端で HEAD commit / branch 名 / stamp 時刻を保存する。
-    // これにより status などが「DB の HEAD が現在の HEAD と何コミットズレているか」を
-    // 検出できる。codeindex_meta が無い legacy DB では reader 側で null フォールバックする。
+    // #1509: 成功 index (full scan / partial 問わず) の終端で HEAD commit / branch 名 /
+    // stamp 時刻を保存する。これにより status などが「DB の HEAD が現在の HEAD と何コミット
+    // ズレているか」を検出できる。`IndexedHeadCommitMetaKey` (#1508) とは異なり、こちらは
+    // partial update でも更新するため commits_ahead_of_indexed_head が常に正確になる。
+    // codeindex_meta が無い legacy DB では reader 側で null フォールバックする。
     public const string IndexedHeadShaMetaKey = "indexed_head_sha";
     public const string IndexedHeadBranchMetaKey = "indexed_head_branch";
     public const string IndexedHeadTimestampMetaKey = "indexed_head_timestamp";

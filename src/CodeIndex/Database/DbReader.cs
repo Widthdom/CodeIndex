@@ -414,6 +414,13 @@ public partial class DbReader
         return readyLangs;
     }
 
+    /// <summary>
+    /// Read a metadata string from `codeindex_meta`. Returns null on missing key or read errors
+    /// (legacy / read-only DBs where the table doesn't exist yet).
+    /// codeindex_meta から文字列を読み出すヘルパー。未登録キーや legacy DB の場合は null。
+    /// </summary>
+    internal string? GetMetaString(string key) => TryGetMetaString(_conn, key);
+
     private static string? TryGetMetaString(SqliteConnection conn, string key)
     {
         // Inline the codeindex_meta lookup to avoid creating a DbContext here.

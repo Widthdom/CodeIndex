@@ -97,14 +97,21 @@ public class IndexFreshnessCheckResult
     public int MatchedFileCount { get; set; }
     public int ChangedFileCount { get; set; }
     public int MissingFileCount { get; set; }
+    public int OutsideSparseConeFileCount { get; set; }
     public int UnindexedFileCount { get; set; }
     public int UnverifiableFileCount { get; set; }
     public int ScanErrorCount { get; set; }
     public List<string> ChangedFiles { get; set; } = [];
     public List<string> MissingFiles { get; set; } = [];
+    public List<string> OutsideSparseConeFiles { get; set; } = [];
     public List<string> UnindexedFiles { get; set; } = [];
     public List<string> UnverifiableFiles { get; set; } = [];
     public List<string> ScanErrors { get; set; } = [];
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? IndexedHeadCommit { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? WorkspaceHeadCommit { get; set; }
+    public bool HeadChanged { get; set; }
 }
 
 public class DefinitionResult : SymbolResult
