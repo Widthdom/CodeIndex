@@ -381,6 +381,110 @@ public class ConsoleUiTests
         }
     }
 
+    [Fact]
+    public void ColorizeKind_NoColorEnvVar_DisablesAnsiEscapes()
+    {
+        WithColorEnvironment(noColor: "1", cliColor: null, cliColorForce: null, () =>
+        {
+            Assert.False(ConsoleUi.ShouldUseColor());
+            var output = ConsoleUi.ColorizeKind("function");
+            Assert.Equal("function", output);
+            Assert.DoesNotContain('\x1b', output);
+        });
+    }
+
+    [Fact]
+    public void ColorizeKind_NoColorEmpty_LeavesDefaultBehavior()
+    {
+        // Per https://no-color.org, only a non-empty NO_COLOR disables color.
+        // 規約に従い、空の NO_COLOR は色を抑制せず、TTY 判定にフォールバックする。
+        WithColorEnvironment(noColor: string.Empty, cliColor: null, cliColorForce: null, () =>
+        {
+            Assert.Equal(ConsoleUi.ShouldUseInteractiveConsole(), ConsoleUi.ShouldUseColor());
+        });
+    }
+
+    [Fact]
+    public void ColorizeKind_CliColorZero_DisablesAnsiEscapes()
+    {
+        WithColorEnvironment(noColor: null, cliColor: "0", cliColorForce: null, () =>
+        {
+            Assert.False(ConsoleUi.ShouldUseColor());
+            var output = ConsoleUi.ColorizeKind("class", padWidth: 6);
+            Assert.Equal("class ", output);
+            Assert.DoesNotContain('\x1b', output);
+        });
+    }
+
+    [Fact]
+    public void ColorizeKind_CliColorOne_DoesNotOverrideTtyDetection()
+    {
+        // CLICOLOR=1 is the conventional default and must not override TTY detection.
+        // CLICOLOR=1 は慣習的なデフォルトであり、TTY 判定を上書きしない。
+        WithColorEnvironment(noColor: null, cliColor: "1", cliColorForce: null, () =>
+        {
+            Assert.Equal(ConsoleUi.ShouldUseInteractiveConsole(), ConsoleUi.ShouldUseColor());
+        });
+    }
+
+    [Fact]
+    public void ColorizeKind_CliColorForce_ForcesAnsiEvenWithoutTty()
+    {
+        WithColorEnvironment(noColor: null, cliColor: null, cliColorForce: "1", () =>
+        {
+            Assert.True(ConsoleUi.ShouldUseColor());
+            var output = ConsoleUi.ColorizeKind("function");
+            Assert.StartsWith("\x1b[33m", output);
+            Assert.EndsWith("\x1b[0m", output);
+        });
+    }
+
+    [Fact]
+    public void ColorizeKind_CliColorForceZero_DoesNotForceColor()
+    {
+        // CLICOLOR_FORCE=0 must not force color on; behavior falls back to TTY detection.
+        // CLICOLOR_FORCE=0 は色を強制せず、TTY 判定にフォールバックする。
+        WithColorEnvironment(noColor: null, cliColor: null, cliColorForce: "0", () =>
+        {
+            Assert.Equal(ConsoleUi.ShouldUseInteractiveConsole(), ConsoleUi.ShouldUseColor());
+        });
+    }
+
+    [Fact]
+    public void ColorizeKind_CliColorForceBeatsNoColor()
+    {
+        // CLICOLOR_FORCE has the highest precedence so users can override a
+        // global NO_COLOR for a single command.
+        // CLICOLOR_FORCE は NO_COLOR より優先され、単発で色を有効化できる。
+        WithColorEnvironment(noColor: "1", cliColor: "0", cliColorForce: "1", () =>
+        {
+            Assert.True(ConsoleUi.ShouldUseColor());
+        });
+    }
+
+    private static void WithColorEnvironment(string? noColor, string? cliColor, string? cliColorForce, Action action)
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalNoColor = Environment.GetEnvironmentVariable("NO_COLOR");
+            var originalCliColor = Environment.GetEnvironmentVariable("CLICOLOR");
+            var originalCliColorForce = Environment.GetEnvironmentVariable("CLICOLOR_FORCE");
+            try
+            {
+                Environment.SetEnvironmentVariable("NO_COLOR", noColor);
+                Environment.SetEnvironmentVariable("CLICOLOR", cliColor);
+                Environment.SetEnvironmentVariable("CLICOLOR_FORCE", cliColorForce);
+                action();
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable("NO_COLOR", originalNoColor);
+                Environment.SetEnvironmentVariable("CLICOLOR", originalCliColor);
+                Environment.SetEnvironmentVariable("CLICOLOR_FORCE", originalCliColorForce);
+            }
+        }
+    }
+
     [Theory]
     [InlineData("serach", "search")]
     [InlineData("statu", "status")]

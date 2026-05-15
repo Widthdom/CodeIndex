@@ -825,13 +825,17 @@ _cdidx";
 
     /// <summary>
     /// Colorize a symbol kind name with ANSI escape codes for terminal output.
-    /// Degrades to plain text when output is redirected (not a terminal).
-    /// シンボル種別名をANSIエスケープコードで色付けする。出力がリダイレクトされている場合は無色テキスト。
+    /// Degrades to plain text when output is redirected (not a terminal) or when
+    /// the user opts out of color via NO_COLOR / CLICOLOR=0. CLICOLOR_FORCE forces
+    /// color on regardless of TTY status.
+    /// シンボル種別名をANSIエスケープコードで色付けする。リダイレクト時、または
+    /// NO_COLOR / CLICOLOR=0 で色を無効化された場合は無色テキスト。
+    /// CLICOLOR_FORCE が指定された場合は TTY でなくても色を付ける。
     /// </summary>
     public static string ColorizeKind(string kind, int padWidth = 0)
     {
         var padded = padWidth > 0 ? kind.PadRight(padWidth) : kind;
-        if (ShouldUseInteractiveConsole())
+        if (ShouldUseColor())
         {
             var color = kind switch
             {
@@ -862,6 +866,42 @@ _cdidx";
         // Console.IsOutputRedirected stays false even though interactive terminal
         // behavior would be unsafe. Treat UTF-16 Console.Out as redirected capture.
         return !Console.Out.Encoding.Equals(Encoding.Unicode);
+    }
+
+    /// <summary>
+    /// Decide whether ANSI color escapes should be emitted, honoring the standard
+    /// NO_COLOR (https://no-color.org) and CLICOLOR / CLICOLOR_FORCE conventions.
+    /// Precedence (highest first):
+    ///   1. CLICOLOR_FORCE (any non-empty value other than "0") — force color on.
+    ///   2. NO_COLOR (any non-empty value) — color off.
+    ///   3. CLICOLOR=0 — color off.
+    ///   4. Otherwise fall back to <see cref="ShouldUseInteractiveConsole"/>.
+    /// ANSI 色エスケープを出力するかを判定する。NO_COLOR / CLICOLOR /
+    /// CLICOLOR_FORCE の慣習に従い、TTY 判定より優先する。
+    /// </summary>
+    internal static bool ShouldUseColor()
+    {
+        if (IsForceColorRequested())
+            return true;
+        if (IsNoColorRequested())
+            return false;
+        return ShouldUseInteractiveConsole();
+    }
+
+    private static bool IsForceColorRequested()
+    {
+        var force = Environment.GetEnvironmentVariable("CLICOLOR_FORCE");
+        return !string.IsNullOrEmpty(force) && force != "0";
+    }
+
+    private static bool IsNoColorRequested()
+    {
+        var noColor = Environment.GetEnvironmentVariable("NO_COLOR");
+        if (!string.IsNullOrEmpty(noColor))
+            return true;
+
+        var cliColor = Environment.GetEnvironmentVariable("CLICOLOR");
+        return cliColor == "0";
     }
 
     /// <summary>

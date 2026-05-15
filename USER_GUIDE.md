@@ -614,6 +614,19 @@ If a query fails with a SQLite reader error such as `The data is NULL at ordinal
   CDIDX_DEBUG=unsafe cdidx unused       # raw content, local only / 生テキスト、ローカルのみ
   ```
 
+### Color output
+
+`cdidx` colorizes symbol-kind labels with ANSI escapes only when stdout is an interactive terminal. The standard `NO_COLOR` (https://no-color.org), `CLICOLOR`, and `CLICOLOR_FORCE` environment variables override that decision so CI logs and scripts stay clean:
+
+| Variable | Value | Effect |
+|---|---|---|
+| `CLICOLOR_FORCE` | any non-empty value other than `0` | Force ANSI color on, even when stdout is not a TTY |
+| `NO_COLOR` | any non-empty value | Disable ANSI color regardless of TTY status |
+| `CLICOLOR` | `0` | Disable ANSI color regardless of TTY status |
+| (none of the above) | — | Fall back to the default TTY check |
+
+`CLICOLOR_FORCE` has the highest precedence, then `NO_COLOR`, then `CLICOLOR=0`. An empty `NO_COLOR` (e.g. `NO_COLOR=` exported with no value) is ignored, matching the no-color.org specification.
+
 ## How it works
 
 cdidx scans your project directory, applies the built-in skip lists plus user `.gitignore` / `.cdidxignore` rules, splits each remaining source file into overlapping chunks, and stores everything in a SQLite database with FTS5 full-text search. Incremental mode (default) first purges database entries for files that no longer exist on disk, then checks each file's last-modified timestamp against the database — only files whose timestamp exactly matches are skipped, and any difference (newer or older) triggers re-indexing. Newly appeared files are indexed as new entries. The same path filter is reused for scoped `--files` / `--commits` refreshes, commit-based refreshes automatically switch to a full scan when ignore files changed, and Git-managed workspaces follow the repository's `core.ignorecase` setting when evaluating ignore rules. This means re-indexing after a branch switch only processes the files that actually differ unless ignore rules themselves changed.
@@ -1661,6 +1674,19 @@ cdidx map --path src/ --exclude-tests --json
 CDIDX_DEBUG=1 cdidx unused            # テキスト伏字化
 CDIDX_DEBUG=unsafe cdidx unused       # 生テキスト、ローカルのみ
 ```
+
+### カラー出力
+
+`cdidx` はシンボル種別ラベルに ANSI エスケープを付けますが、これは stdout がインタラクティブな端末の場合のみです。CI ログやスクリプトが ANSI で汚れないよう、標準的な `NO_COLOR`（https://no-color.org）、`CLICOLOR`、`CLICOLOR_FORCE` の環境変数で挙動を上書きできます。
+
+| 変数 | 値 | 効果 |
+|---|---|---|
+| `CLICOLOR_FORCE` | `0` 以外の非空値 | TTY でなくても ANSI カラーを強制 ON |
+| `NO_COLOR` | 任意の非空値 | TTY 判定に関わらず ANSI カラーを無効化 |
+| `CLICOLOR` | `0` | TTY 判定に関わらず ANSI カラーを無効化 |
+| 上記いずれも未設定 | — | 既定の TTY 判定にフォールバック |
+
+優先順位は `CLICOLOR_FORCE` → `NO_COLOR` → `CLICOLOR=0` の順です。値が空の `NO_COLOR`（例: `NO_COLOR=` のみ export）は no-color.org の仕様に従い無視されます。
 
 ## 動作の仕組み
 
