@@ -614,6 +614,7 @@ cdidx report --output report.tgz --json
 | `--reverse` | `deps` | Reverse lookup: show files that depend ON the matched path |
 | `--top <n>` | Query commands | Alias for `--limit` |
 | `--color <when>` | All commands | Control ANSI color output. Accepts `auto` (default), `always`, or `never`. Precedence: `--color` flag > `CLICOLOR_FORCE` > `NO_COLOR` > `CLICOLOR=0` > TTY auto-detect. Use `--color=always` to keep colored kind labels through a pager such as `cdidx symbols Foo \| less -R`; use `--color=never` (or `NO_COLOR=1`) to suppress ANSI even on a TTY. |
+| `--palette <name>` | All commands | Choose the ANSI palette used when color output is enabled. Accepts `basic` (8-color SGR 30–37, the default fallback for minimal SSH/CI terminals), `256` (256-color `\x1b[38;5;Nm`), or `truecolor` (24-bit RGB `\x1b[38;2;R;G;Bm`). Precedence: `--palette` flag > `CDIDX_COLOR_PALETTE` env var > `COLORTERM` / `TERM` auto-detect. The basic palette avoids `\x1b[90m` (bright-black / dim), which is unreadable on many minimal terminals. |
 | `--metrics <path>` | All commands (and MCP tool calls) | Append one JSONL metrics record per CLI command / MCP tool call to `<path>`. The `CDIDX_METRICS=<path>` environment variable provides the same destination as a fallback when the flag is not passed. Best-effort: any IO failure (missing directory, read-only mount, etc.) is swallowed silently and never breaks the underlying command. |
 
 If a query itself begins with `-`, pass it as `--query <query>` or `-- <query>`. If an option value itself begins with `--`, pass it as `--opt=<value>` rather than a separated value, for example `--path=--json-dir` or `--db=--tmp.db`.
@@ -675,6 +676,22 @@ If a query fails with a SQLite reader error such as `The data is NULL at ordinal
 | (none of the above) | — | Fall back to the default TTY check |
 
 `CLICOLOR_FORCE` has the highest precedence, then `NO_COLOR`, then `CLICOLOR=0`. An empty `NO_COLOR` (e.g. `NO_COLOR=` exported with no value) is ignored, matching the no-color.org specification.
+
+#### Palette selection
+
+When color is enabled, `cdidx` picks an ANSI palette so the same kind labels stay readable on minimal SSH/CI terminals and on truecolor-capable terminals alike. The `--palette` flag and `CDIDX_COLOR_PALETTE` environment variable override auto-detection:
+
+| Source | Value | Effect |
+|---|---|---|
+| `--palette` flag | `basic` \| `8` \| `16` \| `ansi` | Force the 8-color SGR palette (30–37); avoids `\x1b[90m` (bright-black / dim), which is unreadable on many minimal SSH/CI terminals |
+| `--palette` flag | `256` \| `color256` \| `8bit` | Force the 256-color palette (`\x1b[38;5;Nm`) |
+| `--palette` flag | `truecolor` \| `24bit` \| `rgb` | Force the 24-bit RGB palette (`\x1b[38;2;R;G;Bm`) |
+| `CDIDX_COLOR_PALETTE` env var | same value set as above | Same as `--palette` when the flag is not passed |
+| `COLORTERM` env var | `truecolor` \| `24bit` | Auto-detect truecolor |
+| `TERM` env var | contains `256color` | Auto-detect 256-color |
+| (none of the above) | — | Fall back to the basic 8-color palette |
+
+Precedence: `--palette` flag > `CDIDX_COLOR_PALETTE` > `COLORTERM` / `TERM` auto-detect. `NO_COLOR` / `--color=never` consistently suppress ANSI escapes across every palette, so opting out of color always wins over palette selection.
 
 ### Metrics emission
 
@@ -1814,6 +1831,7 @@ cdidx report --output report.tgz --json
 | `--reverse` | `deps` | 逆引き: 指定パスに依存しているファイルを表示 |
 | `--top <n>` | クエリ系 | `--limit` のエイリアス |
 | `--color <when>` | 全コマンド | ANSI カラー出力の制御。`auto`（既定）、`always`、`never` を受け付ける。優先順位: `--color` フラグ > `CLICOLOR_FORCE` > `NO_COLOR` > `CLICOLOR=0` > TTY 自動判定。`cdidx symbols Foo \| less -R` のような pager pipe でも色を維持したい場合は `--color=always`、TTY 上でも ANSI を抑止したい場合は `--color=never`（または `NO_COLOR=1`）を指定する。 |
+| `--palette <name>` | 全コマンド | カラー出力が有効なときに用いる ANSI パレットを選択する。`basic`（標準8色 SGR 30–37、最小 SSH/CI 端末向けの既定フォールバック）、`256`（256色 `\x1b[38;5;Nm`）、`truecolor`（24ビット RGB `\x1b[38;2;R;G;Bm`）を受け付ける。優先順位: `--palette` フラグ > `CDIDX_COLOR_PALETTE` 環境変数 > `COLORTERM` / `TERM` 自動判定。`basic` パレットは最小端末で読みにくい `\x1b[90m`（暗灰 / dim）を避ける。 |
 | `--metrics <path>` | 全コマンド（および MCP ツール呼び出し） | CLI コマンド / MCP ツール呼び出し 1 回ごとに JSONL レコードを 1 行ずつ `<path>` に追記する。フラグ未指定時のフォールバックとして `CDIDX_METRICS=<path>` 環境変数でも同じ出力先を指定できる。Best-effort のため、ディレクトリが無い・read-only マウント等の IO 失敗は黙って握り潰し、本体コマンドを壊さない。 |
 
 クエリ自体が `-` で始まる場合は `--query <query>` または `-- <query>` で渡してください。オプション値自体が `--` で始まる場合は、分離形式ではなく `--opt=<value>` で渡します。たとえば `--path=--json-dir` や `--db=--tmp.db` のように指定します。
@@ -1873,6 +1891,22 @@ MCP ツールで catch-all まで突き抜けた例外（想定外の SQLite 例
 | 上記いずれも未設定 | — | 既定の TTY 判定にフォールバック |
 
 優先順位は `CLICOLOR_FORCE` → `NO_COLOR` → `CLICOLOR=0` の順です。値が空の `NO_COLOR`（例: `NO_COLOR=` のみ export）は no-color.org の仕様に従い無視されます。
+
+#### パレット選択
+
+カラー出力が有効なとき、`cdidx` は最小 SSH/CI 端末でも truecolor 対応端末でも同じシンボル種別ラベルが読みやすくなる ANSI パレットを選択します。`--palette` フラグおよび `CDIDX_COLOR_PALETTE` 環境変数で自動判定を上書きできます:
+
+| 設定元 | 値 | 動作 |
+|---|---|---|
+| `--palette` フラグ | `basic` \| `8` \| `16` \| `ansi` | 標準8色 SGR (30–37) を強制。最小 SSH/CI 端末で読みにくい `\x1b[90m`（暗灰 / dim）を避ける |
+| `--palette` フラグ | `256` \| `color256` \| `8bit` | 256色パレット (`\x1b[38;5;Nm`) を強制 |
+| `--palette` フラグ | `truecolor` \| `24bit` \| `rgb` | 24ビット RGB パレット (`\x1b[38;2;R;G;Bm`) を強制 |
+| `CDIDX_COLOR_PALETTE` 環境変数 | 上記と同じ値 | フラグが未指定のときに `--palette` と同じ意味で適用 |
+| `COLORTERM` 環境変数 | `truecolor` \| `24bit` | truecolor として自動判定 |
+| `TERM` 環境変数 | `256color` を含む | 256色として自動判定 |
+| 上記いずれも無し | — | 標準8色 (basic) にフォールバック |
+
+優先順位は `--palette` フラグ → `CDIDX_COLOR_PALETTE` → `COLORTERM` / `TERM` 自動判定の順です。`NO_COLOR` / `--color=never` はパレット選択に関わらず ANSI エスケープを抑止し、色をオフにする選択が常に優先されます。
 
 ### メトリクス出力
 

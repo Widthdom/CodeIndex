@@ -20,6 +20,28 @@ public enum ColorMode
 }
 
 /// <summary>
+/// ANSI color palette to use when color output is enabled. <see cref="Basic"/>
+/// stays within the 8 standard SGR colors (30–37) and avoids the bright-black
+/// dim escape (<c>\x1b[90m</c>), which is unreadable on many SSH/CI terminals.
+/// <see cref="Color256"/> uses 256-color codes (`\x1b[38;5;Nm`) for higher
+/// contrast on capable terminals. <see cref="Truecolor"/> uses 24-bit RGB
+/// (`\x1b[38;2;R;G;Bm`) for terminals that advertise truecolor via
+/// <c>COLORTERM=truecolor|24bit</c>.
+/// 色出力で使用する ANSI パレット。Basic は標準8色のみで `\x1b[90m`（dim）を
+/// 避け、SSH / CI 端末でも可読性を確保する。Color256 / Truecolor はそれぞれ
+/// 256色 / 24ビットRGB を用い、対応端末で高コントラストを実現する。
+/// </summary>
+public enum ColorPalette
+{
+    /// <summary>Standard 8-color ANSI palette (30–37); avoids dim (`\x1b[90m`).</summary>
+    Basic = 0,
+    /// <summary>256-color ANSI palette (`\x1b[38;5;Nm`).</summary>
+    Color256 = 1,
+    /// <summary>24-bit RGB / truecolor palette (`\x1b[38;2;R;G;Bm`).</summary>
+    Truecolor = 2,
+}
+
+/// <summary>
 /// Console UI helpers: spinner, progress bar, banner, and easter egg messages.
 /// コンソールUIヘルパー: スピナー、プログレスバー、バナー、イースターエッグメッセージ。
 /// </summary>
@@ -430,6 +452,7 @@ public static class ConsoleUi
         Console.WriteLine("  --commits <id> [id ...]    Update only files changed in the specified git commits (preferred after commits)");
         Console.WriteLine("  --files <path> [path ...]  Update only the specified files; old rename/delete paths are not purged unless also listed");
         Console.WriteLine("  --color <when>             Color output: `auto` (default), `always`, or `never`; flag wins over `CLICOLOR_FORCE` / `NO_COLOR` / `CLICOLOR` env vars, which win over TTY auto-detect");
+        Console.WriteLine("  --palette <name>           ANSI palette: `basic` (8-color, default fallback), `256`, or `truecolor`; flag wins over `CDIDX_COLOR_PALETTE` env var, which wins over `COLORTERM` / `TERM` auto-detect");
         Console.WriteLine("  --metrics <path>           Append one JSONL record per CLI command / MCP tool call to <path> (also honors CDIDX_METRICS=<path>)");
         Console.WriteLine("  --help, -h                 Show this help message");
         Console.WriteLine("  --version, -V              Show version information");
@@ -883,6 +906,7 @@ _cdidx";
     // --- Helpers / ヘルパー ---
 
     private static ColorMode _colorMode = ColorMode.Auto;
+    private static ColorPalette? _explicitPalette;
 
     /// <summary>
     /// Set the active color-output mode. <see cref="ColorMode.Always"/> and
@@ -894,6 +918,94 @@ _cdidx";
     public static void SetColorMode(ColorMode mode) => _colorMode = mode;
 
     internal static ColorMode GetColorMode() => _colorMode;
+
+    /// <summary>
+    /// Override the active ANSI palette. <c>null</c> restores auto-detection
+    /// via <c>COLORTERM</c> / <c>TERM</c> / <c>CDIDX_COLOR_PALETTE</c>.
+    /// </summary>
+    public static void SetColorPalette(ColorPalette? palette) => _explicitPalette = palette;
+
+    internal static ColorPalette? GetExplicitColorPalette() => _explicitPalette;
+
+    /// <summary>
+    /// Parse a user-supplied `--palette` value. Accepts `basic`, `256`,
+    /// `color256`, `truecolor`, and `24bit` (case-insensitive). Returns false
+    /// on any other value.
+    /// `--palette` 値を解析する。`basic` / `256` / `truecolor` などを許可する。
+    /// </summary>
+    public static bool TryParseColorPalette(string? value, out ColorPalette palette)
+    {
+        switch (value?.Trim().ToLowerInvariant())
+        {
+            case "basic":
+            case "8":
+            case "16":
+            case "ansi":
+                palette = ColorPalette.Basic;
+                return true;
+            case "256":
+            case "color256":
+            case "8bit":
+                palette = ColorPalette.Color256;
+                return true;
+            case "truecolor":
+            case "24bit":
+            case "rgb":
+                palette = ColorPalette.Truecolor;
+                return true;
+            default:
+                palette = ColorPalette.Basic;
+                return false;
+        }
+    }
+
+    /// <summary>
+    /// Resolve the palette to use. Honors the explicit override set via
+    /// <see cref="SetColorPalette"/> first, then falls back to the
+    /// <c>CDIDX_COLOR_PALETTE</c> environment variable, then to capability
+    /// detection from <c>COLORTERM</c> / <c>TERM</c>.
+    /// </summary>
+    public static ColorPalette ResolveColorPalette()
+    {
+        if (_explicitPalette is { } explicitPalette)
+            return explicitPalette;
+
+        var envPalette = Environment.GetEnvironmentVariable("CDIDX_COLOR_PALETTE");
+        if (!string.IsNullOrWhiteSpace(envPalette) && TryParseColorPalette(envPalette, out var parsed))
+            return parsed;
+
+        return DetectColorPalette();
+    }
+
+    /// <summary>
+    /// Detect the terminal palette from the <c>COLORTERM</c> and <c>TERM</c>
+    /// environment variables. <c>COLORTERM=truecolor</c> / <c>COLORTERM=24bit</c>
+    /// → <see cref="ColorPalette.Truecolor"/>. <c>TERM</c> containing
+    /// <c>256color</c> (e.g. <c>xterm-256color</c>, <c>screen-256color</c>) →
+    /// <see cref="ColorPalette.Color256"/>. Otherwise <see cref="ColorPalette.Basic"/>.
+    /// </summary>
+    internal static ColorPalette DetectColorPalette()
+    {
+        var colorTerm = Environment.GetEnvironmentVariable("COLORTERM");
+        if (!string.IsNullOrEmpty(colorTerm))
+        {
+            var ct = colorTerm.Trim().ToLowerInvariant();
+            if (ct == "truecolor" || ct == "24bit")
+                return ColorPalette.Truecolor;
+        }
+
+        var term = Environment.GetEnvironmentVariable("TERM");
+        if (!string.IsNullOrEmpty(term))
+        {
+            var t = term.ToLowerInvariant();
+            if (t.Contains("256color", StringComparison.Ordinal))
+                return ColorPalette.Color256;
+            if (t.Contains("truecolor", StringComparison.Ordinal) || t.Contains("direct", StringComparison.Ordinal))
+                return ColorPalette.Truecolor;
+        }
+
+        return ColorPalette.Basic;
+    }
 
     /// <summary>
     /// Parse a user-supplied `--color` value. Accepts `auto`, `always`, and
@@ -931,25 +1043,64 @@ _cdidx";
         var padded = padWidth > 0 ? kind.PadRight(padWidth) : kind;
         if (ShouldUseColor())
         {
-            var color = kind switch
-            {
-                "class" => "\x1b[36m",      // cyan / シアン
-                "struct" => "\x1b[36m",     // cyan / シアン
-                "interface" => "\x1b[34m",  // blue / 青
-                "enum" => "\x1b[35m",       // magenta / マゼンタ
-                "function" => "\x1b[33m",   // yellow / 黄
-                "property" => "\x1b[32m",   // green / 緑
-                "event" => "\x1b[31m",      // red / 赤
-                "delegate" => "\x1b[35m",   // magenta / マゼンタ
-                "namespace" => "\x1b[90m",  // dim / 暗灰
-                "import" => "\x1b[90m",     // dim / 暗灰
-                _ => "",
-            };
+            var color = GetKindColorCode(kind, ResolveColorPalette());
             if (color.Length > 0)
                 return $"{color}{padded}\x1b[0m";
         }
         return padded;
     }
+
+    // Per-palette SGR introducer for a given symbol kind. Basic stays within
+    // the 8 standard ANSI colors (30–37) and intentionally avoids
+    // `\x1b[90m` (bright-black / dim), which is unreadable on many minimal
+    // SSH / CI terminals; namespace / import fall back to plain white (37).
+    // 各パレットでのシンボル種別ごとの SGR コード。Basic は標準8色のみで
+    // dim (`\x1b[90m`) を避け、SSH/CI 端末でも可読性を確保する。
+    internal static string GetKindColorCode(string kind, ColorPalette palette) => palette switch
+    {
+        ColorPalette.Truecolor => kind switch
+        {
+            "class" => "\x1b[38;2;102;217;239m",     // bright cyan
+            "struct" => "\x1b[38;2;102;217;239m",
+            "interface" => "\x1b[38;2;102;160;255m",  // bright blue
+            "enum" => "\x1b[38;2;215;110;215m",       // bright magenta
+            "function" => "\x1b[38;2;255;215;75m",    // gold yellow
+            "property" => "\x1b[38;2;160;230;100m",   // bright green
+            "event" => "\x1b[38;2;255;100;100m",      // bright red
+            "delegate" => "\x1b[38;2;215;110;215m",
+            "namespace" => "\x1b[38;2;180;180;180m",  // light gray (readable on dark + light bg)
+            "import" => "\x1b[38;2;180;180;180m",
+            _ => "",
+        },
+        ColorPalette.Color256 => kind switch
+        {
+            "class" => "\x1b[38;5;81m",     // cyan
+            "struct" => "\x1b[38;5;81m",
+            "interface" => "\x1b[38;5;75m",  // blue
+            "enum" => "\x1b[38;5;213m",      // magenta
+            "function" => "\x1b[38;5;221m",  // gold
+            "property" => "\x1b[38;5;120m",  // green
+            "event" => "\x1b[38;5;203m",     // salmon red
+            "delegate" => "\x1b[38;5;213m",
+            "namespace" => "\x1b[38;5;245m", // medium gray (not as dim as 90m)
+            "import" => "\x1b[38;5;245m",
+            _ => "",
+        },
+        _ => kind switch
+        {
+            "class" => "\x1b[36m",      // cyan / シアン
+            "struct" => "\x1b[36m",     // cyan / シアン
+            "interface" => "\x1b[34m",  // blue / 青
+            "enum" => "\x1b[35m",       // magenta / マゼンタ
+            "function" => "\x1b[33m",   // yellow / 黄
+            "property" => "\x1b[32m",   // green / 緑
+            "event" => "\x1b[31m",      // red / 赤
+            "delegate" => "\x1b[35m",   // magenta / マゼンタ
+            "namespace" => "\x1b[37m",  // white (instead of dim 90m) / 白（dim 回避）
+            "import" => "\x1b[37m",     // white (instead of dim 90m) / 白（dim 回避）
+            _ => "",
+        },
+    };
 
     internal static bool ShouldUseInteractiveConsole()
     {

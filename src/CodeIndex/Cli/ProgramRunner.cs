@@ -23,6 +23,14 @@ internal static class ProgramRunner
             return CommandExitCodes.UsageError;
         }
 
+        if (!TryConsumePaletteFlag(ref args, out var paletteError))
+        {
+            Console.Error.WriteLine(paletteError);
+            Console.Error.WriteLine("Hint: use one of `basic`, `256`, `truecolor`.");
+            GlobalToolLog.Info($"command_complete exit_code={CommandExitCodes.UsageError} palette_flag_invalid=true");
+            return CommandExitCodes.UsageError;
+        }
+
         if (!TryConsumeMetricsFlag(ref args, out var metricsPath, out var metricsError))
         {
             Console.Error.WriteLine(metricsError);
@@ -224,6 +232,71 @@ internal static class ProgramRunner
 
         if (requested.HasValue)
             ConsoleUi.SetColorMode(requested.Value);
+        args = kept.ToArray();
+        return true;
+    }
+
+    // Strip `--palette <name>` / `--palette=<name>` from `args` before
+    // subcommand parsing. Mirrors `TryConsumeColorFlag` so any subcommand
+    // (CLI or MCP) inherits the chosen ANSI palette without re-parsing.
+    // Anything after `--` is passed through verbatim so subcommand
+    // query-escape semantics are preserved (#1569).
+    internal static bool TryConsumePaletteFlag(ref string[] args, out string error)
+    {
+        error = string.Empty;
+        ConsoleUi.SetColorPalette(null);
+        if (args.Length == 0)
+            return true;
+
+        var kept = new List<string>(args.Length);
+        ColorPalette? requested = null;
+        var passthrough = false;
+        for (var i = 0; i < args.Length; i++)
+        {
+            var arg = args[i];
+
+            if (passthrough)
+            {
+                kept.Add(arg);
+                continue;
+            }
+            if (arg == "--")
+            {
+                passthrough = true;
+                kept.Add(arg);
+                continue;
+            }
+
+            string? rawValue = null;
+            if (arg == "--palette")
+            {
+                if (i + 1 >= args.Length)
+                {
+                    error = "Error: --palette requires a value (one of `basic`, `256`, `truecolor`).";
+                    return false;
+                }
+                rawValue = args[++i];
+            }
+            else if (arg.StartsWith("--palette=", StringComparison.Ordinal))
+            {
+                rawValue = arg.Substring("--palette=".Length);
+            }
+            else
+            {
+                kept.Add(arg);
+                continue;
+            }
+
+            if (!ConsoleUi.TryParseColorPalette(rawValue, out var palette))
+            {
+                error = $"Error: invalid --palette value `{rawValue}`.";
+                return false;
+            }
+            requested = palette;
+        }
+
+        if (requested.HasValue)
+            ConsoleUi.SetColorPalette(requested.Value);
         args = kept.ToArray();
         return true;
     }
