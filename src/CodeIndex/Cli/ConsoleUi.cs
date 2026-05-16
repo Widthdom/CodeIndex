@@ -290,11 +290,15 @@ public static class ConsoleUi
     /// <paramref name="flag"/> in the language chosen by <see cref="UiLanguageResolver"/>
     /// (<c>CDIDX_LANG</c> env > <see cref="System.Globalization.CultureInfo.CurrentUICulture"/>
     /// > English fallback). Unknown flags print two blank lines for legacy compatibility.
+    /// Pass <paramref name="languageOverride"/> to bypass env/culture resolution (used by
+    /// tests so they do not mutate the live process environment).
     /// イースターエッグメッセージを表示（単体実行時）。<see cref="UiLanguageResolver"/>
     /// が選んだ言語（<c>CDIDX_LANG</c> 環境変数 &gt; カルチャ &gt; 英語）でカタログ
     /// エントリを描画する。未知フラグは従来互換で空行を2つ出力。
+    /// <paramref name="languageOverride"/> を指定すると環境変数/カルチャ判定をスキップする
+    /// （テストがプロセス環境を書き換えずに済むようにするためのフック）。
     /// </summary>
-    public static void PrintEasterEggMessage(string flag)
+    public static void PrintEasterEggMessage(string flag, UiLanguage? languageOverride = null)
     {
         var pair = flag switch
         {
@@ -314,7 +318,7 @@ public static class ConsoleUi
             return;
         }
 
-        var lang = UiLanguageResolver.Resolve();
+        var lang = languageOverride ?? UiLanguageResolver.Resolve();
         foreach (var line in UiMessages.Render(pair, lang))
             Console.WriteLine(line);
     }

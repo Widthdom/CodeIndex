@@ -99,25 +99,25 @@ public class UiI18nTests
     }
 
     [Fact]
-    public void PrintEasterEggMessage_DefaultEnv_EmitsEnglishOnly()
+    public void PrintEasterEggMessage_EnglishOverride_EmitsEnglishOnly()
     {
-        var output = CaptureEasterEgg("--sushi", lang: "en");
+        var output = CaptureEasterEgg("--sushi", UiLanguage.English);
         Assert.Contains(UiMessages.EasterEggSushi.English, output);
         Assert.DoesNotContain(UiMessages.EasterEggSushi.Japanese, output);
     }
 
     [Fact]
-    public void PrintEasterEggMessage_JapaneseEnv_EmitsJapaneseOnly()
+    public void PrintEasterEggMessage_JapaneseOverride_EmitsJapaneseOnly()
     {
-        var output = CaptureEasterEgg("--coffee", lang: "ja");
+        var output = CaptureEasterEgg("--coffee", UiLanguage.Japanese);
         Assert.Contains(UiMessages.EasterEggCoffee.Japanese, output);
         Assert.DoesNotContain(UiMessages.EasterEggCoffee.English, output);
     }
 
     [Fact]
-    public void PrintEasterEggMessage_BothEnv_EmitsBothLanguages()
+    public void PrintEasterEggMessage_BothOverride_EmitsBothLanguages()
     {
-        var output = CaptureEasterEgg("--ramen", lang: "both");
+        var output = CaptureEasterEgg("--ramen", UiLanguage.Both);
         Assert.Contains(UiMessages.EasterEggRamen.English, output);
         Assert.Contains(UiMessages.EasterEggRamen.Japanese, output);
     }
@@ -125,7 +125,7 @@ public class UiI18nTests
     [Fact]
     public void PrintEasterEggMessage_UnknownFlag_PrintsBlankLinesOnly()
     {
-        var output = CaptureEasterEgg("--not-a-flag", lang: "en");
+        var output = CaptureEasterEgg("--not-a-flag", UiLanguage.English);
         // Legacy fallback contract: print two blank lines, no catalog content.
         // 既存契約: 未知フラグは空行を2つ出すだけ。
         Assert.DoesNotContain(UiMessages.EasterEggSushi.English, output);
@@ -134,24 +134,27 @@ public class UiI18nTests
         Assert.Equal("\n\n", trimmed);
     }
 
-    private static string CaptureEasterEgg(string flag, string lang)
+    private static string CaptureEasterEgg(string flag, UiLanguage languageOverride)
     {
+        // Use the language injection seam so tests do not mutate the live
+        // process environment. TestConsoleLock.Gate still serializes the
+        // Console.Out swap against other console-touching tests.
+        // 言語注入フックを使い、プロセス環境を書き換えずに検証する。
+        // Console.Out の差し替えだけは他のコンソール系テストと衝突しないよう
+        // TestConsoleLock.Gate で直列化する。
         lock (TestConsoleLock.Gate)
         {
-            var originalEnv = Environment.GetEnvironmentVariable(UiLanguageResolver.EnvVarName);
             var originalOut = Console.Out;
             using var writer = new StringWriter();
             try
             {
-                Environment.SetEnvironmentVariable(UiLanguageResolver.EnvVarName, lang);
                 Console.SetOut(writer);
-                ConsoleUi.PrintEasterEggMessage(flag);
+                ConsoleUi.PrintEasterEggMessage(flag, languageOverride);
                 return writer.ToString();
             }
             finally
             {
                 Console.SetOut(originalOut);
-                Environment.SetEnvironmentVariable(UiLanguageResolver.EnvVarName, originalEnv);
             }
         }
     }
