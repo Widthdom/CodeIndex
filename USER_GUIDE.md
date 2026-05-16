@@ -552,6 +552,24 @@ cdidx map --path src/ --exclude-tests --json
 
 `map` is the fastest way to orient both a human and an AI agent before deeper queries. Use it to get languages, modules, hot files, and likely entrypoints, then narrow with `inspect`, `search`, or `definition`. For the full freshness and metadata contract of `status --json`, `map --json`, `inspect --json`, and MCP `analyze_symbol`, see [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md).
 
+### Build a bug-report bundle
+
+```bash
+cdidx report --output report.tgz
+cdidx report --output report.tgz --json
+```
+
+`cdidx report --output <path>` packages a redacted `.tar.gz` you can attach to a GitHub issue. The bundle includes the cdidx version, .NET runtime, OS / process architecture, and a `schema.txt` listing each SQLite table with its row count (no user content). It also tails the recent cdidx lifecycle log (`stderr-yyyyMMdd.log`), with `cwd=` and `args=` lines replaced by `[redacted]` so working-directory paths and literal query strings never leave your machine.
+
+| Flag | Default | Effect |
+|---|---|---|
+| `--output <path>` / `-o <path>` | (required) | Destination `.tar.gz`. The directory is created if missing. |
+| `--db <path>` | `.cdidx/codeindex.db` | Override the database whose schema is summarized. If absent, `schema.txt` records that no DB was found. |
+| `--log-lines <n>` | `200` | How many trailing lifecycle-log lines to include (`0` disables the tail). |
+| `--no-log` | | Skip the lifecycle log entirely. |
+| `--include-args` | | Keep literal `cwd=` and `args=` values in the log tail (opt-in; share only with trusted recipients). |
+| `--json` | | Print a stable summary envelope (`output_path`, `version`, `files`, `schema_tables`, `log_lines_included`, `log_included`, `db_included`, `db_path`) instead of the human-friendly output. |
+
 ## Options
 
 | Option | Applies to | Description |
@@ -1667,6 +1685,24 @@ cdidx map --path src/ --exclude-tests --json
 ```
 
 `map` は、人と AI のどちらにも最短で全体像を渡すための入口です。言語、モジュール、ホットなファイル、推定エントリポイントを把握したら、`inspect`、`search`、`definition` に進んでください。`status --json`、`map --json`、`inspect --json`、MCP `analyze_symbol` の詳細なメタデータ契約は [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md#開発者ガイド) にまとめています。
+
+### バグ報告用バンドルを作る
+
+```bash
+cdidx report --output report.tgz
+cdidx report --output report.tgz --json
+```
+
+`cdidx report --output <path>` は GitHub Issue に添付できる匿名化済み `.tar.gz` を生成します。バンドルには cdidx のバージョン、.NET ランタイム、OS / プロセスアーキテクチャ、各 SQLite テーブル名と整数の行数のみを記録した `schema.txt`（ユーザコンテンツは含まれません）が入ります。さらに直近のライフサイクルログ（`stderr-yyyyMMdd.log`）の末尾も含まれますが、`cwd=` と `args=` 行は `[redacted]` に置換されるため、作業ディレクトリのパスや具体的なクエリ文字列が端末から外に出ることはありません。
+
+| フラグ | 既定値 | 効果 |
+|---|---|---|
+| `--output <path>` / `-o <path>` | （必須） | 出力先 `.tar.gz`。親ディレクトリが無ければ作成します。 |
+| `--db <path>` | `.cdidx/codeindex.db` | スキーマ要約対象の DB を上書きします。存在しなければ `schema.txt` に「DB が見つからなかった」旨が記録されます。 |
+| `--log-lines <n>` | `200` | ライフサイクルログ末尾を何行含めるか（`0` で末尾を含めません）。 |
+| `--no-log` | | ライフサイクルログを完全に省略します。 |
+| `--include-args` | | ログ末尾の `cwd=` / `args=` 値を伏字化せずそのまま含めます（信頼できる相手にだけ使用してください）。 |
+| `--json` | | 人間向け出力の代わりに、安定したサマリ JSON（`output_path` / `version` / `files` / `schema_tables` / `log_lines_included` / `log_included` / `db_included` / `db_path`）を出力します。 |
 
 ## オプション一覧
 

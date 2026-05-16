@@ -137,6 +137,7 @@ internal static class ProgramRunner
                     "index" => IndexCommandRunner.Run(subArgs, jsonOptions),
                     "backfill-fold" => IndexCommandRunner.RunBackfillFold(subArgs, jsonOptions),
                     "db" => DbCommandRunner.RunIntegrityCheck(subArgs, jsonOptions),
+                    "report" => ReportCommandRunner.Run(subArgs, jsonOptions, appVersion),
                     _ when IsProjectPathArg(commandName)
                         => IndexCommandRunner.Run(args, jsonOptions),
                     _ => ShowError(args, $"Unknown command: {commandName}")

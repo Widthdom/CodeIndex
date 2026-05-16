@@ -73,6 +73,16 @@ internal static class GlobalToolLog
             || normalized.Contains("/tests/CodeIndex.Tests/bin/", StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>
+    /// Resolve the lifecycle-log directory cdidx writes to, using the same precedence
+    /// as <see cref="TryStart"/>. Exposed to `cdidx report` so the bug-report bundle
+    /// can locate recent stderr log files without duplicating the platform-fallback
+    /// logic.
+    /// `cdidx report` 用に <see cref="TryStart"/> と同じ優先順位で
+    /// ライフサイクルログのディレクトリ解決を公開する。
+    /// </summary>
+    internal static string ResolveLogDirectoryForReport() => ResolveLogDirectory();
+
     private static string ResolveLogDirectory()
     {
         var overrideDirectory = Environment.GetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR");

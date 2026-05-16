@@ -44,6 +44,7 @@ public static class ConsoleUi
         ("outline", "cdidx outline <path> [--db <path>] [--json]"),
         ("status", "cdidx status [--db <path>] [--json] [--check]"),
         ("db", "cdidx db --integrity-check [--db <path>] [--json]"),
+        ("report", "cdidx report --output <path> [--db <path>] [--json] [--log-lines <n>] [--no-log] [--include-args]"),
         ("validate", "cdidx validate [--db <path>] [--json] [--kind <kind>] [--path <glob>]"),
         ("impact", "cdidx impact <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--depth <n>] [--count] [--with-paths]"),
         ("deps", "cdidx deps [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--reverse]"),
@@ -371,6 +372,7 @@ public static class ConsoleUi
         Console.WriteLine("  outline <path>             Show the symbol outline of a single file");
         Console.WriteLine("  status                     Show database statistics; add --check to verify DB/worktree match");
         Console.WriteLine("  db --integrity-check       Run SQLite `PRAGMA integrity_check` and report findings");
+        Console.WriteLine("  report --output <path>     Build a redacted crash-repro tarball (.tgz) for bug reports");
         Console.WriteLine("  validate                   Report encoding issues (U+FFFD, BOM, null bytes, mixed line endings, UTF-16 BOM, likely non-UTF8)");
         Console.WriteLine("  impact <query>             Show transitive callers; type queries may return heuristic file-level dependency hints");
         Console.WriteLine("  deps                       Show file-level dependency edges from the reference graph");
@@ -560,7 +562,7 @@ public static class ConsoleUi
     [
         "index", "backfill-fold", "search", "definition", "references", "callers", "callees",
         "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status",
-        "validate", "deps", "impact", "unused", "hotspots", "languages", "mcp", "db", "license",
+        "validate", "deps", "impact", "unused", "hotspots", "languages", "mcp", "db", "report", "license",
     ];
 
     /// <summary>
