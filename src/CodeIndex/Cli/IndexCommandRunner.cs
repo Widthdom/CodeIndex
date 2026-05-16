@@ -1653,9 +1653,9 @@ public static class IndexCommandRunner
 
             var authoritativeDirectories = scanResult.ListedDirectories
                 .ToHashSet(StringComparer.Ordinal);
-            var symlinkPrunedDirectories = scanResult.SymlinkPrunedDirectories
+            var attributePrunedDirectories = scanResult.AttributePrunedDirectories
                 .ToHashSet(StringComparer.Ordinal);
-            purged += writer.PurgeFilesOutsideRetainedSetWithinListedDirectories(retainedPaths, authoritativeDirectories, symlinkPrunedDirectories);
+            purged += writer.PurgeFilesOutsideRetainedSetWithinListedDirectories(retainedPaths, authoritativeDirectories, attributePrunedDirectories);
         }
         else
         {

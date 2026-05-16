@@ -54,7 +54,7 @@ The lock files for projects with zero direct `PackageReference` entries (e.g. `t
 ### Indexing pipeline
 
 ```
-Directory scan / shared path filter (built-in skip lists + `.gitignore` / `.cdidxignore`) → Language detection → File read (UTF-8)
+Directory scan / shared path filter (built-in skip lists + `.gitignore` / `.cdidxignore` + reparse/Windows Hidden/System attribute pruning) → Language detection → File read (UTF-8)
   → UPSERT file record
   → Split into chunks (80 lines, 10-line overlap)
   → Extract symbols via regex
@@ -63,7 +63,7 @@ Directory scan / shared path filter (built-in skip lists + `.gitignore` / `.cdid
   → Populate FTS5 index
 ```
 
-Scoped `--files` / `--commits` refreshes reuse the same path filter as full scans. If a commit-scoped refresh includes `.gitignore` or `.cdidxignore` changes, `IndexCommandRunner` falls back to a full scan so newly ignored files are purged safely. Malformed ignore lines are reported as scan errors and skipped instead of aborting the whole run.
+Scoped `--files` / `--commits` refreshes reuse the same path filter as full scans. If a commit-scoped refresh includes `.gitignore` or `.cdidxignore` changes, `IndexCommandRunner` falls back to a full scan so newly ignored files are purged safely. Malformed ignore lines are reported as scan errors and skipped instead of aborting the whole run. On Windows, files and directories with Hidden or System attributes are rejected before language detection; clear those attributes before indexing project-owned sources because ignore rules cannot re-include them.
 
 ## Database schema
 
@@ -1371,7 +1371,7 @@ CI で `NU1004 The packages lock file is inconsistent with the project dependenc
 ### インデックスパイプライン
 
 ```
-ディレクトリ走査 / 共有パスフィルタ（組み込みスキップ + `.gitignore` / `.cdidxignore`）→ 言語検出 → ファイル読み込み（UTF-8）
+ディレクトリ走査 / 共有パスフィルタ（組み込みスキップ + `.gitignore` / `.cdidxignore` + reparse/Windows Hidden/System 属性 pruning）→ 言語検出 → ファイル読み込み（UTF-8）
   → ファイルレコードUPSERT
   → チャンク分割（80行、10行重複）
   → 正規表現でシンボル抽出
@@ -1380,7 +1380,7 @@ CI で `NU1004 The packages lock file is inconsistent with the project dependenc
   → FTS5インデックス反映
 ```
 
-`--files` / `--commits` の部分更新も、フルスキャンと同じパスフィルタを再利用する。commit 単位更新に `.gitignore` または `.cdidxignore` の変更が含まれる場合、`IndexCommandRunner` は newly ignored file を安全に purge するため自動でフルスキャンへフォールバックする。malformed な ignore 行は走査エラーとして報告し、その行だけをスキップして index 全体は継続する。
+`--files` / `--commits` の部分更新も、フルスキャンと同じパスフィルタを再利用する。commit 単位更新に `.gitignore` または `.cdidxignore` の変更が含まれる場合、`IndexCommandRunner` は newly ignored file を安全に purge するため自動でフルスキャンへフォールバックする。malformed な ignore 行は走査エラーとして報告し、その行だけをスキップして index 全体は継続する。Windows では Hidden または System 属性が付いたファイルとディレクトリを言語検出前に拒否する。プロジェクト所有のソースを索引したい場合、ignore ルールでは再包含できないため先にそれらの属性を外す。
 
 ## データベーススキーマ
 

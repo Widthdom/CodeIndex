@@ -884,6 +884,67 @@ public class FileIndexerTests
         }
     }
 
+    [Theory]
+    [InlineData(FileAttributes.ReparsePoint, false, true)]
+    [InlineData(FileAttributes.ReparsePoint, true, true)]
+    [InlineData(FileAttributes.Hidden, false, false)]
+    [InlineData(FileAttributes.Hidden, true, true)]
+    [InlineData(FileAttributes.System, false, false)]
+    [InlineData(FileAttributes.System, true, true)]
+    [InlineData(FileAttributes.Hidden | FileAttributes.System, true, true)]
+    [InlineData(FileAttributes.Archive, true, false)]
+    public void HasSkippedAttributes_RejectsWindowsHiddenAndSystemOnly(
+        FileAttributes attributes,
+        bool isWindows,
+        bool expected)
+    {
+        Assert.Equal(expected, FileIndexer.HasSkippedAttributes(attributes, isWindows));
+    }
+
+    [Fact]
+    public void ScanFiles_OnWindowsSkipsHiddenAndSystemEntries()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(Path.Combine(tempDir, "visible.py"), "print('visible')\n");
+
+            var hiddenFile = Path.Combine(tempDir, "hidden.py");
+            File.WriteAllText(hiddenFile, "print('hidden')\n");
+            File.SetAttributes(hiddenFile, File.GetAttributes(hiddenFile) | FileAttributes.Hidden);
+
+            var systemFile = Path.Combine(tempDir, "system.py");
+            File.WriteAllText(systemFile, "print('system')\n");
+            File.SetAttributes(systemFile, File.GetAttributes(systemFile) | FileAttributes.System);
+
+            var hiddenDir = Path.Combine(tempDir, "hidden_dir");
+            Directory.CreateDirectory(hiddenDir);
+            File.WriteAllText(Path.Combine(hiddenDir, "nested.py"), "print('hidden nested')\n");
+            File.SetAttributes(hiddenDir, File.GetAttributes(hiddenDir) | FileAttributes.Hidden);
+
+            var systemDir = Path.Combine(tempDir, "system_dir");
+            Directory.CreateDirectory(systemDir);
+            File.WriteAllText(Path.Combine(systemDir, "nested.py"), "print('system nested')\n");
+            File.SetAttributes(systemDir, File.GetAttributes(systemDir) | FileAttributes.System);
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal(["visible.py"], files);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
     [Fact]
     public void ScanFiles_SkipsDanglingSymlinksWithoutAbortingScan()
     {

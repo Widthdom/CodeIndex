@@ -822,23 +822,23 @@ public class DbWriter
     /// <summary>
     /// Remove files from DB that are outside the retained set, but only when their immediate
     /// parent directory completed its own file listing authoritatively OR they sit anywhere
-    /// under a directory that the scanner skipped because it is a symlink / reparse point.
-    /// The symlink case lets us authoritatively purge deep descendants indexed by earlier
-    /// symlink-following runs, because the current scan affirmatively refused to enter that
-    /// subtree. Used by partial full scans so unreadable descendants do not block stale-file
+    /// under a directory that the scanner skipped because of file attributes such as symlink /
+    /// reparse point or Windows Hidden/System. The pruned-directory case lets us authoritatively
+    /// purge deep descendants indexed by earlier runs, because the current scan affirmatively
+    /// refused to enter that subtree. Used by partial full scans so unreadable descendants do not block stale-file
     /// cleanup for already-listed siblings, while still protecting unreadable subtrees from
     /// speculative deletes.
     /// retained set の外にある DB ファイルを削除するが、即時親ディレクトリ自身の file listing が
-    /// authoritative に完了した場合、または symlink / reparse point として scanner が skip した
-    /// ディレクトリ配下に入っている場合に限定する。後者は「今回のスキャンが subtree 全体への
-    /// 進入を明示的に拒否した」ことを根拠に、過去の symlink 追従で作られた深い子孫も authoritative
-    /// に purge できる。partial full scan では、unreadable descendant のせいで既に列挙済み sibling
+    /// authoritative に完了した場合、または symlink / reparse point や Windows Hidden/System などの
+    /// file attribute で scanner が skip したディレクトリ配下に入っている場合に限定する。後者は
+    /// 「今回のスキャンが subtree 全体への進入を明示的に拒否した」ことを根拠に、過去の実行で
+    /// 作られた深い子孫も authoritative に purge できる。partial full scan では、unreadable descendant のせいで既に列挙済み sibling
     /// の stale cleanup が止まらないようにしつつ、unreadable subtree 自体は推測ベースで削除しない。
     /// </summary>
     public int PurgeFilesOutsideRetainedSetWithinListedDirectories(
         IReadOnlySet<string> retainedRelativePaths,
         IReadOnlySet<string> listedDirectories,
-        IReadOnlySet<string> symlinkPrunedDirectories)
+        IReadOnlySet<string> attributePrunedDirectories)
     {
         var staleIds = new List<long>();
         using (var cmd = _conn.CreateCommand())
@@ -853,7 +853,7 @@ public class DbWriter
                     continue;
 
                 if (HasListedParentDirectory(path, listedDirectories)
-                    || IsUnderSymlinkPrunedDirectory(path, symlinkPrunedDirectories))
+                    || IsUnderAttributePrunedDirectory(path, attributePrunedDirectories))
                     staleIds.Add(id);
             }
         }
@@ -882,21 +882,21 @@ public class DbWriter
         return listedDirectories.Contains(directory);
     }
 
-    // True when any proper ancestor directory of `path` is in the symlink-pruned set.
+    // True when any proper ancestor directory of `path` is in the attribute-pruned set.
     // We walk parents via LastIndexOf('/') rather than building a substring prefix test so that
     // "sub/parent_loop" only matches "sub/parent_loop/..." and never a sibling like "sub/parent_loop_x/...".
-    // path のいずれかの真の祖先ディレクトリが symlink-pruned 集合に含まれるかを判定する。
+    // path のいずれかの真の祖先ディレクトリが attribute-pruned 集合に含まれるかを判定する。
     // 単純な prefix 比較だと "sub/parent_loop" が "sub/parent_loop_x/..." まで巻き込むので、
     // LastIndexOf('/') で親を辿り、ディレクトリ境界に揃った一致のみを拾う。
-    private static bool IsUnderSymlinkPrunedDirectory(string path, IReadOnlySet<string> symlinkPrunedDirectories)
+    private static bool IsUnderAttributePrunedDirectory(string path, IReadOnlySet<string> attributePrunedDirectories)
     {
-        if (symlinkPrunedDirectories.Count == 0)
+        if (attributePrunedDirectories.Count == 0)
             return false;
 
         var directory = GetDirectoryPath(path);
         while (directory.Length > 0)
         {
-            if (symlinkPrunedDirectories.Contains(directory))
+            if (attributePrunedDirectories.Contains(directory))
                 return true;
 
             var separatorIndex = directory.LastIndexOf('/');
