@@ -1,0 +1,26 @@
+{
+  "path": "src/Refs.cs",
+  "lang": "csharp",
+  "symbol_name": "TargetType",
+  "reference_kind": "type_reference",
+  "line": 7,
+  "column": 42,
+  "context": "bool Match(object value) =\u003E value is TargetType;",
+  "context_truncated": false,
+  "container_kind": "function",
+  "container_name": "Match",
+  "exact_index_available": true
+}
+{
+  "path": "src/Refs.cs",
+  "lang": "csharp",
+  "symbol_name": "TargetType",
+  "reference_kind": "type_reference",
+  "line": 8,
+  "column": 29,
+  "context": "void Use() { _ = typeof(TargetType); }",
+  "context_truncated": false,
+  "container_kind": "function",
+  "container_name": "Use",
+  "exact_index_available": true
+}

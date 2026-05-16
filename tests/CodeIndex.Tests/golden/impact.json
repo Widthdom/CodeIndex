@@ -1,0 +1,48 @@
+{
+  "query": "FolderDiffService",
+  "resolved_name": "FolderDiffService",
+  "count": 1,
+  "file_count": 1,
+  "confirmed_count": 0,
+  "confirmed_file_count": 0,
+  "hint_count": 1,
+  "hint_file_count": 1,
+  "max_depth": 5,
+  "actual_depth": 0,
+  "truncated": false,
+  "impact_mode": "file_dependency_hints",
+  "heuristic": true,
+  "callers": [],
+  "file_impacts": [
+    {
+      "source_path": "src/App.cs",
+      "target_path": "src/FolderDiffService.cs",
+      "reference_count": 2,
+      "symbols": "ExecuteFolderDiffAsync,FolderDiffService"
+    }
+  ],
+  "definition_count": 1,
+  "definition_file_count": 1,
+  "has_multiple_definitions": false,
+  "has_class_like_definitions": true,
+  "has_multiple_definition_files": false,
+  "definitions": [
+    {
+      "path": "src/FolderDiffService.cs",
+      "lang": "csharp",
+      "kind": "class",
+      "name": "FolderDiffService",
+      "line": 1,
+      "start_line": 1,
+      "end_line": 4,
+      "body_start_line": 2,
+      "body_end_line": 4,
+      "signature": "public class FolderDiffService",
+      "container_kind": null,
+      "container_name": null,
+      "visibility": "public",
+      "return_type": null
+    }
+  ],
+  "suggestion": "These file-level dependents are heuristic only; confirm with \u0060cdidx deps --path \u003Cdefinition-path\u003E --reverse\u0060 and a member-level \u0060impact\u0060 query."
+}

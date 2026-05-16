@@ -1,0 +1,28 @@
+{
+  "query": "Add",
+  "path": "src/Lib.cs",
+  "lang": "csharp",
+  "chunk_start_line": 1,
+  "chunk_end_line": 7,
+  "snippet_start_line": 1,
+  "snippet_end_line": 7,
+  "snippet": "namespace Demo;\n\npublic static class Lib\n{\n    public static int Add(int a, int b) =\u003E a \u002B b;\n}\n",
+  "match_lines": [
+    5
+  ],
+  "highlights": [
+    {
+      "line": 5,
+      "text": "    public static int Add(int a, int b) =\u003E a \u002B b;",
+      "original_line_length": 49,
+      "truncated": false,
+      "terms": [
+        "Add"
+      ]
+    }
+  ],
+  "context_before": 4,
+  "context_after": 2,
+  "truncated_line_count": 0,
+  "score": "\u003CSCORE\u003E"
+}

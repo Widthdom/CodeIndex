@@ -1,0 +1,8 @@
+{
+  "path": "src/Lib.cs",
+  "lang": "csharp",
+  "start_line": 1,
+  "end_line": 6,
+  "content": "namespace Demo;\n\npublic static class Lib\n{\n    public static int Add(int a, int b) =\u003E a \u002B b;\n}",
+  "content_truncated": false
+}

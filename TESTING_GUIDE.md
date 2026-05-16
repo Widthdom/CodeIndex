@@ -57,6 +57,8 @@ The test project mirrors the production areas closely.
   Large-scale data benchmarks (10K+ files). Skip-by-default; run manually with `--filter`.
 - `DbRecoveryTests.cs`
   Database corruption recovery and graceful degradation behavior.
+- `JsonOutputSnapshotTests.cs`, `JsonOutputSnapshotHelper.cs`
+  Golden-file regression fixtures for the CLI `--json` output contracts (issue #1548). Each test runs one command (`status`, `search`, `references`, `impact`, `excerpt`) against a deterministic in-memory fixture, normalizes volatile fields (timestamps, absolute paths, commit SHAs, FTS5 scores), and diffs against the matching file under `tests/CodeIndex.Tests/golden/`. Renames, removals, reordered arrays, or new keys fail the snapshot so the contract change is forced to land alongside an intentional golden update. See "JSON `--json` output snapshots" below for the update procedure.
 - `TestProjectHelper.cs`, `TestConsoleLock.cs`
   Shared test helpers.
 
@@ -64,7 +66,7 @@ The test project mirrors the production areas closely.
 
 - Keep test names descriptive. The current suite mostly uses `Method_Scenario_ExpectedBehavior`.
 - Keep tests deterministic. Do not depend on machine-global git config, locale-specific output, or ambient files.
-- Prefer small fixtures and explicit assertions over broad snapshot-style checks.
+- Prefer small fixtures and explicit assertions over broad snapshot-style checks. The one narrow exception is the `--json` output contract harness (`JsonOutputSnapshotTests`), which pins the full field shape on purpose — see "JSON `--json` output snapshots" below.
 - When a production comment or error string is bilingual, preserve that expectation in tests where it matters.
 - If a behavior change is user-visible, update tests, `CHANGELOG.md`, and any affected docs together.
 
@@ -117,6 +119,23 @@ For boundary tests, use the smallest fixture that still crosses the boundary. If
 - Lock console mutations with `TestConsoleLock.Gate`.
 - Assert exit codes with `CommandExitCodes`.
 - For JSON output, parse it with `JsonDocument` instead of asserting raw strings.
+
+### JSON `--json` output snapshots
+
+`JsonOutputSnapshotTests` and `JsonOutputSnapshotHelper` form a small golden-file harness that catches accidental shape drift in CLI `--json` output (renamed keys, removed keys, reordered top-level arrays, new keys without a contract update). Use them alongside the narrower assertion-style JSON tests in `QueryCommandRunnerTests`; they complement each other rather than replace it.
+
+- Goldens live at `tests/CodeIndex.Tests/golden/<command>.json` and are checked in to the source tree.
+- `JsonOutputSnapshotHelper` normalizes volatile fields before comparison: `indexed_at` / `latest_modified` / other timestamp keys → `<TIMESTAMP>`; `git_head` / `indexed_head_commit` / other commit-SHA keys → `<COMMIT_SHA>`; `project_root` → `<PROJECT_ROOT>`; `version` → `<VERSION>`; per-result `score` (BM25, FTS5-implementation-sensitive) → `<SCORE>`. Per-test temp paths are redacted via the helper's `BuildPathReplacements`.
+- When a shape change is intentional, regenerate the matching golden(s) by setting `UPDATE_SNAPSHOTS=1` and re-running only the snapshot tests, then review the diff before committing:
+
+  ```bash
+  UPDATE_SNAPSHOTS=1 dotnet test tests/CodeIndex.Tests/CodeIndex.Tests.csproj \
+      --filter "FullyQualifiedName~JsonOutputSnapshotTests"
+  git diff tests/CodeIndex.Tests/golden/
+  ```
+
+- Treat any unintentional snapshot diff as a contract regression: either fix the production code, or update the golden together with the schema/docs/changelog in the same PR.
+- Keep fixtures minimal and deterministic. If a new `--json` output joins the contract, add a dedicated snapshot test plus a golden file in the same change.
 
 ### Git tests
 
@@ -208,6 +227,8 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   大規模データベンチマーク（10K+ファイル）。デフォルトSkip。`--filter` で手動実行。
 - `DbRecoveryTests.cs`
   DB破損からの復旧とグレースフル劣化のテスト。
+- `JsonOutputSnapshotTests.cs`、`JsonOutputSnapshotHelper.cs`
+  CLI の `--json` 出力契約に対するゴールデンファイル回帰フィクスチャ (issue #1548)。各テストは `status` / `search` / `references` / `impact` / `excerpt` を決定的なインメモリ fixture に対して実行し、揺らぐフィールド（timestamp、絶対パス、commit SHA、FTS5 score など）を正規化したうえで `tests/CodeIndex.Tests/golden/` 配下のファイルと差分比較します。フィールドの rename / 削除 / 並び替え / 新規追加が起きると snapshot が失敗するため、契約変更は意図的な golden 更新と同じ PR で揃えざるを得ません。更新手順は下記「JSON `--json` 出力 snapshot」を参照してください。
 - `TestProjectHelper.cs`、`TestConsoleLock.cs`
   共有テストヘルパー。
 
@@ -215,7 +236,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 
 - テスト名は説明的にする。現在のスイートは `Method_Scenario_ExpectedBehavior` 形式が中心です。
 - テストは決定的に保つ。マシン全体の git 設定、ロケール依存出力、外部の残存ファイルに依存しないこと。
-- 広いスナップショット風の検証より、小さなフィクスチャと明示的な assertion を優先する。
+- 広いスナップショット風の検証より、小さなフィクスチャと明示的な assertion を優先する。例外は `--json` 出力契約の harness (`JsonOutputSnapshotTests`) で、こちらは意図的にフィールド形状全体を固定します（下記「JSON `--json` 出力 snapshot」参照）。
 - 境界を証明するテストでは、その境界をまたぐ最小の fixture を使う。1 ページ、1 chunk、1 cache、1 offset overflow で十分なら、それ以上に synthetic data を増やさない。ただし、より大きいサイズ自体が契約の一部なら例外です。
 - 本番コードのコメントやエラー文字列が英日併記前提なら、重要な箇所ではその期待もテストに反映する。
 - ユーザーに見える挙動を変えたら、テストに加えて `CHANGELOG.md` と関連ドキュメントも同じ変更に含める。
@@ -268,6 +289,23 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - コンソール差し替えは `TestConsoleLock.Gate` で直列化する。
 - 終了コードは `CommandExitCodes` で検証する。
 - JSON 出力は生文字列比較ではなく `JsonDocument` で解析して検証する。
+
+### JSON `--json` 出力 snapshot
+
+`JsonOutputSnapshotTests` と `JsonOutputSnapshotHelper` は CLI `--json` 出力の形状ドリフト（キーの rename、削除、トップレベル配列の並び替え、契約更新を伴わない新規キー）を検出する小さなゴールデンファイル harness です。既存の `QueryCommandRunnerTests` 内の絞り込みアサーション形式の JSON テストを置き換えるものではなく、補完するものとして併用してください。
+
+- ゴールデンファイルは `tests/CodeIndex.Tests/golden/<command>.json` に置かれ、ソースツリーに checked in されています。
+- `JsonOutputSnapshotHelper` は比較前に揺らぐフィールドを正規化します: `indexed_at` / `latest_modified` などの timestamp 系キー → `<TIMESTAMP>`、`git_head` / `indexed_head_commit` などの commit SHA 系キー → `<COMMIT_SHA>`、`project_root` → `<PROJECT_ROOT>`、`version` → `<VERSION>`、各 result の `score`（BM25、FTS5 実装依存）→ `<SCORE>`。テストごとの temp パスは helper の `BuildPathReplacements` で除去されます。
+- 形状の変更が意図的な場合は、`UPDATE_SNAPSHOTS=1` を設定して snapshot テストだけを再実行し、生成された差分をレビューしてからコミットしてください:
+
+  ```bash
+  UPDATE_SNAPSHOTS=1 dotnet test tests/CodeIndex.Tests/CodeIndex.Tests.csproj \
+      --filter "FullyQualifiedName~JsonOutputSnapshotTests"
+  git diff tests/CodeIndex.Tests/golden/
+  ```
+
+- 意図しない snapshot 差分は契約の回帰として扱ってください: 本番コードを直すか、ゴールデンを schema / docs / changelog と同じ PR で更新するかのどちらかです。
+- フィクスチャは最小・決定的に保ってください。新しい `--json` 出力が契約に加わる場合は、同じ変更内で対応する snapshot テストとゴールデンファイルを追加します。
 
 ### Git 系テスト
 
