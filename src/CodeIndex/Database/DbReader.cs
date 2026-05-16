@@ -256,7 +256,11 @@ public partial class DbReader
     public DbReader(SqliteConnection connection, bool isReadOnly = false)
     {
         _conn = connection;
-        DbContext.RegisterConnectionFunctions(_conn);
+        // SQL user functions are registered once per connection by `DbContext` when the
+        // connection is opened. Re-registering on every `DbReader` construction wasted CPU
+        // on hot MCP/CLI paths that build a short-lived reader per request (#1564).
+        // SQL ユーザー関数は接続オープン時に `DbContext` が一度だけ登録するため、
+        // ここでの再登録は不要 (#1564)。
         _isReadOnly = isReadOnly;
         _fileColumns = LoadColumns("files");
         _symbolColumns = LoadColumns("symbols");

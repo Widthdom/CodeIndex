@@ -6142,19 +6142,18 @@ public class McpServerTests : IDisposable
             Assert.True(secondResponse["result"]!["structuredContent"]!["fold_ready"]!.GetValue<bool>());
             Assert.Null(secondResponse["result"]!["structuredContent"]!["fold_ready_reason"]);
 
-            using var verify = new SqliteConnection($"Data Source={dbPath}");
-            verify.Open();
-            using var userVerCmd = verify.CreateCommand();
+            using var verify = new DbContext(dbPath);
+            using var userVerCmd = verify.Connection.CreateCommand();
             userVerCmd.CommandText = "PRAGMA user_version";
             var userVersion = (long)userVerCmd.ExecuteScalar()!;
             Assert.NotEqual(0, userVersion & DbContext.FoldReadyFlag);
 
-            using var versionCmd = verify.CreateCommand();
+            using var versionCmd = verify.Connection.CreateCommand();
             versionCmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = 'fold_key_version'";
             var storedVersion = versionCmd.ExecuteScalar() as string;
             Assert.Equal(NameFold.Version.ToString(), storedVersion);
 
-            var reader = new DbReader(verify);
+            var reader = new DbReader(verify.Connection, verify.IsReadOnly);
             Assert.Single(reader.SearchSymbols(new[] { "STRASSE" }, limit: 10, exact: true));
         }
         finally
