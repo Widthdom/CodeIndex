@@ -89,6 +89,40 @@ public class IndexCommandRunnerTests
         }
     }
 
+    [Theory]
+    [InlineData("--duration-format", "auto", DurationOutputFormat.Auto)]
+    [InlineData("--duration-format", "seconds", DurationOutputFormat.Seconds)]
+    [InlineData("--duration-format", "hms", DurationOutputFormat.Hms)]
+    [InlineData("--duration-format=hms", null, DurationOutputFormat.Hms)]
+    public void ParseArgs_DurationFormatFlag_ParsesValue(string flag, string? value, DurationOutputFormat expected)
+    {
+        string[] args = value is null
+            ? [".", flag]
+            : [".", flag, value];
+
+        var options = IndexCommandRunner.ParseArgs(args);
+
+        Assert.Equal(expected, options.DurationFormat);
+    }
+
+    [Fact]
+    public void ParseArgs_DurationFormatFlag_InvalidValue_IsIgnored()
+    {
+        var originalErr = Console.Error;
+        using var stderr = new StringWriter();
+        try
+        {
+            Console.SetError(stderr);
+            var options = IndexCommandRunner.ParseArgs([".", "--duration-format", "bogus"]);
+            Assert.Equal(DurationOutputFormat.Auto, options.DurationFormat);
+            Assert.Contains("invalid --duration-format value", stderr.ToString());
+        }
+        finally
+        {
+            Console.SetError(originalErr);
+        }
+    }
+
     [Fact]
     public void ParseArgs_AbsolutizesRelativeProjectPath()
     {

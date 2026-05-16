@@ -191,6 +191,7 @@ internal static class CliFlagSchema
             new() { Name = "--verbose", Description = "Show per-file status", Commands = Set("index") },
             new() { Name = "--dry-run", Description = "Scan files without writing", Commands = Set("index") },
             new() { Name = "--force", Description = "Bypass the per-database index lock", Commands = Set("index") },
+            new() { Name = "--duration-format", ValuePlaceholder = "<auto|seconds|hms>", Description = "Index elapsed time display format", Commands = Set("index") },
             new() { Name = "--commits", ValuePlaceholder = "<id>", Description = "Update files changed in given git commits", Commands = Set("index") },
             new() { Name = "--files", ValuePlaceholder = "<path>", Description = "Update only the specified files", Commands = Set("index") },
             new() { Name = "--watch", Description = "Continuous reindex on file changes (rejects --commits / --files / --dry-run)", Commands = Set("index") },

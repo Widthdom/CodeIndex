@@ -51,8 +51,9 @@ cdidx mcp
 ```
 
 During indexing, the terminal shows `Scanning...`, `Indexing...`, and a
-`67.0% [28/42]`-style progress line. For later edits, refresh incrementally
-with `--files` or `--commits` instead of rebuilding; see
+`67.0% [28/42]`-style progress line, then a unit-labelled elapsed time such as
+`2.4s` or `5m 42s`. For later edits, refresh incrementally with `--files` or
+`--commits` instead of rebuilding; see
 [Quick Start](USER_GUIDE.md#quick-start).
 
 Use `cdidx` when a repository will be searched repeatedly from terminals,
@@ -172,8 +173,9 @@ cdidx mcp
 ```
 
 インデックス中は `Scanning...`、`Indexing...`、`67.0% [28/42]` のような
-進捗行が表示されます。編集後は再構築ではなく `--files` や `--commits` で
-差分更新できます。詳細は [クイックスタート](USER_GUIDE.md#クイックスタート)
+進捗行が表示され、最後に `2.4s` や `5m 42s` のような単位付き経過時間が出ます。
+編集後は再構築ではなく `--files` や `--commits` で差分更新できます。詳細は
+[クイックスタート](USER_GUIDE.md#クイックスタート)
 を参照してください。
 
 ターミナル、スクリプト、CI、AI ツールから同じリポジトリを繰り返し検索する

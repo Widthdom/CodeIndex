@@ -499,6 +499,7 @@ public static class IndexCommandRunner
         bool force = false;
         bool watch = false;
         int? watchDebounceMs = null;
+        var durationFormat = DurationOutputFormat.Auto;
         string? easterEgg = null;
         int spinnerFlagCount = 0;
         bool randomSpinner = false;
@@ -541,6 +542,12 @@ public static class IndexCommandRunner
                         Console.Error.WriteLine($"Warning: invalid --debounce value '{args[i + 1]}' (ignored; must be a non-negative integer in milliseconds) / 不正な --debounce 値 '{args[i + 1]}'（無視。ミリ秒の0以上の整数を指定）");
                         i++;
                     }
+                    break;
+                case "--duration-format" when i + 1 < args.Length:
+                    durationFormat = ParseDurationFormat(args[++i], durationFormat);
+                    break;
+                case var option when option.StartsWith("--duration-format=", StringComparison.Ordinal):
+                    durationFormat = ParseDurationFormat(option["--duration-format=".Length..], durationFormat);
                     break;
                 case "--commits":
                     while (i + 1 < args.Length && !args[i + 1].StartsWith('-'))
@@ -603,7 +610,25 @@ public static class IndexCommandRunner
             Force = force,
             Watch = watch,
             WatchDebounceMs = watchDebounceMs,
+            DurationFormat = durationFormat,
         };
+    }
+
+    private static DurationOutputFormat ParseDurationFormat(string value, DurationOutputFormat fallback)
+    {
+        return value.Trim().ToLowerInvariant() switch
+        {
+            "auto" => DurationOutputFormat.Auto,
+            "seconds" => DurationOutputFormat.Seconds,
+            "hms" => DurationOutputFormat.Hms,
+            _ => WarnInvalidDurationFormat(value, fallback),
+        };
+    }
+
+    private static DurationOutputFormat WarnInvalidDurationFormat(string value, DurationOutputFormat fallback)
+    {
+        Console.Error.WriteLine($"Warning: invalid --duration-format value '{value}' (ignored; use auto, seconds, or hms) / 不正な --duration-format 値 '{value}'（無視。auto, seconds, hms のいずれかを指定）");
+        return fallback;
     }
 
     private static string? AbsolutizePathOption(string? value)
@@ -1362,7 +1387,7 @@ public static class IndexCommandRunner
             Console.WriteLine($"  C# names : {(csharpSymbolNameReadyAfter ? "ready" : "degraded")}");
             Console.WriteLine($"  C# meta  : {(csharpMetadataTargetReadyAfter ? "ready" : "degraded")}");
             Console.WriteLine($"  Fold     : {(foldReadyAfter ? "ready" : "degraded")}");
-            Console.WriteLine($"  Elapsed  : {stopwatch.Elapsed:hh\\:mm\\:ss}");
+            Console.WriteLine($"  Elapsed  : {ConsoleUi.FormatDuration(stopwatch.Elapsed, options.DurationFormat)}");
             Console.WriteLine();
             if (errors > 0)
                 ConsoleUi.PrintWarning($"Some files failed to update. Fix the reported files or permissions, then rerun `cdidx index \"{projectRoot}\"` to restore a fully ready index.");
@@ -2228,7 +2253,7 @@ public static class IndexCommandRunner
             Console.WriteLine($"  C# names : {(csharpSymbolNameReadyAfter ? "ready" : "degraded")}");
             Console.WriteLine($"  C# meta  : {(csharpMetadataTargetReadyAfter ? "ready" : "degraded")}");
             Console.WriteLine($"  Fold     : {(foldReadyAfter ? "ready" : "degraded")}");
-            Console.WriteLine($"  Elapsed  : {stopwatch.Elapsed:hh\\:mm\\:ss}");
+            Console.WriteLine($"  Elapsed  : {ConsoleUi.FormatDuration(stopwatch.Elapsed, options.DurationFormat)}");
             Console.WriteLine();
             if (errors > 0)
                 ConsoleUi.PrintWarning($"Some files failed to index. Fix the reported files or permissions, then rerun `cdidx index \"{projectRoot}\"` to restore a fully ready index.");
@@ -2445,6 +2470,7 @@ public sealed class IndexCommandOptions
     public bool Force { get; init; }
     public bool Watch { get; init; }
     public int? WatchDebounceMs { get; init; }
+    public DurationOutputFormat DurationFormat { get; init; } = DurationOutputFormat.Auto;
 }
 
 public sealed class BackfillFoldCommandOptions

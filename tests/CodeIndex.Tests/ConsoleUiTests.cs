@@ -27,9 +27,9 @@ public class ConsoleUiTests
 
         Assert.DoesNotContain("██████╗", output);
         Assert.Contains("Usage:", output);
-        Assert.Contains("cdidx index <projectPath> [--db <path>] [--rebuild] [--verbose] [--dry-run] [--force] [--json]", output);
-        Assert.Contains("cdidx index <projectPath> --commits <id> [id ...] [--db <path>] [--verbose] [--dry-run] [--json]", output);
-        Assert.Contains("cdidx index <projectPath> --files <path> [path ...] [--db <path>] [--verbose] [--dry-run] [--json]", output);
+        Assert.Contains("cdidx index <projectPath> [--db <path>] [--rebuild] [--verbose] [--dry-run] [--force] [--json] [--duration-format <auto|seconds|hms>]", output);
+        Assert.Contains("cdidx index <projectPath> --commits <id> [id ...] [--db <path>] [--verbose] [--dry-run] [--json] [--duration-format <auto|seconds|hms>]", output);
+        Assert.Contains("cdidx index <projectPath> --files <path> [path ...] [--db <path>] [--verbose] [--dry-run] [--json] [--duration-format <auto|seconds|hms>]", output);
         Assert.Contains("cdidx backfill-fold [--db <path>] [--json]", output);
         Assert.Contains("cdidx license", output);
         Assert.Contains("cdidx references <query>|--query <query>|-- <query>", output);
@@ -48,6 +48,7 @@ public class ConsoleUiTests
         Assert.Contains("--count                    Count only; search/definition/references/callers/callees/symbols/files/find/unused ignore --limit, impact/hotspots still use visible page counts", output);
         Assert.Contains("--commits <id> [id ...]    Update only files changed in the specified git commits (preferred after commits)", output);
         Assert.Contains("--files <path> [path ...]  Update only the specified files; old rename/delete paths are not purged unless also listed", output);
+        Assert.Contains("--duration-format <format> Index elapsed time format: `auto` (default), `seconds`, or `hms`; JSON keeps raw elapsed_ms", output);
         Assert.Contains("cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--max-line-width <n>] [--focus-line <line>] [--focus-column <n>] [--focus-length <n>] [--db <path>] [--json]", output);
         Assert.Contains("--focus-column <n>         excerpt: column to keep centered when clamping (must be within the focused line)", output);
         Assert.Contains("--focus-line <line>        excerpt: line whose focused column should stay visible", output);
@@ -114,6 +115,30 @@ public class ConsoleUiTests
         var frames = ConsoleUi.GetSpinnerFrames(null);
 
         Assert.Equal(["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"], frames);
+    }
+
+    [Theory]
+    [InlineData(0, "0ms")]
+    [InlineData(999, "999ms")]
+    [InlineData(1_000, "1.0s")]
+    [InlineData(59_900, "59.9s")]
+    [InlineData(60_000, "1m 0s")]
+    [InlineData(3_599_000, "59m 59s")]
+    [InlineData(3_600_000, "1h 0m 0s")]
+    [InlineData(86_400_000, "24h 0m 0s")]
+    [InlineData(360_061_000, "100h 1m 1s")]
+    public void FormatDuration_Auto_UsesUnitLabels(int milliseconds, string expected)
+    {
+        Assert.Equal(expected, ConsoleUi.FormatDuration(TimeSpan.FromMilliseconds(milliseconds)));
+    }
+
+    [Fact]
+    public void FormatDuration_ExplicitFormats_RespectUserPreference()
+    {
+        var duration = TimeSpan.FromMilliseconds(65_432);
+
+        Assert.Equal("65.4s", ConsoleUi.FormatDuration(duration, DurationOutputFormat.Seconds));
+        Assert.Equal("00:01:05", ConsoleUi.FormatDuration(duration, DurationOutputFormat.Hms));
     }
 
     [Fact]

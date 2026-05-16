@@ -1,5 +1,6 @@
 using CodeIndex.Database;
 using CodeIndex.Indexer;
+using System.Globalization;
 using System.Reflection;
 using System.Text;
 
@@ -41,6 +42,13 @@ public enum ColorPalette
     Truecolor = 2,
 }
 
+public enum DurationOutputFormat
+{
+    Auto = 0,
+    Seconds = 1,
+    Hms = 2,
+}
+
 /// <summary>
 /// Console UI helpers: spinner, progress bar, banner, and easter egg messages.
 /// コンソールUIヘルパー: スピナー、プログレスバー、バナー、イースターエッグメッセージ。
@@ -49,10 +57,10 @@ public static class ConsoleUi
 {
     private static readonly (string Command, string Usage)[] CommandUsageLines =
     [
-        ("index", "cdidx index <projectPath> [--db <path>] [--rebuild] [--verbose] [--dry-run] [--force] [--json] [--watch [--debounce <ms>]]"),
+        ("index", "cdidx index <projectPath> [--db <path>] [--rebuild] [--verbose] [--dry-run] [--force] [--json] [--duration-format <auto|seconds|hms>] [--watch [--debounce <ms>]]"),
         ("backfill-fold", "cdidx backfill-fold [--db <path>] [--json]"),
-        ("index-commits", "cdidx index <projectPath> --commits <id> [id ...] [--db <path>] [--verbose] [--dry-run] [--json]"),
-        ("index-files", "cdidx index <projectPath> --files <path> [path ...] [--db <path>] [--verbose] [--dry-run] [--json]"),
+        ("index-commits", "cdidx index <projectPath> --commits <id> [id ...] [--db <path>] [--verbose] [--dry-run] [--json] [--duration-format <auto|seconds|hms>]"),
+        ("index-files", "cdidx index <projectPath> --files <path> [path ...] [--db <path>] [--verbose] [--dry-run] [--json] [--duration-format <auto|seconds|hms>]"),
         ("search", "cdidx search <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--snippet-lines <n>] [--max-line-width <n>] [--fts] [--exact|--exact-substring] [--prefix] [--count] [--since <datetime>] [--no-dedup]"),
         ("definition", "cdidx definition <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--exact|--exact-name] [--count] [--since <datetime>]"),
         ("references", "cdidx references <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--max-line-width <n>] [--exact|--exact-name] [--count]"),
@@ -89,6 +97,55 @@ public static class ConsoleUi
     ];
 
     // --- Spinner / スピナー ---
+
+    public static string FormatDuration(TimeSpan duration, DurationOutputFormat format = DurationOutputFormat.Auto)
+    {
+        if (duration < TimeSpan.Zero)
+            duration = TimeSpan.Zero;
+
+        return format switch
+        {
+            DurationOutputFormat.Seconds => FormatDurationAsSeconds(duration),
+            DurationOutputFormat.Hms => FormatDurationAsHms(duration),
+            _ => FormatDurationAuto(duration),
+        };
+    }
+
+    private static string FormatDurationAuto(TimeSpan duration)
+    {
+        if (duration < TimeSpan.FromSeconds(1))
+            return string.Create(CultureInfo.InvariantCulture, $"{Math.Floor(duration.TotalMilliseconds):0}ms");
+
+        if (duration < TimeSpan.FromMinutes(1))
+            return string.Create(CultureInfo.InvariantCulture, $"{duration.TotalSeconds:0.0}s");
+
+        var totalSeconds = (long)Math.Floor(duration.TotalSeconds);
+        if (duration < TimeSpan.FromHours(1))
+        {
+            var minutes = totalSeconds / 60;
+            var seconds = totalSeconds % 60;
+            return string.Create(CultureInfo.InvariantCulture, $"{minutes}m {seconds}s");
+        }
+
+        var hours = totalSeconds / 3600;
+        var remainder = totalSeconds % 3600;
+        var remMinutes = remainder / 60;
+        var remSeconds = remainder % 60;
+        return string.Create(CultureInfo.InvariantCulture, $"{hours}h {remMinutes}m {remSeconds}s");
+    }
+
+    private static string FormatDurationAsSeconds(TimeSpan duration)
+        => string.Create(CultureInfo.InvariantCulture, $"{duration.TotalSeconds:0.0}s");
+
+    private static string FormatDurationAsHms(TimeSpan duration)
+    {
+        var totalSeconds = (long)Math.Floor(duration.TotalSeconds);
+        var hours = totalSeconds / 3600;
+        var remainder = totalSeconds % 3600;
+        var minutes = remainder / 60;
+        var seconds = remainder % 60;
+        return string.Create(CultureInfo.InvariantCulture, $"{hours:00}:{minutes:00}:{seconds:00}");
+    }
 
     /// <summary>
     /// Start spinner on a background thread, returns CancellationTokenSource to stop it.
@@ -459,6 +516,7 @@ public static class ConsoleUi
         Console.WriteLine("  --dry-run                  Scan files without writing to the database");
         Console.WriteLine("  --force                    Bypass the per-database index lock; only use when no other cdidx index is active");
         Console.WriteLine("  --json                     Output results as JSON (for AI/machine use)");
+        Console.WriteLine("  --duration-format <format> Index elapsed time format: `auto` (default), `seconds`, or `hms`; JSON keeps raw elapsed_ms");
         Console.WriteLine("  --commits <id> [id ...]    Update only files changed in the specified git commits (preferred after commits)");
         Console.WriteLine("  --files <path> [path ...]  Update only the specified files; old rename/delete paths are not purged unless also listed");
         Console.WriteLine("  --watch                    After the initial scan, stay running and reindex on file changes (FileSystemWatcher / inotify / FSEvents); rejects --commits / --files / --dry-run");
