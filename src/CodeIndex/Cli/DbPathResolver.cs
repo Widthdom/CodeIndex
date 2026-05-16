@@ -1,4 +1,3 @@
-using System.Security.Cryptography;
 using CodeIndex.Indexer;
 using Microsoft.Data.Sqlite;
 
@@ -334,7 +333,11 @@ public static class DbPathResolver
                     continue;
 
                 pathExistsMatches++;
-                var checksum = ComputeChecksum(File.ReadAllBytes(absolutePath));
+                // Use the FileIndexer helper so cross-OS clones (CRLF vs LF) still match
+                // checksums recorded by an indexer running on a different OS.
+                // FileIndexer のヘルパを使い、OS をまたいだ clone (CRLF と LF) でも、
+                // 他 OS で生成された checksum と引き続き一致するようにする。
+                var checksum = FileIndexer.ComputeChecksum(File.ReadAllBytes(absolutePath));
                 if (string.Equals(checksum, sample.Checksum, StringComparison.OrdinalIgnoreCase))
                     checksumMatches++;
             }
@@ -346,12 +349,6 @@ public static class DbPathResolver
         }
 
         return new SampleMatchResult(checksumMatches, pathExistsMatches);
-    }
-
-    private static string ComputeChecksum(byte[] bytes)
-    {
-        var hash = SHA256.HashData(bytes);
-        return Convert.ToHexString(hash).ToLowerInvariant();
     }
 
     private readonly record struct SampleMatchResult(int ChecksumMatches, int PathExistsMatches);

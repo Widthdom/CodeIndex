@@ -2165,11 +2165,12 @@ public class FileIndexerTests
     {
         // Files whose on-disk bytes begin with UTF-8 BOM (EF BB BF) must have the BOM
         // stripped from the decoded content so downstream consumers never see a phantom
-        // U+FEFF glyph on line 1. The raw-byte checksum must still reflect the on-disk
-        // file (BOM included) so incremental change detection keeps working. Closes #183.
+        // U+FEFF glyph on line 1. The checksum must still reflect the BOM bytes so adding
+        // or removing the BOM keeps triggering incremental change detection. Closes #183.
         // オンディスク先頭に UTF-8 BOM (EF BB BF) を持つファイルは、デコード後の content
-        // から BOM を剥がし、下流に幽霊 U+FEFF を渡さないようにする。checksum は生バイト
-        // ベース（BOM を含む）のまま維持し、インクリメンタル更新判定が壊れないようにする。Closes #183.
+        // から BOM を剥がし、下流に幽霊 U+FEFF を渡さないようにする。checksum は BOM の
+        // バイトを含めたまま算出し、BOM 追加/削除をインクリメンタル更新判定で引き続き
+        // 検知できるようにする。Closes #183.
         var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
         try
         {
@@ -2190,11 +2191,17 @@ public class FileIndexerTests
             // 文字列オーバーロードではなくコードポイントで確認する。
             Assert.DoesNotContain('\uFEFF', content);
             Assert.Equal(2, record.Lines);
-            // Pin the backward-compatibility requirement: checksum must be SHA256 over the
-            // raw on-disk bytes (BOM included) so that adding or removing a BOM is detected
-            // as a file change by incremental re-indexing. Closes #183.
-            // 後方互換性の要件を固定: checksum は生のオンディスクバイト（BOM 含む）の
-            // SHA256 で、BOM の追加 / 削除をインクリメンタル再索引で検知できること。Closes #183.
+            // Pin the BOM-detection contract: BOM bytes feed into the checksum hash input
+            // so adding or removing a BOM still flips the checksum and triggers incremental
+            // re-index. This test's payload has no CR bytes, so the line-ending normalization
+            // added for #1544 is a no-op and the expected value still matches raw-byte SHA256.
+            // Cross-OS CRLF / LF parity is covered by BuildRecord_Checksum_CrlfAndLfMatch.
+            // Closes #183.
+            // BOM 検知契約を固定: BOM のバイトは checksum のハッシュ入力にそのまま含まれ、
+            // BOM の追加 / 削除でハッシュが変化することでインクリメンタル再索引が走る。
+            // このテストの payload には CR が無いため #1544 の改行正規化は no-op となり、
+            // 期待値は生バイトの SHA256 と一致する。OS をまたいだ CRLF / LF の同一性は
+            // BuildRecord_Checksum_CrlfAndLfMatch で担保する。Closes #183.
             var expectedChecksum = Convert.ToHexString(
                 System.Security.Cryptography.SHA256.HashData(rawBytes)).ToLowerInvariant();
             Assert.Equal(expectedChecksum, record.Checksum);
@@ -2203,6 +2210,118 @@ public class FileIndexerTests
         {
             Directory.Delete(tempDir, true);
         }
+    }
+
+    [Fact]
+    public void BuildRecord_Checksum_CrlfAndLfMatch()
+    {
+        // The same logical content cloned with CRLF line endings (Windows with
+        // core.autocrlf=true) and with LF endings (Linux/macOS) must produce the same
+        // checksum, so cross-OS clones / shared NAS workspaces do not trip incremental
+        // re-index on every file. Standalone CR (legacy Mac classic) must collapse too.
+        // Closes #1544.
+        // 同じ論理内容を CRLF (Windows core.autocrlf=true) と LF (Linux/macOS) で clone
+        // しても checksum が一致する必要がある。さもないと cross-OS clone や共有 NAS で
+        // 初回索引時に全ファイルが「変更あり」扱いとなり再索引が走ってしまう。standalone
+        // CR (旧 Mac classic) も同様に LF へ畳む。Closes #1544.
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var lfPath = Path.Combine(tempDir, "lf.py");
+            var crlfPath = Path.Combine(tempDir, "crlf.py");
+            var crPath = Path.Combine(tempDir, "cr.py");
+            File.WriteAllBytes(lfPath, System.Text.Encoding.UTF8.GetBytes("line1\nline2\nline3\n"));
+            File.WriteAllBytes(crlfPath, System.Text.Encoding.UTF8.GetBytes("line1\r\nline2\r\nline3\r\n"));
+            File.WriteAllBytes(crPath, System.Text.Encoding.UTF8.GetBytes("line1\rline2\rline3\r"));
+
+            var indexer = new FileIndexer(tempDir);
+            var (lfRecord, _, _) = indexer.BuildRecord(lfPath);
+            var (crlfRecord, _, _) = indexer.BuildRecord(crlfPath);
+            var (crRecord, _, _) = indexer.BuildRecord(crPath);
+
+            Assert.Equal(lfRecord.Checksum, crlfRecord.Checksum);
+            Assert.Equal(lfRecord.Checksum, crRecord.Checksum);
+            // Spot-check the expected value: SHA256 of the LF-normalized payload, so a
+            // future regression that re-introduces raw-byte hashing fails loudly.
+            // 期待値も固定: LF 正規化後 payload の SHA256。生バイトハッシュへ戻ると
+            // 落ちるようにしておく。
+            var expected = Convert.ToHexString(
+                System.Security.Cryptography.SHA256.HashData(
+                    System.Text.Encoding.UTF8.GetBytes("line1\nline2\nline3\n"))).ToLowerInvariant();
+            Assert.Equal(expected, lfRecord.Checksum);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void BuildRecord_Checksum_BomAddRemoveStillDetected()
+    {
+        // BOM bytes (EF BB BF) must still be part of the checksum hash input so a clone
+        // that gained or lost a leading BOM is detected as changed by incremental re-index.
+        // Only CRLF / CR are collapsed; BOM passes through unchanged. Closes #1544.
+        // BOM のバイト (EF BB BF) はハッシュ入力に残し、BOM の有無が変わった clone を
+        // インクリメンタル再索引で変更として検知できるようにする。畳むのは CRLF / CR のみで
+        // BOM はそのまま通す。Closes #1544.
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var bomPath = Path.Combine(tempDir, "bom.cs");
+            var noBomPath = Path.Combine(tempDir, "nobom.cs");
+            var payload = System.Text.Encoding.UTF8.GetBytes("using System;\n");
+            File.WriteAllBytes(bomPath, new byte[] { 0xEF, 0xBB, 0xBF }.Concat(payload).ToArray());
+            File.WriteAllBytes(noBomPath, payload);
+
+            var indexer = new FileIndexer(tempDir);
+            var (bomRecord, _, _) = indexer.BuildRecord(bomPath);
+            var (noBomRecord, _, _) = indexer.BuildRecord(noBomPath);
+
+            Assert.NotEqual(bomRecord.Checksum, noBomRecord.Checksum);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ComputeChecksum_MixedLineEndings_NormalizesToLf()
+    {
+        // Direct-call coverage: mixed CRLF / CR / LF lines all collapse to LF before
+        // hashing, matching the content-level normalization in BuildRecord. Pinning the
+        // helper directly catches regressions even if BuildRecord shape changes.
+        // Closes #1544.
+        // direct call の網羅: CRLF / CR / LF が混在しても全て LF に畳まれてから
+        // ハッシュ化され、BuildRecord 側の content 正規化と一致する。BuildRecord の
+        // 形が変わっても helper 単体で回帰を検知できる。Closes #1544.
+        var mixed = System.Text.Encoding.UTF8.GetBytes("a\r\nb\rc\nd\r\n");
+        var lfOnly = System.Text.Encoding.UTF8.GetBytes("a\nb\nc\nd\n");
+        Assert.Equal(
+            FileIndexer.ComputeChecksum(lfOnly),
+            FileIndexer.ComputeChecksum(mixed));
+    }
+
+    [Fact]
+    public void ComputeChecksum_LongInputWithoutCr_MatchesRawByteSha256()
+    {
+        // For CR-free payloads (the common case), the checksum must still equal raw-byte
+        // SHA256 — both as a correctness anchor for existing DBs whose stored checksums
+        // were computed from raw bytes on LF-only sources, and to confirm the streaming
+        // implementation handles inputs that span multiple AppendData chunks. Closes #1544.
+        // CR を含まない payload (一般的なケース) では checksum が生バイト SHA256 と
+        // 一致する必要がある。これは LF のみのソースで生バイトから算出された既存 DB の
+        // checksum との互換性を保ち、また streaming 実装が AppendData の複数チャンクを
+        // またぐ入力でも正しく動くことを示す。Closes #1544.
+        var payload = new byte[16 * 1024];
+        for (int i = 0; i < payload.Length; i++)
+            payload[i] = (byte)(i % 95 + 32); // printable ASCII (no CR / LF)
+        var expected = Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(payload)).ToLowerInvariant();
+        Assert.Equal(expected, FileIndexer.ComputeChecksum(payload));
     }
 
     [Fact]

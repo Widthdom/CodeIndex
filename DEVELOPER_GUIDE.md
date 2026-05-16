@@ -57,7 +57,7 @@ files (
     lang        TEXT,                       -- detected language (e.g. "python")
     size        INTEGER,                    -- file size in bytes
     lines       INTEGER,                    -- line count
-    checksum    TEXT,                       -- SHA256 of raw file bytes
+    checksum    TEXT,                       -- SHA256 over file bytes with CRLF/CR collapsed to LF (BOM bytes preserved); cross-OS clones match while BOM add/remove still triggers re-index
     modified    DATETIME,                   -- file modification time (UTC)
     indexed_at  DATETIME DEFAULT CURRENT_TIMESTAMP
 )
@@ -1239,7 +1239,7 @@ files (
     lang        TEXT,                       -- 検出された言語（例: "python"）
     size        INTEGER,                    -- ファイルサイズ（バイト）
     lines       INTEGER,                    -- 行数
-    checksum    TEXT,                       -- ファイルraw bytesのSHA256
+    checksum    TEXT,                       -- ファイルバイトを CRLF/CR→LF に正規化した上で取った SHA256（BOM はそのまま）。これにより OS をまたいだ clone でも checksum が一致し、BOM の追加/削除は引き続き再索引のトリガーとして機能する
     modified    DATETIME,                   -- ファイル更新日時（UTC）
     indexed_at  DATETIME DEFAULT CURRENT_TIMESTAMP
 )

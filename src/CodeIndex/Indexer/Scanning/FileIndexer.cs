@@ -1936,8 +1936,21 @@ public class FileIndexer
             modifiedUtc = File.GetLastWriteTimeUtc(absolutePath);
         }
 
-        // Compute checksum from raw bytes to avoid re-encoding the string (~10MB saved for large files)
-        // 文字列の再エンコードを回避するためraw bytesからチェックサムを算出（大ファイルで約10MB節約）
+        // Compute the checksum on the byte stream after collapsing CRLF / CR to LF so
+        // a Windows clone (core.autocrlf=true) and a Linux/macOS clone of the same logical
+        // file produce identical checksums. Hashing the unnormalized raw bytes used to
+        // mark every file as "changed" the first time a developer indexed a cross-OS clone
+        // or a shared NAS workspace. BOM bytes are preserved verbatim so BOM addition /
+        // removal still flips the checksum and triggers incremental re-index. The streaming
+        // helper avoids re-encoding the UTF-8 string (~10 MB saved for large files).
+        // Closes #1544.
+        // CRLF / CR を LF に潰した上で SHA256 を取り、Windows (core.autocrlf=true) clone と
+        // Linux/macOS clone の同じ論理内容で checksum を一致させる。生バイトをそのまま
+        // ハッシュしていた以前は、cross-OS の clone や共有 NAS で全ファイルが「変更あり」
+        // 扱いとなり毎回フル再索引が走っていた。BOM はそのままハッシュ対象に残すので
+        // BOM の追加 / 削除はインクリメンタル再索引で引き続き検知できる。streaming
+        // ヘルパは UTF-8 文字列を再エンコードせずに済み、大ファイルで約 10 MB 節約する。
+        // Closes #1544.
         var checksum = ComputeChecksum(bytes);
 
         string content;
@@ -1963,9 +1976,10 @@ public class FileIndexer
         // output. Non-line-leading U+FEFF (Unicode 3.2+ ZWNBSP inside a string
         // literal, identifier, or comment — e.g. `const s = "A\uFEFFB"`) is kept
         // verbatim: stripping it would corrupt content fidelity for intentional
-        // mid-line ZWNBSP use. The raw-byte checksum is computed above and remains
-        // BOM-inclusive so incremental re-index still detects BOM add / removal.
-        // Closes #183.
+        // mid-line ZWNBSP use. The checksum computed above keeps BOM bytes in the
+        // hash input (only CRLF / CR are collapsed to LF) so incremental re-index
+        // still detects BOM add / removal. Closes #183. Cross-OS CRLF / LF parity
+        // is handled by ComputeChecksum itself; see #1544.
         // 行頭の UTF-8 BOM (U+FEFF) だけを剥がす — オフセット 0 の先頭 BOM と、
         // `\n` の直後にある BOM (ファイル連結やツール挿入で発生) が対象。先頭 BOM
         // だけでも行指向の `^\s*` 固定正規表現で BOM 付き Windows 作成ソースの
@@ -1974,8 +1988,10 @@ public class FileIndexer
         // (Unicode 3.2+ の ZWNBSP を文字列リテラル・識別子・コメントで意図的に
         // 使用しているケース、例: `const s = "A\uFEFFB"`) はそのまま保持する:
         // これを剥がすと mid-line ZWNBSP の意図的利用に対して内容が壊れる。
-        // checksum は BOM を含む生バイトから上で算出済みで、インクリメンタル更新
-        // 判定は BOM 追加 / 削除を引き続き検知する。Closes #183.
+        // checksum は上で算出済みで、ハッシュ入力に BOM をそのまま含めたまま
+        // CRLF / CR のみを LF に潰すため、BOM の追加 / 削除はインクリメンタル
+        // 再索引で引き続き検知される。Closes #183。OS をまたいだ CRLF / LF の
+        // 同一性は ComputeChecksum 自体で担保する。#1544 参照。
         content = StripLineLeadingBom(content);
         // Accurate line count: ignore trailing newline, and treat content that became
         // empty after CRLF / BOM stripping as zero lines (not `"".Split('\n') == [""]`'s
@@ -2193,12 +2209,49 @@ public class FileIndexer
     }
 
     /// <summary>
-    /// Compute SHA256 checksum from raw file bytes.
-    /// ファイルのraw bytesからSHA256チェックサムを算出する。
+    /// Compute SHA256 checksum from file bytes after collapsing CRLF / CR to LF.
+    /// Matches the line-ending normalization that BuildRecord applies to the decoded
+    /// content so cross-OS clones (Windows with core.autocrlf=true vs Linux/macOS) of the
+    /// same logical file produce the same checksum, while BOM bytes pass through unchanged
+    /// so BOM add / remove still triggers incremental re-index. Streams through
+    /// IncrementalHash with a fixed buffer so large files do not require an extra full
+    /// normalized-byte copy. Closes #1544.
+    /// CRLF / CR を LF に潰してから SHA256 を算出する。BuildRecord がデコード後 content に
+    /// 適用するのと同じ改行正規化を生バイト側でも行うので、Windows (core.autocrlf=true) と
+    /// Linux/macOS で同じ論理内容を clone した場合に checksum が一致する。BOM はそのまま
+    /// ハッシュ対象に残るので、BOM 追加 / 削除はインクリメンタル再索引で引き続き検知される。
+    /// IncrementalHash に固定バッファで投入する streaming 実装なので、大ファイルでも
+    /// 正規化後バイトのフルコピーを追加で確保しない。Closes #1544.
     /// </summary>
-    private static string ComputeChecksum(byte[] bytes)
+    internal static string ComputeChecksum(byte[] bytes)
     {
-        var hash = SHA256.HashData(bytes);
+        using var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        Span<byte> buffer = stackalloc byte[4096];
+        int n = 0;
+        for (int i = 0; i < bytes.Length; i++)
+        {
+            byte b = bytes[i];
+            if (b == 0x0D)
+            {
+                buffer[n++] = 0x0A;
+                if (i + 1 < bytes.Length && bytes[i + 1] == 0x0A)
+                    i++;
+            }
+            else
+            {
+                buffer[n++] = b;
+            }
+            if (n == buffer.Length)
+            {
+                hasher.AppendData(buffer);
+                n = 0;
+            }
+        }
+        if (n > 0)
+            hasher.AppendData(buffer[..n]);
+        Span<byte> hash = stackalloc byte[32];
+        if (!hasher.TryGetHashAndReset(hash, out var written) || written != hash.Length)
+            throw new InvalidOperationException("SHA256 produced an unexpected hash length");
         return Convert.ToHexString(hash).ToLowerInvariant();
     }
 
