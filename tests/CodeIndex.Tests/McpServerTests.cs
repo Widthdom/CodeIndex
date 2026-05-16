@@ -119,14 +119,121 @@ public class McpServerTests : IDisposable
     [Fact]
     public void Initialize_ReturnsProtocolVersion()
     {
+        // Issue #1554: negotiation echoes back the client's requested protocolVersion when
+        // it is in the server's supported set, instead of hardcoding the server's preferred
+        // version. The legacy `2024-11-05` client is still supported, so the response should
+        // mirror what the client asked for.
+        // Issue #1554: 交渉ロジックはサーバー対応集合にあるクライアント要求バージョンを
+        // そのまま返すようにした。レガシー `2024-11-05` クライアントは引き続きサポートする
+        // ため、レスポンスは要求された値と一致する。
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test"}}}""")!;
         var response = _server.HandleMessage(request)!;
 
         Assert.Equal("2.0", response["jsonrpc"]!.GetValue<string>());
         Assert.Equal(1, response["id"]!.GetValue<int>());
-        Assert.Equal("2025-03-26", response["result"]!["protocolVersion"]!.GetValue<string>());
+        Assert.Equal("2024-11-05", response["result"]!["protocolVersion"]!.GetValue<string>());
         Assert.Equal("cdidx", response["result"]!["serverInfo"]!["name"]!.GetValue<string>());
         Assert.Equal(ConsoleUi.LoadVersion(), response["result"]!["serverInfo"]!["version"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void Initialize_RequestedCurrentProtocolVersion_EchoesBack()
+    {
+        // Issue #1554: when the client pins the current preferred version, the server
+        // must echo it (the client and server agree, no fallback needed).
+        // Issue #1554: クライアントが現行の優先バージョンを指定した場合、サーバーは
+        // そのまま返す（合意済みなので fallback 不要）。
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal("2025-03-26", response["result"]!["protocolVersion"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void Initialize_NoProtocolVersion_UsesPreferred()
+    {
+        // Issue #1554: empty params still works — the negotiation falls back to the server's
+        // preferred (newest) version so existing clients that never sent the field keep
+        // working unchanged.
+        // Issue #1554: params が空でも動作する — 既定の優先バージョン（最新）に fallback
+        // することで、protocolVersion を送らない既存クライアントの互換を保つ。
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal("2025-03-26", response["result"]!["protocolVersion"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void Initialize_UnsupportedProtocolVersion_ReturnsInvalidParamsError()
+    {
+        // Issue #1554: an unsupported requested version must NOT silently downgrade to the
+        // server's preferred version — that hid mismatches and made future spec bumps
+        // observably break clients. Instead the handshake returns -32602 with structured
+        // data so clients can branch on the failure and report a precise diagnostic.
+        // Issue #1554: 未対応の要求バージョンを黙ってダウングレードしてはならない
+        // （ミスマッチを覆い隠してしまうため）。-32602 と構造化データを返し、クライアントが
+        // 失敗判定して正確な診断を出せるようにする。
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2099-01-01"}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Null(response["result"]);
+        var error = response["error"]!;
+        Assert.Equal(-32602, error["code"]!.GetValue<int>());
+        Assert.Contains("2099-01-01", error["message"]!.GetValue<string>());
+        Assert.Contains("2025-03-26", error["message"]!.GetValue<string>());
+
+        var data = error["data"]!;
+        Assert.Equal("2099-01-01", data["requestedVersion"]!.GetValue<string>());
+        var supported = data["supportedVersions"]!.AsArray()
+            .Select(n => n!.GetValue<string>())
+            .ToArray();
+        Assert.Equal(McpServer.SupportedProtocolVersions, supported);
+    }
+
+    [Fact]
+    public void Initialize_MalformedProtocolVersion_FallsBackToPreferred()
+    {
+        // Non-string `protocolVersion` (e.g. number, null, object) is treated the same as
+        // "field absent": fall back to the preferred version. Erroring would break tolerant
+        // clients that send `null` when no preference exists, while a silent fallback only
+        // kicks in for genuinely malformed inputs and not for the strict-mismatch path.
+        // 非文字列の `protocolVersion`（数値・null・オブジェクト）は「未指定」と同じ扱いで
+        // 既定の優先バージョンに fallback する。null を許容するクライアントとの互換を残しつつ、
+        // 厳格な不一致ケース（文字列だが対応外）には引き続き -32602 を返せる。
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":42}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal("2025-03-26", response["result"]!["protocolVersion"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void SupportedProtocolVersions_IsNewestFirstAndIncludesPreferred()
+    {
+        // The preferred version must be the newest entry; ordering matters for future
+        // additions because clients may rely on the listed order as a "newest-first" hint.
+        // 既定の優先バージョンは先頭でなければならない。クライアントが「先頭が最新」と
+        // して扱う可能性があるため、順序の保証は明示的に必要。
+        Assert.NotEmpty(McpServer.SupportedProtocolVersions);
+        Assert.Equal("2025-03-26", McpServer.SupportedProtocolVersions[0]);
+        Assert.Contains("2024-11-05", McpServer.SupportedProtocolVersions);
+    }
+
+    [Fact]
+    public void BuildUnsupportedProtocolMessage_MentionsRequestedAndSupported()
+    {
+        var msg = McpServer.BuildUnsupportedProtocolMessage("2099-01-01");
+        Assert.Contains("2099-01-01", msg);
+        foreach (var supported in McpServer.SupportedProtocolVersions)
+            Assert.Contains(supported, msg);
+    }
+
+    [Fact]
+    public void BuildUnsupportedProtocolLog_IsActionable()
+    {
+        var log = McpServer.BuildUnsupportedProtocolLog("2099-01-01");
+        Assert.Contains("Rejecting initialize", log);
+        Assert.Contains("2099-01-01", log);
+        Assert.Contains("Upgrade the server or pin a supported version", log);
     }
 
     [Fact]

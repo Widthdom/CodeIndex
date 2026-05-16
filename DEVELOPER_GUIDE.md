@@ -1100,6 +1100,17 @@ Piping `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}` into
   `serverInfo.name`, `serverInfo.version` (read via
   `ConsoleUi.LoadVersion()` — the same `version.json` source), and the
   long `instructions` string that guides AI clients on tool selection.
+- `protocolVersion` is **negotiated**, not hardcoded (#1554). The server
+  maintains `McpServer.SupportedProtocolVersions` (newest first:
+  `2025-03-26`, `2024-11-05`), reads the client's requested
+  `protocolVersion` from `initialize` params, and either echoes the
+  supported version back (handshake success), falls back to the newest
+  supported version when the client omits or sends a non-string value,
+  or rejects with a structured JSON-RPC `-32602` whose `error.data`
+  carries `requestedVersion` and `supportedVersions`. This keeps future
+  MCP spec bumps visible as actionable handshake failures instead of
+  silently desynced wire formats. Bump the array deliberately and keep
+  `ProtocolVersion` aligned with its first entry.
 
 Because MCP uses a distinct serialization strategy, it is the most
 robust smoke test for "is the binary runnable at all?" — it stresses
@@ -2074,6 +2085,7 @@ sequenceDiagram
 - `McpServer` が stdin/stdout を持ち、JSON-RPC 2.0 フレームを解析する。
 - レスポンス構築は `JsonSerializer.Serialize<T>(...)` ではなく、`System.Text.Json.Nodes.JsonObject` / `JsonArray` を**手組み**する。これが、トリミング済みバイナリでリフレクションベースのシリアライズが無効でも MCP パスが動き続ける理由。
 - `initialize` レスポンスは `protocolVersion`、`capabilities`、`serverInfo.name`、`serverInfo.version`（`ConsoleUi.LoadVersion()` — `version.json` が源）、および AI クライアントにツール選択を案内する長い `instructions` 文字列を返す。
+- `protocolVersion` は**ハードコードではなく交渉**で決まる（#1554）。サーバーは `McpServer.SupportedProtocolVersions`（新しい順: `2025-03-26`, `2024-11-05`）を保持し、`initialize` パラメータからクライアント要求バージョンを読み取って、対応集合にあればそれを返し（合意）、未指定／非文字列なら既定の最新バージョンに fallback し、対応外なら `error.data` に `requestedVersion` と `supportedVersions` を入れた JSON-RPC `-32602` で拒否する。これにより将来 MCP 仕様が改訂されても、wire format が黙ってずれるのではなく actionable な handshake 失敗として表面化する。配列を新バージョンで更新する際は `ProtocolVersion` を先頭エントリと揃えて意図的に bump する。
 
 MCP は独立したシリアライズ戦略（オブジェクトを JSON などの転送形式に変換する方式のこと。CLI の `--json` 側は .NET 標準の `JsonSerializer` に任せる方式、MCP 側は `JsonObject` を手で組み立てる方式と、別の手段を採っている）を採るため、「そもそもバイナリは走るのか?」を確かめる最も頑健なスモークテスト（デプロイや起動直後に行う、基本動作だけを短時間で確認する簡易テストのこと。詳細な正しさではなく「煙が出ていないか＝致命的に壊れていないか」を見るためこの名で呼ばれる）となる — .NET ホスト、`Program.Main`、CLI ルーティング、`ConsoleUi.LoadVersion()` に負荷をかけるが、SQLite には触れない（`search` など MCP の*ツール呼び出し*は SQLite に触れるが、`initialize` 単独では触れない）。
 

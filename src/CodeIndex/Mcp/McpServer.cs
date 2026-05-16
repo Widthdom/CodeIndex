@@ -11,7 +11,9 @@ namespace CodeIndex.Mcp;
 /// <summary>
 /// MCP (Model Context Protocol) server over stdin/stdout using JSON-RPC 2.0.
 /// stdin/stdout上のJSON-RPC 2.0によるMCPサーバー。
-/// Protocol version: 2024-11-05
+/// Supported protocol versions: see <see cref="SupportedProtocolVersions"/> (negotiated per
+/// `initialize` request, #1554).
+/// 対応プロトコルバージョン: <see cref="SupportedProtocolVersions"/> 参照（`initialize` ごとに交渉, #1554）。
 /// </summary>
 public partial class McpServer : IDisposable
 {
@@ -37,7 +39,21 @@ public partial class McpServer : IDisposable
     private bool _sharedDbReadMigrated;
     private bool _disposed;
 
+    // Preferred MCP protocol version returned when the client does not pin one. This is the
+    // newest entry in `SupportedProtocolVersions` and must stay in lockstep with that array.
+    // 既定の MCP プロトコルバージョン。クライアントが指定しなかった場合に返す値で、
+    // `SupportedProtocolVersions` の先頭（最新）と一致させる。
     private const string ProtocolVersion = "2025-03-26";
+    // MCP protocol versions this server can speak, newest first. Issue #1554: the
+    // `initialize` response used to advertise a single hardcoded version and ignored the
+    // client's requested `protocolVersion`, so any spec bump silently desynced clients and
+    // servers. Negotiation walks this set so older clients on `2024-11-05` keep working and
+    // unknown future versions surface as a structured `-32602` instead of a misleading echo.
+    // このサーバーが話せる MCP プロトコルバージョン（新しい順）。Issue #1554: 旧実装は
+    // ハードコードした 1 つのバージョンだけを返し、クライアントが要求した `protocolVersion`
+    // を無視していたため、仕様改訂のたびに無言で互換が崩れていた。`2024-11-05` の旧クライアント
+    // を引き続きサポートしつつ、未知バージョンは構造化された `-32602` で明示的に拒否する。
+    internal static readonly string[] SupportedProtocolVersions = { "2025-03-26", "2024-11-05" };
     private const int MaxLimit = 200;
     private const int MaxQueryLength = 1000;
     // Upper bound on the `impact_analysis` `maxDepth` argument. Deep monorepos can have
@@ -212,9 +228,23 @@ public partial class McpServer : IDisposable
     /// </summary>
     private JsonNode HandleInitialize(JsonNode? id, JsonNode? _params)
     {
+        var negotiated = NegotiateProtocolVersion(_params, out var requestedVersion);
+        if (negotiated == null)
+        {
+            // No overlap between the client's requested version and this server's supported
+            // set. Issue #1554: respond with structured `-32602` (invalid params) carrying the
+            // requested + supported versions in `error.data` so clients can branch on it
+            // instead of guessing why the handshake silently failed.
+            // クライアント要求バージョンとサーバー対応集合に重なりがない場合。Issue #1554:
+            // クライアントが分岐判定できるよう、`error.data` に要求バージョンと対応バージョン
+            // を入れた -32602 (invalid params) を返す。
+            Console.Error.WriteLine(BuildUnsupportedProtocolLog(requestedVersion));
+            return CreateUnsupportedProtocolError(id, requestedVersion);
+        }
+
         var result = new JsonObject
         {
-            ["protocolVersion"] = ProtocolVersion,
+            ["protocolVersion"] = negotiated,
             ["capabilities"] = new JsonObject
             {
                 ["tools"] = new JsonObject
@@ -232,6 +262,88 @@ public partial class McpServer : IDisposable
             ["instructions"] = BuildInstructions()
         };
         return CreateSuccessResponse(true, id, result);
+    }
+
+    /// <summary>
+    /// Resolve the protocol version to advertise back to the client. Returns the version
+    /// string on success and `null` when the client pinned an unsupported version.
+    /// Issue #1554: the previous handshake hardcoded a single version, so a future MCP
+    /// spec bump would silently break clients. The negotiation now mirrors the MCP spec:
+    /// echo the client's requested version when it is in our supported set, fall back to
+    /// the preferred version when no version was supplied, and surface a structured error
+    /// when there is no overlap (no silent downgrade so clients cannot mistakenly proceed
+    /// against an unsupported wire format).
+    /// クライアントに返すプロトコルバージョンを決める。成功時はバージョン文字列、
+    /// クライアントが対応外バージョンを指定した場合は `null` を返す。Issue #1554:
+    /// 旧実装はハードコードした 1 つのバージョンだけを返していたため、将来の仕様改訂で
+    /// 無言で互換が壊れる。本ロジックは MCP 仕様準拠で、要求バージョンが対応集合にあれば
+    /// それをそのまま返し、未指定なら既定バージョンを返し、重なりが無い場合は構造化エラー
+    /// を返す（黙ってダウングレードしないことでクライアントが誤った wire format で進むのを防ぐ）。
+    /// </summary>
+    internal static string? NegotiateProtocolVersion(JsonNode? initializeParams, out string? requestedVersion)
+    {
+        requestedVersion = null;
+        if (initializeParams is JsonObject obj
+            && obj.TryGetPropertyValue("protocolVersion", out var node)
+            && node is JsonValue value
+            && value.TryGetValue<string>(out var versionString)
+            && !string.IsNullOrWhiteSpace(versionString))
+        {
+            requestedVersion = versionString;
+            foreach (var supported in SupportedProtocolVersions)
+            {
+                if (string.Equals(supported, versionString, StringComparison.Ordinal))
+                    return supported;
+            }
+            return null;
+        }
+
+        // Field absent / null / malformed: fall back to the preferred version so clients
+        // that omit the field (or send a non-string sentinel) keep working as before.
+        // 未指定 / null / 不正型: 既定バージョンに fallback して既存クライアントの互換を保つ。
+        return ProtocolVersion;
+    }
+
+    private static JsonObject CreateUnsupportedProtocolError(JsonNode? id, string? requestedVersion)
+    {
+        var supportedArray = new JsonArray();
+        foreach (var supported in SupportedProtocolVersions)
+            supportedArray.Add(JsonValue.Create(supported));
+
+        var data = new JsonObject
+        {
+            ["supportedVersions"] = supportedArray
+        };
+        if (requestedVersion != null)
+            data["requestedVersion"] = requestedVersion;
+
+        var error = new JsonObject
+        {
+            ["code"] = -32602,
+            ["message"] = BuildUnsupportedProtocolMessage(requestedVersion),
+            ["data"] = data
+        };
+        var response = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["error"] = error,
+            ["id"] = id is null ? JsonNode.Parse("null") : JsonNode.Parse(id.ToJsonString())
+        };
+        return response;
+    }
+
+    internal static string BuildUnsupportedProtocolMessage(string? requestedVersion)
+    {
+        var supported = string.Join(", ", SupportedProtocolVersions);
+        var requested = string.IsNullOrEmpty(requestedVersion) ? "(unspecified)" : requestedVersion;
+        return $"Unsupported MCP protocolVersion '{requested}'. Server supports: {supported}.";
+    }
+
+    internal static string BuildUnsupportedProtocolLog(string? requestedVersion)
+    {
+        var supported = string.Join(", ", SupportedProtocolVersions);
+        var requested = string.IsNullOrEmpty(requestedVersion) ? "(unspecified)" : requestedVersion;
+        return $"[cdidx-mcp] Rejecting initialize: client requested protocolVersion '{requested}', server supports {supported}. Upgrade the server or pin a supported version on the client.";
     }
 
     // Tool definitions are in McpToolDefinitions.cs / ツール定義は McpToolDefinitions.cs に分離
