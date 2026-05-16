@@ -1203,21 +1203,21 @@ public static class QueryCommandRunner
                     value = args[i + 1];
                     i++;
                 }
-                if ((arg == "--limit" || arg == "--top") && (!int.TryParse(value, out var limit) || limit <= 0))
+                if ((arg == "--limit" || arg == "--top") && (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var limit) || limit <= 0))
                     return $"Error: {arg} requires a positive integer, got '{value}'";
                 if ((arg == "--limit" || arg == "--top")
-                    && int.TryParse(value, out var limitCeil)
+                    && int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var limitCeil)
                     && NumericFlagUpperBounds.TryGetValue("--limit", out var limitMax)
                     && limitCeil > limitMax)
                     return $"Error: --limit must be less than or equal to {limitMax}, got '{value}'.";
-                if (arg == "--max-line-width" && (!int.TryParse(value, out var widthValue) || widthValue < 0))
+                if (arg == "--max-line-width" && (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var widthValue) || widthValue < 0))
                     return $"Error: {arg} requires a non-negative integer, got '{value}'";
-                if (arg == "--max-line-width" && int.TryParse(value, out var widthCeil) && widthCeil > LineWidthFormatter.MaxAllowedLineWidth)
+                if (arg == "--max-line-width" && int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var widthCeil) && widthCeil > LineWidthFormatter.MaxAllowedLineWidth)
                     return $"Error: --max-line-width must be less than or equal to {LineWidthFormatter.MaxAllowedLineWidth} (got '{value}').";
-                if ((arg == "--before" || arg == "--after") && (!int.TryParse(value, out var context) || context < 0))
+                if ((arg == "--before" || arg == "--after") && (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var context) || context < 0))
                     return $"Error: {arg} requires a non-negative integer, got '{value}'";
                 if ((arg == "--before" || arg == "--after")
-                    && int.TryParse(value, out var contextCeil)
+                    && int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var contextCeil)
                     && NumericFlagUpperBounds.TryGetValue(arg, out var contextMax)
                     && contextCeil > contextMax)
                     return $"Error: {arg} must be less than or equal to {contextMax}, got '{value}'.";
@@ -4281,7 +4281,7 @@ public static class QueryCommandRunner
         if (string.Equals(optionName, "--max-line-width", StringComparison.Ordinal))
             return TryParseNonNegativeInt(rawValue, optionName, out value, out error);
 
-        if (!int.TryParse(rawValue, out value) || value <= 0)
+        if (!int.TryParse(rawValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out value) || value <= 0)
         {
             value = 0;
             error = $"Error: {optionName} requires a positive integer, got '{rawValue}'. Hint: retry with `{optionName} 1` or another positive integer.";
@@ -4301,7 +4301,7 @@ public static class QueryCommandRunner
 
     private static bool TryParseNonNegativeInt(string rawValue, string optionName, out int value, out string? error)
     {
-        if (!int.TryParse(rawValue, out value) || value < 0)
+        if (!int.TryParse(rawValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out value) || value < 0)
         {
             value = 0;
             error = $"Error: {optionName} requires a non-negative integer, got '{rawValue}'. Hint: retry with `{optionName} 0` or another non-negative integer.";
