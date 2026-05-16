@@ -860,6 +860,164 @@ public class McpServerTests : IDisposable
         }
     }
 
+    // --- Shutdown / concurrency tests (#1567) / shutdown と並列上限のテスト ---
+
+    [Fact]
+    public void Notification_Shutdown_ReturnsNullAndLogsToStderr()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalError = Console.Error;
+            using var errorWriter = new StringWriter();
+            Console.SetError(errorWriter);
+
+            try
+            {
+                var request = JsonNode.Parse("""{"jsonrpc":"2.0","method":"notifications/shutdown"}""")!;
+                var response = _server.HandleMessage(request);
+
+                Assert.Null(response);
+                Assert.Contains("notifications/shutdown", errorWriter.ToString());
+            }
+            finally
+            {
+                Console.SetError(originalError);
+            }
+        }
+    }
+
+    [Fact]
+    public void Notification_Exit_ReturnsNullAndLogsToStderr()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalError = Console.Error;
+            using var errorWriter = new StringWriter();
+            Console.SetError(errorWriter);
+
+            try
+            {
+                var request = JsonNode.Parse("""{"jsonrpc":"2.0","method":"notifications/exit"}""")!;
+                var response = _server.HandleMessage(request);
+
+                Assert.Null(response);
+                Assert.Contains("notifications/exit", errorWriter.ToString());
+            }
+            finally
+            {
+                Console.SetError(originalError);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_ShutdownNotification_DrainsAndExits()
+    {
+        // The loop must exit cleanly when the wire-level `notifications/shutdown` arrives
+        // even if the transport has not been closed externally. WriteFrameAsync is still
+        // called once with `null` because shutdown is a notification (#1567).
+        // 外部からトランスポートが閉じられなくても `notifications/shutdown` でループが正常終了
+        // することを確認する (#1567)。通知なので応答は null。
+        var transport = new ShutdownProbeTransport(
+            """{"jsonrpc":"2.0","method":"notifications/shutdown"}""");
+        using var server = new McpServer(_dbPath, "test");
+
+        await server.RunAsync(transport, CancellationToken.None);
+
+        Assert.Equal(1, transport.WriteCount);
+        Assert.Null(transport.LastWritten);
+    }
+
+    [Fact]
+    public async Task RunAsync_ShutdownNotification_PreemptsRemainingFrames()
+    {
+        // A `tools/list` request queued behind shutdown must not be served — shutdown
+        // wins so the server can stop without taking on more work (#1567).
+        // shutdown の後ろに積まれたフレームは処理しない (#1567)。
+        var transport = new ShutdownProbeTransport(
+            """{"jsonrpc":"2.0","method":"notifications/shutdown"}""",
+            """{"jsonrpc":"2.0","id":99,"method":"tools/list"}""");
+        using var server = new McpServer(_dbPath, "test");
+
+        await server.RunAsync(transport, CancellationToken.None);
+
+        // Exactly one write: the null for the shutdown notification. The queued tools/list
+        // is never read because the loop breaks after observing `_running == false`.
+        // shutdown 通知の null 応答 1 件のみで、後続の tools/list は read されない。
+        Assert.Equal(1, transport.WriteCount);
+        Assert.Null(transport.LastWritten);
+    }
+
+    [Fact]
+    public void MaxConcurrency_DefaultExposesIssueBound()
+    {
+        Assert.Equal(McpServer.DefaultMaxConcurrency, _server.MaxConcurrency);
+        Assert.Equal(8, _server.MaxConcurrency);
+    }
+
+    [Fact]
+    public void MaxConcurrency_ExplicitOverride_TakesEffect()
+    {
+        using var server = new McpServer(
+            _dbPath,
+            "test",
+            dbPathExplicit: false,
+            serializeResponse: null,
+            authenticator: null,
+            toolFilter: null,
+            maxConcurrency: 3);
+        Assert.Equal(3, server.MaxConcurrency);
+    }
+
+    [Fact]
+    public void MaxConcurrency_NonPositive_Throws()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => new McpServer(_dbPath, "test", false, null, null, null, 0));
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => new McpServer(_dbPath, "test", false, null, null, null, -1));
+    }
+
+    /// <summary>
+    /// In-memory <see cref="IMcpTransport"/> that replays a scripted sequence of frames
+    /// and records the responses the server writes back. Used to drive `RunAsync` from
+    /// tests without standing up a real stdio / HTTP transport (#1567).
+    /// テスト用のインメモリ MCP トランスポート (#1567)。固定フレーム列を再生し、サーバーの
+    /// 応答を記録する。
+    /// </summary>
+    private sealed class ShutdownProbeTransport : IMcpTransport
+    {
+        private readonly Queue<string?> _frames;
+
+        public ShutdownProbeTransport(params string?[] frames)
+        {
+            _frames = new Queue<string?>(frames);
+            // Append EOS so the loop terminates if shutdown never fires for some reason.
+            // shutdown が来なかった場合のフェイルセーフとして末尾に EOS を積む。
+            _frames.Enqueue(null);
+        }
+
+        public string Name => "shutdown-probe";
+        public string Endpoint => "in-memory";
+        public int WriteCount { get; private set; }
+        public string? LastWritten { get; private set; }
+
+        public Task<string?> ReadFrameAsync(CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(_frames.Count == 0 ? null : _frames.Dequeue());
+        }
+
+        public Task WriteFrameAsync(string? frame, CancellationToken cancellationToken)
+        {
+            WriteCount++;
+            LastWritten = frame;
+            return Task.CompletedTask;
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
     [Fact]
     public void Ping_ReturnsEmptyResult()
     {

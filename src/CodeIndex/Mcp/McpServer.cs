@@ -30,6 +30,27 @@ public partial class McpServer : IDisposable
     private readonly Func<JsonNode, string> _serializeResponse;
     private readonly IMcpAuthenticator _authenticator;
     private readonly McpToolFilter _toolFilter;
+    // Bounds the number of MCP tool calls in flight at once so an unbounded burst of
+    // requests cannot exhaust memory or wedge the SQLite reader lock (#1567). The
+    // stdio / HTTP loop today only ever has one frame in flight, but the gate
+    // documents the contract and is the seam future async dispatch will use.
+    // 同時 in-flight ツール呼び出しの上限 (#1567)。stdio / HTTP ループは現状単一スレッド
+    // だが、将来の並列ディスパッチに備えて契約を明示し、testable な seam を残す。
+    private readonly SemaphoreSlim _concurrencyGate;
+    // Server-wide shutdown signal. Cancelled by `notifications/shutdown` (and the
+    // `notifications/exit` alias) so the read loop unblocks and exits cleanly even
+    // when the transport itself has not closed (#1567).
+    // サーバー全体の shutdown シグナル。`notifications/shutdown` (および
+    // `notifications/exit`) を受けると cancel され、トランスポート未クローズでも
+    // 読み取りループが unblock して正常終了する (#1567)。
+    private readonly CancellationTokenSource _shutdownCts = new();
+    // Token observed by the currently executing tool call. Set just before
+    // `ProcessFrame` runs and reset afterwards so `WithDbReader` can hand a live
+    // cancellation token to `DbReader` for SQLite work (#1567).
+    // 現在実行中のツール呼び出しが観測するトークン。`ProcessFrame` 実行直前にセットし、
+    // 直後にリセットする。`WithDbReader` が `DbReader` にライブな cancellation token
+    // を渡せるようにするため (#1567)。
+    private CancellationToken _currentRequestToken = CancellationToken.None;
     private bool _running = true;
     // Per-session DbContext reused across MCP tool calls. Holding the connection open
     // avoids reopening SQLite, reapplying pragmas, and re-registering every SQL function
@@ -95,19 +116,24 @@ public partial class McpServer : IDisposable
     // JSON-RPCループのstdioバッファ。大きめのMCPペイロードを1回の読み取りで吸収し、
     // StreamReaderのデフォルト1KBから繰り返し拡張されるのを避けるサイズ。
     private const int StdioBufferSize = 64 * 1024;
+    // Default ceiling on concurrent in-flight tool calls. Matches the issue's suggested
+    // default and is generous enough for typical AI clients without letting a burst of
+    // tool calls wedge the SQLite reader lock or balloon memory (#1567).
+    // 同時 in-flight ツール呼び出し数の既定上限 (#1567)。
+    internal const int DefaultMaxConcurrency = 8;
 
     public McpServer(string dbPath, string version, bool dbPathExplicit = false)
-        : this(dbPath, version, dbPathExplicit, null, null, null)
+        : this(dbPath, version, dbPathExplicit, null, null, null, DefaultMaxConcurrency)
     {
     }
 
     public McpServer(string dbPath, string version, bool dbPathExplicit, IMcpAuthenticator authenticator)
-        : this(dbPath, version, dbPathExplicit, null, authenticator, null)
+        : this(dbPath, version, dbPathExplicit, null, authenticator, null, DefaultMaxConcurrency)
     {
     }
 
     public McpServer(string dbPath, string version, bool dbPathExplicit, McpToolFilter? toolFilter)
-        : this(dbPath, version, dbPathExplicit, null, null, toolFilter)
+        : this(dbPath, version, dbPathExplicit, null, null, toolFilter, DefaultMaxConcurrency)
     {
     }
 
@@ -115,17 +141,24 @@ public partial class McpServer : IDisposable
     // do not need a custom authenticator or tool filter.
     // serializer 注入だけが必要な既存テスト向けの内部互換 entry。
     internal McpServer(string dbPath, string version, bool dbPathExplicit, Func<JsonNode, string>? serializeResponse)
-        : this(dbPath, version, dbPathExplicit, serializeResponse, null, null)
+        : this(dbPath, version, dbPathExplicit, serializeResponse, null, null, DefaultMaxConcurrency)
     {
     }
 
     internal McpServer(string dbPath, string version, bool dbPathExplicit, Func<JsonNode, string>? serializeResponse, IMcpAuthenticator? authenticator)
-        : this(dbPath, version, dbPathExplicit, serializeResponse, authenticator, null)
+        : this(dbPath, version, dbPathExplicit, serializeResponse, authenticator, null, DefaultMaxConcurrency)
     {
     }
 
     internal McpServer(string dbPath, string version, bool dbPathExplicit, Func<JsonNode, string>? serializeResponse, IMcpAuthenticator? authenticator, McpToolFilter? toolFilter)
+        : this(dbPath, version, dbPathExplicit, serializeResponse, authenticator, toolFilter, DefaultMaxConcurrency)
     {
+    }
+
+    internal McpServer(string dbPath, string version, bool dbPathExplicit, Func<JsonNode, string>? serializeResponse, IMcpAuthenticator? authenticator, McpToolFilter? toolFilter, int maxConcurrency)
+    {
+        if (maxConcurrency < 1)
+            throw new ArgumentOutOfRangeException(nameof(maxConcurrency), maxConcurrency, "MCP concurrency cap must be at least 1.");
         _dbPath = dbPath;
         _dbPathExplicit = dbPathExplicit;
         _version = version;
@@ -139,6 +172,8 @@ public partial class McpServer : IDisposable
         _authenticator = authenticator ?? LocalStdioAuthenticator.Instance;
         _toolFilter = toolFilter ?? McpToolFilter.FromEnvironment();
         RateLimiter = new RateLimiter(RateLimiterOptions.FromEnvironment());
+        _concurrencyGate = new SemaphoreSlim(maxConcurrency, maxConcurrency);
+        MaxConcurrency = maxConcurrency;
     }
 
     /// <summary>
@@ -173,6 +208,13 @@ public partial class McpServer : IDisposable
     internal string CurrentCaller => _caller;
 
     /// <summary>
+    /// Cap configured for concurrent in-flight tool calls (#1567). Surfaced for tests so
+    /// the bound can be verified without poking at internals.
+    /// 現在設定されている in-flight ツール呼び出し上限 (#1567)。テスト向けに公開。
+    /// </summary>
+    internal int MaxConcurrency { get; }
+
+    /// <summary>
     /// Run the MCP server loop on the default stdio transport. Kept as a thin wrapper around
     /// <see cref="RunAsync(IMcpTransport, CancellationToken)"/> so existing callers stay
     /// source-compatible after the #1558 transport refactor.
@@ -197,9 +239,18 @@ public partial class McpServer : IDisposable
     {
         ArgumentNullException.ThrowIfNull(transport);
 
+        // Link the caller-supplied token (Ctrl+C / HTTP listener stop) with the server-internal
+        // shutdown signal so `notifications/shutdown` also wakes any pending `ReadFrameAsync`.
+        // The MCP spec leaves shutdown to the transport, but real deployments need a wire-level
+        // way to drain in-flight work without killing the process (#1567).
+        // Ctrl+C 等の外部 token と内部 shutdown signal をリンクし、`notifications/shutdown` でも
+        // pending な `ReadFrameAsync` を unblock できるようにする (#1567)。
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _shutdownCts.Token);
+        var loopToken = linkedCts.Token;
+
         // Use stderr for logging so stdout stays clean for JSON-RPC
         // stdoutをJSON-RPC用にクリーンに保つため、ログはstderrに出力
-        Console.Error.WriteLine($"[cdidx-mcp] Starting MCP server v{_version} (db: {_dbPath}, transport: {transport.Name} @ {transport.Endpoint})");
+        Console.Error.WriteLine($"[cdidx-mcp] Starting MCP server v{_version} (db: {_dbPath}, transport: {transport.Name} @ {transport.Endpoint}, max in-flight: {MaxConcurrency})");
 
         while (_running)
         {
@@ -211,14 +262,45 @@ public partial class McpServer : IDisposable
             // 漏らさず正常終了するよう、read/process/write 全体を同じ cancellation guard で囲む。
             try
             {
-                var frame = await transport.ReadFrameAsync(cancellationToken).ConfigureAwait(false);
+                var frame = await transport.ReadFrameAsync(loopToken).ConfigureAwait(false);
                 if (frame == null)
                     break; // transport closed / トランスポートが閉じられた
 
-                var response = ProcessFrame(frame);
-                await transport.WriteFrameAsync(response, cancellationToken).ConfigureAwait(false);
+                // Acquire the concurrency gate before doing any work so a future async dispatch
+                // mode (multiple frames in flight) can never run more than `MaxConcurrency` tool
+                // calls at once. Today the loop is sequential so the gate is effectively a no-op
+                // at runtime, but it documents the contract and gives tests a verifiable bound
+                // (#1567).
+                // 並列ディスパッチ時に in-flight 数が `MaxConcurrency` を超えないよう、ProcessFrame
+                // の手前で gate を取得する (#1567)。
+                await _concurrencyGate.WaitAsync(loopToken).ConfigureAwait(false);
+                string? response;
+                try
+                {
+                    // Hand the per-request token to `WithDbReader` so SQLite work the tool kicks
+                    // off can observe shutdown / client-disconnect cancellation through
+                    // `DbReader.Cancellation` (#1567).
+                    // ツールが起動する SQLite 作業が shutdown / 切断を観測できるよう per-request
+                    // token を `WithDbReader` に渡す (#1567)。
+                    _currentRequestToken = loopToken;
+                    response = ProcessFrame(frame);
+                }
+                finally
+                {
+                    _currentRequestToken = CancellationToken.None;
+                    _concurrencyGate.Release();
+                }
+
+                await transport.WriteFrameAsync(response, loopToken).ConfigureAwait(false);
+
+                // `notifications/shutdown` flips `_running` inside `HandleMessage`; exit the loop
+                // immediately so a subsequent slow `ReadFrameAsync` does not extend the lifetime
+                // of a server that has been asked to stop.
+                // `notifications/shutdown` が `_running` を倒した直後にループを抜ける (#1567)。
+                if (!_running)
+                    break;
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException) when (loopToken.IsCancellationRequested)
             {
                 break;
             }
@@ -321,6 +403,33 @@ public partial class McpServer : IDisposable
         // Notifications (no id) don't get a response / 通知（idなし）にはレスポンスなし
         if (method == "notifications/initialized" || method == "notifications/cancelled")
             return null;
+
+        // Graceful shutdown via JSON-RPC notification (#1567). Without this, the only way to
+        // stop a long-lived `cdidx mcp` server was to close the transport (stdin EOF / HTTP
+        // listener stop), which races with in-flight work and forces clients to send SIGINT.
+        // Treating both `notifications/shutdown` (the MCP spec-aligned name) and the legacy
+        // LSP-style `notifications/exit` alias as graceful-stop signals lets clients drain the
+        // current request and exit cleanly. Cancelling `_shutdownCts` unblocks any pending
+        // `ReadFrameAsync` in the loop.
+        // JSON-RPC 通知による graceful shutdown (#1567)。`_shutdownCts.Cancel()` でループ側の
+        // `ReadFrameAsync` を unblock し、`_running = false` で次のイテレーション開始を抑止する。
+        if (string.Equals(method, "notifications/shutdown", StringComparison.Ordinal)
+            || string.Equals(method, "notifications/exit", StringComparison.Ordinal))
+        {
+            Console.Error.WriteLine($"[cdidx-mcp] Received {method}; draining in-flight work and shutting down.");
+            _running = false;
+            try
+            {
+                if (!_shutdownCts.IsCancellationRequested)
+                    _shutdownCts.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+                // Server is already disposing — nothing more to cancel.
+                // dispose 中なので追加 cancel は不要。
+            }
+            return null;
+        }
 
         if (!hasId)
         {
@@ -825,7 +934,16 @@ public partial class McpServer : IDisposable
             db.TryMigrateForRead();
             _sharedDbReadMigrated = true;
         }
-        var reader = new DbReader(db.Connection, db.IsReadOnly);
+        // Hand the per-request cancellation token to the reader so SQLite work the tool
+        // kicks off can observe shutdown / client-disconnect cancellation (#1567). The
+        // token is `CancellationToken.None` outside an in-flight request, preserving the
+        // existing behaviour for ad-hoc callers like tests that drive `WithDbReader`
+        // through internals.
+        // per-request cancellation token を reader に渡し、SQLite 作業が shutdown / 切断を
+        // 観測できるようにする (#1567)。
+        var requestToken = _currentRequestToken;
+        requestToken.ThrowIfCancellationRequested();
+        var reader = new DbReader(db.Connection, db.IsReadOnly, requestToken);
         return action(reader);
     }
 
@@ -870,6 +988,17 @@ public partial class McpServer : IDisposable
             return;
         _disposed = true;
         CloseSharedDb();
+        try
+        {
+            if (!_shutdownCts.IsCancellationRequested)
+                _shutdownCts.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // already disposed / 既に dispose 済み
+        }
+        _shutdownCts.Dispose();
+        _concurrencyGate.Dispose();
         GC.SuppressFinalize(this);
     }
 

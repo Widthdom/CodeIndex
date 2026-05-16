@@ -10918,6 +10918,32 @@ public class DbReaderTests : IDisposable
         Assert.Empty(analysis.Callees);
     }
 
+    // --- Cancellation plumbing (#1567) / キャンセル伝搬テスト ---
+
+    [Fact]
+    public void Constructor_DefaultOverload_LeavesCancellationNone()
+    {
+        // The two-argument constructor is the historical surface kept for callers that don't
+        // need request cancellation. It must continue to expose a no-op token so existing
+        // sites (CLI runners, tests) keep working unchanged (#1567).
+        // 既存の 2 引数コンストラクタは cancellation 不要な呼び出し元向けに残してあり、
+        // 互換のため CancellationToken.None を保持する (#1567)。
+        var reader = new DbReader(_db.Connection);
+        Assert.False(reader.Cancellation.CanBeCanceled);
+    }
+
+    [Fact]
+    public void Constructor_ExplicitToken_PropagatedThroughHelpers()
+    {
+        using var cts = new CancellationTokenSource();
+        var reader = new DbReader(_db.Connection, isReadOnly: false, cts.Token);
+        Assert.True(reader.Cancellation.CanBeCanceled);
+
+        cts.Cancel();
+        Assert.True(reader.Cancellation.IsCancellationRequested);
+        Assert.Throws<OperationCanceledException>(() => reader.ThrowIfCancellationRequested());
+    }
+
     public void Dispose()
     {
         _db.Dispose();
