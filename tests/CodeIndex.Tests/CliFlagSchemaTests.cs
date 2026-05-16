@@ -61,6 +61,11 @@ public class CliFlagSchemaTests
         {
             Assert.StartsWith("--", flag.Name);
             Assert.True(seen.Add(flag.Name), $"Duplicate flag in schema: {flag.Name}");
+            if (flag.ShortName is not null)
+            {
+                Assert.StartsWith("-", flag.ShortName);
+                Assert.DoesNotContain("--", flag.ShortName);
+            }
         }
     }
 
@@ -144,6 +149,8 @@ public class CliFlagSchemaTests
             var flags = ExtractBashSubcommandFlags(script, command);
             var allowed = CliFlagSchema.GetCompletionFlagsForCommand(command)
                 .Select(f => f.Name).ToHashSet(StringComparer.Ordinal);
+            foreach (var shortName in CliFlagSchema.GetCompletionFlagsForCommand(command).Select(f => f.ShortName).OfType<string>())
+                allowed.Add(shortName);
             allowed.Add("--help");
             if (command == "find")
                 allowed.Add("--");
@@ -209,7 +216,7 @@ public class CliFlagSchemaTests
     // ConsoleUi 側の EnumeratedCompletionCommands に対応する一覧。
     private static readonly string[] EnumeratedBashBranches =
     [
-        "find", "excerpt", "references", "inspect", "hotspots", "status", "db", "search",
+        "find", "excerpt", "references", "inspect", "hotspots", "status", "db", "report", "search",
     ];
 
     private static IReadOnlyList<string> GetConsoleUiCommands()

@@ -408,6 +408,32 @@ public class ConsoleUiTests
         }
     }
 
+    [Fact]
+    public void PrintCompletions_ReportFlagSetsMatchAcrossShells()
+    {
+        var bashScript = ConsoleUi.GetCompletionScript("bash");
+        var zshScript = ConsoleUi.GetCompletionScript("zsh");
+        var fishScript = ConsoleUi.GetCompletionScript("fish");
+        var bashReport = ExtractBashSubcommandFlags(bashScript, "report", "search");
+        var zshReport = ExtractZshSubcommandFlags(zshScript, "report", "search");
+        var fishReport = ExtractFishSubcommandFlags(fishScript, "report");
+
+        // --help is universal in bash but is not enumerated by the zsh/fish scripts.
+        bashReport.Remove("help");
+
+        var expected = new SortedSet<string>(StringComparer.Ordinal)
+        {
+            "db", "json", "output", "log-lines", "no-log", "include-args",
+        };
+        Assert.Equal(expected, bashReport);
+        Assert.Equal(expected, zshReport);
+        Assert.Equal(expected, fishReport);
+
+        Assert.Contains("-o", ExtractBetween(bashScript, "[ \"$cmd\" = \"report\" ]; then", "[ \"$cmd\" = \"search\" ]; then"));
+        Assert.Contains("'-o[Output bundle path]:file:_files'", ExtractBetween(zshScript, "[[ $subcmd == report ]]; then", "[[ $subcmd == search ]]; then"));
+        Assert.Contains("-l output -s o -r", fishScript);
+    }
+
     private static SortedSet<string> ExtractBashSubcommandFlags(string script, string subcommand, string nextSubcommand)
     {
         var startMarker = $"[ \"$cmd\" = \"{subcommand}\" ]; then";

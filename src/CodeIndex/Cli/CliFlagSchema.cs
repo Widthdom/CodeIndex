@@ -19,6 +19,7 @@ namespace CodeIndex.Cli;
 internal sealed record CliFlag
 {
     public required string Name { get; init; }
+    public string? ShortName { get; init; }
     public string? ValuePlaceholder { get; init; }
     public required string Description { get; init; }
 
@@ -203,7 +204,7 @@ internal static class CliFlagSchema
             new() { Name = "--files", ValuePlaceholder = "<path>", Description = "Update only the specified files", Commands = Set("index") },
             new() { Name = "--watch", Description = "Continuous reindex on file changes (rejects --commits / --changed-between / --files / --dry-run)", Commands = Set("index") },
             new() { Name = "--debounce", ValuePlaceholder = "<ms>", Description = "Watch only: coalesce file events into one update after <ms> of quiet (default 500)", Commands = Set("index") },
-            new() { Name = "--output", ValuePlaceholder = "<path>", Description = "Output bundle path", Commands = Set("report") },
+            new() { Name = "--output", ShortName = "-o", ValuePlaceholder = "<path>", Description = "Output bundle path", Commands = Set("report") },
             new() { Name = "--no-log", Description = "Exclude global tool log from bundle", Commands = Set("report") },
             new() { Name = "--include-args", Description = "Include args in bundle log", Commands = Set("report") },
             new() { Name = "--log-lines", ValuePlaceholder = "<n>", Description = "Number of log lines to include in bundle", Commands = Set("report") },
