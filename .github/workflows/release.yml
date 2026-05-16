@@ -153,12 +153,20 @@ jobs:
           path: |
             ~/.nuget/packages
             ~\AppData\Local\NuGet\packages
-          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/packages.lock.json', '**/*.csproj') }}
           restore-keys: |
             ${{ runner.os }}-nuget-
 
+      # --locked-mode requires every resolved package to match the committed
+      # packages.lock.json so an unexpected transitive bump (including silent
+      # native swaps under SQLitePCLRaw.bundle_e_sqlite3) fails the release
+      # restore instead of slipping into published artifacts. See issue #1556.
+      # --locked-mode は packages.lock.json と完全一致する解決を強制するため、
+      # SQLitePCLRaw.bundle_e_sqlite3 の native を含む推移依存の予期せぬ
+      # bump が公開アーティファクトに紛れ込まず release restore で気付ける。
+      # 詳細は issue #1556 参照。
       - name: Restore dependencies
-        run: dotnet restore CodeIndex.sln
+        run: dotnet restore CodeIndex.sln --locked-mode
 
       - name: Build
         run: dotnet build CodeIndex.sln --configuration Release --no-restore
@@ -211,6 +219,22 @@ jobs:
           name: CodeIndex-sbom
           path: sbom/cdidx.sbom.cdx.json
 
+      # The runtime-specific restore that publish triggers consumes the
+      # versions pinned by the lock file because Directory.Build.props sets
+      # RestorePackagesWithLockFile=true. We deliberately do not pass
+      # RestoreLockedMode=true here: publish for a new RID and trimming
+      # (Microsoft.NET.ILLink.Tasks) legitimately add lock entries that did
+      # not exist at SLN-restore time, and the security guarantee against
+      # silent SQLitePCLRaw-style transitive drift is already enforced at
+      # the SLN restore above. See issue #1556 / DEVELOPER_GUIDE.md.
+      # publish が target RID 向けに走らせる runtime-specific restore は
+      # Directory.Build.props の RestorePackagesWithLockFile=true により
+      # lock ファイルで固定された版を解決対象とする。ここで
+      # RestoreLockedMode=true を渡さないのは意図的で、publish 時に新規 RID と
+      # trimming（Microsoft.NET.ILLink.Tasks）が SLN restore 時にはなかった
+      # lock エントリを正当に追加するため。SQLitePCLRaw のような推移依存
+      # ドリフトに対する保証は上の SLN restore で確保済み。詳細は issue #1556 /
+      # DEVELOPER_GUIDE.md。
       - name: Publish (self-contained)
         run: >
           dotnet publish src/CodeIndex/CodeIndex.csproj
@@ -418,6 +442,19 @@ jobs:
           VERSION="${TAG#v}"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
+      # publish-nuget is a separate job with a fresh checkout, so the lock
+      # file matches what is committed. RestorePackagesWithLockFile=true
+      # (set in Directory.Build.props) forces pack to resolve to the locked
+      # versions; RestoreLockedMode is intentionally NOT enabled here to
+      # match the publish step's rationale (see above). The locked-mode
+      # restore in dotnet.yml / release.yml / codeql.yml is what catches a
+      # drifted lock file. See issue #1556 / DEVELOPER_GUIDE.md.
+      # publish-nuget は別ジョブで fresh checkout から動くため、lock ファイルは
+      # commit 通りの状態。Directory.Build.props の RestorePackagesWithLockFile=true
+      # により pack の解決は lock 済みバージョンに従う。RestoreLockedMode は
+      # 上の publish step と同じ理由で意図的に有効化していない。lock ファイル
+      # ドリフトの検出は dotnet.yml / release.yml / codeql.yml の locked-mode
+      # restore が担う。詳細は issue #1556 / DEVELOPER_GUIDE.md。
       - name: Pack NuGet package
         run: >
           dotnet pack src/CodeIndex/CodeIndex.csproj

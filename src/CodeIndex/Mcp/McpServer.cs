@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization.Metadata;
@@ -27,6 +28,7 @@ public partial class McpServer : IDisposable
     private readonly string _version;
     private readonly JsonSerializerOptions _jsonOptions;
     private readonly Func<JsonNode, string> _serializeResponse;
+    private readonly IMcpAuthenticator _authenticator;
     private readonly McpToolFilter _toolFilter;
     private bool _running = true;
     // Per-session DbContext reused across MCP tool calls. Holding the connection open
@@ -44,6 +46,14 @@ public partial class McpServer : IDisposable
     // 実行する。書き込みツールは InitializeSchema で同等以上の DDL を流すため、そこでフラグを立てる。
     private bool _sharedDbReadMigrated;
     private bool _disposed;
+    // Caller identity used to key the per-(tool, caller) rate limiter. Captured from the
+    // `clientInfo.name` field of the `initialize` request when the client supplies it, so
+    // shared / networked MCP deployments can attribute and throttle individual clients
+    // instead of treating the whole server as a single bucket (#1560).
+    // (tool, caller) ごとのレート制限のキーに使う呼び出し元 ID。`initialize` の
+    // `clientInfo.name` から取得し、共有・ネットワーク経由の MCP でクライアント単位の
+    // 計量・スロットルが効くようにする（#1560）。
+    private string _caller = "unknown";
 
     // Preferred MCP protocol version returned when the client does not pin one. This is the
     // newest entry in `SupportedProtocolVersions` and must stay in lockstep with that array.
@@ -87,21 +97,34 @@ public partial class McpServer : IDisposable
     private const int StdioBufferSize = 64 * 1024;
 
     public McpServer(string dbPath, string version, bool dbPathExplicit = false)
-        : this(dbPath, version, dbPathExplicit, null, null)
+        : this(dbPath, version, dbPathExplicit, null, null, null)
+    {
+    }
+
+    public McpServer(string dbPath, string version, bool dbPathExplicit, IMcpAuthenticator authenticator)
+        : this(dbPath, version, dbPathExplicit, null, authenticator, null)
     {
     }
 
     public McpServer(string dbPath, string version, bool dbPathExplicit, McpToolFilter? toolFilter)
-        : this(dbPath, version, dbPathExplicit, null, toolFilter)
+        : this(dbPath, version, dbPathExplicit, null, null, toolFilter)
     {
     }
 
+    // Legacy internal entry point retained for the existing serializer-injection tests that
+    // do not need a custom authenticator or tool filter.
+    // serializer 注入だけが必要な既存テスト向けの内部互換 entry。
     internal McpServer(string dbPath, string version, bool dbPathExplicit, Func<JsonNode, string>? serializeResponse)
-        : this(dbPath, version, dbPathExplicit, serializeResponse, null)
+        : this(dbPath, version, dbPathExplicit, serializeResponse, null, null)
     {
     }
 
-    internal McpServer(string dbPath, string version, bool dbPathExplicit, Func<JsonNode, string>? serializeResponse, McpToolFilter? toolFilter)
+    internal McpServer(string dbPath, string version, bool dbPathExplicit, Func<JsonNode, string>? serializeResponse, IMcpAuthenticator? authenticator)
+        : this(dbPath, version, dbPathExplicit, serializeResponse, authenticator, null)
+    {
+    }
+
+    internal McpServer(string dbPath, string version, bool dbPathExplicit, Func<JsonNode, string>? serializeResponse, IMcpAuthenticator? authenticator, McpToolFilter? toolFilter)
     {
         _dbPath = dbPath;
         _dbPathExplicit = dbPathExplicit;
@@ -113,8 +136,41 @@ public partial class McpServer : IDisposable
             TypeInfoResolver = new DefaultJsonTypeInfoResolver(),
         };
         _serializeResponse = serializeResponse ?? (node => node.ToJsonString(_jsonOptions));
+        _authenticator = authenticator ?? LocalStdioAuthenticator.Instance;
         _toolFilter = toolFilter ?? McpToolFilter.FromEnvironment();
+        RateLimiter = new RateLimiter(RateLimiterOptions.FromEnvironment());
     }
+
+    /// <summary>
+    /// Per-(tool, caller) token bucket throttle for MCP tool calls. Disabled by default so
+    /// stdio single-user sessions are unaffected; operators opt in via
+    /// `CDIDX_MCP_RATE_LIMIT_RPS` (+ optional `CDIDX_MCP_RATE_LIMIT_BURST`) on the MCP server
+    /// process (#1560).
+    /// MCP ツール呼び出し向け (tool, caller) 単位のトークンバケットスロットル。既定では無効で
+    /// stdio 単一ユーザーには影響しない。`CDIDX_MCP_RATE_LIMIT_RPS`（任意で
+    /// `CDIDX_MCP_RATE_LIMIT_BURST`）を MCP サーバープロセスに設定して opt-in する（#1560）。
+    /// </summary>
+    internal RateLimiter RateLimiter { get; private set; }
+
+    /// <summary>
+    /// Replace the rate limiter for tests so they can inject a deterministic clock and
+    /// custom options without going through environment variables.
+    /// テスト用にレート制限器を差し替える。決定論的なクロックや任意のオプションを環境変数
+    /// 経由ではなく直接注入できるようにする。
+    /// </summary>
+    internal void OverrideRateLimiterForTests(RateLimiter limiter)
+    {
+        RateLimiter = limiter ?? throw new ArgumentNullException(nameof(limiter));
+    }
+
+    /// <summary>
+    /// Caller identifier captured from the most recent `initialize` request's
+    /// `clientInfo.name` (issue #1560). Exposed for tests so they can verify the limiter is
+    /// keyed off the negotiated caller.
+    /// 直近の `initialize` の `clientInfo.name` から取得した呼び出し元 ID（#1560）。
+    /// テストがレート制限のキーを検証するために公開する。
+    /// </summary>
+    internal string CurrentCaller => _caller;
 
     /// <summary>
     /// Run the MCP server loop on the default stdio transport. Kept as a thin wrapper around
@@ -251,7 +307,14 @@ public partial class McpServer : IDisposable
         if (request is not JsonObject obj)
             return CreateErrorResponse(hasId: false, id: null, code: -32600, message: "Invalid request: expected JSON object");
 
-        var method = obj["method"]?.GetValue<string>();
+        // Extract `method` defensively: a non-string `method` (e.g. `"method":42`) must not
+        // throw before the auth gate runs, otherwise a token-protected server would surface
+        // `-32603 "Internal error"` to an unauthenticated caller instead of `-32001
+        // "Unauthorized"`, leaking that the request reached dispatch internals (#1559).
+        // `method` は防御的に取り出す。`"method":42` のような非文字列が GetValue<string>()
+        // で例外を投げると、認証ゲート前に -32603 が返ってしまい、未認証呼び出し元に dispatch
+        // 内部まで届いた事実が漏れる (#1559)。
+        var method = TryGetStringMember(obj, "method");
         if (!TryGetRequestId(obj, out var hasId, out var id))
             return CreateErrorResponse(hasId: true, id: null, code: -32600, message: "Invalid request: id must be string, number, or null");
 
@@ -264,6 +327,21 @@ public partial class McpServer : IDisposable
             if (method != null && method.StartsWith("notifications/", StringComparison.OrdinalIgnoreCase))
                 Console.Error.WriteLine(BuildUnknownNotificationLog(method));
             return null;
+        }
+
+        // Authenticate every responded request before dispatch so the auth contract is
+        // uniform across `initialize`, `tools/list`, `tools/call`, and `ping`. Run auth even
+        // when `method` is missing or malformed so a token-protected server cannot be probed
+        // for method-shape errors without credentials (#1559). Notifications already
+        // short-circuited above because they produce no response and cannot leak an error code.
+        // すべての応答対象リクエストを dispatch 前に認証する。`method` が欠落・不正でも
+        // 認証は走らせ、トークン保護下のサーバーで未認証呼び出し元に method 形式エラーを
+        // 漏らさない (#1559)。通知は応答が無いため上のブランチで先に return している。
+        var authResult = _authenticator.Authenticate(request);
+        if (!authResult.IsAuthenticated)
+        {
+            Console.Error.WriteLine(BuildAuthFailureLog(method, authResult.FailureReason));
+            return CreateErrorResponse(hasId: true, id: id, code: -32001, message: "Unauthorized");
         }
 
         if (method == null)
@@ -281,12 +359,94 @@ public partial class McpServer : IDisposable
         };
     }
 
+    // Safe accessor that returns null instead of throwing when `name` is missing OR present
+    // with a non-string value. JsonNode's `GetValue<string>()` throws InvalidOperationException
+    // on non-string scalars, which would bubble out of HandleMessage and turn into -32603
+    // before the auth gate runs.
+    // `name` が無いケースと文字列以外で存在するケースのどちらでも null を返す安全アクセサ。
+    // JsonNode の `GetValue<string>()` は非文字列で例外を投げ、認証ゲート前に -32603 化して
+    // しまう。
+    private static string? TryGetStringMember(JsonObject obj, string name)
+    {
+        if (!obj.TryGetPropertyValue(name, out var node) || node is null)
+            return null;
+        try
+        {
+            return node.GetValue<string>();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    // Cap on the logged `method` label. Long enough for every spec method (`notifications/cancelled`
+    // is 23 chars) and any plausible client extension, short enough to keep one log line readable.
+    // ログ出力する `method` の長さ上限。仕様メソッド全てと拡張も収まる長さで、1 行を読みやすく保つ。
+    private const int LoggedMethodMaxLength = 64;
+
+    // Strip caller-controlled control characters from `method` and clamp its length before
+    // interpolating into a stderr log line. Prevents log forging: a malicious client could
+    // otherwise send `"method":"evil\n[forged]"` and split the diagnostic across two lines
+    // (#1559).
+    // stderr 行に method を埋め込む前に制御文字を除去し、長さを切る。これをしないと
+    // `"method":"evil\n[forged]"` で診断ログを 2 行に分割するログ偽造ができてしまう (#1559)。
+    internal static string SanitizeMethodForLog(string? method)
+    {
+        if (string.IsNullOrEmpty(method))
+            return "(none)";
+        var sb = new StringBuilder(Math.Min(method.Length, LoggedMethodMaxLength));
+        var truncated = false;
+        foreach (var ch in method)
+        {
+            if (sb.Length >= LoggedMethodMaxLength)
+            {
+                truncated = true;
+                break;
+            }
+            if (ch < 0x20 || ch == 0x7F)
+                sb.Append('?');
+            else
+                sb.Append(ch);
+        }
+        if (truncated)
+            sb.Append('…');
+        return sb.ToString();
+    }
+
+    // Stderr log for an auth failure. Mirrors the #1530 sanitization pattern: keep the
+    // wire response generic and put the detail on stderr for local diagnostics. The method
+    // label is run through SanitizeMethodForLog because it is caller-controlled and reaches
+    // stderr before any allow-list check (#1559).
+    // 認証失敗の stderr ログ。#1530 のサニタイズ方針に倣い、ワイヤ応答は一般化したまま
+    // 詳細だけを stderr に残す。method は認証前に通るため SanitizeMethodForLog で
+    // 制御文字除去と長さ切詰めを行う (#1559)。
+    internal static string BuildAuthFailureLog(string? method, string? reason) =>
+        $"[cdidx-mcp] Auth failed for method {SanitizeMethodForLog(method)}: {reason ?? "(unspecified)"}. Set CDIDX_MCP_AUTH_TOKEN on the server and include a matching params.auth.token on each request.";
+
     /// <summary>
     /// Handle the initialize handshake.
     /// initializeハンドシェイクを処理。
     /// </summary>
     private JsonNode HandleInitialize(JsonNode? id, JsonNode? _params)
     {
+        // Caller stickiness: allow upgrading from the default "unknown" bucket to a named
+        // identity, but reject re-initialize attempts that swap one named identity for
+        // another. Otherwise a single networked session could reset its rate-limit bucket
+        // mid-flight by re-initializing under a fresh name (issue #1560 evidence — DoS
+        // surface for networked MCP deployments).
+        // caller の sticky 制御: 既定の "unknown" バケットからは名前付き ID への昇格を許すが、
+        // 名前付き ID 同士のスワップは拒否する。これを許すと 1 セッション内で再 initialize により
+        // 新しい名前でレート制限バケットをリセットできてしまい、#1560 が指摘する DoS 経路になる。
+        var resolved = ResolveCallerIdentity(_params);
+        if (_caller == "unknown")
+        {
+            _caller = resolved;
+        }
+        else if (resolved != _caller && resolved != "unknown")
+        {
+            Console.Error.WriteLine(BuildCallerSwapRejectionLog(_caller, resolved));
+        }
         var negotiated = NegotiateProtocolVersion(_params, out var requestedVersion);
         if (negotiated == null)
         {
@@ -339,6 +499,41 @@ public partial class McpServer : IDisposable
     /// それをそのまま返し、未指定なら既定バージョンを返し、重なりが無い場合は構造化エラー
     /// を返す（黙ってダウングレードしないことでクライアントが誤った wire format で進むのを防ぐ）。
     /// </summary>
+    /// <summary>
+    /// Resolve the caller identity used by the per-(tool, caller) rate limiter from an
+    /// `initialize` request's `clientInfo`. Falls back to `"unknown"` when the client did
+    /// not supply a name so anonymous callers still get a coherent bucket of their own
+    /// (instead of accidentally sharing one with named clients) (#1560).
+    /// (tool, caller) ごとのレート制限で使う呼び出し元 ID を `initialize` の `clientInfo` から
+    /// 解決する。`name` が無い場合は `"unknown"` を返し、匿名クライアントが他の名前付きクライアントと
+    /// バケットを共有しないようにする（#1560）。
+    /// </summary>
+    internal static string ResolveCallerIdentity(JsonNode? initializeParams)
+    {
+        if (initializeParams is not JsonObject obj)
+            return "unknown";
+        if (obj["clientInfo"] is not JsonObject clientInfo)
+            return "unknown";
+
+        string? Read(string key)
+        {
+            if (clientInfo.TryGetPropertyValue(key, out var node)
+                && node is JsonValue value
+                && value.TryGetValue<string>(out var s)
+                && !string.IsNullOrWhiteSpace(s))
+            {
+                return s.Trim();
+            }
+            return null;
+        }
+
+        var name = Read("name");
+        if (name == null)
+            return "unknown";
+        var version = Read("version");
+        return version == null ? name : $"{name}/{version}";
+    }
+
     internal static string? NegotiateProtocolVersion(JsonNode? initializeParams, out string? requestedVersion)
     {
         requestedVersion = null;
@@ -405,6 +600,39 @@ public partial class McpServer : IDisposable
         return $"[cdidx-mcp] Rejecting initialize: client requested protocolVersion '{requested}', server supports {supported}. Upgrade the server or pin a supported version on the client.";
     }
 
+    /// <summary>
+    /// Build a structured `-32000` JSON-RPC error for a rate-limited tool call. Surfacing
+    /// the limit category in `error.data.error_category` (alongside `tool`, `caller`, and
+    /// `retry_after_ms`) lets MCP clients branch on the failure type without parsing the
+    /// human-readable `message` (#1560).
+    /// レート制限で拒否されたツール呼び出し用の構造化 `-32000` JSON-RPC エラーを構築する。
+    /// `error.data.error_category` を併記することでクライアントが `message` 文字列を解析せず
+    /// 失敗カテゴリで分岐できるようにする（#1560）。
+    /// </summary>
+    internal static JsonObject CreateRateLimitedErrorResponse(JsonNode? id, string tool, string caller, long retryAfterMs)
+    {
+        var data = new JsonObject
+        {
+            ["error_category"] = "rate_limited",
+            ["tool"] = tool,
+            ["caller"] = caller,
+            ["retry_after_ms"] = retryAfterMs,
+        };
+        var error = new JsonObject
+        {
+            ["code"] = -32000,
+            ["message"] = $"Rate limit exceeded for tool '{tool}' (retry after {retryAfterMs} ms).",
+            ["data"] = data,
+        };
+        var response = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["error"] = error,
+            ["id"] = id is null ? JsonNode.Parse("null") : JsonNode.Parse(id.ToJsonString())
+        };
+        return response;
+    }
+
     // Tool definitions are in McpToolDefinitions.cs / ツール定義は McpToolDefinitions.cs に分離
 
 
@@ -436,6 +664,14 @@ public partial class McpServer : IDisposable
         string? metricsError = null;
         try
         {
+            var decision = RateLimiter.TryAcquire(toolName, _caller);
+            if (!decision.Allowed)
+            {
+                metricsError = "rate_limited";
+                Console.Error.WriteLine(BuildRateLimitedLog(toolName, _caller, decision.RetryAfterMs));
+                return CreateRateLimitedErrorResponse(id, toolName, _caller, decision.RetryAfterMs);
+            }
+
             return toolName switch
             {
                 "search" => ExecuteSearch(id, args),
@@ -532,6 +768,17 @@ public partial class McpServer : IDisposable
 
     internal static string BuildToolErrorLog(string toolName, string detail) =>
         $"[cdidx-mcp] Tool error ({toolName}): {detail}. Fix the tool arguments, refresh the index if needed, then retry.";
+
+    // Stderr log emitted when the rate limiter denies a tool call. Mirrors the JSON-RPC
+    // `-32000` payload (tool + caller + retry_after_ms) so operators tailing the MCP log
+    // can correlate spikes with the structured error returned on the wire (#1560).
+    // レート制限で拒否されたツール呼び出しを stderr に記録する。配線上の JSON-RPC `-32000`
+    // ペイロードと内容を揃え、運用側がログ追跡から状況把握できるようにする（#1560）。
+    internal static string BuildRateLimitedLog(string toolName, string caller, long retryAfterMs) =>
+        $"[cdidx-mcp] Rate limit exceeded: tool='{toolName}', caller='{caller}', retry_after_ms={retryAfterMs}. Increase {RateLimiterOptions.RpsEnvVar} / {RateLimiterOptions.BurstEnvVar} on the server, or back off and retry.";
+
+    internal static string BuildCallerSwapRejectionLog(string current, string attempted) =>
+        $"[cdidx-mcp] Ignoring re-initialize with new clientInfo identity '{attempted}': retaining original caller '{current}' so rate-limit buckets cannot be reset mid-session.";
 
     internal static string BuildUnknownNotificationLog(string method) =>
         $"[cdidx-mcp] Ignoring unknown notification: {method}";

@@ -144,12 +144,20 @@ jobs:
           path: |
             ~/.nuget/packages
             ~\AppData\Local\NuGet\packages
-          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/packages.lock.json', '**/*.csproj') }}
           restore-keys: |
             ${{ runner.os }}-nuget-
 
+      # --locked-mode requires every resolved package to match the committed
+      # packages.lock.json so an unexpected transitive bump (including silent
+      # native swaps under SQLitePCLRaw.bundle_e_sqlite3) fails the build
+      # instead of slipping into CI/release artifacts. See issue #1556.
+      # --locked-mode は packages.lock.json と完全一致する解決を強制するため、
+      # SQLitePCLRaw.bundle_e_sqlite3 の native を含む推移依存の予期せぬ
+      # bump が CI / release アーティファクトに紛れ込まずビルド失敗で気付ける。
+      # 詳細は issue #1556 参照。
       - name: Restore dependencies
-        run: dotnet restore CodeIndex.sln
+        run: dotnet restore CodeIndex.sln --locked-mode
 
       - name: Build
         run: dotnet build CodeIndex.sln --configuration Release --no-restore

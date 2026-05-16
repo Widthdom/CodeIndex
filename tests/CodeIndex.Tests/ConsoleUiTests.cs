@@ -555,11 +555,22 @@ public class ConsoleUiTests
             var originalNoColor = Environment.GetEnvironmentVariable("NO_COLOR");
             var originalCliColor = Environment.GetEnvironmentVariable("CLICOLOR");
             var originalCliColorForce = Environment.GetEnvironmentVariable("CLICOLOR_FORCE");
+            var originalColorTerm = Environment.GetEnvironmentVariable("COLORTERM");
+            var originalTerm = Environment.GetEnvironmentVariable("TERM");
+            var originalPaletteEnv = Environment.GetEnvironmentVariable("CDIDX_COLOR_PALETTE");
+            var originalPalette = ConsoleUi.GetExplicitColorPalette();
             try
             {
                 Environment.SetEnvironmentVariable("NO_COLOR", noColor);
                 Environment.SetEnvironmentVariable("CLICOLOR", cliColor);
                 Environment.SetEnvironmentVariable("CLICOLOR_FORCE", cliColorForce);
+                // These ANSI-code assertions predate the palette feature and assume
+                // the 8-color basic palette; pin it explicitly so the host's
+                // COLORTERM/TERM cannot upgrade the palette mid-test.
+                Environment.SetEnvironmentVariable("COLORTERM", null);
+                Environment.SetEnvironmentVariable("TERM", null);
+                Environment.SetEnvironmentVariable("CDIDX_COLOR_PALETTE", null);
+                ConsoleUi.SetColorPalette(ColorPalette.Basic);
                 action();
             }
             finally
@@ -567,6 +578,10 @@ public class ConsoleUiTests
                 Environment.SetEnvironmentVariable("NO_COLOR", originalNoColor);
                 Environment.SetEnvironmentVariable("CLICOLOR", originalCliColor);
                 Environment.SetEnvironmentVariable("CLICOLOR_FORCE", originalCliColorForce);
+                Environment.SetEnvironmentVariable("COLORTERM", originalColorTerm);
+                Environment.SetEnvironmentVariable("TERM", originalTerm);
+                Environment.SetEnvironmentVariable("CDIDX_COLOR_PALETTE", originalPaletteEnv);
+                ConsoleUi.SetColorPalette(originalPalette);
             }
         }
     }
@@ -671,13 +686,221 @@ public class ConsoleUiTests
         Assert.Contains("CLICOLOR_FORCE", output);
     }
 
+    [Fact]
+    public void PrintUsage_DocumentsPaletteFlag()
+    {
+        var output = CaptureUsageOutput(showBanner: false);
+        Assert.Contains("--palette <name>", output);
+        Assert.Contains("`basic`", output);
+        Assert.Contains("`256`", output);
+        Assert.Contains("`truecolor`", output);
+        Assert.Contains("COLORTERM", output);
+        Assert.Contains("CDIDX_COLOR_PALETTE", output);
+    }
+
+    [Theory]
+    [InlineData("basic", ColorPalette.Basic)]
+    [InlineData("BASIC", ColorPalette.Basic)]
+    [InlineData("8", ColorPalette.Basic)]
+    [InlineData("16", ColorPalette.Basic)]
+    [InlineData("ansi", ColorPalette.Basic)]
+    [InlineData("256", ColorPalette.Color256)]
+    [InlineData("color256", ColorPalette.Color256)]
+    [InlineData("8bit", ColorPalette.Color256)]
+    [InlineData("truecolor", ColorPalette.Truecolor)]
+    [InlineData("24bit", ColorPalette.Truecolor)]
+    [InlineData("rgb", ColorPalette.Truecolor)]
+    [InlineData(" Truecolor ", ColorPalette.Truecolor)]
+    public void TryParseColorPalette_KnownValue_ReturnsTrue(string value, ColorPalette expected)
+    {
+        Assert.True(ConsoleUi.TryParseColorPalette(value, out var palette));
+        Assert.Equal(expected, palette);
+    }
+
+    [Theory]
+    [InlineData("on")]
+    [InlineData("none")]
+    [InlineData("fancy")]
+    [InlineData("")]
+    [InlineData(null)]
+    public void TryParseColorPalette_UnknownValue_ReturnsFalse(string? value)
+    {
+        Assert.False(ConsoleUi.TryParseColorPalette(value, out _));
+    }
+
+    [Fact]
+    public void ColorizeKind_BasicPalette_DoesNotEmitDimEscape()
+    {
+        // The dim escape `\x1b[90m` (bright black) is unreadable on many
+        // minimal SSH / CI terminals; the basic palette must avoid it (#1569).
+        using var env = new ColorEnvironmentScope();
+        using var pal = new ColorPaletteScope();
+        ConsoleUi.SetColorMode(ColorMode.Always);
+        ConsoleUi.SetColorPalette(ColorPalette.Basic);
+
+        foreach (var kind in new[] { "namespace", "import", "class", "function" })
+        {
+            var output = ConsoleUi.ColorizeKind(kind);
+            Assert.DoesNotContain("\x1b[90m", output);
+        }
+    }
+
+    [Fact]
+    public void ColorizeKind_Color256Palette_EmitsExtendedSgrCodes()
+    {
+        using var env = new ColorEnvironmentScope();
+        using var pal = new ColorPaletteScope();
+        ConsoleUi.SetColorMode(ColorMode.Always);
+        ConsoleUi.SetColorPalette(ColorPalette.Color256);
+
+        var output = ConsoleUi.ColorizeKind("class");
+        Assert.StartsWith("\x1b[38;5;", output);
+        Assert.EndsWith("\x1b[0m", output);
+    }
+
+    [Fact]
+    public void ColorizeKind_TruecolorPalette_EmitsRgbSgrCodes()
+    {
+        using var env = new ColorEnvironmentScope();
+        using var pal = new ColorPaletteScope();
+        ConsoleUi.SetColorMode(ColorMode.Always);
+        ConsoleUi.SetColorPalette(ColorPalette.Truecolor);
+
+        var output = ConsoleUi.ColorizeKind("class");
+        Assert.StartsWith("\x1b[38;2;", output);
+        Assert.EndsWith("\x1b[0m", output);
+    }
+
+    [Fact]
+    public void ResolveColorPalette_ExplicitOverrideWins()
+    {
+        using var env = new ColorEnvironmentScope();
+        using var pal = new ColorPaletteScope();
+        Environment.SetEnvironmentVariable("COLORTERM", "truecolor");
+        Environment.SetEnvironmentVariable("CDIDX_COLOR_PALETTE", "256");
+        ConsoleUi.SetColorPalette(ColorPalette.Basic);
+
+        Assert.Equal(ColorPalette.Basic, ConsoleUi.ResolveColorPalette());
+    }
+
+    [Fact]
+    public void ResolveColorPalette_EnvVarWinsOverDetection()
+    {
+        using var env = new ColorEnvironmentScope();
+        using var pal = new ColorPaletteScope();
+        Environment.SetEnvironmentVariable("COLORTERM", "truecolor");
+        Environment.SetEnvironmentVariable("CDIDX_COLOR_PALETTE", "basic");
+        ConsoleUi.SetColorPalette(null);
+
+        Assert.Equal(ColorPalette.Basic, ConsoleUi.ResolveColorPalette());
+    }
+
+    [Fact]
+    public void ResolveColorPalette_ColorTermTruecolor_DetectedAsTruecolor()
+    {
+        using var env = new ColorEnvironmentScope();
+        using var pal = new ColorPaletteScope();
+        Environment.SetEnvironmentVariable("COLORTERM", "truecolor");
+        Environment.SetEnvironmentVariable("TERM", "xterm");
+        ConsoleUi.SetColorPalette(null);
+
+        Assert.Equal(ColorPalette.Truecolor, ConsoleUi.ResolveColorPalette());
+    }
+
+    [Fact]
+    public void ResolveColorPalette_ColorTerm24bit_DetectedAsTruecolor()
+    {
+        using var env = new ColorEnvironmentScope();
+        using var pal = new ColorPaletteScope();
+        Environment.SetEnvironmentVariable("COLORTERM", "24bit");
+        Environment.SetEnvironmentVariable("TERM", "xterm");
+        ConsoleUi.SetColorPalette(null);
+
+        Assert.Equal(ColorPalette.Truecolor, ConsoleUi.ResolveColorPalette());
+    }
+
+    [Fact]
+    public void ResolveColorPalette_Term256color_DetectedAsColor256()
+    {
+        using var env = new ColorEnvironmentScope();
+        using var pal = new ColorPaletteScope();
+        Environment.SetEnvironmentVariable("COLORTERM", null);
+        Environment.SetEnvironmentVariable("TERM", "xterm-256color");
+        ConsoleUi.SetColorPalette(null);
+
+        Assert.Equal(ColorPalette.Color256, ConsoleUi.ResolveColorPalette());
+    }
+
+    [Fact]
+    public void ResolveColorPalette_MinimalTerm_FallsBackToBasic()
+    {
+        using var env = new ColorEnvironmentScope();
+        using var pal = new ColorPaletteScope();
+        Environment.SetEnvironmentVariable("COLORTERM", null);
+        Environment.SetEnvironmentVariable("TERM", "xterm");
+        ConsoleUi.SetColorPalette(null);
+
+        Assert.Equal(ColorPalette.Basic, ConsoleUi.ResolveColorPalette());
+    }
+
+    [Fact]
+    public void ColorizeKind_NoColorRequested_SuppressesAllPalettes()
+    {
+        // NO_COLOR must consistently suppress ANSI escapes across every palette
+        // so users opting out via the env standard get clean output regardless
+        // of `--palette` (#1569).
+        foreach (var palette in new[] { ColorPalette.Basic, ColorPalette.Color256, ColorPalette.Truecolor })
+        {
+            using var env = new ColorEnvironmentScope();
+            using var pal = new ColorPaletteScope();
+            Environment.SetEnvironmentVariable("NO_COLOR", "1");
+            ConsoleUi.SetColorPalette(palette);
+
+            var output = ConsoleUi.ColorizeKind("class");
+            Assert.DoesNotContain('\x1b', output);
+            Assert.Equal("class", output);
+        }
+    }
+
+    private sealed class ColorPaletteScope : IDisposable
+    {
+        private readonly ColorPalette? _original;
+        private readonly string? _originalEnv;
+        private readonly string? _originalColorTerm;
+        private readonly string? _originalTerm;
+
+        public ColorPaletteScope()
+        {
+            _original = ConsoleUi.GetExplicitColorPalette();
+            _originalEnv = Environment.GetEnvironmentVariable("CDIDX_COLOR_PALETTE");
+            _originalColorTerm = Environment.GetEnvironmentVariable("COLORTERM");
+            _originalTerm = Environment.GetEnvironmentVariable("TERM");
+            Environment.SetEnvironmentVariable("CDIDX_COLOR_PALETTE", null);
+            Environment.SetEnvironmentVariable("COLORTERM", null);
+            Environment.SetEnvironmentVariable("TERM", null);
+            ConsoleUi.SetColorPalette(null);
+        }
+
+        public void Dispose()
+        {
+            Environment.SetEnvironmentVariable("CDIDX_COLOR_PALETTE", _originalEnv);
+            Environment.SetEnvironmentVariable("COLORTERM", _originalColorTerm);
+            Environment.SetEnvironmentVariable("TERM", _originalTerm);
+            ConsoleUi.SetColorPalette(_original);
+        }
+    }
+
     private sealed class ColorEnvironmentScope : IDisposable
     {
         private readonly bool _lockTaken;
         private readonly string? _originalNoColor;
         private readonly string? _originalForce;
         private readonly string? _originalCliColor;
+        private readonly string? _originalColorTerm;
+        private readonly string? _originalTerm;
+        private readonly string? _originalPaletteEnv;
         private readonly ColorMode _originalMode;
+        private readonly ColorPalette? _originalPalette;
 
         public ColorEnvironmentScope()
         {
@@ -686,10 +909,18 @@ public class ConsoleUiTests
             _originalNoColor = Environment.GetEnvironmentVariable("NO_COLOR");
             _originalForce = Environment.GetEnvironmentVariable("CLICOLOR_FORCE");
             _originalCliColor = Environment.GetEnvironmentVariable("CLICOLOR");
+            _originalColorTerm = Environment.GetEnvironmentVariable("COLORTERM");
+            _originalTerm = Environment.GetEnvironmentVariable("TERM");
+            _originalPaletteEnv = Environment.GetEnvironmentVariable("CDIDX_COLOR_PALETTE");
             _originalMode = ConsoleUi.GetColorMode();
+            _originalPalette = ConsoleUi.GetExplicitColorPalette();
             Environment.SetEnvironmentVariable("NO_COLOR", null);
             Environment.SetEnvironmentVariable("CLICOLOR_FORCE", null);
             Environment.SetEnvironmentVariable("CLICOLOR", null);
+            Environment.SetEnvironmentVariable("COLORTERM", null);
+            Environment.SetEnvironmentVariable("TERM", null);
+            Environment.SetEnvironmentVariable("CDIDX_COLOR_PALETTE", null);
+            ConsoleUi.SetColorPalette(null);
         }
 
         public void Dispose()
@@ -697,7 +928,11 @@ public class ConsoleUiTests
             Environment.SetEnvironmentVariable("NO_COLOR", _originalNoColor);
             Environment.SetEnvironmentVariable("CLICOLOR_FORCE", _originalForce);
             Environment.SetEnvironmentVariable("CLICOLOR", _originalCliColor);
+            Environment.SetEnvironmentVariable("COLORTERM", _originalColorTerm);
+            Environment.SetEnvironmentVariable("TERM", _originalTerm);
+            Environment.SetEnvironmentVariable("CDIDX_COLOR_PALETTE", _originalPaletteEnv);
             ConsoleUi.SetColorMode(_originalMode);
+            ConsoleUi.SetColorPalette(_originalPalette);
             if (_lockTaken)
                 Monitor.Exit(TestConsoleLock.Gate);
         }

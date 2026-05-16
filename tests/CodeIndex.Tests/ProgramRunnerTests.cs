@@ -297,6 +297,123 @@ public class ProgramRunnerTests
         Assert.Contains("Hint:", stderr);
     }
 
+    [Theory]
+    [InlineData(new[] { "--palette=truecolor", "status" }, ColorPalette.Truecolor, new[] { "status" })]
+    [InlineData(new[] { "status", "--palette", "256" }, ColorPalette.Color256, new[] { "status" })]
+    [InlineData(new[] { "search", "--palette=basic", "foo" }, ColorPalette.Basic, new[] { "search", "foo" })]
+    public void TryConsumePaletteFlag_StripsFlagAndSetsPalette(string[] input, ColorPalette expected, string[] expectedKept)
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var original = ConsoleUi.GetExplicitColorPalette();
+            try
+            {
+                var args = input;
+                Assert.True(ProgramRunner.TryConsumePaletteFlag(ref args, out var error));
+                Assert.Empty(error);
+                Assert.Equal(expected, ConsoleUi.GetExplicitColorPalette());
+                Assert.Equal(expectedKept, args);
+            }
+            finally
+            {
+                ConsoleUi.SetColorPalette(original);
+            }
+        }
+    }
+
+    [Fact]
+    public void TryConsumePaletteFlag_NoFlag_ClearsExplicitOverride()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var original = ConsoleUi.GetExplicitColorPalette();
+            try
+            {
+                ConsoleUi.SetColorPalette(ColorPalette.Truecolor);
+                var args = new[] { "status" };
+                Assert.True(ProgramRunner.TryConsumePaletteFlag(ref args, out var error));
+                Assert.Empty(error);
+                Assert.Null(ConsoleUi.GetExplicitColorPalette());
+                Assert.Equal(new[] { "status" }, args);
+            }
+            finally
+            {
+                ConsoleUi.SetColorPalette(original);
+            }
+        }
+    }
+
+    [Fact]
+    public void TryConsumePaletteFlag_InvalidValue_ReturnsError()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var original = ConsoleUi.GetExplicitColorPalette();
+            try
+            {
+                var args = new[] { "search", "--palette=fancy" };
+                Assert.False(ProgramRunner.TryConsumePaletteFlag(ref args, out var error));
+                Assert.Contains("fancy", error);
+            }
+            finally
+            {
+                ConsoleUi.SetColorPalette(original);
+            }
+        }
+    }
+
+    [Fact]
+    public void TryConsumePaletteFlag_MissingValue_ReturnsError()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var original = ConsoleUi.GetExplicitColorPalette();
+            try
+            {
+                var args = new[] { "search", "--palette" };
+                Assert.False(ProgramRunner.TryConsumePaletteFlag(ref args, out var error));
+                Assert.Contains("requires a value", error);
+            }
+            finally
+            {
+                ConsoleUi.SetColorPalette(original);
+            }
+        }
+    }
+
+    [Fact]
+    public void TryConsumePaletteFlag_AfterDoubleDash_PreservesQueryEscape()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var original = ConsoleUi.GetExplicitColorPalette();
+            try
+            {
+                var args = new[] { "search", "--", "--palette=truecolor" };
+                Assert.True(ProgramRunner.TryConsumePaletteFlag(ref args, out var error));
+                Assert.Empty(error);
+                Assert.Null(ConsoleUi.GetExplicitColorPalette());
+                Assert.Equal(new[] { "search", "--", "--palette=truecolor" }, args);
+            }
+            finally
+            {
+                ConsoleUi.SetColorPalette(original);
+            }
+        }
+    }
+
+    [Fact]
+    public void Run_InvalidPaletteValue_ReturnsUsageError()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["--palette=fancy", "status"],
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("invalid --palette value `fancy`", stderr);
+        Assert.Contains("Hint:", stderr);
+    }
+
     [Fact]
     public void Run_Version_HumanOutput_IncludesBuildMetadata()
     {

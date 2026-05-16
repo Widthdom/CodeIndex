@@ -1237,6 +1237,32 @@ public partial class McpServer
             resultsArray.Add(entry);
         }
 
+        // Rate-limited slot error variant. Mirrors the shape of `AppendSlotError` so existing
+        // clients keep working, but also surfaces `error_category` + `retry_after_ms` next to
+        // `error` so well-behaved clients can detect throttling and back off per-slot instead
+        // of inferring it from the human-readable message. The outer call also consumes a
+        // batch_query token, so spamming `batch_query` with N inner calls is bounded by both
+        // the batch_query bucket and per-tool buckets (#1560).
+        // レート制限スロット用の AppendSlotError 変種。既存クライアント互換のため `error` を
+        // そのまま維持しつつ、`error_category` と `retry_after_ms` を併記して、スロット単位での
+        // 検出・バックオフを可能にする。外側の batch_query 自体もトークンを消費するため、
+        // N 個の内側呼び出しを含むスパムは batch_query バケットとツール別バケットの両方で
+        // 上限が掛かる（#1560）。
+        void AppendRateLimitedSlot(string? toolName, JsonNode? toolArgs, Stopwatch slotStopwatch, long retryAfterMs)
+        {
+            slotStopwatch.Stop();
+            failureCount++;
+            resultsArray.Add(new JsonObject
+            {
+                ["tool"] = toolName,
+                ["args_summary"] = BuildArgsSummary(toolArgs),
+                ["elapsed_ms"] = slotStopwatch.ElapsedMilliseconds,
+                ["error"] = $"Rate limit exceeded for tool '{toolName}' (retry after {retryAfterMs} ms).",
+                ["error_category"] = "rate_limited",
+                ["retry_after_ms"] = retryAfterMs,
+            });
+        }
+
         foreach (var q in queries)
         {
             var toolName = q?["tool"]?.GetValue<string>();
@@ -1274,6 +1300,33 @@ public partial class McpServer
             if (toolName == "index" || toolName == "backfill_fold" || toolName == "suggest_improvement")
             {
                 AppendSlotError(toolName, toolArgs, slotStopwatch, $"{toolName} is not allowed in batch_query (write operation)");
+                continue;
+            }
+
+            // Reject nested batch_query before the rate-limit consumption so the per-(tool,
+            // caller) bucket cannot be drained by recursive expansion (and so the failure
+            // message is clear instead of the generic "Unknown tool: batch_query") (#1560).
+            // 再帰展開でバケットを消費させないため、レート制限消費の前に内側 batch_query を
+            // 明示的に拒否する。エラーメッセージも "Unknown tool: batch_query" の汎用ではなく
+            // ネスト禁止の明示文に揃える（#1560）。
+            if (toolName == "batch_query")
+            {
+                AppendSlotError(toolName, toolArgs, slotStopwatch, "batch_query cannot be nested inside batch_query.");
+                continue;
+            }
+
+            // Throttle each inner slot too, otherwise a single allowed batch_query call could
+            // still drive N inner searches through and defeat the per-(tool, caller) limiter
+            // the outer dispatch enforces. The decision is per (inner-tool, caller) so an
+            // over-quota slot can coexist with allowed slots in the same batch (#1560).
+            // 内側スロット単位でもスロットルする。これを行わないと外側の batch_query が 1 回通った
+            // だけで N 個の内側呼び出しが素通りし、(tool, caller) 制限が batch_query 経由で
+            // 迂回されてしまう。判定は (内側ツール, caller) 単位なので、同一バッチ内で許可スロット
+            // と超過スロットを併存させられる（#1560）。
+            var slotDecision = RateLimiter.TryAcquire(toolName, _caller);
+            if (!slotDecision.Allowed)
+            {
+                AppendRateLimitedSlot(toolName, toolArgs, slotStopwatch, slotDecision.RetryAfterMs);
                 continue;
             }
 

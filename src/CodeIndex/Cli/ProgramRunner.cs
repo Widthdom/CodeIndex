@@ -23,6 +23,14 @@ internal static class ProgramRunner
             return CommandExitCodes.UsageError;
         }
 
+        if (!TryConsumePaletteFlag(ref args, out var paletteError))
+        {
+            Console.Error.WriteLine(paletteError);
+            Console.Error.WriteLine("Hint: use one of `basic`, `256`, `truecolor`.");
+            GlobalToolLog.Info($"command_complete exit_code={CommandExitCodes.UsageError} palette_flag_invalid=true");
+            return CommandExitCodes.UsageError;
+        }
+
         if (!TryConsumeMetricsFlag(ref args, out var metricsPath, out var metricsError))
         {
             Console.Error.WriteLine(metricsError);
@@ -224,6 +232,71 @@ internal static class ProgramRunner
 
         if (requested.HasValue)
             ConsoleUi.SetColorMode(requested.Value);
+        args = kept.ToArray();
+        return true;
+    }
+
+    // Strip `--palette <name>` / `--palette=<name>` from `args` before
+    // subcommand parsing. Mirrors `TryConsumeColorFlag` so any subcommand
+    // (CLI or MCP) inherits the chosen ANSI palette without re-parsing.
+    // Anything after `--` is passed through verbatim so subcommand
+    // query-escape semantics are preserved (#1569).
+    internal static bool TryConsumePaletteFlag(ref string[] args, out string error)
+    {
+        error = string.Empty;
+        ConsoleUi.SetColorPalette(null);
+        if (args.Length == 0)
+            return true;
+
+        var kept = new List<string>(args.Length);
+        ColorPalette? requested = null;
+        var passthrough = false;
+        for (var i = 0; i < args.Length; i++)
+        {
+            var arg = args[i];
+
+            if (passthrough)
+            {
+                kept.Add(arg);
+                continue;
+            }
+            if (arg == "--")
+            {
+                passthrough = true;
+                kept.Add(arg);
+                continue;
+            }
+
+            string? rawValue = null;
+            if (arg == "--palette")
+            {
+                if (i + 1 >= args.Length)
+                {
+                    error = "Error: --palette requires a value (one of `basic`, `256`, `truecolor`).";
+                    return false;
+                }
+                rawValue = args[++i];
+            }
+            else if (arg.StartsWith("--palette=", StringComparison.Ordinal))
+            {
+                rawValue = arg.Substring("--palette=".Length);
+            }
+            else
+            {
+                kept.Add(arg);
+                continue;
+            }
+
+            if (!ConsoleUi.TryParseColorPalette(rawValue, out var palette))
+            {
+                error = $"Error: invalid --palette value `{rawValue}`.";
+                return false;
+            }
+            requested = palette;
+        }
+
+        if (requested.HasValue)
+            ConsoleUi.SetColorPalette(requested.Value);
         args = kept.ToArray();
         return true;
     }
@@ -436,7 +509,17 @@ internal static class ProgramRunner
             return CommandExitCodes.UsageError;
         }
 
-        using var server = new McpServer(options.DbPath, appVersion, options.DbPathExplicit);
+        // Pick the authenticator based on `CDIDX_MCP_AUTH_TOKEN` (#1559). When unset the
+        // permissive local-stdio default keeps the historical behaviour; when set every
+        // JSON-RPC request must include a matching `params.auth.token`. The tool-enablement
+        // gate (#1561) is wired automatically by the McpServer ctor via
+        // `McpToolFilter.FromEnvironment()`.
+        // `CDIDX_MCP_AUTH_TOKEN` の有無で authenticator を切り替える (#1559)。未設定なら
+        // permissive な stdio 既定で従来動作を維持し、設定済みなら全 JSON-RPC リクエストに
+        // `params.auth.token` の一致を要求する。ツール有効化ゲート (#1561) は McpServer の
+        // コンストラクタ内部で `McpToolFilter.FromEnvironment()` から自動取得される。
+        var authenticator = Mcp.McpAuthenticatorFactory.FromEnvironment();
+        using var server = new McpServer(options.DbPath, appVersion, options.DbPathExplicit, authenticator);
 
         if (string.Equals(transport, "http", StringComparison.OrdinalIgnoreCase))
             return RunMcpHttp(server, listenSpec ?? DefaultMcpHttpListen);

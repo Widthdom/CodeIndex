@@ -1,0 +1,18 @@
+<Project>
+
+  <PropertyGroup>
+    <!--
+      Pin every transitive NuGet package by committing per-project
+      packages.lock.json. CI restores with the locked-mode flag so any
+      unexpected resolution (including silent native swaps under
+      SQLitePCLRaw.bundle_e_sqlite3) fails the build instead of slipping
+      through. See DEVELOPER_GUIDE.md and issue #1556.
+      すべての推移的 NuGet 依存を packages.lock.json で固定する。CI は
+      locked-mode フラグ付きで restore するため、SQLitePCLRaw.bundle_e_sqlite3 の
+      ネイティブを含む解決差分が黙って入ることなくビルド失敗で気付ける。
+      詳細は DEVELOPER_GUIDE.md および issue #1556 を参照。
+    -->
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+  </PropertyGroup>
+
+</Project>

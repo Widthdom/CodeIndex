@@ -49,9 +49,15 @@ jobs:
         with:
           languages: ${{ matrix.language }}
 
+      # --locked-mode keeps CodeQL's restore inside the committed
+      # packages.lock.json bounds so dependency-graph analysis runs against
+      # the same transitive set we ship. See issue #1556.
+      # --locked-mode により CodeQL の restore も packages.lock.json と同じ
+      # 推移依存セットに揃え、出荷物と同じ依存グラフを解析対象にする。
+      # 詳細は issue #1556 参照。
       - name: Restore dependencies
         if: matrix.language == 'csharp'
-        run: dotnet restore CodeIndex.sln
+        run: dotnet restore CodeIndex.sln --locked-mode
 
       - name: Build for CodeQL
         if: matrix.language == 'csharp'

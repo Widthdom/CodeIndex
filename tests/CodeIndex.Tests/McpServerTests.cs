@@ -307,6 +307,331 @@ public class McpServerTests : IDisposable
         }
     }
 
+    // --- Authentication tests (#1559) / 認証テスト (#1559) ---
+
+    [Fact]
+    public void DefaultAuthenticator_AllowsRequestsWithoutToken()
+    {
+        // #1559: the historical stdio default must keep working without an auth token so
+        // existing clients (Claude Code, Cursor, Windsurf) don't break when the upgrade
+        // ships. The permissive default is wired by the parameterless ctor.
+        // #1559: stdio 既定の従来動作はトークン無しで通る必要がある。permissive 既定は
+        // 引数なしコンストラクタで wire される。
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"ping"}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.NotNull(response["result"]);
+        Assert.Null(response["error"]);
+    }
+
+    [Fact]
+    public void TokenAuthenticator_MatchingToken_DispatchesNormally()
+    {
+        // #1559: when the server is configured with a token, the matching token in
+        // params.auth.token authenticates the request and dispatch proceeds.
+        // #1559: トークン設定済みサーバーに対し、params.auth.token に一致する値を
+        // 添えれば認証成功し dispatch に進む。
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion(), false,
+            new TokenMcpAuthenticator("s3cret"));
+        var request = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"auth":{"token":"s3cret"}}}""")!;
+
+        var response = server.HandleMessage(request)!;
+
+        Assert.NotNull(response["result"]);
+        Assert.Null(response["error"]);
+    }
+
+    [Fact]
+    public void TokenAuthenticator_MissingToken_ReturnsUnauthorized()
+    {
+        // #1559: a configured server must reject requests with no token. The wire response
+        // carries only -32001 + "Unauthorized" (no detail) per the #1530 sanitization rule.
+        // #1559: トークン設定済みサーバーはトークン未提示のリクエストを拒否する。ワイヤ応答は
+        // #1530 サニタイズ方針に従い -32001 と "Unauthorized" のみ。
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion(), false,
+            new TokenMcpAuthenticator("s3cret"));
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+
+        var response = server.HandleMessage(request)!;
+
+        Assert.Null(response["result"]);
+        var error = response["error"]!;
+        Assert.Equal(-32001, error["code"]!.GetValue<int>());
+        Assert.Equal("Unauthorized", error["message"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void TokenAuthenticator_WrongToken_ReturnsUnauthorized()
+    {
+        // #1559: an incorrect token must produce the same wire response shape as a missing
+        // token so callers cannot mount a token-presence oracle on the response body.
+        // #1559: 不一致トークンも未提示と同じワイヤ応答にすることで、応答本文を見て
+        // トークン有無を判定するオラクル攻撃を防ぐ。
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion(), false,
+            new TokenMcpAuthenticator("s3cret"));
+        var request = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"auth":{"token":"wrong"}}}""")!;
+
+        var response = server.HandleMessage(request)!;
+
+        Assert.Null(response["result"]);
+        var error = response["error"]!;
+        Assert.Equal(-32001, error["code"]!.GetValue<int>());
+        Assert.Equal("Unauthorized", error["message"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void TokenAuthenticator_ToolsCallWithToken_Dispatches()
+    {
+        // #1559: the auth check runs uniformly across initialize/tools/list/tools/call/ping
+        // so a tool dispatch with a matching token still reaches the handler and returns the
+        // tool result instead of an Unauthorized error.
+        // #1559: 認証チェックは initialize/tools/list/tools/call/ping に統一されているため、
+        // 一致トークン付きのツール呼び出しはハンドラまで届き Unauthorized ではなくツール結果を返す。
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion(), false,
+            new TokenMcpAuthenticator("s3cret"));
+        var request = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ping","auth":{"token":"s3cret"}}}""")!;
+
+        var response = server.HandleMessage(request)!;
+
+        Assert.NotNull(response["result"]);
+        Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
+        Assert.Null(response["error"]);
+    }
+
+    [Fact]
+    public void TokenAuthenticator_NotificationsBypassAuthCheck()
+    {
+        // Notifications (no id) produce no response so the auth check would have nothing to
+        // signal on; the existing notification short-circuit must stay BEFORE the auth gate
+        // so a token-protected server still tolerates `notifications/initialized` without
+        // synthesising an error response.
+        // 通知 (id 無し) は応答が無いので認証チェックがエラーを返す手段を持たない。通知の
+        // ショートサーキットを認証ゲートより前に置き続け、token 保護サーバーでも
+        // `notifications/initialized` を黙って受け入れられるようにする。
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion(), false,
+            new TokenMcpAuthenticator("s3cret"));
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","method":"notifications/initialized"}""")!;
+
+        var response = server.HandleMessage(request);
+
+        Assert.Null(response);
+    }
+
+    [Fact]
+    public void TokenAuthenticator_MalformedAuthShape_TreatedAsMissing()
+    {
+        // Defensive: an `auth` object whose `token` field is not a string (number, array,
+        // object) must not crash the server. The token-authenticator catches the cast and
+        // treats it as a missing token so the wire stays uniform.
+        // 防御: `auth.token` が文字列でない（数値・配列・オブジェクト）入力でサーバーが
+        // クラッシュしてはならない。token authenticator は cast 失敗を未提示扱いにし、
+        // ワイヤ応答を統一する。
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion(), false,
+            new TokenMcpAuthenticator("s3cret"));
+        var request = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"auth":{"token":42}}}""")!;
+
+        var response = server.HandleMessage(request)!;
+
+        Assert.Equal(-32001, response["error"]!["code"]!.GetValue<int>());
+        Assert.Equal("Unauthorized", response["error"]!["message"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void BuildAuthFailureLog_IsActionable()
+    {
+        // The stderr log keeps the actionable detail (method, reason, recovery hint) so an
+        // operator can diagnose without combing through the wire transcript. The wire stays
+        // sanitized per #1530.
+        // stderr ログには診断用詳細 (method/reason/復旧ヒント) を残す。ワイヤ応答は #1530
+        // 方針でサニタイズしたまま保つ。
+        var log = McpServer.BuildAuthFailureLog("tools/call", "missing auth token");
+
+        Assert.Contains("Auth failed", log);
+        Assert.Contains("tools/call", log);
+        Assert.Contains("missing auth token", log);
+        Assert.Contains("CDIDX_MCP_AUTH_TOKEN", log);
+        Assert.Contains("params.auth.token", log);
+    }
+
+    [Fact]
+    public void TokenAuthenticator_EmptyTokenInCtor_Rejected()
+    {
+        // An empty configured token would make every empty-string presentation succeed, so
+        // the constructor must refuse it. RunMcp's factory already pre-filters on
+        // whitespace, but the constructor is the public contract.
+        // 空文字を期待トークンに設定すると空文字提示が全て通ってしまうため、コンストラクタで
+        // 拒否する。RunMcp の factory は空白フィルタを掛けるが、コンストラクタが公開契約。
+        Assert.Throws<ArgumentException>(() => new TokenMcpAuthenticator(string.Empty));
+    }
+
+    [Fact]
+    public void McpAuthenticatorFactory_NoEnv_ReturnsLocalStdio()
+    {
+        // FromEnvironment() must default to permissive stdio when the env var is unset or
+        // whitespace, so unconfigured installs preserve the historical behaviour.
+        // 環境変数が未設定 or 空白の場合は permissive stdio に fallback し、未設定インストールの
+        // 従来動作を維持する。
+        var previous = Environment.GetEnvironmentVariable(McpAuthenticatorFactory.AuthTokenEnvVar);
+        try
+        {
+            Environment.SetEnvironmentVariable(McpAuthenticatorFactory.AuthTokenEnvVar, null);
+            Assert.IsType<LocalStdioAuthenticator>(McpAuthenticatorFactory.FromEnvironment());
+
+            Environment.SetEnvironmentVariable(McpAuthenticatorFactory.AuthTokenEnvVar, "   ");
+            Assert.IsType<LocalStdioAuthenticator>(McpAuthenticatorFactory.FromEnvironment());
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(McpAuthenticatorFactory.AuthTokenEnvVar, previous);
+        }
+    }
+
+    [Fact]
+    public void TokenAuthenticator_NonStringMethod_ReturnsUnauthorized()
+    {
+        // #1559: a non-string `method` (e.g. `42`) must hit the auth gate and produce
+        // -32001 "Unauthorized", not a -32603 "Internal error" leaked from a throwing
+        // GetValue<string>() call on the way to dispatch. Otherwise the token-protected
+        // server would tell unauthenticated callers that their malformed request reached
+        // dispatch internals.
+        // #1559: 非文字列 method（例: 42）は認証ゲートに到達して -32001 を返すべきで、
+        // GetValue<string>() の例外から -32603 を漏らしてはならない。漏らすと token 保護下で
+        // 未認証呼び出しに「dispatch 内部まで届いた」事実を伝えてしまう。
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion(), false,
+            new TokenMcpAuthenticator("s3cret"));
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":42}""")!;
+
+        var response = server.HandleMessage(request)!;
+
+        Assert.Null(response["result"]);
+        Assert.Equal(-32001, response["error"]!["code"]!.GetValue<int>());
+        Assert.Equal("Unauthorized", response["error"]!["message"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void TokenAuthenticator_MissingMethodWithToken_ReturnsMethodError()
+    {
+        // After auth passes, a request that omits `method` entirely still gets the
+        // structured -32600 "missing method" error. This documents that the auth gate runs
+        // first but does not swallow downstream method-shape validation when the caller is
+        // authenticated.
+        // 認証が通った後で `method` が欠落しているリクエストには従来通り -32600
+        // "missing method" を返す。認証ゲートは先行するが、認証済み呼び出しに対しては
+        // 既存の method 形式検証を残す。
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion(), false,
+            new TokenMcpAuthenticator("s3cret"));
+        var request = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"params":{"auth":{"token":"s3cret"}}}""")!;
+
+        var response = server.HandleMessage(request)!;
+
+        Assert.Equal(-32600, response["error"]!["code"]!.GetValue<int>());
+        Assert.Contains("missing method", response["error"]!["message"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void BuildAuthFailureLog_SanitizesControlCharsInMethod()
+    {
+        // The stderr log interpolates the caller-controlled `method`; if we don't strip
+        // control characters, an attacker can send `"method":"evil\n[forged]"` and split
+        // the diagnostic across two lines (log forging). Sanitization replaces \n/\r/etc.
+        // with `?` and clamps method length so a single auth failure never spans lines.
+        // stderr ログには caller 由来の `method` が埋め込まれる。制御文字を除去しないと
+        // `"method":"evil\n[forged]"` で 1 件のログを 2 行に分割されてしまう（ログ偽造）。
+        // 制御文字を `?` に置換し、長さも切り詰める。
+        var log = McpServer.BuildAuthFailureLog("evil\n[forged]\rfoo\t", "missing auth token");
+
+        Assert.DoesNotContain('\n', log);
+        Assert.DoesNotContain('\r', log);
+        Assert.DoesNotContain('\t', log);
+        Assert.Contains("evil?[forged]?foo?", log);
+        Assert.Contains("missing auth token", log);
+    }
+
+    [Fact]
+    public void BuildAuthFailureLog_ClampsLongMethod()
+    {
+        // The log clamps method to a fixed cap to keep a single auth-failure line readable
+        // and to bound the cost of stderr writes when a hostile client sends a giant method.
+        // method を一定長に切り詰めることでログ行を読みやすく保ち、巨大 method による
+        // stderr 書き込みコストも抑える。
+        var huge = new string('A', 5000);
+
+        var log = McpServer.BuildAuthFailureLog(huge, "missing auth token");
+
+        Assert.DoesNotContain(new string('A', 5000), log);
+        Assert.Contains("…", log);
+    }
+
+    [Fact]
+    public void BuildAuthFailureLog_NullMethod_LabeledNone()
+    {
+        // After the safe method-extraction change, `method` may be null when the request
+        // omits it or sets it to a non-string. The log must still be readable rather than
+        // showing a literal "null".
+        // 安全な method 抽出により method が null になり得る（欠落 or 非文字列）。ログは
+        // 読みやすい表記にしておき、リテラル "null" を出さない。
+        var log = McpServer.BuildAuthFailureLog(null, "missing auth token");
+
+        Assert.Contains("Auth failed for method (none)", log);
+    }
+
+    [Fact]
+    public void TokenAuthenticator_WrongLengthToken_UniformWireResponse()
+    {
+        // The hash-based compare normalizes presented tokens to a fixed length before
+        // FixedTimeEquals, so a wrong-length guess and a wrong equal-length guess produce
+        // byte-identical wire responses. Verifies the two error bodies are exactly equal
+        // (no length echoed back, no detail leaked).
+        // ハッシュ比較により提示トークンは固定長に正規化されてから FixedTimeEquals に渡る
+        // ので、長さ違いの推測と同長の不一致は同一のワイヤ応答になる。両エラーボディが
+        // バイト単位で完全一致することを確認する。
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion(), false,
+            new TokenMcpAuthenticator("s3cret"));
+        var shortReq = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"ping","params":{"auth":{"token":"x"}}}""")!;
+        var sameLenReq = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"ping","params":{"auth":{"token":"WRONG!"}}}""")!;
+
+        var shortResp = server.HandleMessage(shortReq)!;
+        var sameLenResp = server.HandleMessage(sameLenReq)!;
+
+        Assert.Equal(shortResp.ToJsonString(), sameLenResp.ToJsonString());
+        Assert.Equal(-32001, shortResp["error"]!["code"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void McpAuthenticatorFactory_TokenSet_ReturnsTokenAuthenticator()
+    {
+        // When CDIDX_MCP_AUTH_TOKEN holds a non-whitespace value, the factory must produce a
+        // TokenMcpAuthenticator that enforces a matching token on the wire.
+        // CDIDX_MCP_AUTH_TOKEN に空白以外の値があれば factory は TokenMcpAuthenticator を
+        // 返し、ワイヤ上で一致トークンを強制する。
+        var previous = Environment.GetEnvironmentVariable(McpAuthenticatorFactory.AuthTokenEnvVar);
+        try
+        {
+            Environment.SetEnvironmentVariable(McpAuthenticatorFactory.AuthTokenEnvVar, "s3cret");
+            var authenticator = McpAuthenticatorFactory.FromEnvironment();
+            Assert.IsType<TokenMcpAuthenticator>(authenticator);
+
+            var matching = JsonNode.Parse(
+                """{"jsonrpc":"2.0","id":1,"method":"ping","params":{"auth":{"token":"s3cret"}}}""")!;
+            Assert.True(authenticator.Authenticate(matching).IsAuthenticated);
+
+            var bad = JsonNode.Parse(
+                """{"jsonrpc":"2.0","id":1,"method":"ping","params":{"auth":{"token":"nope"}}}""")!;
+            Assert.False(authenticator.Authenticate(bad).IsAuthenticated);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(McpAuthenticatorFactory.AuthTokenEnvVar, previous);
+        }
+    }
+
     [Fact]
     public void BuildOversizedMessageLog_IsActionable()
     {
@@ -6792,6 +7117,227 @@ public class McpServerTests : IDisposable
         var writer = new DbWriter(db.Connection);
         writer.MarkGraphReady();
         writer.MarkIssuesReady();
+    }
+
+    // --- Rate limiter (issue #1560) / レート制限器（#1560） ---
+
+    private sealed class FixedClock
+    {
+        public DateTimeOffset Now { get; set; } = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        public DateTimeOffset Read() => Now;
+    }
+
+    private static FixedClock InstallRateLimiter(McpServer server, RateLimiterOptions options)
+    {
+        var clock = new FixedClock();
+        server.OverrideRateLimiterForTests(new RateLimiter(options, clock.Read));
+        return clock;
+    }
+
+    [Fact]
+    public void ToolsCall_RateLimitDisabled_NoThrottle()
+    {
+        // Default (no env vars) must behave like the pre-#1560 server so existing stdio
+        // single-user sessions are unaffected. The limiter still records nothing on every
+        // call regardless of how many succeed.
+        // 既定（環境変数なし）では #1560 以前と同じ挙動で、stdio 単一ユーザーは影響を受けない。
+        for (var i = 0; i < 5; i++)
+        {
+            var request = JsonNode.Parse($"{{\"jsonrpc\":\"2.0\",\"id\":{i},\"method\":\"tools/call\",\"params\":{{\"name\":\"status\"}}}}")!;
+            var response = _server.HandleMessage(request)!;
+            Assert.Null(response["error"]);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_RateLimited_ReturnsStructuredNegative32000()
+    {
+        // Bucket of capacity 1, refilling at 1/sec. First call succeeds, second is denied
+        // with -32000 carrying tool / caller / retry_after_ms (#1560 contract).
+        // 容量 1・補充 1/sec のバケット。1 回目は成功、2 回目は -32000 で tool/caller/retry_after_ms
+        // を含む構造化レスポンスになる（#1560 の契約）。
+        InstallRateLimiter(_server, new RateLimiterOptions { RefillTokensPerSecond = 1.0, BurstCapacity = 1.0 });
+
+        var initialize = JsonNode.Parse("""{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"clientInfo":{"name":"client-a","version":"1.2.3"}}}""")!;
+        _server.HandleMessage(initialize);
+
+        var first = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status"}}""")!)!;
+        Assert.Null(first["error"]);
+        Assert.False(first["result"]!["isError"]?.GetValue<bool>() ?? false);
+
+        var second = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"status"}}""")!)!;
+
+        Assert.Null(second["result"]);
+        var error = second["error"]!;
+        Assert.Equal(-32000, error["code"]!.GetValue<int>());
+        Assert.Contains("Rate limit exceeded", error["message"]!.GetValue<string>());
+        var data = error["data"]!;
+        Assert.Equal("rate_limited", data["error_category"]!.GetValue<string>());
+        Assert.Equal("status", data["tool"]!.GetValue<string>());
+        Assert.Equal("client-a/1.2.3", data["caller"]!.GetValue<string>());
+        Assert.True(data["retry_after_ms"]!.GetValue<long>() >= 1);
+        Assert.Equal(2, second["id"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsCall_RateLimit_KeysByTool()
+    {
+        // Different tools have independent buckets, so once `status` is throttled the
+        // sibling tool `languages` still goes through (#1560).
+        // 別ツールは独立バケットを持つため、`status` がスロットルされても `languages` は通る（#1560）。
+        InstallRateLimiter(_server, new RateLimiterOptions { RefillTokensPerSecond = 1.0, BurstCapacity = 1.0 });
+
+        Assert.Null(_server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status"}}""")!)!["error"]);
+        Assert.NotNull(_server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"status"}}""")!)!["error"]);
+
+        var languages = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"languages"}}""")!)!;
+        Assert.Null(languages["error"]);
+    }
+
+    [Fact]
+    public void Initialize_CapturesClientInfoAsCallerIdentity()
+    {
+        // The caller identity is read from `clientInfo.name` on `initialize` so the
+        // limiter can attribute / throttle per client. Missing `clientInfo` falls back to
+        // `"unknown"` so anonymous clients still get a coherent bucket (#1560).
+        // `clientInfo.name` を取り込むことで、クライアント単位の計量・スロットルが効く。
+        // `clientInfo` が無い場合は `"unknown"` に fallback する（#1560）。
+        Assert.Equal("unknown", _server.CurrentCaller);
+
+        _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"my-client","version":"1.2.3"}}}""")!);
+        Assert.Equal("my-client/1.2.3", _server.CurrentCaller);
+    }
+
+    [Fact]
+    public void Initialize_UpgradesFromUnknownToNamedCaller()
+    {
+        // The first initialize() with a named clientInfo upgrades the caller out of the
+        // anonymous `"unknown"` bucket, so subsequent calls are throttled per client
+        // rather than under a shared anonymous bucket (#1560).
+        // 最初の名前付き initialize で `"unknown"` から昇格し、以降は client 単位で計量される。
+        Assert.Equal("unknown", _server.CurrentCaller);
+
+        _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"named-client"}}}""")!);
+        Assert.Equal("named-client", _server.CurrentCaller);
+    }
+
+    [Fact]
+    public void Initialize_NamedCallerIsSticky_RejectsReIdentifySwap()
+    {
+        // Once a named caller has been captured, re-initialize() under a *different* name
+        // is ignored so a networked MCP session cannot reset its rate-limit bucket simply
+        // by re-initializing under a fresh identity. The retained name continues to key
+        // all subsequent (tool, caller) buckets (#1560 DoS vector).
+        // 名前付き caller の取得後は、別名での再 initialize() を無視し、レート制限バケットを
+        // リセットする経路を塞ぐ（#1560 DoS）。
+        _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"first-client"}}}""")!);
+        Assert.Equal("first-client", _server.CurrentCaller);
+
+        // Re-init under a different name is ignored / 別名は無視
+        _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"clientInfo":{"name":"second-client"}}}""")!);
+        Assert.Equal("first-client", _server.CurrentCaller);
+
+        // Re-init with empty clientInfo (resolves to "unknown") also cannot downgrade /
+        // 空の clientInfo（"unknown" に解決）でも降格しない。
+        _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":3,"method":"initialize","params":{}}""")!);
+        Assert.Equal("first-client", _server.CurrentCaller);
+    }
+
+    [Fact]
+    public void BuildCallerSwapRejectionLog_IsActionable()
+    {
+        var log = McpServer.BuildCallerSwapRejectionLog("first-client", "second-client");
+        Assert.Contains("Ignoring re-initialize", log);
+        Assert.Contains("first-client", log);
+        Assert.Contains("second-client", log);
+    }
+
+    [Fact]
+    public void BatchQuery_RejectsNestedBatchQuerySlots()
+    {
+        // batch_query slots that themselves request `batch_query` are rejected before
+        // rate-limit token consumption so the per-(tool, caller) bucket cannot be drained
+        // by recursive expansion, and the error message names the constraint explicitly
+        // instead of bubbling up the generic "Unknown tool" error (#1560 nesting vector).
+        // 内側で batch_query を呼ぶスロットは、トークン消費の前に明示的に拒否し、再帰展開で
+        // バケットを枯渇させる経路を塞ぐ。エラーメッセージもネスト禁止を明示する（#1560）。
+        var request = JsonNode.Parse("""
+        {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[
+            {"tool":"batch_query","args":{"queries":[]}}
+        ]}}}
+        """)!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Null(response["error"]);
+        var results = response["result"]!["structuredContent"]!["results"]!.AsArray();
+        Assert.Single(results);
+        var nested = results[0]!;
+        Assert.Equal("batch_query cannot be nested inside batch_query.", nested["error"]!.GetValue<string>());
+        Assert.Null(nested["error_category"]);
+    }
+
+    [Fact]
+    public void BatchQuery_PerSlotRateLimited_MarksOnlyOverQuotaSlots()
+    {
+        // batch_query mitigation: each inner slot also consumes a token from the
+        // (inner-tool, caller) bucket, so a misbehaving client cannot bypass the limiter
+        // by stuffing 10 inner `search` calls into a single allowed batch (#1560 evidence).
+        // Outer `batch_query` and inner `status` have independent buckets keyed by tool;
+        // burst=2 lets the outer call through and the first two inner `status` slots, while
+        // the third inner slot is throttled and surfaces error_category=rate_limited +
+        // retry_after_ms in the per-slot result.
+        // batch_query の対策: 内側スロットも (inner-tool, caller) からトークンを消費するため、
+        // 内側 search を 10 個詰めて制限を迂回できない。バケットはツール毎に独立しており、
+        // burst=2 なら外側 batch_query と 1〜2 個目の内側 status が通り、3 個目はスロット単位で
+        // error_category=rate_limited と retry_after_ms を返す。
+        InstallRateLimiter(_server, new RateLimiterOptions { RefillTokensPerSecond = 0.1, BurstCapacity = 2.0 });
+
+        var request = JsonNode.Parse("""
+        {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[
+            {"tool":"status"},
+            {"tool":"status"},
+            {"tool":"status"}
+        ]}}}
+        """)!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Null(response["error"]);
+        var structured = response["result"]!["structuredContent"]!;
+        var results = structured["results"]!.AsArray();
+        Assert.Equal(3, results.Count);
+
+        Assert.Null(results[0]!["error"]);
+        Assert.Null(results[1]!["error"]);
+
+        var throttled = results[2]!;
+        Assert.NotNull(throttled["error"]);
+        Assert.Equal("rate_limited", throttled["error_category"]!.GetValue<string>());
+        Assert.True(throttled["retry_after_ms"]!.GetValue<long>() >= 1);
+
+        var metadata = structured["metadata"]!;
+        Assert.Equal(2, metadata["success_count"]!.GetValue<int>());
+        Assert.Equal(1, metadata["failure_count"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void BuildRateLimitedLog_IsActionable()
+    {
+        var log = McpServer.BuildRateLimitedLog("search", "client-a", 250);
+        Assert.Contains("Rate limit exceeded", log);
+        Assert.Contains("search", log);
+        Assert.Contains("client-a", log);
+        Assert.Contains("250", log);
+        Assert.Contains("CDIDX_MCP_RATE_LIMIT_RPS", log);
     }
 
     private static void WriteOversizedAsciiFile(string path)
