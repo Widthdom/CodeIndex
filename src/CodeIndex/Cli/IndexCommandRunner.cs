@@ -1415,17 +1415,7 @@ public static class IndexCommandRunner
             .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         var normalizedChild = Path.GetFullPath(candidateChild)
             .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        var comparison = OperatingSystem.IsWindows()
-            ? StringComparison.OrdinalIgnoreCase
-            : StringComparison.Ordinal;
-
-        if (string.Equals(normalizedParent, normalizedChild, comparison))
-            return true;
-
-        var parentWithDirectorySeparator = normalizedParent + Path.DirectorySeparatorChar;
-        var parentWithAltDirectorySeparator = normalizedParent + Path.AltDirectorySeparatorChar;
-        return normalizedChild.StartsWith(parentWithDirectorySeparator, comparison)
-            || normalizedChild.StartsWith(parentWithAltDirectorySeparator, comparison);
+        return PathCasing.IsPathEqualOrParent(normalizedParent, normalizedChild);
     }
 
     private static bool TryProbeDryRunFile(FileIndexer indexer, string absolutePath, out string lang, out string? error)
@@ -1494,6 +1484,31 @@ public static class IndexCommandRunner
         {
             // Best-effort metadata only; never fail an otherwise-successful index run.
             // best-effort であり、stamp の失敗で index 全体を失敗扱いにしない。
+        }
+        StampWorkspacePathCaseSensitivity(writer, projectRoot);
+    }
+
+    // Issue #1546: capture the actual case-sensitivity of the workspace filesystem so
+    // `cdidx status` can diagnose phantom path collapses on case-sensitive APFS / WSL
+    // NTFS / ReFS volumes (where the OS-keyed heuristic would mismatch reality). Probed
+    // via the same `core.ignorecase` + filesystem probe used by FileIndexer, then
+    // persisted as "true" / "false" alongside the HEAD stamp. Failures are swallowed so
+    // an unwritable git config / temp probe never blocks an otherwise-successful index.
+    // #1546: workspace FS の大小区別を実プローブして codeindex_meta に保存する。
+    // probe 失敗時は黙って null stamp にして index 本体は成功扱いのままとする。
+    private static void StampWorkspacePathCaseSensitivity(DbWriter writer, string projectRoot)
+    {
+        try
+        {
+            var ignoreCase = GitHelper.ResolveIgnoreCase(projectRoot);
+            PathCasing.SeedFromWorkspace(projectRoot, ignoreCase);
+            var caseSensitive = (!ignoreCase).ToString(System.Globalization.CultureInfo.InvariantCulture);
+            writer.SetMeta(DbContext.WorkspacePathCaseSensitiveMetaKey, caseSensitive);
+        }
+        catch
+        {
+            // Best-effort metadata only; never fail an otherwise-successful index run.
+            // best-effort のみ。stamp 失敗で index 全体を落とさない。
         }
     }
 

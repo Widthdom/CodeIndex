@@ -421,6 +421,10 @@ public partial class DbReader
         var indexedHeadSha = TryGetMetaStringInternal(DbContext.IndexedHeadShaMetaKey);
         var indexedHeadBranch = TryGetMetaStringInternal(DbContext.IndexedHeadBranchMetaKey);
         var indexedHeadTimestamp = ParseMetaDateTime(TryGetMetaStringInternal(DbContext.IndexedHeadTimestampMetaKey));
+        // #1546: workspace case-sensitivity stamp. Read inside the SHARED snapshot for
+        // consistency with the other freshness signals; missing on legacy DBs.
+        // #1546: case-sensitivity stamp も同 snapshot で読む。stamp 無し旧 DB は null。
+        var pathCaseSensitive = ParseMetaBool(TryGetMetaStringInternal(DbContext.WorkspacePathCaseSensitiveMetaKey));
 
         var result = new StatusResult
         {
@@ -447,6 +451,7 @@ public partial class DbReader
             IndexWriterVersion = _indexWriterVersion,
             IndexNewerThanReader = _indexNewerThanReader,
             IndexNewerThanReaderReason = _indexNewerThanReaderReason,
+            PathCaseSensitive = pathCaseSensitive,
         };
         // Commit the read-only snapshot explicitly so the SHARED lock is released promptly.
         // read-only なので rollback でも同じだが、明示 commit して SHARED lock を早期解放する。
@@ -552,4 +557,14 @@ public partial class DbReader
         }
         return null;
     }
+
+    // Parse a "true" / "false" meta string into a nullable bool. Returns null when the raw
+    // value is missing or unrecognized so a partial / legacy stamp degrades gracefully.
+    // bool.TryParse already accepts case-insensitive "True"/"False" via Boolean.TryParse,
+    // matching how SetMeta(WorkspacePathCaseSensitiveMetaKey, value.ToString()) writes it.
+    // "true"/"false" meta 文字列を nullable bool に。欠落・不明値は null フォールバック。
+    private static bool? ParseMetaBool(string? raw)
+        => string.IsNullOrWhiteSpace(raw) || !bool.TryParse(raw, out var value)
+            ? null
+            : value;
 }

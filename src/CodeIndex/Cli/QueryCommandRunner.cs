@@ -1751,6 +1751,11 @@ public static class QueryCommandRunner
                 }
                 if (status.GraphSupportedLanguages is { Count: > 0 })
                     Console.WriteLine($"Graph   : {status.GraphSupportedLanguages.Count} languages ({string.Join(", ", status.GraphSupportedLanguages)})");
+                // #1546: surface the persisted filesystem case-sensitivity so operators can
+                // diagnose phantom path collapses on case-sensitive APFS / WSL / ReFS volumes.
+                // #1546: case-sensitivity を診断用に明示する。
+                if (status.PathCaseSensitive != null)
+                    Console.WriteLine($"FS Case : {(status.PathCaseSensitive == true ? "case-sensitive" : "case-insensitive")}");
                 if (status.WorktreeHeadChanged == true)
                     Console.WriteLine($"WARN    : worktree HEAD changed since the index was built ({ShortSha(status.IndexedHeadCommit)} -> {ShortSha(status.GitHead)}). Run `{BuildReindexRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit)}` to refresh the index for the current branch.");
                 if (status.IndexNewerThanReader)

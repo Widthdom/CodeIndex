@@ -1267,11 +1267,10 @@ public class FileIndexer
         _ => null,
     };
 
-    private static bool PathsEqual(string left, string right) =>
-        string.Equals(
+    private static bool PathsEqual(string left, string right)
+        => CodeIndex.Cli.PathCasing.PathsEqual(
             Path.GetFullPath(left).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
-            Path.GetFullPath(right).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
-            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+            Path.GetFullPath(right).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
 
     private static bool IsPathEqualOrParent(string candidateParent, string candidateChild)
     {
@@ -1279,17 +1278,7 @@ public class FileIndexer
             .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         var normalizedChild = Path.GetFullPath(candidateChild)
             .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        var comparison = OperatingSystem.IsWindows()
-            ? StringComparison.OrdinalIgnoreCase
-            : StringComparison.Ordinal;
-
-        if (string.Equals(normalizedParent, normalizedChild, comparison))
-            return true;
-
-        var parentWithDirectorySeparator = normalizedParent + Path.DirectorySeparatorChar;
-        var parentWithAltDirectorySeparator = normalizedParent + Path.AltDirectorySeparatorChar;
-        return normalizedChild.StartsWith(parentWithDirectorySeparator, comparison)
-            || normalizedChild.StartsWith(parentWithAltDirectorySeparator, comparison);
+        return CodeIndex.Cli.PathCasing.IsPathEqualOrParent(normalizedParent, normalizedChild);
     }
 
     /// <summary>

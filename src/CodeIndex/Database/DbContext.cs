@@ -483,6 +483,18 @@ public class DbContext : IDisposable
     public const string IndexedHeadShaMetaKey = "indexed_head_sha";
     public const string IndexedHeadBranchMetaKey = "indexed_head_branch";
     public const string IndexedHeadTimestampMetaKey = "indexed_head_timestamp";
+    // Issue #1546: case-sensitivity of the workspace filesystem the most recent successful
+    // index ran on, persisted as the string "true" / "false". Resolved via the probe in
+    // `PathCasing` (which honors `core.ignorecase` when the project is a git workspace and
+    // falls back to a per-volume probe otherwise) so case-sensitive APFS volumes on macOS,
+    // case-sensitive NTFS via WSL, and case-sensitive ReFS no longer collapse onto the OS
+    // family heuristic. Exposed back through `cdidx status` (`path_case_sensitive`) so
+    // operators can diagnose phantom path collapses / missing-file reports.
+    // #1546: 直近 index 時のワークスペース FS の大小区別を "true"/"false" で保存する。
+    // OS 系列だけに依存していた既存ヒューリスティックでは case-sensitive APFS 等で
+    // ファイルが誤って同一視されるため、`PathCasing` の実 FS プローブで判定し、
+    // `cdidx status` の `path_case_sensitive` で診断できるようにする。
+    public const string WorkspacePathCaseSensitiveMetaKey = "workspace_path_case_sensitive";
     // Authoritative `symbols.is_metadata_target` flag readiness, per language. Stamped at the
     // end of a successful index pass once the writer's metadata-target resolver has classified
     // every class-like row for that language. Readers fall back to the legacy heuristic when

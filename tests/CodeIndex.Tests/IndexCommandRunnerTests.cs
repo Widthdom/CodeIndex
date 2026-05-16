@@ -229,6 +229,38 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_PersistsWorkspacePathCaseSensitivity()
+    {
+        // #1546: every successful `cdidx index` stamps the workspace's filesystem
+        // case-sensitivity so `status` can audit the trust decision that
+        // `PathsEqual` / `IsPathEqualOrParent` made at index time.
+        // #1546: index 成功時に case-sensitivity を stamp し、status から監査可能にする。
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_path_case_{Guid.NewGuid():N}.db");
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('hi')\n");
+
+            var (exitCode, _) = RunAndCaptureJson([projectRoot, "--db", dbPath, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+
+            using var db = new DbContext(dbPath);
+            var stamp = db.GetMetaString(DbContext.WorkspacePathCaseSensitiveMetaKey);
+            Assert.False(string.IsNullOrWhiteSpace(stamp));
+            Assert.True(
+                bool.TryParse(stamp, out _),
+                $"path-case stamp must be a parseable bool: {stamp}");
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
     public void Run_GitRepo_DetachedHead_PersistsShaButNotBranch()
     {
         var projectRoot = CreateTempProject();

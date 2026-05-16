@@ -1804,10 +1804,7 @@ public partial class McpServer
             if (left == null || right == null)
                 return false;
 
-            var comparison = OperatingSystem.IsWindows()
-                ? StringComparison.OrdinalIgnoreCase
-                : StringComparison.Ordinal;
-            return string.Equals(left, right, comparison);
+            return CodeIndex.Cli.PathCasing.PathsEqual(left, right);
         }
 
         void WriteProjectRootOnce()
@@ -1980,6 +1977,21 @@ public partial class McpServer
                 writer.SetMeta(DbContext.IndexedHeadShaMetaKey, currentHeadCommit);
                 writer.SetMeta(DbContext.IndexedHeadBranchMetaKey, headBranch);
                 writer.SetMeta(DbContext.IndexedHeadTimestampMetaKey, timestamp);
+            }
+            catch
+            {
+                // Best-effort; never fail an otherwise-successful index run.
+            }
+            // #1546: stamp workspace path-case-sensitivity so MCP-driven indexes also
+            // surface the diagnostic field through `cdidx status` / MCP status.
+            // #1546: MCP 経由 index でも case-sensitivity stamp を残す。
+            try
+            {
+                var ignoreCase = GitHelper.ResolveIgnoreCase(projectPath);
+                CodeIndex.Cli.PathCasing.SeedFromWorkspace(projectPath, ignoreCase);
+                writer.SetMeta(
+                    DbContext.WorkspacePathCaseSensitiveMetaKey,
+                    (!ignoreCase).ToString(System.Globalization.CultureInfo.InvariantCulture));
             }
             catch
             {

@@ -261,29 +261,10 @@ public static class DbPathResolver
     }
 
     private static bool PathsEqual(string left, string right)
-    {
-        var comparison = OperatingSystem.IsWindows()
-            ? StringComparison.OrdinalIgnoreCase
-            : StringComparison.Ordinal;
-        return string.Equals(left, right, comparison);
-    }
+        => PathCasing.PathsEqual(left, right);
 
     private static bool IsUnderDirectory(string parentDirectory, string candidatePath)
-    {
-        if (PathsEqual(parentDirectory, candidatePath))
-            return true;
-
-        var comparison = OperatingSystem.IsWindows()
-            ? StringComparison.OrdinalIgnoreCase
-            : StringComparison.Ordinal;
-        var trimmedParent = parentDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        var parentWithSeparator = trimmedParent
-            + Path.DirectorySeparatorChar;
-        var parentWithAltSeparator = trimmedParent
-            + Path.AltDirectorySeparatorChar;
-        return candidatePath.StartsWith(parentWithSeparator, comparison)
-            || candidatePath.StartsWith(parentWithAltSeparator, comparison);
-    }
+        => PathCasing.IsPathEqualOrParent(parentDirectory, candidatePath);
 
     private static List<IndexedFileSample> TryReadIndexedFileSamples(string dbPath)
     {

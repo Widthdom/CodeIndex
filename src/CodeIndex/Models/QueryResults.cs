@@ -488,6 +488,19 @@ public class StatusResult
     [JsonPropertyName("index_newer_than_reader_reason")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? IndexNewerThanReaderReason { get; set; }
+    /// <summary>
+    /// True when the workspace filesystem this index was built on treats path names as
+    /// case-sensitive (e.g. case-sensitive APFS on macOS, case-sensitive NTFS via WSL,
+    /// case-sensitive ReFS, ext4/btrfs on Linux). False when names are folded
+    /// case-insensitively (default APFS / HFS+ on macOS, default NTFS on Windows).
+    /// Null on legacy DBs that predate Issue #1546's probe stamp. Stamped on every
+    /// successful index pass (full scan and partial update).
+    /// 直近の index 実行時にワークスペース FS が大小区別したか。case-sensitive なら true、
+    /// case-insensitive なら false。stamp の無い旧 DB では null。Issue #1546。
+    /// </summary>
+    [JsonPropertyName("path_case_sensitive")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? PathCaseSensitive { get; set; }
 }
 
 public class RepoMapResult
