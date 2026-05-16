@@ -46,7 +46,7 @@ internal static class PhpReferenceExtractor
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
     private static readonly Regex DocblockPropertyTypeRegex = new(
-        @"^\s*(?:/\*\*)?\s*\*?\s*@(?>phpstan-|psalm-)?property(?:-read|-write)?\s+(?<types>\S+)",
+        @"^\s*(?:/\*\*)?\s*\*?\s*@(?>phpstan-|psalm-)?property(?:-read|-write)?\s+(?<types>\S+)(?:\s+\$(?<name>[A-Za-z_]\w*))?",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
     private static readonly Regex DocblockMethodReturnTypeRegex = new(
@@ -272,16 +272,31 @@ internal static class PhpReferenceExtractor
         long fileId,
         string context,
         int lineNumber,
-        SymbolRecord? container)
-        => EmitDocblockTypeReferences(
-            DocblockPropertyTypeRegex,
-            originalLine,
+        SymbolRecord? container,
+        HashSet<string>? seenDocblockPropertyNames = null)
+    {
+        var match = DocblockPropertyTypeRegex.Match(originalLine);
+        if (!match.Success)
+            return;
+
+        var nameGroup = match.Groups["name"];
+        if (nameGroup.Success && seenDocblockPropertyNames != null
+            && !seenDocblockPropertyNames.Add(nameGroup.Value))
+        {
+            return;
+        }
+
+        var typesGroup = match.Groups["types"];
+        EmitDocblockTypeGroupReferences(
+            typesGroup.Value,
+            typesGroup.Index,
             references,
             seen,
             fileId,
             context,
             lineNumber,
             container);
+    }
 
     public static void EmitDocblockMethodReturnTypeReferences(
         string originalLine,

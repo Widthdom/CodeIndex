@@ -12611,6 +12611,36 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_PHP_DocblockProperties_DuplicateForSameName_EmitsOnce()
+    {
+        var content = """
+            <?php
+            /**
+             * @property OwnerA $name
+             * @property OwnerB $name
+             * @property-read OwnerC $title
+             * @property-write OwnerD $title
+             */
+            class UserPresenter {}
+
+            /**
+             * @property OwnerE $name
+             */
+            class Other {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var docblockProperties = symbols.Where(s => s.Kind == "property").ToList();
+
+        Assert.Equal(3, docblockProperties.Count(s => s.Name == "name" || s.Name == "title"));
+        Assert.Single(docblockProperties, s => s.Name == "name" && s.ReturnType == "OwnerA");
+        Assert.DoesNotContain(docblockProperties, s => s.ReturnType == "OwnerB");
+        Assert.Single(docblockProperties, s => s.Name == "title" && s.ReturnType == "OwnerC");
+        Assert.DoesNotContain(docblockProperties, s => s.ReturnType == "OwnerD");
+        Assert.Single(docblockProperties, s => s.Name == "name" && s.ReturnType == "OwnerE");
+    }
+
+    [Fact]
     public void Extract_PHP_DetectsTraitAliasMethods()
     {
         var content = """

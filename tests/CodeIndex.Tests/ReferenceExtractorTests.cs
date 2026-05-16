@@ -10375,6 +10375,72 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PhpDocblockProperty_DuplicateTagsForSameName_AreDeduplicated()
+    {
+        const string content = """
+            <?php
+            /**
+             * @property OwnerA $name
+             * @property OwnerB $name
+             */
+            final class Account {}
+            ?>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var references = ReferenceExtractor.Extract(1, "php", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "OwnerA" && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "OwnerB" && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_PhpDocblockProperty_OverlappingReadWriteTags_AreDeduplicated()
+    {
+        const string content = """
+            <?php
+            /**
+             * @property-read OwnerA $title
+             * @property-write OwnerB $title
+             * @phpstan-property OwnerC $title
+             */
+            final class Article {}
+            ?>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var references = ReferenceExtractor.Extract(1, "php", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "OwnerA" && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "OwnerB" && reference.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "OwnerC" && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_PhpDocblockProperty_DistinctDocblocks_DoNotDedup()
+    {
+        const string content = """
+            <?php
+            /**
+             * @property OwnerA $name
+             */
+            final class Account {}
+
+            /**
+             * @property OwnerB $name
+             */
+            final class Profile {}
+            ?>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var references = ReferenceExtractor.Extract(1, "php", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "OwnerA" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "OwnerB" && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_PhpDocblockMethodReturnTypes_EmitTypeReferences()
     {
         const string content = """

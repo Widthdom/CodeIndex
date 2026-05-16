@@ -1073,6 +1073,7 @@ public static partial class ReferenceExtractor
         var sqlState = language == "sql" ? SqlReferenceExtractor.CreateState() : null;
         var csharpInDelimitedDocComment = false;
         var jvmInDelimitedDocComment = false;
+        HashSet<string>? phpDocblockPropertyNames = null;
 
         for (int i = 0; i < lines.Length; i++)
         {
@@ -1325,6 +1326,12 @@ public static partial class ReferenceExtractor
                 }
             }
 
+            if (language == "php"
+                && originalLine.IndexOf("/**", StringComparison.Ordinal) >= 0)
+            {
+                phpDocblockPropertyNames = new HashSet<string>(StringComparer.Ordinal);
+            }
+
             if (language == "php" && originalLine.Contains("property", StringComparison.OrdinalIgnoreCase))
             {
                 var docblockContext = originalLine.Trim();
@@ -1337,8 +1344,16 @@ public static partial class ReferenceExtractor
                         fileId,
                         docblockContext,
                         lineNumber,
-                        FindInnermostContainer(containerCandidates, lineNumber));
+                        FindInnermostContainer(containerCandidates, lineNumber),
+                        phpDocblockPropertyNames);
                 }
+            }
+
+            if (language == "php"
+                && phpDocblockPropertyNames != null
+                && originalLine.IndexOf("*/", StringComparison.Ordinal) >= 0)
+            {
+                phpDocblockPropertyNames = null;
             }
 
             if (language == "php" && originalLine.Contains("@method", StringComparison.OrdinalIgnoreCase))
