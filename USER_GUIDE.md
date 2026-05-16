@@ -676,6 +676,19 @@ If a query fails with a SQLite reader error such as `The data is NULL at ordinal
 
 `CLICOLOR_FORCE` has the highest precedence, then `NO_COLOR`, then `CLICOLOR=0`. An empty `NO_COLOR` (e.g. `NO_COLOR=` exported with no value) is ignored, matching the no-color.org specification.
 
+### Message language (CDIDX_LANG)
+
+`cdidx`'s user-facing messages are bilingual (English / 日本語). Set `CDIDX_LANG` to control which language the catalog renders:
+
+| Value | Effect |
+|---|---|
+| `en` / `en-us` / `english` | Force English only |
+| `ja` / `jp` / `ja-jp` / `japanese` | Force Japanese only |
+| `both` / `bilingual` / `en+ja` / `ja+en` | Print both languages, English first |
+| (unset / unknown) | Auto-detect: `ja-*` cultures (via `CultureInfo.CurrentUICulture`) → Japanese; otherwise English |
+
+Currently only the `cdidx --sushi` / `--coffee` / `--ramen` / `--wine` / `--beer` / `--matcha` / `--whisky` easter-egg banners go through the catalog. Existing bilingual help, error, and progress strings are migrated incrementally; until each is moved into the catalog, `CDIDX_LANG` has no effect on them.
+
 ### Metrics emission
 
 Pass `--metrics <path>` (or set `CDIDX_METRICS=<path>` in the environment) to make `cdidx` append one JSON-lines record per CLI command and per MCP tool call. The flag wins over the environment variable when both are present. The destination file is opened in append mode, so multiple cdidx invocations writing to the same path interleave cleanly. Emission is best-effort: any IO failure (missing directory, unwritable mount, etc.) is swallowed silently and never breaks the underlying command.
@@ -1841,6 +1854,19 @@ MCP ツールで catch-all まで突き抜けた例外（想定外の SQLite 例
 | 上記いずれも未設定 | — | 既定の TTY 判定にフォールバック |
 
 優先順位は `CLICOLOR_FORCE` → `NO_COLOR` → `CLICOLOR=0` の順です。値が空の `NO_COLOR`（例: `NO_COLOR=` のみ export）は no-color.org の仕様に従い無視されます。
+
+### 表示言語 (CDIDX_LANG)
+
+`cdidx` のユーザー向けメッセージは英語と日本語のバイリンガルです。`CDIDX_LANG` でカタログ描画時の表示言語を切り替えできます。
+
+| 値 | 効果 |
+|---|---|
+| `en` / `en-us` / `english` | 英語のみを表示 |
+| `ja` / `jp` / `ja-jp` / `japanese` | 日本語のみを表示 |
+| `both` / `bilingual` / `en+ja` / `ja+en` | 英語 → 日本語の順で両方を表示 |
+| （未設定 / 不正値） | 自動判定: `CultureInfo.CurrentUICulture` が `ja-*` なら日本語、それ以外は英語 |
+
+現時点でカタログ経由になっているのは `cdidx --sushi` / `--coffee` / `--ramen` / `--wine` / `--beer` / `--matcha` / `--whisky` のイースターエッグ表示のみです。ヘルプ・エラー・進捗などの既存バイリンガル文字列は段階的に移行する方針で、未移行部分には `CDIDX_LANG` は効きません。
 
 ### メトリクス出力
 

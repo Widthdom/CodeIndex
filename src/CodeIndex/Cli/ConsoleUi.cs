@@ -286,31 +286,37 @@ public static class ConsoleUi
     // --- Easter eggs / イースターエッグ ---
 
     /// <summary>
-    /// Print easter egg message (standalone mode).
-    /// イースターエッグメッセージを表示（単体実行時）。
+    /// Print easter egg message (standalone mode). Renders the catalog entry for
+    /// <paramref name="flag"/> in the language chosen by <see cref="UiLanguageResolver"/>
+    /// (<c>CDIDX_LANG</c> env > <see cref="System.Globalization.CultureInfo.CurrentUICulture"/>
+    /// > English fallback). Unknown flags print two blank lines for legacy compatibility.
+    /// イースターエッグメッセージを表示（単体実行時）。<see cref="UiLanguageResolver"/>
+    /// が選んだ言語（<c>CDIDX_LANG</c> 環境変数 &gt; カルチャ &gt; 英語）でカタログ
+    /// エントリを描画する。未知フラグは従来互換で空行を2つ出力。
     /// </summary>
     public static void PrintEasterEggMessage(string flag)
     {
-        var (en, ja) = flag switch
+        var pair = flag switch
         {
-            "--sushi"  => ("\U0001f363 Indexing is like making sushi \u2014 patience yields perfection.",
-                           "   \u30a4\u30f3\u30c7\u30c3\u30af\u30b9\u306f\u5bff\u53f8\u4f5c\u308a\u306e\u3088\u3046\u306b \u2014 \u5fcd\u8010\u304c\u5b8c\u74a7\u3092\u751f\u3080\u3002"),
-            "--coffee" => ("\u2615 Leave the indexing to me and go grab a coffee!",
-                           "   \u30a4\u30f3\u30c7\u30c3\u30af\u30b9\u306f\u4efb\u305b\u3066\u3001\u30b3\u30fc\u30d2\u30fc\u3067\u3082\u98f2\u3093\u3067\u304d\u3066\uff01"),
-            "--ramen"  => ("\U0001f35c Indexing in progress... perfect time for a bowl of ramen!",
-                           "   \u30a4\u30f3\u30c7\u30c3\u30af\u30b9\u4e2d\u2026\u30e9\u30fc\u30e1\u30f3\u4e00\u676f\u3044\u304b\u304c\uff1f"),
-            "--wine"   => ("\U0001f377 Crushing... Aging... Pouring... Sant\u00e9!",
-                           "   \u30a4\u30f3\u30c7\u30c3\u30af\u30b9\u306f\u30ef\u30a4\u30f3\u306e\u3088\u3046\u306b\u2014\u719f\u6210\u3092\u5f85\u3064\u4fa1\u5024\u304c\u3042\u308b\u3002"),
-            "--beer"   => ("\U0001f37a Tapping... Pouring... Foaming... Cheers!",
-                           "   \u30a4\u30f3\u30c7\u30c3\u30af\u30b9\u5b8c\u4e86\u307e\u3067\u3001\u4e7e\u676f\uff01"),
-            "--matcha" => ("\U0001f375 Sifting... Pouring... Whisking... \u3069\u3046\u305e\uff01",
-                           "   \u4e00\u670d\u306e\u62b9\u8336\u3067\u3082\u3044\u304b\u304c\u3067\u3059\u304b\uff1f"),
-            "--whisky" => ("\U0001f943 Mashing... Distilling... Aging... Slainte!",
-                           "   \u30a4\u30f3\u30c7\u30c3\u30af\u30b9\u306f\u30a6\u30a4\u30b9\u30ad\u30fc\u306e\u3088\u3046\u306b\u2014\u719f\u6210\u304c\u5927\u4e8b\u3002"),
-            _ => ("", ""),
+            "--sushi"  => UiMessages.EasterEggSushi,
+            "--coffee" => UiMessages.EasterEggCoffee,
+            "--ramen"  => UiMessages.EasterEggRamen,
+            "--wine"   => UiMessages.EasterEggWine,
+            "--beer"   => UiMessages.EasterEggBeer,
+            "--matcha" => UiMessages.EasterEggMatcha,
+            "--whisky" => UiMessages.EasterEggWhisky,
+            _ => null,
         };
-        Console.WriteLine(en);
-        Console.WriteLine(ja);
+        if (pair is null)
+        {
+            Console.WriteLine();
+            Console.WriteLine();
+            return;
+        }
+
+        var lang = UiLanguageResolver.Resolve();
+        foreach (var line in UiMessages.Render(pair, lang))
+            Console.WriteLine(line);
     }
 
     // --- Version loading / バージョン読み込み ---
