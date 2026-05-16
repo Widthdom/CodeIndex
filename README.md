@@ -12,12 +12,12 @@
 ![License](https://img.shields.io/badge/License-FSL--1.1--ALv2-orange)
 ![SQLite](https://img.shields.io/badge/SQLite-FTS5-003B57?logo=sqlite&logoColor=white)
 
-**AI-native local code search for terminal and MCP workflows.**
+**CLI code indexing and MCP search for local repositories.**
 
-`cdidx` indexes a repository into a local SQLite FTS5 database, then answers
+`cdidx` is a command-line code indexer and MCP server that builds a local
+SQLite index of your repository so humans and AI agents can run fast
 full-text, symbol, dependency, and inspection queries without repeatedly
-rescanning the same tree. It is built for humans and AI agents that need small,
-structured code context from local repositories.
+rescanning the same tree.
 
 ## Why cdidx
 
@@ -122,12 +122,12 @@ details.
 ![License](https://img.shields.io/badge/License-FSL--1.1--ALv2-orange)
 ![SQLite](https://img.shields.io/badge/SQLite-FTS5-003B57?logo=sqlite&logoColor=white)
 
-**ターミナルと MCP ワークフロー向けの、AI ネイティブなローカルコード検索です。**
+**ローカルリポジトリ向けの CLI コードインデックスと MCP 検索です。**
 
-`cdidx` はリポジトリをローカル SQLite FTS5 データベースにインデックスし、
-同じツリーを何度も読み直さずに全文検索、シンボル、依存関係、inspect
-クエリへ応答します。人間と AI エージェントの両方が、ローカルリポジトリから
-小さく構造化されたコード文脈を取り出すためのツールです。
+`cdidx` はコマンドラインのコードインデクサー兼 MCP サーバーで、リポジトリの
+ローカル SQLite index を作成します。人間と AI エージェントは、同じツリーを
+何度も読み直さずに、高速な全文検索、シンボル、依存関係、inspect クエリを
+実行できます。
 
 ## なぜ cdidx なのか
 
