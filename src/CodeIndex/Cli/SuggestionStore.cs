@@ -213,8 +213,10 @@ public class SuggestionStore
 
         try
         {
-            return JsonSerializer.Deserialize<List<SuggestionRecord>>(json, s_readOptions)
-                   ?? new List<SuggestionRecord>();
+            var records = JsonSerializer.Deserialize<List<SuggestionRecord>>(json, s_readOptions)
+                          ?? new List<SuggestionRecord>();
+            NormalizeAttributionDefaults(records);
+            return records;
         }
         catch (JsonException)
         {
@@ -225,6 +227,19 @@ public class SuggestionStore
         }
         // IOException is NOT caught here — it propagates to the caller (fail-closed).
         // IOException はここでキャッチしない — 呼び出し元に伝播する（fail-closed）。
+    }
+
+    private static void NormalizeAttributionDefaults(List<SuggestionRecord> records)
+    {
+        foreach (var record in records)
+        {
+            if (string.IsNullOrWhiteSpace(record.CreatedByAgent))
+                record.CreatedByAgent = "unknown";
+            if (string.IsNullOrWhiteSpace(record.SessionId))
+                record.SessionId = "unknown";
+            if (string.IsNullOrWhiteSpace(record.ClientVersion))
+                record.ClientVersion = "unknown";
+        }
     }
 
     /// <summary>

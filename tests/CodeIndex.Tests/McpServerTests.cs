@@ -6940,6 +6940,42 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void SuggestImprovement_RecordsClientAttributionFromInitialize()
+    {
+        _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"clientInfo":{"name":"codex","version":"5.0"}}}""")!);
+        var uniqueDesc = $"Attribution metadata regression {Guid.NewGuid():N}";
+        var json = new JsonObject
+        {
+            ["jsonrpc"] = "2.0", ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "suggest_improvement",
+                ["arguments"] = new JsonObject
+                {
+                    ["category"] = "other",
+                    ["description"] = uniqueDesc,
+                    ["toolInvocationContext"] = "Investigating suggestion triage"
+                }
+            }
+        };
+
+        _server.HandleMessage((JsonNode)json);
+
+        var cdidxDir = Path.GetDirectoryName(_dbPath)!;
+        var dbName = Path.GetFileNameWithoutExtension(_dbPath);
+        var stored = new SuggestionStore(cdidxDir, dbName).LoadAll()
+            .Single(s => s.Description == uniqueDesc);
+        Assert.Equal("codex/5.0", stored.CreatedByAgent);
+        Assert.Equal(_server.CurrentSessionId, stored.SessionId);
+        Assert.Equal(ConsoleUi.LoadVersion(), stored.ClientVersion);
+        Assert.Equal("codex", stored.McpClientName);
+        Assert.Equal("5.0", stored.McpClientVersion);
+        Assert.Equal("Investigating suggestion triage", stored.ToolInvocationContext);
+    }
+
+    [Fact]
     public void SuggestImprovement_DuplicateSubmission_ReturnsDuplicate()
     {
         var uniqueDesc = $"Add support for Zig language {Guid.NewGuid():N}";

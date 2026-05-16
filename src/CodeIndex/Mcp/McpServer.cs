@@ -81,6 +81,9 @@ public partial class McpServer : IDisposable
     // にする。`initialize` 毎に上書きすることで再接続時に caller identity が追随する。
     private string? _clientName;
     private string? _clientVersion;
+    // Opaque per-server-instance session id copied into suggestion attribution records (#1873).
+    // #1873 の提案 attribution 用に保存する、サーバーインスタンス単位の不透明セッションID。
+    private readonly string _sessionId = Guid.NewGuid().ToString("D");
     // Caller identity used to key the per-(tool, caller) rate limiter. Captured from the
     // `clientInfo.name` field of the `initialize` request when the client supplies it, so
     // shared / networked MCP deployments can attribute and throttle individual clients
@@ -249,6 +252,12 @@ public partial class McpServer : IDisposable
     /// テストがレート制限のキーを検証するために公開する。
     /// </summary>
     internal string CurrentCaller => _caller;
+
+    /// <summary>
+    /// Opaque session id used for suggestion attribution records (#1873).
+    /// 提案 attribution レコードに使う不透明セッションID (#1873)。
+    /// </summary>
+    internal string CurrentSessionId => _sessionId;
 
     /// <summary>
     /// Cap configured for concurrent in-flight tool calls (#1567). Surfaced for tests so

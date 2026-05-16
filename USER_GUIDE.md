@@ -1402,7 +1402,7 @@ When both are set, the allowlist wins. `tools/list` only advertises enabled tool
 
 ### AI Feedback
 
-cdidx includes a `suggest_improvement` MCP tool for AI agents that hit gaps or bugs. Suggestions are saved locally to `.cdidx/suggestions.json`, and are sent to GitHub only when the user explicitly provides `CDIDX_GITHUB_TOKEN`. Payload details and source-code leak guardrails are documented in the [Developer Guide](DEVELOPER_GUIDE.md#ai-feedback-implementation).
+cdidx includes a `suggest_improvement` MCP tool for AI agents that hit gaps or bugs. Suggestions are saved locally to `.cdidx/suggestions.json`, and are sent to GitHub only when the user explicitly provides `CDIDX_GITHUB_TOKEN`. New records also store attribution metadata: the MCP `initialize.clientInfo` name/version when available, an opaque cdidx session id, the cdidx version that recorded the suggestion, and optional natural-language `toolInvocationContext` supplied by the caller. Payload details and source-code leak guardrails are documented in the [Developer Guide](DEVELOPER_GUIDE.md#ai-feedback-implementation).
 
 ## Troubleshooting
 
@@ -2860,7 +2860,7 @@ stdio トランスポートはバイト単位で挙動が変わらないため�
 
 ### AIフィードバック
 
-cdidx には、AI エージェントがギャップや不具合に気づいたときに使える `suggest_improvement` MCP ツールがあります。提案は `.cdidx/suggestions.json` にローカル保存され、`CDIDX_GITHUB_TOKEN` を明示設定した場合に限って GitHub へ送信されます。ペイロード詳細とソースコード漏えいガードは [DEVELOPER_GUIDE.md#aiフィードバックの実装](DEVELOPER_GUIDE.md#aiフィードバックの実装) にまとめています。
+cdidx には、AI エージェントがギャップや不具合に気づいたときに使える `suggest_improvement` MCP ツールがあります。提案は `.cdidx/suggestions.json` にローカル保存され、`CDIDX_GITHUB_TOKEN` を明示設定した場合に限って GitHub へ送信されます。新規レコードには attribution metadata も保存されます。取得可能な場合は MCP `initialize.clientInfo` の name/version、不透明な cdidx セッション ID、提案を記録した cdidx バージョン、呼び出し元が任意で渡す自然言語の `toolInvocationContext` が含まれます。ペイロード詳細とソースコード漏えいガードは [DEVELOPER_GUIDE.md#aiフィードバックの実装](DEVELOPER_GUIDE.md#aiフィードバックの実装) にまとめています。
 
 ## トラブルシューティング
 

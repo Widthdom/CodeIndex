@@ -221,6 +221,11 @@ public class GitHubIssueReporterTests : IDisposable
             Assert.Equal(2, handler.RequestCount);
             Assert.Equal(HttpMethod.Get, handler.Requests[0].Method);
             Assert.Equal(HttpMethod.Post, handler.Requests[1].Method);
+            var postedJson = Assert.Single(handler.RequestBodies);
+            Assert.Contains("codex/5.0", postedJson);
+            Assert.Contains("session-123", postedJson);
+            Assert.Contains("MCP client: codex", postedJson);
+            Assert.Contains("Tool invocation context: Investigating suggestion triage", postedJson);
         }
         finally
         {
@@ -295,6 +300,12 @@ public class GitHubIssueReporterTests : IDisposable
             Description = description,
             Hash = SuggestionStore.ComputeHash("other", null, description),
             CreatedAt = new DateTime(2026, 5, 15, 0, 0, 0, DateTimeKind.Utc),
+            CreatedByAgent = "codex/5.0",
+            SessionId = "session-123",
+            ClientVersion = "1.0.0-test",
+            McpClientName = "codex",
+            McpClientVersion = "5.0",
+            ToolInvocationContext = "Investigating suggestion triage",
         };
     }
 
@@ -315,8 +326,10 @@ public class GitHubIssueReporterTests : IDisposable
     {
         private readonly List<(Func<HttpRequestMessage, bool> Match, HttpResponseMessage Response)> _responses = new();
         private readonly List<HttpRequestMessage> _requests = new();
+        private readonly List<string> _requestBodies = new();
 
         public IReadOnlyList<HttpRequestMessage> Requests => _requests;
+        public IReadOnlyList<string> RequestBodies => _requestBodies;
         public int RequestCount => _requests.Count;
 
         public void AddResponse(Func<HttpRequestMessage, bool> match, HttpResponseMessage response)
@@ -327,6 +340,8 @@ public class GitHubIssueReporterTests : IDisposable
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             _requests.Add(request);
+            if (request.Content != null)
+                _requestBodies.Add(request.Content.ReadAsStringAsync(cancellationToken).GetAwaiter().GetResult());
             foreach (var entry in _responses)
             {
                 if (entry.Match(request))

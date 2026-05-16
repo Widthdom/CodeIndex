@@ -16,6 +16,7 @@ namespace CodeIndex.Cli;
 ///   - Language name (e.g. "typescript")
 ///   - Description text (validated by SourceCodeDetector to not contain code)
 ///   - Context text (also validated)
+///   - Attribution metadata captured from MCP initialize/client context
 ///   - cdidx version and suggestion hash
 ///
 /// このクラスはAIフィードバックシステムの一部である。構造化されたギャップ記述のみを
@@ -24,6 +25,7 @@ namespace CodeIndex.Cli;
 ///   - 言語名（例: "typescript"）
 ///   - 説明テキスト（SourceCodeDetector によりコードが含まれないことを検証済み）
 ///   - コンテキストテキスト（同様に検証済み）
+///   - MCP initialize / client context から取得した attribution metadata
 ///   - cdidx バージョンと提案ハッシュ
 ///
 /// GitHub Issues are only created when the user has explicitly configured
@@ -208,6 +210,9 @@ internal static class GitHubIssueReporter
         // GitHub に公開する前に除去し、コード的な内容が外部リポジトリに到達することを防ぐ。
         var scrubbedDescription = ScrubInlineCode(record.Description);
         var scrubbedContext = record.Context != null ? ScrubInlineCode(record.Context) : null;
+        var scrubbedToolInvocationContext = record.ToolInvocationContext != null
+            ? ScrubInlineCode(record.ToolInvocationContext)
+            : null;
 
         // Build the issue body — structured fields only, with code scrubbed.
         // Issue 本文を構築 — 構造化フィールドのみ、コードは除去済み。
@@ -223,6 +228,13 @@ internal static class GitHubIssueReporter
         body.AppendLine();
         body.AppendLine("## Context");
         body.AppendLine(scrubbedContext ?? "N/A");
+        body.AppendLine();
+        body.AppendLine("## Attribution");
+        body.AppendLine($"Created by: {record.CreatedByAgent}");
+        body.AppendLine($"Session: {record.SessionId}");
+        body.AppendLine($"MCP client: {record.McpClientName ?? "N/A"}");
+        body.AppendLine($"MCP client version: {record.McpClientVersion ?? "N/A"}");
+        body.AppendLine($"Tool invocation context: {scrubbedToolInvocationContext ?? "N/A"}");
         body.AppendLine();
         body.AppendLine("---");
         body.AppendLine($"_Submitted by cdidx v{version}. Hash: `{record.Hash}`_");

@@ -150,6 +150,12 @@ public class SuggestionStoreTests : IDisposable
             Context = "Searching for arrow functions",
             Hash = SuggestionStore.ComputeHash("crash_report", "typescript", "NullReferenceException during search"),
             CreatedAt = new DateTime(2026, 4, 12, 10, 0, 0, DateTimeKind.Utc),
+            CreatedByAgent = "codex/5",
+            SessionId = "session-123",
+            ClientVersion = "1.2.3",
+            McpClientName = "codex",
+            McpClientVersion = "5",
+            ToolInvocationContext = "MCP regression triage",
             SubmittedToGitHub = false,
             GitHubIssueUrl = null,
         };
@@ -164,8 +170,39 @@ public class SuggestionStoreTests : IDisposable
         Assert.Equal("NullReferenceException during search", r.Description);
         Assert.Equal("Searching for arrow functions", r.Context);
         Assert.Equal(record.Hash, r.Hash);
+        Assert.Equal("codex/5", r.CreatedByAgent);
+        Assert.Equal("session-123", r.SessionId);
+        Assert.Equal("1.2.3", r.ClientVersion);
+        Assert.Equal("codex", r.McpClientName);
+        Assert.Equal("5", r.McpClientVersion);
+        Assert.Equal("MCP regression triage", r.ToolInvocationContext);
         Assert.False(r.SubmittedToGitHub);
         Assert.Null(r.GitHubIssueUrl);
+    }
+
+    [Fact]
+    public void LoadAll_LegacyRecordsDefaultMissingAttribution()
+    {
+        File.WriteAllText(Path.Combine(_tempDir, "suggestions-codeindex.json"),
+            """
+            [
+              {
+                "category": "other",
+                "description": "Legacy suggestion without attribution",
+                "hash": "abc123",
+                "created_at": "2026-04-12T10:00:00Z"
+              }
+            ]
+            """);
+
+        var loaded = _store.LoadAll();
+
+        Assert.Single(loaded);
+        Assert.Equal("unknown", loaded[0].CreatedByAgent);
+        Assert.Equal("unknown", loaded[0].SessionId);
+        Assert.Equal("unknown", loaded[0].ClientVersion);
+        Assert.Null(loaded[0].McpClientName);
+        Assert.Null(loaded[0].McpClientVersion);
     }
 
     // --- MarkSubmitted tests / MarkSubmitted テスト ---
