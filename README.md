@@ -71,6 +71,15 @@ scripts, CI, or AI tools. Use `rg` when you only need a one-off text scan.
 | [Self-Improvement Contract](SELF_IMPROVEMENT.md) | Rules for agents improving CodeIndex itself. |
 | [Integration Policy](INTEGRATION_POLICY.md) | Permitted CLI, JSON, MCP, and integration use. |
 
+## Supported Surfaces
+
+`cdidx` is a **CLI and MCP server** only. The supported, versioned surfaces are
+the `cdidx` CLI (including its `--json` output) and the `cdidx mcp` JSON-RPC
+interface. There is no public library / SDK API: the `cdidx` NuGet package is
+published as a .NET global tool (`PackAsTool=true`), and `public` types on the
+assembly are implementation details that may change without notice. See
+[INTEGRATION_POLICY.md — API Surface and Library Use](INTEGRATION_POLICY.md#api-surface-and-library-use).
+
 ## Verifying releases
 
 Every GitHub release ships the following supply-chain artifacts next to
@@ -169,6 +178,17 @@ cdidx mcp
 | [テストガイド](TESTING_GUIDE.md#テストガイド) | テスト規約と検証コマンド。 |
 | [自己改善コントラクト](SELF_IMPROVEMENT.md#自己改善ループ) | CodeIndex 自身を改善するエージェント向けルール。 |
 | [統合ポリシー](INTEGRATION_POLICY.md) | CLI、JSON、MCP、各種統合で許可される利用。 |
+
+## サポート対象の利用面
+
+`cdidx` は **CLI と MCP サーバーとしてのみ** 提供します。バージョニング契約の
+対象となるのは、`cdidx` CLI（`--json` 出力を含む）と `cdidx mcp` の JSON-RPC
+インターフェースだけです。公開ライブラリ/SDK API は提供していません。`cdidx`
+NuGet パッケージは .NET グローバルツールとして公開されており
+（`PackAsTool=true`）、アセンブリ上の `public` 型は CLI/MCP の実装上の事情で
+公開されているだけの実装詳細で、予告なく変更される可能性があります。詳細は
+[INTEGRATION_POLICY.md — API Surface and Library Use](INTEGRATION_POLICY.md#api-surface-and-library-use)
+を参照してください。
 
 ## リリース成果物の検証
 

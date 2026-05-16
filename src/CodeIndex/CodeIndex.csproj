@@ -28,7 +28,7 @@
     <VersionJsonContent>$([System.IO.File]::ReadAllText('$(VersionJsonPath)'))</VersionJsonContent>
     <Version>$([System.Text.RegularExpressions.Regex]::Match('$(VersionJsonContent)', '"version"\s*:\s*"([^"]+)"').Groups[1].Value)</Version>
     <Authors>Widthdom</Authors>
-    <Description>AI-native local code index for CLI and MCP workflows. Index source code into SQLite, search with FTS5, and return structured results for humans and agents. / CLIとMCPワークフロー向けのAIネイティブなローカルコードインデックス。ソースコードをSQLiteにインデックスし、FTS5で検索し、人間とAI向けに構造化された結果を返す。</Description>
+    <Description>AI-native local code index for CLI and MCP workflows. Index source code into SQLite, search with FTS5, and return structured results for humans and agents. Distributed as a .NET global tool — CLI and MCP server only; no public library / SDK API is provided (see INTEGRATION_POLICY.md). / CLIとMCPワークフロー向けのAIネイティブなローカルコードインデックス。ソースコードをSQLiteにインデックスし、FTS5で検索し、人間とAI向けに構造化された結果を返す。.NET グローバルツールとして配布され、CLI と MCP サーバーのみを提供します。公開ライブラリ/SDK API は提供しません（INTEGRATION_POLICY.md 参照）。</Description>
     <PackageTags>code-search;indexer;sqlite;fts5;ai;mcp;developer-tools;source-available;fair-source</PackageTags>
     <PackageLicenseFile>LICENSE</PackageLicenseFile>
     <PackageRequireLicenseAcceptance>true</PackageRequireLicenseAcceptance>

@@ -40,6 +40,30 @@ access:
 - CodeIndex does not claim ownership over your repositories or generated
   development context.
 
+## API Surface and Library Use
+
+CodeIndex ships as a **CLI and MCP server only**. It does not publish a library
+or SDK API for embedders.
+
+- The stable, supported surfaces are the `cdidx` CLI (including its `--json`
+  output) and the `cdidx mcp` JSON-RPC interface. Versioning guarantees only
+  apply to those surfaces.
+- The `cdidx` NuGet package is published with `PackAsTool=true` and is intended
+  to be installed as a .NET global tool, not added as an assembly reference.
+- Types that happen to be `public` on the `cdidx` assembly (for example DTOs in
+  `CodeIndex.Database` / `CodeIndex.Models`, or readers such as
+  `CodeIndex.Database.DbReader`) exist to satisfy CLI and MCP composition. They
+  are **implementation details**, not a public library contract, and may
+  change, move, or become `internal` in any release without a deprecation
+  cycle.
+- Projects that need a programmatic interface should depend on the CLI's
+  `--json` output or on the MCP server, both of which are covered by the
+  changelog and the documented status contract.
+
+If a future need justifies a real library API, it will be carved out as a
+separate package with its own explicit interface and versioning contract.
+Until then, treat embedding the `cdidx` assembly as unsupported.
+
 ## Boundary
 
 The integration is allowed when it helps users operate official CodeIndex
