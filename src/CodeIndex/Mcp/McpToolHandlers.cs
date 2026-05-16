@@ -18,35 +18,106 @@ public partial class McpServer
 
     /// <summary>
     /// Build the server instructions string for the initialize response.
-    /// Uses the actual supported-language list from ReferenceExtractor.
+    /// Uses the actual supported-language list from ReferenceExtractor and skips guidance
+    /// for any tool the operator disabled through the #1561 enablement gate so scoped
+    /// deployments do not advertise tools that the gate would reject.
     /// initializeレスポンス用のサーバー指示文字列を構築。
-    /// ReferenceExtractorの実際の対応言語リストを使用。
+    /// ReferenceExtractorの実際の対応言語リストを使用し、#1561 の有効化ゲートで無効化された
+    /// ツールについての案内は除外する（scoped デプロイで無効ツールが advertise されないように）。
     /// </summary>
-    private static string BuildInstructions()
+    private string BuildInstructions()
     {
-        var langs = string.Join(", ", ReferenceExtractor.GetSupportedLanguages());
-        return "cdidx is a code-index server. "
-            + "If queries fail because no index exists, run 'index' first to build it. "
-            + "Start with 'map' for repo orientation, then use 'search' for text queries or 'definition' for symbol lookup. "
-            + "Use 'analyze_symbol' to get definition, callers, callees, and references in one call instead of chaining separate tools. "
-            + $"Graph tools (references, callers, callees) only work for supported languages ({langs}); "
-            + "for other languages, use 'search' instead. "
-            + "Use 'outline' to see the full symbol structure of a single file (functions, classes, properties, interfaces, enums with line numbers) without reading the file content. "
-            + "Filter symbols by kind using the 'kind' parameter: function, class, struct, interface, enum, property, event, delegate, namespace, import. "
-            + "Use 'find_in_file' for literal substring navigation when the target file is already known. "
-            + "Use 'excerpt' to read specific line ranges from indexed files. "
-            + "Check 'status' to verify index freshness before trusting results. "
-            + "Use 'languages' to discover all supported languages, file extensions, and which languages support call-graph queries. "
-            + "Use 'search' with 'exactSubstring: true' for case-sensitive substring matching when FTS5 returns too many results; "
-            + "use 'exactName: true' on symbols/definition/references/callers/callees/analyze_symbol for exact symbol-name equality. "
-            + "If 'status' reports fold_ready=false and Unicode exact-name matching matters, use 'backfill_fold' to upgrade folded keys without reparsing files. "
-            + "Use 'files' with 'since' to find recently modified files without scanning all results. "
-            + "Use 'batch_query' to execute multiple read-only queries in a single call (max 10), dramatically reducing round-trips. "
-            + "Use 'deps' to see file-level dependency edges — which files reference symbols from which other files. "
-            + "Use 'unused_symbols' to find dead code — symbols defined but never referenced (only meaningful for graph-supported languages). "
-            + "Use 'symbol_hotspots' to find the most-referenced symbols — central, high-impact code that changes may affect widely. "
-            + "Use 'impact_analysis' to compute transitive callers of a symbol. Pass maxDepth=0 when you only want symbol resolution without traversing callers. When a scoped query resolves to a single class / struct / interface but no symbol-level callers exist, it may instead return heuristic file-level dependency hints; always inspect 'impact_mode', 'heuristic', and 'file_impacts'. "
-            + "Use 'suggest_improvement' to report gaps or errors you notice (e.g. missing language support, poor ranking, crashes) — never include source code, only describe the issue in natural language.";
+        bool On(string name) => _toolFilter.IsEnabled(name);
+        bool All(params string[] names)
+        {
+            foreach (var n in names)
+                if (!On(n)) return false;
+            return true;
+        }
+
+        var parts = new List<string> { "cdidx is a code-index server." };
+
+        if (On("index"))
+            parts.Add("If queries fail because no index exists, run 'index' first to build it.");
+
+        if (All("map", "search", "definition"))
+            parts.Add("Start with 'map' for repo orientation, then use 'search' for text queries or 'definition' for symbol lookup.");
+        else if (All("search", "definition"))
+            parts.Add("Use 'search' for text queries or 'definition' for symbol lookup.");
+        else if (On("search"))
+            parts.Add("Use 'search' for text queries.");
+        else if (On("definition"))
+            parts.Add("Use 'definition' for symbol lookup.");
+
+        if (On("analyze_symbol"))
+            parts.Add("Use 'analyze_symbol' to get definition, callers, callees, and references in one call instead of chaining separate tools.");
+
+        var graphEnabled = new List<string>();
+        foreach (var name in new[] { "references", "callers", "callees" })
+            if (On(name)) graphEnabled.Add(name);
+        if (graphEnabled.Count > 0)
+        {
+            var langs = string.Join(", ", ReferenceExtractor.GetSupportedLanguages());
+            var names = string.Join(", ", graphEnabled);
+            var sentence = $"Graph tools ({names}) only work for supported languages ({langs});";
+            sentence += On("search")
+                ? " for other languages, use 'search' instead."
+                : " for other languages, these tools have no answers.";
+            parts.Add(sentence);
+        }
+
+        if (On("outline"))
+            parts.Add("Use 'outline' to see the full symbol structure of a single file (functions, classes, properties, interfaces, enums with line numbers) without reading the file content.");
+
+        if (On("symbols"))
+            parts.Add("Filter symbols by kind using the 'kind' parameter: function, class, struct, interface, enum, property, event, delegate, namespace, import.");
+
+        if (On("find_in_file"))
+            parts.Add("Use 'find_in_file' for literal substring navigation when the target file is already known.");
+
+        if (On("excerpt"))
+            parts.Add("Use 'excerpt' to read specific line ranges from indexed files.");
+
+        if (On("status"))
+            parts.Add("Check 'status' to verify index freshness before trusting results.");
+
+        if (On("languages"))
+            parts.Add("Use 'languages' to discover all supported languages, file extensions, and which languages support call-graph queries.");
+
+        if (On("search"))
+            parts.Add("Use 'search' with 'exactSubstring: true' for case-sensitive substring matching when FTS5 returns too many results.");
+
+        var exactNameTools = new List<string>();
+        foreach (var name in new[] { "symbols", "definition", "references", "callers", "callees", "analyze_symbol" })
+            if (On(name)) exactNameTools.Add(name);
+        if (exactNameTools.Count > 0)
+            parts.Add($"Use 'exactName: true' on {string.Join("/", exactNameTools)} for exact symbol-name equality.");
+
+        if (All("status", "backfill_fold"))
+            parts.Add("If 'status' reports fold_ready=false and Unicode exact-name matching matters, use 'backfill_fold' to upgrade folded keys without reparsing files.");
+
+        if (On("files"))
+            parts.Add("Use 'files' with 'since' to find recently modified files without scanning all results.");
+
+        if (On("batch_query"))
+            parts.Add("Use 'batch_query' to execute multiple read-only queries in a single call (max 10), dramatically reducing round-trips.");
+
+        if (On("deps"))
+            parts.Add("Use 'deps' to see file-level dependency edges — which files reference symbols from which other files.");
+
+        if (On("unused_symbols"))
+            parts.Add("Use 'unused_symbols' to find dead code — symbols defined but never referenced (only meaningful for graph-supported languages).");
+
+        if (On("symbol_hotspots"))
+            parts.Add("Use 'symbol_hotspots' to find the most-referenced symbols — central, high-impact code that changes may affect widely.");
+
+        if (On("impact_analysis"))
+            parts.Add("Use 'impact_analysis' to compute transitive callers of a symbol. Pass maxDepth=0 when you only want symbol resolution without traversing callers. When a scoped query resolves to a single class / struct / interface but no symbol-level callers exist, it may instead return heuristic file-level dependency hints; always inspect 'impact_mode', 'heuristic', and 'file_impacts'.");
+
+        if (On("suggest_improvement"))
+            parts.Add("Use 'suggest_improvement' to report gaps or errors you notice (e.g. missing language support, poor ranking, crashes) — never include source code, only describe the issue in natural language.");
+
+        return string.Join(" ", parts);
     }
 
     /// <summary>
@@ -1150,17 +1221,20 @@ public partial class McpServer
         int successCount = 0;
         int failureCount = 0;
 
-        void AppendSlotError(string? toolName, JsonNode? toolArgs, Stopwatch slotStopwatch, string errorMessage)
+        void AppendSlotError(string? toolName, JsonNode? toolArgs, Stopwatch slotStopwatch, string errorMessage, int? code = null)
         {
             slotStopwatch.Stop();
             failureCount++;
-            resultsArray.Add(new JsonObject
+            var entry = new JsonObject
             {
                 ["tool"] = toolName,
                 ["args_summary"] = BuildArgsSummary(toolArgs),
                 ["elapsed_ms"] = slotStopwatch.ElapsedMilliseconds,
                 ["error"] = errorMessage,
-            });
+            };
+            if (code.HasValue)
+                entry["code"] = code.Value;
+            resultsArray.Add(entry);
         }
 
         foreach (var q in queries)
@@ -1172,6 +1246,27 @@ public partial class McpServer
             if (string.IsNullOrEmpty(toolName))
             {
                 AppendSlotError(toolName, toolArgs, slotStopwatch, "Missing tool name");
+                continue;
+            }
+
+            // Honor the per-deployment enablement gate inside batch_query too (#1561). Without
+            // this, an operator who disabled a tool through `CDIDX_MCP_TOOLS_ALLOW` /
+            // `CDIDX_MCP_TOOLS_DENY` could still reach it by smuggling the name into a batch
+            // slot. Only intercept known-but-disabled tools so unknown names still surface as
+            // the existing "Unknown tool" slot error below. The gate runs BEFORE the
+            // write-operation guard so a disabled write tool (e.g. `index` excluded via deny)
+            // surfaces as the structured `code: -32601` "Tool not enabled" — the operator's
+            // intent is "this tool is not on offer", which is more informative for AI clients
+            // than the generic write-in-batch message.
+            // batch_query 内でもデプロイ単位の有効化ゲートを尊重する (#1561)。これが無いと、
+            // `CDIDX_MCP_TOOLS_ALLOW` / `CDIDX_MCP_TOOLS_DENY` で無効化したツールに batch 経由で
+            // 到達できてしまう。既知だが無効なツールだけを捕まえ、未知名は既存の "Unknown tool"
+            // slot エラーに任せる。書き込みツールであっても gate で無効化されていれば、より
+            // 情報量のある `code: -32601` "Tool not enabled" を返したいので、書き込みガードより
+            // 前にこのゲートを置く。
+            if (McpToolFilter.IsKnownTool(toolName) && !_toolFilter.IsEnabled(toolName))
+            {
+                AppendSlotError(toolName, toolArgs, slotStopwatch, $"Tool not enabled: {toolName}", code: -32601);
                 continue;
             }
 

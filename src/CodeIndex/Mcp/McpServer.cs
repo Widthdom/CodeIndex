@@ -22,6 +22,7 @@ public partial class McpServer : IDisposable
     private readonly string _version;
     private readonly JsonSerializerOptions _jsonOptions;
     private readonly Func<JsonNode, string> _serializeResponse;
+    private readonly McpToolFilter _toolFilter;
     private bool _running = true;
     // Per-session DbContext reused across MCP tool calls. Holding the connection open
     // avoids reopening SQLite, reapplying pragmas, and re-registering every SQL function
@@ -81,11 +82,21 @@ public partial class McpServer : IDisposable
     private const int StdioBufferSize = 64 * 1024;
 
     public McpServer(string dbPath, string version, bool dbPathExplicit = false)
-        : this(dbPath, version, dbPathExplicit, null)
+        : this(dbPath, version, dbPathExplicit, null, null)
+    {
+    }
+
+    public McpServer(string dbPath, string version, bool dbPathExplicit, McpToolFilter? toolFilter)
+        : this(dbPath, version, dbPathExplicit, null, toolFilter)
     {
     }
 
     internal McpServer(string dbPath, string version, bool dbPathExplicit, Func<JsonNode, string>? serializeResponse)
+        : this(dbPath, version, dbPathExplicit, serializeResponse, null)
+    {
+    }
+
+    internal McpServer(string dbPath, string version, bool dbPathExplicit, Func<JsonNode, string>? serializeResponse, McpToolFilter? toolFilter)
     {
         _dbPath = dbPath;
         _dbPathExplicit = dbPathExplicit;
@@ -97,6 +108,7 @@ public partial class McpServer : IDisposable
             TypeInfoResolver = new DefaultJsonTypeInfoResolver(),
         };
         _serializeResponse = serializeResponse ?? (node => node.ToJsonString(_jsonOptions));
+        _toolFilter = toolFilter ?? McpToolFilter.FromEnvironment();
     }
 
     /// <summary>
@@ -360,6 +372,16 @@ public partial class McpServer : IDisposable
 
         if (toolName == null)
             return CreateErrorResponse(hasId: true, id: id, code: -32602, message: "Missing tool name");
+
+        // Per-deployment enablement gate (#1561). Disabled known tools return `-32601 method
+        // not found` so clients can branch on a structured JSON-RPC code; truly unknown names
+        // still fall through to the existing `-32602 Unknown tool` path so typos remain
+        // distinguishable from operator-disabled tools.
+        // デプロイ単位の有効化ゲート (#1561)。既知ツールが無効化されている場合は `-32601`
+        // を返し、クライアントが構造化 code で判定できるようにする。サーバーに無い名前は
+        // 既存の `-32602 Unknown tool` 経路に流し、オペレータによる無効化と typo を区別する。
+        if (McpToolFilter.IsKnownTool(toolName) && !_toolFilter.IsEnabled(toolName))
+            return CreateErrorResponse(hasId: true, id: id, code: -32601, message: $"Tool not enabled: {toolName}");
 
         Database.DbDebug.ResetContext();
         var metricsStartedAt = DateTimeOffset.UtcNow;

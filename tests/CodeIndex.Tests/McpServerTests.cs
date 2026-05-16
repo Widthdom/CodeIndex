@@ -770,6 +770,214 @@ public class McpServerTests : IDisposable
         Assert.False(annotations["openWorldHint"]!.GetValue<bool>());
     }
 
+    // --- tool enablement filter tests (#1561) ---
+
+    [Fact]
+    public void McpToolFilter_AllowAll_EnablesEveryKnownTool()
+    {
+        var filter = McpToolFilter.AllowAll();
+        foreach (var name in McpToolFilter.KnownToolNames)
+            Assert.True(filter.IsEnabled(name), $"{name} should be enabled in AllowAll");
+    }
+
+    [Fact]
+    public void McpToolFilter_Parse_AllowListPinsVisibleSet()
+    {
+        var filter = McpToolFilter.Parse("search, references", null);
+
+        Assert.True(filter.IsEnabled("search"));
+        Assert.True(filter.IsEnabled("references"));
+        Assert.False(filter.IsEnabled("index"));
+        Assert.False(filter.IsEnabled("backfill_fold"));
+        Assert.False(filter.IsEnabled("suggest_improvement"));
+    }
+
+    [Fact]
+    public void McpToolFilter_Parse_DenyListRemovesIndividualTools()
+    {
+        var filter = McpToolFilter.Parse(null, "index, backfill_fold");
+
+        Assert.True(filter.IsEnabled("search"));
+        Assert.False(filter.IsEnabled("index"));
+        Assert.False(filter.IsEnabled("backfill_fold"));
+    }
+
+    [Fact]
+    public void McpToolFilter_Parse_AllowWinsOverDeny()
+    {
+        var filter = McpToolFilter.Parse("search,index", "index");
+
+        Assert.True(filter.IsEnabled("search"));
+        Assert.True(filter.IsEnabled("index"));
+        Assert.False(filter.IsEnabled("references"));
+    }
+
+    [Fact]
+    public void McpToolFilter_Parse_UnknownNamesInDenyListDoNotAffectKnownTools()
+    {
+        // A typo in CDIDX_MCP_TOOLS_DENY simply does not match anything; the known set stays
+        // enabled. Allowlist semantics deliberately differ: a non-empty allowlist is treated
+        // as a strict pin, so an allowlist of only-unknown names exposes nothing — that empty
+        // surface is visible at the next tools/list call.
+        var denyFilter = McpToolFilter.Parse(null, "bogus_tool");
+        foreach (var name in McpToolFilter.KnownToolNames)
+            Assert.True(denyFilter.IsEnabled(name), $"{name} should remain enabled when denylist names only unknown tools");
+
+        var allowFilter = McpToolFilter.Parse("bogus_tool", null);
+        foreach (var name in McpToolFilter.KnownToolNames)
+            Assert.False(allowFilter.IsEnabled(name), $"{name} should be disabled when allowlist only names unknown tools");
+    }
+
+    [Fact]
+    public void McpToolFilter_IsKnownTool_DistinguishesKnownFromUnknown()
+    {
+        Assert.True(McpToolFilter.IsKnownTool("search"));
+        Assert.True(McpToolFilter.IsKnownTool("SEARCH"));
+        Assert.False(McpToolFilter.IsKnownTool("bogus_tool"));
+        Assert.False(McpToolFilter.IsKnownTool(null));
+        Assert.False(McpToolFilter.IsKnownTool(string.Empty));
+    }
+
+    [Fact]
+    public void ToolsList_FilteredByAllowList_HidesDisabledTools()
+    {
+        var allow = McpToolFilter.Parse("search, references", null);
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion(), false, allow);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var response = server.HandleMessage(request)!;
+        var tools = response["result"]!["tools"]!.AsArray();
+        var names = tools.Select(t => t!["name"]!.GetValue<string>()).OrderBy(n => n, StringComparer.Ordinal).ToArray();
+
+        Assert.Equal(new[] { "references", "search" }, names);
+    }
+
+    [Fact]
+    public void ToolsList_FilteredByDenyList_HidesDeniedTools()
+    {
+        var deny = McpToolFilter.Parse(null, "index,backfill_fold,suggest_improvement");
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion(), false, deny);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var response = server.HandleMessage(request)!;
+        var names = response["result"]!["tools"]!.AsArray().Select(t => t!["name"]!.GetValue<string>()).ToList();
+
+        Assert.DoesNotContain("index", names);
+        Assert.DoesNotContain("backfill_fold", names);
+        Assert.DoesNotContain("suggest_improvement", names);
+        Assert.Contains("search", names);
+        Assert.Contains("references", names);
+    }
+
+    [Fact]
+    public void ToolsCall_DisabledTool_ReturnsMethodNotFoundError()
+    {
+        var deny = McpToolFilter.Parse(null, "index");
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion(), false, deny);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"index","arguments":{"path":"/tmp/whatever"}}}""")!;
+        var response = server.HandleMessage(request)!;
+
+        Assert.Null(response["result"]);
+        Assert.Equal(-32601, response["error"]!["code"]!.GetValue<int>());
+        Assert.Contains("Tool not enabled", response["error"]!["message"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_BatchQuery_DisabledInnerTool_ReturnsSlotError()
+    {
+        // batch_query stays enabled, but the slot for a denied inner tool must surface a
+        // per-slot error instead of executing it. Otherwise CDIDX_MCP_TOOLS_DENY could be
+        // bypassed by smuggling the disabled name into a batch slot.
+        var deny = McpToolFilter.Parse(null, "symbols");
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion(), false, deny);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[{"tool":"symbols","arguments":{"query":"App"}}]}}}""")!;
+        var response = server.HandleMessage(request)!;
+        var results = response["result"]!["structuredContent"]!["results"]!.AsArray();
+
+        Assert.Single(results);
+        var slot = results[0]!.AsObject();
+        var slotError = slot["error"]!.GetValue<string>();
+        Assert.Contains("Tool not enabled", slotError);
+        // Carry the JSON-RPC error code on the slot so AI clients can branch on a code
+        // instead of substring-matching prose (#1561).
+        // AI クライアントが prose を部分一致せず code で分岐できるよう、slot にコードを乗せる (#1561)。
+        Assert.Equal(-32601, slot["code"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void Initialize_InstructionsOmitsDisabledTools()
+    {
+        // BuildInstructions feeds tool-selection guidance to AI clients via `initialize`.
+        // Once an operator disables a tool through the gate, the instructions must stop
+        // advertising it; otherwise the client follows the guidance and hits a `-32601`
+        // every time (#1561).
+        // BuildInstructions は initialize 経由で AI クライアントに tool 選択ガイダンスを渡す。
+        // gate で無効化された tool を案内し続けると、クライアントが従って毎回 -32601 を踏むので、
+        // 無効化されたツールについての文章は出力しない (#1561)。
+        var allow = McpToolFilter.Parse("search,definition", null);
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion(), false, allow);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}""")!;
+        var response = server.HandleMessage(request)!;
+        var instructions = response["result"]!["instructions"]!.GetValue<string>();
+
+        Assert.Contains("'search'", instructions);
+        Assert.Contains("'definition'", instructions);
+        // Disabled tools must not be mentioned by name. Use single-quote-anchored names so
+        // that prose like "graph-supported languages" does not false-positive on "graph".
+        // 無効化された tool 名はガイダンスに含めない。"graph-supported languages" のような
+        // 一般語で誤検出しないよう、'name' 形式で照合する。
+        Assert.DoesNotContain("'index'", instructions);
+        Assert.DoesNotContain("'map'", instructions);
+        Assert.DoesNotContain("'status'", instructions);
+        Assert.DoesNotContain("'batch_query'", instructions);
+        Assert.DoesNotContain("'backfill_fold'", instructions);
+        Assert.DoesNotContain("'suggest_improvement'", instructions);
+        Assert.DoesNotContain("'analyze_symbol'", instructions);
+        Assert.DoesNotContain("'outline'", instructions);
+        Assert.DoesNotContain("'find_in_file'", instructions);
+        Assert.DoesNotContain("'excerpt'", instructions);
+        Assert.DoesNotContain("'languages'", instructions);
+        Assert.DoesNotContain("'files'", instructions);
+        Assert.DoesNotContain("'deps'", instructions);
+        Assert.DoesNotContain("'unused_symbols'", instructions);
+        Assert.DoesNotContain("'symbol_hotspots'", instructions);
+        Assert.DoesNotContain("'impact_analysis'", instructions);
+        // The exactName-guidance sentence used to enumerate "symbols/definition/references/
+        // callers/callees/analyze_symbol" verbatim. With only 'search' and 'definition'
+        // enabled, none of those disabled names should leak into the guidance.
+        // exactName 案内に旧実装はツール名を直書きしていたため、無効化されたツール名が漏れて
+        // いないかを bare 名前 (single-quote 無し) でも確認する。
+        Assert.DoesNotContain("symbols/", instructions);
+        Assert.DoesNotContain("references/", instructions);
+    }
+
+    [Fact]
+    public void ToolsCall_BatchQuery_DisabledWriteTool_PrefersGateCodeOverWriteGuard()
+    {
+        // When a write tool is excluded by the gate AND smuggled into a batch slot, both
+        // guards could match. The gate runs first so the slot carries the structured
+        // `code: -32601` shape — "this tool is not on offer for this deployment" — instead
+        // of the generic write-in-batch prose. Otherwise scoped clients see different
+        // error shapes depending on whether a tool happened to be a write tool (#1561).
+        // 書き込みツールが gate でも除外され、かつ batch slot に紛れ込んだケース。両 guard が
+        // 該当するが、gate を先に走らせて構造化 `code: -32601` を出すことで、scoped クライアントが
+        // 「このデプロイでは無効」という意図を一貫した shape で受け取れる (#1561)。
+        var allow = McpToolFilter.Parse("batch_query,search", null);
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion(), false, allow);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[{"tool":"index","arguments":{"path":"/tmp/x"}}]}}}""")!;
+        var response = server.HandleMessage(request)!;
+        var results = response["result"]!["structuredContent"]!["results"]!.AsArray();
+
+        Assert.Single(results);
+        var slot = results[0]!.AsObject();
+        Assert.Equal(-32601, slot["code"]!.GetValue<int>());
+        Assert.Contains("Tool not enabled", slot["error"]!.GetValue<string>());
+    }
+
     // --- tools/call tests / ツール呼び出しテスト ---
 
     [Fact]

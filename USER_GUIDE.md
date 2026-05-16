@@ -1123,6 +1123,15 @@ Graph-oriented MCP tools such as `references`, `callers`, and `callees` also ret
 
 All MCP tools include `annotations` (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) so AI clients can auto-approve safe read-only queries without prompting the user.
 
+#### Restricting which MCP tools a deployment exposes
+
+For read-only deployments or sessions that only need a narrow tool surface, two environment variables control which tools `cdidx mcp` advertises and dispatches (#1561):
+
+- `CDIDX_MCP_TOOLS_ALLOW=<comma-separated names>` — strict allowlist. Only the named tools appear in `tools/list` and are callable via `tools/call`. Example: `CDIDX_MCP_TOOLS_ALLOW=search,references,callers` exposes only those three.
+- `CDIDX_MCP_TOOLS_DENY=<comma-separated names>` — remove individual tools from the default-all-enabled set. Example: `CDIDX_MCP_TOOLS_DENY=index,backfill_fold,suggest_improvement` hides the write-side tools on a read-only mount.
+
+When both are set, the allowlist wins. `tools/list` only advertises enabled tools, and the `initialize` instructions string no longer recommends tools the gate disabled. A top-level `tools/call` on a disabled known tool returns the structured JSON-RPC error `-32601 Tool not enabled: <name>`. `batch_query` continues to succeed at the envelope, but each disabled-tool slot carries a `code: -32601` field alongside the `error` string so clients can branch on the code instead of substring-matching prose. Unknown names (typos) still surface as `-32602 Unknown tool`, so operator-disabled tools are distinguishable from missing tools. Names are compared case-insensitively. The default is **all tools enabled**, so existing deployments are unaffected unless an operator sets one of these variables.
+
 ### Why cdidx over grep/ripgrep for AI workflows?
 
 | | `grep` / `rg` | `cdidx` |
@@ -2248,6 +2257,15 @@ cdidx backfill-fold
 `references`、`callers`、`callees` などの graph 系 MCP ツールも、言語フィルタが指定されている場合は `graph_language`、`graph_supported`、`graph_support_reason` を返し、未対応言語と単なる 0 件ヒットを区別できるようにしています。
 
 全 MCP ツールは `annotations`（`readOnlyHint`、`destructiveHint`、`idempotentHint`、`openWorldHint`）を含み、AIクライアントがユーザーへの確認なしに安全な読み取り専用クエリを自動承認できるようにしています。
+
+#### デプロイ単位で公開する MCP ツールを制限する
+
+読み取り専用デプロイや、狭いツールセットしか必要としないセッション向けに、`cdidx mcp` が広告／dispatch するツールを 2 つの環境変数で制御できます (#1561)。
+
+- `CDIDX_MCP_TOOLS_ALLOW=<カンマ区切り名>` — 厳格な allowlist。指定したツールのみが `tools/list` に現れ、`tools/call` から呼び出せます。例: `CDIDX_MCP_TOOLS_ALLOW=search,references,callers` でその 3 つだけを公開。
+- `CDIDX_MCP_TOOLS_DENY=<カンマ区切り名>` — 既定の全有効集合から個別ツールを除外。例: `CDIDX_MCP_TOOLS_DENY=index,backfill_fold,suggest_improvement` で read-only マウント上の書き込み系ツールを非表示にします。
+
+両方指定された場合は allowlist が優先されます。`tools/list` は有効ツールのみ広告し、`initialize` の instructions 文字列も無効化されたツールを推奨しなくなります。トップレベル `tools/call` で無効化された既知ツールを呼び出した場合は、構造化された JSON-RPC エラー `-32601 Tool not enabled: <name>` を返します。`batch_query` 自体は引き続きエンベロープとして成功しますが、無効化ツールの各 slot に `code: -32601` フィールドが `error` 文字列と並んで載るため、クライアントは prose の部分一致ではなく code で分岐できます。typo などサーバーに元から無い名前は引き続き `-32602 Unknown tool` を返すため、オペレータによる無効化と typo を区別できます。比較は大小文字無視。既定は **全ツール有効** なので、オペレータがこれらの変数を設定しない限り既存デプロイへの影響はありません。
 
 ### AIワークフローで grep/ripgrep より cdidx が優れる理由
 

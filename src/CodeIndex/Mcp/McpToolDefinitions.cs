@@ -460,7 +460,22 @@ public partial class McpServer
                 SuggestionAnnotations())
         };
 
-        var result = new JsonObject { ["tools"] = tools };
+        // Per-deployment enablement gate (#1561). Drop any tool the operator disabled via
+        // `CDIDX_MCP_TOOLS_ALLOW` / `CDIDX_MCP_TOOLS_DENY` so AI clients never see destructive
+        // or out-of-scope tools advertised in the first place.
+        // デプロイ単位の有効化ゲート (#1561)。`CDIDX_MCP_TOOLS_ALLOW` /
+        // `CDIDX_MCP_TOOLS_DENY` で除外されたツールは tools/list 段階で隠し、AI クライアント
+        // が破壊的ツールや範囲外ツールを最初から見えないようにする。
+        var filtered = new JsonArray();
+        foreach (var tool in tools)
+        {
+            var name = tool?["name"]?.GetValue<string>();
+            if (name == null || !_toolFilter.IsEnabled(name))
+                continue;
+            filtered.Add(tool!.DeepClone());
+        }
+
+        var result = new JsonObject { ["tools"] = filtered };
         return CreateSuccessResponse(id, result);
     }
 }
