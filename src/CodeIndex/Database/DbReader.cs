@@ -1,5 +1,6 @@
 using CodeIndex.Indexer;
 using Microsoft.Data.Sqlite;
+using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -1866,12 +1867,19 @@ public partial class DbReader
     internal static int GetInt32OrFallback(SqliteDataReader reader, int ordinal, int fallbackOrdinal)
         => reader.IsDBNull(ordinal) ? reader.GetInt32(fallbackOrdinal) : reader.GetInt32(ordinal);
 
+    // Offsetless timestamps stored by SQLite (e.g. CURRENT_TIMESTAMP, or a UTC DateTime written
+    // through Microsoft.Data.Sqlite) are treated as UTC. Parsing offsetless input via
+    // DateTime.TryParse defaults to AssumeLocal, so without AssumeUniversal|AdjustToUniversal
+    // the value would silently shift by the local TZ offset before being re-stamped as UTC,
+    // which is the cross-TZ drift Issue #1545 describes.
+    // SQLiteが保存するオフセットなしのタイムスタンプはUTC扱い。AssumeUniversal|AdjustToUniversalを
+    // 付けないとローカル時刻として解釈→UTCにリラベルで暗黙にズレるため、Issue #1545対応として明示する。
     private static DateTime? ParseDateTimeValue(object value)
     {
         return value switch
         {
             DateTime dateTime => dateTime.Kind == DateTimeKind.Utc ? dateTime : DateTime.SpecifyKind(dateTime, DateTimeKind.Utc),
-            string text when DateTime.TryParse(text, out var parsed) => parsed.Kind == DateTimeKind.Utc ? parsed : DateTime.SpecifyKind(parsed, DateTimeKind.Utc),
+            string text when DateTime.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var parsed) => parsed,
             _ => null,
         };
     }

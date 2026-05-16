@@ -10671,6 +10671,33 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetRepoMap_TreatsStoredTimestampsAsUtc_NotLocalRelabelled()
+    {
+        // Issue #1545: timestamps stored in SQLite (whether offsetless or with an explicit
+        // offset) must round-trip to a single canonical UTC instant. Previously the offset-
+        // bearing string was first converted to local time by DateTime.TryParse and then
+        // re-stamped as UTC, drifting freshness by the caller's local TZ offset.
+        // Issue #1545: SQLite に保存された日時（オフセット有無問わず）は同一の UTC 時点へ
+        // ラウンドトリップする必要がある。旧実装は DateTime.TryParse が一旦ローカルへ変換し、
+        // SpecifyKind(Utc) で再ラベルしていたため、呼び出し側のローカル TZ ぶんずれていた。
+        InsertIndexedFile("src/Program.cs", "csharp", "public class Program {}\n",
+            modified: new DateTime(2025, 6, 2, 0, 0, 0, DateTimeKind.Utc));
+
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = "UPDATE files SET indexed_at = @ts WHERE path = 'src/Program.cs'";
+        // Offset-bearing literal: 2025-06-04T15:00:00+09:00 == 2025-06-04T06:00:00Z /
+        // オフセット付き値: 2025-06-04T15:00:00+09:00 == 2025-06-04T06:00:00Z
+        cmd.Parameters.AddWithValue("@ts", "2025-06-04T15:00:00+09:00");
+        cmd.ExecuteNonQuery();
+
+        var file = _reader.GetFileByPath("src/Program.cs");
+        Assert.NotNull(file);
+        Assert.NotNull(file!.IndexedAt);
+        Assert.Equal(new DateTime(2025, 6, 4, 6, 0, 0, DateTimeKind.Utc), file.IndexedAt!.Value);
+        Assert.Equal(DateTimeKind.Utc, file.IndexedAt!.Value.Kind);
+    }
+
+    [Fact]
     public void GetFileByPath_ReturnsExactMatchWithFullMetadata()
     {
         // Seed data: src/api.js — Size=800, Lines=50, Modified=2025-06-01, 2 symbols (ApiClient, fetchData)

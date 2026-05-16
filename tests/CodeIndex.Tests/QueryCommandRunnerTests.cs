@@ -29379,13 +29379,25 @@ jobs:
     }
 
     [Fact]
-    public void TryParseIso8601Since_DateOnlyTreatedAsLocalTime()
+    public void TryParseIso8601Since_DateOnlyTreatedAsUtc()
     {
-        // Offsetless dates are treated as local time, matching prior DateTime.TryParse behavior /
-        // オフセットなしの日付はローカル時刻として扱う（従来のDateTime.TryParseの動作と一致）
+        // Issue #1545: offsetless inputs resolve to the same UTC instant in every timezone, so
+        // teammates running the same `--since 2024-06-15` query agree on the cutoff. Append `Z`
+        // or an explicit offset to opt out.
+        // Issue #1545: オフセットなしの入力はどのタイムゾーンでも同じUTC時点になり、`--since 2024-06-15`
+        // が地域差で揺れない。明示したい場合は `Z` または `+09:00` を付ける。
         QueryCommandRunner.TryParseIso8601Since("2024-06-15", out var result);
-        var expected = new DateTimeOffset(2024, 6, 15, 0, 0, 0, TimeZoneInfo.Local.GetUtcOffset(new DateTime(2024, 6, 15))).UtcDateTime;
-        Assert.Equal(expected, result);
+        Assert.Equal(new DateTime(2024, 6, 15, 0, 0, 0, DateTimeKind.Utc), result);
+        Assert.Equal(DateTimeKind.Utc, result.Kind);
+    }
+
+    [Fact]
+    public void TryParseIso8601Since_OffsetlessTimestampTreatedAsUtc()
+    {
+        // Issue #1545: offsetless date-times must not shift by the caller's local TZ offset.
+        // Issue #1545: オフセットなしの日時はローカルTZオフセットの分だけずれてはならない。
+        QueryCommandRunner.TryParseIso8601Since("2024-06-15T12:00:00", out var result);
+        Assert.Equal(new DateTime(2024, 6, 15, 12, 0, 0, DateTimeKind.Utc), result);
         Assert.Equal(DateTimeKind.Utc, result.Kind);
     }
 
@@ -29419,9 +29431,9 @@ jobs:
             ["search", "foo", "--since", "2024-01-02"], jsonDefault: false);
         Assert.Null(options.ParseError);
         Assert.NotNull(options.Since);
-        // Offsetless date → local midnight → UTC / オフセットなし → ローカル深夜 → UTC
-        var expected = new DateTimeOffset(2024, 1, 2, 0, 0, 0, TimeZoneInfo.Local.GetUtcOffset(new DateTime(2024, 1, 2))).UtcDateTime;
-        Assert.Equal(expected, options.Since.Value);
+        // Issue #1545: offsetless date → UTC midnight, independent of caller TZ /
+        // Issue #1545: オフセットなし → UTC深夜（呼び出し側TZに依存しない）
+        Assert.Equal(new DateTime(2024, 1, 2, 0, 0, 0, DateTimeKind.Utc), options.Since.Value);
     }
 
     [Fact]
