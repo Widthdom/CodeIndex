@@ -8,6 +8,8 @@ namespace CodeIndex.Database;
 
 public class SearchResult
 {
+    [JsonPropertyName("api_version")]
+    public string ApiVersion { get; set; } = JsonOutputContract.ApiVersion;
     public string Path { get; set; } = string.Empty;
     public string? Lang { get; set; }
     public int StartLine { get; set; }
@@ -20,6 +22,8 @@ public readonly record struct QueryCountResult(int Count, int FileCount, bool In
 
 public class SymbolResult
 {
+    [JsonPropertyName("api_version")]
+    public string ApiVersion { get; set; } = JsonOutputContract.ApiVersion;
     public string Path { get; set; } = string.Empty;
     public string? Lang { get; set; }
     public string Kind { get; set; } = string.Empty;
@@ -53,6 +57,8 @@ public class GroupedHotspotResult
 
 public class FileResult
 {
+    [JsonPropertyName("api_version")]
+    public string ApiVersion { get; set; } = JsonOutputContract.ApiVersion;
     public string Path { get; set; } = string.Empty;
     public string? Lang { get; set; }
     public long Size { get; set; }
@@ -66,6 +72,8 @@ public class FileResult
 
 public class FileExcerptResult
 {
+    [JsonPropertyName("api_version")]
+    public string ApiVersion { get; set; } = JsonOutputContract.ApiVersion;
     public string Path { get; set; } = string.Empty;
     public string? Lang { get; set; }
     public int StartLine { get; set; }
@@ -76,6 +84,8 @@ public class FileExcerptResult
 
 public class FileFindResult
 {
+    [JsonPropertyName("api_version")]
+    public string ApiVersion { get; set; } = JsonOutputContract.ApiVersion;
     public string Path { get; set; } = string.Empty;
     public string? Lang { get; set; }
     public int Line { get; set; }
@@ -160,6 +170,8 @@ public class FreshnessHintResult
 
 public class ReferenceResult
 {
+    [JsonPropertyName("api_version")]
+    public string ApiVersion { get; set; } = JsonOutputContract.ApiVersion;
     public string Path { get; set; } = string.Empty;
     public string? Lang { get; set; }
     public string SymbolName { get; set; } = string.Empty;
@@ -176,6 +188,8 @@ public class ReferenceResult
 
 public class CallerResult
 {
+    [JsonPropertyName("api_version")]
+    public string ApiVersion { get; set; } = JsonOutputContract.ApiVersion;
     public string Path { get; set; } = string.Empty;
     public string? Lang { get; set; }
     public string? CallerKind { get; set; }
@@ -197,6 +211,8 @@ public class CallerResult
 
 public class CalleeResult
 {
+    [JsonPropertyName("api_version")]
+    public string ApiVersion { get; set; } = JsonOutputContract.ApiVersion;
     public string Path { get; set; } = string.Empty;
     public string? Lang { get; set; }
     public string? CallerKind { get; set; }
@@ -237,6 +253,8 @@ public class ImpactResult
 
 public class ImpactAnalysisResult
 {
+    [JsonPropertyName("api_version")]
+    public string ApiVersion { get; set; } = JsonOutputContract.ApiVersion;
     public string Query { get; set; } = string.Empty;
     public string ResolvedName { get; set; } = string.Empty;
     public string ImpactMode { get; set; } = "callers";
@@ -290,6 +308,8 @@ public static class ImpactTruncatedReasons
 
 public class StatusResult
 {
+    [JsonPropertyName("api_version")]
+    public string ApiVersion { get; set; } = JsonOutputContract.ApiVersion;
     public long Files { get; set; }
     public long Chunks { get; set; }
     public long Symbols { get; set; }
@@ -472,6 +492,8 @@ public class StatusResult
 
 public class RepoMapResult
 {
+    [JsonPropertyName("api_version")]
+    public string ApiVersion { get; set; } = JsonOutputContract.ApiVersion;
     public int FileCount { get; set; }
     public long TotalLines { get; set; }
     public long TotalSymbols { get; set; }
@@ -547,6 +569,8 @@ public class RepoEntrypointResult
 
 public class SymbolAnalysisResult
 {
+    [JsonPropertyName("api_version")]
+    public string ApiVersion { get; set; } = JsonOutputContract.ApiVersion;
     public string Query { get; set; } = string.Empty;
     public FileResult? File { get; set; }
     public DateTime? WorkspaceIndexedAt { get; set; }
@@ -611,6 +635,8 @@ public class SymbolAnalysisResult
 /// </summary>
 public class OutlineResult
 {
+    [JsonPropertyName("api_version")]
+    public string ApiVersion { get; set; } = JsonOutputContract.ApiVersion;
     public string Path { get; set; } = string.Empty;
     public string? Lang { get; set; }
     public int TotalLines { get; set; }

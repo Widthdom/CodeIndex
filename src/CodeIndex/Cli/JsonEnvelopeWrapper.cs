@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using CodeIndex.Database;
 
 namespace CodeIndex.Cli;
 
@@ -118,6 +119,7 @@ internal static class JsonEnvelopeWrapper
     {
         var metadata = new JsonObject
         {
+            ["api_version"] = JsonOutputContract.ApiVersion,
             ["command"] = command,
             ["cdidx_version"] = appVersion,
             ["elapsed_ms"] = Math.Round(elapsedMs, 3),

@@ -1,4 +1,5 @@
 {
+  "api_version": "1",
   "path": "src/Refs.cs",
   "lang": "csharp",
   "symbol_name": "TargetType",
@@ -12,6 +13,7 @@
   "exact_index_available": true
 }
 {
+  "api_version": "1",
   "path": "src/Refs.cs",
   "lang": "csharp",
   "symbol_name": "TargetType",

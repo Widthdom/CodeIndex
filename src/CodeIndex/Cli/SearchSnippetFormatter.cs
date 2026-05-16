@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using CodeIndex.Database;
 
 namespace CodeIndex.Cli;
@@ -312,6 +313,8 @@ public static class SearchSnippetFormatter
 
 public sealed class CompactSearchResult
 {
+    [JsonPropertyName("api_version")]
+    public string ApiVersion { get; set; } = JsonOutputContract.ApiVersion;
     public string Query { get; set; } = string.Empty;
     public string Path { get; set; } = string.Empty;
     public string? Lang { get; set; }

@@ -1,4 +1,5 @@
 {
+  "api_version": "1",
   "query": "Add",
   "path": "src/Lib.cs",
   "lang": "csharp",
