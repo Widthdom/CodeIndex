@@ -34,6 +34,7 @@ internal static class TypeScriptReferenceExtractor
         EmitHeritageTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitCallableSignatureTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitFunctionPropertyTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitDecoratedMemberTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         TypedLanguageReferenceExtractor.EmitColonVariableTypeReferences(
             preparedLine,
             DeclarationKeywords,
@@ -142,7 +143,10 @@ internal static class TypeScriptReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
-        var openParen = TypedLanguageReferenceExtractor.FindTopLevelChar(preparedLine, '(');
+        var openParen = TypedLanguageReferenceExtractor.FindTopLevelChar(
+            preparedLine,
+            '(',
+            SkipLeadingDecorators(preparedLine));
         if (openParen <= 0)
             return;
 
@@ -167,6 +171,51 @@ internal static class TypeScriptReferenceExtractor
             return;
 
         var typeStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, returnColon + 1);
+        if (typeStart >= preparedLine.Length)
+            return;
+
+        var typeEnd = TypedLanguageReferenceExtractor.FindTypeExpressionEnd(preparedLine, typeStart, stopAtArrow: false);
+        if (typeEnd <= typeStart)
+            return;
+
+        TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
+            preparedLine.Substring(typeStart, typeEnd - typeStart),
+            typeStart,
+            "typescript",
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            resolveContainerForColumn(typeStart));
+    }
+
+    private static void EmitDecoratedMemberTypeReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        var memberStart = SkipLeadingDecorators(preparedLine);
+        if (memberStart <= 0 || memberStart >= preparedLine.Length)
+            return;
+
+        var colonIndex = TypedLanguageReferenceExtractor.FindTopLevelChar(preparedLine, ':', memberStart);
+        if (colonIndex < 0)
+            return;
+
+        var openParen = TypedLanguageReferenceExtractor.FindTopLevelChar(preparedLine, '(', memberStart);
+        if (openParen >= 0 && openParen < colonIndex)
+            return;
+
+        var equalsIndex = TypedLanguageReferenceExtractor.FindTopLevelChar(preparedLine, '=', memberStart);
+        if (equalsIndex >= 0 && equalsIndex < colonIndex)
+            return;
+
+        var typeStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, colonIndex + 1);
         if (typeStart >= preparedLine.Length)
             return;
 
@@ -332,6 +381,40 @@ internal static class TypeScriptReferenceExtractor
         }
 
         return false;
+    }
+
+    private static int SkipLeadingDecorators(string line)
+    {
+        var index = 0;
+        while (index < line.Length)
+        {
+            while (index < line.Length && char.IsWhiteSpace(line[index]))
+                index++;
+
+            if (index >= line.Length || line[index] != '@')
+                return index;
+
+            index++;
+            while (index < line.Length && (IsTypeScriptIdentifierPart(line[index]) || line[index] == '.'))
+                index++;
+
+            while (index < line.Length && char.IsWhiteSpace(line[index]))
+                index++;
+
+            if (index < line.Length && line[index] == '(')
+            {
+                var closeParen = ReferenceExtractor.FindMatchingChar(line, index, '(', ')');
+                if (closeParen < 0)
+                    return index;
+
+                index = closeParen + 1;
+            }
+
+            while (index < line.Length && char.IsWhiteSpace(line[index]))
+                index++;
+        }
+
+        return index;
     }
 
     private static bool IsImportExportOpeningBrace(IReadOnlyList<string> preparedLines, int openLineIndex, int openColumn)

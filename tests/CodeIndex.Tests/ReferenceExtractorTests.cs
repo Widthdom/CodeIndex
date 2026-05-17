@@ -29207,6 +29207,38 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScriptDecoratedMembers_CaptureDecoratorAndTypeReferences()
+    {
+        const string content = """
+            class Controller {
+                @Get("/users") find(@Optional() @Inject(USER_REPOSITORY) repo: UserRepository, @Param("id") id: UserId): Promise<UserDto> {
+                    return repo.find(id);
+                }
+
+                @Input() profile: UserProfile;
+                @Column({ type: "json" }) settings!: SettingsDocument;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Get" && r.ReferenceKind == "annotation");
+        Assert.Contains(references, r => r.SymbolName == "Optional" && r.ReferenceKind == "annotation");
+        Assert.Contains(references, r => r.SymbolName == "Inject" && r.ReferenceKind == "annotation");
+        Assert.Contains(references, r => r.SymbolName == "Param" && r.ReferenceKind == "annotation");
+        Assert.Contains(references, r => r.SymbolName == "Input" && r.ReferenceKind == "annotation");
+        Assert.Contains(references, r => r.SymbolName == "Column" && r.ReferenceKind == "annotation");
+
+        Assert.Contains(references, r => r.SymbolName == "UserRepository" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "UserId" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Promise" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "UserDto" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "UserProfile" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "SettingsDocument" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_TypeScriptImportExportAliases_DoNotEmitTypeReferences()
     {
         const string content = """
