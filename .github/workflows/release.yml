@@ -400,10 +400,20 @@ jobs:
           test -f "$CDIDX_INSTALL_DIR/LICENSES/Apache-2.0.txt"
 
           # --version must reflect the tag, not the v0.0.0 fallback.
+          # Since #1550 `cdidx --version` is `cdidx v<ver>` optionally
+          # followed by a ` (commit <sha>, built <date>, <clean|dirty>)`
+          # build-metadata suffix, so anchor on the `cdidx <tag>` prefix
+          # instead of an exact match — a wrong version still fails because
+          # the suffix can only ever follow a space.
           EXPECTED="cdidx ${TAG_NAME}"
           ACTUAL="$("$CDIDX_INSTALL_DIR/cdidx" --version)"
-          [ "$ACTUAL" = "$EXPECTED" ] \
-            || { echo "Version mismatch: expected '$EXPECTED', got '$ACTUAL'" >&2; exit 1; }
+          case "$ACTUAL" in
+            "$EXPECTED"|"$EXPECTED "*) ;;
+            *)
+              echo "Version mismatch: expected '$EXPECTED' (optionally followed by build metadata), got '$ACTUAL'" >&2
+              exit 1
+              ;;
+          esac
 
           # A command that touches SQLite must not DllNotFoundException.
           "$CDIDX_INSTALL_DIR/cdidx" . >/dev/null

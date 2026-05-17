@@ -55,9 +55,19 @@
     `cdidx version` flag can distinguish dev builds from tagged releases
     (#1550). XML comments may not contain a double-dash, so we avoid the
     literal flag spelling here.
+    The dirty probe excludes every `packages.lock.json`: the release
+    workflow's RID-targeted `dotnet publish` step legitimately rewrites
+    the lock file with RID-specific entries before this target re-runs, so
+    a plain repo-wide probe would stamp a clean tagged release as `dirty`.
+    Genuine lock drift is still caught by the locked-mode SLN restore in CI.
     バグ報告で dev ビルドとリリースタグを区別できるよう、commit SHA / build
     date / dirty フラグをアセンブリに刻む (#1550)。XML コメント内には連続した
     ダッシュを書けないため、フラグ名そのものを記述しない。
+    dirty 判定からは `packages.lock.json` を除外する。release workflow の
+    RID 指定 `dotnet publish` は本ターゲット再実行前に lock ファイルへ
+    RID 固有エントリを正当に書き込むため、除外しないとクリーンなタグ
+    リリースまで `dirty` と刻まれてしまう。lock の本当のドリフトは CI の
+    locked-mode SLN restore が引き続き検出する。
   -->
   <Target Name="StampCdidxBuildMetadata" BeforeTargets="GetAssemblyAttributes">
     <Exec Command="git rev-parse --short=7 HEAD"
@@ -70,7 +80,7 @@
       <Output TaskParameter="ConsoleOutput" PropertyName="CdidxGitShaRaw" />
       <Output TaskParameter="ExitCode" PropertyName="CdidxGitShaExitCode" />
     </Exec>
-    <Exec Command="git diff-index --quiet HEAD --"
+    <Exec Command="git diff-index --quiet HEAD -- &quot;:/&quot; &quot;:(top,exclude,glob)**/packages.lock.json&quot;"
           ContinueOnError="true"
           IgnoreExitCode="true"
           EchoOff="true"
