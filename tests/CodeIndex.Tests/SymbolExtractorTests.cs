@@ -8099,6 +8099,25 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_RequiredProperties_PreserveRequiredAndInitInSignature()
+    {
+        var content = """
+            public class User
+            {
+                public required string Name { get; init; }
+                public required int Age { get; set; }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var name = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Name"));
+        var age = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Age"));
+
+        Assert.Equal("public required string Name { get; init; }", name.Signature);
+        Assert.Equal("public required int Age { get; set; }", age.Signature);
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsNoVisibilityMembers()
     {
         // Classes/methods without explicit visibility (internal by default)
