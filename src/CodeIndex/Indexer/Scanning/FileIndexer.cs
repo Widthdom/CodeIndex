@@ -2119,8 +2119,8 @@ public class FileIndexer
                 warning = $"{relativePath}: contains invalid UTF-8 bytes (replaced with U+FFFD)";
             }
         }
-        // Normalize line endings to LF / 改行をLFに正規化
-        content = content.Replace("\r\n", "\n").Replace("\r", "\n");
+        // Normalize line endings to LF in one pass / 改行を1パスでLFに正規化
+        content = NormalizeLineEndings(content);
         // Strip every line-leading UTF-8 BOM (U+FEFF): the leading BOM at offset 0
         // and any BOM that immediately follows a `\n` (e.g. from accidental file
         // concatenation or tool insertion). Leading BOM alone would make `^\s*`-
@@ -2172,6 +2172,31 @@ public class FileIndexer
         };
 
         return (record, content, bytes, warning);
+    }
+
+    internal static string NormalizeLineEndings(string content)
+    {
+        var firstCarriageReturn = content.IndexOf('\r');
+        if (firstCarriageReturn < 0)
+            return content;
+
+        var builder = new StringBuilder(content.Length);
+        builder.Append(content, 0, firstCarriageReturn);
+
+        for (var index = firstCarriageReturn; index < content.Length; index++)
+        {
+            if (content[index] != '\r')
+            {
+                builder.Append(content[index]);
+                continue;
+            }
+
+            builder.Append('\n');
+            if (index + 1 < content.Length && content[index + 1] == '\n')
+                index++;
+        }
+
+        return builder.ToString();
     }
 
     private string BuildFileTooLargeMessage(long actualBytes, bool grewDuringRead)

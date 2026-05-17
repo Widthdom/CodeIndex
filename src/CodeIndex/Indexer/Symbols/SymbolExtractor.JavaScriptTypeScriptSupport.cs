@@ -1571,7 +1571,7 @@ public static partial class SymbolExtractor
             return line[start..endExclusive].Trim();
         }
 
-        var builder = new StringBuilder();
+        var builder = new StringBuilder(EstimateJavaScriptTypeScriptLineSliceLength(rawLines, startLineIndex, endLineIndex));
         for (var lineIndex = startLineIndex; lineIndex <= endLineIndex; lineIndex++)
         {
             if (lineIndex > startLineIndex)
@@ -1662,7 +1662,7 @@ public static partial class SymbolExtractor
         if (startLineIndex == endLineIndex)
             return rawLines[startLineIndex].Trim();
 
-        var builder = new StringBuilder();
+        var builder = new StringBuilder(EstimateJavaScriptTypeScriptLineSliceLength(rawLines, startLineIndex, endLineIndex));
         for (var lineIndex = startLineIndex; lineIndex <= endLineIndex; lineIndex++)
         {
             if (lineIndex > startLineIndex)
@@ -1675,6 +1675,35 @@ public static partial class SymbolExtractor
         }
 
         return builder.ToString().Trim();
+    }
+
+    private static int EstimateJavaScriptTypeScriptLineSliceLength(string[] lines, int startLineIndex, int endLineIndex)
+    {
+        if (lines.Length == 0)
+            return 0;
+
+        startLineIndex = Math.Clamp(startLineIndex, 0, lines.Length - 1);
+        endLineIndex = Math.Clamp(endLineIndex, startLineIndex, lines.Length - 1);
+
+        var capacity = 0;
+        for (var lineIndex = startLineIndex; lineIndex <= endLineIndex; lineIndex++)
+            capacity += lines[lineIndex].Length + (lineIndex > startLineIndex ? 1 : 0);
+
+        return capacity;
+    }
+
+    private static int EstimateJavaScriptTypeScriptStatementCapacity(string[] lines, int startLineIndex)
+    {
+        if (lines.Length == 0)
+            return 0;
+
+        startLineIndex = Math.Clamp(startLineIndex, 0, lines.Length - 1);
+        var endExclusive = Math.Min(lines.Length, startLineIndex + 16);
+        var capacity = 0;
+        for (var lineIndex = startLineIndex; lineIndex < endExclusive; lineIndex++)
+            capacity += lines[lineIndex].Length + (lineIndex > startLineIndex ? 1 : 0);
+
+        return capacity;
     }
 
     private static bool TryHandleJavaScriptTypeScriptImportEqualsLine(
@@ -2277,8 +2306,9 @@ public static partial class SymbolExtractor
 
         startColumnText = startColumn + startLineSlice.IndexOf("export", StringComparison.Ordinal);
 
-        var clauseBuilder = new System.Text.StringBuilder();
-        var signatureBuilder = new System.Text.StringBuilder();
+        var builderCapacity = EstimateJavaScriptTypeScriptStatementCapacity(sanitizedLines, startLineIndex);
+        var clauseBuilder = new System.Text.StringBuilder(builderCapacity);
+        var signatureBuilder = new System.Text.StringBuilder(builderCapacity);
 
         for (int lineIndex = startLineIndex; lineIndex < sanitizedLines.Length; lineIndex++)
         {
@@ -2393,8 +2423,9 @@ public static partial class SymbolExtractor
 
         startColumnText = startColumn + startLineSlice.IndexOf("export", StringComparison.Ordinal);
 
-        var clauseBuilder = new System.Text.StringBuilder();
-        var signatureBuilder = new System.Text.StringBuilder();
+        var builderCapacity = EstimateJavaScriptTypeScriptStatementCapacity(sanitizedLines, startLineIndex);
+        var clauseBuilder = new System.Text.StringBuilder(builderCapacity);
+        var signatureBuilder = new System.Text.StringBuilder(builderCapacity);
 
         for (int lineIndex = startLineIndex; lineIndex < sanitizedLines.Length; lineIndex++)
         {
@@ -5144,7 +5175,7 @@ public static partial class SymbolExtractor
 
     private static string CollectJavaScriptTypeScriptAssignedRhsHeader(string[] sanitizedLines, int startLineIndex, int startColumn)
     {
-        var builder = new System.Text.StringBuilder();
+        var builder = new System.Text.StringBuilder(EstimateJavaScriptTypeScriptStatementCapacity(sanitizedLines, startLineIndex));
         var parenDepth = 0;
         var bracketDepth = 0;
         var braceDepth = 0;
@@ -5309,8 +5340,9 @@ public static partial class SymbolExtractor
         rhsEndColumn = -1;
         signature = string.Empty;
 
-        var rhsBuilder = new System.Text.StringBuilder();
-        var signatureBuilder = new System.Text.StringBuilder();
+        var builderCapacity = EstimateJavaScriptTypeScriptStatementCapacity(sanitizedLines, assignmentLineIndex);
+        var rhsBuilder = new System.Text.StringBuilder(builderCapacity);
+        var signatureBuilder = new System.Text.StringBuilder(builderCapacity);
         var pendingWrapperParenClose = false;
 
         for (int lineIndex = assignmentLineIndex; lineIndex < sanitizedLines.Length; lineIndex++)
@@ -6155,7 +6187,7 @@ public static partial class SymbolExtractor
         if (exportedName[^1] != quote)
             return exportedName;
 
-        var builder = new StringBuilder();
+        var builder = new StringBuilder(Math.Max(0, exportedName.Length - 2));
         for (var index = 1; index < exportedName.Length - 1; index++)
         {
             var ch = exportedName[index];

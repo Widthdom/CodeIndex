@@ -2524,6 +2524,16 @@ public class FileIndexerTests
         }
     }
 
+    [Theory]
+    [InlineData("line1\r\nline2\r\n", "line1\nline2\n")]
+    [InlineData("line1\rline2\r", "line1\nline2\n")]
+    [InlineData("crlf\r\ncr\rlf\n", "crlf\ncr\nlf\n")]
+    [InlineData("line1\nline2\n", "line1\nline2\n")]
+    public void NormalizeLineEndings_CollapsesCrVariantsToLf(string input, string expected)
+    {
+        Assert.Equal(expected, FileIndexer.NormalizeLineEndings(input));
+    }
+
     [Fact]
     public void BuildRecord_LeadingBomStrippedFromContent()
     {
