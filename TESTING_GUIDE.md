@@ -40,6 +40,8 @@ The test project mirrors the production areas closely.
   End-to-end upgrade path: seeds a pre-column legacy DB, opens it through `TryMigrateForRead`, and exercises the read paths that touch nullable symbol ordinals (outline, symbol search, nearby, unused, analyze bundle) to lock in the real-world failure mode behind #58 / #49.
 - `IndexCommandRunnerTests.cs`, `QueryCommandRunnerTests.cs`, `ProgramCliTests.cs`, `InstallScriptTests.cs`
   CLI parsing, command execution, and installer behavior. `ProgramCliTests.cs` covers top-level entrypoint behavior that must be exercised through a subprocess, while `InstallScriptTests.cs` runs focused bash snippets against `install.sh` in library mode to lock in release-installer regressions without performing real network installs.
+- `SymbolExtractorTests.Extract_CSharp_InstallScriptFixture_CompletesWithinPracticalBudget`
+  is a coarse runaway guard for the real `InstallScriptTests.cs` C# extraction fixture. Its wall-clock budget is intentionally broader than a benchmark so slower or noisy CI hosts do not fail the suite for ordinary variance.
 - `McpServerTests.cs`
   MCP JSON-RPC behavior and tool outputs.
 - `GitHelperTests.cs`
@@ -213,6 +215,8 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   エンドツーエンドのアップグレード経路: カラム追加前のレガシー DB を用意し、`TryMigrateForRead` 経由で開いてから NULL になりうるシンボル列を触る read path（outline、シンボル検索、近傍、unused、analyze バンドル）を一通り叩き、#58 / #49 の実機失敗モードを固定する。
 - `IndexCommandRunnerTests.cs`、`QueryCommandRunnerTests.cs`、`ProgramCliTests.cs`、`InstallScriptTests.cs`
   CLI の引数解析、コマンド実行、installer 挙動のテスト。`ProgramCliTests.cs` はグローバル引数の解釈や完全な CLI 起動フローのように subprocess 経由で確認すべき Program エントリポイント挙動を扱い、`InstallScriptTests.cs` は `install.sh` を library mode で source した bash snippet を実行して、実ネットワーク install を行わずに release installer の回帰を固定する。
+- `SymbolExtractorTests.Extract_CSharp_InstallScriptFixture_CompletesWithinPracticalBudget`
+  は実ファイル `InstallScriptTests.cs` を C# 抽出に通す coarse な runaway guard です。wall-clock の予算は benchmark より意図的に広く取り、遅い / 混雑した CI host で通常の揺れだけにより suite が失敗しないようにしています。
 - `McpServerTests.cs`
   MCP の JSON-RPC 挙動とツール出力のテスト。
 - `GitHelperTests.cs`

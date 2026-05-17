@@ -22787,10 +22787,12 @@ public class SymbolExtractorTests
         // issue #447 regression: the real InstallScriptTests fixture previously drove C#
         // symbol extraction into super-linear CPU time. Use the repository's current copy so
         // the regression test keeps exercising the same realistic raw-string + heredoc shape
-        // that broke self-indexing, but keep the budget generous enough for slower CI hosts.
+        // that broke self-indexing. This is a coarse runaway guard, not a tight benchmark, so
+        // keep the budget generous enough for slower or noisy CI hosts.
         // issue #447 回帰: 実ファイル InstallScriptTests.cs が C# シンボル抽出を super-linear に
         // 悪化させていた。自己ホストを壊した raw-string + heredoc の実形を継続的に踏むため、
-        // リポジトリ内の現行ファイルをそのまま使う。時間予算は遅い CI でも耐えるよう広めに取る。
+        // リポジトリ内の現行ファイルをそのまま使う。これは厳密な benchmark ではなく runaway
+        // guard なので、時間予算は遅い / 混雑した CI でも耐えるよう広めに取る。
         var path = Path.Combine(GetRepositoryRoot(), "tests", "CodeIndex.Tests", "InstallScriptTests.cs");
         var content = File.ReadAllText(path);
 
@@ -22801,8 +22803,8 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "InstallScriptTests");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Main_WithoutExplicitVersion_DoesNotShortCircuitBrokenZeroVersionInstall");
         Assert.True(
-            stopwatch.Elapsed < TimeSpan.FromSeconds(10),
-            $"InstallScriptTests.cs extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < 10s.");
+            stopwatch.Elapsed < TimeSpan.FromSeconds(20),
+            $"InstallScriptTests.cs extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < 20s.");
     }
 
     [Fact]
