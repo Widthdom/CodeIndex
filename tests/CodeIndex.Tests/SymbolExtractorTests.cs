@@ -112,6 +112,69 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Swift_DetectsRepresentativeDeclarationKinds()
+    {
+        const string content = """
+            import Foundation
+
+            public protocol StoreProtocol {
+                associatedtype Element
+            }
+
+            @MainActor
+            public final class UserStore {
+                public var currentUser: User?
+
+                public init() {}
+
+                public func loadUser() -> User {
+                    fetchUser()
+                }
+
+                deinit {}
+
+                subscript(index: Int) -> User {
+                    currentUser!
+                }
+            }
+
+            struct User {}
+
+            enum Status {
+                case active, disabled = "disabled"
+            }
+
+            typealias UserIdentifier = String
+            macro stringify<T>(_ value: T) = #externalMacro(module: "Macros", type: "StringifyMacro")
+            precedencegroup PipelinePrecedence {}
+            infix operator |>: PipelinePrecedence
+            extension Array where Element == User {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Foundation");
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "StoreProtocol");
+        Assert.Contains(symbols, s => s.Kind == "associatedtype" && s.Name == "Element");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "UserStore");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "currentUser" && s.ContainerName == "UserStore");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "init" && s.ContainerName == "UserStore");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "loadUser" && s.ContainerName == "UserStore");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "deinit" && s.ContainerName == "UserStore");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "subscript" && s.ContainerName == "UserStore");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "User");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Status");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "active" && s.ContainerName == "Status");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "disabled" && s.ContainerName == "Status");
+        Assert.Contains(symbols, s => s.Kind == "typealias" && s.Name == "UserIdentifier");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "stringify");
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "PipelinePrecedence");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "|>");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name.StartsWith("Array", StringComparison.Ordinal));
+        Assert.DoesNotContain(symbols, s => s.Name == "fetchUser" && s.Kind == "function");
+    }
+
+    [Fact]
     public void Extract_Python_DetectsGenericFunctionsAndTypeAliases()
     {
         var content = """
