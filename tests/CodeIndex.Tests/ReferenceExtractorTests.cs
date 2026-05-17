@@ -28118,9 +28118,9 @@ public class ReferenceExtractorTests
     [Fact]
     public void Extract_KotlinTripleQuotedString_DoesNotLeakPhantomCallReferences()
     {
-        // Regression for issue #385: call-looking identifiers inside a Kotlin
+        // Regression for issues #385 and #1446: call-looking identifiers inside a Kotlin
         // multi-line raw string (""".. .""") must not be captured as references.
-        // issue #385 回帰: Kotlin の複数行 raw 文字列（"""..."""）の内側にある
+        // issue #385 / #1446 回帰: Kotlin の複数行 raw 文字列（"""..."""）の内側にある
         // 呼び出しらしい識別子は参照として抽出してはならない。
         const string content = """"
             package demo
@@ -28282,10 +28282,10 @@ public class ReferenceExtractorTests
     [Fact]
     public void Extract_ScalaTripleQuotedString_DoesNotLeakPhantomCallReferences()
     {
-        // Regression for issue #385: call-looking identifiers inside a Scala
+        // Regression for issues #385 and #1446: call-looking identifiers inside a Scala
         // multi-line raw string (""".. .""", including interpolator-prefixed forms
         // such as `s"""..."""` / `raw"""..."""`) must not be captured as references.
-        // issue #385 回帰: Scala の複数行 raw 文字列（"""...""" および `s"""..."""` /
+        // issue #385 / #1446 回帰: Scala の複数行 raw 文字列（"""...""" および `s"""..."""` /
         // `raw"""..."""` などの interpolator 形式）の内側にある呼び出しらしい識別子は
         // 参照として抽出してはならない。
         const string content = """"
