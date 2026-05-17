@@ -8023,6 +8023,65 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_ClassPrimaryConstructorParameters_AreIndexedAsContainedProperties()
+    {
+        var content = """
+            namespace App;
+
+            public class Worker(string name, int id)
+            {
+                public string Describe() => $"{name}#{id}";
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var name = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "name" && s.ContainerName == "Worker"));
+        Assert.Equal("class", name.ContainerKind);
+        Assert.Equal("string", name.ReturnType);
+        Assert.Equal("string name", name.Signature);
+
+        var id = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "id" && s.ContainerName == "Worker"));
+        Assert.Equal("int", id.ReturnType);
+        Assert.Equal("int id", id.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_StructPrimaryConstructorParameters_AreIndexedAsContainedProperties()
+    {
+        var content = """
+            namespace App;
+
+            internal readonly struct Range(int start, int length)
+            {
+                public int End => start + length;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var start = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "start" && s.ContainerName == "Range"));
+        Assert.Equal("struct", start.ContainerKind);
+        Assert.Equal("int", start.ReturnType);
+
+        var length = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "length" && s.ContainerName == "Range"));
+        Assert.Equal("struct", length.ContainerKind);
+        Assert.Equal("int", length.ReturnType);
+    }
+
+    [Fact]
+    public void Extract_CSharp_GenericConstraintNewCall_IsNotPrimaryConstructorParameter()
+    {
+        var content = """
+            public class Factory<T> where T : new()
+            {
+                public T Create() => new T();
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.ContainerName == "Factory" && s.Name == "new");
+    }
+
+    [Fact]
     public void Extract_CSharp_WrappedHeaderWithInterpolationHoleContainingNestedVerbatim_PreservesInnerLiteral()
     {
         // An interpolation hole in an outer `$"..."` must be classified as Code so the

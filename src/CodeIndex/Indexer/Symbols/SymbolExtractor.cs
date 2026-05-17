@@ -7162,9 +7162,11 @@ public static partial class SymbolExtractor
         if (!recordMatch.Success)
             return false;
 
-        var parameterOpenIndex = FindRecordPrimaryComponentListStart(
-            declaration,
-            recordMatch.Index + recordMatch.Length + javaLeadingAnnotationOffset);
+        var parameterOpenIndex = lang == "csharp"
+            ? FindCSharpPrimaryConstructorParameterListStart(declaration, recordMatch.Index + recordMatch.Length)
+            : FindRecordPrimaryComponentListStart(
+                declaration,
+                recordMatch.Index + recordMatch.Length + javaLeadingAnnotationOffset);
         if (parameterOpenIndex < 0)
             return false;
 
@@ -7284,8 +7286,8 @@ public static partial class SymbolExtractor
         if (lang == "csharp")
         {
             return kind == "struct"
-                ? new Regex(@"^\s*(?:(?:public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:static|partial|readonly|file|new|ref|unsafe)\s+)*record\s+struct\s+" + Regex.Escape(recordName) + @"\b", RegexOptions.CultureInvariant)
-                : new Regex(@"^\s*(?:(?:public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:static|partial|abstract|sealed|readonly|file|new|unsafe)\s+)*record(?:\s+class)?\s+" + Regex.Escape(recordName) + @"\b", RegexOptions.CultureInvariant);
+                ? new Regex(@"^\s*(?:(?:public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:static|partial|readonly|file|new|ref|unsafe)\s+)*(?:record\s+)?struct\s+" + Regex.Escape(recordName) + @"\b", RegexOptions.CultureInvariant)
+                : new Regex(@"^\s*(?:(?:public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:static|partial|abstract|sealed|readonly|file|new|unsafe)\s+)*(?:record(?:\s+class)?\s+|class\s+)" + Regex.Escape(recordName) + @"\b", RegexOptions.CultureInvariant);
         }
 
         if (lang == "kotlin")
@@ -7296,6 +7298,45 @@ public static partial class SymbolExtractor
         }
 
         return new Regex(@"^\s*(?:public|private|protected)?\s*(?:(?:static|final|abstract|sealed|non-sealed|strictfp)\s+)*record\s+" + Regex.Escape(recordName) + @"\b", RegexOptions.CultureInvariant);
+    }
+
+    private static int FindCSharpPrimaryConstructorParameterListStart(string declaration, int startIndex)
+    {
+        var index = Math.Max(0, startIndex);
+        if (!SkipCSharpGenericTypeParameterList(declaration, ref index))
+            return -1;
+
+        while (index < declaration.Length && char.IsWhiteSpace(declaration[index]))
+            index++;
+
+        return index < declaration.Length && declaration[index] == '('
+            ? index
+            : -1;
+    }
+
+    private static bool SkipCSharpGenericTypeParameterList(string declaration, ref int index)
+    {
+        if (index >= declaration.Length || declaration[index] != '<')
+            return true;
+
+        var depth = 0;
+        for (; index < declaration.Length; index++)
+        {
+            var ch = declaration[index];
+            if (ch == '<')
+                depth++;
+            else if (ch == '>')
+            {
+                depth--;
+                if (depth == 0)
+                {
+                    index++;
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     private static int FindRecordPrimaryComponentListStart(string declaration, int startIndex)
