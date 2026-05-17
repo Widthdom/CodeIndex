@@ -4701,6 +4701,32 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScriptTypeAliasGenericDefaults_EmitsDefaultAndRhsTypeReferences()
+    {
+        const string content = """
+            type DefaultKey = string;
+            type DefaultValue = unknown;
+            type Dict<K = DefaultKey, V = DefaultValue> = Record<K, V>;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "DefaultKey"
+            && reference.ReferenceKind == "type_reference"
+            && reference.Context == "type Dict<K = DefaultKey, V = DefaultValue> = Record<K, V>;");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "DefaultValue"
+            && reference.ReferenceKind == "type_reference"
+            && reference.Context == "type Dict<K = DefaultKey, V = DefaultValue> = Record<K, V>;");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Record"
+            && reference.ReferenceKind == "type_reference"
+            && reference.Context == "type Dict<K = DefaultKey, V = DefaultValue> = Record<K, V>;");
+    }
+
+    [Fact]
     public void Extract_CsharpIndentedRawStringBeforeBlockComment_DoesNotLeakXmlDocReferences()
     {
         // Regression: BuildCSharpBlockCommentLines must recognize the closing delimiter of an
