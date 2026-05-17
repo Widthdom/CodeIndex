@@ -357,29 +357,49 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
-          ASSET_NAME: CodeIndex-linux-x64.tar.gz
+          # install.sh downloads BOTH the linux-x64 tarball and sha256sums.txt,
+          # and the CDN can propagate each release asset independently. Polling
+          # only the tarball let the verify step run while sha256sums.txt was
+          # still 404 on the download CDN, which is exactly how the v1.22.1
+          # release failed ("Failed to download sha256sums.txt ... HTTP 404").
+          # Poll every asset the verify step fetches so a slow-propagating
+          # asset is waited out instead of failing the release.
+          # install.sh は linux-x64 tarball と sha256sums.txt の両方を
+          # ダウンロードし、CDN は各 release asset を独立に伝播させる。
+          # tarball だけをポーリングしていたため、sha256sums.txt がまだ
+          # download CDN 上で 404 のまま verify step が走り、v1.22.1 の
+          # リリースが "Failed to download sha256sums.txt ... HTTP 404" で
+          # 失敗した。verify step が取得する全 asset をポーリングし、伝播の
+          # 遅い asset があってもリリースを失敗させず待ち切る。
+          ASSET_NAMES: CodeIndex-linux-x64.tar.gz sha256sums.txt
         run: |
           set -euo pipefail
           # gh release create returns once the GitHub API records the assets,
           # but the public download URL (download/<tag>/<asset>) is served via
-          # a CDN that can lag a few seconds. Poll the actual download URL
-          # before running install.sh so the verify step doesn't 404 on a
-          # transient propagation gap.
+          # a CDN that can lag a few seconds. Poll each download URL before
+          # running install.sh so the verify step doesn't 404 on a transient
+          # propagation gap.
           # gh release create は API 反映直後に戻るが、download URL は CDN
           # 経由で配信されるため数秒のラグが起きうる。install.sh が 404 で
-          # 落ちないよう、download URL 自体が取得可能になるまでポーリングする。
-          url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG_NAME}/${ASSET_NAME}"
-          for attempt in 1 2 3 4 5 6 7 8 9 10; do
-            code="$(curl -fsSL -o /dev/null -w '%{http_code}' -I "$url" || true)"
-            if [ "$code" = "200" ]; then
-              echo "Asset reachable after $attempt attempt(s)."
-              exit 0
+          # 落ちないよう、各 download URL が取得可能になるまでポーリングする。
+          for asset in $ASSET_NAMES; do
+            url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG_NAME}/${asset}"
+            reachable=
+            for attempt in 1 2 3 4 5 6 7 8 9 10; do
+              code="$(curl -fsSL -o /dev/null -w '%{http_code}' -I "$url" || true)"
+              if [ "$code" = "200" ]; then
+                echo "Asset ${asset} reachable after $attempt attempt(s)."
+                reachable=1
+                break
+              fi
+              echo "Attempt $attempt: ${asset} HTTP $code, retrying in 5s..."
+              sleep 5
+            done
+            if [ -z "$reachable" ]; then
+              echo "Asset $url did not become reachable in time." >&2
+              exit 1
             fi
-            echo "Attempt $attempt: HTTP $code, retrying in 5s..."
-            sleep 5
           done
-          echo "Asset $url did not become reachable in time." >&2
-          exit 1
 
       - name: Verify install.sh against the published release
         env:
