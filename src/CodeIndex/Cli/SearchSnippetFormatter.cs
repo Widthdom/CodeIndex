@@ -203,11 +203,32 @@ public static class SearchSnippetFormatter
         if (matchColumn <= 0)
             return LineWidthFormatter.ClampLine(originalLine, maxLineWidth);
 
-        var normalizedStart = matchColumn - 1;
-        var normalizedEnd = Math.Min(rawIndexMap.Length - 1, normalizedStart + Math.Max(1, matchLength) - 1);
-        var rawFocusColumn = rawIndexMap[normalizedStart] + 1;
-        var rawFocusLength = rawIndexMap[normalizedEnd] - rawIndexMap[normalizedStart] + 1;
+        if (!TryReconstructRawSpan(rawIndexMap, normalizedStart: matchColumn - 1, matchLength, out var rawFocusColumn, out var rawFocusLength))
+            return LineWidthFormatter.ClampLine(originalLine, maxLineWidth);
+
         return LineWidthFormatter.ClampLine(originalLine, maxLineWidth, rawFocusColumn, rawFocusLength);
+    }
+
+    internal static bool TryReconstructRawSpan(int[] rawIndexMap, int normalizedStart, int matchLength, out int rawFocusColumn, out int rawFocusLength)
+    {
+        rawFocusColumn = 0;
+        rawFocusLength = 0;
+
+        if (normalizedStart < 0 || matchLength <= 0)
+            return false;
+
+        var normalizedEnd = normalizedStart + matchLength - 1;
+        if (normalizedEnd < normalizedStart || normalizedEnd >= rawIndexMap.Length)
+            return false;
+
+        var rawStart = rawIndexMap[normalizedStart];
+        var rawEnd = rawIndexMap[normalizedEnd];
+        if (rawStart < 0 || rawEnd < rawStart)
+            return false;
+
+        rawFocusColumn = rawStart + 1;
+        rawFocusLength = rawEnd - rawStart + 1;
+        return true;
     }
 
     private static (int Column, int Length) FindBestMatchColumn(string line, string normalizedQuery, string[] tokens, bool caseSensitive, SearchSnippetFocusMode focusMode)

@@ -99,6 +99,29 @@ public class SearchSnippetFormatterTests
     }
 
     [Fact]
+    public void TryReconstructRawSpan_ReturnsFalse_WhenNormalizedSpanCannotAnchorEnd()
+    {
+        var mapped = SearchSnippetFormatter.TryReconstructRawSpan([0, 1, 2], normalizedStart: 1, matchLength: 4, out var rawColumn, out var rawLength);
+
+        Assert.False(mapped);
+        Assert.Equal(0, rawColumn);
+        Assert.Equal(0, rawLength);
+    }
+
+    [Fact]
+    public void TryReconstructRawSpan_MapsVerbatimBoundaryToRawColumns()
+    {
+        var normalized = CSharpVerbatimNameNormalizer.Normalize("using @Foo.@Bar;", out var rawIndexMap);
+
+        var matchStart = normalized.IndexOf("Foo.Bar", StringComparison.Ordinal);
+        var mapped = SearchSnippetFormatter.TryReconstructRawSpan(rawIndexMap, matchStart, "Foo.Bar".Length, out var rawColumn, out var rawLength);
+
+        Assert.True(mapped);
+        Assert.Equal(8, rawColumn);
+        Assert.Equal(8, rawLength);
+    }
+
+    [Fact]
     public void Format_TruncatedAfterOnly_WhenMatchIsNearStart()
     {
         // Match on line 1 with maxLines=2 out of 6 — truncated after only
