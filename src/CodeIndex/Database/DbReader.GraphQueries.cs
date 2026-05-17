@@ -1750,7 +1750,7 @@ public partial class DbReader
             // 過剰に metadata 経由で広げないようにする。
             if (!evidenceCache.TryGetValue(candidate.SourceFileId, out var hasEvidence))
             {
-                hasEvidence = SourceFileHasInvokeReferenceTo(candidate.SourceFileId, definition.Name)
+                hasEvidence = SourceFileHasAnchorReferenceTo(candidate.SourceFileId, definition.Name)
                               || SourceFileHasStructuredTypeEvidence(candidate.SourceFileId, definition.Name);
                 evidenceCache[candidate.SourceFileId] = hasEvidence;
             }
@@ -1923,21 +1923,22 @@ public partial class DbReader
         return false;
     }
 
-    // A `call` or `instantiate` reference to `typeName` inside the source file is a stronger
-    // anchor than structured type evidence (signature / return-type tokens). When such a
-    // reference exists, the source/target relationship is pinned by the call graph itself,
-    // so `GetFileDependencyHintsToResolvedType` does not need to widen via the looser
-    // metadata bypass. Symbol-name match is intentionally exact (no suffix-strip alias)
-    // because callable references already carry the authoritative name — applying the C#
-    // `[Foo]` → `FooAttribute` alias here would let an unrelated `Foo()` method call
-    // anchor `impact FooAttribute` and over-report blast radius (issue #1881).
-    // `typeName` への `call` / `instantiate` 参照は signature / return 型のトークンより強い
-    // anchor で、call graph 自体が source/target の関係を確定するため metadata bypass を
+    // A `call`, `instantiate`, `subscribe`, or `unsubscribe` reference to `typeName` inside
+    // the source file is a stronger anchor than structured type evidence (signature /
+    // return-type tokens). When such a reference exists, the source/target relationship
+    // is pinned by the call graph itself, so `GetFileDependencyHintsToResolvedType` does
+    // not need to widen via the looser metadata bypass. Symbol-name match is
+    // intentionally exact (no suffix-strip alias) because callable references already
+    // carry the authoritative name — applying the C# `[Foo]` → `FooAttribute` alias here
+    // would let an unrelated `Foo()` method call anchor `impact FooAttribute` and
+    // over-report blast radius (issue #1881).
+    // `typeName` への `call` / `instantiate` / `subscribe` / `unsubscribe` 参照は signature /
+    // return 型のトークンより強い anchor で、call graph 自体が source/target の関係を確定するため metadata bypass を
     // 経由した widening は不要になる。比較は厳密一致のみで行う：callable な参照は
     // 既に authoritative な名前を保持しているため、C# の `[Foo]` → `FooAttribute` のような
     // suffix alias を適用すると、無関係な `Foo()` 呼び出しが `impact FooAttribute` を
     // 不当に anchor してしまい blast radius を過大報告する (issue #1881)。
-    private bool SourceFileHasInvokeReferenceTo(long fileId, string typeName)
+    private bool SourceFileHasAnchorReferenceTo(long fileId, string typeName)
     {
         if (!_hasReferencesTable || string.IsNullOrWhiteSpace(typeName))
             return false;
@@ -1947,7 +1948,7 @@ public partial class DbReader
             FROM symbol_references r
             WHERE r.file_id = @fileId
               AND r.symbol_name = @typeName
-              AND r.reference_kind IN {InvokeReferenceKindsSql}
+              AND r.reference_kind IN {ImpactAnchorReferenceKindsSql}
             LIMIT 1";
         cmd.Parameters.AddWithValue("@fileId", fileId);
         cmd.Parameters.AddWithValue("@typeName", typeName);

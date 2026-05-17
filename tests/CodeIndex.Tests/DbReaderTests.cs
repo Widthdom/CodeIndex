@@ -8612,6 +8612,48 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SourceFileHasAnchorReference_SubscribeAnchorsFileImpactWithoutStructuredTypeEvidence()
+    {
+        // issue #2132: C# event subscriptions are compile-time dependencies just like
+        // calls/instantiations. The file-level impact evidence guard must treat the
+        // `subscribe` row itself as an anchor, even when no method signature or
+        // return-type token mentions the event name and no metadata bypass applies.
+        // issue #2132: C# の event subscription は call / instantiate と同じく
+        // compile-time dependency なので、method signature / return 型に event 名が
+        // 出ず metadata bypass も使えない場合でも、`subscribe` 行そのものを
+        // file-level impact の anchor として扱う。
+        var svcFileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/Svc.cs",
+            Lang = "csharp",
+            Size = 64,
+            Lines = 6,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertReferences(new[]
+        {
+            new ReferenceRecord
+            {
+                FileId = svcFileId,
+                SymbolName = "Changed",
+                ReferenceKind = "subscribe",
+                Line = 4,
+                Column = 16,
+                Context = "source.Changed += OnChanged;",
+                ContainerKind = null,
+                ContainerName = null,
+            },
+        });
+
+        var method = typeof(DbReader).GetMethod("SourceFileHasAnchorReferenceTo", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+
+        var anchored = (bool)method.Invoke(_reader, new object[] { svcFileId, "Changed" })!;
+
+        Assert.True(anchored);
+    }
+
+    [Fact]
     public void AnalyzeImpact_CSharpVerbatimQueryKeepsOriginalInputOnMiss()
     {
         // issue #960: verbatim C# queries should normalize for lookup when a match

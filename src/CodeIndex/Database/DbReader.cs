@@ -124,6 +124,7 @@ public partial class DbReader
         END";
     private const string InvokeReferenceKindsSql = "('call', 'instantiate')";
     private const string EventReferenceKindsSql = "('subscribe', 'unsubscribe')";
+    private const string ImpactAnchorReferenceKindsSql = "('call', 'instantiate', 'subscribe', 'unsubscribe')";
     // Reference kinds that participate in the call-graph (callers/callees/hotspots). Metadata
     // kinds such as `attribute` / `annotation` are excluded so they do not inflate the graph
     // with non-call edges (issue #293); C++ `friend` declarations are retained because they are
