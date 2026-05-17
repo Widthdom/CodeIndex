@@ -113,6 +113,9 @@ public static partial class SymbolExtractor
     private static readonly Regex CSharpPartialFunctionDeclarationSignatureRegex = new(
         $@"^(?:(?:{CSharpVisibilityPattern}|abstract|async|extern|new|override|sealed|static|unsafe|virtual)\s+)*partial\s+",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CSharpTestMethodAttributeRegex = new(
+        @"(?:^|,)\s*(?:(?:\w+\.)*)?(?:Fact|Theory|Test|TestCase|TestCaseSource|TestMethod|DataTestMethod)(?:Attribute)?\b",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private const string JavaUnicodeEscapePattern = @"\\u+[0-9A-Fa-f]{4}";
     private const string JavaIdentifierPattern =
         @"(?:[\p{L}_$]|" + JavaUnicodeEscapePattern + @")(?:[\p{L}\p{Nd}_$]|" + JavaUnicodeEscapePattern + @")*";
@@ -3057,6 +3060,13 @@ public static partial class SymbolExtractor
 
                     if (!suppressJavaStatementSymbol)
                     {
+                        if (lang == "csharp"
+                            && pattern.Kind == "function"
+                            && IsCSharpTestMethod(lines, i))
+                        {
+                            kind = "test.method";
+                        }
+
                         var pythonImportEntries = lang == "python" && pattern.Kind == "import"
                             ? TryExpandPythonImportSymbols(lines, i, absoluteStartColumn, pythonModulePrefix)
                             : null;
@@ -3921,6 +3931,60 @@ public static partial class SymbolExtractor
         }
 
         return new string(chars);
+    }
+
+    private static bool IsCSharpTestMethod(string[] lines, int declarationLineIndex)
+    {
+        var scannedAttributeLine = false;
+        for (var lineIndex = declarationLineIndex; lineIndex >= 0; lineIndex--)
+        {
+            var trimmed = lines[lineIndex].TrimStart();
+            if (trimmed.Length == 0)
+                return false;
+
+            if (!trimmed.StartsWith('['))
+            {
+                if (lineIndex == declarationLineIndex && !scannedAttributeLine)
+                    continue;
+
+                return false;
+            }
+
+            scannedAttributeLine = true;
+            if (CSharpLineHasTestMethodAttribute(trimmed))
+                return true;
+
+            var remainderIndex = trimmed.LastIndexOf(']');
+            if (remainderIndex < 0)
+                return false;
+
+            var remainder = trimmed[(remainderIndex + 1)..].TrimStart();
+            if (remainder.Length > 0)
+                return false;
+        }
+
+        return false;
+    }
+
+    private static bool CSharpLineHasTestMethodAttribute(string trimmedLine)
+    {
+        var cursor = 0;
+        while (cursor < trimmedLine.Length && trimmedLine[cursor] == '[')
+        {
+            var closeIndex = trimmedLine.IndexOf(']', cursor + 1);
+            if (closeIndex < 0)
+                return false;
+
+            var content = trimmedLine[(cursor + 1)..closeIndex];
+            if (CSharpTestMethodAttributeRegex.IsMatch(content))
+                return true;
+
+            cursor = closeIndex + 1;
+            while (cursor < trimmedLine.Length && char.IsWhiteSpace(trimmedLine[cursor]))
+                cursor++;
+        }
+
+        return false;
     }
 
     private static void AddCppFriendDeclarationSymbol(

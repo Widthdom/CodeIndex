@@ -6647,6 +6647,45 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_ClassifiesAttributedTestMethods()
+    {
+        var content = """
+            namespace Demo.Tests;
+
+            public class CalculatorTests
+            {
+                [Fact]
+                public void AddsValues() { }
+
+                [Theory(DisplayName = "adds many")]
+                [InlineData(1, 2, 3)]
+                public void AddsManyValues(int left, int right, int expected) { }
+
+                [TestMethod]
+                public void MultipliesValues() { }
+
+                [Test]
+                public void DividesValues() { }
+
+                [NUnit.Framework.TestCase(1)]
+                public void AcceptsQualifiedNUnitAttributes(int value) { }
+
+                [Obsolete]
+                public void HelperMethod() { }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "test.method" && s.Name == "AddsValues");
+        Assert.Contains(symbols, s => s.Kind == "test.method" && s.Name == "AddsManyValues");
+        Assert.Contains(symbols, s => s.Kind == "test.method" && s.Name == "MultipliesValues");
+        Assert.Contains(symbols, s => s.Kind == "test.method" && s.Name == "DividesValues");
+        Assert.Contains(symbols, s => s.Kind == "test.method" && s.Name == "AcceptsQualifiedNUnitAttributes");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "HelperMethod");
+    }
+
+    [Fact]
     public void Extract_CSharp_NormalizesUnicodeEscapedIdentifierNames()
     {
         const string content = "namespace Demo.\\u004eames;\n\n"
@@ -8558,7 +8597,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "C");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "D");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "E");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "F");
+        Assert.Contains(symbols, s => s.Kind == "test.method" && s.Name == "F");
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "Conditional");
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "Description");
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "Trait");
@@ -23253,7 +23292,7 @@ public class SymbolExtractorTests
         stopwatch.Stop();
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "InstallScriptTests");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Main_WithoutExplicitVersion_DoesNotShortCircuitBrokenZeroVersionInstall");
+        Assert.Contains(symbols, s => s.Kind == "test.method" && s.Name == "Main_WithoutExplicitVersion_DoesNotShortCircuitBrokenZeroVersionInstall");
         Assert.True(
             stopwatch.Elapsed < TimeSpan.FromSeconds(20),
             $"InstallScriptTests.cs extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < 20s.");
