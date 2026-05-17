@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
@@ -66,6 +67,17 @@ public class DbReaderTests : IDisposable
 
         Assert.Equal(1, counts.Count);
         Assert.Equal(1, counts.FileCount);
+    }
+
+    [Fact]
+    public void CreateSearchReferencesCommand_RanksWithoutLoweringReferenceNames()
+    {
+        using var cmd = CreateSearchReferencesCommandForSql("FetchData");
+        var sql = cmd.CommandText;
+
+        Assert.DoesNotContain("lower(r.symbol_name)", sql, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("r.symbol_name = @rankingQuery COLLATE NOCASE", sql, StringComparison.Ordinal);
+        Assert.Contains("r.symbol_name COLLATE NOCASE LIKE @rankingQueryPrefix ESCAPE '\\'", sql, StringComparison.Ordinal);
     }
 
     [Theory]
@@ -221,6 +233,29 @@ public class DbReaderTests : IDisposable
         SymbolExtractor.ApplyFamilyScope(symbols, familyScopeKey ?? FileIndexer.DeriveFallbackFamilyScopeKey(path));
         _writer.InsertSymbols(symbols);
         _writer.InsertReferences(ReferenceExtractor.Extract(fileId, lang, normalized, symbols));
+    }
+
+    private SqliteCommand CreateSearchReferencesCommandForSql(string query)
+    {
+        var method = typeof(DbReader).GetMethod(
+            "CreateSearchReferencesCommand",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+
+        return Assert.IsType<SqliteCommand>(method!.Invoke(
+            _reader,
+            [
+                query,
+                20,
+                null,
+                null,
+                null,
+                null,
+                false,
+                false,
+                0,
+                true,
+            ]));
     }
 
     private void InsertManualReferences(string path, string containerName, string target, string kind, int count)

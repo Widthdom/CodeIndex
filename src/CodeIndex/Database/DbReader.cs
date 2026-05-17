@@ -1386,7 +1386,7 @@ public partial class DbReader
             FROM logical_references r";
         }
         if (includeOrdering)
-            sql += $" ORDER BY CASE WHEN @preferExactCase = 1 AND r.symbol_name = @rawQuery THEN 0 ELSE 1 END, {(referenceKind == null ? GetPathBucketOrderSql("r.path") : PathBucketOrder)}, CASE WHEN lower(r.symbol_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, CASE WHEN lower(r.symbol_name) LIKE lower(@rankingQueryPrefix) ESCAPE '\\' THEN 0 ELSE 1 END, {(referenceKind == null ? "r.path" : "f.path")}, r.line, r.column_number, r.reference_kind, r.symbol_name LIMIT @limit OFFSET @offset";
+            sql += $" ORDER BY CASE WHEN @preferExactCase = 1 AND r.symbol_name = @rawQuery THEN 0 ELSE 1 END, {(referenceKind == null ? GetPathBucketOrderSql("r.path") : PathBucketOrder)}, CASE WHEN r.symbol_name = @rankingQuery COLLATE NOCASE THEN 0 ELSE 1 END, CASE WHEN r.symbol_name COLLATE NOCASE LIKE @rankingQueryPrefix ESCAPE '\\' THEN 0 ELSE 1 END, {(referenceKind == null ? "r.path" : "f.path")}, r.line, r.column_number, r.reference_kind, r.symbol_name LIMIT @limit OFFSET @offset";
 
         cmd.CommandText = sql;
         if (query != null)
