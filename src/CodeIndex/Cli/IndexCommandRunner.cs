@@ -1051,6 +1051,7 @@ public static class IndexCommandRunner
         var errorList = new List<CliJsonMessage>();
         var warningList = new List<CliJsonMessage>();
         var scanErrorKeys = new HashSet<string>(StringComparer.Ordinal);
+        var visitedFileIdentities = new HashSet<FileIndexer.FileIdentity>();
         var readinessDemoted = false;
         var normalizedProjectRoot = Path.GetFullPath(projectRoot);
         var normalizedPriorIndexedProjectRoot = string.IsNullOrWhiteSpace(priorIndexedProjectRoot)
@@ -1349,6 +1350,40 @@ public static class IndexCommandRunner
                             Console.WriteLine($"  [SKIP] {relPath} (unsupported type)");
                             ResumeUpdateSpinnerAfterConsoleWrite();
                         }
+                    }
+                    continue;
+                }
+
+                if (FileIndexer.TryGetFileIdentity(absPath, out var identity) && !visitedFileIdentities.Add(identity))
+                {
+                    var message = "Skipped hardlinked file because the same file content was already indexed from another path.";
+                    warnings++;
+                    warningList.Add(new CliJsonMessage(relPath, message));
+                    if (!options.Json && !options.Quiet)
+                    {
+                        PauseUpdateSpinnerForConsoleWrite();
+                        ConsoleUi.PrintWarning($"{relPath}: {message}");
+                        ResumeUpdateSpinnerAfterConsoleWrite();
+                    }
+
+                    if (!writer.HasFileAtPath(relPath))
+                    {
+                        skipped++;
+                        continue;
+                    }
+
+                    DemoteReadinessOnce();
+                    using var deleteTxn = writer.BeginTransaction();
+                    if (writer.DeleteFileByPath(relPath))
+                    {
+                        WriteProjectRootOnce();
+                        deleteTxn.Commit();
+                        removed++;
+                        ftsMutated = true;
+                    }
+                    else
+                    {
+                        skipped++;
                     }
                     continue;
                 }

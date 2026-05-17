@@ -126,6 +126,44 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_UpdateFiles_HardlinkedTargets_SkipsDuplicatePathWithWarning()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var original = Path.Combine(projectRoot, "original.cs");
+            var duplicate = Path.Combine(projectRoot, "duplicate.cs");
+            File.WriteAllText(original, "public class HardlinkFixture { }\n");
+            CreateHardLink(original, duplicate);
+
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.AppendAllText(original, "public class HardlinkFixture2 { }\n");
+            File.SetLastWriteTimeUtc(original, DateTime.UtcNow.AddSeconds(2));
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "original.cs", "duplicate.cs", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal("update", json.GetProperty("mode").GetString());
+            var summary = json.GetProperty("summary");
+            Assert.Equal(1, summary.GetProperty("updated").GetInt32());
+            Assert.Equal(1, summary.GetProperty("warnings").GetInt32());
+            var warning = Assert.Single(json.GetProperty("warnings").EnumerateArray());
+            Assert.Contains("hardlinked", warning.GetProperty("message").GetString(), StringComparison.OrdinalIgnoreCase);
+            Assert.Single(ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db")));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void HandleIndexCancelKeyPress_FirstCancelRequestsCooperativeCancellation_SecondAllowsForceExit()
     {
         using var cts = new CancellationTokenSource();
@@ -6446,6 +6484,27 @@ public class IndexCommandRunnerTests
         process.WaitForExit();
         if (process.ExitCode != 0)
             throw new InvalidOperationException($"mkfifo failed: {stderr.Trim()}");
+    }
+
+    private static void CreateHardLink(string existingPath, string newPath)
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "ln",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        psi.ArgumentList.Add(existingPath);
+        psi.ArgumentList.Add(newPath);
+
+        using var process = System.Diagnostics.Process.Start(psi)
+            ?? throw new InvalidOperationException("Failed to start ln / ln の起動に失敗");
+        var stderr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        if (process.ExitCode != 0)
+            throw new InvalidOperationException($"ln failed: {stderr.Trim()}");
     }
 
     private static void WriteOversizedAsciiFile(string path)

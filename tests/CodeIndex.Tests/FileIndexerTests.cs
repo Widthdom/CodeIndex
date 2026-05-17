@@ -14,6 +14,40 @@ namespace CodeIndex.Tests;
 /// </summary>
 public class FileIndexerTests
 {
+    [Fact]
+    public void ScanFilesDetailed_HardlinkedFiles_SkipsDuplicatePathWithWarning()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-hardlink-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var original = Path.Combine(tempDir, "original.cs");
+            var duplicate = Path.Combine(tempDir, "duplicate.cs");
+            File.WriteAllText(original, "class HardlinkFixture { }\n");
+            CreateHardLink(original, duplicate);
+
+            var result = new FileIndexer(tempDir).ScanFilesDetailed();
+
+            var files = result.Files.Select(Path.GetFileName).OrderBy(name => name, StringComparer.Ordinal).ToList();
+            Assert.Single(files);
+            Assert.Contains(files[0], new[] { "duplicate.cs", "original.cs" });
+            Assert.Contains(result.NonIndexablePaths, path => path is "duplicate.cs" or "original.cs");
+            var warning = Assert.Single(
+                result.Errors,
+                error => error.Severity == FileIndexer.ScanIssueSeverity.Warning
+                    && error.Message.Contains("hardlinked", StringComparison.OrdinalIgnoreCase));
+            Assert.Contains(warning.Path, new[] { "duplicate.cs", "original.cs" });
+            Assert.False(result.HadErrors);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
     [Theory]
     [InlineData("test.py", "python")]
     [InlineData("app.js", "javascript")]
@@ -3236,6 +3270,27 @@ public class FileIndexerTests
         process.WaitForExit();
         if (process.ExitCode != 0)
             throw new InvalidOperationException($"mkfifo failed: {stderr.Trim()}");
+    }
+
+    private static void CreateHardLink(string existingPath, string newPath)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = "ln",
+            RedirectStandardError = true,
+            RedirectStandardOutput = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        psi.ArgumentList.Add(existingPath);
+        psi.ArgumentList.Add(newPath);
+
+        using var process = Process.Start(psi)
+            ?? throw new InvalidOperationException("Failed to start ln / ln の起動に失敗");
+        var stderr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        if (process.ExitCode != 0)
+            throw new InvalidOperationException($"ln failed: {stderr.Trim()}");
     }
 
     private static string RunGit(string workDir, params string[] args)
