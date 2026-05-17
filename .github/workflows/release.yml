@@ -371,29 +371,87 @@ jobs:
           # リリースが "Failed to download sha256sums.txt ... HTTP 404" で
           # 失敗した。verify step が取得する全 asset をポーリングし、伝播の
           # 遅い asset があってもリリースを失敗させず待ち切る。
-          ASSET_NAMES: CodeIndex-linux-x64.tar.gz sha256sums.txt
+          VERIFY_ASSET_NAMES: CodeIndex-linux-x64.tar.gz sha256sums.txt
         run: |
           set -euo pipefail
-          # gh release create returns once the GitHub API records the assets,
-          # but the public download URL (download/<tag>/<asset>) is served via
-          # a CDN that can lag a few seconds. Poll each download URL before
-          # running install.sh so the verify step doesn't 404 on a transient
-          # propagation gap.
-          # gh release create は API 反映直後に戻るが、download URL は CDN
-          # 経由で配信されるため数秒のラグが起きうる。install.sh が 404 で
-          # 落ちないよう、各 download URL が取得可能になるまでポーリングする。
-          for asset in $ASSET_NAMES; do
+          mapfile -t expected_assets < <(cd release-files && printf '%s\n' *)
+          wait_seconds=600
+          interval_seconds=10
+
+          # `gh release create` / `gh release upload` can return while release
+          # assets are still being processed. First wait until every file we
+          # intend to publish is visible in the release API as an uploaded,
+          # non-empty asset; otherwise the download URL can legitimately 404
+          # for longer than a short CDN-only retry loop.
+          # `gh release create` / `gh release upload` は release asset の処理完了
+          # 前に戻り得る。まず公開対象の全ファイルが release API 上で uploaded
+          # かつ非空として見えるまで待つ。これを確認しないと、download URL が
+          # 短い CDN 待機時間を超えて 404 になることがある。
+          release_api="/repos/${GITHUB_REPOSITORY}/releases/tags/${TAG_NAME}"
+          deadline=$((SECONDS + wait_seconds))
+          while :; do
+            if ! available_assets="$(gh api "${release_api}" --jq '.assets[] | select(.state == "uploaded" and .size > 0) | .name' | sort)"; then
+              if [ "$SECONDS" -ge "$deadline" ]; then
+                echo "Release API did not become readable in time for ${TAG_NAME}." >&2
+                exit 1
+              fi
+
+              echo "Release API is not ready for ${TAG_NAME}; retrying in ${interval_seconds}s..."
+              sleep "$interval_seconds"
+              continue
+            fi
+
+            missing_assets=""
+            for asset in "${expected_assets[@]}"; do
+              if ! printf '%s\n' "$available_assets" | grep -Fx -- "$asset" >/dev/null; then
+                missing_assets="${missing_assets} ${asset}"
+              fi
+            done
+
+            if [ -z "$missing_assets" ]; then
+              echo "All release assets are uploaded and non-empty in the GitHub API."
+              break
+            fi
+
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "Release assets did not finish uploading in time:${missing_assets}" >&2
+              gh api "${release_api}" --jq '.assets[] | {name, state, size}'
+              exit 1
+            fi
+
+            echo "Waiting for release assets to finish uploading:${missing_assets}"
+            sleep "$interval_seconds"
+          done
+
+          # The public download URL (download/<tag>/<asset>) is served via a
+          # CDN after the API accepts the assets. Use a tiny ranged GET instead
+          # of HEAD so this check matches install.sh's download path; GitHub's
+          # asset CDN can disagree with HEAD while GET is the operation users
+          # actually need.
+          # public download URL は API 反映後に CDN 経由で配信される。HEAD では
+          # なく小さな Range GET を使い、install.sh と同じ取得経路を確認する。
+          # GitHub の asset CDN では HEAD と GET の見え方がずれることがあり、
+          # ユーザーに必要なのは GET が成功すること。
+          for asset in $VERIFY_ASSET_NAMES; do
             url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG_NAME}/${asset}"
             reachable=
-            for attempt in 1 2 3 4 5 6 7 8 9 10; do
-              code="$(curl -fsSL -o /dev/null -w '%{http_code}' -I "$url" || true)"
-              if [ "$code" = "200" ]; then
+            deadline=$((SECONDS + wait_seconds))
+            attempt=1
+            while :; do
+              code="$(curl -fsSL --range 0-0 -o /dev/null -w '%{http_code}' "$url" || true)"
+              if [ "$code" = "200" ] || [ "$code" = "206" ]; then
                 echo "Asset ${asset} reachable after $attempt attempt(s)."
                 reachable=1
                 break
               fi
-              echo "Attempt $attempt: ${asset} HTTP $code, retrying in 5s..."
-              sleep 5
+
+              if [ "$SECONDS" -ge "$deadline" ]; then
+                break
+              fi
+
+              echo "Attempt $attempt: ${asset} HTTP $code, retrying in ${interval_seconds}s..."
+              attempt=$((attempt + 1))
+              sleep "$interval_seconds"
             done
             if [ -z "$reachable" ]; then
               echo "Asset $url did not become reachable in time." >&2
