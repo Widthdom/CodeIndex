@@ -9522,6 +9522,53 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void CSharpActiveScopeResolvers_CacheRepeatedFileLineResults_Issue2074()
+    {
+        InsertIndexedFile("src/ScopeCache.cs", "csharp",
+            """
+            using System;
+            using static Probe.Color;
+
+            namespace Probe;
+
+            public enum Color
+            {
+                Red,
+                Blue
+            }
+
+            public class Demo
+            {
+                object? Match(object value)
+                {
+                    return value is Red ? value : null;
+                }
+            }
+            """);
+
+        const string path = "src/ScopeCache.cs";
+        const int lineNumber = 15;
+
+        var namespacesFirst = InvokePrivateCSharpScopeResolver("GetActiveCSharpTypeNamespaces", path, lineNumber);
+        var namespacesSecond = InvokePrivateCSharpScopeResolver("GetActiveCSharpTypeNamespaces", path, lineNumber);
+        var containingTypesFirst = InvokePrivateCSharpScopeResolver("GetActiveCSharpContainingTypeScopes", path, lineNumber);
+        var containingTypesSecond = InvokePrivateCSharpScopeResolver("GetActiveCSharpContainingTypeScopes", path, lineNumber);
+        var staticTargetsFirst = InvokePrivateCSharpScopeResolver("GetActiveCSharpUsingStaticTargets", path, lineNumber);
+        var staticTargetsSecond = InvokePrivateCSharpScopeResolver("GetActiveCSharpUsingStaticTargets", path, lineNumber);
+
+        Assert.Same(namespacesFirst, namespacesSecond);
+        Assert.Same(containingTypesFirst, containingTypesSecond);
+        Assert.Same(staticTargetsFirst, staticTargetsSecond);
+    }
+
+    private object InvokePrivateCSharpScopeResolver(string methodName, string path, int lineNumber)
+    {
+        var method = typeof(DbReader).GetMethod(methodName, BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+        return method.Invoke(_reader, new object[] { path, lineNumber })!;
+    }
+
+    [Fact]
     public void SearchReferences_ExactSameLineResults_AreOrderedByColumn()
     {
         var fileId = _writer.UpsertFile(new FileRecord

@@ -62,6 +62,12 @@ public partial class DbReader
 
     private HashSet<string> GetActiveCSharpTypeNamespaces(string path, int lineNumber)
     {
+        if (_activeCSharpTypeNamespacesByPathLine.TryGetValue(path, out var activeNamespacesByLine)
+            && activeNamespacesByLine.TryGetValue(lineNumber, out var cachedActiveNamespaces))
+        {
+            return cachedActiveNamespaces;
+        }
+
         if (!_csharpNamespaceScopesByPath.TryGetValue(path, out var namespaceScopes))
         {
             namespaceScopes = LoadCSharpNamespaceScopes(path);
@@ -96,11 +102,24 @@ public partial class DbReader
         foreach (var globalNamespace in GetGlobalCSharpUsingNamespaces())
             activeNamespaces.Add(globalNamespace);
 
+        if (activeNamespacesByLine == null)
+        {
+            activeNamespacesByLine = new Dictionary<int, HashSet<string>>();
+            _activeCSharpTypeNamespacesByPathLine[path] = activeNamespacesByLine;
+        }
+
+        activeNamespacesByLine[lineNumber] = activeNamespaces;
         return activeNamespaces;
     }
 
     private List<CSharpContainingTypeScope> GetActiveCSharpContainingTypeScopes(string path, int lineNumber)
     {
+        if (_activeCSharpContainingTypeScopesByPathLine.TryGetValue(path, out var activeContainingTypesByLine)
+            && activeContainingTypesByLine.TryGetValue(lineNumber, out var cachedActiveContainingTypes))
+        {
+            return cachedActiveContainingTypes;
+        }
+
         if (!_csharpContainingTypeScopesByPath.TryGetValue(path, out var containingTypeScopes))
         {
             containingTypeScopes = LoadCSharpContainingTypeScopes(path);
@@ -114,6 +133,13 @@ public partial class DbReader
                 activeContainingTypes.Add(scope);
         }
 
+        if (activeContainingTypesByLine == null)
+        {
+            activeContainingTypesByLine = new Dictionary<int, List<CSharpContainingTypeScope>>();
+            _activeCSharpContainingTypeScopesByPathLine[path] = activeContainingTypesByLine;
+        }
+
+        activeContainingTypesByLine[lineNumber] = activeContainingTypes;
         return activeContainingTypes;
     }
 
@@ -304,6 +330,12 @@ public partial class DbReader
 
     private HashSet<string> GetActiveCSharpUsingStaticTargets(string path, int lineNumber)
     {
+        if (_activeCSharpUsingStaticTargetsByPathLine.TryGetValue(path, out var activeTargetsByLine)
+            && activeTargetsByLine.TryGetValue(lineNumber, out var cachedActiveTargets))
+        {
+            return cachedActiveTargets;
+        }
+
         if (!_csharpUsingStaticScopesByPath.TryGetValue(path, out var scopes))
         {
             scopes = LoadCSharpUsingStaticScopes(path);
@@ -323,6 +355,13 @@ public partial class DbReader
         foreach (var globalTarget in GetGlobalCSharpUsingStaticTargets())
             activeTargets.Add(globalTarget);
 
+        if (activeTargetsByLine == null)
+        {
+            activeTargetsByLine = new Dictionary<int, HashSet<string>>();
+            _activeCSharpUsingStaticTargetsByPathLine[path] = activeTargetsByLine;
+        }
+
+        activeTargetsByLine[lineNumber] = activeTargets;
         return activeTargets;
     }
 

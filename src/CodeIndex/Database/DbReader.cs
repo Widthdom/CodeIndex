@@ -50,6 +50,9 @@ public partial class DbReader
     private readonly Dictionary<string, List<CSharpContainingTypeScope>> _csharpContainingTypeScopesByPath = new(StringComparer.Ordinal);
     private readonly Dictionary<string, List<CSharpUsingNamespaceScope>> _csharpUsingNamespaceScopesByPath = new(StringComparer.Ordinal);
     private readonly Dictionary<string, List<CSharpUsingAliasScope>> _csharpUsingAliasScopesByPath = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, Dictionary<int, HashSet<string>>> _activeCSharpTypeNamespacesByPathLine = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, Dictionary<int, List<CSharpContainingTypeScope>>> _activeCSharpContainingTypeScopesByPathLine = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, Dictionary<int, HashSet<string>>> _activeCSharpUsingStaticTargetsByPathLine = new(StringComparer.Ordinal);
     private readonly Dictionary<string, HashSet<string>> _csharpConstantPatternContainersByMemberName = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, List<CSharpTypeNamespaceCandidate>> _csharpTypeNamespacesByName = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, List<CSharpContainingTypeCandidate>> _csharpTypeContainingTypesByName = new(StringComparer.OrdinalIgnoreCase);
