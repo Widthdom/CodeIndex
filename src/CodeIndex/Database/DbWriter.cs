@@ -256,73 +256,38 @@ public class DbWriter
             return null;
 
         var cmd = RentCommand(
-            "SELECT id, modified, checksum FROM files WHERE path = @path",
-            static c => c.Parameters.Add("@path", SqliteType.Text));
-        long? unchangedId = null;
-        long? touchId = null;
-        DateTime touchModified = default;
+            @"UPDATE files
+              SET modified = CASE
+                  WHEN modified <> @modified
+                       AND @checksum IS NOT NULL
+                       AND checksum = @checksum
+                  THEN @modified
+                  ELSE modified
+              END
+              WHERE path = @path
+                AND (
+                    modified = @modified
+                    OR (@checksum IS NOT NULL AND checksum = @checksum)
+                )
+              RETURNING id",
+            static c =>
+            {
+                c.Parameters.Add("@path", SqliteType.Text);
+                c.Parameters.Add("@modified", SqliteType.Text);
+                c.Parameters.Add("@checksum", SqliteType.Text);
+            });
         try
         {
             cmd.Parameters["@path"].Value = relativePath;
-
-            using var reader = cmd.ExecuteTrackedReader();
-            if (reader.TrackedRead())
-            {
-                var id = reader.GetInt64(0);
-                var existingModified = reader.GetDateTime(1);
-
-                // Fast path: timestamp unchanged / 高速パス: タイムスタンプ一致
-                if (existingModified == modified)
-                {
-                    unchangedId = id;
-                }
-                // Slow path: timestamp changed but content may be the same (e.g. git checkout)
-                // 低速パス: タイムスタンプは変わったが内容は同じ可能性（例: git checkout）
-                else if (checksum != null && !reader.IsDBNull(2))
-                {
-                    var existingChecksum = reader.GetString(2);
-                    if (existingChecksum == checksum)
-                    {
-                        // Defer the UPDATE until after the reader is closed so a cached
-                        // SELECT command can be reused without colliding with an open
-                        // result set on the same connection.
-                        // SELECT 用キャッシュ command の result set を閉じてから UPDATE を発行する。
-                        touchId = id;
-                        touchModified = modified;
-                    }
-                }
-            }
+            cmd.Parameters["@modified"].Value = modified;
+            cmd.Parameters["@checksum"].Value = checksum is null ? DBNull.Value : checksum;
+            var raw = cmd.ExecuteScalar();
+            return raw is long id ? id : null;
         }
         finally
         {
             ReleaseCommand(cmd);
         }
-
-        if (touchId is long id2)
-        {
-            // Update timestamp so next run takes the fast path
-            // 次回実行で高速パスを通るようタイムスタンプを更新
-            var updateCmd = RentCommand(
-                "UPDATE files SET modified = @modified WHERE id = @id",
-                static c =>
-                {
-                    c.Parameters.Add("@modified", SqliteType.Text);
-                    c.Parameters.Add("@id", SqliteType.Integer);
-                });
-            try
-            {
-                updateCmd.Parameters["@modified"].Value = touchModified;
-                updateCmd.Parameters["@id"].Value = id2;
-                updateCmd.ExecuteNonQuery();
-            }
-            finally
-            {
-                ReleaseCommand(updateCmd);
-            }
-            return id2;
-        }
-
-        return unchangedId;
     }
 
     /// <summary>

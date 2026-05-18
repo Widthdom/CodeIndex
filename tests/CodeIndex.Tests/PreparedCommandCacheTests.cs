@@ -300,8 +300,8 @@ public class PreparedCommandCacheTests : IDisposable
             Modified = modified,
         });
 
-        // Same SELECT command must be reused across distinct paths.
-        // 異なる path に対しても SELECT command が再利用される。
+        // Same atomic lookup/touch command must be reused across distinct paths.
+        // 異なる path に対しても atomic lookup/touch command が再利用される。
         Assert.NotNull(writer.GetUnchangedFileId("src/x.py", modified, "k1"));
         Assert.NotNull(writer.GetUnchangedFileId("src/y.py", modified, "k2"));
         Assert.Null(writer.GetUnchangedFileId("src/missing.py", modified, "k3"));
@@ -310,12 +310,10 @@ public class PreparedCommandCacheTests : IDisposable
     [Fact]
     public void DbWriter_WithCache_GetUnchangedFileIdTouchUpdatesTimestamp()
     {
-        // The slow-path UPDATE inside GetUnchangedFileId is now deferred until
-        // after the SELECT reader is closed, so the cached SELECT command can
-        // be reused. Confirm the touch still persists the new timestamp.
-        // GetUnchangedFileId の slow-path UPDATE は SELECT reader を閉じた後に発行
-        // されるよう変更したため、cached SELECT command の再利用と timestamp 更新が
-        // 両立することを確認する。
+        // GetUnchangedFileId now performs lookup and timestamp touch in one
+        // cached command. Confirm the touch still persists the new timestamp.
+        // GetUnchangedFileId は lookup と timestamp touch を 1 つの cached command
+        // で行うため、timestamp 更新が維持されることを確認する。
         var writer = new DbWriter(_db);
         var initial = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
         var touched = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc);
