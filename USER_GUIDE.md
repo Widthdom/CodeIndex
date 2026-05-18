@@ -299,13 +299,13 @@ fallback until you re-index with a current binary.
 ### Trace impact
 
 ```bash
-cdidx impact Run --depth 2 --exclude-tests
-cdidx impact Run --depth 0 --json
+cdidx impact Run --max-hops 2 --exclude-tests
+cdidx impact Run --max-hops 0 --json
 cdidx impact FolderDiffService --with-paths --json
 ```
 
 `impact` resolves a symbol and walks transitive callers through call-graph edges.
-`--depth 0` resolves without traversing, while `--with-paths` emits shortest call
+`--max-hops 0` resolves without traversing, while `--with-paths` emits shortest call
 chains for converging routes. Metadata-only edges such as attributes,
 annotations, and type-position references are excluded from the symbol-level BFS
 so metadata cycles do not inflate caller counts; single-type queries may still
@@ -1513,7 +1513,7 @@ Once configured, the AI can directly call these tools:
 | `outline` | Show all symbols in a single file ordered by line, start column, kind, and name, with signatures and container-depth nesting |
 | `status` | Database statistics |
 | `deps` | File-level dependency edges from the reference graph |
-| `impact_analysis` | Compute transitive callers of a symbol (inclusive `maxDepth`: `maxDepth: N` returns callers at depth 1..N — a chain A→B→C→D queried against D with `maxDepth: 2` yields C at depth 1 and B at depth 2). The symbol-level BFS walks only call-graph kinds (`call`, `instantiate`, `subscribe`) and excludes metadata-only edges (`attribute`, `annotation`, `type_reference`) so metadata cycles do not inflate caller counts. Use `maxDepth: 0` to resolve the symbol only, or rely on single-type fallback to heuristic file-level dependency hints and partial-definition hints; those file hints may include metadata edges. Pass `withPaths: true` to also receive a `paths` array per caller (shortest chains `[resolvedRoot, intermediate..., callerName]`; diamond convergence surfaces every route, capped per row with a `paths_truncated` overflow flag). |
+| `impact_analysis` | Compute transitive callers of a symbol (inclusive `maxHops`: `maxHops: N` returns callers at hop 1..N — a chain A→B→C→D queried against D with `maxHops: 2` yields C at hop 1 and B at hop 2). The deprecated `maxDepth` alias is still accepted during the compatibility period and surfaces a warning. The symbol-level BFS walks only call-graph kinds (`call`, `instantiate`, `subscribe`) and excludes metadata-only edges (`attribute`, `annotation`, `type_reference`) so metadata cycles do not inflate caller counts. Use `maxHops: 0` to resolve the symbol only, or rely on single-type fallback to heuristic file-level dependency hints and partial-definition hints; those file hints may include metadata edges. Pass `withPaths: true` to also receive a `paths` array per caller (shortest chains `[resolvedRoot, intermediate..., callerName]`; diamond convergence surfaces every route, capped per row with a `paths_truncated` overflow flag). |
 | `unused_symbols` | Find symbols defined but never referenced, with confidence buckets for dead-code triage |
 | `symbol_hotspots` | Find high-impact hotspots. `groupBy` supports `symbol`, `file`, and `statement`; SQL scopes default to statement grouping while non-SQL scopes default to symbol grouping. |
 | `batch_query` | Execute multiple queries in a single call (MCP only, max 10). The response now includes a top-level `metadata` object with `total_elapsed_ms`, `success_count`, and `failure_count`, and every entry in `results` carries `elapsed_ms` plus a compact `args_summary` so callers can spot partial failures and slow inner queries without re-issuing them. |
@@ -1980,13 +1980,13 @@ fallback になります。
 ### Impact を追跡する
 
 ```bash
-cdidx impact Run --depth 2 --exclude-tests
-cdidx impact Run --depth 0 --json
+cdidx impact Run --max-hops 2 --exclude-tests
+cdidx impact Run --max-hops 0 --json
 cdidx impact FolderDiffService --with-paths --json
 ```
 
 `impact` は symbol を解決し、call-graph edges を通じて transitive callers を探索します。
-`--depth 0` は traversal せず resolve のみ行い、`--with-paths` は収束する経路の shortest
+`--max-hops 0` は traversal せず resolve のみ行い、`--with-paths` は収束する経路の shortest
 call chains を出力します。Attributes、annotations、type-position references のような
 metadata-only edges は symbol-level BFS から除外されるため、metadata cycle で caller
 count が膨らむことはありません。ただし single-type query では heuristic file-level
@@ -3188,7 +3188,7 @@ OpenAI Codex CLI (`codex.json` または `~/.codex/config.json`):
 | `outline` | 1ファイルの全シンボルを行、開始列、種別、名前の順序で、シグネチャとコンテナ深さに応じたネスト付きで表示 |
 | `status` | データベース統計情報 |
 | `deps` | 参照グラフからファイル間依存エッジを表示 |
-| `impact_analysis` | シンボルの推移的 caller を算出（`maxDepth` は inclusive で、`maxDepth: N` 指定時は depth 1〜N の caller を返す。例: A→B→C→D のチェーンで D を `maxDepth: 2` 検索すると C(depth=1) と B(depth=2) が返る）。symbol-level BFS は call graph 種別（`call`、`instantiate`、`subscribe`）のみを辿り、metadata-only edge（`attribute`、`annotation`、`type_reference`）を除外するため、metadata cycle で caller 件数が膨らまない。`maxDepth: 0` で symbol 解決のみを行い、単一定義の型は heuristic な file-level dependency hint にフォールバックし、複数定義時はヒントも返す。この file hint は metadata edge を含み得る。`withPaths: true` を渡すと、各 caller に最短経路 `[resolvedRoot, 中間..., callerName]` の `paths` 配列が付き、ダイヤモンド収束時もすべての経路を返す（1 行あたりの保持上限を超えると `paths_truncated` で通知） |
+| `impact_analysis` | シンボルの推移的 caller を算出（`maxHops` は inclusive で、`maxHops: N` 指定時は hop 1〜N の caller を返す。例: A→B→C→D のチェーンで D を `maxHops: 2` 検索すると C(hop=1) と B(hop=2) が返る）。非推奨 alias の `maxDepth` は互換期間中も受け付け、使用時は warning を返す。symbol-level BFS は call graph 種別（`call`、`instantiate`、`subscribe`）のみを辿り、metadata-only edge（`attribute`、`annotation`、`type_reference`）を除外するため、metadata cycle で caller 件数が膨らまない。`maxHops: 0` で symbol 解決のみを行い、単一定義の型は heuristic な file-level dependency hint にフォールバックし、複数定義時はヒントも返す。この file hint は metadata edge を含み得る。`withPaths: true` を渡すと、各 caller に最短経路 `[resolvedRoot, 中間..., callerName]` の `paths` 配列が付き、ダイヤモンド収束時もすべての経路を返す（1 行あたりの保持上限を超えると `paths_truncated` で通知） |
 | `unused_symbols` | 定義されているが参照されていないシンボルを bucket 付きで検索（デッドコード検出向け） |
 | `symbol_hotspots` | 影響の大きい hotspot を検索。`groupBy` は `symbol` / `file` / `statement` を指定でき、SQL scope は statement grouping、非 SQL scope は symbol grouping が既定。 |
 | `batch_query` | 複数クエリを1回で実行（MCP専用、最大10件）。レスポンスにはトップレベル `metadata`（`total_elapsed_ms` / `success_count` / `failure_count`）と各 `results` エントリの `elapsed_ms` / `args_summary` が含まれ、部分失敗や遅い内部クエリを再実行せず把握できます。 |

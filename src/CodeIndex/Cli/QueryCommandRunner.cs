@@ -64,6 +64,7 @@ public static class QueryCommandRunner
         "--project",
         "--solution",
         "--exclude-path",
+        "--max-hops",
         "--depth",
         "--query",
         "--group-by",
@@ -2007,7 +2008,9 @@ public static class QueryCommandRunner
 
         return WithDb(options, jsonOptions, reader =>
         {
-            var maxDepth = options.ContextAfterExplicit ? options.ContextAfter : 5; // --depth is parsed into ContextAfter; 0 means resolve-only
+            var maxDepth = options.ContextAfterExplicit ? options.ContextAfter : 5; // --max-hops/--depth is parsed into ContextAfter; 0 means resolve-only
+            if (!options.Json && options.ImpactDeprecatedDepthUsed)
+                Console.Error.WriteLine("Warning: --depth is deprecated for impact; use --max-hops instead.");
             var analysis = reader.AnalyzeImpact(options.Query, maxDepth, options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.WithPaths);
             var sqlGraphSignal = NarrowSqlGraphContractSignal(
                 reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests),
@@ -2047,6 +2050,7 @@ public static class QueryCommandRunner
                                 zeroPayload["confirmed_file_count"] = 0;
                                 zeroPayload["hint_count"] = 0;
                                 zeroPayload["hint_file_count"] = 0;
+                                zeroPayload["max_hops"] = maxDepth;
                                 zeroPayload["max_depth"] = maxDepth;
                                 zeroPayload["actual_depth"] = 0;
                                 zeroPayload["truncated"] = analysis.Truncated;
@@ -2067,6 +2071,7 @@ public static class QueryCommandRunner
                                 if (analysis.Suggestion != null)
                                     zeroPayload["suggestion"] = analysis.Suggestion;
                                 AddSqlGraphContractJsonFields(zeroPayload, sqlGraphSignal);
+                                AddImpactOptionWarnings(zeroPayload, options);
                             });
                         Console.WriteLine(payload.ToJsonString(jsonOptions));
                     }
@@ -2112,6 +2117,7 @@ public static class QueryCommandRunner
                             payload["note"] = "symbol_references table is missing in this index (legacy or read-only DB). Zero result is degraded, not authoritative.";
                         AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
                         AddFreshnessHint(payload, reader);
+                        AddImpactOptionWarnings(payload, options);
                         Console.WriteLine(payload.ToJsonString(jsonOptions));
                     }
                     else
@@ -2138,6 +2144,7 @@ public static class QueryCommandRunner
                             zeroPayload["confirmed_file_count"] = 0;
                             zeroPayload["hint_count"] = 0;
                             zeroPayload["hint_file_count"] = 0;
+                            zeroPayload["max_hops"] = maxDepth;
                             zeroPayload["max_depth"] = maxDepth;
                             zeroPayload["actual_depth"] = 0;
                             zeroPayload["truncated"] = analysis.Truncated;
@@ -2158,6 +2165,7 @@ public static class QueryCommandRunner
                             if (analysis.Suggestion != null)
                                 zeroPayload["suggestion"] = analysis.Suggestion;
                             AddSqlGraphContractJsonFields(zeroPayload, sqlGraphSignal);
+                            AddImpactOptionWarnings(zeroPayload, options);
                         });
                     if (!analysis.GraphTableAvailable)
                         payload["note"] = "symbol_references table is missing in this index (legacy or read-only DB). Zero result is degraded, not authoritative.";
@@ -2195,6 +2203,7 @@ public static class QueryCommandRunner
                     if (analysis.TruncatedReason != null)
                         payload["truncated_reason"] = analysis.TruncatedReason;
                     AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
+                    AddImpactOptionWarnings(payload, options);
                     Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
                 else
@@ -2216,6 +2225,7 @@ public static class QueryCommandRunner
                     ["confirmed_file_count"] = confirmedFileCount,
                     ["hint_count"] = hintCount,
                     ["hint_file_count"] = hintFileCount,
+                    ["max_hops"] = maxDepth,
                     ["max_depth"] = maxDepth,
                     ["actual_depth"] = analysis.Callers.Count > 0 ? analysis.Callers.Max(r => r.Depth) : 0,
                     ["truncated"] = analysis.Truncated,
@@ -2236,6 +2246,7 @@ public static class QueryCommandRunner
                 if (analysis.Suggestion != null)
                     payload["suggestion"] = analysis.Suggestion;
                 AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
+                AddImpactOptionWarnings(payload, options);
                 Console.WriteLine(payload.ToJsonString(jsonOptions));
             }
             else
@@ -3140,6 +3151,7 @@ public static class QueryCommandRunner
         string? statusExplainField = null;
         var rankMode = ReferenceRankMode.Weighted;
         var extraNames = new List<string>();
+        bool impactDeprecatedDepthUsed = false;
 
         void AddParseError(string error)
         {
@@ -3335,14 +3347,18 @@ public static class QueryCommandRunner
                 case "--prefix":
                     prefix = true;
                     break;
+                case "--max-hops":
                 case "--depth":
-                    if (!TryReadRawOptionValue(args, ref i, "--depth", inlineValue, out var depthValue, out var missingDepthError))
+                    var depthOptionName = normalizedArg;
+                    if (!TryReadRawOptionValue(args, ref i, depthOptionName, inlineValue, out var depthValue, out var missingDepthError))
                         AddParseError(missingDepthError!);
-                    else if (TryParseNonNegativeInt(depthValue!, "--depth", out var parsedDepth, out var depthError))
+                    else if (TryParseNonNegativeInt(depthValue!, depthOptionName, out var parsedDepth, out var depthError))
                     {
-                        WarnIfDuplicateSingleValueOption("--depth", depthValue!);
+                        WarnIfDuplicateSingleValueOption("--max-hops", depthValue!);
                         contextAfter = parsedDepth; // reused as depth for impact / impact用に再利用
                         contextAfterExplicit = true;
+                        if (depthOptionName == "--depth")
+                            impactDeprecatedDepthUsed = true;
                     }
                     else
                         AddParseError(depthError!);
@@ -3648,6 +3664,7 @@ public static class QueryCommandRunner
             ContextBefore = contextBefore,
             ContextAfter = contextAfter,
             ContextAfterExplicit = contextAfterExplicit,
+            ImpactDeprecatedDepthUsed = impactDeprecatedDepthUsed,
             FocusLine = focusLine,
             FocusColumn = focusColumn,
             FocusLength = focusLength,
@@ -5237,6 +5254,25 @@ public static class QueryCommandRunner
             payload["unsupported_symbol_kind"] = graphSupportOverride.UnsupportedSymbolKind;
     }
 
+    private static void AddImpactOptionWarnings(JsonObject payload, QueryCommandOptions options)
+    {
+        if (!options.ImpactDeprecatedDepthUsed)
+            return;
+
+        JsonArray warnings;
+        if (payload["warnings"] is JsonArray existingWarnings)
+        {
+            warnings = existingWarnings;
+        }
+        else
+        {
+            warnings = [];
+            payload["warnings"] = warnings;
+        }
+
+        warnings.Add("--depth is deprecated for impact; use --max-hops instead.");
+    }
+
     private static void WriteGraphSupportOverrideHint(GraphSupportOverride? graphSupportOverride)
     {
         if (graphSupportOverride == null)
@@ -5334,6 +5370,7 @@ public static class QueryCommandRunner
             ["--snippet-lines"] = SearchSnippetFormatter.MaxSnippetLines,
             ["--max-line-width"] = LineWidthFormatter.MaxAllowedLineWidth,
             ["--slow-query-ms"] = 3_600_000,
+            ["--max-hops"] = 64,
             ["--depth"] = 64,
             ["--before"] = 1_000,
             ["--after"] = 1_000,
@@ -5359,7 +5396,8 @@ public static class QueryCommandRunner
         ["--query"] = "pass a search literal, e.g. `--query \"authenticate\"`. Use the `--query` form when the literal starts with `-`.",
         ["--kind"] = "pass a kind identifier, e.g. `--kind function`. definition/symbols/hotspots/unused take a symbol kind; references/callers/callees take a reference kind such as `call`, `instantiate`, or `subscribe`. Run the command's `--help` for the kind list.",
         ["--rank-by"] = "pass `weighted`, `count`, or `kind` (callers/callees only).",
-        ["--depth"] = "pass a non-negative integer, e.g. `--depth 5` (default 5).",
+        ["--max-hops"] = "pass a non-negative integer, e.g. `--max-hops 5` (default 5).",
+        ["--depth"] = "deprecated alias for `--max-hops`; pass a non-negative integer, e.g. `--max-hops 5` (default 5).",
         ["--path"] = "pass a glob-style path pattern, e.g. `--path src/**`. Repeat `--path` to add more patterns.",
         ["--exclude-path"] = "pass a glob-style path pattern to exclude, e.g. `--exclude-path tests/**`. Repeat `--exclude-path` to add more.",
         ["--since"] = "pass an ISO 8601 datetime, e.g. `--since 2024-01-01` or `--since 2024-01-01T00:00:00Z`.",
@@ -5646,6 +5684,7 @@ public sealed class QueryCommandOptions
     public int ContextBefore { get; init; }
     public int ContextAfter { get; init; }
     public bool ContextAfterExplicit { get; init; }
+    public bool ImpactDeprecatedDepthUsed { get; init; }
     public int? FocusLine { get; init; }
     public int? FocusColumn { get; init; }
     public int FocusLength { get; init; } = 1;

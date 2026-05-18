@@ -198,7 +198,7 @@ internal static class JsonEnvelopeWrapper
     {
         "--db", "--limit", "--top", "--lang", "--kind", "--since",
         "--start", "--end", "--before", "--after", "--name",
-        "--snippet-lines", "--snippet-focus", "--path", "--exclude-path", "--depth",
+        "--snippet-lines", "--snippet-focus", "--path", "--exclude-path", "--max-hops", "--depth",
         "--focus-line", "--focus-column", "--focus-length",
         "--max-line-width",
     };

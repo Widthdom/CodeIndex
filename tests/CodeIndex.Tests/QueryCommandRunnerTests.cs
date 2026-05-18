@@ -2186,8 +2186,8 @@ jobs:
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
         Assert.Contains("Error: --depth requires a value.", stderr);
-        Assert.Contains("Hint: pass a non-negative integer", stderr);
-        Assert.Contains("--depth 5", stderr);
+        Assert.Contains("Hint: deprecated alias", stderr);
+        Assert.Contains("--max-hops 5", stderr);
     }
 
     [Fact]
@@ -2869,6 +2869,7 @@ jobs:
     [InlineData("search", "0", "--top", "--limit requires a positive integer")]
     [InlineData("search", "-5", "--top", "--limit requires a positive integer")]
     [InlineData("search", "0", "--snippet-lines", "--snippet-lines requires a positive integer")]
+    [InlineData("impact", "-1", "--max-hops", "--max-hops requires a non-negative integer")]
     [InlineData("impact", "-1", "--depth", "--depth requires a non-negative integer")]
     [InlineData("excerpt", "0", "--start", "--start requires a positive integer")]
     [InlineData("excerpt", "-5", "--start", "--start requires a positive integer")]
@@ -2953,6 +2954,20 @@ jobs:
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
+    }
+
+    [Fact]
+    public void ParseArgs_ImpactMaxHopsCanonicalAndDepthDeprecatedAliasShareValue()
+    {
+        var maxHops = QueryCommandRunner.ParseArgs(["Run", "--max-hops", "2"], jsonDefault: false);
+        Assert.Equal(2, maxHops.ContextAfter);
+        Assert.True(maxHops.ContextAfterExplicit);
+        Assert.False(maxHops.ImpactDeprecatedDepthUsed);
+
+        var depthAlias = QueryCommandRunner.ParseArgs(["Run", "--depth", "3"], jsonDefault: false);
+        Assert.Equal(3, depthAlias.ContextAfter);
+        Assert.True(depthAlias.ContextAfterExplicit);
+        Assert.True(depthAlias.ImpactDeprecatedDepthUsed);
     }
 
     // Regression lock for #184: when a value-taking option is followed by the next recognized
@@ -11703,7 +11718,7 @@ jobs:
         {
             var dbPath = CreateIndexedDbWithSingleFile(projectRoot, markGraphReady: true);
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
-                ["DefinitelyMissingSymbol", "--db", dbPath, "--json", "--depth", "3"],
+                ["DefinitelyMissingSymbol", "--db", dbPath, "--json", "--max-hops", "3"],
                 _jsonOptions));
 
             using var document = ParseJsonOutput(stdout);
@@ -11713,6 +11728,7 @@ jobs:
             Assert.Equal(string.Empty, stderr);
             AssertZeroResultPayload(json, "callers");
             Assert.Equal("DefinitelyMissingSymbol", json.GetProperty("query").GetString());
+            Assert.Equal(3, json.GetProperty("max_hops").GetInt32());
             Assert.Equal(3, json.GetProperty("max_depth").GetInt32());
             Assert.False(json.GetProperty("truncated").GetBoolean());
             Assert.True(json.GetProperty("graph_table_available").GetBoolean());
@@ -11731,7 +11747,7 @@ jobs:
         {
             var dbPath = CreateIndexedDbWithSingleFile(projectRoot, markGraphReady: true);
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
-                ["HandleRequest", "--db", dbPath, "--json", "--depth", "0"],
+                ["HandleRequest", "--db", dbPath, "--json", "--max-hops", "0"],
                 _jsonOptions));
 
             using var document = ParseJsonOutput(stdout);
@@ -11740,12 +11756,13 @@ jobs:
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("HandleRequest", json.GetProperty("query").GetString());
+            Assert.Equal(0, json.GetProperty("max_hops").GetInt32());
             Assert.Equal(0, json.GetProperty("max_depth").GetInt32());
             Assert.Equal(0, json.GetProperty("actual_depth").GetInt32());
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.Equal(1, json.GetProperty("definition_count").GetInt32());
             Assert.Equal("depth_zero", json.GetProperty("zero_result_reason").GetString());
-            Assert.Equal("Use `cdidx impact <symbol> --depth 1` or higher to traverse callers.", json.GetProperty("suggestion").GetString());
+            Assert.Equal("Use `cdidx impact <symbol> --max-hops 1` or higher to traverse callers.", json.GetProperty("suggestion").GetString());
             Assert.Empty(json.GetProperty("callers").EnumerateArray());
         }
         finally

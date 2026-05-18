@@ -112,7 +112,7 @@ public partial class McpServer
             parts.Add("Use 'symbol_hotspots' to find the most-referenced symbols — central, high-impact code that changes may affect widely.");
 
         if (On("impact_analysis"))
-            parts.Add("Use 'impact_analysis' to compute transitive callers of a symbol. Pass maxDepth=0 when you only want symbol resolution without traversing callers. When a scoped query resolves to a single class / struct / interface but no symbol-level callers exist, it may instead return heuristic file-level dependency hints; always inspect 'impact_mode', 'heuristic', and 'file_impacts'.");
+            parts.Add("Use 'impact_analysis' to compute transitive callers of a symbol. Pass maxHops=0 when you only want symbol resolution without traversing callers. When a scoped query resolves to a single class / struct / interface but no symbol-level callers exist, it may instead return heuristic file-level dependency hints; always inspect 'impact_mode', 'heuristic', and 'file_impacts'.");
 
         if (On("suggest_improvement"))
             parts.Add("Use 'suggest_improvement' to report gaps or errors you notice (e.g. missing language support, poor ranking, crashes) — never include source code, only describe the issue in natural language.");
@@ -1646,7 +1646,10 @@ public partial class McpServer
         if (IsBareVerbatimQueryToken(query))
             return CreateToolErrorResponse(id, "Add a real symbol name after the command; bare verbatim prefixes like `@` are not valid queries.");
 
-        var maxDepthRequested = args?["maxDepth"]?.GetValue<int>() ?? 5;
+        var maxHopsNode = args?["maxHops"];
+        var deprecatedMaxDepthNode = args?["maxDepth"];
+        var usedDeprecatedMaxDepth = deprecatedMaxDepthNode != null;
+        var maxDepthRequested = maxHopsNode?.GetValue<int>() ?? deprecatedMaxDepthNode?.GetValue<int>() ?? 5;
         var maxDepth = Math.Clamp(maxDepthRequested, 0, MaxImpactDepth);
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 50);
         var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
@@ -1682,6 +1685,8 @@ public partial class McpServer
                 ["confirmed_file_count"] = confirmedFileCount,
                 ["hint_count"] = hintCount,
                 ["hint_file_count"] = hintFileCount,
+                ["max_hops"] = maxDepth,
+                ["max_hops_requested"] = maxDepthRequested,
                 ["max_depth"] = maxDepth,
                 ["max_depth_requested"] = maxDepthRequested,
                 ["actual_depth"] = maxActualDepth,
@@ -1705,12 +1710,21 @@ public partial class McpServer
             if (analysis.Cycles is { Count: > 0 })
                 payload["cycles"] = JsonSerializer.SerializeToNode(analysis.Cycles, _jsonOptions);
             AddSqlGraphContractSignal(payload, sqlGraphSignal);
+            var warnings = new JsonArray();
             string? maxDepthClampWarning = null;
+            string? maxDepthDeprecationWarning = null;
+            if (usedDeprecatedMaxDepth)
+            {
+                maxDepthDeprecationWarning = "maxDepth is deprecated for impact_analysis; use maxHops instead.";
+                warnings.Add(maxDepthDeprecationWarning);
+            }
             if (maxDepthRequested != maxDepth)
             {
-                maxDepthClampWarning = $"maxDepth was clamped from {maxDepthRequested} to {maxDepth} (server cap is [0, {MaxImpactDepth}]).";
-                payload["warnings"] = new JsonArray { maxDepthClampWarning };
+                maxDepthClampWarning = $"maxHops was clamped from {maxDepthRequested} to {maxDepth} (server cap is [0, {MaxImpactDepth}]).";
+                warnings.Add(maxDepthClampWarning);
             }
+            if (warnings.Count > 0)
+                payload["warnings"] = warnings;
             if (analysis.ZeroResultReason != null)
                 payload["zero_result_reason"] = analysis.ZeroResultReason;
             if (analysis.Suggestion != null)
@@ -1740,6 +1754,8 @@ public partial class McpServer
             };
             if (maxDepthClampWarning != null)
                 summary += $" Warning: {maxDepthClampWarning}";
+            if (maxDepthDeprecationWarning != null)
+                summary += $" Warning: {maxDepthDeprecationWarning}";
 
             if (count == 0)
             {

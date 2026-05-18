@@ -4546,7 +4546,7 @@ public class DbReaderTests : IDisposable
         Assert.Empty(analysis.FileImpacts);
         Assert.Equal("none", analysis.ImpactMode);
         Assert.Equal("depth_zero", analysis.ZeroResultReason);
-        Assert.Contains("depth 1", analysis.Suggestion, StringComparison.Ordinal);
+        Assert.Contains("--max-hops 1", analysis.Suggestion, StringComparison.Ordinal);
     }
 
     [Fact]

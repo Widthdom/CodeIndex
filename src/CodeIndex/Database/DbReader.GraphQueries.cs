@@ -1356,7 +1356,7 @@ public partial class DbReader
                 ZeroResultReason = definitions.Count == 0 ? "no_matching_definition" : "depth_zero",
                 Suggestion = definitions.Count == 0
                     ? "Try `cdidx definition <symbol>` to confirm the indexed name."
-                    : "Use `cdidx impact <symbol> --depth 1` or higher to traverse callers.",
+                    : "Use `cdidx impact <symbol> --max-hops 1` or higher to traverse callers.",
             };
         }
 

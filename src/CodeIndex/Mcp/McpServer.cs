@@ -110,11 +110,11 @@ public partial class McpServer : IDisposable
     internal static readonly string[] SupportedProtocolVersions = { "2025-03-26", "2024-11-05" };
     private const int MaxLimit = 200;
     private const int MaxQueryLength = 1000;
-    // Upper bound on the `impact_analysis` `maxDepth` argument. Deep monorepos can have
+    // Upper bound on the `impact_analysis` `maxHops` argument. Deep monorepos can have
     // legitimate caller chains exceeding 10 hops (e.g. DI container → factory → service →
     // handler → business logic), so the previous cap of 10 silently downgraded such requests.
     // The result-set `limit` (`MaxLimit`) and BFS visited-set still bound traversal cost.
-    // `impact_analysis` の `maxDepth` 引数の上限。深いモノレポでは 10 hops 超の正当な caller
+    // `impact_analysis` の `maxHops` 引数の上限。深いモノレポでは 10 hops 超の正当な caller
     // チェーン (DI container → factory → service → handler → business logic) があり、旧上限
     // 10 では黙ってダウングレードしていた。結果件数 `limit` (`MaxLimit`) と BFS の visited-set
     // が探索コストを抑える役割を担う。
