@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using CodeIndex.Database;
+using CodeIndex.Indexer;
 
 namespace CodeIndex.Cli;
 
@@ -147,7 +148,7 @@ internal static class JsonEnvelopeWrapper
         try
         {
             var resolvedPath = dbPath;
-            if (!dbPathExplicit && !File.Exists(resolvedPath))
+            if (!dbPathExplicit && !File.Exists(LongPath.EnsureWindowsPrefix(resolvedPath)))
                 return null;
             return DbPathResolver.TryReadIndexedHeadCommit(DbPathResolver.NormalizeDbPath(resolvedPath));
         }

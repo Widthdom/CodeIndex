@@ -1367,7 +1367,7 @@ public partial class McpServer : IDisposable
         // shaped values because they may carry query params meaningless to the filesystem.
         // CLI と同じく file: URI を受け付け、サンドボックス用の escape hatch に到達できるようにする。
         var isUri = _dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase);
-        if (!isUri && !File.Exists(_dbPath))
+        if (!isUri && !File.Exists(LongPath.EnsureWindowsPrefix(_dbPath)))
         {
             // Drop any stale cached context so the next tool call can re-open after the user
             // creates the DB (e.g. via an external `cdidx index`). Without this, a missed

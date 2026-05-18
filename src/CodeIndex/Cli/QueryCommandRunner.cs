@@ -3909,7 +3909,7 @@ public static class QueryCommandRunner
         // are meaningless to the filesystem API but are understood by SQLite.
         // URI 形式の --db を受け入れるため、file: で始まる値は File.Exists チェックをスキップ。
         var isUri = dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase);
-        if (!isUri && !File.Exists(dbPath))
+        if (!isUri && !File.Exists(LongPath.EnsureWindowsPrefix(dbPath)))
         {
             Console.Error.WriteLine($"Error [{CommandErrorCodes.DbNotFound}]: database not found at {Path.GetFullPath(dbPath)}");
             Console.Error.WriteLine("Hint: create or refresh the index with `cdidx index <projectPath>` (or `cdidx .`) and then rerun this command.");

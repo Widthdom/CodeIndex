@@ -1,4 +1,5 @@
 using System.Text.Json;
+using CodeIndex.Indexer;
 
 namespace CodeIndex.Cli;
 
@@ -76,48 +77,55 @@ public static class HookCommandRunner
 
     private static int Install(HookCommandOptions options, JsonSerializerOptions jsonOptions, string projectPath, string hooksDir, string hookPath, string chainedHookPath)
     {
-        Directory.CreateDirectory(hooksDir);
+        Directory.CreateDirectory(LongPath.EnsureWindowsPrefix(hooksDir));
 
-        if (File.Exists(hookPath))
+        var ioHookPath = LongPath.EnsureWindowsPrefix(hookPath);
+        var ioChainedHookPath = LongPath.EnsureWindowsPrefix(chainedHookPath);
+        if (File.Exists(ioHookPath))
         {
-            var existing = File.ReadAllText(hookPath);
+            var existing = File.ReadAllText(ioHookPath);
             if (!IsManagedHook(existing))
             {
-                if (File.Exists(chainedHookPath) && !options.Force)
+                if (File.Exists(ioChainedHookPath) && !options.Force)
                     return WriteResult(options.Json, jsonOptions, "error", $"chained hook already exists: {chainedHookPath}", projectPath, hookPath, chainedHookPath, CommandExitCodes.UsageError);
-                if (File.Exists(chainedHookPath))
-                    File.Delete(chainedHookPath);
-                File.Move(hookPath, chainedHookPath);
+                if (File.Exists(ioChainedHookPath))
+                    File.Delete(ioChainedHookPath);
+                File.Move(ioHookPath, ioChainedHookPath);
             }
         }
 
-        File.WriteAllText(hookPath, BuildHookScript(chainedHookPath));
-        MakeExecutable(hookPath);
+        File.WriteAllText(ioHookPath, BuildHookScript(chainedHookPath));
+        MakeExecutable(ioHookPath);
 
-        return WriteResult(options.Json, jsonOptions, "installed", "cdidx pre-commit hook installed", projectPath, hookPath, File.Exists(chainedHookPath) ? chainedHookPath : null, CommandExitCodes.Success);
+        return WriteResult(options.Json, jsonOptions, "installed", "cdidx pre-commit hook installed", projectPath, hookPath, File.Exists(ioChainedHookPath) ? chainedHookPath : null, CommandExitCodes.Success);
     }
 
     private static int Uninstall(HookCommandOptions options, JsonSerializerOptions jsonOptions, string projectPath, string hookPath, string chainedHookPath)
     {
-        if (!File.Exists(hookPath))
-            return WriteResult(options.Json, jsonOptions, "absent", "cdidx pre-commit hook is not installed", projectPath, hookPath, File.Exists(chainedHookPath) ? chainedHookPath : null, CommandExitCodes.Success);
+        var ioHookPath = LongPath.EnsureWindowsPrefix(hookPath);
+        var ioChainedHookPath = LongPath.EnsureWindowsPrefix(chainedHookPath);
+        if (!File.Exists(ioHookPath))
+            return WriteResult(options.Json, jsonOptions, "absent", "cdidx pre-commit hook is not installed", projectPath, hookPath, File.Exists(ioChainedHookPath) ? chainedHookPath : null, CommandExitCodes.Success);
 
-        var existing = File.ReadAllText(hookPath);
+        var existing = File.ReadAllText(ioHookPath);
         if (!IsManagedHook(existing) && !options.Force)
             return WriteResult(options.Json, jsonOptions, "error", "pre-commit hook is not managed by cdidx; pass --force to remove it", projectPath, hookPath, null, CommandExitCodes.UsageError);
 
-        File.Delete(hookPath);
-        if (File.Exists(chainedHookPath))
-            File.Move(chainedHookPath, hookPath);
+        File.Delete(ioHookPath);
+        if (File.Exists(ioChainedHookPath))
+            File.Move(ioChainedHookPath, ioHookPath);
 
         return WriteResult(options.Json, jsonOptions, "uninstalled", "cdidx pre-commit hook uninstalled", projectPath, hookPath, null, CommandExitCodes.Success);
     }
 
     private static int Status(HookCommandOptions options, JsonSerializerOptions jsonOptions, string projectPath, string hookPath, string chainedHookPath)
     {
-        var installed = File.Exists(hookPath) && IsManagedHook(File.ReadAllText(hookPath));
-        var status = installed ? "installed" : File.Exists(hookPath) ? "custom" : "absent";
-        return WriteResult(options.Json, jsonOptions, status, $"cdidx pre-commit hook is {status}", projectPath, hookPath, File.Exists(chainedHookPath) ? chainedHookPath : null, CommandExitCodes.Success);
+        var ioHookPath = LongPath.EnsureWindowsPrefix(hookPath);
+        var ioChainedHookPath = LongPath.EnsureWindowsPrefix(chainedHookPath);
+        var hookExists = File.Exists(ioHookPath);
+        var installed = hookExists && IsManagedHook(File.ReadAllText(ioHookPath));
+        var status = installed ? "installed" : hookExists ? "custom" : "absent";
+        return WriteResult(options.Json, jsonOptions, status, $"cdidx pre-commit hook is {status}", projectPath, hookPath, File.Exists(ioChainedHookPath) ? chainedHookPath : null, CommandExitCodes.Success);
     }
 
     private static int UnknownCommand(HookCommandOptions options, JsonSerializerOptions jsonOptions, string projectPath)

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using CodeIndex.Indexer;
 
 namespace CodeIndex.Cli;
 
@@ -224,7 +225,7 @@ internal static class CdidxConfigFile
         while (current is not null)
         {
             var candidate = Path.Combine(current.FullName, FileName);
-            if (File.Exists(candidate))
+            if (File.Exists(LongPath.EnsureWindowsPrefix(candidate)))
                 return candidate;
             current = current.Parent;
         }

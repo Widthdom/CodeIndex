@@ -433,14 +433,15 @@ public static class ConsoleUi
     {
         var exeDir = AppContext.BaseDirectory;
         var path = Path.Combine(exeDir, "version.json");
-        if (!File.Exists(path))
+        if (!File.Exists(LongPath.EnsureWindowsPrefix(path)))
         {
             // Fallback: look relative to current directory / カレントディレクトリからの相対パスでフォールバック
             path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "version.json");
         }
-        if (File.Exists(path))
+        var ioPath = LongPath.EnsureWindowsPrefix(path);
+        if (File.Exists(ioPath))
         {
-            var json = File.ReadAllText(path);
+            var json = File.ReadAllText(ioPath);
             using var doc = System.Text.Json.JsonDocument.Parse(json);
             if (doc.RootElement.TryGetProperty("version", out var ver))
                 return ver.GetString() ?? "0.0.0";

@@ -21,14 +21,15 @@ public static class GitHelper
     public static string? ResolveGitCommonDir(string projectRoot)
     {
         var dotGit = Path.Combine(projectRoot, ".git");
+        var ioDotGit = LongPath.EnsureWindowsPrefix(dotGit);
 
         // Normal repository: .git is a directory / 通常リポジトリ: .gitがディレクトリ
-        if (Directory.Exists(dotGit)) return dotGit;
+        if (Directory.Exists(ioDotGit)) return dotGit;
 
         // Worktree: .git is a file containing "gitdir: <path>" / worktree: .gitがファイルで "gitdir: <path>" を含む
-        if (!File.Exists(dotGit)) return null;
+        if (!File.Exists(ioDotGit)) return null;
 
-        var gitFileContent = File.ReadAllText(dotGit).Trim();
+        var gitFileContent = File.ReadAllText(ioDotGit).Trim();
         if (!gitFileContent.StartsWith("gitdir:")) return null;
 
         var worktreeGitDir = gitFileContent["gitdir:".Length..].Trim();
@@ -37,9 +38,10 @@ public static class GitHelper
 
         // Read commondir to find the shared .git directory / commondirを読んで共有.gitディレクトリを見つける
         var commonDirFile = Path.Combine(worktreeGitDir, "commondir");
-        if (File.Exists(commonDirFile))
+        var ioCommonDirFile = LongPath.EnsureWindowsPrefix(commonDirFile);
+        if (File.Exists(ioCommonDirFile))
         {
-            var commonDirRelative = File.ReadAllText(commonDirFile).Trim();
+            var commonDirRelative = File.ReadAllText(ioCommonDirFile).Trim();
             return Path.GetFullPath(Path.Combine(worktreeGitDir, commonDirRelative));
         }
 
@@ -420,16 +422,17 @@ public static class GitHelper
                 return ignoreCase;
 
             var probePath = Path.Combine(normalizedRoot, $".cdidx_case_probe_{Guid.NewGuid():N}");
-            File.WriteAllText(probePath, string.Empty);
+            var ioProbePath = LongPath.EnsureWindowsPrefix(probePath);
+            File.WriteAllText(ioProbePath, string.Empty);
             try
             {
                 if (TryCreateCaseVariant(probePath, out var variant))
-                    return File.Exists(variant);
+                    return File.Exists(LongPath.EnsureWindowsPrefix(variant));
             }
             finally
             {
-                if (File.Exists(probePath))
-                    File.Delete(probePath);
+                if (File.Exists(ioProbePath))
+                    File.Delete(ioProbePath);
             }
         }
         catch

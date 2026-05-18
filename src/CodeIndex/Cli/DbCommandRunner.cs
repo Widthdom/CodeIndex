@@ -1,4 +1,5 @@
 using System.Text.Json;
+using CodeIndex.Indexer;
 using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Cli;
@@ -38,7 +39,7 @@ public static class DbCommandRunner
 
         var dbPath = options.DbPath;
         var isUri = dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase);
-        if (!isUri && !File.Exists(dbPath))
+        if (!isUri && !File.Exists(LongPath.EnsureWindowsPrefix(dbPath)))
             return WriteCommandError(
                 options.Json,
                 jsonOptions,

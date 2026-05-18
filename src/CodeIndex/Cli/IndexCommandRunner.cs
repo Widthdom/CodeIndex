@@ -3120,15 +3120,21 @@ public static class IndexCommandRunner
                 patterns = [$"{dbDirRelative.TrimEnd('/')}/"];
             }
 
-            var existingContent = File.Exists(excludeFile) ? File.ReadAllText(excludeFile) : "";
+            var ioExcludeFile = LongPath.EnsureWindowsPrefix(excludeFile);
+            var existingContent = File.Exists(ioExcludeFile) ? File.ReadAllText(ioExcludeFile) : "";
             var existingLines = existingContent.Split('\n').Select(l => l.TrimEnd('\r')).ToHashSet();
 
             var missing = patterns.Where(p => !existingLines.Contains(p)).ToList();
             if (missing.Count == 0) return;
 
-            Directory.CreateDirectory(Path.GetDirectoryName(excludeFile)!);
+            Directory.CreateDirectory(LongPath.EnsureWindowsPrefix(Path.GetDirectoryName(excludeFile)!));
 
-            using var sw = File.AppendText(excludeFile);
+            using var stream = new FileStream(
+                ioExcludeFile,
+                FileMode.Append,
+                FileAccess.Write,
+                FileShare.Read);
+            using var sw = new StreamWriter(stream);
             if (existingContent.Length > 0 && !existingContent.EndsWith('\n'))
                 sw.WriteLine();
             sw.WriteLine("# cdidx (CodeIndex) — auto-generated");

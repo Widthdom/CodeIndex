@@ -1894,7 +1894,7 @@ public partial class McpServer
             ["version"] = _version,
             ["timestamp"] = DateTime.UtcNow.ToString("O"),
             ["db_path"] = _dbPath,
-            ["db_exists"] = File.Exists(_dbPath),
+            ["db_exists"] = File.Exists(LongPath.EnsureWindowsPrefix(_dbPath)),
         };
         return CreateToolResult(id, $"cdidx v{_version} is ready.", payload);
     }

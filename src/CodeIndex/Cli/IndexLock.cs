@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using CodeIndex.Indexer;
 
 namespace CodeIndex.Cli;
 
@@ -120,7 +121,8 @@ internal sealed class IndexLock : IDisposable
         var infoPath = GetInfoPath(lockPath);
         try
         {
-            if (!File.Exists(infoPath))
+            var ioInfoPath = LongPath.EnsureWindowsPrefix(infoPath);
+            if (!File.Exists(ioInfoPath))
                 return null;
             // FileShare.ReadWrite mirrors what a concurrent holder might be doing
             // (the holder may overwrite the .info on stale recovery), so a
@@ -128,7 +130,7 @@ internal sealed class IndexLock : IDisposable
             // 保持者が .info を上書きしている可能性があるため FileShare.ReadWrite で
             // 開き、共有モード不一致で読みを失敗させない。
             using var stream = new FileStream(
-                infoPath,
+                ioInfoPath,
                 FileMode.Open,
                 FileAccess.Read,
                 FileShare.ReadWrite);

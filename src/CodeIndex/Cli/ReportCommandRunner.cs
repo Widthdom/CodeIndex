@@ -3,6 +3,7 @@ using System.IO.Compression;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
+using CodeIndex.Indexer;
 using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Cli;
@@ -185,7 +186,7 @@ public static class ReportCommandRunner
 
     internal static (string Text, List<ReportSchemaTable> Tables, string? DbPath, bool DbIncluded) BuildSchemaSummary(string dbPath)
     {
-        if (!File.Exists(dbPath))
+        if (!File.Exists(LongPath.EnsureWindowsPrefix(dbPath)))
         {
             var missingText = $"no SQLite index found at: {dbPath}\nRun `cdidx index <projectPath>` first if you want schema details attached.\n";
             return (missingText, new List<ReportSchemaTable>(), dbPath, false);

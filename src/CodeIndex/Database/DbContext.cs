@@ -91,7 +91,7 @@ public class DbContext : IDisposable
             var normalized = TryGetLocalPath(dbPath);
             if (normalized != null)
             {
-                if (!File.Exists(normalized))
+                if (!File.Exists(LongPath.EnsureWindowsPrefix(normalized)))
                 {
                     message = $"database not found: {dbPath}";
                     isNotFound = true;
@@ -101,7 +101,7 @@ public class DbContext : IDisposable
                 openTarget = normalized;
             }
         }
-        else if (!File.Exists(dbPath))
+        else if (!File.Exists(LongPath.EnsureWindowsPrefix(dbPath)))
         {
             message = $"database not found: {dbPath}";
             isNotFound = true;

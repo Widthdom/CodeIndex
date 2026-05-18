@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using CodeIndex.Indexer;
 using CodeIndex.Models;
 
 namespace CodeIndex.Cli;
@@ -270,10 +271,11 @@ public class SuggestionStore
     /// </summary>
     private List<SuggestionRecord> ReadUnlocked()
     {
-        if (!File.Exists(_filePath))
+        var ioPath = LongPath.EnsureWindowsPrefix(_filePath);
+        if (!File.Exists(ioPath))
             return new List<SuggestionRecord>();
 
-        var json = File.ReadAllText(_filePath);
+        var json = File.ReadAllText(ioPath);
         if (string.IsNullOrWhiteSpace(json))
             return new List<SuggestionRecord>();
 
@@ -320,10 +322,11 @@ public class SuggestionStore
         int skip = 0,
         int? take = null)
     {
-        if (!File.Exists(_filePath))
+        var ioPath = LongPath.EnsureWindowsPrefix(_filePath);
+        if (!File.Exists(ioPath))
             return new List<SuggestionRecord>();
 
-        var snapshot = File.ReadAllBytes(_filePath);
+        var snapshot = File.ReadAllBytes(ioPath);
         if (snapshot.Length == 0)
             return new List<SuggestionRecord>();
 
@@ -531,8 +534,8 @@ public class SuggestionStore
         try
         {
             var backupPath = _filePath + ".bak";
-            if (File.Exists(_filePath))
-                File.Move(_filePath, backupPath, overwrite: true);
+            if (File.Exists(LongPath.EnsureWindowsPrefix(_filePath)))
+                File.Move(LongPath.EnsureWindowsPrefix(_filePath), LongPath.EnsureWindowsPrefix(backupPath), overwrite: true);
         }
         catch
         {

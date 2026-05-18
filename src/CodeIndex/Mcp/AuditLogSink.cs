@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using CodeIndex.Indexer;
 
 namespace CodeIndex.Mcp;
 
@@ -141,19 +142,23 @@ internal sealed class AuditLogSink : IDisposable
             {
                 var current = SlotPath(slot);
                 var next = SlotPath(slot + 1);
-                if (!File.Exists(current))
+                var ioCurrent = LongPath.EnsureWindowsPrefix(current);
+                var ioNext = LongPath.EnsureWindowsPrefix(next);
+                if (!File.Exists(ioCurrent))
                     continue;
-                if (File.Exists(next))
-                    SafeDelete(next);
-                File.Move(current, next);
+                if (File.Exists(ioNext))
+                    SafeDelete(ioNext);
+                File.Move(ioCurrent, ioNext);
             }
 
-            if (File.Exists(_path))
+            var ioPath = LongPath.EnsureWindowsPrefix(_path);
+            if (File.Exists(ioPath))
             {
                 var first = SlotPath(1);
-                if (File.Exists(first))
-                    SafeDelete(first);
-                File.Move(_path, first);
+                var ioFirst = LongPath.EnsureWindowsPrefix(first);
+                if (File.Exists(ioFirst))
+                    SafeDelete(ioFirst);
+                File.Move(ioPath, ioFirst);
             }
             _bytesWritten = 0;
         }
