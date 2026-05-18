@@ -228,6 +228,75 @@ public class McpServerTests : IDisposable
         Assert.Contains("2024-11-05", McpServer.SupportedProtocolVersions);
     }
 
+    [Theory]
+    [InlineData("search")]
+    [InlineData("definition")]
+    [InlineData("references")]
+    [InlineData("callers")]
+    [InlineData("callees")]
+    [InlineData("analyze_symbol")]
+    [InlineData("impact_analysis")]
+    public void ToolCall_RequiredQuery_DistinguishesMissingFromWhitespace(string toolName)
+    {
+        var missing = CallToolAndReadErrorMessage(toolName, new JsonObject());
+        var blank = CallToolAndReadErrorMessage(toolName, new JsonObject { ["query"] = "   " });
+
+        Assert.Equal("Missing required parameter: query", missing);
+        Assert.Equal("Parameter \"query\" cannot be empty or whitespace-only", blank);
+    }
+
+    [Theory]
+    [InlineData("outline")]
+    [InlineData("excerpt")]
+    [InlineData("index")]
+    public void ToolCall_RequiredPath_DistinguishesMissingFromWhitespace(string toolName)
+    {
+        var missing = CallToolAndReadErrorMessage(toolName, new JsonObject());
+        var blank = CallToolAndReadErrorMessage(toolName, new JsonObject { ["path"] = "   " });
+
+        Assert.Equal("Missing required parameter: path", missing);
+        Assert.Equal("Parameter \"path\" cannot be empty or whitespace-only", blank);
+    }
+
+    [Fact]
+    public void ToolCall_FindInFilePath_DistinguishesMissingFromWhitespace()
+    {
+        var missing = CallToolAndReadErrorMessage("find_in_file", new JsonObject { ["query"] = "Run" });
+        var blank = CallToolAndReadErrorMessage("find_in_file", new JsonObject
+        {
+            ["query"] = "Run",
+            ["path"] = "   "
+        });
+
+        Assert.Equal("Missing required parameter: path", missing);
+        Assert.Equal("Parameter \"path\" cannot be empty or whitespace-only", blank);
+    }
+
+    [Theory]
+    [InlineData("category")]
+    [InlineData("description")]
+    public void ToolCall_SuggestImprovementRequiredStrings_DistinguishMissingFromWhitespace(string propertyName)
+    {
+        var baseArguments = new JsonObject
+        {
+            ["category"] = "unexpected_error",
+            ["description"] = "The tool should report this behavior more clearly."
+        };
+        baseArguments.Remove(propertyName);
+        var missing = CallToolAndReadErrorMessage("suggest_improvement", baseArguments);
+
+        var blankArguments = new JsonObject
+        {
+            ["category"] = "unexpected_error",
+            ["description"] = "The tool should report this behavior more clearly.",
+            [propertyName] = "   "
+        };
+        var blank = CallToolAndReadErrorMessage("suggest_improvement", blankArguments);
+
+        Assert.Equal($"Missing required parameter: {propertyName}", missing);
+        Assert.Equal($"Parameter \"{propertyName}\" cannot be empty or whitespace-only", blank);
+    }
+
     [Fact]
     public void BuildUnsupportedProtocolMessage_MentionsRequestedAndSupported()
     {
@@ -8253,6 +8322,25 @@ public class McpServerTests : IDisposable
         RaiseConsoleCancelKeyPress();
 
         Assert.False(cts.IsCancellationRequested);
+    }
+
+    private string CallToolAndReadErrorMessage(string toolName, JsonObject arguments)
+    {
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = toolName,
+                ["arguments"] = arguments
+            }
+        };
+        var response = _server.HandleMessage(request)!;
+
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+        return response["result"]!["content"]!.AsArray()[0]!["text"]!.GetValue<string>();
     }
 
     private static void RaiseConsoleCancelKeyPress()

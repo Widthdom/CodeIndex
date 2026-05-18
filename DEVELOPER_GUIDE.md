@@ -1318,6 +1318,10 @@ Every MCP error response — both JSON-RPC `error` objects and MCP
 tool-result errors (`isError: true`) — carries a canonical
 `data` envelope so clients can branch on a stable machine-readable
 category instead of parsing the human `message` string.
+For required string tool arguments, the human message still says
+`Missing required parameter: <name>` only when the argument is absent;
+when the argument is present but empty or whitespace-only, the message
+is `Parameter "<name>" cannot be empty or whitespace-only` (#2145).
 
 - `data.category` — stable wire identifier (see table below).
 - `data.suggestion` — operator-actionable next step in English.
@@ -2504,6 +2508,7 @@ MCP は独立したシリアライズ戦略（オブジェクトを JSON など�
 #### 構造化エラーエンベロープとサーバーコード — issue #1581
 
 MCP のエラー応答は JSON-RPC の `error` オブジェクトでも、MCP ツール結果エラー（`isError: true`）でも、共通の canonical な `data` エンベロープを必ず載せる。クライアントは人間向けの `message` 文字列をパースする代わりに、安定した機械可読カテゴリで分岐できる。
+必須文字列ツール引数について、人間向け message は引数自体が無い場合だけ `Missing required parameter: <name>` となる。引数は存在するが空または空白のみの場合は `Parameter "<name>" cannot be empty or whitespace-only` を返す（#2145）。
 
 - `data.category` — 安定ワイヤ識別子（下表参照）。
 - `data.suggestion` — オペレータが取れる次のアクション（英語）。
