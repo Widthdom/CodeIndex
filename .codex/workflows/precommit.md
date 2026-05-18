@@ -27,4 +27,14 @@ dotnet build CodeIndex.sln -c Release
 dotnet test CodeIndex.sln -c Release
 ```
 
+In sandboxed environments where the shared Roslyn compilation server cannot
+start or connect reliably, add `-p:UseSharedCompilation=false` to build and
+test commands. This avoids the 5-minute shared compilation socket timeout while
+preserving the same project and configuration coverage:
+
+```bash
+dotnet build CodeIndex.sln -c Release -p:UseSharedCompilation=false
+dotnet test CodeIndex.sln -c Release -p:UseSharedCompilation=false
+```
+
 If a command cannot run in the current environment, report the reason and the exact command the user should run.
