@@ -1046,6 +1046,38 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void Search_TiedChunksUseStableChunkIdOrder()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/tied_chunks.py", Lang = "python", Size = 3000, Lines = 260,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks([
+            new ChunkRecord { FileId = fileId, ChunkIndex = 0, StartLine = 1, EndLine = 20, Content = "stable_tie_marker\n" },
+            new ChunkRecord { FileId = fileId, ChunkIndex = 1, StartLine = 101, EndLine = 120, Content = "stable_tie_marker\n" },
+            new ChunkRecord { FileId = fileId, ChunkIndex = 2, StartLine = 201, EndLine = 220, Content = "stable_tie_marker\n" },
+        ]);
+
+        var first = _reader.Search("stable_tie_marker", limit: 10)
+            .Where(r => r.Path == "src/tied_chunks.py")
+            .Select(r => (r.Path, r.StartLine, r.EndLine, r.Content))
+            .ToArray();
+
+        Assert.Equal([1, 101, 201], first.Select(r => r.StartLine).ToArray());
+
+        for (var i = 0; i < 10; i++)
+        {
+            var next = _reader.Search("stable_tie_marker", limit: 10)
+                .Where(r => r.Path == "src/tied_chunks.py")
+                .Select(r => (r.Path, r.StartLine, r.EndLine, r.Content))
+                .ToArray();
+
+            Assert.Equal(first, next);
+        }
+    }
+
+    [Fact]
     public void Search_PrefersDefinitionFileOverReferenceOnlySourceFile()
     {
         var refFileId = _writer.UpsertFile(new FileRecord

@@ -312,6 +312,8 @@ For the current use case — a local CLI tool that indexes a single project for 
 
 FTS5 works through a **virtual table** — a table that looks and behaves like a normal SQLite table but stores its data in a specialized format optimized for text search.
 
+Search result ordering must remain deterministic for identical inputs and an unchanged index. Ranking `ORDER BY` clauses should finish with stable persisted keys after user-visible relevance keys, so ties in FTS rank, file timestamp, and path never fall through to SQLite's implementation-defined row order. The chunk search `ORDER BY` ends with `f.path, c.id ASC` for this reason (#1731).
+
 ### What is an inverted index?
 
 An inverted index maps each word (token) to the list of documents (or rows) that contain it — like the index at the back of a textbook.
