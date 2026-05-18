@@ -36,6 +36,7 @@ public static class LineWidthFormatter
             return new ClampedTextResult(string.Join('\n', lines), false);
         var output = new string[lines.Count];
         var anyTruncated = false;
+        var truncatedCharCount = 0;
         for (var i = 0; i < lines.Count; i++)
         {
             var clamped = i == focusLineIndex
@@ -43,19 +44,38 @@ public static class LineWidthFormatter
                 : ClampLine(lines[i], maxLineWidth);
             output[i] = clamped.Text;
             anyTruncated |= clamped.Truncated;
+            truncatedCharCount += clamped.TruncatedCharCount;
         }
 
-        return new ClampedTextResult(string.Join('\n', output), anyTruncated);
+        return new ClampedTextResult(string.Join('\n', output), anyTruncated, truncatedCharCount);
     }
 
     private static ClampedTextResult ClampFromHead(string line, int maxLineWidth)
     {
-        var suffix = BuildMarker(line.Length - maxLineWidth);
-        var visibleWidth = maxLineWidth - suffix.Length;
-        if (visibleWidth <= 0)
-            return new ClampedTextResult(line[..SafeSliceEnd(line, maxLineWidth)], true);
+        var visibleWidth = Math.Min(maxLineWidth, line.Length);
+        var suffix = BuildMarker(line.Length - visibleWidth);
+        for (var attempt = 0; attempt < 4; attempt++)
+        {
+            var nextVisibleWidth = maxLineWidth - suffix.Length;
+            if (nextVisibleWidth <= 0)
+                break;
+            nextVisibleWidth = Math.Min(nextVisibleWidth, line.Length);
+            if (nextVisibleWidth == visibleWidth)
+                break;
 
-        return new ClampedTextResult(line[..SafeSliceEnd(line, visibleWidth)] + suffix, true);
+            visibleWidth = nextVisibleWidth;
+            suffix = BuildMarker(line.Length - visibleWidth);
+        }
+
+        visibleWidth = maxLineWidth - suffix.Length;
+        if (visibleWidth <= 0)
+        {
+            var safeEnd = SafeSliceEnd(line, maxLineWidth);
+            return new ClampedTextResult(line[..safeEnd], true, line.Length - safeEnd);
+        }
+
+        var safeVisibleEnd = SafeSliceEnd(line, visibleWidth);
+        return new ClampedTextResult(line[..safeVisibleEnd] + BuildMarker(line.Length - safeVisibleEnd), true, line.Length - safeVisibleEnd);
     }
 
     private static ClampedTextResult ClampAroundFocus(string line, int maxLineWidth, int focusColumn, int focusLength)
@@ -75,7 +95,7 @@ public static class LineWidthFormatter
                 var safeFocusStart = SafeSliceStart(line, focusStart);
                 var fallbackLength = Math.Min(maxLineWidth, line.Length - safeFocusStart);
                 var safeFallbackEnd = SafeSliceEnd(line, safeFocusStart + fallbackLength);
-                return new ClampedTextResult(line[safeFocusStart..safeFallbackEnd], true);
+                return new ClampedTextResult(line[safeFocusStart..safeFallbackEnd], true, line.Length - (safeFallbackEnd - safeFocusStart));
             }
 
             var desiredCenter = focusStart + ((focusEnd - focusStart) / 2);
@@ -99,7 +119,8 @@ public static class LineWidthFormatter
         var safeEnd = SafeSliceEnd(line, end);
         var finalPrefix = safeStart > 0 ? BuildMarker(safeStart) : string.Empty;
         var finalSuffix = safeEnd < line.Length ? BuildMarker(line.Length - safeEnd) : string.Empty;
-        return new ClampedTextResult(finalPrefix + line[safeStart..safeEnd] + finalSuffix, true);
+        var visibleChars = safeEnd - safeStart;
+        return new ClampedTextResult(finalPrefix + line[safeStart..safeEnd] + finalSuffix, true, line.Length - visibleChars);
     }
 
     // Avoid slicing in the middle of a UTF-16 surrogate pair so output stays valid UTF-16
@@ -126,4 +147,4 @@ public static class LineWidthFormatter
         $"...(+{elidedChars})...";
 }
 
-public readonly record struct ClampedTextResult(string Text, bool Truncated);
+public readonly record struct ClampedTextResult(string Text, bool Truncated, int TruncatedCharCount = 0);

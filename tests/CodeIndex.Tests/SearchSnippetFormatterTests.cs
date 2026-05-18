@@ -239,9 +239,41 @@ public class SearchSnippetFormatterTests
         Assert.Contains("Target", compact.Snippet);
         Assert.True(compact.Snippet.Length <= 512, $"clamped snippet should stay bounded, got {compact.Snippet.Length}");
         Assert.Equal(1, compact.TruncatedLineCount);
+        Assert.Equal(1, compact.TruncationContext.LineCount);
+        Assert.Single(compact.TruncationContext.CharCounts);
+        Assert.True(compact.TruncationContext.TotalChars > 0);
+        Assert.Equal(compact.TruncationContext.TotalChars, compact.TruncationContext.CharCounts.Sum());
         Assert.Single(compact.Highlights);
         Assert.True(compact.Highlights[0].Truncated);
         Assert.Equal(hugeLine.Length, compact.Highlights[0].OriginalLineLength);
+        Assert.Equal(compact.TruncationContext.CharCounts, compact.Highlights[0].TruncatedCharCounts);
+    }
+
+    [Fact]
+    public void ToCompactResult_ReportsTruncationContext_WhenMultipleSnippetLinesAreClamped()
+    {
+        var first = "Target " + new string('a', 5_000);
+        var second = new string('b', 5_000);
+        var result = new SearchResult
+        {
+            Path = "dist/app.min.js",
+            Lang = "javascript",
+            StartLine = 1,
+            EndLine = 2,
+            Content = first + "\n" + second,
+            Score = -1.0,
+        };
+
+        var compact = SearchSnippetFormatter.ToCompactResult(result, "Target", maxLines: 2, maxLineWidth: 128);
+
+        Assert.Equal(2, compact.TruncatedLineCount);
+        Assert.Equal(2, compact.TruncationContext.LineCount);
+        Assert.Equal(2, compact.TruncationContext.CharCounts.Count);
+        Assert.All(compact.TruncationContext.CharCounts, count => Assert.True(count > 4_000));
+        Assert.Equal(compact.TruncationContext.CharCounts.Sum(), compact.TruncationContext.TotalChars);
+        Assert.Single(compact.Highlights);
+        Assert.Equal([compact.TruncationContext.CharCounts[0]], compact.Highlights[0].TruncatedCharCounts);
+        Assert.Contains($"(+{compact.TruncationContext.CharCounts[1]})", compact.Snippet);
     }
 
     [Fact]

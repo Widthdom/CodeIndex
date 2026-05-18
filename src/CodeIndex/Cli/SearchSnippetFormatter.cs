@@ -49,6 +49,7 @@ public static class SearchSnippetFormatter
             ContextBefore = excerpt.ContextBefore,
             ContextAfter = excerpt.ContextAfter,
             TruncatedLineCount = excerpt.TruncatedLineCount,
+            TruncationContext = excerpt.TruncationContext,
             Score = result.Score,
         };
     }
@@ -132,6 +133,7 @@ public static class SearchSnippetFormatter
         var matchLines = new List<int>();
         var highlights = new List<SearchHighlight>();
         var clampedLines = new List<string>((end - start) + 1);
+        var truncatedCharCounts = new List<int>();
         var truncatedLineCount = 0;
 
         for (int i = start; i <= end; i++)
@@ -148,7 +150,10 @@ public static class SearchSnippetFormatter
             }
             clampedLines.Add(clamped.Text);
             if (clamped.Truncated)
+            {
                 truncatedLineCount++;
+                truncatedCharCounts.Add(clamped.TruncatedCharCount);
+            }
 
             if (!matchSet.Contains(i))
                 continue;
@@ -161,6 +166,7 @@ public static class SearchSnippetFormatter
                 Text = clamped.Text,
                 OriginalLineLength = originalLine.Length,
                 Truncated = clamped.Truncated,
+                TruncatedCharCounts = clamped.Truncated ? [clamped.TruncatedCharCount] : [],
                 Terms = GetMatchedTerms(normalizeCSharpVerbatimNames && normalizedLines != null ? normalizedLines[i] : originalLine, normalizedQuery, tokens, caseSensitive),
             });
         }
@@ -177,6 +183,12 @@ public static class SearchSnippetFormatter
             TruncatedBefore = start > 0,
             TruncatedAfter = end < lines.Length - 1,
             TruncatedLineCount = truncatedLineCount,
+            TruncationContext = new SearchTruncationContext
+            {
+                LineCount = truncatedLineCount,
+                CharCounts = truncatedCharCounts,
+                TotalChars = truncatedCharCounts.Sum(),
+            },
         };
     }
 
@@ -431,6 +443,7 @@ public sealed class CompactSearchResult
     public int ContextBefore { get; set; }
     public int ContextAfter { get; set; }
     public int TruncatedLineCount { get; set; }
+    public SearchTruncationContext TruncationContext { get; set; } = new();
     public double Score { get; set; }
 }
 
@@ -447,7 +460,15 @@ public sealed class SearchHighlight
     public string Text { get; set; } = string.Empty;
     public int OriginalLineLength { get; set; }
     public bool Truncated { get; set; }
+    public List<int> TruncatedCharCounts { get; set; } = [];
     public List<string> Terms { get; set; } = [];
+}
+
+public sealed class SearchTruncationContext
+{
+    public int LineCount { get; set; }
+    public List<int> CharCounts { get; set; } = [];
+    public int TotalChars { get; set; }
 }
 
 public sealed class SearchSnippetExcerpt
@@ -462,4 +483,5 @@ public sealed class SearchSnippetExcerpt
     public bool TruncatedBefore { get; set; }
     public bool TruncatedAfter { get; set; }
     public int TruncatedLineCount { get; set; }
+    public SearchTruncationContext TruncationContext { get; set; } = new();
 }
