@@ -36,6 +36,7 @@ public partial class DbReader
     private static readonly Regex CSharpUsingNamespaceImportRegex = new(@"^\s*(?:global\s+)?using\s+(?!static\b)(?<target>[^;=]+)", RegexOptions.Compiled);
     private static readonly IReadOnlyDictionary<string, string> QueryLanguageAliases = BuildQueryLanguageAliases();
     private readonly SqliteConnection _conn;
+    private readonly PreparedCommandCache? _commandCache;
     private readonly bool _isReadOnly;
     private readonly DbSchemaCache? _schemaCache;
     private readonly CancellationToken _cancellation;
@@ -320,7 +321,8 @@ public partial class DbReader
         : this(context?.Connection ?? throw new ArgumentNullException(nameof(context)),
                context.IsReadOnly,
                context.SchemaCache,
-               CancellationToken.None)
+               CancellationToken.None,
+               context.PreparedCommands)
     {
     }
 
@@ -334,7 +336,8 @@ public partial class DbReader
         : this(context?.Connection ?? throw new ArgumentNullException(nameof(context)),
                context.IsReadOnly,
                context.SchemaCache,
-               cancellation)
+               cancellation,
+               context.PreparedCommands)
     {
     }
 
@@ -356,8 +359,14 @@ public partial class DbReader
     }
 
     public DbReader(SqliteConnection connection, bool isReadOnly, DbSchemaCache? schemaCache, CancellationToken cancellation)
+        : this(connection, isReadOnly, schemaCache, cancellation, commandCache: null)
+    {
+    }
+
+    private DbReader(SqliteConnection connection, bool isReadOnly, DbSchemaCache? schemaCache, CancellationToken cancellation, PreparedCommandCache? commandCache)
     {
         _conn = connection;
+        _commandCache = commandCache;
         // SQL user functions are registered once per connection by `DbContext` when the
         // connection is opened. Re-registering on every `DbReader` construction wasted CPU
         // on hot MCP/CLI paths that build a short-lived reader per request (#1564).
@@ -444,6 +453,28 @@ public partial class DbReader
     /// プライベートフィールドに触れずに済むようにする。
     /// </summary>
     public void ThrowIfCancellationRequested() => _cancellation.ThrowIfCancellationRequested();
+
+    private SqliteCommand RentCommand(string sql, Action<SqliteCommand> configureSchema)
+    {
+        if (_commandCache != null)
+            return _commandCache.GetOrAdd(sql, configureSchema);
+
+        var cmd = _conn.CreateCommand();
+        cmd.CommandText = sql;
+        configureSchema(cmd);
+        return cmd;
+    }
+
+    private void ReleaseCommand(SqliteCommand cmd)
+    {
+        if (_commandCache == null)
+            cmd.Dispose();
+    }
+
+    private static void SetParameter(SqliteCommand cmd, string name, object? value)
+    {
+        cmd.Parameters[name].Value = value ?? DBNull.Value;
+    }
 
     private static (bool Newer, string? Reason) DetectNewerThanReaderContracts(SqliteConnection conn, int userVersion)
     {

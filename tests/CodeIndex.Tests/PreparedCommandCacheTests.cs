@@ -348,6 +348,70 @@ public class PreparedCommandCacheTests : IDisposable
         Assert.Equal(touched, reader.GetDateTime(0));
     }
 
+    [Fact]
+    public void DbReader_WithCache_ReusesCSharpResolutionCommandsAcrossReaders()
+    {
+        var writer = new DbWriter(_db);
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/pattern.cs",
+            Lang = "csharp",
+            Size = 80,
+            Lines = 4,
+            Checksum = "reader-cache",
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        writer.InsertSymbols(new[]
+        {
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "enum",
+                Name = "Color",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 1,
+                Signature = "enum Color { Red }",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "enum",
+                Name = "Red",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 1,
+                Signature = "Red",
+                ContainerKind = "enum",
+                ContainerName = "Color",
+                ContainerQualifiedName = "Color",
+            },
+        });
+        writer.InsertReferences(new[]
+        {
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "Red",
+                ReferenceKind = "type_reference",
+                Line = 4,
+                Column = 18,
+                Context = "case Red: break;",
+            },
+        });
+
+        var firstReader = new DbReader(_db);
+        firstReader.SearchReferences("Red", lang: "csharp", referenceKind: "type_reference", exact: true);
+        var countAfterFirstReader = _db.PreparedCommands.Count;
+
+        Assert.True(countAfterFirstReader > 0);
+
+        var secondReader = new DbReader(_db);
+        secondReader.SearchReferences("Red", lang: "csharp", referenceKind: "type_reference", exact: true);
+
+        Assert.Equal(countAfterFirstReader, _db.PreparedCommands.Count);
+    }
+
     public void Dispose()
     {
         _db.Dispose();

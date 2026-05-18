@@ -175,38 +175,45 @@ public partial class DbReader
 
         var lastDot = qualifiedName.LastIndexOf('.');
         var shortName = lastDot >= 0 ? qualifiedName[(lastDot + 1)..] : qualifiedName;
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = @"
+        var sql = @"
             SELECT f.path, s.kind, s.name, s.container_name, s.container_qualified_name, s.visibility, s.signature, s.body_start_line, s.body_end_line, s.start_line, s.end_line
             FROM symbols s
             JOIN files f ON s.file_id = f.id
             WHERE f.lang = 'csharp'
               AND s.name = @symbolName COLLATE NOCASE
               AND s.kind IN ('class', 'struct', 'interface')";
-        cmd.Parameters.AddWithValue("@symbolName", shortName);
+        var cmd = RentCommand(sql, static c => c.Parameters.Add("@symbolName", SqliteType.Text));
+        SetParameter(cmd, "@symbolName", shortName);
 
         CSharpContainingTypeScope? resolved = null;
-        using var reader = cmd.ExecuteTrackedReader();
-        while (reader.TrackedRead())
+        try
         {
-            var scope = CreateCSharpContainingTypeScope(
-                reader.GetString(0),
-                GetNullableString(reader, 1),
-                GetNullableString(reader, 2),
-                GetNullableString(reader, 3),
-                GetNullableString(reader, 4),
-                GetNullableString(reader, 5),
-                GetNullableString(reader, 6),
-                reader.IsDBNull(7) ? null : reader.GetInt32(7),
-                reader.IsDBNull(8) ? null : reader.GetInt32(8),
-                reader.IsDBNull(9) ? null : reader.GetInt32(9),
-                reader.IsDBNull(10) ? null : reader.GetInt32(10));
-            if (scope == null)
-                continue;
-            if (!string.Equals(scope.QualifiedName, qualifiedName, StringComparison.Ordinal))
-                continue;
-            resolved = scope;
-            break;
+            using var reader = cmd.ExecuteTrackedReader();
+            while (reader.TrackedRead())
+            {
+                var scope = CreateCSharpContainingTypeScope(
+                    reader.GetString(0),
+                    GetNullableString(reader, 1),
+                    GetNullableString(reader, 2),
+                    GetNullableString(reader, 3),
+                    GetNullableString(reader, 4),
+                    GetNullableString(reader, 5),
+                    GetNullableString(reader, 6),
+                    reader.IsDBNull(7) ? null : reader.GetInt32(7),
+                    reader.IsDBNull(8) ? null : reader.GetInt32(8),
+                    reader.IsDBNull(9) ? null : reader.GetInt32(9),
+                    reader.IsDBNull(10) ? null : reader.GetInt32(10));
+                if (scope == null)
+                    continue;
+                if (!string.Equals(scope.QualifiedName, qualifiedName, StringComparison.Ordinal))
+                    continue;
+                resolved = scope;
+                break;
+            }
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
         }
 
         _csharpContainingTypeScopeByQualifiedName[qualifiedName] = resolved;
@@ -407,8 +414,7 @@ public partial class DbReader
 
     private List<CSharpUsingNamespaceScope> LoadCSharpUsingNamespaceScopes(string path)
     {
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = @"
+        var sql = @"
             SELECT s.kind, s.line, s.body_start_line, s.body_end_line, s.end_line, s.signature, f.lines
             FROM symbols s
             JOIN files f ON s.file_id = f.id
@@ -416,36 +422,44 @@ public partial class DbReader
               AND f.lang = 'csharp'
               AND (s.kind = 'import' OR s.kind = 'namespace')
             ORDER BY s.line";
-        cmd.Parameters.AddWithValue("@path", path);
+        var cmd = RentCommand(sql, static c => c.Parameters.Add("@path", SqliteType.Text));
+        SetParameter(cmd, "@path", path);
 
         var namespaceScopes = new List<(int StartLine, int EndLine)>();
         var imports = new List<(int Line, string Signature)>();
-        using var reader = cmd.ExecuteTrackedReader();
-        while (reader.TrackedRead())
+        try
         {
-            var kind = reader.GetString(0);
-            var line = reader.GetInt32(1);
-            if (kind == "namespace")
+            using var reader = cmd.ExecuteTrackedReader();
+            while (reader.TrackedRead())
             {
-                var startLine = reader.IsDBNull(2) ? line : reader.GetInt32(2);
-                var endLine = reader.IsDBNull(3)
-                    ? (reader.IsDBNull(4) ? line : reader.GetInt32(4))
-                    : reader.GetInt32(3);
-                var signature = GetNullableString(reader, 5);
-                if (!string.IsNullOrWhiteSpace(signature)
-                    && signature.TrimEnd().EndsWith(';')
-                    && !reader.IsDBNull(6))
+                var kind = reader.GetString(0);
+                var line = reader.GetInt32(1);
+                if (kind == "namespace")
                 {
-                    endLine = Math.Max(endLine, reader.GetInt32(6));
+                    var startLine = reader.IsDBNull(2) ? line : reader.GetInt32(2);
+                    var endLine = reader.IsDBNull(3)
+                        ? (reader.IsDBNull(4) ? line : reader.GetInt32(4))
+                        : reader.GetInt32(3);
+                    var signature = GetNullableString(reader, 5);
+                    if (!string.IsNullOrWhiteSpace(signature)
+                        && signature.TrimEnd().EndsWith(';')
+                        && !reader.IsDBNull(6))
+                    {
+                        endLine = Math.Max(endLine, reader.GetInt32(6));
+                    }
+
+                    if (startLine > 0 && endLine >= startLine)
+                        namespaceScopes.Add((startLine, endLine));
+                    continue;
                 }
 
-                if (startLine > 0 && endLine >= startLine)
-                    namespaceScopes.Add((startLine, endLine));
-                continue;
+                if (!reader.IsDBNull(5))
+                    imports.Add((line, reader.GetString(5)));
             }
-
-            if (!reader.IsDBNull(5))
-                imports.Add((line, reader.GetString(5)));
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
         }
 
         var scopes = new List<CSharpUsingNamespaceScope>();
@@ -814,8 +828,7 @@ public partial class DbReader
 
     private List<CSharpUsingStaticScope> LoadCSharpUsingStaticScopes(string path)
     {
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = @"
+        var sql = @"
             SELECT s.kind, s.line, s.body_start_line, s.body_end_line, s.end_line, s.signature, f.lines
             FROM symbols s
             JOIN files f ON s.file_id = f.id
@@ -823,36 +836,44 @@ public partial class DbReader
               AND f.lang = 'csharp'
               AND (s.kind = 'import' OR s.kind = 'namespace')
             ORDER BY s.line";
-        cmd.Parameters.AddWithValue("@path", path);
+        var cmd = RentCommand(sql, static c => c.Parameters.Add("@path", SqliteType.Text));
+        SetParameter(cmd, "@path", path);
 
         var namespaceScopes = new List<(int StartLine, int EndLine)>();
         var imports = new List<(int Line, string Signature)>();
-        using var reader = cmd.ExecuteTrackedReader();
-        while (reader.TrackedRead())
+        try
         {
-            var kind = reader.GetString(0);
-            var line = reader.GetInt32(1);
-            if (kind == "namespace")
+            using var reader = cmd.ExecuteTrackedReader();
+            while (reader.TrackedRead())
             {
-                var startLine = reader.IsDBNull(2) ? line : reader.GetInt32(2);
-                var endLine = reader.IsDBNull(3)
-                    ? (reader.IsDBNull(4) ? line : reader.GetInt32(4))
-                    : reader.GetInt32(3);
-                var signature = GetNullableString(reader, 5);
-                if (!string.IsNullOrWhiteSpace(signature)
-                    && signature.TrimEnd().EndsWith(';')
-                    && !reader.IsDBNull(6))
+                var kind = reader.GetString(0);
+                var line = reader.GetInt32(1);
+                if (kind == "namespace")
                 {
-                    endLine = Math.Max(endLine, reader.GetInt32(6));
+                    var startLine = reader.IsDBNull(2) ? line : reader.GetInt32(2);
+                    var endLine = reader.IsDBNull(3)
+                        ? (reader.IsDBNull(4) ? line : reader.GetInt32(4))
+                        : reader.GetInt32(3);
+                    var signature = GetNullableString(reader, 5);
+                    if (!string.IsNullOrWhiteSpace(signature)
+                        && signature.TrimEnd().EndsWith(';')
+                        && !reader.IsDBNull(6))
+                    {
+                        endLine = Math.Max(endLine, reader.GetInt32(6));
+                    }
+
+                    if (startLine > 0 && endLine >= startLine)
+                        namespaceScopes.Add((startLine, endLine));
+                    continue;
                 }
 
-                if (startLine > 0 && endLine >= startLine)
-                    namespaceScopes.Add((startLine, endLine));
-                continue;
+                if (!reader.IsDBNull(5))
+                    imports.Add((line, reader.GetString(5)));
             }
-
-            if (!reader.IsDBNull(5))
-                imports.Add((line, reader.GetString(5)));
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
         }
 
         var scopes = new List<CSharpUsingStaticScope>();
@@ -973,8 +994,7 @@ public partial class DbReader
         if (_csharpGlobalUsingStaticTargets != null)
             return _csharpGlobalUsingStaticTargets;
 
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = @"
+        var sql = @"
             SELECT s.signature
             FROM symbols s
             JOIN files f ON s.file_id = f.id
@@ -982,16 +1002,24 @@ public partial class DbReader
               AND s.kind = 'import'";
 
         var targets = new HashSet<string>(StringComparer.Ordinal);
-        using var reader = cmd.ExecuteTrackedReader();
-        while (reader.TrackedRead())
+        var cmd = RentCommand(sql, static _ => { });
+        try
         {
-            if (reader.IsDBNull(0))
-                continue;
-            if (TryParseCSharpUsingStaticImport(reader.GetString(0), out var target, out var isGlobal)
-                && isGlobal)
+            using var reader = cmd.ExecuteTrackedReader();
+            while (reader.TrackedRead())
             {
-                targets.Add(target!);
+                if (reader.IsDBNull(0))
+                    continue;
+                if (TryParseCSharpUsingStaticImport(reader.GetString(0), out var target, out var isGlobal)
+                    && isGlobal)
+                {
+                    targets.Add(target!);
+                }
             }
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
         }
 
         _csharpGlobalUsingStaticTargets = targets;
@@ -1003,8 +1031,7 @@ public partial class DbReader
         if (_csharpGlobalUsingAliasesByName != null)
             return _csharpGlobalUsingAliasesByName;
 
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = @"
+        var sql = @"
             SELECT s.signature
             FROM symbols s
             JOIN files f ON s.file_id = f.id
@@ -1012,22 +1039,30 @@ public partial class DbReader
               AND s.kind = 'import'";
 
         var aliases = new Dictionary<string, CSharpUsingAliasScope>(StringComparer.Ordinal);
-        using var reader = cmd.ExecuteTrackedReader();
-        while (reader.TrackedRead())
+        var cmd = RentCommand(sql, static _ => { });
+        try
         {
-            if (reader.IsDBNull(0))
-                continue;
-            if (TryParseCSharpUsingAliasImport(reader.GetString(0), out var aliasName, out var targetQualifiedName, out var isGlobal)
-                && isGlobal)
+            using var reader = cmd.ExecuteTrackedReader();
+            while (reader.TrackedRead())
             {
-                aliases[aliasName!] = new CSharpUsingAliasScope(
-                    aliasName!,
-                    targetQualifiedName!,
-                    0,
-                    1,
-                    int.MaxValue,
-                    IsKnownCSharpTypeQualifiedName(targetQualifiedName!));
+                if (reader.IsDBNull(0))
+                    continue;
+                if (TryParseCSharpUsingAliasImport(reader.GetString(0), out var aliasName, out var targetQualifiedName, out var isGlobal)
+                    && isGlobal)
+                {
+                    aliases[aliasName!] = new CSharpUsingAliasScope(
+                        aliasName!,
+                        targetQualifiedName!,
+                        0,
+                        1,
+                        int.MaxValue,
+                        IsKnownCSharpTypeQualifiedName(targetQualifiedName!));
+                }
             }
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
         }
 
         _csharpGlobalUsingAliasesByName = aliases;
@@ -1039,8 +1074,7 @@ public partial class DbReader
         if (_csharpGlobalUsingNamespaces != null)
             return _csharpGlobalUsingNamespaces;
 
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = @"
+        var sql = @"
             SELECT s.signature
             FROM symbols s
             JOIN files f ON s.file_id = f.id
@@ -1048,16 +1082,24 @@ public partial class DbReader
               AND s.kind = 'import'";
 
         var namespaces = new HashSet<string>(StringComparer.Ordinal);
-        using var reader = cmd.ExecuteTrackedReader();
-        while (reader.TrackedRead())
+        var cmd = RentCommand(sql, static _ => { });
+        try
         {
-            if (reader.IsDBNull(0))
-                continue;
-            if (TryParseCSharpUsingNamespaceImport(reader.GetString(0), out var target, out var isGlobal)
-                && isGlobal)
+            using var reader = cmd.ExecuteTrackedReader();
+            while (reader.TrackedRead())
             {
-                namespaces.Add(target!);
+                if (reader.IsDBNull(0))
+                    continue;
+                if (TryParseCSharpUsingNamespaceImport(reader.GetString(0), out var target, out var isGlobal)
+                    && isGlobal)
+                {
+                    namespaces.Add(target!);
+                }
             }
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
         }
 
         _csharpGlobalUsingNamespaces = namespaces;
@@ -1570,38 +1612,45 @@ public partial class DbReader
         if (_csharpTypeNamespacesByName.TryGetValue(symbolName, out var cached))
             return cached;
 
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = @"
+        var sql = @"
             SELECT DISTINCT s.container_kind, s.container_name, s.container_qualified_name, f.path, s.visibility, s.signature
             FROM symbols s
             JOIN files f ON s.file_id = f.id
             WHERE f.lang = 'csharp'
               AND s.name = @symbolName COLLATE NOCASE
               AND s.kind IN ('class', 'struct', 'interface', 'enum', 'delegate')";
-        cmd.Parameters.AddWithValue("@symbolName", symbolName);
+        var cmd = RentCommand(sql, static c => c.Parameters.Add("@symbolName", SqliteType.Text));
+        SetParameter(cmd, "@symbolName", symbolName);
 
         var namespaces = new List<CSharpTypeNamespaceCandidate>();
-        using var reader = cmd.ExecuteTrackedReader();
-        while (reader.TrackedRead())
+        try
         {
-            var containerKind = GetNullableString(reader, 0);
-            var path = reader.GetString(3);
-            var visibility = GetNullableString(reader, 4);
-            var signature = GetNullableString(reader, 5);
-            var isFileLocal = string.Equals(visibility, "file", StringComparison.OrdinalIgnoreCase)
-                || (!string.IsNullOrWhiteSpace(signature) && signature.Contains("file ", StringComparison.Ordinal));
-            if (string.Equals(containerKind, "namespace", StringComparison.Ordinal))
+            using var reader = cmd.ExecuteTrackedReader();
+            while (reader.TrackedRead())
             {
-                var qualifiedNamespace = GetNullableString(reader, 2);
-                var fallbackNamespace = GetNullableString(reader, 1);
-                var namespaceName = NormalizeDbCSharpQualifiedName(qualifiedNamespace ?? fallbackNamespace ?? string.Empty)
-                    ?? string.Empty;
-                namespaces.Add(new CSharpTypeNamespaceCandidate(namespaceName, path, isFileLocal));
-                continue;
-            }
+                var containerKind = GetNullableString(reader, 0);
+                var path = reader.GetString(3);
+                var visibility = GetNullableString(reader, 4);
+                var signature = GetNullableString(reader, 5);
+                var isFileLocal = string.Equals(visibility, "file", StringComparison.OrdinalIgnoreCase)
+                    || (!string.IsNullOrWhiteSpace(signature) && signature.Contains("file ", StringComparison.Ordinal));
+                if (string.Equals(containerKind, "namespace", StringComparison.Ordinal))
+                {
+                    var qualifiedNamespace = GetNullableString(reader, 2);
+                    var fallbackNamespace = GetNullableString(reader, 1);
+                    var namespaceName = NormalizeDbCSharpQualifiedName(qualifiedNamespace ?? fallbackNamespace ?? string.Empty)
+                        ?? string.Empty;
+                    namespaces.Add(new CSharpTypeNamespaceCandidate(namespaceName, path, isFileLocal));
+                    continue;
+                }
 
-            if (containerKind == null)
-                namespaces.Add(new CSharpTypeNamespaceCandidate(string.Empty, path, isFileLocal));
+                if (containerKind == null)
+                    namespaces.Add(new CSharpTypeNamespaceCandidate(string.Empty, path, isFileLocal));
+            }
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
         }
 
         _csharpTypeNamespacesByName[symbolName] = namespaces;
@@ -1613,33 +1662,40 @@ public partial class DbReader
         if (_csharpTypeContainingTypesByName.TryGetValue(symbolName, out var cached))
             return cached;
 
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = @"
+        var sql = @"
             SELECT DISTINCT s.container_kind, s.container_name, s.container_qualified_name, s.visibility, s.signature
             FROM symbols s
             JOIN files f ON s.file_id = f.id
             WHERE f.lang = 'csharp'
               AND s.name = @symbolName COLLATE NOCASE
               AND s.kind IN ('class', 'struct', 'interface', 'enum', 'delegate')";
-        cmd.Parameters.AddWithValue("@symbolName", symbolName);
+        var cmd = RentCommand(sql, static c => c.Parameters.Add("@symbolName", SqliteType.Text));
+        SetParameter(cmd, "@symbolName", symbolName);
 
         var containingTypes = new List<CSharpContainingTypeCandidate>();
-        using var reader = cmd.ExecuteTrackedReader();
-        while (reader.TrackedRead())
+        try
         {
-            var containerKind = GetNullableString(reader, 0);
-            if (containerKind is not ("class" or "struct" or "interface"))
-                continue;
-
-            var containerQualifiedName = GetNullableString(reader, 2);
-            var containerName = GetNullableString(reader, 1);
-            var qualifiedContainer = NormalizeDbCSharpQualifiedName(containerQualifiedName ?? containerName ?? string.Empty);
-            if (!string.IsNullOrWhiteSpace(qualifiedContainer))
+            using var reader = cmd.ExecuteTrackedReader();
+            while (reader.TrackedRead())
             {
-                containingTypes.Add(new CSharpContainingTypeCandidate(
-                    qualifiedContainer,
-                    IsNestedCSharpTypeAccessibleFromDerivedType(GetNullableString(reader, 3), GetNullableString(reader, 4))));
+                var containerKind = GetNullableString(reader, 0);
+                if (containerKind is not ("class" or "struct" or "interface"))
+                    continue;
+
+                var containerQualifiedName = GetNullableString(reader, 2);
+                var containerName = GetNullableString(reader, 1);
+                var qualifiedContainer = NormalizeDbCSharpQualifiedName(containerQualifiedName ?? containerName ?? string.Empty);
+                if (!string.IsNullOrWhiteSpace(qualifiedContainer))
+                {
+                    containingTypes.Add(new CSharpContainingTypeCandidate(
+                        qualifiedContainer,
+                        IsNestedCSharpTypeAccessibleFromDerivedType(GetNullableString(reader, 3), GetNullableString(reader, 4))));
+                }
             }
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
         }
 
         _csharpTypeContainingTypesByName[symbolName] = containingTypes;
@@ -1651,33 +1707,40 @@ public partial class DbReader
         if (_csharpConstantPatternContainersByMemberName.TryGetValue(symbolName, out var cached))
             return cached;
 
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = @"
+        var sql = @"
             SELECT s.kind, s.container_kind, s.container_name, s.container_qualified_name, s.signature
             FROM symbols s
             JOIN files f ON s.file_id = f.id
             WHERE f.lang = 'csharp'
               AND s.name = @symbolName COLLATE NOCASE
               AND s.container_name IS NOT NULL";
-        cmd.Parameters.AddWithValue("@symbolName", symbolName);
+        var cmd = RentCommand(sql, static c => c.Parameters.Add("@symbolName", SqliteType.Text));
+        SetParameter(cmd, "@symbolName", symbolName);
 
         var containers = new HashSet<string>(StringComparer.Ordinal);
-        using var reader = cmd.ExecuteTrackedReader();
-        while (reader.TrackedRead())
+        try
         {
-            var kind = reader.GetString(0);
-            var containerKind = GetNullableString(reader, 1);
-            var containerName = GetNullableString(reader, 2);
-            if (string.IsNullOrWhiteSpace(containerName))
-                continue;
+            using var reader = cmd.ExecuteTrackedReader();
+            while (reader.TrackedRead())
+            {
+                var kind = reader.GetString(0);
+                var containerKind = GetNullableString(reader, 1);
+                var containerName = GetNullableString(reader, 2);
+                if (string.IsNullOrWhiteSpace(containerName))
+                    continue;
 
-            var isConstantPatternMember = (kind == "enum" && containerKind == "enum")
-                || (containerKind is "class" or "struct" && !reader.IsDBNull(4) && IsCSharpConstSignature(reader.GetString(4)));
-            if (!isConstantPatternMember)
-                continue;
+                var isConstantPatternMember = (kind == "enum" && containerKind == "enum")
+                    || (containerKind is "class" or "struct" && !reader.IsDBNull(4) && IsCSharpConstSignature(reader.GetString(4)));
+                if (!isConstantPatternMember)
+                    continue;
 
-            var qualifiedContainer = GetNullableString(reader, 3);
-            containers.Add(string.IsNullOrWhiteSpace(qualifiedContainer) ? containerName! : qualifiedContainer!);
+                var qualifiedContainer = GetNullableString(reader, 3);
+                containers.Add(string.IsNullOrWhiteSpace(qualifiedContainer) ? containerName! : qualifiedContainer!);
+            }
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
         }
 
         _csharpConstantPatternContainersByMemberName[symbolName] = containers;
