@@ -197,6 +197,13 @@ internal static class ProgramRunner
             EmitCommandMetric(args[0], args, commandStartTimestamp, commandStopwatch, exitCode, ex.Code);
             return exitCode;
         }
+        catch (OperationCanceledException ex)
+        {
+            GlobalToolLog.Error($"command_complete exit_code={CommandExitCodes.CancelledBySignal} operation_cancelled type={ex.GetType().Name}: {ex.Message}");
+            Console.Error.WriteLine("Error: command cancelled before it could complete.");
+            EmitCommandMetric(args[0], args, commandStartTimestamp, commandStopwatch, CommandExitCodes.CancelledBySignal, ex.GetType().Name);
+            return CommandExitCodes.CancelledBySignal;
+        }
         catch (Exception ex)
         {
             if (JsonOutputFailure.TryHandle(ex, out var exitCode))

@@ -32,6 +32,25 @@ public class ProgramRunnerTests
     }
 
     [Fact]
+    public void Run_OperationCanceledException_ReturnsCancelledExitCode()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["status"],
+            appVersion: "1.10.0",
+            beforeDispatchForTesting: () => throw new OperationCanceledException("timeout budget elapsed")));
+
+        Assert.Equal(CommandExitCodes.CancelledBySignal, exitCode);
+        Assert.Equal(string.Empty, stdout);
+
+        var trimmed = stderr.TrimEnd();
+        Assert.Equal(trimmed, stderr.Trim());
+        Assert.DoesNotContain(Environment.NewLine, trimmed);
+        Assert.DoesNotContain("OperationCanceledException", trimmed);
+        Assert.DoesNotContain("timeout budget elapsed", trimmed);
+        Assert.StartsWith("Error: command cancelled before it could complete.", trimmed);
+    }
+
+    [Fact]
     public void Run_ForcedGlobalToolLogging_WritesLifecycleAndMirrorsStderr()
     {
         var logDir = Path.Combine(Path.GetTempPath(), $"cdidx_global_tool_log_{Guid.NewGuid():N}");
