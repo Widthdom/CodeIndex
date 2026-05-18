@@ -978,13 +978,14 @@ curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh 
 What `install.sh` does, in order (see `install.sh`):
 
 1. **Detect platform.** `uname -s` / `uname -m` are normalized to the
-   `<os>-<arch>` RID the release workflow publishes (`linux-x64`,
-   `linux-arm64`, `osx-arm64`, `win-x64`; see
-   [Platform Support](docs/platform-support.md)). Alpine / musl is
-   rejected up front with an actionable error because the self-contained
-   binary links against glibc. `osx-x64` is rejected because the release
-   matrix does not ship that RID, with NuGet global-tool and source-build
-   alternatives in the error text.
+   `<os>-<arch>` RID and validates it against the release workflow's
+   published asset list (`linux-x64`, `linux-arm64`, `osx-arm64`,
+   `win-x64`, `win-arm64`; see [Platform Support](docs/platform-support.md))
+   before any release-asset download. Alpine / musl is rejected up front
+   with an actionable error because the self-contained binary links against
+   glibc. Unsupported RIDs such as `osx-x64` fail with the detected RID,
+   supported list, NuGet global-tool and source-build alternatives, and the
+   issue link for requesting official platform support.
 2. **Detect existing install first.** If `INSTALL_DIR/cdidx` already
    exists, the installer caches its parsed `--version` output before any
    network work so later version-selection and repair decisions can
@@ -2382,7 +2383,7 @@ curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh 
 
 `install.sh` が順に行うこと（`install.sh` 参照）:
 
-1. **プラットフォーム検出。** `uname -s` / `uname -m` をリリースワークフローが publish する `<os>-<arch>` RID（`linux-x64`、`linux-arm64`、`osx-arm64`、`win-x64`。詳細は [プラットフォームサポート](docs/platform-support.md#プラットフォームサポート)）に正規化。自己完結型バイナリは glibc にリンクされているため、Alpine / musl は先頭で明示的に拒否する。リリース行列が `osx-x64` を出していないため、こちらも拒否し、エラー文で NuGet global tool と source build の代替手段を案内する。
+1. **プラットフォーム検出。** `uname -s` / `uname -m` を `<os>-<arch>` RID に正規化し、release asset の download 前にリリースワークフローが publish する一覧（`linux-x64`、`linux-arm64`、`osx-arm64`、`win-x64`、`win-arm64`。詳細は [プラットフォームサポート](docs/platform-support.md#プラットフォームサポート)）と照合する。自己完結型バイナリは glibc にリンクされているため、Alpine / musl は先頭で明示的に拒否する。`osx-x64` などの未対応 RID は、検出 RID、対応一覧、NuGet global tool / source build の代替手段、公式 platform support をリクエストする issue link を含むエラーで拒否する。
 2. **既存インストールを先に検出。** `INSTALL_DIR/cdidx` が既にある場合は、ネットワークへ行く前に `--version` を解釈して保持する。これにより、後続のバージョン選択や repair 判定で「健全な一致」なのか「古い/不完全な install」なのかを区別できる。
 3. **バージョン解決。** 明示引数がある場合は `v` プレフィックス付き・無しの両方を受け付ける（`v1.8.0` / `1.8.0`）。引数なしでも GitHub API（`/repos/Widthdom/CodeIndex/releases/latest`）を叩いて latest tag を解決し、`jq` があれば `tag_name` 取得に使い、無ければ portability のため従来どおり `grep` + `sed` にフォールバックする。そのうえで健全な既存 install がその latest tag と一致している場合だけ download を skip する。壊れた `v0.0.0` install や必須隣接資産欠落 install は再インストール対象として扱う。HTTP 失敗も `403` rate limit / `404` / `5xx` / 実際の curl network error を分けて案内する。
 4. **明示バージョン指定時は再インストールまたは切り替えに進む。** 引数なし再実行も latest release を対象にするが、明示ターゲット版では、同版でも必ず再インストールへ進み、別版なら切り替えへ進む。壊れた `v0.0.0` install や、同版でも必須資産が欠けている install も置き換え対象として扱う — これは意図した挙動。

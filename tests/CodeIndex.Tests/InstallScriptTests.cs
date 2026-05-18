@@ -1846,6 +1846,29 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("linux-x86, osx-x64, and win-x86 are not currently shipped", stderr);
         Assert.Contains("dotnet tool install -g cdidx", stderr);
         Assert.Contains("dotnet publish src/CodeIndex/CodeIndex.csproj -c Release -r <rid> --self-contained true", stderr);
+        Assert.Contains("issues/new?title=Request%20official%20release%20asset%20for%20RID", stderr);
+        Assert.Contains("docs/platform-support.md", stderr);
+    }
+
+    [Fact]
+    public void ValidatePublishedReleaseRid_UnsupportedResolvedRid_FailsBeforeDownloadWithActionableGuidance()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            """
+            RID="linux-arm"
+            validate_published_release_rid
+            """,
+            enforceStrictMode: false);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("Unsupported release asset RID: linux-arm", stderr);
+        Assert.Contains("linux-x64, linux-arm64, osx-arm64, win-x64, win-arm64", stderr);
+        Assert.Contains("dotnet tool install -g cdidx", stderr);
+        Assert.Contains("dotnet publish src/CodeIndex/CodeIndex.csproj -c Release -r linux-arm --self-contained true", stderr);
+        Assert.Contains("issues/new?title=Request%20official%20release%20asset%20for%20RID", stderr);
         Assert.Contains("docs/platform-support.md", stderr);
     }
 
