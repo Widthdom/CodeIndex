@@ -12,5 +12,9 @@ public static class CommandExitCodes
     public const int DatabaseError = 3;
     public const int FeatureUnavailable = 4;
     public const int StaleIndex = 5;
-    public const int Interrupted = 130;
+    public const int TransientDatabaseError = 6;
+    public const int InvalidArgument = 7;
+    public const int CancelledBySignal = 8;
+    public const int Interrupted = CancelledBySignal;
+    public const int LegacyInterrupted = 130;
 }

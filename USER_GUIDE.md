@@ -871,11 +871,14 @@ If a query itself begins with `-`, pass it as `--query <query>` or `-- <query>`.
 | Code | Meaning |
 |---|---|
 | `0` | Success |
-| `1` | Usage error (invalid arguments) |
+| `1` | Usage error (missing command, missing required positional input, or command-shape error) |
 | `2` | Not found (no search results, missing directory) |
-| `3` | Database error |
+| `3` | Permanent database error |
 | `4` | Feature unavailable on this build (for example CLI `--json` on a manually trimmed custom build) |
 | `5` | Stale index (`status --check` found DB/workspace differences) |
+| `6` | Transient database error (SQLite `BUSY` / `LOCKED`, retry with backoff) |
+| `7` | Invalid argument value (for example invalid `--kind`, `--color`, or `--metrics`) |
+| `8` | Cancelled by signal / Ctrl-C (`SIGINT` / `SIGTERM`-style cancellation path) |
 
 ### Error codes
 
@@ -894,6 +897,7 @@ For scripts and AI agents that need to classify failures without substring-match
 | `E009_FEATURE_UNAVAILABLE` | Requested feature is unavailable in this build (e.g. `--json` on a manually trimmed custom build) |
 | `E010_USAGE_ERROR` | Argument parse error, conflicting flags, or unknown subcommand |
 | `E011_DIRECTORY_NOT_FOUND` | Project / target directory passed to `cdidx index` does not exist |
+| `E012_INTERRUPTED` | The user interrupted the command with Ctrl-C / signal cancellation |
 
 ### Debugging reader errors
 

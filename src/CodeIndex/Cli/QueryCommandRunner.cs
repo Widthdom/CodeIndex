@@ -421,6 +421,8 @@ public static class QueryCommandRunner
         var options = ParseArgs(cmdArgs, jsonDefault: false, allowNamedQuery: true);
         if (TryWriteUnsupportedOptionError("references", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("references"), options.Query))
             return CommandExitCodes.UsageError;
+        if (TryWriteInvalidKindFilterError(options, "references", AllValidReferenceKinds, AllValidKinds))
+            return CommandExitCodes.InvalidArgument;
         if (TryWriteParseError(options, "references"))
             return CommandExitCodes.UsageError;
         if (!TryResolveNameExactMode(options, "references", out var exact, out var exactError))
@@ -547,6 +549,8 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryRejectNonCallGraphKindForGraphCommand("callers", options.Kind))
             return CommandExitCodes.UsageError;
+        if (TryWriteInvalidKindFilterError(options, "callers", CallGraphOnlyReferenceKinds, AllValidReferenceKinds, AllValidKinds))
+            return CommandExitCodes.InvalidArgument;
         if (!TryResolveNameExactMode(options, "callers", out var exact, out var exactError))
         {
             Console.Error.WriteLine(exactError);
@@ -671,6 +675,8 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryRejectNonCallGraphKindForGraphCommand("callees", options.Kind))
             return CommandExitCodes.UsageError;
+        if (TryWriteInvalidKindFilterError(options, "callees", CallGraphOnlyReferenceKinds, AllValidReferenceKinds, AllValidKinds))
+            return CommandExitCodes.InvalidArgument;
         if (!TryResolveNameExactMode(options, "callees", out var exact, out var exactError))
         {
             Console.Error.WriteLine(exactError);
@@ -813,6 +819,8 @@ public static class QueryCommandRunner
         var options = ParseArgs(cmdArgs, jsonDefault: false, allowNamedQuery: true);
         if (TryWriteUnsupportedOptionError("symbols", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("symbols"), options.Query))
             return CommandExitCodes.UsageError;
+        if (TryWriteInvalidKindFilterError(options, "symbols", KnownSymbolKindFilters))
+            return CommandExitCodes.InvalidArgument;
         if (TryWriteParseError(options, "symbols"))
             return CommandExitCodes.UsageError;
         if (TryWriteBlankQueryError(options, "symbols"))
@@ -4048,6 +4056,58 @@ public static class QueryCommandRunner
         Console.Error.WriteLine("Hint: fix the invalid or missing option value, then rerun with the command shape below.");
         Console.Error.WriteLine($"Usage: {GetUsageLineOrThrow(commandName)}");
         return true;
+    }
+
+    private static readonly HashSet<string> KnownSymbolKindFilters = new(StringComparer.Ordinal)
+    {
+        "accessor",
+        "associatedtype",
+        "class",
+        "class_hook",
+        "constant",
+        "constructor",
+        "delegate",
+        "enum",
+        "event",
+        "field",
+        "function",
+        "heading",
+        "hook",
+        "impl",
+        "import",
+        "interface",
+        "label",
+        "method",
+        "module",
+        "namespace",
+        "operator",
+        "procedure",
+        "property",
+        "record",
+        "reference",
+        "specialization",
+        "struct",
+        "test.method",
+        "trait",
+        "type",
+        "typealias",
+        "union",
+        "variable",
+    };
+
+    private static bool TryWriteInvalidKindFilterError(QueryCommandOptions options, string commandName, IReadOnlyCollection<string> acceptedKinds, params IReadOnlyCollection<string>[] alternateAcceptedKinds)
+    {
+        if (options.Kind != null
+            && !acceptedKinds.Contains(options.Kind)
+            && !alternateAcceptedKinds.Any(kinds => kinds.Contains(options.Kind)))
+        {
+            Console.Error.WriteLine($"Error: invalid --kind value `{options.Kind}`.");
+            Console.Error.WriteLine($"Hint: use one of: {string.Join(", ", acceptedKinds)}.");
+            Console.Error.WriteLine($"Usage: {GetUsageLineOrThrow(commandName)}");
+            return true;
+        }
+
+        return false;
     }
 
     private static bool TryWriteUnsupportedOptionError(string commandName, string[] cmdArgs, IEnumerable<string> supportedOptions, string? queryLiteral = null)

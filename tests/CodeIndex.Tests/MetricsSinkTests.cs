@@ -156,13 +156,13 @@ public class MetricsSinkTests
     }
 
     [Fact]
-    public void Run_InvalidMetricsFlag_ReportsUsageError()
+    public void Run_InvalidMetricsFlag_ReportsInvalidArgument()
     {
         var (exitCode, _, stderr) = CaptureConsole(() => ProgramRunner.Run(
             ["--metrics"],
             appVersion: "1.10.0"));
 
-        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(CommandExitCodes.InvalidArgument, exitCode);
         Assert.Contains("--metrics requires a path value", stderr);
     }
 

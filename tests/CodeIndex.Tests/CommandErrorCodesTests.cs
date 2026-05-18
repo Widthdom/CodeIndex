@@ -106,6 +106,47 @@ public class CommandErrorCodesTests
         Assert.Contains("[E001_DB_NOT_FOUND]", stderr);
     }
 
+    [Fact]
+    public void Symbols_InvalidKind_ReturnsInvalidArgumentExitCode()
+    {
+        var (exitCode, _, stderr) = CaptureStreams(() => QueryCommandRunner.RunSymbols(["--kind", "invalid_kind"], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.InvalidArgument, exitCode);
+        Assert.Contains("invalid --kind", stderr);
+    }
+
+    [Theory]
+    [InlineData("hook")]
+    [InlineData("import")]
+    [InlineData("property")]
+    public void Symbols_KnownExtractorKinds_DoNotReturnInvalidArgument(string kind)
+    {
+        var (exitCode, _, stderr) = CaptureStreams(() => QueryCommandRunner.RunSymbols(["--kind", kind], _jsonOptions));
+
+        Assert.NotEqual(CommandExitCodes.InvalidArgument, exitCode);
+        Assert.DoesNotContain("invalid --kind", stderr);
+    }
+
+    [Theory]
+    [InlineData("references")]
+    [InlineData("callers")]
+    [InlineData("callees")]
+    public void KindFilteredCommands_InvalidKind_ReturnInvalidArgumentExitCode(string command)
+    {
+        var args = new[] { "Foo", "--kind", "invalid_kind" };
+
+        var (exitCode, _, stderr) = CaptureStreams(() => command switch
+        {
+            "references" => QueryCommandRunner.RunReferences(args, _jsonOptions),
+            "callers" => QueryCommandRunner.RunCallers(args, _jsonOptions),
+            "callees" => QueryCommandRunner.RunCallees(args, _jsonOptions),
+            _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
+        });
+
+        Assert.Equal(CommandExitCodes.InvalidArgument, exitCode);
+        Assert.Contains("invalid --kind", stderr);
+    }
+
     private (int ExitCode, string StdOut, string StdErr) RunDbIntegrityCheckCapturingStreams(string[] args)
     {
         lock (TestConsoleLock.Gate)
@@ -182,6 +223,29 @@ public class CommandErrorCodesTests
                 Console.SetOut(outWriter);
                 Console.SetError(errWriter);
                 var exitCode = QueryCommandRunner.RunSearch(args, _jsonOptions);
+                return (exitCode, outWriter.ToString(), errWriter.ToString());
+            }
+            finally
+            {
+                Console.SetOut(originalOut);
+                Console.SetError(originalErr);
+            }
+        }
+    }
+
+    private static (int ExitCode, string StdOut, string StdErr) CaptureStreams(Func<int> run)
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalOut = Console.Out;
+            var originalErr = Console.Error;
+            using var outWriter = new StringWriter();
+            using var errWriter = new StringWriter();
+            try
+            {
+                Console.SetOut(outWriter);
+                Console.SetError(errWriter);
+                var exitCode = run();
                 return (exitCode, outWriter.ToString(), errWriter.ToString());
             }
             finally

@@ -2212,19 +2212,24 @@ public static class IndexCommandRunner
         }
     }
 
-    private static int WriteDatabaseFilesystemError(bool json, JsonSerializerOptions jsonOptions, string dbPath, Exception ex) =>
-        WriteCommandError(
+    private static int WriteDatabaseFilesystemError(bool json, JsonSerializerOptions jsonOptions, string dbPath, Exception ex)
+    {
+        var transient = ex is SqliteException { SqliteErrorCode: 5 or 6 };
+        return WriteCommandError(
             json,
             jsonOptions,
             $"database write failed for {dbPath}: {CollapseLineBreaks(ex.Message)}",
-            CommandExitCodes.DatabaseError,
-            "Check that the database file and parent directory exist and are writable, then retry `cdidx index`.",
-            CommandErrorCodes.DbNotWritable);
+            transient ? CommandExitCodes.TransientDatabaseError : CommandExitCodes.DatabaseError,
+            transient
+                ? "Another process may be holding the database. Wait for it to finish, or retry with backoff."
+                : "Check that the database file and parent directory exist and are writable, then retry `cdidx index`.",
+            transient ? CommandErrorCodes.DbLocked : CommandErrorCodes.DbNotWritable);
+    }
 
     private static bool IsDatabaseFilesystemError(Exception ex) =>
         ex is UnauthorizedAccessException
         || ex is IOException
-        || ex is SqliteException { SqliteErrorCode: 8 or 10 or 14 };
+        || ex is SqliteException { SqliteErrorCode: 5 or 6 or 8 or 10 or 14 };
 
     private static int RunFullScan(
         DbWriter writer,

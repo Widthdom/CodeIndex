@@ -41,24 +41,24 @@ internal static class ProgramRunner
         {
             Console.Error.WriteLine(colorError);
             Console.Error.WriteLine("Hint: use one of `auto`, `always`, `never`.");
-            GlobalToolLog.Info($"command_complete exit_code={CommandExitCodes.UsageError} color_flag_invalid=true");
-            return CommandExitCodes.UsageError;
+            GlobalToolLog.Info($"command_complete exit_code={CommandExitCodes.InvalidArgument} color_flag_invalid=true");
+            return CommandExitCodes.InvalidArgument;
         }
 
         if (!TryConsumePaletteFlag(ref args, out var paletteError))
         {
             Console.Error.WriteLine(paletteError);
             Console.Error.WriteLine("Hint: use one of `basic`, `256`, `truecolor`.");
-            GlobalToolLog.Info($"command_complete exit_code={CommandExitCodes.UsageError} palette_flag_invalid=true");
-            return CommandExitCodes.UsageError;
+            GlobalToolLog.Info($"command_complete exit_code={CommandExitCodes.InvalidArgument} palette_flag_invalid=true");
+            return CommandExitCodes.InvalidArgument;
         }
 
         if (!TryConsumeMetricsFlag(ref args, out var metricsPath, out var metricsError))
         {
             Console.Error.WriteLine(metricsError);
             Console.Error.WriteLine("Hint: pass `--metrics <path>` (e.g. `--metrics out.jsonl`).");
-            GlobalToolLog.Info($"command_complete exit_code={CommandExitCodes.UsageError} metrics_flag_invalid=true");
-            return CommandExitCodes.UsageError;
+            GlobalToolLog.Info($"command_complete exit_code={CommandExitCodes.InvalidArgument} metrics_flag_invalid=true");
+            return CommandExitCodes.InvalidArgument;
         }
 
         using var metricsSession = MetricsSink.TryStart(metricsPath);
@@ -216,7 +216,7 @@ internal static class ProgramRunner
     internal static int MapCodeIndexExceptionExitCode(string code) => code switch
     {
         CommandErrorCodes.DbNotFound => CommandExitCodes.NotFound,
-        CommandErrorCodes.DbLocked => CommandExitCodes.DatabaseError,
+        CommandErrorCodes.DbLocked => CommandExitCodes.TransientDatabaseError,
         CommandErrorCodes.DbNotWritable => CommandExitCodes.DatabaseError,
         CommandErrorCodes.DbIntegrityFailed => CommandExitCodes.DatabaseError,
         CommandErrorCodes.SchemaTooNew => CommandExitCodes.DatabaseError,
@@ -224,7 +224,8 @@ internal static class ProgramRunner
         CommandErrorCodes.DbError => CommandExitCodes.DatabaseError,
         CommandErrorCodes.DirectoryNotFound => CommandExitCodes.NotFound,
         CommandErrorCodes.FeatureUnavailable => CommandExitCodes.FeatureUnavailable,
-        CommandErrorCodes.UsageError => CommandExitCodes.UsageError,
+        CommandErrorCodes.UsageError => CommandExitCodes.InvalidArgument,
+        CommandErrorCodes.Interrupted => CommandExitCodes.CancelledBySignal,
         _ => CommandExitCodes.DatabaseError,
     };
 

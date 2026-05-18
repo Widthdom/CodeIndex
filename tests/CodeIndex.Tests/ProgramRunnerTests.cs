@@ -308,13 +308,13 @@ public class ProgramRunnerTests
     }
 
     [Fact]
-    public void Run_InvalidColorValue_ReturnsUsageError()
+    public void Run_InvalidColorValue_ReturnsInvalidArgument()
     {
         var (exitCode, _, stderr) = CaptureConsole(() => ProgramRunner.Run(
             ["--color=sparkly", "status"],
             appVersion: "1.10.0"));
 
-        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(CommandExitCodes.InvalidArgument, exitCode);
         Assert.Contains("invalid --color value `sparkly`", stderr);
         Assert.Contains("Hint:", stderr);
     }
@@ -425,13 +425,13 @@ public class ProgramRunnerTests
     }
 
     [Fact]
-    public void Run_InvalidPaletteValue_ReturnsUsageError()
+    public void Run_InvalidPaletteValue_ReturnsInvalidArgument()
     {
         var (exitCode, _, stderr) = CaptureConsole(() => ProgramRunner.Run(
             ["--palette=fancy", "status"],
             appVersion: "1.10.0"));
 
-        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(CommandExitCodes.InvalidArgument, exitCode);
         Assert.Contains("invalid --palette value `fancy`", stderr);
         Assert.Contains("Hint:", stderr);
     }

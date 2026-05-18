@@ -221,14 +221,15 @@ public class CodeIndexExceptionTests
     [Theory]
     [InlineData(CommandErrorCodes.DbNotFound, CommandExitCodes.NotFound)]
     [InlineData(CommandErrorCodes.DirectoryNotFound, CommandExitCodes.NotFound)]
-    [InlineData(CommandErrorCodes.DbLocked, CommandExitCodes.DatabaseError)]
+    [InlineData(CommandErrorCodes.DbLocked, CommandExitCodes.TransientDatabaseError)]
     [InlineData(CommandErrorCodes.DbNotWritable, CommandExitCodes.DatabaseError)]
     [InlineData(CommandErrorCodes.DbIntegrityFailed, CommandExitCodes.DatabaseError)]
     [InlineData(CommandErrorCodes.SchemaTooNew, CommandExitCodes.DatabaseError)]
     [InlineData(CommandErrorCodes.TempStoreExhausted, CommandExitCodes.DatabaseError)]
     [InlineData(CommandErrorCodes.DbError, CommandExitCodes.DatabaseError)]
     [InlineData(CommandErrorCodes.FeatureUnavailable, CommandExitCodes.FeatureUnavailable)]
-    [InlineData(CommandErrorCodes.UsageError, CommandExitCodes.UsageError)]
+    [InlineData(CommandErrorCodes.UsageError, CommandExitCodes.InvalidArgument)]
+    [InlineData(CommandErrorCodes.Interrupted, CommandExitCodes.CancelledBySignal)]
     [InlineData("E999_UNKNOWN", CommandExitCodes.DatabaseError)]
     public void MapCodeIndexExceptionExitCode_MapsKnownCodesToTaxonomy(string code, int expectedExitCode)
     {
