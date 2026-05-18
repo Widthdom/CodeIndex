@@ -86,6 +86,7 @@ public static class ConsoleUi
         ("hotspots", "cdidx hotspots [--db <path>] [--json] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--group-by <symbol|file|statement>] [--group-by-name]"),
         ("suggestions", "cdidx suggestions <list|show|export> [id] [--db <path>] [--json] [--status <all|submitted|unsubmitted>] [--language <lang>] [--category <category>] [--since <datetime>] [--agent <name>] [--format <json|markdown>]"),
         ("languages", "cdidx languages [--json]"),
+        ("batch", "cdidx batch [--db <path>]  # reads JSON string arrays from stdin, one query command per line"),
         ("mcp", "cdidx mcp [--db <path>]"),
         ("license", "cdidx license"),
     ];
@@ -551,6 +552,7 @@ public static class ConsoleUi
         Console.WriteLine("  hotspots                   Find high-impact symbols; duplicate-name families may fall back conservatively");
         Console.WriteLine("  suggestions                List, inspect, and export local suggestion history");
         Console.WriteLine("  languages                  List supported languages and their capabilities");
+        Console.WriteLine("  batch                      Run newline-delimited JSON query commands with one DB connection");
         Console.WriteLine("  mcp                        Start MCP server (for AI tools: Claude, Cursor, etc.)");
         Console.WriteLine("  license                    Show licensing, trademark, and commercial-use summary");
         Console.WriteLine();
@@ -802,7 +804,7 @@ public static class ConsoleUi
     [
         "index", "backfill-fold", "search", "definition", "references", "callers", "callees",
         "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status",
-        "validate", "deps", "impact", "unused", "hotspots", "languages", "mcp", "db", "report", "license",
+        "validate", "deps", "impact", "unused", "hotspots", "languages", "batch", "mcp", "db", "report", "license",
     ];
 
     /// <summary>

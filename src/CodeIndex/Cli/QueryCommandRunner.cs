@@ -16,6 +16,8 @@ public static class QueryCommandRunner
 {
     internal const string StaleAfterEnvironmentVariable = "CDIDX_STALE_AFTER";
     internal static readonly TimeSpan DefaultStaleAfter = TimeSpan.FromHours(24);
+    [ThreadStatic]
+    private static DbReader? s_batchReader;
 
     // Cap OR-joined `symbols` names well below SQLite's 1000 expression-tree depth so oversized
     // batches fail fast with a clear usage error instead of a confusing SQLite exception.
@@ -158,6 +160,150 @@ public static class QueryCommandRunner
         "--profile",
     ];
     private const string FindUsage = "Usage: cdidx find <query> --path <glob> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--before <n>] [--after <n>] [--max-line-width <n>] [--exact] [--count]\n       cdidx find --query <query> --path <glob> [...]\n       cdidx find [options] -- <query>";
+
+    public static int RunBatch(string[] cmdArgs, JsonSerializerOptions jsonOptions)
+    {
+        var dbPath = Path.Combine(".cdidx", "codeindex.db");
+        for (var i = 0; i < cmdArgs.Length; i++)
+        {
+            var arg = cmdArgs[i];
+            if (arg == "--db")
+            {
+                if (i + 1 >= cmdArgs.Length || string.IsNullOrWhiteSpace(cmdArgs[i + 1]))
+                {
+                    Console.Error.WriteLine(BuildMissingOptionValueError("--db"));
+                    return CommandExitCodes.UsageError;
+                }
+                dbPath = cmdArgs[++i];
+                continue;
+            }
+
+            if (arg.StartsWith("--db=", StringComparison.Ordinal))
+            {
+                dbPath = arg["--db=".Length..];
+                if (string.IsNullOrWhiteSpace(dbPath))
+                {
+                    Console.Error.WriteLine(BuildMissingOptionValueError("--db"));
+                    return CommandExitCodes.UsageError;
+                }
+                continue;
+            }
+
+            Console.Error.WriteLine($"Error: {arg} is not supported for batch.");
+            Console.Error.WriteLine($"Usage: {ConsoleUi.GetUsageLine("batch")}");
+            return CommandExitCodes.UsageError;
+        }
+
+        var isUri = dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase);
+        if (!isUri && !File.Exists(dbPath))
+        {
+            Console.Error.WriteLine($"Error [{CommandErrorCodes.DbNotFound}]: database not found at {Path.GetFullPath(dbPath)}");
+            Console.Error.WriteLine("Hint: create or refresh the index with `cdidx index <projectPath>` (or `cdidx .`) and then rerun this command.");
+            return CommandExitCodes.DatabaseError;
+        }
+
+        try
+        {
+            using var db = new DbContext(dbPath);
+            db.TryMigrateForRead();
+            s_batchReader = new DbReader(db);
+            var firstFailure = CommandExitCodes.Success;
+            string? line;
+            var lineNumber = 0;
+            while ((line = Console.In.ReadLine()) != null)
+            {
+                lineNumber++;
+                if (string.IsNullOrWhiteSpace(line))
+                    continue;
+
+                if (!TryParseBatchLine(line, lineNumber, out var commandName, out var subArgs, out var parseExitCode))
+                {
+                    if (firstFailure == CommandExitCodes.Success)
+                        firstFailure = parseExitCode;
+                    continue;
+                }
+
+                var exitCode = RunBatchQueryCommand(commandName, subArgs, jsonOptions);
+                if (exitCode != CommandExitCodes.Success && firstFailure == CommandExitCodes.Success)
+                    firstFailure = exitCode;
+            }
+
+            return firstFailure;
+        }
+        finally
+        {
+            s_batchReader = null;
+        }
+    }
+
+    private static bool TryParseBatchLine(string line, int lineNumber, out string commandName, out string[] subArgs, out int exitCode)
+    {
+        commandName = string.Empty;
+        subArgs = [];
+        exitCode = CommandExitCodes.UsageError;
+
+        try
+        {
+            using var document = JsonDocument.Parse(line);
+            if (document.RootElement.ValueKind != JsonValueKind.Array || document.RootElement.GetArrayLength() == 0)
+            {
+                Console.Error.WriteLine($"Error: batch line {lineNumber} must be a non-empty JSON string array.");
+                return false;
+            }
+
+            var values = new List<string>();
+            foreach (var element in document.RootElement.EnumerateArray())
+            {
+                if (element.ValueKind != JsonValueKind.String)
+                {
+                    Console.Error.WriteLine($"Error: batch line {lineNumber} must contain only strings.");
+                    return false;
+                }
+                values.Add(element.GetString() ?? string.Empty);
+            }
+
+            commandName = values[0];
+            subArgs = values.Skip(1).ToArray();
+            return true;
+        }
+        catch (JsonException ex)
+        {
+            Console.Error.WriteLine($"Error: batch line {lineNumber} is not valid JSON: {ex.Message}");
+            return false;
+        }
+    }
+
+    private static int RunBatchQueryCommand(string commandName, string[] subArgs, JsonSerializerOptions jsonOptions)
+        => commandName switch
+        {
+            "search" => RunSearch(subArgs, jsonOptions),
+            "definition" => RunDefinition(subArgs, jsonOptions),
+            "references" => RunReferences(subArgs, jsonOptions),
+            "callers" => RunCallers(subArgs, jsonOptions),
+            "callees" => RunCallees(subArgs, jsonOptions),
+            "symbols" => RunSymbols(subArgs, jsonOptions),
+            "files" => RunFiles(subArgs, jsonOptions),
+            "find" => RunFind(subArgs, jsonOptions),
+            "excerpt" => RunExcerpt(subArgs, jsonOptions),
+            "map" => RunMap(subArgs, jsonOptions),
+            "inspect" => RunInspect(subArgs, jsonOptions),
+            "outline" => RunOutline(subArgs, jsonOptions),
+            "status" => RunStatus(subArgs, jsonOptions),
+            "validate" => RunValidate(subArgs, jsonOptions),
+            "impact" => RunImpact(subArgs, jsonOptions),
+            "deps" => RunDeps(subArgs, jsonOptions),
+            "unused" => RunUnused(subArgs, jsonOptions),
+            "hotspots" => RunHotspots(subArgs, jsonOptions),
+            _ => WriteBatchUnsupportedCommand(commandName),
+        };
+
+    private static int WriteBatchUnsupportedCommand(string commandName)
+    {
+        Console.Error.WriteLine($"Error: batch only supports query commands; '{commandName}' is not supported.");
+        Console.Error.WriteLine("Hint: use one of search, definition, references, callers, callees, symbols, files, find, excerpt, map, inspect, outline, status, validate, impact, deps, unused, or hotspots.");
+        return CommandExitCodes.UsageError;
+    }
+
     public static int RunSearch(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var previewOptionError = ValidatePreviewOptions("search", cmdArgs, allowMaxLineWidth: true, allowFocusOptions: false);
@@ -3898,35 +4044,48 @@ public static class QueryCommandRunner
     private static int WithDb(QueryCommandOptions options, JsonSerializerOptions jsonOptions, Func<DbReader, int> action)
     {
         var dbPath = options.DbPath;
-        if (string.IsNullOrWhiteSpace(dbPath))
+        if (s_batchReader == null)
         {
-            Console.Error.WriteLine(BuildMissingOptionValueError("--db"));
-            return CommandExitCodes.UsageError;
-        }
+            if (string.IsNullOrWhiteSpace(dbPath))
+            {
+                Console.Error.WriteLine(BuildMissingOptionValueError("--db"));
+                return CommandExitCodes.UsageError;
+            }
 
-        // Allow SQLite URI forms (file:///abs/path?immutable=1 etc.) so users and AI agents
-        // on read-only mounts / sandboxes can opt into the immutable read-only escape hatch
-        // explicitly when the automatic DbContext fallback cannot recover. File.Exists is
-        // skipped for URI-shaped inputs because they may carry query params and schemes that
-        // are meaningless to the filesystem API but are understood by SQLite.
-        // URI 形式の --db を受け入れるため、file: で始まる値は File.Exists チェックをスキップ。
-        var isUri = dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase);
-        if (!isUri && !File.Exists(LongPath.EnsureWindowsPrefix(dbPath)))
-        {
-            Console.Error.WriteLine($"Error [{CommandErrorCodes.DbNotFound}]: database not found at {Path.GetFullPath(dbPath)}");
-            Console.Error.WriteLine("Hint: create or refresh the index with `cdidx index <projectPath>` (or `cdidx .`) and then rerun this command.");
-            return CommandExitCodes.DatabaseError;
+            // Allow SQLite URI forms (file:///abs/path?immutable=1 etc.) so users and AI agents
+            // on read-only mounts / sandboxes can opt into the immutable read-only escape hatch
+            // explicitly when the automatic DbContext fallback cannot recover. File.Exists is
+            // skipped for URI-shaped inputs because they may carry query params and schemes that
+            // are meaningless to the filesystem API but are understood by SQLite.
+            // URI 形式の --db を受け入れるため、file: で始まる値は File.Exists チェックをスキップ。
+            var isUri = dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase);
+            if (!isUri && !File.Exists(LongPath.EnsureWindowsPrefix(dbPath)))
+            {
+                Console.Error.WriteLine($"Error [{CommandErrorCodes.DbNotFound}]: database not found at {Path.GetFullPath(dbPath)}");
+                Console.Error.WriteLine("Hint: create or refresh the index with `cdidx index <projectPath>` (or `cdidx .`) and then rerun this command.");
+                return CommandExitCodes.DatabaseError;
+            }
         }
 
         Database.DbDebug.ResetContext();
         var profiling = options.Profile || options.SlowQueryMs.HasValue;
         if (profiling)
             Database.DbDebug.BeginProfile(options.SlowQueryMs);
+        DbContext? db = null;
         try
         {
-            using var db = new DbContext(dbPath);
-            db.TryMigrateForRead();
-            var reader = new DbReader(db);
+            DbReader reader;
+            if (s_batchReader != null)
+            {
+                reader = s_batchReader;
+            }
+            else
+            {
+                db = new DbContext(dbPath);
+                db.TryMigrateForRead();
+                reader = new DbReader(db);
+            }
+
             var exitCode = action(reader);
             var profileEntries = profiling ? Database.DbDebug.EndProfile() : [];
             if (options.Profile)
@@ -3982,6 +4141,7 @@ public static class QueryCommandRunner
         }
         finally
         {
+            db?.Dispose();
             if (profiling)
                 Database.DbDebug.EndProfile();
             Database.DbDebug.ResetContext();

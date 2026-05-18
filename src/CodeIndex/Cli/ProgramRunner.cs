@@ -153,6 +153,7 @@ internal static class ProgramRunner
                 "deps" => a => QueryCommandRunner.RunDeps(a, jsonOptions),
                 "unused" => a => QueryCommandRunner.RunUnused(a, jsonOptions),
                 "hotspots" => a => QueryCommandRunner.RunHotspots(a, jsonOptions),
+                "batch" => a => QueryCommandRunner.RunBatch(a, jsonOptions),
                 "suggestions" => a => SuggestionsCommandRunner.Run(a, jsonOptions),
                 _ => null,
             };

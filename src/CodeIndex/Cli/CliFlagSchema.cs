@@ -54,7 +54,7 @@ internal static class CliFlagSchema
     [
         "index", "backfill-fold", "search", "definition", "references", "callers", "callees",
         "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status",
-        "validate", "deps", "impact", "unused", "hotspots", "languages", "mcp", "db", "report", "license",
+        "validate", "deps", "impact", "unused", "hotspots", "languages", "batch", "mcp", "db", "report", "license",
     ];
 
     // Commands that accept the `--` end-of-options marker so a user can pass a literal
@@ -140,7 +140,7 @@ internal static class CliFlagSchema
     [
         "index", "backfill-fold", "search", "definition", "references", "callers", "callees",
         "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status",
-        "validate", "deps", "impact", "unused", "hotspots", "db", "report", "mcp",
+        "validate", "deps", "impact", "unused", "hotspots", "db", "report", "batch", "mcp",
     ];
 
     private static readonly string[] JsonCommands =

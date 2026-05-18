@@ -242,6 +242,48 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunBatch_ReusesDatabaseForJsonLineQueryCommands_Issue2119()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_batch_query_reuse");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/auth.cs",
+                "csharp",
+                """
+                public class AuthFixture
+                {
+                    public void Authenticate() { }
+                }
+                """);
+
+            var input = """
+            ["search","Authenticate","--json","--exact"]
+            ["symbols","AuthFixture","--json","--exact-name"]
+
+            """;
+            var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
+                input,
+                () => QueryCommandRunner.RunBatch(["--db", dbPath], _jsonOptions));
+            var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(2, lines.Length);
+            using var searchDocument = JsonDocument.Parse(lines[0]);
+            using var symbolDocument = JsonDocument.Parse(lines[1]);
+            Assert.Equal("src/auth.cs", searchDocument.RootElement.GetProperty("path").GetString());
+            Assert.Equal("AuthFixture", symbolDocument.RootElement.GetProperty("name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void ParseArgs_ImpactDepthZeroIsRetainedWhenExplicit()
     {
         var options = QueryCommandRunner.ParseArgs(["RunImpact", "--depth", "0"], jsonDefault: false, allowNamedQuery: true);
@@ -30173,6 +30215,34 @@ jobs:
             }
             finally
             {
+                Console.SetOut(originalOut);
+                Console.SetError(originalError);
+            }
+        }
+    }
+
+    private static (T Result, string Stdout, string Stderr) CaptureConsoleWithInput<T>(string input, Func<T> action)
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalIn = Console.In;
+            var originalOut = Console.Out;
+            var originalError = Console.Error;
+            using var stdin = new StringReader(input);
+            using var stdout = new StringWriter();
+            using var stderr = new StringWriter();
+
+            try
+            {
+                Console.SetIn(stdin);
+                Console.SetOut(stdout);
+                Console.SetError(stderr);
+                var result = action();
+                return (result, stdout.ToString(), stderr.ToString());
+            }
+            finally
+            {
+                Console.SetIn(originalIn);
                 Console.SetOut(originalOut);
                 Console.SetError(originalError);
             }
