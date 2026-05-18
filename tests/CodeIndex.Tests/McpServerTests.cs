@@ -3542,6 +3542,31 @@ public class McpServerTests : IDisposable
     }
 
     [Theory]
+    [InlineData("search", """{"query":"Run","exact":true,"exactSubstring":true}""")]
+    [InlineData("search", """{"query":"Run","exact":true,"exactName":true}""")]
+    [InlineData("definition", """{"query":"Run","exact":true,"exactName":true}""")]
+    [InlineData("definition", """{"query":"Run","exact":true,"exactSubstring":true}""")]
+    [InlineData("references", """{"query":"Run","exact":true,"exactName":true}""")]
+    [InlineData("references", """{"query":"Run","exact":true,"exactSubstring":true}""")]
+    [InlineData("callers", """{"query":"Run","exact":true,"exactName":true}""")]
+    [InlineData("callers", """{"query":"Run","exact":true,"exactSubstring":true}""")]
+    [InlineData("callees", """{"query":"Run","exact":true,"exactName":true}""")]
+    [InlineData("callees", """{"query":"Run","exact":true,"exactSubstring":true}""")]
+    [InlineData("symbols", """{"query":"Run","exact":true,"exactName":true}""")]
+    [InlineData("symbols", """{"query":"Run","exact":true,"exactSubstring":true}""")]
+    [InlineData("analyze_symbol", """{"query":"Run","exact":true,"exactName":true}""")]
+    [InlineData("analyze_symbol", """{"query":"Run","exact":true,"exactSubstring":true}""")]
+    public void ToolsCall_ExactAliases_RejectsCombinedFlags(string toolName, string argumentsJson)
+    {
+        var request = JsonNode.Parse("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"" + toolName + "\",\"arguments\":" + argumentsJson + "}}")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+        var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("Pass only one of 'exact', 'exactSubstring', 'exactName'.", text);
+    }
+
+    [Theory]
     [InlineData("""{"names":""}""", "must be an array")]
     [InlineData("""{"names":[]}""", "no usable entries")]
     [InlineData("""{"names":[""]}""", "no usable entries")]

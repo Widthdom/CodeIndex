@@ -224,30 +224,57 @@ public partial class McpServer
 
     private static bool TryResolveSearchExactArgument(JsonNode? args, out bool exact, out string? error)
     {
-        if (args?["exactName"]?.GetValue<bool>() ?? false)
+        var legacyExact = args?["exact"]?.GetValue<bool>() ?? false;
+        var exactSubstring = args?["exactSubstring"]?.GetValue<bool>() ?? false;
+        var exactName = args?["exactName"]?.GetValue<bool>() ?? false;
+
+        if (CountTrue(legacyExact, exactSubstring, exactName) > 1)
+        {
+            exact = false;
+            error = "Pass only one of 'exact', 'exactSubstring', 'exactName'.";
+            return false;
+        }
+
+        if (exactName)
         {
             exact = false;
             error = "Search does not accept 'exactName'. Use 'exactSubstring' for search, or keep 'exact' for backward compatibility.";
             return false;
         }
 
-        exact = (args?["exact"]?.GetValue<bool>() ?? false) || (args?["exactSubstring"]?.GetValue<bool>() ?? false);
+        exact = legacyExact || exactSubstring;
         error = null;
         return true;
     }
 
     private static bool TryResolveNameExactArgument(JsonNode? args, string toolName, out bool exact, out string? error)
     {
-        if (args?["exactSubstring"]?.GetValue<bool>() ?? false)
+        var legacyExact = args?["exact"]?.GetValue<bool>() ?? false;
+        var exactSubstring = args?["exactSubstring"]?.GetValue<bool>() ?? false;
+        var exactName = args?["exactName"]?.GetValue<bool>() ?? false;
+
+        if (CountTrue(legacyExact, exactSubstring, exactName) > 1)
+        {
+            exact = false;
+            error = "Pass only one of 'exact', 'exactSubstring', 'exactName'.";
+            return false;
+        }
+
+        if (exactSubstring)
         {
             exact = false;
             error = $"Tool '{toolName}' does not accept 'exactSubstring'. Use 'exactName', or keep 'exact' for backward compatibility.";
             return false;
         }
 
-        exact = (args?["exact"]?.GetValue<bool>() ?? false) || (args?["exactName"]?.GetValue<bool>() ?? false);
+        exact = legacyExact || exactName;
         error = null;
         return true;
+    }
+
+    private static int CountTrue(params bool[] values)
+    {
+        return values.Count(value => value);
     }
 
     /// <summary>
