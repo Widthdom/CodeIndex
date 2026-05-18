@@ -14421,8 +14421,8 @@ public class ReferenceExtractorTests
 
         Assert.Equal(2, references.Count(r => r.SymbolName == "ActiveUsers" && r.ReferenceKind == "reference"));
         Assert.Contains(references, r => r.SymbolName == "RecentOrders" && r.ReferenceKind == "reference");
-        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference");
-        Assert.Contains(references, r => r.SymbolName == "orders" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "cte_body_reference");
+        Assert.Contains(references, r => r.SymbolName == "orders" && r.ReferenceKind == "cte_body_reference");
         Assert.Contains(references, r => r.SymbolName == "user_summary_view" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "audit_log" && r.ReferenceKind == "reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "audit_log" && r.ReferenceKind == "call");
@@ -14438,6 +14438,36 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, r => r.SymbolName == "fn_get_backtick_stats" && r.ReferenceKind == "reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "fn_quoted_stats" && r.ReferenceKind == "reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "fn_GetUserStat");
+    }
+
+    [Fact]
+    public void Extract_SQL_RecursiveCteCapturesBodyReferencesAndCteSymbols()
+    {
+        // issue #2098: recursive CTE source references should stay distinguishable from the
+        // outer SELECT, including the CTE's self-reference in the recursive member.
+        // issue #2098: recursive CTE 内の source 参照は outer SELECT と区別し、
+        // recursive member 内の CTE 自己参照も保持する。
+        const string content = """
+            WITH RECURSIVE org_tree AS (
+                SELECT id, manager_id
+                FROM employees
+                WHERE manager_id IS NULL
+                UNION ALL
+                SELECT e.id, e.manager_id
+                FROM employees e
+                JOIN org_tree ot ON e.manager_id = ot.id
+            )
+            SELECT id
+            FROM org_tree;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "org_tree");
+        Assert.Equal(2, references.Count(r => r.SymbolName == "employees" && r.ReferenceKind == "cte_body_reference"));
+        Assert.Contains(references, r => r.SymbolName == "org_tree" && r.ReferenceKind == "cte_body_reference");
+        Assert.Contains(references, r => r.SymbolName == "org_tree" && r.ReferenceKind == "reference");
     }
 
     [Fact]
@@ -16091,7 +16121,7 @@ public class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
 
         Assert.Contains(references, r => r.SymbolName == "#selected_users" && r.ReferenceKind == "reference");
-        Assert.Contains(references, r => r.SymbolName == "accounts" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "accounts" && r.ReferenceKind == "cte_body_reference");
         Assert.Contains(references, r => r.SymbolName == "recent_users" && r.ReferenceKind == "reference");
     }
 

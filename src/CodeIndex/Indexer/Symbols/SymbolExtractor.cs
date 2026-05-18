@@ -356,6 +356,9 @@ public static partial class SymbolExtractor
     private static readonly Regex SqlDefinerMarkerRegex = new(
         @"\bDEFINER\s*=",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex SqlCteDefinitionRegex = new(
+        $@"(?<![\w$])(?:WITH\s+(?:RECURSIVE\s+)?|,\s*)(?<name>{SqlQualifiedIdentifierSegmentPattern})(?:\s*\([^)]*\))?\s+AS\s*\(",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex SqlReturnsTableRegex = new(
         @"\bRETURNS\s+TABLE\s*\((?<columns>(?:[^()]|\([^()]*\))*)\)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Singleline);
@@ -3902,6 +3905,7 @@ public static partial class SymbolExtractor
         if (lang == "sql")
         {
             var sqlSyntheticSymbolLines = MaskSqlSyntheticSymbolLines(lines);
+            ExtractSqlCteSymbols(fileId, lines, symbols);
             ExtractSqlDefinerSymbols(fileId, lines, sqlSyntheticSymbolLines, symbols);
             ExtractSqlRoutineResultColumnSymbols(fileId, lines, sqlSyntheticSymbolLines, symbols);
         }
@@ -3929,6 +3933,72 @@ public static partial class SymbolExtractor
             if (symbol.Kind == "function" && IsJavaScriptTypeScriptReactHookName(symbol.Name))
                 symbol.Kind = "hook";
         }
+    }
+
+    private static void ExtractSqlCteSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
+    {
+        var content = string.Join('\n', lines);
+        if (content.IndexOf("WITH", StringComparison.OrdinalIgnoreCase) < 0)
+            return;
+
+        var lineStarts = BuildLineStarts(content);
+        foreach (Match match in SqlCteDefinitionRegex.Matches(content))
+        {
+            var nameGroup = match.Groups["name"];
+            var name = NormalizeSqlIdentifierSegment(nameGroup.Value);
+            if (string.IsNullOrWhiteSpace(name))
+                continue;
+
+            var lineNumber = GetLineNumberFromOffset(lineStarts, nameGroup.Index);
+            AddSymbolRecord(
+                symbols,
+                null,
+                lineNumber,
+                new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "class",
+                    Name = name,
+                    Line = lineNumber,
+                    StartLine = lineNumber,
+                    StartColumn = nameGroup.Index - lineStarts[lineNumber - 1],
+                    EndLine = lineNumber,
+                    Signature = lines[lineNumber - 1].Trim(),
+                });
+        }
+    }
+
+    private static List<int> BuildLineStarts(string content)
+    {
+        var starts = new List<int> { 0 };
+        for (var i = 0; i < content.Length; i++)
+        {
+            if (content[i] == '\n')
+                starts.Add(i + 1);
+        }
+
+        return starts;
+    }
+
+    private static int GetLineNumberFromOffset(List<int> lineStarts, int offset)
+    {
+        var index = lineStarts.BinarySearch(offset);
+        if (index >= 0)
+            return index + 1;
+
+        return ~index;
+    }
+
+    private static string NormalizeSqlIdentifierSegment(string value)
+    {
+        if (value.Length >= 2 && value[0] == '[' && value[^1] == ']')
+            return value[1..^1].Replace("]]", "]", StringComparison.Ordinal);
+        if (value.Length >= 2 && value[0] == '"' && value[^1] == '"')
+            return value[1..^1].Replace("\"\"", "\"", StringComparison.Ordinal);
+        if (value.Length >= 2 && value[0] == '`' && value[^1] == '`')
+            return value[1..^1];
+
+        return value;
     }
 
     private static void ExtractSqlDefinerSymbols(long fileId, string[] lines, string[] structuralLines, List<SymbolRecord> symbols)

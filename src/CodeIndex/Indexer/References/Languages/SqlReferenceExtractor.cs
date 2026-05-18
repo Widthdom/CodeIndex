@@ -8,6 +8,8 @@ internal static class SqlReferenceExtractor
 {
     internal readonly record struct DefinitionLeafSpan(string LeafName, int StartIndex, int EndIndexExclusive);
 
+    private readonly record struct CteBodySpan(int StartIndex, int EndIndexExclusive);
+
     internal readonly record struct IdentifierScanState(
         bool InBlockComment,
         string? DollarQuoteDelimiter,
@@ -53,6 +55,9 @@ internal static class SqlReferenceExtractor
         @"WITH\s*\((?:[^()]|\([^()]*\))*\)";
     private const string DropStatisticsItemPattern =
         @"(?:(?:" + QuotedIdentifierPattern + "|" + BareIdentifierPattern + @")\s*\.\s*)*(?<name>" + QuotedIdentifierPattern + "|" + BareIdentifierPattern + @")\s*\.\s*(?:" + QuotedIdentifierPattern + "|" + BareIdentifierPattern + @")";
+    private static readonly Regex CteDefinitionRegex = new(
+        $@"(?<![\w$])(?:(?:WITH)\b\s+(?:RECURSIVE\b\s+)?)?(?<name>{QuotedIdentifierPattern}|{BareIdentifierPattern})(?:\s*\([^)]*\))?\s+AS\s*\(",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     private static readonly Regex ProcCallRegex = new(
         @"(?<![\w$])(?:EXEC|EXECUTE|CALL)\b\s+(?:@\w+\s*=\s*)?" + ProcCallQualifierPattern + @"(?<name>" + ProcCallIdentifierPattern + @")",
@@ -428,6 +433,7 @@ internal static class SqlReferenceExtractor
         Func<string, bool> shouldIgnoreName,
         Func<string, int, bool> shouldSuppressDefinitionCall)
     {
+        var cteBodySpans = FindCteBodySpans(statement);
         HashSet<int>? usingSourceIndices = null;
         foreach (Match match in MergeUsingSourceRegex.Matches(statement))
         {
@@ -517,7 +523,8 @@ internal static class SqlReferenceExtractor
             establishedTempObjectNames,
             suppressedCallIndices,
             resolveContainerForCall,
-            shouldIgnoreName);
+            shouldIgnoreName,
+            cteBodySpans);
 
         EmitSourceCaptureReferences(
             SourceReferenceRegex.Matches(statement),
@@ -533,7 +540,8 @@ internal static class SqlReferenceExtractor
             establishedTempObjectNames,
             suppressedCallIndices,
             resolveContainerForCall,
-            shouldIgnoreName);
+            shouldIgnoreName,
+            cteBodySpans);
 
         EmitMergeUsingReferences(
             statement,
@@ -1467,7 +1475,8 @@ internal static class SqlReferenceExtractor
         HashSet<string> establishedTempObjectNames,
         HashSet<int> suppressedCallIndices,
         Func<int, SymbolRecord?> resolveContainerForCall,
-        Func<string, bool> shouldIgnoreName)
+        Func<string, bool> shouldIgnoreName,
+        IReadOnlyList<CteBodySpan>? cteBodySpans = null)
     {
         if (RevokePermissionStatementRegex.IsMatch(statement))
             return;
@@ -1493,7 +1502,8 @@ internal static class SqlReferenceExtractor
                     establishedTempObjectNames,
                     suppressedCallIndices,
                     resolveContainerForCall,
-                    shouldIgnoreName);
+                    shouldIgnoreName,
+                    GetSourceReferenceKind(capture.Index, cteBodySpans));
             }
         }
     }
@@ -1552,7 +1562,8 @@ internal static class SqlReferenceExtractor
         HashSet<string> establishedTempObjectNames,
         HashSet<int> suppressedCallIndices,
         Func<int, SymbolRecord?> resolveContainerForCall,
-        Func<string, bool> shouldIgnoreName)
+        Func<string, bool> shouldIgnoreName,
+        string referenceKind = "reference")
     {
         if (rawIndex < statementLineOffset)
             return;
@@ -1575,7 +1586,62 @@ internal static class SqlReferenceExtractor
             return;
 
         var referenceContainer = resolveContainerForCall(rawIndex);
-        ReferenceExtractor.AddReference(references, seen, fileId, resolvedName, nameColumn, "reference", context, lineNumber, referenceContainer);
+        ReferenceExtractor.AddReference(references, seen, fileId, resolvedName, nameColumn, referenceKind, context, lineNumber, referenceContainer);
+    }
+
+    private static string GetSourceReferenceKind(int index, IReadOnlyList<CteBodySpan>? cteBodySpans)
+    {
+        if (cteBodySpans == null)
+            return "reference";
+
+        foreach (var span in cteBodySpans)
+        {
+            if (index >= span.StartIndex && index < span.EndIndexExclusive)
+                return "cte_body_reference";
+        }
+
+        return "reference";
+    }
+
+    private static List<CteBodySpan>? FindCteBodySpans(string statement)
+    {
+        if (statement.IndexOf("WITH", StringComparison.OrdinalIgnoreCase) < 0)
+            return null;
+
+        List<CteBodySpan>? spans = null;
+        foreach (Match match in CteDefinitionRegex.Matches(statement))
+        {
+            if (IsInsideDoubleQuotedRegion(statement, match.Index))
+                continue;
+
+            var openParenIndex = match.Index + match.Length - 1;
+            var closeParenIndex = FindMatchingParen(statement, openParenIndex);
+            (spans ??= []).Add(new CteBodySpan(openParenIndex + 1, closeParenIndex < 0 ? statement.Length : closeParenIndex));
+        }
+
+        return spans;
+    }
+
+    private static int FindMatchingParen(string text, int openParenIndex)
+    {
+        var depth = 0;
+        for (var i = openParenIndex; i < text.Length; i++)
+        {
+            if (text[i] == '(')
+            {
+                depth++;
+                continue;
+            }
+
+            if (text[i] != ')')
+                continue;
+
+            depth--;
+            if (depth == 0)
+                return i;
+        }
+
+        return -1;
     }
 
     private static void EmitSelectIntoTargetReferences(
