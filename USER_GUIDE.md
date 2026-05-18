@@ -230,6 +230,26 @@ Stable since values are intentionally not repeated in this guide because the
 release changelog is the source of truth for when each command first shipped.
 Run `cdidx --help` for the full syntax line for every command.
 
+## Flag compatibility and migrations
+
+`--exact` remains accepted for compatibility, but new usage should prefer the
+semantic flag for the command family. The split exists because text search and
+symbol navigation use different equality contracts: `search` exact mode is a
+case-sensitive substring scan over indexed text, while symbol/navigation exact
+mode is NFKC + Unicode CaseFold equality over extracted names.
+
+| Command family | Legacy flag | Preferred flag | Matching semantics |
+|---|---|---|---|
+| `search` | `--exact` | `--exact-substring` | Case-sensitive exact substring match; bypasses FTS5 tokenization. |
+| `symbols`, `definition`, `references`, `callers`, `callees`, `inspect` | `--exact` | `--exact-name` | Exact extracted-name equality using NFKC + Unicode CaseFold; avoids substring expansion such as `Run` matching `RunAsync`. |
+| `find` | `--exact` | `--exact` | Literal in-file matching already has substring semantics, so there is no newer alias. |
+
+The legacy `--exact` aliases are stable for the current major release and are
+not scheduled for removal before the next major release. If removal is planned,
+the release notes will announce the timeline before the alias stops working.
+MCP mirrors the same split: use `exactSubstring` on `search`, `exactName` on
+name-based tools, and keep `exact` only for backward-compatible clients.
+
 ## Documented defaults and drift guard
 
 `cdidx --help` and the source constants are the canonical defaults. This guide
@@ -1926,6 +1946,25 @@ cdidx index . --quiet
 Stable since の値はこのガイドでは重複管理しません。各コマンドがいつ入ったかは
 release changelog を source of truth とします。完全な syntax line は `cdidx --help`
 を参照してください。
+
+## フラグ互換性と移行
+
+`--exact` は互換性のため引き続き受け付けますが、新しい使い方ではコマンド系統に
+合った意味のフラグを優先してください。この分割は、テキスト検索とシンボル移動で
+等価判定の契約が異なるためです。`search` の exact mode は indexed text に対する
+大小文字区別の部分文字列 scan で、シンボル/ナビゲーション系の exact mode は抽出済み
+name に対する NFKC + Unicode CaseFold の等価比較です。
+
+| コマンド系統 | 従来フラグ | 推奨フラグ | 一致 semantics |
+|---|---|---|---|
+| `search` | `--exact` | `--exact-substring` | FTS5 tokenization を経由しない、大小文字区別の exact substring match。 |
+| `symbols`, `definition`, `references`, `callers`, `callees`, `inspect` | `--exact` | `--exact-name` | NFKC + Unicode CaseFold による抽出済み name の完全一致。`Run` が `RunAsync` に広がるような部分一致を避ける。 |
+| `find` | `--exact` | `--exact` | 既に literal in-file substring semantics のため、新しい alias はありません。 |
+
+従来の `--exact` alias は現行 major release では安定扱いで、次の major release より前に
+削除する予定はありません。削除する場合は、alias が使えなくなる前に release notes で
+timeline を告知します。MCP も同じ分割を反映します。`search` では `exactSubstring`、
+name-based tools では `exactName` を使い、`exact` は後方互換 client 向けに残します。
 
 ## 既定値と drift 防止
 

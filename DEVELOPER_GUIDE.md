@@ -556,6 +556,8 @@ The documented `status --json` trust contract spans `fold_ready`, `fold_ready_re
 
 MCP tool calls return structured JSON in `structuredContent` plus a short summary in `content`, so clients can consume typed data directly.
 
+Exact-match flag compatibility is documented in [USER_GUIDE.md](USER_GUIDE.md#flag-compatibility-and-migrations). Keep MCP schemas aligned with that table: `search.exact` is the legacy alias for `exactSubstring`, while name-based tools use `exact` as the legacy alias for `exactName`. Do not add new exact-match aliases without updating the compatibility table, CLI help, MCP descriptions, and changelog fragment together.
+
 `search`, `definition`, `references`, `callers`, `callees`, `symbols`, and `files` also share path-aware narrowing via `--path`, repeatable `--exclude-path`, and `--exclude-tests`. The read layer ranks source files ahead of tests and docs, and `search` further boosts exact symbol-name and path matches so AI clients are more likely to land on implementation files first.
 
 `search --json` and MCP `search` project full chunks into compact match-centered snippets with `chunk_start_line`, `chunk_end_line`, `snippet_start_line`, `snippet_end_line`, `snippet`, `match_lines`, `highlights`, `context_before`, `context_after`, `truncated_line_count`, and `truncation_context`. `--snippet-lines` caps the snippet length up front (default: 8, max: 20), and `--max-line-width` (CLI) / `maxLineWidth` (MCP) clamps each individual snippet line around the first match token via the shared `LineWidthFormatter.ClampLine` contract used by `find` / `references` / `excerpt` / `inspect` (default: 512, max: 4096) so a single match inside a minified / transpiled / generated single-line file no longer returns hundreds of KB per hit. Clamped lines surface `...(+N)...` markers inside the snippet and expose `truncation_context.char_counts`, `truncation_context.total_chars`, `highlights[].truncated`, `highlights[].original_line_length`, and `highlights[].truncated_char_counts` so AI clients can detect clamping and quantify omitted characters.
@@ -2043,6 +2045,8 @@ CLI/MCP のトップレベル JSON DTO（`StatusResult`、`RepoMapResult`、`Sym
 `references` は以前から人間向け出力の各行先頭に `reference_kind` を表示しており、`callers` も grouped caller 行に対して同じタグを出す。1 つの grouped container で kind が混在する場合（例: 同じ event メンバに対する `call` と `subscribe`）は、単一 preferred label へ潰さずに `call+subscribe` のように distinct kind を `+` で連結して表示する。reference-kind 列の幅はバッチ内で最も長いラベルに合わせて動的に広がるため、mixed 行が隣接列を押し出さない。`callers` / `callees` の JSON 出力では、後方互換のため scalar な `reference_kind`（preferred 順 `instantiate` > `subscribe` > `MIN(call)` の要約 kind）を残しつつ、ソート済みの `reference_kinds` 配列と `has_mixed_reference_kinds` bool も追加した。これにより consumer は単一 summary label に騙されずに mixed container を検出できる。端末上でも `call` / `instantiate` / `subscribe` / mixed を `--json` なしで見分けられ、AI クライアントも `--exact` を改めて投げ直さずに mixed-kind の問いに答えられる。
 
 MCPツール呼び出しは `structuredContent` に構造化JSON、`content` に短い要約を返すため、クライアントは型付きデータを直接利用できます。
+
+exact-match flag の互換性は [USER_GUIDE.md](USER_GUIDE.md#フラグ互換性と移行) に記載しています。MCP schema はこの表と同期してください。`search.exact` は `exactSubstring` の legacy alias、name-based tools の `exact` は `exactName` の legacy alias です。新しい exact-match alias を追加する場合は、compatibility table、CLI help、MCP description、changelog fragment を同じ変更で更新してください。
 
 `search`、`definition`、`references`、`callers`、`callees`、`symbols`、`files` は `--path`、繰り返し指定できる `--exclude-path`、`--exclude-tests` による絞り込みを共有します。読み取り層は tests や docs より source を優先し、`search` はシンボル名やパスがクエリと正確に一致する候補をさらに上位に出して、AIクライアントが実装ファイルへ早く到達できるようにします。
 
