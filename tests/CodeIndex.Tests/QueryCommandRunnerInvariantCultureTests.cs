@@ -57,7 +57,7 @@ public class QueryCommandRunnerInvariantCultureTests
             allowNamedQuery: true);
 
         Assert.NotNull(options.ParseError);
-        Assert.Contains("--limit requires a positive integer", options.ParseError);
+        Assert.Contains("--limit requires an integer between 1 and 10000", options.ParseError);
         Assert.Contains("got '-5'", options.ParseError);
     }
 
@@ -72,7 +72,7 @@ public class QueryCommandRunnerInvariantCultureTests
             allowNamedQuery: true);
 
         Assert.NotNull(options.ParseError);
-        Assert.Contains("--before requires a non-negative integer", options.ParseError);
+        Assert.Contains("--before requires an integer between 0 and 1000", options.ParseError);
         Assert.Contains("got '-1'", options.ParseError);
     }
 

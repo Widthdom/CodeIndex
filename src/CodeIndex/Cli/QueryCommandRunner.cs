@@ -1438,23 +1438,23 @@ public static class QueryCommandRunner
                     i++;
                 }
                 if ((arg == "--limit" || arg == "--top") && (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var limit) || limit <= 0))
-                    return $"Error: {arg} requires a positive integer, got '{value}'";
+                    return BuildPositiveIntegerError("--limit", value, arg);
                 if ((arg == "--limit" || arg == "--top")
                     && int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var limitCeil)
                     && NumericFlagUpperBounds.TryGetValue("--limit", out var limitMax)
                     && limitCeil > limitMax)
-                    return $"Error: --limit must be less than or equal to {limitMax}, got '{value}'.";
+                    return BuildPositiveIntegerUpperBoundError("--limit", value, limitMax);
                 if (arg == "--max-line-width" && (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var widthValue) || widthValue < 0))
-                    return $"Error: {arg} requires a non-negative integer, got '{value}'";
+                    return BuildNonNegativeIntegerError(arg, value);
                 if (arg == "--max-line-width" && int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var widthCeil) && widthCeil > LineWidthFormatter.MaxAllowedLineWidth)
-                    return $"Error: --max-line-width must be less than or equal to {LineWidthFormatter.MaxAllowedLineWidth} (got '{value}').";
+                    return BuildNonNegativeIntegerUpperBoundError("--max-line-width", value, LineWidthFormatter.MaxAllowedLineWidth);
                 if ((arg == "--before" || arg == "--after") && (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var context) || context < 0))
-                    return $"Error: {arg} requires a non-negative integer, got '{value}'";
+                    return BuildNonNegativeIntegerError(arg, value);
                 if ((arg == "--before" || arg == "--after")
                     && int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var contextCeil)
                     && NumericFlagUpperBounds.TryGetValue(arg, out var contextMax)
                     && contextCeil > contextMax)
-                    return $"Error: {arg} must be less than or equal to {contextMax}, got '{value}'.";
+                    return BuildNonNegativeIntegerUpperBoundError(arg, value, contextMax);
                 if (arg == "--query")
                 {
                     queryCount++;
@@ -5607,13 +5607,13 @@ public static class QueryCommandRunner
         if (!int.TryParse(rawValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out value) || value <= 0)
         {
             value = 0;
-            error = $"Error: {optionName} requires a positive integer, got '{rawValue}'. Hint: retry with `{optionName} 1` or another positive integer.";
+            error = BuildPositiveIntegerError(optionName, rawValue);
             return false;
         }
 
         if (NumericFlagUpperBounds.TryGetValue(optionName, out var maxAllowed) && value > maxAllowed)
         {
-            error = $"Error: {optionName} must be less than or equal to {maxAllowed}, got '{rawValue}'. Hint: retry with `{optionName} {maxAllowed}` or a smaller positive integer.";
+            error = BuildPositiveIntegerUpperBoundError(optionName, rawValue, maxAllowed);
             value = 0;
             return false;
         }
@@ -5627,19 +5627,44 @@ public static class QueryCommandRunner
         if (!int.TryParse(rawValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out value) || value < 0)
         {
             value = 0;
-            error = $"Error: {optionName} requires a non-negative integer, got '{rawValue}'. Hint: retry with `{optionName} 0` or another non-negative integer.";
+            error = BuildNonNegativeIntegerError(optionName, rawValue);
             return false;
         }
 
         if (NumericFlagUpperBounds.TryGetValue(optionName, out var maxAllowed) && value > maxAllowed)
         {
-            error = $"Error: {optionName} must be less than or equal to {maxAllowed}, got '{rawValue}'. Hint: retry with `{optionName} {maxAllowed}` or a smaller non-negative integer.";
+            error = BuildNonNegativeIntegerUpperBoundError(optionName, rawValue, maxAllowed);
             value = 0;
             return false;
         }
 
         error = null;
         return true;
+    }
+
+    private static string BuildPositiveIntegerError(string optionName, string rawValue, string? displayOptionName = null)
+    {
+        displayOptionName ??= optionName;
+        if (NumericFlagUpperBounds.TryGetValue(optionName, out var maxAllowed))
+            return $"Error: {displayOptionName} requires an integer between 1 and {maxAllowed}, got '{rawValue}'. Hint: retry with `{displayOptionName} 1` or another value up to {maxAllowed}.";
+        return $"Error: {displayOptionName} requires a positive integer, got '{rawValue}'. Hint: retry with `{displayOptionName} 1` or another positive integer.";
+    }
+
+    private static string BuildPositiveIntegerUpperBoundError(string optionName, string rawValue, int maxAllowed)
+    {
+        return $"Error: {optionName} must be less than or equal to {maxAllowed}, got '{rawValue}'. Hint: retry with `{optionName} {maxAllowed}` or a smaller positive integer.";
+    }
+
+    private static string BuildNonNegativeIntegerError(string optionName, string rawValue)
+    {
+        if (NumericFlagUpperBounds.TryGetValue(optionName, out var maxAllowed))
+            return $"Error: {optionName} requires an integer between 0 and {maxAllowed}, got '{rawValue}'. Hint: retry with `{optionName} 0` or another value up to {maxAllowed}.";
+        return $"Error: {optionName} requires a non-negative integer, got '{rawValue}'. Hint: retry with `{optionName} 0` or another non-negative integer.";
+    }
+
+    private static string BuildNonNegativeIntegerUpperBoundError(string optionName, string rawValue, int maxAllowed)
+    {
+        return $"Error: {optionName} must be less than or equal to {maxAllowed}, got '{rawValue}'. Hint: retry with `{optionName} {maxAllowed}` or a smaller non-negative integer.";
     }
 
     private static bool TryReadRawOptionValue(string[] args, ref int index, string optionName, string? inlineValue, out string? value, out string? error)
