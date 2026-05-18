@@ -191,6 +191,38 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void MayContainCSharpStaticInterfaceContract_RealContract_ReturnsTrue()
+    {
+        const string content = """
+        public interface IFixture<T>
+        {
+            static abstract T Create();
+            static virtual int Count => 0;
+        }
+        """;
+
+        Assert.True(IndexCommandRunner.MayContainCSharpStaticInterfaceContract(content));
+    }
+
+    [Fact]
+    public void MayContainCSharpStaticInterfaceContract_HelperNamesAndStrings_ReturnsFalse()
+    {
+        var content = File.ReadAllText(Path.Combine(
+            AppContext.BaseDirectory,
+            "..",
+            "..",
+            "..",
+            "..",
+            "..",
+            "src",
+            "CodeIndex",
+            "Database",
+            "DbWriter.cs"));
+
+        Assert.False(IndexCommandRunner.MayContainCSharpStaticInterfaceContract(content));
+    }
+
+    [Fact]
     public void HandleIndexCancelKeyPress_FirstCancelRequestsCooperativeCancellation_SecondAllowsForceExit()
     {
         using var cts = new CancellationTokenSource();
