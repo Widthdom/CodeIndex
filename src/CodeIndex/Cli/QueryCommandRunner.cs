@@ -4815,13 +4815,13 @@ public static class QueryCommandRunner
         => !signal.ExactIndexAvailable
            && !signal.HasMissingIndex
            && !signal.HasMissingTable
-           && signal.DegradedReason?.Contains("sql_graph_contract_ready=false", StringComparison.OrdinalIgnoreCase) == true;
+           && signal.DegradedReason?.Contains(DegradationReasonCodes.SqlGraphContractNotReady, StringComparison.OrdinalIgnoreCase) == true;
 
     private static bool IsCSharpCanonicalNameSignal(ExactQuerySignal signal)
         => !signal.ExactIndexAvailable
            && !signal.HasMissingIndex
            && !signal.HasMissingTable
-           && signal.DegradedReason?.Contains("csharp_symbol_name_ready=false", StringComparison.OrdinalIgnoreCase) == true;
+           && signal.DegradedReason?.Contains(DegradationReasonCodes.CSharpSymbolNameNotReady, StringComparison.OrdinalIgnoreCase) == true;
 
     private static int WriteStatusReadinessExplanation(string fieldName)
     {
@@ -4884,10 +4884,10 @@ public static class QueryCommandRunner
             "hotspot_family_ready" => status.HotspotFamilyDegradedReason ?? fallback,
             "fold_ready" => BuildFoldNotReadyExplanation(status.FoldReadyReason),
             "index_newer_than_reader" => status.IndexNewerThanReaderReason ?? fallback,
-            "graph_table_available" => "reference / caller / callee / unused counts are degraded to 0 because the symbol_references table is missing.",
-            "issues_table_available" => "validate output is degraded to empty because the file_issues table is missing.",
-            "csharp_symbol_name_ready" => "C# exact-name for operators / conversion operators / indexers is degraded.",
-            "csharp_metadata_target_ready" => "C# deps / impact metadata-attribute edges fall back to the signature / name-suffix heuristic.",
+            "graph_table_available" => DegradationReasonCodes.GetMetadata(DegradationReasonCodes.GraphTableMissing).HumanText,
+            "issues_table_available" => DegradationReasonCodes.GetMetadata(DegradationReasonCodes.IssuesTableMissing).HumanText,
+            "csharp_symbol_name_ready" => DegradationReasonCodes.GetMetadata(DegradationReasonCodes.CSharpSymbolNameNotReady).HumanText,
+            "csharp_metadata_target_ready" => DegradationReasonCodes.GetMetadata(DegradationReasonCodes.CSharpMetadataTargetNotReady).HumanText,
             _ => fallback,
         };
 
@@ -4985,13 +4985,7 @@ public static class QueryCommandRunner
            && status.CSharpMetadataTargetReady;
 
     private static string BuildFoldNotReadyExplanation(string? foldReadyReason)
-        => foldReadyReason switch
-        {
-            "missing_fold_backfill" => "--exact falls back to ASCII COLLATE NOCASE because legacy rows without `name_folded` remain.",
-            "stale_fold_key_version" => "--exact falls back to ASCII COLLATE NOCASE because unchanged rows still carry an older fold-key version.",
-            "stale_fold_key_fingerprint" => "--exact falls back to ASCII COLLATE NOCASE because unchanged rows still carry folded keys generated under an older runtime fingerprint.",
-            _ => "--exact falls back to ASCII COLLATE NOCASE because some folded-name rows were not restamped under the current runtime."
-        };
+        => DegradationReasonCodes.BuildFoldNotReadyExplanation(foldReadyReason);
 
     private static string BuildFoldNotReadyWarning(string? foldReadyReason, string backfillCommand, string rebuildCommand)
         => $"{BuildFoldNotReadyExplanation(foldReadyReason)} Run `{backfillCommand}` to restamp folded-name columns in place, or `{rebuildCommand}` for a full rebuild.";

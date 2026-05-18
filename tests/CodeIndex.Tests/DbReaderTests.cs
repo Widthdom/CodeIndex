@@ -58,6 +58,32 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void DegradationReasonCodes_AllCodesHaveActionableMetadata()
+    {
+        foreach (var code in DegradationReasonCodes.All)
+        {
+            var metadata = DegradationReasonCodes.GetMetadata(code);
+
+            Assert.Equal(code, metadata.Code);
+            Assert.False(string.IsNullOrWhiteSpace(metadata.HumanText));
+            Assert.Contains("cdidx", metadata.RecommendedAction, StringComparison.Ordinal);
+            Assert.Contains("cdidx", metadata.AlternativeAction, StringComparison.Ordinal);
+        }
+    }
+
+    [Theory]
+    [InlineData(DegradationReasonCodes.MissingFoldBackfill, "--exact falls back")]
+    [InlineData(DegradationReasonCodes.StaleFoldKeyVersion, "older fold-key version")]
+    [InlineData(DegradationReasonCodes.StaleFoldKeyFingerprint, "older runtime fingerprint")]
+    [InlineData(DegradationReasonCodes.FoldRowsNotRestamped, "not restamped")]
+    public void DegradationReasonCodes_BuildsFoldExplanationFromCode(string code, string expectedText)
+    {
+        var explanation = DegradationReasonCodes.BuildFoldNotReadyExplanation(code);
+
+        Assert.Contains(expectedText, explanation, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void CountSearchResults_NormalizesJavascriptLangSpelling()
     {
         const string query = "JavaScriptAliasToken";

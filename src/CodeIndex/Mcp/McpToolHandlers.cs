@@ -2255,19 +2255,19 @@ public partial class McpServer
                 // 場合は missing_fold_backfill に降格する。Issue #1535。
                 foldReadyAfter = writer.MarkFoldReady();
                 if (!foldReadyAfter)
-                    foldReadyReason = "missing_fold_backfill";
+                    foldReadyReason = DegradationReasonCodes.MissingFoldBackfill;
             }
             else if (!backfillReady)
             {
-                foldReadyReason = "missing_fold_backfill";
+                foldReadyReason = DegradationReasonCodes.MissingFoldBackfill;
             }
             else if (!foldVersionMatchesCurrent)
             {
-                foldReadyReason = "stale_fold_key_version";
+                foldReadyReason = DegradationReasonCodes.StaleFoldKeyVersion;
             }
             else if (!foldFingerprintMatchesCurrent)
             {
-                foldReadyReason = "stale_fold_key_fingerprint";
+                foldReadyReason = DegradationReasonCodes.StaleFoldKeyFingerprint;
             }
 
             writer.WriteCdidxWriterVersion(_version);

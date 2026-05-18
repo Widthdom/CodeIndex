@@ -80,6 +80,27 @@ Do not add mutable static caches, shared `StringBuilder` instances, reused `Matc
 
 `status --check` keeps the DB/worktree checksum comparison in `IndexFreshnessChecker`, but the user-facing age hint threshold is resolved in `QueryCommandRunner`: CLI `--stale-after <duration>` wins over `CDIDX_STALE_AFTER`, which wins over `.cdidxrc.json`'s `stale_after`, then the 24-hour default. Supported duration suffixes are `m`, `h`, and `d`. JSON output includes `stale_after_seconds` and `index_age_seconds` only for `--check`, so clients can confirm which threshold was applied without inferring it from text.
 
+### Degradation reason codes
+
+Readiness degradation reason codes are centralized in `DegradationReasonCodes`. Add new codes there with human text, a recommended action, and an alternative action before emitting them from readers, CLI, or MCP payloads.
+
+Current stable codes and triggers:
+
+| Code | Trigger | Recovery |
+|---|---|---|
+| `missing_fold_backfill` | legacy rows do not have folded-name values | `cdidx backfill-fold` or full rebuild |
+| `stale_fold_key_version` | folded rows were stamped with an older fold-key version | `cdidx backfill-fold` or full rebuild |
+| `stale_fold_key_fingerprint` | folded rows were stamped under an older runtime fingerprint | `cdidx backfill-fold` or full rebuild |
+| `fold_rows_not_restamped` | fold metadata is current but one or more folded rows were not restamped | `cdidx backfill-fold` or full rebuild |
+| `fold_ready=false` | aggregate fold readiness bit is degraded | `cdidx backfill-fold` or full rebuild |
+| `sql_graph_contract_ready=false` | SQL graph rows do not match the current call-column / qualified-name contract | `cdidx index <projectPath>` |
+| `hotspot_family_ready=false` | one or more hotspot-family languages lack current authoritative family stamps | `cdidx index <projectPath>` |
+| `graph_table_available=false` | `symbol_references` is missing or not graph-ready | `cdidx index <projectPath>` |
+| `issues_table_available=false` | `file_issues` is missing or not issue-ready | `cdidx index <projectPath>` |
+| `csharp_symbol_name_ready=false` | C# canonical symbol-name stamps are stale | `cdidx index <projectPath>` |
+| `csharp_metadata_target_ready=false` | C# metadata-target stamps are stale | `cdidx index <projectPath>` |
+| `index_newer_than_reader=true` | the DB was written with a newer persisted contract than this reader understands | use a current `cdidx` binary or rebuild with this version |
+
 ### SQLite WAL durability policy
 
 `DbContext` opens writable indexes in WAL mode, sets `PRAGMA synchronous=NORMAL`, and pins `PRAGMA wal_autocheckpoint=1000`. Under WAL, `NORMAL` avoids per-commit fsync pressure during 500-row indexing batches while preserving database consistency after crashes; a crash can lose the last uncheckpointed transaction, but it must not corrupt committed database structure. `DbWriter` also runs `PRAGMA wal_checkpoint(PASSIVE)` after each outer transaction commit so batch boundaries give SQLite a chance to checkpoint without blocking active readers. `status --json` exposes these resolved connection values under `db_pragma_settings` (`journal_mode`, `synchronous`, `wal_autocheckpoint`) for automation and support diagnostics.

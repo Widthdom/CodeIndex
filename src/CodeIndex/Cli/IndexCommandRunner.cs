@@ -3156,25 +3156,19 @@ public static class IndexCommandRunner
     private static string GetFoldReadyReason(bool backfillReady, bool foldVersionMatchesCurrent, bool foldFingerprintMatchesCurrent)
     {
         if (!backfillReady)
-            return "missing_fold_backfill";
+            return DegradationReasonCodes.MissingFoldBackfill;
 
         if (!foldVersionMatchesCurrent)
-            return "stale_fold_key_version";
+            return DegradationReasonCodes.StaleFoldKeyVersion;
 
         if (!foldFingerprintMatchesCurrent)
-            return "stale_fold_key_fingerprint";
+            return DegradationReasonCodes.StaleFoldKeyFingerprint;
 
-        return "fold_rows_not_restamped";
+        return DegradationReasonCodes.FoldRowsNotRestamped;
     }
 
     private static string BuildFoldNotReadyExplanation(string? foldReadyReason)
-        => foldReadyReason switch
-        {
-            "missing_fold_backfill" => "--exact falls back to ASCII COLLATE NOCASE because legacy rows without `name_folded` remain.",
-            "stale_fold_key_version" => "--exact falls back to ASCII COLLATE NOCASE because unchanged rows still carry an older fold-key version.",
-            "stale_fold_key_fingerprint" => "--exact falls back to ASCII COLLATE NOCASE because unchanged rows still carry folded keys generated under an older runtime fingerprint.",
-            _ => "--exact falls back to ASCII COLLATE NOCASE because some folded-name rows were not restamped under the current runtime."
-        };
+        => DegradationReasonCodes.BuildFoldNotReadyExplanation(foldReadyReason);
 
     private static string BuildFoldBackfillCommand(string resolvedDbPath)
         => $"cdidx backfill-fold --db {QuoteCommandArgument(resolvedDbPath)}";
@@ -3269,19 +3263,19 @@ public static class IndexCommandRunner
 
         var degradedParts = new List<string>();
         if (!graphTableAvailable)
-            degradedParts.Add("graph_table_available=false");
+            degradedParts.Add(DegradationReasonCodes.GraphTableMissing);
         if (!issuesTableAvailable)
-            degradedParts.Add("issues_table_available=false");
+            degradedParts.Add(DegradationReasonCodes.IssuesTableMissing);
         if (!sqlGraphContractReady)
-            degradedParts.Add("sql_graph_contract_ready=false");
+            degradedParts.Add(DegradationReasonCodes.SqlGraphContractNotReady);
         if (!hotspotFamilyReady)
-            degradedParts.Add("hotspot_family_ready=false");
+            degradedParts.Add(DegradationReasonCodes.HotspotFamilyNotReady);
         if (!csharpSymbolNameReady)
-            degradedParts.Add("csharp_symbol_name_ready=false");
+            degradedParts.Add(DegradationReasonCodes.CSharpSymbolNameNotReady);
         if (!csharpMetadataTargetReady)
-            degradedParts.Add("csharp_metadata_target_ready=false");
+            degradedParts.Add(DegradationReasonCodes.CSharpMetadataTargetNotReady);
         if (!foldReady)
-            degradedParts.Add("fold_ready=false");
+            degradedParts.Add(DegradationReasonCodes.FoldReadyNotReady);
 
         return $"Index completed with degraded readiness ({string.Join(", ", degradedParts)}). Run `cdidx status --db \"{resolvedDbPath}\" --json` to inspect the current DB state.";
     }
