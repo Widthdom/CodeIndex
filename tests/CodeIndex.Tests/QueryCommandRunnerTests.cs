@@ -11185,7 +11185,7 @@ jobs:
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Contains("WARN    : worktree HEAD changed since the index was built", stdout);
+            Assert.Contains("WARN     : worktree HEAD changed since the index was built", stdout);
             Assert.Contains(staleHead[..12], stdout);
             Assert.Contains("cdidx index", stdout);
         }
@@ -11221,8 +11221,8 @@ jobs:
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Contains("older fold-key version", stdout);
-            Assert.Contains("Hint    : run `cdidx backfill-fold --db", stdout);
-            Assert.Contains("Hint    : or run `cdidx index", stdout);
+            Assert.Contains("Hint     : run `cdidx backfill-fold --db", stdout);
+            Assert.Contains("Hint     : or run `cdidx index", stdout);
             Assert.Contains("--rebuild", stdout);
         }
         finally

@@ -1841,23 +1841,23 @@ public static class IndexCommandRunner
             Console.WriteLine();
             Console.WriteLine("Done.");
             Console.WriteLine();
-            Console.WriteLine($"  Files    : {totalFiles:N0} (total in DB)");
-            Console.WriteLine($"  Chunks   : {totalChunks:N0}");
-            Console.WriteLine($"  Symbols  : {totalSymbols:N0}");
-            Console.WriteLine($"  Refs     : {totalReferences:N0}");
-            Console.WriteLine($"  Updated  : {updated:N0}");
-            if (removed > 0) Console.WriteLine($"  Removed  : {removed:N0}");
-            if (skipped > 0) Console.WriteLine($"  Skipped  : {skipped:N0}");
-            if (warnings > 0) Console.WriteLine($"  Warnings : {warnings:N0}");
-            if (errors > 0) Console.WriteLine($"  Errors   : {errors:N0}");
-            Console.WriteLine($"  Graph    : {(graphTableAvailableAfter ? "ready" : "degraded")}");
-            Console.WriteLine($"  Issues   : {(issuesTableAvailableAfter ? "ready" : "degraded")}");
-            Console.WriteLine($"  SQL graph: {(sqlGraphContractReadyAfter ? "ready" : "degraded")}");
-            Console.WriteLine($"  Hotspots : {(hotspotFamilyReadyAfter ? "ready" : "degraded")}");
-            Console.WriteLine($"  C# names : {(csharpSymbolNameReadyAfter ? "ready" : "degraded")}");
-            Console.WriteLine($"  C# meta  : {(csharpMetadataTargetReadyAfter ? "ready" : "degraded")}");
-            Console.WriteLine($"  Fold     : {(foldReadyAfter ? "ready" : "degraded")}");
-            Console.WriteLine($"  Elapsed  : {ConsoleUi.FormatDuration(stopwatch.Elapsed, options.DurationFormat)}");
+            Console.WriteLine(ConsoleUi.FormatSummaryLine("Files", $"{totalFiles:N0} (total in DB)", indent: "  "));
+            Console.WriteLine(ConsoleUi.FormatSummaryLine("Chunks", $"{totalChunks:N0}", indent: "  "));
+            Console.WriteLine(ConsoleUi.FormatSummaryLine("Symbols", $"{totalSymbols:N0}", indent: "  "));
+            Console.WriteLine(ConsoleUi.FormatSummaryLine("Refs", $"{totalReferences:N0}", indent: "  "));
+            Console.WriteLine(ConsoleUi.FormatSummaryLine("Updated", $"{updated:N0}", indent: "  "));
+            if (removed > 0) Console.WriteLine(ConsoleUi.FormatSummaryLine("Removed", $"{removed:N0}", indent: "  "));
+            if (skipped > 0) Console.WriteLine(ConsoleUi.FormatSummaryLine("Skipped", $"{skipped:N0}", indent: "  "));
+            if (warnings > 0) Console.WriteLine(ConsoleUi.FormatSummaryLine("Warnings", $"{warnings:N0}", indent: "  "));
+            if (errors > 0) Console.WriteLine(ConsoleUi.FormatSummaryLine("Errors", $"{errors:N0}", indent: "  "));
+            Console.WriteLine(ConsoleUi.FormatSummaryLine("Graph", graphTableAvailableAfter ? "ready" : "degraded", indent: "  "));
+            Console.WriteLine(ConsoleUi.FormatSummaryLine("Issues", issuesTableAvailableAfter ? "ready" : "degraded", indent: "  "));
+            Console.WriteLine(ConsoleUi.FormatSummaryLine("SQL graph", sqlGraphContractReadyAfter ? "ready" : "degraded", indent: "  "));
+            Console.WriteLine(ConsoleUi.FormatSummaryLine("Hotspots", hotspotFamilyReadyAfter ? "ready" : "degraded", indent: "  "));
+            Console.WriteLine(ConsoleUi.FormatSummaryLine("C# names", csharpSymbolNameReadyAfter ? "ready" : "degraded", indent: "  "));
+            Console.WriteLine(ConsoleUi.FormatSummaryLine("C# meta", csharpMetadataTargetReadyAfter ? "ready" : "degraded", indent: "  "));
+            Console.WriteLine(ConsoleUi.FormatSummaryLine("Fold", foldReadyAfter ? "ready" : "degraded", indent: "  "));
+            Console.WriteLine(ConsoleUi.FormatSummaryLine("Elapsed", ConsoleUi.FormatDuration(stopwatch.Elapsed, options.DurationFormat), indent: "  "));
             Console.WriteLine();
             if (errors > 0)
                 ConsoleUi.PrintWarning($"Some files failed to update. Fix the reported files or permissions, then rerun `cdidx index \"{projectRoot}\"` to restore a fully ready index.");
@@ -3088,11 +3088,11 @@ public static class IndexCommandRunner
             Console.WriteLine();
             Console.WriteLine("Done.");
             Console.WriteLine();
-            Console.WriteLine($"  Files    : {totalFiles:N0}");
-            Console.WriteLine($"  Chunks   : {totalChunks:N0}");
-            Console.WriteLine($"  Symbols  : {totalSymbols:N0}");
-            Console.WriteLine($"  Refs     : {totalReferences:N0}");
-            if (skipped > 0) Console.WriteLine($"  Skipped  : {skipped:N0} (unchanged)");
+            Console.WriteLine(ConsoleUi.FormatSummaryLine("Files", $"{totalFiles:N0}", indent: "  "));
+            Console.WriteLine(ConsoleUi.FormatSummaryLine("Chunks", $"{totalChunks:N0}", indent: "  "));
+            Console.WriteLine(ConsoleUi.FormatSummaryLine("Symbols", $"{totalSymbols:N0}", indent: "  "));
+            Console.WriteLine(ConsoleUi.FormatSummaryLine("Refs", $"{totalReferences:N0}", indent: "  "));
+            if (skipped > 0) Console.WriteLine(ConsoleUi.FormatSummaryLine("Skipped", $"{skipped:N0} (unchanged)", indent: "  "));
             if (options.Verbose && scanResult.UnknownExtensionFiles.Count > 0)
             {
                 Console.WriteLine($"  Unknown extension files: {scanResult.UnknownExtensionFiles.Count:N0}");
@@ -3101,16 +3101,16 @@ public static class IndexCommandRunner
                 if (scanResult.UnknownExtensionFiles.Count > 5)
                     Console.WriteLine($"    ... {scanResult.UnknownExtensionFiles.Count - 5:N0} more");
             }
-            if (warnings > 0) Console.WriteLine($"  Warnings : {warnings:N0}");
-            if (errors > 0) Console.WriteLine($"  Errors   : {errors:N0}");
-            Console.WriteLine($"  Graph    : {(graphTableAvailableAfter ? "ready" : "degraded")}");
-            Console.WriteLine($"  Issues   : {(issuesTableAvailableAfter ? "ready" : "degraded")}");
-            Console.WriteLine($"  SQL graph: {(sqlGraphContractReadyAfter ? "ready" : "degraded")}");
-            Console.WriteLine($"  Hotspots : {(hotspotFamilyReadyAfter ? "ready" : "degraded")}");
-            Console.WriteLine($"  C# names : {(csharpSymbolNameReadyAfter ? "ready" : "degraded")}");
-            Console.WriteLine($"  C# meta  : {(csharpMetadataTargetReadyAfter ? "ready" : "degraded")}");
-            Console.WriteLine($"  Fold     : {(foldReadyAfter ? "ready" : "degraded")}");
-            Console.WriteLine($"  Elapsed  : {ConsoleUi.FormatDuration(stopwatch.Elapsed, options.DurationFormat)}");
+            if (warnings > 0) Console.WriteLine(ConsoleUi.FormatSummaryLine("Warnings", $"{warnings:N0}", indent: "  "));
+            if (errors > 0) Console.WriteLine(ConsoleUi.FormatSummaryLine("Errors", $"{errors:N0}", indent: "  "));
+            Console.WriteLine(ConsoleUi.FormatSummaryLine("Graph", graphTableAvailableAfter ? "ready" : "degraded", indent: "  "));
+            Console.WriteLine(ConsoleUi.FormatSummaryLine("Issues", issuesTableAvailableAfter ? "ready" : "degraded", indent: "  "));
+            Console.WriteLine(ConsoleUi.FormatSummaryLine("SQL graph", sqlGraphContractReadyAfter ? "ready" : "degraded", indent: "  "));
+            Console.WriteLine(ConsoleUi.FormatSummaryLine("Hotspots", hotspotFamilyReadyAfter ? "ready" : "degraded", indent: "  "));
+            Console.WriteLine(ConsoleUi.FormatSummaryLine("C# names", csharpSymbolNameReadyAfter ? "ready" : "degraded", indent: "  "));
+            Console.WriteLine(ConsoleUi.FormatSummaryLine("C# meta", csharpMetadataTargetReadyAfter ? "ready" : "degraded", indent: "  "));
+            Console.WriteLine(ConsoleUi.FormatSummaryLine("Fold", foldReadyAfter ? "ready" : "degraded", indent: "  "));
+            Console.WriteLine(ConsoleUi.FormatSummaryLine("Elapsed", ConsoleUi.FormatDuration(stopwatch.Elapsed, options.DurationFormat), indent: "  "));
             Console.WriteLine();
             if (errors > 0)
                 ConsoleUi.PrintWarning($"Some files failed to index. Fix the reported files or permissions, then rerun `cdidx index \"{projectRoot}\"` to restore a fully ready index.");

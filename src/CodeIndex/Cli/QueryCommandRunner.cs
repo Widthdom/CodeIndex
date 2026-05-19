@@ -2038,19 +2038,19 @@ public static class QueryCommandRunner
                     Console.WriteLine(status.Summary);
                 Console.WriteLine();
                 if (status.Version != null)
-                    Console.WriteLine($"Version  : cdidx v{status.Version}");
-                Console.WriteLine($"Files    : {status.Files:N0}");
-                Console.WriteLine($"Chunks   : {status.Chunks:N0}");
-                Console.WriteLine($"Symbols  : {status.Symbols:N0}");
-                Console.WriteLine($"Refs     : {status.References:N0}");
+                    Console.WriteLine(ConsoleUi.FormatSummaryLine("Version", $"cdidx v{status.Version}"));
+                Console.WriteLine(ConsoleUi.FormatSummaryLine("Files", $"{status.Files:N0}"));
+                Console.WriteLine(ConsoleUi.FormatSummaryLine("Chunks", $"{status.Chunks:N0}"));
+                Console.WriteLine(ConsoleUi.FormatSummaryLine("Symbols", $"{status.Symbols:N0}"));
+                Console.WriteLine(ConsoleUi.FormatSummaryLine("Refs", $"{status.References:N0}"));
                 if (status.IndexedAt != null)
-                    Console.WriteLine($"Indexed  : {status.IndexedAt:O}");
+                    Console.WriteLine(ConsoleUi.FormatSummaryLine("Indexed", $"{status.IndexedAt:O}"));
                 if (status.LatestModified != null)
-                    Console.WriteLine($"Source   : {status.LatestModified:O}");
+                    Console.WriteLine(ConsoleUi.FormatSummaryLine("Source", $"{status.LatestModified:O}"));
                 if (status.GitHead != null)
-                    Console.WriteLine($"Git HEAD : {status.GitHead}");
+                    Console.WriteLine(ConsoleUi.FormatSummaryLine("Git HEAD", status.GitHead));
                 if (status.GitIsDirty != null)
-                    Console.WriteLine($"Git Dirty: {status.GitIsDirty}");
+                    Console.WriteLine(ConsoleUi.FormatSummaryLine("Git Dirty", status.GitIsDirty));
                 // #1509 surface: SHA / branch / timestamp / drift come from the per-success
                 // stamp (indexed_head_sha / _branch / _timestamp) and reflect last-touched HEAD
                 // regardless of update mode. #1508/#1512's IndexedHeadCommit (full-scan only)
@@ -2060,16 +2060,16 @@ public static class QueryCommandRunner
                     var branchSuffix = string.IsNullOrWhiteSpace(status.IndexedHeadBranch)
                         ? string.Empty
                         : $" (branch {status.IndexedHeadBranch})";
-                    Console.WriteLine($"Idx HEAD : {status.IndexedHeadSha}{branchSuffix}");
+                    Console.WriteLine(ConsoleUi.FormatSummaryLine("Idx HEAD", $"{status.IndexedHeadSha}{branchSuffix}"));
                 }
                 else if (status.IndexedHeadCommit != null && !string.Equals(status.IndexedHeadCommit, status.GitHead, StringComparison.OrdinalIgnoreCase))
                 {
-                    Console.WriteLine($"Idx HEAD : {status.IndexedHeadCommit}");
+                    Console.WriteLine(ConsoleUi.FormatSummaryLine("Idx HEAD", status.IndexedHeadCommit));
                 }
                 if (status.IndexedHeadTimestamp != null)
-                    Console.WriteLine($"Idx Stamp: {status.IndexedHeadTimestamp:O}");
+                    Console.WriteLine(ConsoleUi.FormatSummaryLine("Idx Stamp", $"{status.IndexedHeadTimestamp:O}"));
                 if (status.CommitsAheadOfIndexedHead is { } ahead && ahead > 0)
-                    Console.WriteLine($"Idx Drift: workspace is {ConsoleUi.Counted(ahead, "commit")} ahead of indexed HEAD — rerun `cdidx index .` to refresh.");
+                    Console.WriteLine(ConsoleUi.FormatSummaryLine("Idx Drift", $"workspace is {ConsoleUi.Counted(ahead, "commit")} ahead of indexed HEAD — rerun `cdidx index .` to refresh."));
                 if (status.WorkspaceCheck != null)
                 {
                     WriteStatusAge(status, staleAfter.Value);
@@ -2088,15 +2088,15 @@ public static class QueryCommandRunner
                         Console.WriteLine($"  {kind,-12} {count,6}");
                 }
                 if (status.GraphSupportedLanguages is { Count: > 0 })
-                    Console.WriteLine($"Graph   : {status.GraphSupportedLanguages.Count} languages ({string.Join(", ", status.GraphSupportedLanguages)})");
+                    Console.WriteLine(ConsoleUi.FormatSummaryLine("Graph", $"{status.GraphSupportedLanguages.Count} languages ({string.Join(", ", status.GraphSupportedLanguages)})"));
                 // #1546: surface the persisted filesystem case-sensitivity so operators can
                 // diagnose phantom path collapses on case-sensitive APFS / WSL / ReFS volumes.
                 // #1546: case-sensitivity を診断用に明示する。
                 if (status.PathCaseSensitive != null)
-                    Console.WriteLine($"FS Case : {(status.PathCaseSensitive == true ? "case-sensitive" : "case-insensitive")}");
+                    Console.WriteLine(ConsoleUi.FormatSummaryLine("FS Case", status.PathCaseSensitive == true ? "case-sensitive" : "case-insensitive"));
                 WriteStatusReadinessSummary(status, options);
                 if (status.WorktreeHeadChanged == true)
-                    Console.WriteLine($"WARN    : worktree HEAD changed since the index was built ({ShortSha(status.IndexedHeadCommit)} -> {ShortSha(status.GitHead)}). Run `{BuildReindexRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit)}` to refresh the index for the current branch.");
+                    Console.WriteLine(ConsoleUi.FormatSummaryLine("WARN", $"worktree HEAD changed since the index was built ({ShortSha(status.IndexedHeadCommit)} -> {ShortSha(status.GitHead)}). Run `{BuildReindexRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit)}` to refresh the index for the current branch."));
                 if (status.IndexNewerThanReader)
                 {
                     var reason = status.IndexNewerThanReaderReason ?? "DB was written by a newer cdidx than this binary.";
@@ -2105,46 +2105,46 @@ public static class QueryCommandRunner
                         : status.Version is { Length: > 0 } readerVersion
                             ? $" (reader: cdidx v{readerVersion})"
                             : "";
-                    Console.WriteLine($"WARN    : {reason}{writerLabel}");
+                    Console.WriteLine(ConsoleUi.FormatSummaryLine("WARN", $"{reason}{writerLabel}"));
                 }
                 if (!status.GraphTableAvailable)
-                    Console.WriteLine("WARN    : symbol_references table missing — reference / caller / callee / unused counts are degraded to 0.");
+                    Console.WriteLine(ConsoleUi.FormatSummaryLine("WARN", "symbol_references table missing — reference / caller / callee / unused counts are degraded to 0."));
                 if (!status.IssuesTableAvailable)
-                    Console.WriteLine("WARN    : file_issues table missing — validate output is degraded to empty.");
+                    Console.WriteLine(ConsoleUi.FormatSummaryLine("WARN", "file_issues table missing — validate output is degraded to empty."));
                 if (!status.SqlGraphContractReady)
-                    Console.WriteLine($"WARN    : SQL graph/dependency results may be stale. Run `{BuildSqlGraphContractRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit)}` before trusting SQL references/callers/deps/unused/hotspots.");
+                    Console.WriteLine(ConsoleUi.FormatSummaryLine("WARN", $"SQL graph/dependency results may be stale. Run `{BuildSqlGraphContractRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit)}` before trusting SQL references/callers/deps/unused/hotspots."));
                 if (!status.HotspotFamilyReady && status.HotspotFamilyDegradedReason != null)
                 {
-                    Console.WriteLine($"WARN    : {status.HotspotFamilyDegradedReason}");
-                    Console.WriteLine("Hint    : rerun `cdidx index <projectPath>` to restore authoritative cross-file hotspot families.");
+                    Console.WriteLine(ConsoleUi.FormatSummaryLine("WARN", status.HotspotFamilyDegradedReason));
+                    Console.WriteLine(ConsoleUi.FormatSummaryLine("Hint", "rerun `cdidx index <projectPath>` to restore authoritative cross-file hotspot families."));
                 }
                 if (!status.CSharpSymbolNameReady)
-                    Console.WriteLine($"WARN    : C# exact-name for operators / conversion operators / indexers is degraded. Run `{BuildCSharpCanonicalNameRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit)}` to upgrade canonical symbol names in place.");
+                    Console.WriteLine(ConsoleUi.FormatSummaryLine("WARN", $"C# exact-name for operators / conversion operators / indexers is degraded. Run `{BuildCSharpCanonicalNameRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit)}` to upgrade canonical symbol names in place."));
                 // #435: tell the user when deps / impact metadata-attribute edges fall back
                 // to the legacy signature / name-suffix heuristic (impostor classes may be
                 // silently promoted or demoted until the authoritative resolver is re-run).
                 // #435: deps / impact の metadata-attribute edge が legacy heuristic に
                 // 縮退しているときは明示する。
                 if (!status.CSharpMetadataTargetReady)
-                    Console.WriteLine("WARN    : C# deps / impact metadata-attribute edges fall back to the signature / name-suffix heuristic. Run `cdidx index .` to re-stamp authoritative is_metadata_target values.");
+                    Console.WriteLine(ConsoleUi.FormatSummaryLine("WARN", "C# deps / impact metadata-attribute edges fall back to the signature / name-suffix heuristic. Run `cdidx index .` to re-stamp authoritative is_metadata_target values."));
                 // #86: tell the user when `--exact` is running on the ASCII NOCASE fallback.
                 // #86: --exact が ASCII NOCASE fallback で動いているときは明示する。
                 if (!status.FoldReady)
                 {
                     if (IsFoldOnlyReadinessDegraded(status) && status.DegradedReason != null && status.RecommendedAction != null && status.AlternativeAction != null)
                     {
-                        Console.WriteLine($"WARN    : {status.DegradedReason}");
-                        Console.WriteLine($"Hint    : run `{status.RecommendedAction}` to restamp folded-name columns in place.");
-                        Console.WriteLine($"Hint    : or run `{status.AlternativeAction}` for a full rebuild.");
+                        Console.WriteLine(ConsoleUi.FormatSummaryLine("WARN", status.DegradedReason));
+                        Console.WriteLine(ConsoleUi.FormatSummaryLine("Hint", $"run `{status.RecommendedAction}` to restamp folded-name columns in place."));
+                        Console.WriteLine(ConsoleUi.FormatSummaryLine("Hint", $"or run `{status.AlternativeAction}` for a full rebuild."));
                     }
                     else
                     {
-                        Console.WriteLine($"WARN    : {BuildFoldNotReadyWarning(status.FoldReadyReason, BuildFoldBackfillCommand(options.DbPath, options.DbPathExplicit), BuildFoldRebuildRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit))}");
+                        Console.WriteLine(ConsoleUi.FormatSummaryLine("WARN", BuildFoldNotReadyWarning(status.FoldReadyReason, BuildFoldBackfillCommand(options.DbPath, options.DbPathExplicit), BuildFoldRebuildRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit))));
                     }
                 }
                 var totalLangs = FileIndexer.GetLanguageExtensions().Values.Distinct().Count();
                 var symbolLangs = SymbolExtractor.GetSupportedLanguages().Count;
-                Console.WriteLine($"Support : {totalLangs} detected, {symbolLangs} with symbols, {status.GraphSupportedLanguages?.Count ?? 0} with graph");
+                Console.WriteLine(ConsoleUi.FormatSummaryLine("Support", $"{totalLangs} detected, {symbolLangs} with symbols, {status.GraphSupportedLanguages?.Count ?? 0} with graph"));
             }
 
             if (!options.CheckWorkspace)

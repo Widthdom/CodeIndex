@@ -4340,6 +4340,10 @@ public class IndexCommandRunnerTests
             Assert.Contains("Issues   : degraded", output);
             Assert.Contains("SQL graph: ready", output);
             Assert.Contains("Fold     : degraded", output);
+            var readinessLines = output.Split('\n')
+                .Where(line => line.Contains(": ready", StringComparison.Ordinal) || line.Contains(": degraded", StringComparison.Ordinal))
+                .ToList();
+            Assert.All(readinessLines, line => Assert.Equal(readinessLines[0].IndexOf(':', StringComparison.Ordinal), line.IndexOf(':', StringComparison.Ordinal)));
         }
         finally
         {
@@ -4741,7 +4745,7 @@ public class IndexCommandRunnerTests
             }
 
             Assert.Equal(CommandExitCodes.Success, humanExitCode);
-            Assert.Contains("WARN    : C# exact-name for operators / conversion operators / indexers is degraded.", output);
+            Assert.Contains("WARN     : C# exact-name for operators / conversion operators / indexers is degraded.", output);
             Assert.Contains("--db", output);
             Assert.Contains(Path.GetFullPath(projectRoot), output);
             Assert.Contains(Path.GetFullPath(dbPath), output);

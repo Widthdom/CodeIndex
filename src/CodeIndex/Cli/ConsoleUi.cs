@@ -56,6 +56,8 @@ public enum DurationOutputFormat
 /// </summary>
 public static class ConsoleUi
 {
+    public const int SummaryLabelWidth = 9;
+
     private static readonly (string Command, string Usage)[] CommandUsageLines =
     [
         ("index", "cdidx index <projectPath> [--db <path>] [--rebuild] [--verbose] [--dry-run] [--force] [--quiet] [--json] [--duration-format <auto|seconds|hms>] [--max-file-bytes <bytes>] [--watch [--debounce <ms>]]"),
@@ -91,6 +93,9 @@ public static class ConsoleUi
         ("mcp", "cdidx mcp [--db <path>]"),
         ("license", "cdidx license"),
     ];
+
+    public static string FormatSummaryLine(string label, object? value, int labelWidth = SummaryLabelWidth, string indent = "")
+        => $"{indent}{label.PadRight(labelWidth)}: {value}";
 
     private const int SpinnerFrameDelayMs = 100;
     private const int SpinnerStopDelayMs = 20;

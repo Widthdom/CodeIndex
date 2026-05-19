@@ -530,6 +530,7 @@ Done.
   SQL graph: ready
   Hotspots : ready
   C# names : ready
+  C# meta  : ready
   Fold     : ready
   Elapsed  : 2.4s
 ```
@@ -2265,19 +2266,20 @@ interactive terminal では spinner と progress bar が動き続けます。待
 
 Done.
 
-  Files   : 42
-  Chunks  : 318
-  Symbols : 156
-  Refs    : 1,024
-  Updated : 14
-  Skipped : 28 (unchanged)
-  Graph   : ready
-  Issues  : ready
+  Files    : 42
+  Chunks   : 318
+  Symbols  : 156
+  Refs     : 1,024
+  Updated  : 14
+  Skipped  : 28 (unchanged)
+  Graph    : ready
+  Issues   : ready
   SQL graph: ready
-  Hotspots: ready
-  C# names: ready
-  Fold    : ready
-  Elapsed : 2.4s
+  Hotspots : ready
+  C# names : ready
+  C# meta  : ready
+  Fold     : ready
+  Elapsed  : 2.4s
 ```
 
 対話ターミナルで長時間インデックスするときも、`Indexing...` は次の 50 ファイル更新まで固定文字列に落ちず、スピナーとして動き続けます。警告はその場で表示されますが、各警告の直後にスピナーが再開するため、処理が止まったようには見えません。stdout をリダイレクトしている場合（例: `cdidx . > out.txt`）は、stdout には `Indexing...` を 1 回だけ出し、警告は stderr に分離したまま、stdout には行単位の進捗だけを出します。
