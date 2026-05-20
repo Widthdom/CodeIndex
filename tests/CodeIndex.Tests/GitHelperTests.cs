@@ -7,6 +7,7 @@ namespace CodeIndex.Tests;
 /// Tests for GitHelper.ResolveGitCommonDir.
 /// GitHelper.ResolveGitCommonDirのテスト。
 /// </summary>
+[Collection("SQLite pool sensitive")]
 public class GitHelperTests : IDisposable
 {
     private readonly string _tempDir;
@@ -313,6 +314,33 @@ public class GitHelperTests : IDisposable
         Assert.Contains("new.txt", changedFiles);
     }
 
+    [Fact]
+    public async Task GetChangedFilesFromCommit_DrainsLargeStderrWithoutDeadlock()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var repoDir = Path.Combine(_tempDir, "repo");
+        Directory.CreateDirectory(repoDir);
+        var fakeGitDir = Path.Combine(_tempDir, "fake-git");
+        Directory.CreateDirectory(fakeGitDir);
+        WriteFakeGitThatEmitsLargeStderr(fakeGitDir);
+
+        var oldPath = Environment.GetEnvironmentVariable("PATH");
+        Environment.SetEnvironmentVariable("PATH", fakeGitDir + Path.PathSeparator + oldPath);
+        try
+        {
+            var task = Task.Run(() => GitHelper.GetChangedFilesFromCommit(repoDir, "0123456789abcdef"));
+
+            var changedFiles = await task.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.Equal(["changed.txt"], changedFiles);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PATH", oldPath);
+        }
+    }
+
     [Theory]
     [InlineData("feature")]
     [InlineData("v1.0.0")]
@@ -604,6 +632,31 @@ public class GitHelperTests : IDisposable
             throw new InvalidOperationException($"git {string.Join(' ', args)} failed: {stderr.Trim()}");
 
         return stdout;
+    }
+
+    private static void WriteFakeGitThatEmitsLargeStderr(string directory)
+    {
+        var script = Path.Combine(directory, "git");
+        File.WriteAllText(script, """
+#!/bin/sh
+if [ "$1" = "rev-parse" ]; then
+  if [ "$2" = "--symbolic-full-name" ]; then
+    exit 0
+  fi
+  if [ "$2" = "--verify" ]; then
+    printf '%s\n' '0123456789abcdef0123456789abcdef01234567'
+    exit 0
+  fi
+fi
+if [ "$1" = "diff-tree" ]; then
+  perl -e 'print STDERR "x" x 131072'
+  printf 'M\tchanged.txt\n'
+  exit 0
+fi
+exit 1
+""");
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
     }
 
     private static bool ProbeDirectoryIgnoreCaseLikeProduction(string path)
