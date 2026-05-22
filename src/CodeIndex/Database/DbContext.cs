@@ -196,7 +196,7 @@ public class DbContext : IDisposable
             var journalMode = ExecuteScalar("PRAGMA journal_mode=WAL");
             if (!string.Equals(journalMode, "wal", StringComparison.OrdinalIgnoreCase))
                 Console.Error.WriteLine($"Warning: WAL mode not enabled (got '{journalMode}')");
-            Execute($"PRAGMA synchronous={DefaultSynchronousMode}");
+            ExecuteSynchronousPragmaWithFallback(Execute);
             Execute($"PRAGMA wal_autocheckpoint={DefaultWalAutocheckpointPages}");
         }
         catch (SqliteException ex) when (IsReadOnlyOpenError(ex))
@@ -221,6 +221,24 @@ public class DbContext : IDisposable
             EnsureForeignKeysEnabled();
         }
     }
+
+    internal static void ExecuteSynchronousPragmaWithFallback(Action<string> execute)
+    {
+        try
+        {
+            execute($"PRAGMA synchronous={DefaultSynchronousMode}");
+        }
+        catch (SqliteException ex) when (IsSafetyLevelTransactionError(ex))
+        {
+            // SQLite can reject PRAGMA synchronous while another pooled connection is in a
+            // transaction. Keep the connection usable; the setting is a durability/perf knob,
+            // not a schema precondition for readers.
+        }
+    }
+
+    internal static bool IsSafetyLevelTransactionError(SqliteException ex) =>
+        ex.SqliteErrorCode == 1 &&
+        ex.Message.Contains("Safety level may not be changed inside a transaction", StringComparison.OrdinalIgnoreCase);
 
     // SQLITE_READONLY(8), SQLITE_CANTOPEN(14), SQLITE_IOERR(10). A read-only filesystem
     // typically surfaces as CANTOPEN because -journal/-shm cannot be created.

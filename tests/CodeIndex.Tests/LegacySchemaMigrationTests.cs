@@ -553,6 +553,31 @@ public class LegacySchemaMigrationTests : IDisposable
     }
 
     [Fact]
+    public void DbContext_SynchronousPragma_AllowsSqliteSafetyLevelTransactionError()
+    {
+        var calls = 0;
+
+        DbContext.ExecuteSynchronousPragmaWithFallback(sql =>
+        {
+            calls++;
+            Assert.Equal($"PRAGMA synchronous={DbContext.DefaultSynchronousMode}", sql);
+            throw CreateSqliteException("Safety level may not be changed inside a transaction", 1);
+        });
+
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
+    public void DbContext_SynchronousPragma_RethrowsOtherSqliteErrors()
+    {
+        var ex = Assert.Throws<SqliteException>(() =>
+            DbContext.ExecuteSynchronousPragmaWithFallback(_ =>
+                throw CreateSqliteException("no such table: missing", 1)));
+
+        Assert.Contains("no such table", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void TryValidateExistingCodeIndexDb_RetriesTransientBusyOpen()
     {
         // backfill-fold validation must use the same retry/backoff path as the main open.
@@ -629,12 +654,15 @@ public class LegacySchemaMigrationTests : IDisposable
     }
 
     private static SqliteException CreateTransientBusyException()
+        => CreateSqliteException("busy", 5);
+
+    private static SqliteException CreateSqliteException(string message, int errorCode)
     {
         var exception = Activator.CreateInstance(
             typeof(SqliteException),
             BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
             binder: null,
-            args: ["busy", 5],
+            args: [message, errorCode],
             culture: null) as SqliteException;
 
         return exception ?? throw new InvalidOperationException("Failed to create SqliteException for retry test.");
