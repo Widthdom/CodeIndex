@@ -143,7 +143,8 @@ public static partial class SymbolExtractor
 
             if (TryGetFirstNonWhitespaceColumn(maskedLine, lineScanStartColumn, scanEndColumnExclusive, out var firstNonWhitespaceColumn)
                 && column == firstNonWhitespaceColumn
-                && maskedLine[column] == '#')
+                && (maskedLine[column] == '#'
+                    || IsCSharpXmlDocCommentLine(rawLines[lineIndex], firstNonWhitespaceColumn)))
             {
                 currentStart = null;
                 parenDepth = 0;
@@ -219,6 +220,14 @@ public static partial class SymbolExtractor
 
         if (currentStart != null)
             TryAddCSharpEnumMemberFromSpan(fileId, enumSymbol, rawLines, enumScannerLines, currentStart.Value, (bodyEndLineIndex, bodyEndColumnExclusive), symbols);
+    }
+
+    private static bool IsCSharpXmlDocCommentLine(string rawLine, int firstNonWhitespaceColumn)
+    {
+        return firstNonWhitespaceColumn + 2 < rawLine.Length
+            && rawLine[firstNonWhitespaceColumn] == '/'
+            && rawLine[firstNonWhitespaceColumn + 1] == '/'
+            && rawLine[firstNonWhitespaceColumn + 2] == '/';
     }
 
     internal static string[] SanitizeCSharpLinesForCrossLineScan(string[] lines)

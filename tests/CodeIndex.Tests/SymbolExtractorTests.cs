@@ -16908,6 +16908,28 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_EnumMembers_DoNotUseXmlDocProseAsNames()
+    {
+        const string content = """
+            internal enum ColorMode
+            {
+                Auto = 0,
+                /// <summary>Use ANSI colors even when stdout is redirected.</summary>
+                Always = 1,
+                /// <summary>Disable ANSI colors even on a TTY.</summary>
+                Never = 2,
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Auto" && s.ContainerName == "ColorMode");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Always" && s.ContainerName == "ColorMode");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Never" && s.ContainerName == "ColorMode");
+        Assert.DoesNotContain(symbols, s => s.Kind == "enum" && s.Name == "even" && s.ContainerName == "ColorMode");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsPlainFieldDeclarations()
     {
         // Plain fields are now captured as kind `property` so definition/symbols/outline/
