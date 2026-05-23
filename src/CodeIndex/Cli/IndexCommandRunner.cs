@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Collections.Concurrent;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
@@ -14,6 +15,8 @@ namespace CodeIndex.Cli;
 /// </summary>
 public static class IndexCommandRunner
 {
+    internal static Action? FullScanWritePhaseStartedForTesting { get; set; }
+
     public static int Run(string[] indexArgs, JsonSerializerOptions jsonOptions) =>
         Run(indexArgs, jsonOptions, cancellationForTesting: null);
 
@@ -25,6 +28,9 @@ public static class IndexCommandRunner
         var indexCancellation = cancellationForTesting ?? ownedCancellation!;
         using var cancelKeyPressRegistration = cancellationForTesting == null
             ? RegisterIndexCancelKeyPress(indexCancellation)
+            : NullDisposable.Instance;
+        using var terminateSignalRegistration = cancellationForTesting == null
+            ? RegisterIndexTerminateSignal(indexCancellation)
             : NullDisposable.Instance;
 
         if (options.ShowHelp)
@@ -2248,6 +2254,25 @@ public static class IndexCommandRunner
         }
     }
 
+    private static IDisposable RegisterIndexTerminateSignal(CancellationTokenSource cancellation)
+    {
+        if (OperatingSystem.IsWindows())
+            return NullDisposable.Instance;
+
+        try
+        {
+            return PosixSignalRegistration.Create(PosixSignal.SIGTERM, context =>
+            {
+                context.Cancel = true;
+                cancellation.Cancel();
+            });
+        }
+        catch (PlatformNotSupportedException)
+        {
+            return NullDisposable.Instance;
+        }
+    }
+
     private static int WriteDatabaseFilesystemError(bool json, JsonSerializerOptions jsonOptions, string dbPath, Exception ex)
     {
         var transient = ex is SqliteException { SqliteErrorCode: 5 or 6 };
@@ -2445,16 +2470,18 @@ public static class IndexCommandRunner
             Console.WriteLine();
         }
 
-        // Full-scan commits to mutating the DB from here on. Demote readiness just before
-        // the first write (PurgeStaleFiles). This is equivalent to clearing earlier in terms
-        // of the --rebuild crash-window guard (the --rebuild path already cleared before
-        // DropAll in RunIndex), but avoids downgrading a healthy DB if full-scan itself
-        // never reaches this point for any reason.
-        // 実書き込み直前で readiness をクリア。--rebuild 経路は RunIndex で既に clear 済み。
+        // Full-scan commits to mutating the DB from here on. Keep the whole write phase in
+        // one outer transaction so Ctrl-C/SIGTERM can roll back the readiness demotion,
+        // stale-file purge, and per-file writes instead of leaving a half-cleared index.
+        // full-scan の書き込み全体を outer transaction に入れ、中断時に readiness clear /
+        // purge / per-file write をまとめて rollback する。
         ThrowIfFullScanCancelled(0, files.Count);
+        using var fullScanTxn = writer.BeginTransaction();
         writer.ClearReadyFlags();
         writer.ClearHotspotFamilyReady();
         writer.ClearMetadataTargetReady();
+        FullScanWritePhaseStartedForTesting?.Invoke();
+        ThrowIfFullScanCancelled(0, files.Count);
 
         CancellationTokenSource? purgeCts = null;
         if (!options.Json && !options.Quiet)
@@ -3002,6 +3029,7 @@ public static class IndexCommandRunner
             // ここで stamp する。full scan / partial update を問わず最新の HEAD を保存する。
             StampIndexedHeadMetadata(writer, projectRoot);
         }
+        fullScanTxn.Commit();
         stopwatch.Stop();
         // Detect cwd drift between option-parsing and finalize. See RunUpdateMode for the
         // rationale; the warning is informational because we already absolutized paths.

@@ -2604,6 +2604,64 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FullScan_CancelledAfterReadinessDemotion_RollsBackExistingIndex()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            int initialReadiness;
+            using (var db = new DbContext(dbPath))
+                initialReadiness = db.GetUserVersion();
+            Assert.Equal(DbContext.CurrentSchemaVersion, initialReadiness);
+            Assert.Contains("app.cs", ReadIndexedPaths(dbPath));
+
+            File.WriteAllText(Path.Combine(projectRoot, "later.cs"), "public class Later { }\n");
+            using var cancellation = new CancellationTokenSource();
+            var hookInvoked = false;
+            IndexCommandRunner.FullScanWritePhaseStartedForTesting = () =>
+            {
+                hookInvoked = true;
+                cancellation.Cancel();
+            };
+
+            int interruptedExitCode;
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                using var stdout = new StringWriter();
+                try
+                {
+                    Console.SetOut(stdout);
+                    interruptedExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions, cancellation);
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                    IndexCommandRunner.FullScanWritePhaseStartedForTesting = null;
+                }
+            }
+
+            Assert.True(hookInvoked);
+            Assert.Equal(CommandExitCodes.Interrupted, interruptedExitCode);
+            using (var db = new DbContext(dbPath))
+                Assert.Equal(initialReadiness, db.GetUserVersion());
+            Assert.DoesNotContain("later.cs", ReadIndexedPaths(dbPath));
+        }
+        finally
+        {
+            IndexCommandRunner.FullScanWritePhaseStartedForTesting = null;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_UpdateMode_WithIndexingErrors_PrintsRecoveryWarning()
     {
         var projectRoot = CreateTempProject();
