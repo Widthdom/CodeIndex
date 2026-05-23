@@ -133,13 +133,24 @@ Current stable codes and triggers:
 
 ### SQLite WAL durability policy
 
-`DbContext` opens writable indexes in WAL mode, sets `PRAGMA synchronous=NORMAL`, and pins `PRAGMA wal_autocheckpoint=1000`. When WAL is active, the durable SQLite index is the `.db` file plus its sibling `.db-wal` and `.db-shm` files. Backups, diagnostics bundles, and manual copies must include all three files when the siblings exist, or use SQLite's `.backup` command/API from a live connection. Copying only `codeindex.db` can produce a stale snapshot because committed pages may still live in `codeindex.db-wal`.
+`DbContext` opens writable indexes in WAL mode, sets `PRAGMA application_id=0x43444958` (`CDIX`), sets `PRAGMA synchronous=NORMAL`, and pins `PRAGMA wal_autocheckpoint=1000`. The application id lets file-type detection tools distinguish cdidx databases from generic SQLite databases. When WAL is active, the durable SQLite index is the `.db` file plus its sibling `.db-wal` and `.db-shm` files. Backups, diagnostics bundles, and manual copies must include all three files when the siblings exist, or use SQLite's `.backup` command/API from a live connection. Copying only `codeindex.db` can produce a stale snapshot because committed pages may still live in `codeindex.db-wal`.
 
 Under WAL, `NORMAL` avoids per-commit fsync pressure during 500-row indexing batches while preserving database consistency after crashes. `DbWriter` runs `PRAGMA wal_checkpoint(PASSIVE)` after each outer transaction commit, and SQLite may also checkpoint automatically after the configured 1000-page threshold. Both checkpoint paths are opportunistic: active readers are not blocked, and an uncheckpointed WAL is expected state rather than corruption. If the process is killed after SQLite has committed a transaction but before checkpointing, the next normal opener rolls the WAL forward; no manual recovery step is required. If the process dies before a transaction commits, that transaction is rolled back by SQLite.
 
 Read-only fallback uses an immutable SQLite URI when the normal writable open cannot create or lock journal/WAL side files, so query commands can still read a DB from read-only or sandboxed storage. That fallback intentionally skips writable pragmas, migrations, and WAL recovery writes; if a WAL is present and must be observed, copy the `.db`, `.db-wal`, and `.db-shm` files together to a writable location or use a SQLite backup from an environment that can open the full WAL set. `status --json` exposes the resolved connection values under `db_pragma_settings` (`journal_mode`, `synchronous`, `wal_autocheckpoint`) for automation and support diagnostics.
 
 Writable opens also reject databases whose `PRAGMA user_version` contains readiness bits outside the current binary's `CurrentSchemaVersion` mask. Read-only status/query paths may still surface `index_newer_than_reader=true` as a degraded audit signal, but write-capable paths must fail with `E003_SCHEMA_TOO_NEW` so an older cdidx cannot silently rewrite a DB stamped by a newer one.
+
+### SQLite performance tuning
+
+Every `DbContext` connection sets `PRAGMA cache_size=-65536` (64 MiB), `PRAGMA temp_store=MEMORY`, and on 64-bit processes `PRAGMA mmap_size=268435456` (256 MiB). These are connection-scoped query-performance knobs; they do not alter the on-disk schema and are skipped only where SQLite cannot apply them.
+
+Operators can override the defaults with environment variables:
+
+| Variable | Default | Meaning |
+|---|---:|---|
+| `CDIDX_SQLITE_CACHE_KB` | `65536` | Positive cache size in KiB; cdidx applies it as a negative SQLite `cache_size` value so SQLite interprets it as KiB. |
+| `CDIDX_SQLITE_MMAP_BYTES` | `268435456` | Non-negative memory-map window in bytes on 64-bit processes. Use `0` to disable mmap. |
 
 ## Database schema
 

@@ -10,6 +10,11 @@ namespace CodeIndex.Database;
 /// </summary>
 public class DbContext : IDisposable
 {
+    public const int ApplicationId = 0x43444958; // "CDIX"
+    public const int DefaultCacheSizeKb = 65536;
+    public const long DefaultMmapSizeBytes = 268435456;
+    public const string CacheSizeEnvironmentVariable = "CDIDX_SQLITE_CACHE_KB";
+    public const string MmapSizeEnvironmentVariable = "CDIDX_SQLITE_MMAP_BYTES";
     public const int DefaultWalAutocheckpointPages = 1000;
     public const string DefaultSynchronousMode = "NORMAL";
     public const string SymbolExtractorVersionMetaPrefix = "symbol_extractor_version_";
@@ -166,12 +171,21 @@ public class DbContext : IDisposable
             // 通常経路にフォールバックさせて read-write-CREATE の副作用を防ぐ。
             if (UriRequestsReadOnly(dbPath))
             {
-                _connection = new SqliteConnection($"Data Source={dbPath}");
-                _connection.Open();
-                Execute("PRAGMA busy_timeout=5000");
-                RegisterConnectionFunctionsWithRetry(_connection);
-                _isReadOnly = true;
-                return;
+                try
+                {
+                    _connection = new SqliteConnection($"Data Source={dbPath}");
+                    _connection.Open();
+                    Execute("PRAGMA busy_timeout=5000");
+                    ApplyConnectionPerformancePragmas();
+                    RegisterConnectionFunctionsWithRetry(_connection);
+                    _isReadOnly = true;
+                    return;
+                }
+                catch
+                {
+                    _connection?.Dispose();
+                    throw;
+                }
             }
 
             // Bare file: URI — normalize to a filesystem path and fall through.
@@ -194,8 +208,10 @@ public class DbContext : IDisposable
                 static milliseconds => System.Threading.Thread.Sleep(milliseconds),
                 dbPath: dbPath);
             Execute("PRAGMA busy_timeout=5000");
+            ApplyConnectionPerformancePragmas();
             RegisterConnectionFunctionsWithRetry(_connection);
             EnsureWritableUserVersionSupported(dbPath);
+            Execute($"PRAGMA application_id={ApplicationId}");
 
             // Enable WAL mode and verify it was applied / WALモードを有効にし適用を確認
             var journalMode = ExecuteScalar("PRAGMA journal_mode=WAL");
@@ -216,10 +232,24 @@ public class DbContext : IDisposable
             // read-only FS / サンドボックスでも縮退 read path を動かせるようフォールバック。
             // immutable=1 を付けないと SQLite は -shm/-wal を触ろうとして CANTOPEN で落ちることがある。
             _connection?.Dispose();
-            _connection = OpenReadOnly(dbPath);
-            Execute("PRAGMA busy_timeout=5000");
-            RegisterConnectionFunctionsWithRetry(_connection);
-            _isReadOnly = true;
+            try
+            {
+                _connection = OpenReadOnly(dbPath);
+                Execute("PRAGMA busy_timeout=5000");
+                ApplyConnectionPerformancePragmas();
+                RegisterConnectionFunctionsWithRetry(_connection);
+                _isReadOnly = true;
+            }
+            catch
+            {
+                _connection?.Dispose();
+                throw;
+            }
+        }
+        catch
+        {
+            _connection?.Dispose();
+            throw;
         }
 
         if (!_isReadOnly)
@@ -228,6 +258,26 @@ public class DbContext : IDisposable
         }
 
         _suppressWriteWorkTracking = false;
+    }
+
+    private void ApplyConnectionPerformancePragmas()
+    {
+        Execute($"PRAGMA cache_size=-{ReadPositiveIntEnvironment(CacheSizeEnvironmentVariable, DefaultCacheSizeKb)}");
+        Execute("PRAGMA temp_store=MEMORY");
+        if (Environment.Is64BitProcess)
+            Execute($"PRAGMA mmap_size={ReadNonNegativeLongEnvironment(MmapSizeEnvironmentVariable, DefaultMmapSizeBytes)}");
+    }
+
+    private static int ReadPositiveIntEnvironment(string name, int fallback)
+    {
+        var value = Environment.GetEnvironmentVariable(name);
+        return int.TryParse(value, out var parsed) && parsed > 0 ? parsed : fallback;
+    }
+
+    private static long ReadNonNegativeLongEnvironment(string name, long fallback)
+    {
+        var value = Environment.GetEnvironmentVariable(name);
+        return long.TryParse(value, out var parsed) && parsed >= 0 ? parsed : fallback;
     }
 
     private void EnsureWritableUserVersionSupported(string dbPath)
