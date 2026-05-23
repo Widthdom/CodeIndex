@@ -110,6 +110,46 @@ public class ProgramRunnerTests
     }
 
     [Fact]
+    public void Run_ForcedGlobalToolLogging_WritesUnhandledExceptionChain()
+    {
+        var logDir = Path.Combine(Path.GetTempPath(), $"cdidx_global_tool_log_exception_chain_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(logDir);
+        using var env = EnvironmentVariableScope.Capture(
+            "CDIDX_FORCE_GLOBAL_TOOL_LOG",
+            "CDIDX_DISABLE_PERSISTENT_LOG",
+            "CDIDX_GLOBAL_TOOL_LOG_DIR");
+
+        try
+        {
+            env.Set("CDIDX_FORCE_GLOBAL_TOOL_LOG", "1");
+            env.Set("CDIDX_DISABLE_PERSISTENT_LOG", null);
+            env.Set("CDIDX_GLOBAL_TOOL_LOG_DIR", logDir);
+
+            var inner = new InvalidOperationException("root cause");
+            var outer = new ApplicationException("outer wrapper", inner);
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["status"],
+                appVersion: "1.10.0",
+                beforeDispatchForTesting: () => throw outer));
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.StartsWith("Error: command failed before it could complete.", stderr.TrimEnd());
+            Assert.DoesNotContain("root cause", stderr);
+
+            var logPath = Directory.GetFiles(logDir, "stderr-*.log", SearchOption.TopDirectoryOnly).Single();
+            var log = File.ReadAllText(logPath);
+            Assert.Contains("unhandled_exception", log);
+            Assert.Contains("exception[0] type=System.ApplicationException message=\"outer wrapper\"", log);
+            Assert.Contains("inner_exception[1] type=System.InvalidOperationException message=\"root cause\"", log);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(logDir);
+        }
+    }
+
+    [Fact]
     public void Run_ForcedGlobalToolLogging_PrunesToThirtyDailyFiles()
     {
         var logDir = Path.Combine(Path.GetTempPath(), $"cdidx_global_tool_log_prune_{Guid.NewGuid():N}");

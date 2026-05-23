@@ -192,13 +192,13 @@ internal static class ProgramRunner
             // #1580: 失敗ファイル / 構造化フィールドを CLI で一律に表示する。
             var exitCode = MapCodeIndexExceptionExitCode(ex.Code);
             CodeIndexExceptionFormatter.Write(ex, args, jsonOptions);
-            GlobalToolLog.Error($"command_complete exit_code={exitCode} code_index_exception code={ex.Code} category={ex.Category} path={ex.Path}");
+            GlobalToolLog.Error($"command_complete exit_code={exitCode} code_index_exception code={ex.Code} category={ex.Category} path={ex.Path}\n{GlobalToolLog.FormatExceptionChain(ex)}");
             EmitCommandMetric(args[0], args, commandStartTimestamp, commandStopwatch, exitCode, ex.Code);
             return exitCode;
         }
         catch (OperationCanceledException ex)
         {
-            GlobalToolLog.Error($"command_complete exit_code={CommandExitCodes.CancelledBySignal} operation_cancelled type={ex.GetType().Name}: {ex.Message}");
+            GlobalToolLog.Error($"command_complete exit_code={CommandExitCodes.CancelledBySignal} operation_cancelled\n{GlobalToolLog.FormatExceptionChain(ex)}");
             Console.Error.WriteLine("Error: command cancelled before it could complete.");
             EmitCommandMetric(args[0], args, commandStartTimestamp, commandStopwatch, CommandExitCodes.CancelledBySignal, ex.GetType().Name);
             return CommandExitCodes.CancelledBySignal;
@@ -207,12 +207,12 @@ internal static class ProgramRunner
         {
             if (JsonOutputFailure.TryHandle(ex, out var exitCode))
             {
-                GlobalToolLog.Error($"command_complete exit_code={exitCode} handled_exception={ex.GetType().Name}: {ex.Message}");
+                GlobalToolLog.Error($"command_complete exit_code={exitCode} handled_exception\n{GlobalToolLog.FormatExceptionChain(ex)}");
                 EmitCommandMetric(args[0], args, commandStartTimestamp, commandStopwatch, exitCode, ex.GetType().Name);
                 return exitCode;
             }
 
-            GlobalToolLog.Error($"unhandled_exception type={ex.GetType().FullName}: {ex}");
+            GlobalToolLog.Error($"unhandled_exception\n{GlobalToolLog.FormatExceptionChain(ex, includeStacks: true)}");
             Console.Error.WriteLine("Error: command failed before it could complete. Run `cdidx report` for details.");
             EmitCommandMetric(args[0], args, commandStartTimestamp, commandStopwatch, CommandExitCodes.DatabaseError, ex.GetType().Name);
             return CommandExitCodes.DatabaseError;

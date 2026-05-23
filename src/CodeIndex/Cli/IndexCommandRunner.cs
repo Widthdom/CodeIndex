@@ -1883,6 +1883,7 @@ public static class IndexCommandRunner
             catch (Exception ex)
             {
                 DemoteReadinessOnce();
+                GlobalToolLog.Error($"index_update_file_failed path={CollapseLineBreaks(relPath)}\n{GlobalToolLog.FormatExceptionChain(ex)}");
 
                 errors++;
                 errorList.Add(new CliJsonMessage(relPath, ex.Message));
@@ -2531,6 +2532,7 @@ public static class IndexCommandRunner
     private static int WriteDatabaseFilesystemError(bool json, JsonSerializerOptions jsonOptions, string dbPath, Exception ex)
     {
         var transient = ex is SqliteException { SqliteErrorCode: 5 or 6 };
+        GlobalToolLog.Error($"index_database_filesystem_error db={CollapseLineBreaks(dbPath)}\n{GlobalToolLog.FormatExceptionChain(ex)}");
         return WriteCommandError(
             json,
             jsonOptions,
@@ -3233,6 +3235,7 @@ public static class IndexCommandRunner
                 }
                 catch (Exception ex)
                 {
+                    GlobalToolLog.Error($"index_file_failed path={CollapseLineBreaks(item.FilePath)}\n{GlobalToolLog.FormatExceptionChain(ex)}");
                     errors++;
                     errorList.Add(new CliJsonMessage(item.FilePath, ex.Message));
                     if (!options.Json)

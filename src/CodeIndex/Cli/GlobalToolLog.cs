@@ -49,6 +49,58 @@ internal static class GlobalToolLog
 
     internal static void Error(string message) => CurrentSession.Value?.Write("ERROR", message);
 
+    internal static string FormatExceptionChain(Exception ex, bool includeStacks = false)
+    {
+        var sb = new StringBuilder();
+        AppendException(sb, ex, 0, includeStacks);
+        return sb.ToString().TrimEnd();
+    }
+
+    private static void AppendException(StringBuilder sb, Exception ex, int depth, bool includeStacks)
+    {
+        var indent = new string(' ', depth * 2);
+        sb.Append(indent);
+        sb.Append(depth == 0 ? "exception" : "inner_exception");
+        sb.Append('[');
+        sb.Append(depth.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        sb.Append("] type=");
+        sb.Append(ex.GetType().FullName);
+        sb.Append(" message=");
+        sb.Append(QuoteLogValue(ex.Message));
+        sb.AppendLine();
+
+        if (includeStacks && !string.IsNullOrWhiteSpace(ex.StackTrace))
+        {
+            foreach (var line in ex.StackTrace.Split('\n'))
+            {
+                sb.Append(indent);
+                sb.Append("  stack: ");
+                sb.AppendLine(line.TrimEnd('\r'));
+            }
+        }
+
+        if (ex is AggregateException aggregate)
+        {
+            var index = 0;
+            foreach (var inner in aggregate.InnerExceptions)
+            {
+                sb.Append(indent);
+                sb.Append("  aggregate_inner_index=");
+                sb.AppendLine(index.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                AppendException(sb, inner, depth + 1, includeStacks);
+                index++;
+            }
+
+            return;
+        }
+
+        if (ex.InnerException is not null)
+            AppendException(sb, ex.InnerException, depth + 1, includeStacks);
+    }
+
+    private static string QuoteLogValue(string value) =>
+        "\"" + value.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal).Replace("\r", "\\r", StringComparison.Ordinal).Replace("\n", "\\n", StringComparison.Ordinal) + "\"";
+
     private static bool ShouldEnable()
     {
         var disabled = Environment.GetEnvironmentVariable("CDIDX_DISABLE_PERSISTENT_LOG");

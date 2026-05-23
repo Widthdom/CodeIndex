@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Diagnostics;
+using CodeIndex.Cli;
 using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Database;
@@ -281,7 +282,8 @@ public static class DbDebug
         var sb = new StringBuilder();
         sb.AppendLine("--- CDIDX_DEBUG ---");
         sb.AppendLine($"Mode: {(mode == DebugMode.Unsafe ? "unsafe (raw content)" : "redacted (salted text hashes; path shape only)")}");
-        sb.AppendLine($"Exception: {ex.GetType().FullName}: {ex.Message}");
+        sb.AppendLine("Exception chain:");
+        sb.AppendLine(GlobalToolLog.FormatExceptionChain(ex, includeStacks: mode == DebugMode.Unsafe));
         if (_lastSql != null)
         {
             sb.AppendLine("Last SQL:");
@@ -300,7 +302,7 @@ public static class DbDebug
             foreach (var (name, value) in _lastRow)
                 sb.AppendLine($"  [{name}] = {value}");
         }
-        if (ex.StackTrace != null)
+        if (mode != DebugMode.Unsafe && ex.StackTrace != null)
         {
             sb.AppendLine("Stack:");
             sb.AppendLine(ex.StackTrace);
