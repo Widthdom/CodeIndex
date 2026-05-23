@@ -10,7 +10,7 @@ AI/MCP setup, language list, and troubleshooting details.
 [![CodeQL](https://github.com/Widthdom/CodeIndex/actions/workflows/codeql.yml/badge.svg)](https://github.com/Widthdom/CodeIndex/actions/workflows/codeql.yml)
 [![Release](https://github.com/Widthdom/CodeIndex/actions/workflows/release.yml/badge.svg)](https://github.com/Widthdom/CodeIndex/actions/workflows/release.yml)
 
-![.NET 8](https://img.shields.io/badge/.NET-8.0-512BD4?logo=dotnet&logoColor=white)
+![.NET 8.x](https://img.shields.io/badge/.NET-8.x-512BD4?logo=dotnet&logoColor=white)
 ![C#](https://img.shields.io/badge/C%23-12-239120?logo=csharp&logoColor=white)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 ![License](https://img.shields.io/badge/License-FSL--1.1--ALv2-orange)
@@ -411,7 +411,10 @@ RUN export CDIDX_INSTALL_DIR=/usr/local/bin \
 
 ### Option B: NuGet Global Tool
 
-Requires [.NET 8.0 SDK](https://dotnet.microsoft.com/download/dotnet/8.0).
+Requires the [.NET 8.x SDK](https://dotnet.microsoft.com/download/dotnet/8.0).
+CodeIndex targets `net8.0`; .NET 8.x is the supported and tested SDK/runtime
+line. Newer major .NET releases are outside the supported/tested matrix until
+CI covers them.
 
 ```bash
 dotnet tool install -g cdidx
@@ -443,7 +446,7 @@ dotnet tool update -g cdidx
 
 ### Option C: Build from source
 
-Requires [.NET 8.0 SDK](https://dotnet.microsoft.com/download/dotnet/8.0).
+Requires the [.NET 8.x SDK](https://dotnet.microsoft.com/download/dotnet/8.0).
 
 ```bash
 dotnet build src/CodeIndex/CodeIndex.csproj -c Release
@@ -1359,7 +1362,7 @@ cdidx --version
 curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash
 ```
 
-Or, if .NET 8+ SDK is available:
+Or, if the .NET 8.x SDK is available:
 
 ```bash
 dotnet tool install -g cdidx
@@ -1804,7 +1807,7 @@ The short version: `version.json` is the single source of truth, and the maintai
 <a id="cdidx日本語"></a>
 # cdidx（日本語）
 
-![.NET 8](https://img.shields.io/badge/.NET-8.0-512BD4?logo=dotnet&logoColor=white)
+![.NET 8.x](https://img.shields.io/badge/.NET-8.x-512BD4?logo=dotnet&logoColor=white)
 ![C#](https://img.shields.io/badge/C%23-12-239120?logo=csharp&logoColor=white)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 ![License](https://img.shields.io/badge/License-FSL--1.1--ALv2-orange)
@@ -2198,7 +2201,10 @@ RUN export CDIDX_INSTALL_DIR=/usr/local/bin \
 
 ### 方法B: NuGet グローバルツール
 
-[.NET 8.0 SDK](https://dotnet.microsoft.com/download/dotnet/8.0) が必要です。
+[.NET 8.x SDK](https://dotnet.microsoft.com/download/dotnet/8.0) が必要です。
+CodeIndex は `net8.0` を対象にしており、.NET 8.x がサポート済みかつ
+テスト済みの SDK/runtime 系列です。CI で対象になるまでは、より新しい
+メジャー .NET リリースはサポート・テスト対象外です。
 
 ```bash
 dotnet tool install -g cdidx
@@ -2216,7 +2222,7 @@ dotnet tool update -g cdidx
 
 ### 方法C: ソースからビルド
 
-[.NET 8.0 SDK](https://dotnet.microsoft.com/download/dotnet/8.0) が必要です。
+[.NET 8.x SDK](https://dotnet.microsoft.com/download/dotnet/8.0) が必要です。
 
 ```bash
 dotnet build src/CodeIndex/CodeIndex.csproj -c Release
@@ -3125,7 +3131,7 @@ cdidx --version
 curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash
 ```
 
-または .NET 8+ SDK がある場合:
+または .NET 8.x SDK がある場合:
 
 ```bash
 dotnet tool install -g cdidx

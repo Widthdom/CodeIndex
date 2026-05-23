@@ -10,6 +10,10 @@ dotnet test
 dotnet run --project src/CodeIndex -- <command> [options]
 ```
 
+Development, CI, and NuGet tool packaging target `net8.0`. Use a .NET 8.x SDK
+for supported and tested builds; newer major .NET releases are outside the
+supported/tested matrix until CI covers them.
+
 For test suite structure, shared helpers, and test-writing conventions, see [TESTING_GUIDE.md](TESTING_GUIDE.md).
 
 ### NuGet lock files
@@ -1587,6 +1591,10 @@ dotnet build
 dotnet test
 dotnet run --project src/CodeIndex -- <command> [options]
 ```
+
+開発、CI、NuGet ツールのパッケージングは `net8.0` を対象にしています。
+サポート済みかつテスト済みのビルドには .NET 8.x SDK を使ってください。
+CI で対象になるまでは、より新しいメジャー .NET リリースはサポート・テスト対象外です。
 
 テストスイートの構成、共有ヘルパー、テスト作法については [TESTING_GUIDE.md#テストガイド](TESTING_GUIDE.md#テストガイド) を参照してください。
 
