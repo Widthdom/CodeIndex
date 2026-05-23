@@ -2256,6 +2256,193 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void RunOptimizeFts_ExistingDb_ResetsCounterAndEmitsJson()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_optimize_fts_{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db);
+                writer.RecordFtsIncrementalWrite();
+                writer.RecordFtsIncrementalWrite();
+            }
+
+            int exitCode;
+            JsonElement json;
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                try
+                {
+                    using var stdout = new StringWriter();
+                    Console.SetOut(stdout);
+                    exitCode = IndexCommandRunner.RunOptimizeFts(["--db", dbPath, "--json"], _jsonOptions);
+                    using var document = JsonDocument.Parse(stdout.ToString());
+                    json = document.RootElement.Clone();
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                }
+            }
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(2, json.GetProperty("writes_since_optimize_before").GetInt32());
+            Assert.Equal(0, json.GetProperty("writes_since_optimize_after").GetInt32());
+
+            using var verifyDb = new DbContext(dbPath);
+            Assert.Equal("0", verifyDb.GetMetaString(DbWriter.FtsIncrementalWritesSinceOptimizeMetaKey));
+            Assert.False(string.IsNullOrWhiteSpace(verifyDb.GetMetaString(DbWriter.FtsLastOptimizedAtMetaKey)));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void RunOptimizeFts_LockHeld_ReportsDbLocked()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_optimize_locked_{Guid.NewGuid():N}.db");
+        var lockPath = dbPath + ".lock";
+        try
+        {
+            using (var db = new DbContext(dbPath))
+                db.InitializeSchema();
+
+            Directory.CreateDirectory(Path.GetDirectoryName(lockPath)!);
+            using (var holder = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+            {
+                int exitCode;
+                JsonElement json;
+                lock (TestConsoleLock.Gate)
+                {
+                    var originalOut = Console.Out;
+                    try
+                    {
+                        using var stdout = new StringWriter();
+                        Console.SetOut(stdout);
+                        exitCode = IndexCommandRunner.RunOptimizeFts(["--db", dbPath, "--json"], _jsonOptions);
+                        using var document = JsonDocument.Parse(stdout.ToString());
+                        json = document.RootElement.Clone();
+                    }
+                    finally
+                    {
+                        Console.SetOut(originalOut);
+                    }
+                }
+
+                Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+                Assert.Equal("error", json.GetProperty("status").GetString());
+                Assert.Equal(CommandErrorCodes.DbLocked, json.GetProperty("error_code").GetString());
+                Assert.Contains("another cdidx index is already running", json.GetProperty("message").GetString());
+                Assert.Contains("retry `cdidx optimize`", json.GetProperty("hint").GetString());
+            }
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+            if (File.Exists(lockPath + ".info"))
+                File.Delete(lockPath + ".info");
+            if (File.Exists(lockPath))
+                File.Delete(lockPath);
+        }
+    }
+
+    [Fact]
+    public void RunOptimizeFts_ReadOnlyUri_ReturnsDbNotWritable()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_optimize_readonly_{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db);
+                writer.RecordFtsIncrementalWrite();
+            }
+
+            var dbUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+            int exitCode;
+            JsonElement json;
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                try
+                {
+                    using var stdout = new StringWriter();
+                    Console.SetOut(stdout);
+                    exitCode = IndexCommandRunner.RunOptimizeFts(["--db", dbUri, "--json"], _jsonOptions);
+                    using var document = JsonDocument.Parse(stdout.ToString());
+                    json = document.RootElement.Clone();
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                }
+            }
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.Equal("error", json.GetProperty("status").GetString());
+            Assert.Equal(CommandErrorCodes.DbNotWritable, json.GetProperty("error_code").GetString());
+            Assert.Contains("database must be writable for optimize", json.GetProperty("message").GetString());
+
+            using var verifyDb = new DbContext(dbPath);
+            Assert.Equal("1", verifyDb.GetMetaString(DbWriter.FtsIncrementalWritesSinceOptimizeMetaKey));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void Run_IndexOptimizeWithDryRun_ReturnsUsageErrorWithoutWriting()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { }\n");
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db);
+                writer.RecordFtsIncrementalWrite();
+                writer.SetMeta(DbWriter.FtsLastOptimizedAtMetaKey, "sentinel");
+            }
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--optimize", "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal("error", json.GetProperty("status").GetString());
+            Assert.Equal(CommandErrorCodes.UsageError, json.GetProperty("error_code").GetString());
+            Assert.Contains("--optimize cannot be combined", json.GetProperty("message").GetString());
+
+            using var verifyDb = new DbContext(dbPath);
+            Assert.Equal("1", verifyDb.GetMetaString(DbWriter.FtsIncrementalWritesSinceOptimizeMetaKey));
+            Assert.Equal("sentinel", verifyDb.GetMetaString(DbWriter.FtsLastOptimizedAtMetaKey));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunBackfillFold_BackfillsLegacyRowsAndStampsFoldReady()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_fold_{Guid.NewGuid():N}.db");

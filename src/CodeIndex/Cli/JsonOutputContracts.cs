@@ -19,6 +19,13 @@ internal sealed record BackfillFoldJsonResult(
     [property: JsonPropertyName("user_version_after")] int UserVersionAfter,
     [property: JsonPropertyName("fold_ready")] bool FoldReady);
 
+internal sealed record OptimizeFtsJsonResult(
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("db_path")] string DbPath,
+    [property: JsonPropertyName("writes_since_optimize_before")] int WritesSinceOptimizeBefore,
+    [property: JsonPropertyName("writes_since_optimize_after")] int WritesSinceOptimizeAfter,
+    [property: JsonPropertyName("elapsed_ms")] long ElapsedMs);
+
 internal sealed record CommandErrorJsonResult(
     [property: JsonPropertyName("status")] string Status,
     [property: JsonPropertyName("message")] string Message,
@@ -139,6 +146,8 @@ internal sealed class IndexUpdateSummaryJsonResult
     public int Warnings { get; init; }
     public int Errors { get; init; }
     public int SymbolsDroppedByKindFilter { get; init; }
+    [JsonPropertyName("fts_optimize_ran")]
+    public bool FtsOptimizeRan { get; init; }
 }
 
 internal sealed class IndexFullScanSummaryJsonResult
@@ -316,6 +325,7 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(List<UnusedSymbolResult>))]
 [JsonSerializable(typeof(OutlineResult))]
 [JsonSerializable(typeof(OutlineSymbol))]
+[JsonSerializable(typeof(OptimizeFtsJsonResult))]
 [JsonSerializable(typeof(QueryCountResult))]
 [JsonSerializable(typeof(ReferenceResult))]
 [JsonSerializable(typeof(RepoEntrypointResult))]

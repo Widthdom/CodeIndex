@@ -173,6 +173,7 @@ internal static class ProgramRunner
                     "diff" => DiffCommandRunner.Run(subArgs, jsonOptions),
                     "hooks" => HookCommandRunner.Run(subArgs, jsonOptions),
                     "backfill-fold" => IndexCommandRunner.RunBackfillFold(subArgs, jsonOptions),
+                    "optimize" => IndexCommandRunner.RunOptimizeFts(subArgs, jsonOptions),
                     "db" => DbCommandRunner.RunIntegrityCheck(subArgs, jsonOptions),
                     "report" => ReportCommandRunner.Run(subArgs, jsonOptions, appVersion),
                     _ when IsProjectPathArg(commandName)

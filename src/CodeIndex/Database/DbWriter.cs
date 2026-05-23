@@ -11,6 +11,10 @@ namespace CodeIndex.Database;
 /// </summary>
 public class DbWriter
 {
+    public const string FtsIncrementalWritesSinceOptimizeMetaKey = "fts_incremental_writes_since_optimize";
+    public const string FtsLastOptimizedAtMetaKey = "fts_last_optimized_at";
+    public const int DefaultFtsOptimizeIncrementalWriteThreshold = 25;
+
     private readonly SqliteConnection _conn;
     private readonly PreparedCommandCache? _commandCache;
     private readonly Action? _markWriteWork;
@@ -1459,6 +1463,35 @@ public class DbWriter
     public void OptimizeFts()
     {
         Execute("INSERT INTO fts_chunks(fts_chunks) VALUES('optimize')");
+        SetMeta(FtsIncrementalWritesSinceOptimizeMetaKey, "0");
+        SetMeta(FtsLastOptimizedAtMetaKey, DateTimeOffset.UtcNow.ToString("O", System.Globalization.CultureInfo.InvariantCulture));
+    }
+
+    public int GetFtsIncrementalWritesSinceOptimize()
+    {
+        var raw = GetMetaString(FtsIncrementalWritesSinceOptimizeMetaKey);
+        return int.TryParse(raw, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var value) && value > 0
+            ? value
+            : 0;
+    }
+
+    public int RecordFtsIncrementalWrite()
+    {
+        var value = GetFtsIncrementalWritesSinceOptimize() + 1;
+        SetMeta(FtsIncrementalWritesSinceOptimizeMetaKey, value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        return value;
+    }
+
+    public bool OptimizeFtsIfIncrementalWriteThresholdReached(int threshold = DefaultFtsOptimizeIncrementalWriteThreshold)
+    {
+        if (threshold <= 0)
+            throw new ArgumentOutOfRangeException(nameof(threshold));
+
+        if (GetFtsIncrementalWritesSinceOptimize() < threshold)
+            return false;
+
+        OptimizeFts();
+        return true;
     }
 
     // End-of-successful-index trust markers. The ready bits live in PRAGMA user_version so

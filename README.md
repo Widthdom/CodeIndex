@@ -60,6 +60,10 @@ of rebuilding; see
 [Incremental update reliability](USER_GUIDE.md#incremental-update-reliability).
 If you do need `--rebuild`, interactive terminals ask for confirmation before
 deleting the existing DB, and scripts/CI must pass `--yes` (or `--force`).
+Incremental refreshes keep an FTS5 maintenance counter and optimize internal
+segments opportunistically; run `cdidx optimize` or
+`cdidx index <projectPath> --optimize` to perform the same maintenance manually
+when a long-lived DB needs immediate compaction.
 If a directory cannot be scanned because of permissions or an I/O error,
 `cdidx` records the scan error, keeps scanning other directories, and writes a
 temporary `.cdidx/scan-checkpoint.json` so a same-HEAD retry can skip directories
@@ -258,6 +262,9 @@ cdidx mcp
 を参照してください。
 `--rebuild` が必要な場合、interactive terminal では既存 DB 削除前に確認を求め、
 script / CI では `--yes`（または `--force`）が必要です。
+差分更新では FTS5 maintenance counter を保持し、内部 segment をしきい値到達時に
+自動で optimize します。長期間使っている DB をすぐに compact したい場合は、
+`cdidx optimize` または `cdidx index <projectPath> --optimize` を実行してください。
 権限や I/O エラーでディレクトリを走査できない場合でも、`cdidx` は scan error を
 記録して他のディレクトリの走査を続け、同じ HEAD の再実行で成功済みディレクトリを
 読み飛ばせるように一時的な `.cdidx/scan-checkpoint.json` を書き込みます。
