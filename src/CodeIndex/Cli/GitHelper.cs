@@ -281,9 +281,13 @@ public static class GitHelper
         string projectRoot,
         IReadOnlyDictionary<string, string?>? gitEnvironmentOverrides)
     {
-        var repositoryType = TryGetRepositoryType(projectRoot, gitEnvironmentOverrides);
-        if (repositoryType == GitRepositoryType.None)
-            return GitHeadCommitResult.NotARepo;
+        var repositoryRoot = TryGetRepositoryRoot(projectRoot, gitEnvironmentOverrides);
+        if (repositoryRoot == null)
+        {
+            return HasGitMetadataEntry(projectRoot)
+                ? GitHeadCommitResult.Error("git repository metadata is present, but git could not resolve the repository root")
+                : GitHeadCommitResult.NotARepo;
+        }
 
         var headResult = RunGitCapturingResult(projectRoot, gitEnvironmentOverrides, "rev-parse", "--verify", "HEAD^{commit}");
         if (headResult.StartError != null)
@@ -547,6 +551,13 @@ public static class GitHelper
         return string.Equals(isBare, "true", StringComparison.OrdinalIgnoreCase)
             ? Path.GetFullPath(projectPath)
             : null;
+    }
+
+    private static bool HasGitMetadataEntry(string projectRoot)
+    {
+        var dotGit = Path.Combine(projectRoot, ".git");
+        var ioDotGit = LongPath.EnsureWindowsPrefix(dotGit);
+        return Directory.Exists(ioDotGit) || File.Exists(ioDotGit);
     }
 
     private static string? TryRunGit(string projectRoot, params string[] args)

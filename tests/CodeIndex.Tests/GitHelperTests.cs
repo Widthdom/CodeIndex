@@ -387,6 +387,25 @@ public class GitHelperTests : IDisposable
     }
 
     [Fact]
+    public void TryGetHeadCommitResult_ReturnsResolvedForRepositorySubdirectory()
+    {
+        var repoDir = CreateGitRepo();
+
+        File.WriteAllText(Path.Combine(repoDir, "tracked.txt"), "v1\n");
+        RunGit(repoDir, "add", "tracked.txt");
+        RunGit(repoDir, "commit", "-m", "initial");
+        var projectDir = Path.Combine(repoDir, "src", "App");
+        Directory.CreateDirectory(projectDir);
+
+        var expected = RunGit(repoDir, "rev-parse", "HEAD").Trim();
+        var actual = GitHelper.TryGetHeadCommitResult(projectDir);
+
+        Assert.Equal(GitHeadCommitState.Resolved, actual.State);
+        Assert.Equal(expected, actual.Sha);
+        Assert.Null(actual.Reason);
+    }
+
+    [Fact]
     public void TryGetHeadCommitResult_ReturnsDetachedHeadWithSha()
     {
         var repoDir = CreateGitRepo();
