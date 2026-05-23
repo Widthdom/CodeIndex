@@ -2537,8 +2537,19 @@ public static class IndexCommandRunner
             transient ? CommandExitCodes.TransientDatabaseError : CommandExitCodes.DatabaseError,
             transient
                 ? "Another process may be holding the database. Wait for it to finish, or retry with backoff."
-                : "Check that the database file and parent directory exist and are writable, then retry `cdidx index`.",
+                : BuildDatabaseFilesystemHint(ex),
             transient ? CommandErrorCodes.DbLocked : CommandErrorCodes.DbNotWritable);
+    }
+
+    private static string BuildDatabaseFilesystemHint(Exception ex)
+    {
+        if (ex is SqliteException sqlite && MacProfileDetector.IsPermissionStyleSqliteError(sqlite))
+            return MacProfileDetector.BuildDatabaseHint(MacProfileDetector.DetectCurrent());
+
+        if (ex is UnauthorizedAccessException)
+            return MacProfileDetector.BuildDatabaseHint(MacProfileDetector.DetectCurrent());
+
+        return "Check that the database file and parent directory exist and are writable, then retry `cdidx index`.";
     }
 
     private static bool IsDatabaseFilesystemError(Exception ex) =>

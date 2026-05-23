@@ -1119,6 +1119,7 @@ public partial class McpServer
         {
             var status = reader.GetStatus();
             WorkspaceMetadataEnricher.Enrich(status, _dbPath, _dbPathExplicit);
+            status.MacProfile = MacProfileDetector.DetectCurrent();
             status.GraphSupportedLanguages = ReferenceExtractor.GetSupportedLanguages().OrderBy(l => l).ToList();
             var postExtractionHooks = PostExtractionHookRunner.DiscoverDefault().Hooks;
             if (postExtractionHooks.Count > 0)

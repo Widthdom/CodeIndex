@@ -26,6 +26,7 @@ public class DocumentationStatusContractTests
         "index_newer_than_reader_reason",
         "unknown_extension_file_count",
         "path_case_sensitive",
+        "mac_profile",
         "stale_after_seconds",
         "index_age_seconds",
         "degraded_reason",

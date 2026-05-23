@@ -381,6 +381,15 @@ public class StatusResult
     public string? GitHead { get; set; }
     public bool? GitIsDirty { get; set; }
     /// <summary>
+    /// Best-effort Linux mandatory-access-control profile for the running process, such as
+    /// `apparmor:snap.cdidx.cdidx` or `selinux:user_u:user_r:user_t:s0`. Null on non-Linux
+    /// hosts, unconstrained processes, or when `/proc/self/attr/*` cannot be read (#1768).
+    /// 実行中プロセスの Linux MAC profile。非 Linux / 非制限 / 読み取り不可では null。
+    /// </summary>
+    [JsonPropertyName("mac_profile")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? MacProfile { get; set; }
+    /// <summary>
     /// Git HEAD commit captured at the end of the most recent successful full-scan
     /// index run (Issue #1508). Compared with the runtime `GitHead` to surface a
     /// worktree branch / HEAD switch that silently invalidates the on-disk index

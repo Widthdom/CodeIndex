@@ -1730,8 +1730,16 @@ This section catalogs the failure modes you are most likely to hit while running
 
 4. **Database is not writable** (`E004_DB_NOT_WRITABLE`)
    - Symptom: `Error [E004_DB_NOT_WRITABLE]: ...` on `cdidx index`, often paired with SQLite `CANTOPEN(14)` on read-only filesystems (e.g. read-only bind mounts, container layers).
-   - Cause: the DB path is on a read-only filesystem, or filesystem permissions block writes by the current user. WAL mode requires write access even for some read paths.
-   - Recovery: relocate the DB with `--db <writable-path>`, fix filesystem permissions, or remount writable. Read-only queries against a writable mount work normally.
+   - Cause: the DB path is on a read-only filesystem, filesystem permissions block writes by the current user, or Linux mandatory access control blocks SQLite WAL/SHM sidecar creation under AppArmor / SELinux. WAL mode requires write access even for some read paths.
+   - Recovery: relocate the DB with `--db <writable-path>`, fix filesystem permissions, or remount writable. On AppArmor / SELinux systems, check the reported `mac_profile` from `cdidx status --json`, then inspect `aa-status` / snap or flatpak permissions / audit logs for AppArmor, or `getenforce`, `ausearch`, and `audit2why` for SELinux. Read-only queries can use a SQLite URI such as `--db 'file:///abs/path/codeindex.db?immutable=1'` when policy allows reading the DB file but blocks sidecar writes.
+
+#### Sandbox diagnostics
+
+When SQLite returns permission-style errors such as `SQLITE_AUTH`, `SQLITE_PERM`, `SQLITE_IOERR`, or `SQLITE_CANTOPEN`, `cdidx` adds a confinement-aware hint on Linux if `/proc/self/attr/current` or `/proc/self/attr/exec` exposes an AppArmor or SELinux profile. `status --json` also includes `mac_profile` for the same best-effort signal, for example `apparmor:snap.cdidx.cdidx` or `selinux:user_u:user_r:user_t:s0`.
+
+- Snap / AppArmor: run `aa-status`, inspect snap interface grants, and check audit logs for denied `codeindex.db-wal` or `codeindex.db-shm` creation.
+- Flatpak: check filesystem portal permissions and AppArmor/audit logs when the host policy confines the app.
+- SELinux: run `getenforce`, inspect denials with `ausearch -m avc -ts recent`, and explain them with `audit2why`.
 
 5. **Database disk image malformed / integrity failure** (`E005_DB_INTEGRITY_FAILED`)
    - Symptom: queries crash with `database disk image is malformed`, or `cdidx db --integrity-check` exits `3` and lists `PRAGMA integrity_check` failures with `Error [E005_DB_INTEGRITY_FAILED]: ...`.
