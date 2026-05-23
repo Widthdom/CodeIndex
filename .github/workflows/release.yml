@@ -536,9 +536,40 @@ jobs:
       - name: Extract version from tag
         id: version
         run: |
+          set -euo pipefail
           TAG="${{ inputs.tag_name || github.ref_name }}"
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Release tag must be a v-prefixed SemVer version, got: ${TAG}" >&2
+            exit 1
+          fi
+
           VERSION="${TAG#v}"
+          VERSION_JSON="$(jq -r '.version // empty' version.json)"
+          if [ "$VERSION_JSON" != "$VERSION" ]; then
+            echo "version.json (${VERSION_JSON}) does not match release tag ${TAG} (${VERSION})." >&2
+            echo "Run the release changelog preparation workflow and commit version.json before tagging." >&2
+            exit 1
+          fi
+
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify NuGet version is not already published
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          package_url="https://api.nuget.org/v3-flatcontainer/cdidx/${VERSION}/cdidx.${VERSION}.nupkg"
+          status="$(curl -sS -o /tmp/cdidx-nuget-head -w '%{http_code}' -I "$package_url")"
+          if [ "$status" = "200" ]; then
+            echo "NuGet package cdidx ${VERSION} is already published; refusing to mask this as a duplicate." >&2
+            exit 1
+          fi
+
+          if [ "$status" != "404" ]; then
+            echo "Could not verify NuGet package availability for cdidx ${VERSION}; HTTP ${status}." >&2
+            cat /tmp/cdidx-nuget-head >&2 || true
+            exit 1
+          fi
 
       # publish-nuget is a separate job with a fresh checkout, so the lock
       # file matches what is committed. RestorePackagesWithLockFile=true
@@ -560,9 +591,21 @@ jobs:
           -p:Version=${{ steps.version.outputs.version }}
           --output nupkg
 
+      - name: Verify packed NuGet package version
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          expected_package="nupkg/cdidx.${VERSION}.nupkg"
+          if [ ! -f "$expected_package" ]; then
+            echo "Expected packed package ${expected_package} was not produced." >&2
+            printf 'Produced packages:\n' >&2
+            ls -la nupkg >&2
+            exit 1
+          fi
+
       - name: Publish to NuGet
         run: >
           dotnet nuget push nupkg/*.nupkg
           --api-key ${{ secrets.NUGET_API_KEY }}
           --source https://api.nuget.org/v3/index.json
-          --skip-duplicate

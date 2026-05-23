@@ -54,6 +54,27 @@ public class ReleaseWorkflowTests
         Assert.Contains("'*.cdx.json'", workflow);
     }
 
+    // Issue #2042: NuGet publishing must fail before pack/push when the tag,
+    // version.json, or NuGet package state is inconsistent. A duplicate NuGet
+    // version is not a harmless re-run condition because it can mask tagging or
+    // version-sync mistakes.
+    // Issue #2042 対応: tag / version.json / NuGet package 状態が不整合な場合、
+    // pack/push 前に失敗させる。NuGet の duplicate version は harmless な再実行
+    // 条件ではなく、tag や version sync の誤りを隠し得る。
+    [Fact]
+    public void ReleaseWorkflow_ValidatesNuGetVersionBeforePublishing()
+    {
+        var workflow = File.ReadAllText(Path.Combine(GetRepositoryRoot(), ".github", "workflows", "release.yml"));
+
+        Assert.Contains("Release tag must be a v-prefixed SemVer version", workflow);
+        Assert.Contains("jq -r '.version // empty' version.json", workflow);
+        Assert.Contains("does not match release tag", workflow);
+        Assert.Contains("https://api.nuget.org/v3-flatcontainer/cdidx/${VERSION}/cdidx.${VERSION}.nupkg", workflow);
+        Assert.Contains("NuGet package cdidx ${VERSION} is already published", workflow);
+        Assert.Contains("Expected packed package ${expected_package} was not produced", workflow);
+        Assert.DoesNotContain("--skip-duplicate", workflow);
+    }
+
     private static string GetRepositoryRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);

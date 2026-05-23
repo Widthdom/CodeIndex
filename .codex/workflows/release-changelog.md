@@ -35,6 +35,11 @@ This command must:
   `.gitkeep`;
 - update the compare-link footer.
 
+The resulting release PR must include the `version.json` bump for the target
+version. The NuGet publish job validates that the pushed `v*` tag exactly
+matches `version.json` before packing, so do not tag a release from a commit
+where `version.json` still contains the previous version.
+
 ## Compare-link footer
 
 For a release from `1.16.0` to `1.17.0`, the footer must change from:
@@ -165,10 +170,15 @@ Failures usually only affect one of them.
   the missing files, then re-runs the CDN-propagation poll and `install.sh`
   verification.
 - **`publish-nuget` failed but the GitHub release succeeded.**
-  Re-run `publish-nuget` from the GitHub Actions UI. `dotnet nuget push` uses
-  `--skip-duplicate`, so already-pushed packages are not republished. Do not
-  delete and re-tag for a NuGet-only failure — the GitHub release is
-  already public and tag deletion would invalidate it for downstream installs.
+  First check the job log. The job fails before packing if `version.json` does
+  not match the tag, the tag is not a `v`-prefixed SemVer value, NuGet already
+  has that package version, or NuGet availability could not be verified. Do not
+  delete and re-tag for a NuGet-only failure — the GitHub release is already
+  public and tag deletion would invalidate it for downstream installs. If the
+  version already exists on NuGet, verify the package on nuget.org instead of
+  re-running the publish job. For transient network/API failures before publish,
+  re-run `publish-nuget` from the GitHub Actions UI after confirming the package
+  version is still absent.
 - **Install-verification step failed (e.g. `cdidx --version` mismatch, missing
   asset).** This means the published release is *not* usable. Investigate
   before announcing. If the cause is a transient CDN/network blip, re-run the
