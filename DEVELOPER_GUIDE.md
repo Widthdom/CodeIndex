@@ -60,11 +60,23 @@ The lock files for projects with zero direct `PackageReference` entries (e.g. `t
 ```
 Directory scan / shared path filter (built-in skip lists + `.gitignore` / `.cdidxignore` + reparse/Windows Hidden/System attribute pruning)
   → Parallel extraction workers (`--parallelism`, `CDIDX_INDEX_PARALLELISM`; default CPU count capped at 16) read UTF-8, split chunks, extract symbols/references, and validate content
-  → Single SQLite writer checks unchanged-file reuse, UPSERTs file records, and inserts chunks + symbols + references + issues in per-file transactions
+  → Single SQLite writer checks unchanged-file reuse, UPSERTs file records, runs post-extraction hooks, and inserts chunks + symbols + references + issues in per-file transactions
   → Populate FTS5 index
 ```
 
 Scoped `--files` / `--commits` refreshes reuse the same path filter as full scans. Within each directory, `FileIndexer` loads `.gitignore` before `.cdidxignore`, appends both rule sets in that order, and honors later `!` patterns as re-includes. If a commit-scoped refresh includes `.gitignore` or `.cdidxignore` changes, `IndexCommandRunner` falls back to a full scan so newly ignored files are purged safely. Malformed ignore lines are reported as scan errors and skipped instead of aborting the whole run. On Windows, files and directories with Hidden or System attributes are rejected before language detection; clear those attributes before indexing project-owned sources because ignore rules cannot re-include them.
+
+### Extending the indexer
+
+Out-of-tree post-extraction hooks can implement `CodeIndex.Indexer.Hooks.IPostExtractionHook` in a `.dll` placed under `~/.config/cdidx/hooks/` (or the directory named by `CDIDX_HOOKS_DIR`). Hook assemblies are discovered in path order. Each concrete hook type is instantiated with a public parameterless constructor, then called after built-in symbol extraction and again after built-in reference extraction, before rows are persisted. Hooks receive a `FileContext` plus mutable `IList<SymbolRecord>` / `IList<ReferenceRecord>` values, so they can annotate extracted records, add synthetic symbols, or add domain-specific references.
+
+Hook failures are isolated to that hook invocation: assembly load, construction, and callback exceptions are captured as diagnostics and indexing continues. `status --json` and MCP `status` expose loaded hooks under `hooks` with `name`, `assembly_path`, and `type_name` so users can confirm which extensions are active.
+
+### Ignore file parsing
+
+`.gitignore` and `.cdidxignore` parsing follows Git's whitespace rules for pattern lines: leading spaces and tabs are literal pattern characters, `#` starts a comment only when it is the first unescaped character, and unescaped trailing spaces or tabs are trimmed. Escape a trailing space or tab with `\` when the whitespace is part of the filename pattern.
+
+Bracket expressions follow Git-compatible glob behavior: both `[!a]` and `[^a]` are treated as negated character classes when `!` or `^` appears immediately after `[`. A caret elsewhere in the class is literal (`[a^b]`), and a literal leading caret must be escaped (`[\^a]`).
 
 ### CLI recoverable error format
 
@@ -143,6 +155,7 @@ files (
     lines       INTEGER,                    -- line count
     checksum    TEXT,                       -- SHA256 over file bytes with CRLF/CR collapsed to LF (BOM bytes preserved); cross-OS clones match while BOM add/remove still triggers re-index
     modified    DATETIME,                   -- file modification time (UTC)
+    generated   INTEGER NOT NULL DEFAULT 0, -- generated-code marker from filename/header detection
     indexed_at  DATETIME DEFAULT CURRENT_TIMESTAMP
 )
 
@@ -1358,9 +1371,12 @@ is:
   resources (file handles, listener prefixes) without coupling to
   `McpServer`.
 
-`StdioMcpTransport` preserves the pre-#1558 byte-for-byte stdio behavior
-(UTF-8, BOM detection on input, BOM-less UTF-8 on output, 64 KiB buffer,
-`AutoFlush = true`), so existing client configs are unaffected.
+`StdioMcpTransport` preserves the pre-#1558 stdio framing behavior while
+enforcing strict UTF-8 on input (BOM auto-detection is disabled so UTF-16/UTF-32
+frames cannot switch encodings, output is BOM-less UTF-8, 64 KiB buffer,
+`AutoFlush = true`). Malformed UTF-8 bytes
+raise a transport decode failure that the MCP loop maps to JSON-RPC `-32700`
+with an invalid-UTF-8 hint instead of silently replacing bytes with U+FFFD.
 
 `HttpMcpTransport` (also #1558) wraps `System.Net.HttpListener`:
 
@@ -1650,6 +1666,12 @@ CI で `NU1004 The packages lock file is inconsistent with the project dependenc
 ```
 
 `--files` / `--commits` の部分更新も、フルスキャンと同じパスフィルタを再利用する。各ディレクトリでは `FileIndexer` が `.gitignore` を `.cdidxignore` より先に読み、この順序でルールを追加し、後続の `!` パターンを再包含として扱う。commit 単位更新に `.gitignore` または `.cdidxignore` の変更が含まれる場合、`IndexCommandRunner` は newly ignored file を安全に purge するため自動でフルスキャンへフォールバックする。malformed な ignore 行は走査エラーとして報告し、その行だけをスキップして index 全体は継続する。Windows では Hidden または System 属性が付いたファイルとディレクトリを言語検出前に拒否する。プロジェクト所有のソースを索引したい場合、ignore ルールでは再包含できないため先にそれらの属性を外す。
+
+### ignore ファイルの解析
+
+`.gitignore` と `.cdidxignore` の pattern 行は Git の空白規則に合わせて解析する。行頭の space / tab は pattern の literal 文字として扱い、`#` は unescaped な先頭文字のときだけ comment を開始する。未エスケープの末尾 space / tab は削除するため、ファイル名 pattern の一部として末尾空白を含めたい場合は `\` で escape する。
+
+bracket expression は Git 互換の glob 挙動に合わせる。`!` または `^` が `[` の直後にある場合、`[!a]` と `[^a]` はどちらも negated character class として扱う。class の途中にある caret は literal（`[a^b]`）で、先頭 caret を literal にしたい場合は escape する（`[\^a]`）。
 
 ### C# / .NET integration
 
@@ -2613,7 +2635,7 @@ MCP は独立したシリアライズ戦略（オブジェクトを JSON など�
 - 契約は厳密に「1 read → 1 write」。再入は明示的に拒否し、サーバーの他部分が依存している request/response 順序不変条件をシーム部で強制する。
 - `IAsyncDisposable` により、各トランスポートが自身のカーネル側リソース（ファイルハンドル、listener プレフィックス）を `McpServer` と結合せずに解放できる。
 
-`StdioMcpTransport` は #1558 以前と同じバイト単位の挙動（UTF-8、入力 BOM 検出、出力 BOM なし UTF-8、64 KiB バッファ、`AutoFlush = true`）を維持しているため、既存クライアント設定への影響は無い。
+`StdioMcpTransport` は #1558 以前と同じ stdio framing を維持しつつ、入力を strict UTF-8 として検証する（BOM 自動検出は無効にし、UTF-16/UTF-32 フレームが encoding を切り替えられないようにする。出力は BOM なし UTF-8、64 KiB バッファ、`AutoFlush = true`）。不正な UTF-8 バイトは transport decode failure として表面化し、MCP ループはバイトを U+FFFD に黙って置換せず、invalid UTF-8 のヒント付き JSON-RPC `-32700` に変換する。
 
 `HttpMcpTransport`（同じく #1558）は `System.Net.HttpListener` をラップする:
 

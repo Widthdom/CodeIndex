@@ -455,6 +455,11 @@ public partial class McpServer : IDisposable
                 {
                     break;
                 }
+                catch (DecoderFallbackException ex)
+                {
+                    await WriteFrameSafelyAsync(transport, BuildInvalidUtf8ParseErrorResponse(ex), loopToken).ConfigureAwait(false);
+                    break;
+                }
             }
         }
         finally
@@ -481,6 +486,20 @@ public partial class McpServer : IDisposable
             }
             catch (OperationCanceledException) when (loopToken.IsCancellationRequested)
             {
+                break;
+            }
+            catch (DecoderFallbackException ex)
+            {
+                await Task.WhenAll(tasks).ConfigureAwait(false);
+                await writeGate.WaitAsync(loopToken).ConfigureAwait(false);
+                try
+                {
+                    await WriteFrameSafelyAsync(transport, BuildInvalidUtf8ParseErrorResponse(ex), loopToken).ConfigureAwait(false);
+                }
+                finally
+                {
+                    writeGate.Release();
+                }
                 break;
             }
             if (frame == null)
@@ -579,6 +598,19 @@ public partial class McpServer : IDisposable
             Console.Error.WriteLine(BuildResponseWriteErrorLog(ex.Message));
         }
     }
+
+    private string BuildInvalidUtf8ParseErrorResponse(DecoderFallbackException ex)
+    {
+        Console.Error.WriteLine(BuildInvalidUtf8ErrorLog(ex.Message));
+        var errorResponse = CreateErrorResponse(hasId: true, id: null, code: -32700, message: "Parse error: invalid UTF-8 input",
+            category: McpErrorEnvelope.CategoryParseError,
+            suggestion: "Send one JSON-RPC 2.0 object per line encoded as valid UTF-8. Reject or re-encode malformed bytes before retrying.",
+            retrySafe: false);
+        return errorResponse.ToJsonString(_jsonOptions);
+    }
+
+    internal static string BuildInvalidUtf8ErrorLog(string detail)
+        => $"[cdidx-mcp] JSON parse error: invalid UTF-8 input ({detail}). Send one UTF-8 JSON-RPC object per line; reject or re-encode malformed bytes before retrying.";
 
     /// <summary>
     /// Process one MCP JSON-RPC frame and return the wire-ready response string (or null when
@@ -1069,7 +1101,7 @@ public partial class McpServer : IDisposable
             offset = parsed;
         }
 
-        return WithDbReader(id, reader =>
+        return WithDbReader(id, args: null, reader =>
         {
             var files = reader.ListFiles(limit: offset + pageSize + 1);
             var page = files.Skip(offset).Take(pageSize).ToArray();
@@ -1110,7 +1142,7 @@ public partial class McpServer : IDisposable
                 suggestion: "Use a cdidx file resource URI returned by resources/list (`cdidx://file/<indexed-path>`).",
                 retrySafe: false);
 
-        return WithDbReader(id, reader =>
+        return WithDbReader(id, args: null, reader =>
         {
             var files = reader.ListFiles(query: path, limit: 2);
             var file = files.FirstOrDefault(f => string.Equals(f.Path, path, StringComparison.Ordinal));
@@ -1825,7 +1857,7 @@ public partial class McpServer : IDisposable
 
     // --- DB helper / DBヘルパー ---
 
-    private JsonNode WithDbReader(JsonNode? id, Func<DbReader, JsonNode> action)
+    private JsonNode WithDbReader(JsonNode? id, JsonNode? args, Func<DbReader, JsonNode> action)
     {
         // Accept SQLite file: URIs the same way the CLI does (QueryCommandRunner.WithDb),
         // so AI agents on read-only mounts can pass `--db file:///abs/path?immutable=1` and
@@ -1865,7 +1897,8 @@ public partial class McpServer : IDisposable
         var requestToken = _currentRequestToken.Value;
         requestToken.ThrowIfCancellationRequested();
         var reader = new DbReader(db, requestToken);
-        return action(reader);
+        reader.IncludeGenerated = args?["includeGenerated"]?.GetValue<bool>() ?? false;
+        return reader.RunWithGeneratedScope(() => action(reader));
     }
 
     /// <summary>

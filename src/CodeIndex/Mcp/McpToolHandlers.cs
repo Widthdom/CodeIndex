@@ -5,6 +5,7 @@ using System.Text.Json.Nodes;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
+using CodeIndex.Indexer.Hooks;
 using CodeIndex.Models;
 
 namespace CodeIndex.Mcp;
@@ -449,7 +450,7 @@ public partial class McpServer
         if (prefix && exact)
             return CreateToolErrorResponse(id, "'prefix' cannot be combined with 'exact' / 'exactSubstring' (exact uses instr(), not FTS5 prefix phrases).");
 
-        return WithDbReader(id, reader =>
+        return WithDbReader(id, args, reader =>
         {
             var results = reader.Search(query, limit, lang, rawQuery, pathPatterns, excludePaths, excludeTests, deduplicate, since, exact, prefix);
             if (results.Count == 0)
@@ -542,7 +543,7 @@ public partial class McpServer
             return CreateToolErrorResponse(id, $"Too many symbol names ({queriesForSearch.Count}); maximum is {QueryCommandRunner.MaxSymbolQueryNames}. Split the request into smaller batches.");
         IReadOnlyList<string>? effectiveQueries = queriesForSearch.Count == 0 ? null : queriesForSearch;
 
-        return WithDbReader(id, reader =>
+        return WithDbReader(id, args, reader =>
         {
             var results = reader.SearchSymbols(effectiveQueries, limit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact);
             var hasExactPredicate = exact && effectiveQueries is { Count: > 0 };
@@ -621,7 +622,7 @@ public partial class McpServer
         if (!TryResolveNameExactArgument(args, "definition", out var exact, out var exactError))
             return CreateToolErrorResponse(id, exactError!);
 
-        return WithDbReader(id, reader =>
+        return WithDbReader(id, args, reader =>
         {
             var results = reader.GetDefinitions(query, limit, kind, lang, includeBody, pathPatterns, excludePaths, excludeTests, since, exact);
             var exactSignal = reader.GetDefinitionExactQuerySignal(lang, pathPatterns, excludePaths, excludeTests, since);
@@ -675,7 +676,7 @@ public partial class McpServer
         if (!TryResolveNameExactArgument(args, "references", out var exact, out var exactError))
             return CreateToolErrorResponse(id, exactError!);
 
-        return WithDbReader(id, reader =>
+        return WithDbReader(id, args, reader =>
         {
             var results = reader.SearchReferences(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact, maxLineWidth);
             var graphSupport = ResolveGraphSupport(reader, exact, query, lang, pathPatterns, excludePaths, excludeTests);
@@ -741,7 +742,7 @@ public partial class McpServer
         if (!TryReadReferenceRankMode(args, out var rankMode, out var rankModeError))
             return CreateToolErrorResponse(id, rankModeError!);
 
-        return WithDbReader(id, reader =>
+        return WithDbReader(id, args, reader =>
         {
             var results = reader.GetCallers(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact, rankMode: rankMode);
             var graphSupport = ResolveGraphSupport(reader, exact, query, lang, pathPatterns, excludePaths, excludeTests);
@@ -807,7 +808,7 @@ public partial class McpServer
         if (!TryReadReferenceRankMode(args, out var rankMode, out var rankModeError))
             return CreateToolErrorResponse(id, rankModeError!);
 
-        return WithDbReader(id, reader =>
+        return WithDbReader(id, args, reader =>
         {
             var results = reader.GetCallees(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact, rankMode: rankMode);
             var graphSupport = ResolveGraphSupport(reader, exact, query, lang, pathPatterns, excludePaths, excludeTests);
@@ -871,7 +872,7 @@ public partial class McpServer
                 return CreateToolErrorResponse(id, $"Invalid 'since' timestamp: '{sinceStr}'. Use ISO 8601 format (e.g. 2024-01-01 or 2024-01-01T00:00:00Z).");
         }
 
-        return WithDbReader(id, reader =>
+        return WithDbReader(id, args, reader =>
         {
             var results = reader.ListFiles(query, limit, lang, pathPatterns, excludePaths, excludeTests, since);
             if (results.Count == 0)
@@ -910,7 +911,7 @@ public partial class McpServer
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
 
-        return WithDbReader(id, reader =>
+        return WithDbReader(id, args, reader =>
         {
             var map = reader.GetRepoMap(limit, lang, pathPatterns, excludePaths, excludeTests);
             WorkspaceMetadataEnricher.Enrich(map, _dbPath, _dbPathExplicit);
@@ -949,7 +950,7 @@ public partial class McpServer
         if (!TryResolveNameExactArgument(args, "analyze_symbol", out var exact, out var exactError))
             return CreateToolErrorResponse(id, exactError!);
 
-        return WithDbReader(id, reader =>
+        return WithDbReader(id, args, reader =>
         {
             var analysis = reader.AnalyzeSymbol(query, limit, lang, includeBody, pathPatterns, excludePaths, excludeTests, exact, maxLineWidth);
             var sqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignal(
@@ -1114,11 +1115,23 @@ public partial class McpServer
 
     private JsonNode ExecuteStatus(JsonNode? id)
     {
-        return WithDbReader(id, reader =>
+        return WithDbReader(id, args: null, reader =>
         {
             var status = reader.GetStatus();
             WorkspaceMetadataEnricher.Enrich(status, _dbPath, _dbPathExplicit);
             status.GraphSupportedLanguages = ReferenceExtractor.GetSupportedLanguages().OrderBy(l => l).ToList();
+            var postExtractionHooks = PostExtractionHookRunner.DiscoverDefault().Hooks;
+            if (postExtractionHooks.Count > 0)
+            {
+                status.Hooks = postExtractionHooks
+                    .Select(hook => new PostExtractionHookStatus
+                    {
+                        Name = hook.Name,
+                        AssemblyPath = hook.AssemblyPath,
+                        TypeName = hook.TypeName,
+                    })
+                    .ToList();
+            }
             status.Version = _version;
             var structured = JsonSerializer.SerializeToNode(status, _jsonOptions)!.AsObject();
             structured["hotspotFamilyReady"] = status.HotspotFamilyReady;
@@ -1136,7 +1149,7 @@ public partial class McpServer
         if (!TryReadRequiredStringParameter(args, "path", out var path, out var requiredError))
             return CreateToolErrorResponse(id, requiredError!);
 
-        return WithDbReader(id, reader =>
+        return WithDbReader(id, args, reader =>
         {
             var outline = reader.GetOutline(path);
             if (outline == null)
@@ -1195,7 +1208,7 @@ public partial class McpServer
         if (!focusColumn.HasValue && (focusLine.HasValue || explicitFocusLength))
             return CreateToolErrorResponse(id, "focusLine and focusLength require focusColumn");
 
-        return WithDbReader(id, reader =>
+        return WithDbReader(id, args, reader =>
         {
             if (focusLine.HasValue)
             {
@@ -1281,7 +1294,7 @@ public partial class McpServer
             return maxLineWidthError;
         var exact = args?["exact"]?.GetValue<bool>() ?? false;
 
-        return WithDbReader(id, reader =>
+        return WithDbReader(id, args, reader =>
         {
             var results = reader.FindInFiles(query, limit, lang, pathPatterns, excludePaths, excludeTests, before, after, exact, maxLineWidth);
             var structured = new JsonObject
@@ -1761,7 +1774,7 @@ public partial class McpServer
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
         var reverse = args?["reverse"]?.GetValue<bool>() ?? false;
 
-        return WithDbReader(id, reader =>
+        return WithDbReader(id, args, reader =>
         {
             var results = reader.GetFileDependencies(limit, lang, pathPatterns, excludePaths, excludeTests, reverse);
             var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests);
@@ -1806,7 +1819,7 @@ public partial class McpServer
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
         var withPaths = args?["withPaths"]?.GetValue<bool>() ?? false;
 
-        return WithDbReader(id, reader =>
+        return WithDbReader(id, args, reader =>
         {
             var analysis = reader.AnalyzeImpact(query, maxDepth, limit, lang, pathPatterns, excludePaths, excludeTests, withPaths);
             var sqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignal(
@@ -1925,7 +1938,7 @@ public partial class McpServer
         var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
         var pathPatterns = ReadScopedPathList(args);
 
-        return WithDbReader(id, reader =>
+        return WithDbReader(id, args, reader =>
         {
             var issues = reader.GetIssues(kind, pathPatterns);
             var payload = new JsonObject
@@ -1953,7 +1966,7 @@ public partial class McpServer
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
 
-        return WithDbReader(id, reader =>
+        return WithDbReader(id, args, reader =>
         {
             var results = reader.GetSymbolHotspots(groupBy == "file" ? int.MaxValue : limit, kind, lang, pathPatterns, excludePaths, excludeTests);
             var hotspotSignal = reader.GetHotspotFamilySignal(lang);
@@ -2059,7 +2072,7 @@ public partial class McpServer
             bool? graphSupported = lang != null ? ReferenceExtractor.SupportsLanguage(lang) : null;
             var graphSupportReason = ReferenceExtractor.BuildGraphSupportReason(lang, graphSupported);
 
-        return WithDbReader(id, reader =>
+        return WithDbReader(id, args, reader =>
         {
             var results = reader.GetUnusedSymbols(limit, kind, lang, pathPatterns, excludePaths, excludeTests);
             var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests);
@@ -2230,6 +2243,7 @@ public partial class McpServer
 
         var writer = new DbWriter(db);
         var indexer = new FileIndexer(projectPath, GitHelper.ResolveIgnoreCase(projectPath), GitHelper.TryGetRepositoryRoot(projectPath) ?? Path.GetFullPath(projectPath), maxFileBytes);
+        var postExtractionHooks = PostExtractionHookRunner.DiscoverDefault();
         var currentHotspotFamilyMarkerFingerprints = GetHotspotFamilyMarkerFingerprints(indexer);
         var currentCSharpSymbolNameContractVersion = DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var csharpSymbolNameContractMatchesCurrent = priorCSharpSymbolNameContractVersion == currentCSharpSymbolNameContractVersion;
@@ -2319,6 +2333,8 @@ public partial class McpServer
                 writer.InsertChunks(chunks);
                 var symbols = SymbolExtractor.Extract(fileId, record.Lang, content, filePath, projectPath);
                 SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(filePath, record.Lang));
+                var fileContext = new FileContext(projectPath, record.Path, filePath, record.Lang);
+                postExtractionHooks.OnSymbolsExtracted(fileContext, symbols);
                 writer.InsertSymbols(symbols);
                 var references = ReferenceExtractor.Extract(
                     fileId,
@@ -2327,6 +2343,7 @@ public partial class McpServer
                     symbols,
                     record.Path,
                     record.Lang == "csharp" ? csharpWorkspace.Symbols : null);
+                postExtractionHooks.OnReferencesExtracted(fileContext, references);
                 writer.InsertReferences(references);
                 // Keep MCP index parity with CLI index: persist file-level validation issues too.
                 // MCPインデックスもCLIインデックスと同等に、ファイル検証issueを保存する。

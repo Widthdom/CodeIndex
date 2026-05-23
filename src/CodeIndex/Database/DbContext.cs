@@ -26,6 +26,10 @@ public class DbContext : IDisposable
     private SqliteTransaction? _activeMigrationTransaction;
     private DbSchemaCache? _schemaCache;
     private PreparedCommandCache? _preparedCommands;
+    private bool _suppressWriteWorkTracking = true;
+    private bool _hasWriteWork;
+
+    internal static Action<string>? OptimizePragmaExecutedForTesting { get; set; }
 
     public SqliteConnection Connection => _connection;
     public bool IsReadOnly => _isReadOnly;
@@ -199,6 +203,7 @@ public class DbContext : IDisposable
                 Console.Error.WriteLine($"Warning: WAL mode not enabled (got '{journalMode}')");
             ExecuteSynchronousPragmaWithFallback(Execute);
             Execute($"PRAGMA wal_autocheckpoint={DefaultWalAutocheckpointPages}");
+            Execute("PRAGMA optimize=0x10002");
         }
         catch (SqliteException ex) when (IsReadOnlyOpenError(ex))
         {
@@ -221,6 +226,8 @@ public class DbContext : IDisposable
         {
             EnsureForeignKeysEnabled();
         }
+
+        _suppressWriteWorkTracking = false;
     }
 
     private void EnsureWritableUserVersionSupported(string dbPath)
@@ -1091,6 +1098,7 @@ public class DbContext : IDisposable
                 lines       INTEGER,
                 checksum    TEXT,
                 modified    DATETIME,
+                generated   INTEGER NOT NULL DEFAULT 0,
                 indexed_at  DATETIME DEFAULT CURRENT_TIMESTAMP
             )");
 
@@ -1178,6 +1186,7 @@ public class DbContext : IDisposable
         // Schema migrations for existing DBs / 既存DB向けスキーマ移行
         EnsureColumn("files", "checksum", "TEXT");
         EnsureColumn("files", "modified", "DATETIME");
+        EnsureColumn("files", "generated", "INTEGER NOT NULL DEFAULT 0");
         EnsureColumn("files", "indexed_at", "DATETIME");
         EnsureColumn("symbols", "start_line", "INTEGER");
         EnsureColumn("symbols", "sub_kind", "TEXT");
@@ -1208,6 +1217,7 @@ public class DbContext : IDisposable
         // Indexes / インデックス
         Execute("CREATE INDEX IF NOT EXISTS idx_files_lang     ON files(lang)");
         Execute("CREATE INDEX IF NOT EXISTS idx_files_modified ON files(modified)");
+        Execute("CREATE INDEX IF NOT EXISTS idx_files_generated ON files(generated)");
         // idx_files_path is not needed: the UNIQUE constraint on path already creates an implicit index
         // idx_files_path は不要: path の UNIQUE 制約が暗黙的にインデックスを作成済み
         Execute("CREATE INDEX IF NOT EXISTS idx_chunks_file    ON chunks(file_id)");
@@ -1307,6 +1317,7 @@ public class DbContext : IDisposable
             cmd.Transaction = _activeMigrationTransaction;
         cmd.CommandText = sql;
         cmd.ExecuteNonQuery();
+        MarkWriteWork();
     }
 
     private void EnsureForeignKeysEnabled()
@@ -1595,6 +1606,31 @@ public class DbContext : IDisposable
         return cmd.ExecuteScalar()?.ToString() ?? "";
     }
 
+    internal void MarkWriteWork()
+    {
+        if (!_isReadOnly && !_suppressWriteWorkTracking)
+            _hasWriteWork = true;
+    }
+
+    private void RunOptimizeOnCloseIfNeeded()
+    {
+        if (!_hasWriteWork || _isReadOnly)
+            return;
+
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = "PRAGMA optimize";
+        try
+        {
+            cmd.ExecuteNonQuery();
+            OptimizePragmaExecutedForTesting?.Invoke(_connection.DataSource);
+        }
+        catch (SqliteException ex) when (IsReadOnlyOpenError(ex))
+        {
+            // Best effort on close: a writable DB may become read-only before Dispose
+            // (e.g. tests or sandbox handoff). Do not turn cleanup into command failure.
+        }
+    }
+
     public void Dispose()
     {
         // Dispose cached prepared statements before closing the connection so each
@@ -1603,6 +1639,7 @@ public class DbContext : IDisposable
         // connection teardown の競合を防ぐ。
         _preparedCommands?.Dispose();
         _preparedCommands = null;
+        RunOptimizeOnCloseIfNeeded();
         _connection.Dispose();
     }
 }

@@ -100,6 +100,7 @@ public static class ConsoleUi
     private const int SpinnerFrameDelayMs = 100;
     private const int SpinnerStopDelayMs = 20;
     private const int ConsoleLineMargin = 1;
+    private static readonly object TerminalLock = new();
     private static readonly string[] ByteUnits = ["bytes", "KiB", "MiB", "GiB", "TiB", "PiB"];
 
     private static readonly string[] DefaultBrailleSpinnerFrames =
@@ -201,8 +202,11 @@ public static class ConsoleUi
             {
                 var frame = frames[i % frames.Length];
                 var line = isThemed ? $"\r{frame}" : $"\r{frame} {message}";
-                Console.Write(line);
-                Console.Out.Flush();
+                lock (TerminalLock)
+                {
+                    Console.Write(line);
+                    Console.Out.Flush();
+                }
                 i++;
                 try { Task.Delay(SpinnerFrameDelayMs, ct).Wait(ct); } catch (OperationCanceledException) { break; }
             }
@@ -222,8 +226,11 @@ public static class ConsoleUi
         Thread.Sleep(SpinnerStopDelayMs);
         if (ShouldUseInteractiveConsole())
         {
-            Console.Write($"\r{new string(' ', GetWindowWidth() - ConsoleLineMargin)}\r");
-            Console.Out.Flush();
+            lock (TerminalLock)
+            {
+                Console.Write($"\r{new string(' ', GetWindowWidth() - ConsoleLineMargin)}\r");
+                Console.Out.Flush();
+            }
         }
         cts.Dispose();
     }
@@ -334,13 +341,16 @@ public static class ConsoleUi
 
         if (!redirected)
         {
-            output.Write($"\r{line}");
-            output.Flush();
-            _lastProgressLineLength = line.Length;
-            if (current == total)
+            lock (TerminalLock)
             {
-                output.WriteLine();
-                _lastProgressLineLength = 0;
+                output.Write($"\r{line}");
+                output.Flush();
+                _lastProgressLineLength = line.Length;
+                if (current == total)
+                {
+                    output.WriteLine();
+                    _lastProgressLineLength = 0;
+                }
             }
         }
         else
@@ -386,6 +396,14 @@ public static class ConsoleUi
     /// </summary>
     public static void ClearProgressLine()
     {
+        lock (TerminalLock)
+        {
+            ClearProgressLineCore();
+        }
+    }
+
+    private static void ClearProgressLineCore()
+    {
         if (ShouldUseInteractiveConsole() && _lastProgressLineLength > 0)
         {
             Console.Write($"\r{new string(' ', _lastProgressLineLength)}\r");
@@ -400,8 +418,13 @@ public static class ConsoleUi
     /// </summary>
     public static void PrintWarning(string message)
     {
-        ClearProgressLine();
-        Console.Error.WriteLine($"  [WARN] {message}");
+        lock (TerminalLock)
+        {
+            ClearProgressLineCore();
+            Console.Error.WriteLine($"  [WARN] {message}");
+            Console.Error.Flush();
+            Console.Out.Flush();
+        }
     }
 
     // --- Banner / バナー ---
@@ -640,6 +663,7 @@ public static class ConsoleUi
         Console.WriteLine("  --query <query>            Pass a query literal, useful when the query starts with '-'");
         Console.WriteLine("  --exclude-path <glob>      Exclude glob-style path patterns (* and ?) (repeatable)");
         Console.WriteLine("  --exclude-tests            Exclude likely test files");
+        Console.WriteLine("  --include-generated        Include generated files in query results");
         Console.WriteLine("  --snippet-lines <n>        Search snippet length (1-20, default: 8)");
         Console.WriteLine("  --snippet-focus <mode>     search only: long-line focus mode (leftmost|quality|proximity, default: quality)");
         Console.WriteLine($"  --max-line-width <n>       search/references/find/excerpt/inspect only: clamp very long single-line snippet/context/excerpt payloads (`0` disables clamping; default: {LineWidthFormatter.DefaultMaxLineWidth})");

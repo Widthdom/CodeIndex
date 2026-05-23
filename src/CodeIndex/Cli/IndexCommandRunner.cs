@@ -4,6 +4,7 @@ using System.Runtime.InteropServices;
 using System.Text.Json;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
+using CodeIndex.Indexer.Hooks;
 using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
 
@@ -1344,6 +1345,7 @@ public static class IndexCommandRunner
         var ftsMutated = false;
         var purgedRefs = 0;
         var supportedGraphLanguages = ReferenceExtractor.GetSupportedLanguages();
+        var postExtractionHooks = PostExtractionHookRunner.DiscoverDefault();
         var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var currentFoldFingerprint = NameFold.Fingerprint();
         var currentCSharpSymbolNameContractVersion = DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -1811,6 +1813,7 @@ public static class IndexCommandRunner
                     record.Checksum,
                     size: record.Size,
                     language: record.Lang,
+                    generated: record.Generated,
                     allowReuse: symbolKindFilterMatchesPrior
                         && record.Lang is not ("javascript" or "typescript")
                         && (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
@@ -1854,6 +1857,8 @@ public static class IndexCommandRunner
                 writer.InsertChunks(chunks);
                 var symbols = SymbolExtractor.Extract(fileId, record.Lang, content, absPath, Path.GetFullPath(options.ProjectPath!));
                 SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(absPath, record.Lang));
+                var fileContext = new FileContext(projectRoot, record.Path, absPath, record.Lang);
+                postExtractionHooks.OnSymbolsExtracted(fileContext, symbols);
                 symbolsDroppedByKindFilter += options.SymbolKindFilter.Apply(symbols);
                 writer.InsertSymbols(symbols);
                 var references = ReferenceExtractor.Extract(
@@ -1863,6 +1868,7 @@ public static class IndexCommandRunner
                     symbols,
                     record.Path,
                     record.Lang == "csharp" ? csharpWorkspace.Symbols : null);
+                postExtractionHooks.OnReferencesExtracted(fileContext, references);
                 writer.InsertReferences(references);
                 // Validate content for encoding issues / エンコーディング問題を検証
                 var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
@@ -2022,6 +2028,7 @@ public static class IndexCommandRunner
             warningList.Add(new CliJsonMessage("<process_cwd>", cwdDriftNotice!));
             warnings++;
         }
+        warnings += AddPostExtractionHookWarnings(postExtractionHooks, warningList);
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
         var signalReader = new DbReader(writer.Connection);
         var sqlGraphContractSignalAfter = signalReader.GetSqlGraphContractSignal(lang: null);
@@ -2893,6 +2900,7 @@ public static class IndexCommandRunner
         string? currentJsonIndexFile = null;
         CancellationTokenSource? jsonHeartbeatCts = null;
         Task? jsonHeartbeatTask = null;
+        var postExtractionHooks = PostExtractionHookRunner.DiscoverDefault();
         var extractionParallelism = Math.Max(1, options.Parallelism);
         var parallelizeExtraction = (options.Rebuild || writer.GetCounts().files == 0)
             && !options.SymbolKindFilter.IsActive;
@@ -3152,6 +3160,7 @@ public static class IndexCommandRunner
                             record.Checksum,
                             size: record.Size,
                             language: record.Lang,
+                            generated: record.Generated,
                             allowReuse: symbolKindFilterMatchesPrior
                                 && record.Lang is not ("javascript" or "typescript")
                                 && (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
@@ -3198,7 +3207,9 @@ public static class IndexCommandRunner
                         : ReassignSymbolFileIds(item.Symbols, fileId);
                     if (item.Symbols == null)
                         SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(item.FilePath, record.Lang));
+                    var fileContext = new FileContext(projectRoot, record.Path, item.FilePath, record.Lang);
                     var mutableSymbols = symbols as IList<SymbolRecord> ?? symbols.ToList();
+                    postExtractionHooks.OnSymbolsExtracted(fileContext, mutableSymbols);
                     symbolsDroppedByKindFilter += options.SymbolKindFilter.Apply(mutableSymbols);
                     symbols = (IReadOnlyList<SymbolRecord>)mutableSymbols;
                     writer.InsertSymbols(symbols);
@@ -3211,6 +3222,7 @@ public static class IndexCommandRunner
                             record.Path,
                             record.Lang == "csharp" ? csharpWorkspace.Symbols : null)
                         : ReassignReferenceFileIds(item.References, fileId);
+                    postExtractionHooks.OnReferencesExtracted(fileContext, AsMutableList(references));
                     writer.InsertReferences(references);
                     var issues = item.Issues ?? FileIndexer.ValidateContent(record.Path, item.RawBytes!, item.Content!);
                     writer.InsertIssues(fileId, issues);
@@ -3406,6 +3418,7 @@ public static class IndexCommandRunner
             warningList.Add(new CliJsonMessage("<process_cwd>", cwdDriftNotice!));
             warnings++;
         }
+        warnings += AddPostExtractionHookWarnings(postExtractionHooks, warningList);
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
         var signalReader = new DbReader(writer.Connection);
         var sqlGraphContractSignalAfter = signalReader.GetSqlGraphContractSignal(lang: null);
@@ -3571,6 +3584,28 @@ public static class IndexCommandRunner
         foreach (var reference in references)
             reference.FileId = fileId;
         return references;
+    }
+
+    private static IList<T> AsMutableList<T>(IReadOnlyList<T> records)
+    {
+        if (records is IList<T> mutable)
+            return mutable;
+
+        throw new InvalidOperationException("Post-extraction hooks require mutable extraction result lists.");
+    }
+
+    private static int AddPostExtractionHookWarnings(PostExtractionHookRunner runner, List<CliJsonMessage> warningList)
+    {
+        var added = 0;
+        foreach (var diagnostic in runner.Diagnostics)
+        {
+            warningList.Add(new CliJsonMessage(
+                string.IsNullOrWhiteSpace(diagnostic.TypeName) ? diagnostic.AssemblyPath : diagnostic.TypeName,
+                diagnostic.Message));
+            added++;
+        }
+
+        return added;
     }
 
     private static FoldOnlyRemediation? BuildFoldOnlyReadinessRemediation(

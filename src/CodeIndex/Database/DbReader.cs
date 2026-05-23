@@ -67,6 +67,26 @@ public partial class DbReader
     internal readonly bool _hasChunksTable;
     internal readonly bool _hasReferenceLinesTable;
     internal readonly bool _canUseReferenceLines;
+    public bool IncludeGenerated { get; set; }
+    private static readonly AsyncLocal<bool> IncludeGeneratedScope = new();
+    private static readonly AsyncLocal<bool> GeneratedColumnAvailableScope = new();
+
+    public T RunWithGeneratedScope<T>(Func<T> action)
+    {
+        var previous = IncludeGeneratedScope.Value;
+        var previousGeneratedColumnAvailable = GeneratedColumnAvailableScope.Value;
+        IncludeGeneratedScope.Value = IncludeGenerated;
+        GeneratedColumnAvailableScope.Value = _fileColumns.Contains("generated");
+        try
+        {
+            return action();
+        }
+        finally
+        {
+            IncludeGeneratedScope.Value = previous;
+            GeneratedColumnAvailableScope.Value = previousGeneratedColumnAvailable;
+        }
+    }
     // #86: True when every symbols / symbol_references row has name_folded populated and
     // the Unicode fold path is safe to use for `--exact`. Legacy / partial-backfill DBs
     // read this as false and fall back to the ASCII-only `COLLATE NOCASE` path.
@@ -374,6 +394,7 @@ public partial class DbReader
         _schemaCache = schemaCache;
         _cancellation = cancellation;
         _fileColumns = LoadColumns("files");
+        GeneratedColumnAvailableScope.Value = _fileColumns.Contains("generated");
         _symbolColumns = LoadColumns("symbols");
         _referenceColumns = LoadColumns("symbol_references");
         _symbolIndexes = LoadIndexes("symbols");
@@ -1341,6 +1362,9 @@ public partial class DbReader
 
     internal static void AppendPathFilters(ref string sql, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
     {
+        if (!IncludeGeneratedScope.Value && GeneratedColumnAvailableScope.Value)
+            sql += " AND COALESCE(f.generated, 0) = 0";
+
         if (pathPatterns != null && pathPatterns.Count > 0)
         {
             // Multiple --path values are OR'd together / 複数の --path 値は OR で結合する。
@@ -1380,6 +1404,9 @@ public partial class DbReader
     internal static string BuildPathFiltersSql(string fileAlias, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
     {
         var sql = string.Empty;
+        if (!IncludeGeneratedScope.Value && GeneratedColumnAvailableScope.Value)
+            sql += $" AND COALESCE({fileAlias}.generated, 0) = 0";
+
         if (pathPatterns != null && pathPatterns.Count > 0)
         {
             // Multiple --path values are OR'd together / 複数の --path 値は OR で結合する。

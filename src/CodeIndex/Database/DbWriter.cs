@@ -13,6 +13,7 @@ public class DbWriter
 {
     private readonly SqliteConnection _conn;
     private readonly PreparedCommandCache? _commandCache;
+    private readonly Action? _markWriteWork;
     internal static Action? FoldBackfillRowUpdatedForTesting { get; set; }
     private const int BatchSize = 500;
     private const int MaxSqlVariables = 999;
@@ -34,7 +35,7 @@ public class DbWriter
     internal SqliteConnection Connection => _conn;
 
     public DbWriter(SqliteConnection connection)
-        : this(connection, commandCache: null)
+        : this(connection, commandCache: null, markWriteWork: null)
     {
     }
 
@@ -50,14 +51,16 @@ public class DbWriter
     public DbWriter(DbContext context)
         : this(
             (context ?? throw new ArgumentNullException(nameof(context))).Connection,
-            context.IsReadOnly ? null : context.PreparedCommands)
+            context.IsReadOnly ? null : context.PreparedCommands,
+            context.MarkWriteWork)
     {
     }
 
-    internal DbWriter(SqliteConnection connection, PreparedCommandCache? commandCache)
+    internal DbWriter(SqliteConnection connection, PreparedCommandCache? commandCache, Action? markWriteWork)
     {
         _conn = connection;
         _commandCache = commandCache;
+        _markWriteWork = markWriteWork;
     }
 
     /// <summary>
@@ -160,10 +163,14 @@ public class DbWriter
             if (_transaction != null)
             {
                 _transaction.Commit();
+                _writer._markWriteWork?.Invoke();
                 _writer.RunPassiveWalCheckpoint();
             }
             else
+            {
                 ExecuteSql($"RELEASE SAVEPOINT {_savepointName}");
+                _writer._markWriteWork?.Invoke();
+            }
             // Set _committed after success so Dispose() will rollback if Commit/Release throws
             // コミット/リリース成功後にフラグを立て、失敗時はDispose()でロールバックされるようにする
             _committed = true;
@@ -227,6 +234,7 @@ public class DbWriter
             using var cmd = _conn!.CreateCommand();
             cmd.CommandText = sql;
             cmd.ExecuteNonQuery();
+            _writer._markWriteWork?.Invoke();
         }
     }
 
@@ -253,7 +261,7 @@ public class DbWriter
     /// 変更なしなら既存ファイルIDを返し、インデックスが必要ならnullを返す。
     /// タイムスタンプが異なってもチェックサムが一致すればDB側を更新しIDを返す。
     /// </summary>
-    public long? GetUnchangedFileId(string relativePath, DateTime modified, string? checksum = null, long? size = null, bool allowReuse = true, string? language = null)
+    public long? GetUnchangedFileId(string relativePath, DateTime modified, string? checksum = null, long? size = null, bool allowReuse = true, string? language = null, bool? generated = null)
     {
         if (!allowReuse)
             return null;
@@ -268,6 +276,10 @@ public class DbWriter
                        AND checksum = @checksum
                   THEN @modified
                   ELSE modified
+              END,
+                  generated = CASE
+                  WHEN @generated IS NOT NULL THEN @generated
+                  ELSE generated
               END
               WHERE path = @path
                 AND (
@@ -281,6 +293,7 @@ public class DbWriter
                 c.Parameters.Add("@modified", SqliteType.Text);
                 c.Parameters.Add("@checksum", SqliteType.Text);
                 c.Parameters.Add("@size", SqliteType.Integer);
+                c.Parameters.Add("@generated", SqliteType.Integer);
             });
         try
         {
@@ -288,6 +301,7 @@ public class DbWriter
             cmd.Parameters["@modified"].Value = modified;
             cmd.Parameters["@checksum"].Value = checksum is null ? DBNull.Value : checksum;
             cmd.Parameters["@size"].Value = size.HasValue ? size.Value : DBNull.Value;
+            cmd.Parameters["@generated"].Value = generated.HasValue ? (generated.Value ? 1 : 0) : DBNull.Value;
             var raw = cmd.ExecuteScalar();
             return raw is long id ? id : null;
         }
@@ -518,14 +532,15 @@ public class DbWriter
         // ON CONFLICT DO UPDATEで既存の行IDを保持する
         var cmd = RentCommand(
             @"
-            INSERT INTO files (path, lang, size, lines, checksum, modified, indexed_at)
-            VALUES (@path, @lang, @size, @lines, @checksum, @modified, CURRENT_TIMESTAMP)
+            INSERT INTO files (path, lang, size, lines, checksum, modified, generated, indexed_at)
+            VALUES (@path, @lang, @size, @lines, @checksum, @modified, @generated, CURRENT_TIMESTAMP)
             ON CONFLICT(path) DO UPDATE SET
                 lang = excluded.lang,
                 size = excluded.size,
                 lines = excluded.lines,
                 checksum = excluded.checksum,
                 modified = excluded.modified,
+                generated = excluded.generated,
                 indexed_at = CURRENT_TIMESTAMP
             RETURNING id",
             static c =>
@@ -536,6 +551,7 @@ public class DbWriter
                 c.Parameters.Add("@lines", SqliteType.Integer);
                 c.Parameters.Add("@checksum", SqliteType.Text);
                 c.Parameters.Add("@modified", SqliteType.Text);
+                c.Parameters.Add("@generated", SqliteType.Integer);
             });
         try
         {
@@ -545,6 +561,7 @@ public class DbWriter
             cmd.Parameters["@lines"].Value = file.Lines;
             cmd.Parameters["@checksum"].Value = (object?)file.Checksum ?? DBNull.Value;
             cmd.Parameters["@modified"].Value = file.Modified;
+            cmd.Parameters["@generated"].Value = file.Generated ? 1 : 0;
             return (long)cmd.ExecuteScalar()!;
         }
         finally

@@ -439,6 +439,8 @@ public class StatusResult
     public Dictionary<string, long> Languages { get; set; } = new();
     public Dictionary<string, long>? SymbolKinds { get; set; }
     public List<string>? GraphSupportedLanguages { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<PostExtractionHookStatus>? Hooks { get; set; }
     public string? Version { get; set; }
     /// <summary>
     /// One-line human-readable summary for quick orientation.
@@ -601,6 +603,13 @@ public class StatusDbPragmaSettings
     public string? JournalMode { get; set; }
     public string? Synchronous { get; set; }
     public long? WalAutocheckpoint { get; set; }
+}
+
+public class PostExtractionHookStatus
+{
+    public string Name { get; set; } = string.Empty;
+    public string AssemblyPath { get; set; } = string.Empty;
+    public string TypeName { get; set; } = string.Empty;
 }
 
 public class RepoMapResult

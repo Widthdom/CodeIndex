@@ -81,7 +81,7 @@ public class McpServerTests : IDisposable
         _server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
     }
 
-    private void InsertIndexedFile(string path, string lang, string content)
+    private void InsertIndexedFile(string path, string lang, string content, bool generated = false)
     {
         var normalized = content.Replace("\r\n", "\n");
         var lines = normalized.Split('\n');
@@ -94,6 +94,7 @@ public class McpServerTests : IDisposable
             Lines = lines.Length,
             Modified = new DateTime(2024, 1, 1),
             Checksum = Guid.NewGuid().ToString("N"),
+            Generated = generated,
         });
         writer.InsertChunks([new ChunkRecord
         {
@@ -849,6 +850,16 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void BuildInvalidUtf8ErrorLog_IsActionable()
+    {
+        var message = McpServer.BuildInvalidUtf8ErrorLog("invalid byte sequence");
+
+        Assert.Contains("invalid UTF-8", message);
+        Assert.Contains("Send one UTF-8 JSON-RPC object per line", message);
+        Assert.Contains("retry", message);
+    }
+
+    [Fact]
     public void BuildResponseSerializationErrorLog_IdentifiesResponseSerializationStage()
     {
         var message = McpServer.BuildResponseSerializationErrorLog("serializer failed");
@@ -1280,6 +1291,61 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public async Task RunAsync_InvalidUtf8DecodeFailure_ReturnsParseError()
+    {
+        var transport = new InvalidUtf8ReadTransport("stdio");
+        using var server = new McpServer(_dbPath, "test");
+
+        await server.RunAsync(transport, CancellationToken.None);
+
+        Assert.Equal(1, transport.WriteCount);
+        using var response = JsonDocument.Parse(transport.LastWritten!);
+        var root = response.RootElement;
+        Assert.Equal("2.0", root.GetProperty("jsonrpc").GetString());
+        var error = root.GetProperty("error");
+        Assert.Equal(-32700, error.GetProperty("code").GetInt32());
+        Assert.Contains("invalid UTF-8", error.GetProperty("message").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(JsonValueKind.Null, root.GetProperty("id").ValueKind);
+    }
+
+    [Fact]
+    public async Task RunAsync_InvalidUtf8DecodeFailure_WaitsForPriorStdioResponse()
+    {
+        var transport = new InvalidUtf8ReadTransport(
+            "stdio",
+            """{"jsonrpc":"2.0","id":1,"method":"tools/list"}""");
+        using var firstResponseStarted = new ManualResetEventSlim(false);
+        using var server = new McpServer(_dbPath, "test", false, response =>
+        {
+            firstResponseStarted.Set();
+            Thread.Sleep(200);
+            return response.ToJsonString();
+        });
+
+        await server.RunAsync(transport, CancellationToken.None);
+
+        Assert.True(firstResponseStarted.IsSet);
+        Assert.Equal(2, transport.WrittenFrames.Count);
+        using var first = JsonDocument.Parse(transport.WrittenFrames[0]!);
+        using var second = JsonDocument.Parse(transport.WrittenFrames[1]!);
+        Assert.Equal(1, first.RootElement.GetProperty("id").GetInt32());
+        Assert.Equal(-32700, second.RootElement.GetProperty("error").GetProperty("code").GetInt32());
+    }
+
+    [Fact]
+    public async Task StdioTransport_Utf16BomInput_ThrowsDecodeFailure()
+    {
+        var utf16Json = Encoding.Unicode.GetPreamble()
+            .Concat(Encoding.Unicode.GetBytes("""{"jsonrpc":"2.0","id":1,"method":"ping"}""" + "\n"))
+            .ToArray();
+        await using var input = new MemoryStream(utf16Json);
+        await using var output = new MemoryStream();
+        await using var transport = new StdioMcpTransport(input, output, bufferSize: 1024);
+
+        await Assert.ThrowsAsync<DecoderFallbackException>(() => transport.ReadFrameAsync(CancellationToken.None));
+    }
+
+    [Fact]
     public async Task RunAsync_StdioCancellationNotification_CancelsActiveRequest()
     {
         using var cancelWritten = new ManualResetEventSlim(false);
@@ -1376,6 +1442,40 @@ public class McpServerTests : IDisposable
             LastWritten = frame;
             WrittenFrames.Add(frame);
             _onWrite?.Invoke(frame);
+            return Task.CompletedTask;
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class InvalidUtf8ReadTransport : IMcpTransport
+    {
+        private readonly Queue<string> _frames;
+
+        public InvalidUtf8ReadTransport(string name, params string[] frames)
+        {
+            Name = name;
+            _frames = new Queue<string>(frames);
+        }
+
+        public string Name { get; }
+        public string Endpoint => "invalid-utf8";
+        public int WriteCount { get; private set; }
+        public string? LastWritten { get; private set; }
+        public List<string?> WrittenFrames { get; } = [];
+
+        public Task<string?> ReadFrameAsync(CancellationToken cancellationToken)
+        {
+            if (_frames.Count > 0)
+                return Task.FromResult<string?>(_frames.Dequeue());
+            throw new DecoderFallbackException("Unable to translate bytes [ED][A0][80] at index 0 from specified code page to Unicode.");
+        }
+
+        public Task WriteFrameAsync(string? frame, CancellationToken cancellationToken)
+        {
+            WriteCount++;
+            LastWritten = frame;
+            WrittenFrames.Add(frame);
             return Task.CompletedTask;
         }
 
@@ -1923,6 +2023,32 @@ public class McpServerTests : IDisposable
         Assert.NotNull(structured["results"]![0]!["matchLines"]);
         Assert.NotNull(structured["results"]![0]!["highlights"]);
         Assert.Null(structured["results"]![0]!["content"]);
+    }
+
+    [Fact]
+    public void ToolsCall_Search_ExcludesGeneratedFilesByDefault()
+    {
+        InsertIndexedFile("src/generated.g.cs", "csharp", "class Generated { void Needle() {} }\n", generated: true);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"Needle"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(0, structured["count"]!.GetValue<int>());
+        Assert.Empty(structured["results"]!.AsArray());
+    }
+
+    [Fact]
+    public void ToolsCall_Search_IncludeGeneratedReturnsGeneratedFiles()
+    {
+        InsertIndexedFile("src/generated.g.cs", "csharp", "class Generated { void Needle() {} }\n", generated: true);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"Needle","includeGenerated":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(1, structured["count"]!.GetValue<int>());
+        Assert.Equal("src/generated.g.cs", structured["results"]![0]!["path"]!.GetValue<string>());
     }
 
     [Fact]

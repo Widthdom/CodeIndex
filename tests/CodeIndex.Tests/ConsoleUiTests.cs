@@ -203,6 +203,34 @@ public class ConsoleUiTests
     }
 
     [Fact]
+    public void PrintWarning_FlushesBothConsoleStreams()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalOut = Console.Out;
+            var originalError = Console.Error;
+            using var output = new FlushCountingTextWriter();
+            using var error = new FlushCountingTextWriter();
+            try
+            {
+                Console.SetOut(output);
+                Console.SetError(error);
+
+                ConsoleUi.PrintWarning("watch out");
+
+                Assert.Contains("[WARN] watch out", error.ToString());
+                Assert.True(error.FlushCount > 0);
+                Assert.True(output.FlushCount > 0);
+            }
+            finally
+            {
+                Console.SetOut(originalOut);
+                Console.SetError(originalError);
+            }
+        }
+    }
+
+    [Fact]
     public void GetWindowWidth_ColumnsEnvVarSet_UsesColumnsValue()
     {
         WithColumnsEnvironment("200", () =>
@@ -1408,6 +1436,17 @@ public class ConsoleUiTests
             ConsoleUi.SetColorPalette(_originalPalette);
             if (_lockTaken)
                 Monitor.Exit(TestConsoleLock.Gate);
+        }
+    }
+
+    private sealed class FlushCountingTextWriter : StringWriter
+    {
+        public int FlushCount { get; private set; }
+
+        public override void Flush()
+        {
+            FlushCount++;
+            base.Flush();
         }
     }
 

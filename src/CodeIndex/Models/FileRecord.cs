@@ -25,4 +25,7 @@ public class FileRecord
 
     /// <summary>Last modified time / 最終更新日時</summary>
     public DateTime Modified { get; set; }
+
+    /// <summary>Generated source marker / 生成コードマーカー</summary>
+    public bool Generated { get; set; }
 }

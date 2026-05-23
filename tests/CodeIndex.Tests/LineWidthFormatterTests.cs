@@ -79,6 +79,36 @@ public class LineWidthFormatterTests
         Assert.StartsWith(ThumbsUp, result.Text);
     }
 
+    [Fact]
+    public void ClampLine_UsesDisplayWidthForCjk()
+    {
+        var result = LineWidthFormatter.ClampLine("日本語abcdefg", maxLineWidth: 12);
+
+        Assert.True(result.Truncated);
+        Assert.StartsWith("日", result.Text);
+        Assert.EndsWith("...(+9)...", result.Text);
+    }
+
+    [Fact]
+    public void ClampLine_UsesDisplayWidthForEmoji()
+    {
+        var line = "ab" + ThumbsUp + "abcdefghijk";
+        var result = LineWidthFormatter.ClampLine(line, maxLineWidth: 12, focusColumn: 3, focusLength: 2);
+
+        Assert.True(result.Truncated);
+        Assert.Contains(ThumbsUp, result.Text);
+        AssertNoOrphanedSurrogate(result.Text);
+    }
+
+    [Fact]
+    public void ClampLine_DoesNotTruncateCombiningAccentByCodeUnitLength()
+    {
+        var result = LineWidthFormatter.ClampLine("e\u0301", maxLineWidth: 1);
+
+        Assert.False(result.Truncated);
+        Assert.Equal("e\u0301", result.Text);
+    }
+
     private static void AssertNoOrphanedSurrogate(string text)
     {
         for (var i = 0; i < text.Length; i++)

@@ -92,6 +92,8 @@ scripts, CI, or AI tools. Use `rg` when you only need a one-off text scan.
   `cdidx suggestions`.
 - Parallel full-scan extraction with configurable `--parallelism`, incremental refreshes
   with `--files` and `--commits`, plus continuous `--watch` mode.
+- Post-extraction hooks from `~/.config/cdidx/hooks/*.dll` (or `CDIDX_HOOKS_DIR`)
+  can enrich symbols and references before persistence.
 - Exact DB/worktree freshness checks with `status --check`, including an
   overridable age threshold via `--stale-after` / `CDIDX_STALE_AFTER`.
 - Human `status` output translates readiness flags and `status --explain <field>`
@@ -113,7 +115,7 @@ scripts, CI, or AI tools. Use `rg` when you only need a one-off text scan.
   `indexed_head_branch`, `indexed_head_timestamp`, `commits_ahead_of_indexed_head`,
   `index_writer_version`, `index_newer_than_reader`,
   `index_newer_than_reader_reason`, `unknown_extension_file_count`,
-  `path_case_sensitive`, `db_pragma_settings`, `stale_after_seconds`,
+  `path_case_sensitive`, `db_pragma_settings`, `hooks`, `stale_after_seconds`,
   `index_age_seconds`, `degraded_reason`, `recommended_action`, and `alternative_action`; keep this
   list synchronized with `DEVELOPER_GUIDE.md` and `AGENT_GUIDE.md`.
   `hotspot_family_degraded_reason` distinguishes legacy DBs without hotspot-family
@@ -270,6 +272,8 @@ script / CI では `--yes`（または `--force`）が必要です。
   tools、インデックス済みファイル resources、定型分析 prompts を提供します。
 - `cdidx suggestions` でローカルの提案履歴を一覧表示、詳細表示、エクスポート可能。
 - `--files` と `--commits` による差分更新、および `--watch` による継続更新モード。
+- `~/.config/cdidx/hooks/*.dll`（または `CDIDX_HOOKS_DIR`）の post-extraction hook で、
+  永続化前のシンボルと参照を拡張できます。
 - `status --check` による DB と作業ツリーの完全一致確認。`--stale-after` /
   `CDIDX_STALE_AFTER` で age threshold を上書き可能。
 - 人間向け `status` は readiness flag を翻訳し、`status --explain <field>` は
@@ -291,7 +295,7 @@ script / CI では `--yes`（または `--force`）が必要です。
   `indexed_head_branch`、`indexed_head_timestamp`、`commits_ahead_of_indexed_head`、
   `index_writer_version`、`index_newer_than_reader`、
   `index_newer_than_reader_reason`、`unknown_extension_file_count`、
-  `path_case_sensitive`、`db_pragma_settings`、`stale_after_seconds`、
+  `path_case_sensitive`、`db_pragma_settings`、`hooks`、`stale_after_seconds`、
   `index_age_seconds`、`degraded_reason`、`recommended_action`、`alternative_action` を対象にします。
   この一覧は `DEVELOPER_GUIDE.md` と `AGENT_GUIDE.md` に同期してください。
   `hotspot_family_degraded_reason` は、hotspot-family 未対応の legacy DB

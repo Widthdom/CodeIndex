@@ -4,10 +4,10 @@ namespace CodeIndex.Mcp;
 
 /// <summary>
 /// Default MCP transport: line-delimited JSON-RPC over stdin/stdout. Mirrors the byte-for-byte
-/// behavior of the pre-#1558 inline loop (UTF-8, BOM detection on input, BOM-less UTF-8 on
+/// behavior of the pre-#1558 inline loop (strict UTF-8, BOM-less UTF-8 on
 /// output, 64 KiB buffer, AutoFlush) so existing clients keep working unchanged.
 /// 既定の MCP トランスポート: stdin/stdout 上の行区切り JSON-RPC。#1558 以前のインラインループと
-/// 同じ I/O 挙動（UTF-8、入力 BOM 検出、出力 BOM なし UTF-8、64 KiB バッファ、AutoFlush）を維持し、
+/// 同じ I/O 挙動（strict UTF-8、出力 BOM なし UTF-8、64 KiB バッファ、AutoFlush）を維持し、
 /// 既存クライアントを動かしたまま透過的に置き換える。
 /// </summary>
 internal sealed class StdioMcpTransport : IMcpTransport
@@ -19,10 +19,19 @@ internal sealed class StdioMcpTransport : IMcpTransport
     private bool _disposed;
 
     public StdioMcpTransport(int bufferSize)
+        : this(Console.OpenStandardInput(), Console.OpenStandardOutput(), bufferSize)
     {
-        _stdin = Console.OpenStandardInput();
-        _stdout = Console.OpenStandardOutput();
-        _reader = new StreamReader(_stdin, Encoding.UTF8, detectEncodingFromByteOrderMarks: true, bufferSize: bufferSize);
+    }
+
+    internal StdioMcpTransport(Stream stdin, Stream stdout, int bufferSize)
+    {
+        _stdin = stdin;
+        _stdout = stdout;
+        _reader = new StreamReader(
+            _stdin,
+            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true),
+            detectEncodingFromByteOrderMarks: false,
+            bufferSize: bufferSize);
         _writer = new StreamWriter(_stdout, new UTF8Encoding(false), bufferSize: bufferSize) { AutoFlush = true };
     }
 
