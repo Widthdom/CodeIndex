@@ -106,6 +106,8 @@ public class HttpMcpTransportTests : IDisposable
             Assert.Equal(HttpStatusCode.OK, okResponse.StatusCode);
         }
 
+        // Issue #2434: the successful POST response can reach the client before its
+        // best-effort request log callback runs, so assert after the async sink catches up.
         var snapshot = await WaitForRequestLogRecordsAsync(records, 3);
 
         var missingPost = Assert.Single(snapshot, record =>
