@@ -4254,9 +4254,25 @@ public static class QueryCommandRunner
             // are meaningless to the filesystem API but are understood by SQLite.
             // URI 形式の --db を受け入れるため、file: で始まる値は File.Exists チェックをスキップ。
             var isUri = dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase);
-            if (!isUri && !File.Exists(LongPath.EnsureWindowsPrefix(dbPath)))
+            var fileExistsPath = dbPath;
+            if (isUri)
             {
-                Console.Error.WriteLine($"Error [{CommandErrorCodes.DbNotFound}]: database not found at {Path.GetFullPath(dbPath)}");
+                if (!DbPathResolver.TryNormalizeDbPath(dbPath, out fileExistsPath, out var parseError))
+                {
+                    Console.Error.WriteLine($"Error [{CommandErrorCodes.DbError}]: invalid --db file URI: {parseError?.Message ?? dbPath}");
+                    Console.Error.WriteLine($"Hint: pass a valid SQLite file URI such as `file:///absolute/path/to/codeindex.db?immutable=1`; the --db value resolved to: {dbPath}");
+                    GlobalToolLog.Error($"invalid_db_file_uri db={FormatLogValue(dbPath)} exception={FormatLogValue(parseError?.ToString() ?? "<unknown>")}");
+                    return CommandExitCodes.DatabaseError;
+                }
+            }
+
+            if (!fileExistsPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase)
+                && !File.Exists(LongPath.EnsureWindowsPrefix(fileExistsPath)))
+            {
+                var resolvedPath = Path.GetFullPath(fileExistsPath);
+                Console.Error.WriteLine($"Error [{CommandErrorCodes.DbNotFound}]: database not found at {resolvedPath}");
+                if (isUri)
+                    Console.Error.WriteLine($"Hint: the --db path resolved to: {resolvedPath}");
                 Console.Error.WriteLine("Hint: create or refresh the index with `cdidx index <projectPath>` (or `cdidx .`) and then rerun this command.");
                 return CommandExitCodes.DatabaseError;
             }
@@ -6000,7 +6016,7 @@ public static class QueryCommandRunner
     // メッセージを揃え、ヒントの単一情報源を維持する。
     private static readonly Dictionary<string, string> MissingOptionValueHints = new(StringComparer.Ordinal)
     {
-        ["--db"] = "pass a path to a CodeIndex SQLite database, e.g. `--db .cdidx/codeindex.db`, or omit `--db` to use `.cdidx/codeindex.db`.",
+        ["--db"] = "pass a path to a CodeIndex SQLite database, e.g. `--db .cdidx/codeindex.db` or `--db file:///absolute/path/to/codeindex.db?immutable=1`, or omit `--db` to use `.cdidx/codeindex.db`.",
         ["--limit"] = "pass a positive integer, e.g. `--limit 20` (default 20).",
         ["--top"] = "pass a positive integer, e.g. `--top 20` (alias for `--limit`, default 20).",
         ["--lang"] = "pass a language identifier, e.g. `--lang csharp`. Run `cdidx languages` for the supported set.",

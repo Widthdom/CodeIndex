@@ -2582,6 +2582,21 @@ jobs:
     }
 
     [Fact]
+    public void WithDb_MalformedFileUriSurfacesDbPathParseError_Issue1990()
+    {
+        const string malformedUri = "file:///tmp/codeindex%ZZ.db?immutable=1";
+
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--db", malformedUri],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+        Assert.Contains($"Error [{CommandErrorCodes.DbError}]: invalid --db file URI:", stderr);
+        Assert.Contains("file:///absolute/path/to/codeindex.db?immutable=1", stderr);
+        Assert.Contains($"the --db value resolved to: {malformedUri}", stderr);
+    }
+
+    [Fact]
     public void WithDb_SqliteCantOpenSurfacesAccessOpenCategory_Issue2072()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue2072_cantopen");
@@ -2595,9 +2610,9 @@ jobs:
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
-            Assert.Contains($"Error [{CommandErrorCodes.DbError}]: database access/open denied:", stderr);
-            Assert.Contains("verify parent directory permissions", stderr);
-            Assert.DoesNotContain("SQLite database error", stderr);
+            Assert.Contains($"Error [{CommandErrorCodes.DbNotFound}]: database not found at {Path.GetFullPath(Path.Combine(missingParent, "codeindex.db"))}", stderr);
+            Assert.Contains("Hint: the --db path resolved to:", stderr);
+            Assert.DoesNotContain("database access/open denied", stderr);
         }
         finally
         {

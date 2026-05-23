@@ -86,35 +86,55 @@ public static class DbPathResolver
     /// </summary>
     public static string NormalizeDbPath(string dbPath)
     {
+        if (TryNormalizeDbPath(dbPath, out var normalized, out var parseError))
+            return normalized;
+
+        if (parseError != null)
+            GlobalToolLog.Error($"db_path_uri_parse_failed db={QuoteLogValue(dbPath)} exception={QuoteLogValue(parseError.Message)}");
+
+        return dbPath;
+    }
+
+    internal static bool TryNormalizeDbPath(string dbPath, out string normalizedDbPath, out Exception? parseError)
+    {
+        normalizedDbPath = dbPath;
+        parseError = null;
         if (!dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
-            return dbPath;
+            return true;
+
         try
         {
             // Strip query params (?immutable=1 etc.) before URI parsing so LocalPath is clean.
             var qIdx = dbPath.IndexOf('?');
             var trimmed = qIdx >= 0 ? dbPath[..qIdx] : dbPath;
+            if (ContainsInvalidPercentEscape(trimmed))
+                throw new FormatException("Invalid percent escape in SQLite file URI.");
+
             if (!trimmed.StartsWith("file://", StringComparison.OrdinalIgnoreCase))
             {
                 var relativePath = Uri.UnescapeDataString(trimmed["file:".Length..]);
-                return string.IsNullOrWhiteSpace(relativePath)
+                normalizedDbPath = string.IsNullOrWhiteSpace(relativePath)
                     ? dbPath
                     : Path.GetFullPath(relativePath);
+                return true;
             }
 
             var uri = new Uri(trimmed);
             if (!uri.IsFile)
-                return dbPath;
+                return true;
 
             var localPath = uri.LocalPath;
-            return string.IsNullOrWhiteSpace(localPath)
+            normalizedDbPath = string.IsNullOrWhiteSpace(localPath)
                 ? dbPath
                 : Path.IsPathRooted(localPath)
                     ? localPath
                     : Path.GetFullPath(localPath);
+            return true;
         }
-        catch
+        catch (Exception ex) when (ex is ArgumentException or FormatException or UriFormatException)
         {
-            return dbPath;
+            parseError = ex;
+            return false;
         }
     }
 
@@ -289,8 +309,32 @@ public static class DbPathResolver
     private static bool PathsEqual(string left, string right)
         => PathCasing.PathsEqual(left, right);
 
+    private static string QuoteLogValue(string value) =>
+        "\"" + value.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal).Replace("\r", "\\r", StringComparison.Ordinal).Replace("\n", "\\n", StringComparison.Ordinal) + "\"";
+
     private static bool IsUnderDirectory(string parentDirectory, string candidatePath)
         => PathCasing.IsPathEqualOrParent(parentDirectory, candidatePath);
+
+    private static bool ContainsInvalidPercentEscape(string value)
+    {
+        for (var i = 0; i < value.Length; i++)
+        {
+            if (value[i] != '%')
+                continue;
+
+            if (i + 2 >= value.Length || !IsHexDigit(value[i + 1]) || !IsHexDigit(value[i + 2]))
+                return true;
+
+            i += 2;
+        }
+
+        return false;
+    }
+
+    private static bool IsHexDigit(char value) =>
+        value is >= '0' and <= '9'
+            or >= 'a' and <= 'f'
+            or >= 'A' and <= 'F';
 
     private static List<IndexedFileSample> TryReadIndexedFileSamples(string dbPath)
     {

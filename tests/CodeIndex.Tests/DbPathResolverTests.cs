@@ -88,6 +88,18 @@ public class DbPathResolverTests
     }
 
     [Fact]
+    public void TryNormalizeDbPath_MalformedFileUri_ReturnsParseErrorWithoutChangingValue()
+    {
+        const string malformedUri = "file:///tmp/codeindex%ZZ.db?immutable=1";
+
+        var resolved = DbPathResolver.TryNormalizeDbPath(malformedUri, out var normalized, out var parseError);
+
+        Assert.False(resolved);
+        Assert.Equal(malformedUri, normalized);
+        Assert.NotNull(parseError);
+    }
+
+    [Fact]
     public void ResolveProjectRootForQuery_PrefersStoredIndexedProjectRootMetadata()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_meta_root");
