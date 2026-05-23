@@ -1645,6 +1645,44 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_UpdateFiles_UnchangedStatMatch_SkipsWithoutOpeningFile()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "app.py");
+            const string content = "def run():\n    return 1\n";
+            File.WriteAllText(sourcePath, content);
+            File.SetLastWriteTimeUtc(sourcePath, new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc));
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.SetUnixFileMode(sourcePath, UnixFileMode.None);
+            try
+            {
+                var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "app.py", "--json"]);
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal("success", json.GetProperty("status").GetString());
+                Assert.Equal(0, json.GetProperty("summary").GetProperty("updated").GetInt32());
+                Assert.Equal(1, json.GetProperty("summary").GetProperty("skipped").GetInt32());
+            }
+            finally
+            {
+                File.SetUnixFileMode(sourcePath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            }
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
     public void Run_UpdateFiles_RemovesOldPathWhenExtensionChanges()
     {
         var projectRoot = CreateTempProject();
