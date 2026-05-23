@@ -370,6 +370,97 @@ public class GitHelperTests : IDisposable
     }
 
     [Fact]
+    public void TryGetHeadCommitResult_ReturnsResolvedForBranchHead()
+    {
+        var repoDir = CreateGitRepo();
+
+        File.WriteAllText(Path.Combine(repoDir, "tracked.txt"), "v1\n");
+        RunGit(repoDir, "add", "tracked.txt");
+        RunGit(repoDir, "commit", "-m", "initial");
+
+        var expected = RunGit(repoDir, "rev-parse", "HEAD").Trim();
+        var actual = GitHelper.TryGetHeadCommitResult(repoDir);
+
+        Assert.Equal(GitHeadCommitState.Resolved, actual.State);
+        Assert.Equal(expected, actual.Sha);
+        Assert.Null(actual.Reason);
+    }
+
+    [Fact]
+    public void TryGetHeadCommitResult_ReturnsDetachedHeadWithSha()
+    {
+        var repoDir = CreateGitRepo();
+
+        File.WriteAllText(Path.Combine(repoDir, "tracked.txt"), "v1\n");
+        RunGit(repoDir, "add", "tracked.txt");
+        RunGit(repoDir, "commit", "-m", "initial");
+        var sha = RunGit(repoDir, "rev-parse", "HEAD").Trim();
+        RunGit(repoDir, "checkout", "--detach", sha);
+
+        var actual = GitHelper.TryGetHeadCommitResult(repoDir);
+
+        Assert.Equal(GitHeadCommitState.DetachedHead, actual.State);
+        Assert.Equal(sha, actual.Sha);
+        Assert.Null(actual.Reason);
+    }
+
+    [Fact]
+    public void TryGetHeadCommitResult_ReturnsNotARepo()
+    {
+        var nonRepo = Path.Combine(_tempDir, "not-a-repo");
+        Directory.CreateDirectory(nonRepo);
+
+        var actual = GitHelper.TryGetHeadCommitResult(nonRepo);
+
+        Assert.Equal(GitHeadCommitState.NotARepo, actual.State);
+        Assert.Null(actual.Sha);
+        Assert.Null(actual.Reason);
+    }
+
+    [Fact]
+    public void TryGetHeadCommitResult_ReturnsNoneForUnbornHead()
+    {
+        var repoDir = CreateGitRepo();
+
+        var actual = GitHelper.TryGetHeadCommitResult(repoDir);
+
+        Assert.Equal(GitHeadCommitState.None, actual.State);
+        Assert.Null(actual.Sha);
+        Assert.Null(actual.Reason);
+    }
+
+    [Fact]
+    public void TryGetHeadCommitResult_ReturnsErrorForCorruptGitDirectory()
+    {
+        var repoDir = Path.Combine(_tempDir, "corrupt-repo");
+        Directory.CreateDirectory(Path.Combine(repoDir, ".git"));
+
+        var actual = GitHelper.TryGetHeadCommitResult(repoDir);
+
+        Assert.Equal(GitHeadCommitState.Error, actual.State);
+        Assert.Null(actual.Sha);
+        Assert.False(string.IsNullOrWhiteSpace(actual.Reason));
+    }
+
+    [Fact]
+    public void TryGetHeadCommitResult_ReturnsResolvedForBareRepository()
+    {
+        var sourceRepo = CreateGitRepo();
+        File.WriteAllText(Path.Combine(sourceRepo, "tracked.txt"), "v1\n");
+        RunGit(sourceRepo, "add", "tracked.txt");
+        RunGit(sourceRepo, "commit", "-m", "initial");
+        var bareRepo = Path.Combine(_tempDir, "head-result.git");
+        RunGit(_tempDir, "clone", "--bare", sourceRepo, bareRepo);
+
+        var expected = RunGit(bareRepo, "rev-parse", "HEAD").Trim();
+        var actual = GitHelper.TryGetHeadCommitResult(bareRepo);
+
+        Assert.Equal(GitHeadCommitState.Resolved, actual.State);
+        Assert.Equal(expected, actual.Sha);
+        Assert.Null(actual.Reason);
+    }
+
+    [Fact]
     public void TryGetHeadBranch_ReturnsBranchShortName()
     {
         var repoDir = CreateGitRepo();

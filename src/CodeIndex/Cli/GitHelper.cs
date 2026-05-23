@@ -13,6 +13,24 @@ public enum GitRepositoryType
     Bare,
 }
 
+public enum GitHeadCommitState
+{
+    None,
+    NotARepo,
+    DetachedHead,
+    Resolved,
+    Error,
+}
+
+public sealed record GitHeadCommitResult(GitHeadCommitState State, string? Sha = null, string? Reason = null)
+{
+    public static GitHeadCommitResult None { get; } = new(GitHeadCommitState.None);
+    public static GitHeadCommitResult NotARepo { get; } = new(GitHeadCommitState.NotARepo);
+    public static GitHeadCommitResult DetachedHead(string sha) => new(GitHeadCommitState.DetachedHead, sha);
+    public static GitHeadCommitResult Resolved(string sha) => new(GitHeadCommitState.Resolved, sha);
+    public static GitHeadCommitResult Error(string reason) => new(GitHeadCommitState.Error, Reason: reason);
+}
+
 /// <summary>
 /// Git integration helpers.
 /// Git連携ヘルパー。
@@ -250,9 +268,49 @@ public static class GitHelper
     /// </summary>
     public static string? TryGetHeadCommit(string projectRoot)
     {
-        var output = TryRunGit(projectRoot, "rev-parse", "HEAD");
-        var value = output?.Trim();
-        return string.IsNullOrWhiteSpace(value) ? null : value;
+        var result = TryGetHeadCommitResult(projectRoot);
+        return result.State is GitHeadCommitState.Resolved or GitHeadCommitState.DetachedHead
+            ? result.Sha
+            : null;
+    }
+
+    public static GitHeadCommitResult TryGetHeadCommitResult(string projectRoot)
+        => TryGetHeadCommitResult(projectRoot, gitEnvironmentOverrides: null);
+
+    internal static GitHeadCommitResult TryGetHeadCommitResult(
+        string projectRoot,
+        IReadOnlyDictionary<string, string?>? gitEnvironmentOverrides)
+    {
+        var repositoryType = TryGetRepositoryType(projectRoot, gitEnvironmentOverrides);
+        if (repositoryType == GitRepositoryType.None)
+            return GitHeadCommitResult.NotARepo;
+
+        var headResult = RunGitCapturingResult(projectRoot, gitEnvironmentOverrides, "rev-parse", "--verify", "HEAD^{commit}");
+        if (headResult.StartError != null)
+            return GitHeadCommitResult.Error(headResult.StartError);
+
+        var sha = headResult.Output?.Trim();
+        if (headResult.ExitCode != 0)
+        {
+            var reason = NormalizeGitError(headResult.Error);
+            return IsMissingHeadError(reason)
+                ? GitHeadCommitResult.None
+                : GitHeadCommitResult.Error(reason);
+        }
+
+        if (string.IsNullOrWhiteSpace(sha))
+            return GitHeadCommitResult.None;
+
+        var branchResult = RunGitCapturingResult(projectRoot, gitEnvironmentOverrides, "rev-parse", "--abbrev-ref", "HEAD");
+        if (branchResult.StartError != null)
+            return GitHeadCommitResult.Error(branchResult.StartError);
+        if (branchResult.ExitCode != 0)
+            return GitHeadCommitResult.Error(NormalizeGitError(branchResult.Error));
+
+        var branch = branchResult.Output?.Trim();
+        return string.Equals(branch, "HEAD", StringComparison.Ordinal)
+            ? GitHeadCommitResult.DetachedHead(sha)
+            : GitHeadCommitResult.Resolved(sha);
     }
 
     /// <summary>
@@ -349,6 +407,23 @@ public static class GitHelper
     /// </summary>
     public static string? TryGetRepositoryRoot(string projectPath)
         => TryGetRepositoryRoot(projectPath, gitEnvironmentOverrides: null);
+
+    internal static GitRepositoryType TryGetRepositoryType(
+        string projectRoot,
+        IReadOnlyDictionary<string, string?>? gitEnvironmentOverrides)
+    {
+        var dotGit = Path.Combine(projectRoot, ".git");
+        var ioDotGit = LongPath.EnsureWindowsPrefix(dotGit);
+        if (Directory.Exists(ioDotGit))
+            return GitRepositoryType.Normal;
+        if (File.Exists(ioDotGit))
+            return GitRepositoryType.Worktree;
+
+        var isBare = TryRunGit(projectRoot, gitEnvironmentOverrides, "rev-parse", "--is-bare-repository")?.Trim();
+        return string.Equals(isBare, "true", StringComparison.OrdinalIgnoreCase)
+            ? GitRepositoryType.Bare
+            : GitRepositoryType.None;
+    }
 
     /// <summary>
     /// Resolve whether ignore matching should be case-insensitive for this workspace.
@@ -477,6 +552,8 @@ public static class GitHelper
     private static string? TryRunGit(string projectRoot, params string[] args)
         => TryRunGit(projectRoot, gitEnvironmentOverrides: null, args);
 
+    private readonly record struct GitCommandResult(int? ExitCode, string? Output, string? Error, string? StartError);
+
     private static string? TryRunGit(string projectRoot, IReadOnlyDictionary<string, string?>? gitEnvironmentOverrides, params string[] args)
     {
         try
@@ -517,6 +594,59 @@ public static class GitHelper
             return null;
         }
     }
+
+    private static GitCommandResult RunGitCapturingResult(
+        string projectRoot,
+        IReadOnlyDictionary<string, string?>? gitEnvironmentOverrides,
+        params string[] args)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = "git",
+                WorkingDirectory = projectRoot,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+
+            foreach (var arg in args)
+                psi.ArgumentList.Add(arg);
+
+            if (gitEnvironmentOverrides != null)
+            {
+                foreach (var (key, value) in gitEnvironmentOverrides)
+                {
+                    if (value == null)
+                        psi.Environment.Remove(key);
+                    else
+                        psi.Environment[key] = value;
+                }
+            }
+
+            var result = RunProcessCapturingOutput(psi);
+            return result == null
+                ? new GitCommandResult(null, null, null, "Failed to start git process / gitプロセスの起動に失敗")
+                : new GitCommandResult(result.Value.ExitCode, result.Value.Output, result.Value.Error, null);
+        }
+        catch (Exception ex)
+        {
+            return new GitCommandResult(null, null, null, ex.Message);
+        }
+    }
+
+    private static string NormalizeGitError(string? error)
+    {
+        var reason = error?.Trim();
+        return string.IsNullOrWhiteSpace(reason) ? "git command failed without stderr" : reason;
+    }
+
+    private static bool IsMissingHeadError(string reason)
+        => reason.Contains("Needed a single revision", StringComparison.OrdinalIgnoreCase)
+            || reason.Contains("ambiguous argument 'HEAD", StringComparison.OrdinalIgnoreCase)
+            || reason.Contains("bad revision 'HEAD", StringComparison.OrdinalIgnoreCase);
 
     // Drain stdout and stderr concurrently via Process's own event-based reader threads so a
     // full stderr pipe buffer cannot deadlock a blocking stdout read. Returns null if the
