@@ -897,6 +897,7 @@ public class DbContext : IDisposable
     public const string IndexedHeadShaMetaKey = "indexed_head_sha";
     public const string IndexedHeadBranchMetaKey = "indexed_head_branch";
     public const string IndexedHeadTimestampMetaKey = "indexed_head_timestamp";
+    public const string LastFullScanElapsedMsMetaKey = "last_full_scan_elapsed_ms";
     // Issue #1585: count of files seen by the most recent successful full-repository scan
     // whose non-empty extension did not map to a known language. This is a scan coverage
     // signal, not an indexed-file count, and is omitted by readers until a current index pass

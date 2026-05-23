@@ -15,6 +15,7 @@ public static class CommandExitCodes
     public const int TransientDatabaseError = 6;
     public const int InvalidArgument = 7;
     public const int CancelledBySignal = 8;
+    public const int ExUsage = 64;
     public const int Interrupted = CancelledBySignal;
     public const int LegacyInterrupted = 130;
 }
