@@ -266,11 +266,44 @@ public static partial class SymbolExtractor
         var inFence = false;
         var fenceChar = '\0';
         var fenceLength = 0;
+        var fenceSymbolIndex = -1;
 
         for (var i = 0; i < lines.Length; i++)
         {
-            if (TryToggleMarkdownFence(lines[i], inFence, fenceChar, fenceLength, out var nextFenceChar, out var nextFenceLength))
+            if (TryToggleMarkdownFence(lines[i], inFence, fenceChar, fenceLength, out var nextFenceChar, out var nextFenceLength, out var fenceInfo))
             {
+                if (!inFence)
+                {
+                    var codeSymbol = new SymbolRecord
+                    {
+                        FileId = fileId,
+                        Kind = "code",
+                        Name = NormalizeMarkdownFenceInfo(fenceInfo),
+                        Line = i + 1,
+                        StartLine = i + 1,
+                        EndLine = lines.Length,
+                        BodyStartLine = i + 2,
+                        BodyEndLine = lines.Length,
+                        Signature = lines[i].Trim(),
+                    };
+
+                    if (headingStack.Count > 0)
+                    {
+                        var parent = symbols[headingStack.Peek().SymbolIndex];
+                        codeSymbol.ContainerKind = "heading";
+                        codeSymbol.ContainerName = parent.Name;
+                    }
+
+                    symbols.Add(codeSymbol);
+                    fenceSymbolIndex = symbols.Count - 1;
+                }
+                else if (fenceSymbolIndex >= 0)
+                {
+                    symbols[fenceSymbolIndex].EndLine = i + 1;
+                    symbols[fenceSymbolIndex].BodyEndLine = Math.Max(symbols[fenceSymbolIndex].BodyStartLine ?? i + 1, i);
+                    fenceSymbolIndex = -1;
+                }
+
                 inFence = nextFenceLength > 0;
                 fenceChar = nextFenceChar;
                 fenceLength = nextFenceLength;
@@ -374,7 +407,7 @@ public static partial class SymbolExtractor
 
         foreach (var line in lines)
         {
-            if (TryToggleMarkdownFence(line, inFence, fenceChar, fenceLength, out var nextFenceChar, out var nextFenceLength))
+            if (TryToggleMarkdownFence(line, inFence, fenceChar, fenceLength, out var nextFenceChar, out var nextFenceLength, out _))
             {
                 inFence = nextFenceLength > 0;
                 fenceChar = nextFenceChar;
@@ -435,10 +468,12 @@ public static partial class SymbolExtractor
         char fenceChar,
         int fenceLength,
         out char nextFenceChar,
-        out int nextFenceLength)
+        out int nextFenceLength,
+        out string fenceInfo)
     {
         nextFenceChar = '\0';
         nextFenceLength = 0;
+        fenceInfo = string.Empty;
 
         var index = 0;
         while (index < line.Length && index < 3 && line[index] == ' ')
@@ -465,10 +500,24 @@ public static partial class SymbolExtractor
         {
             nextFenceChar = marker;
             nextFenceLength = length - index;
+            fenceInfo = line[length..].Trim();
             return true;
         }
 
         return false;
+    }
+
+    private static string NormalizeMarkdownFenceInfo(string fenceInfo)
+    {
+        var normalized = fenceInfo.Trim();
+        if (normalized.Length == 0)
+            return "code";
+
+        var separatorIndex = normalized.IndexOfAny([' ', '\t', '\r', '\n']);
+        if (separatorIndex >= 0)
+            normalized = normalized[..separatorIndex];
+
+        return normalized.Length == 0 ? "code" : normalized;
     }
 
     private static bool TryParseMarkdownSetextHeading(string currentLine, string nextLine, out int level, out string headingText)

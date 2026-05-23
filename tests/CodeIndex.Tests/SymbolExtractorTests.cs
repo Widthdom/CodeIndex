@@ -14606,6 +14606,95 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Markdown_DetectsFencedCodeBlockSymbols()
+    {
+        const string content = """
+            # Guide
+
+            ```python
+            print("hello")
+            ```
+
+            ## Examples
+
+            ~~~bash title="setup"
+            echo ok
+            ~~~
+
+            ```
+            no language
+            ```
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "markdown", content);
+        var codeBlocks = symbols.Where(s => s.Kind == "code").ToList();
+
+        Assert.Equal(3, codeBlocks.Count);
+        Assert.Contains(codeBlocks, s =>
+            s.Name == "python"
+            && s.Line == 3
+            && s.StartLine == 3
+            && s.EndLine == 5
+            && s.BodyStartLine == 4
+            && s.BodyEndLine == 4
+            && s.ContainerName == "Guide"
+            && s.Signature == "```python");
+        Assert.Contains(codeBlocks, s =>
+            s.Name == "bash"
+            && s.Line == 9
+            && s.EndLine == 11
+            && s.BodyStartLine == 10
+            && s.BodyEndLine == 10
+            && s.ContainerName == "Examples"
+            && s.Signature == "~~~bash title=\"setup\"");
+        Assert.Contains(codeBlocks, s =>
+            s.Name == "code"
+            && s.Line == 13
+            && s.EndLine == 15
+            && s.BodyStartLine == 14
+            && s.BodyEndLine == 14
+            && s.ContainerName == "Examples");
+    }
+
+    [Fact]
+    public void Extract_Markdown_DetectsEmptyAndUnclosedFencedCodeBlockSymbols()
+    {
+        const string emptyFenceContent = """
+            # Guide
+
+            ```json
+            ```
+            """;
+        const string unclosedFenceContent = """
+            # Guide
+
+            ```dockerfile
+            FROM alpine
+            RUN true
+            """;
+
+        var emptyFenceSymbols = SymbolExtractor.Extract(1, "markdown", emptyFenceContent);
+        var emptyCodeBlock = Assert.Single(emptyFenceSymbols.Where(s => s.Kind == "code"));
+
+        Assert.Equal("json", emptyCodeBlock.Name);
+        Assert.Equal(3, emptyCodeBlock.StartLine);
+        Assert.Equal(4, emptyCodeBlock.EndLine);
+        Assert.Equal(4, emptyCodeBlock.BodyStartLine);
+        Assert.Equal(4, emptyCodeBlock.BodyEndLine);
+        Assert.Equal("Guide", emptyCodeBlock.ContainerName);
+
+        var unclosedFenceSymbols = SymbolExtractor.Extract(1, "markdown", unclosedFenceContent);
+        var unclosedCodeBlock = Assert.Single(unclosedFenceSymbols.Where(s => s.Kind == "code"));
+
+        Assert.Equal("dockerfile", unclosedCodeBlock.Name);
+        Assert.Equal(3, unclosedCodeBlock.StartLine);
+        Assert.Equal(5, unclosedCodeBlock.EndLine);
+        Assert.Equal(4, unclosedCodeBlock.BodyStartLine);
+        Assert.Equal(5, unclosedCodeBlock.BodyEndLine);
+        Assert.Equal("Guide", unclosedCodeBlock.ContainerName);
+    }
+
+    [Fact]
     public void Extract_Markdown_DetectsSetextHeadingsAndLocalAnchorReferences()
     {
         const string content = """

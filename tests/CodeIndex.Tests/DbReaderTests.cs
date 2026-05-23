@@ -12485,7 +12485,7 @@ public class DbReaderTests : IDisposable
 
         Assert.NotNull(outline);
         Assert.Equal("docs/guide.md", outline!.Path);
-        Assert.Equal(4, outline.SymbolCount);
+        Assert.Equal(5, outline.SymbolCount);
         Assert.Collection(outline.Symbols,
             symbol =>
             {
@@ -12496,6 +12496,12 @@ public class DbReaderTests : IDisposable
             {
                 Assert.Equal("Details", symbol.Name);
                 Assert.Equal(1, symbol.Depth);
+            },
+            symbol =>
+            {
+                Assert.Equal("markdown", symbol.Name);
+                Assert.Equal("code", symbol.Kind);
+                Assert.Equal(2, symbol.Depth);
             },
             symbol =>
             {
