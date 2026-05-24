@@ -646,6 +646,34 @@ public class SuggestionStoreTests : IDisposable
     }
 
     [Fact]
+    public void ZeroByteFile_IsPreservedAsBackup()
+    {
+        var filePath = Path.Combine(_tempDir, "suggestions-codeindex.json");
+        var backupPath = filePath + ".bak";
+        File.WriteAllBytes(filePath, Array.Empty<byte>());
+
+        var all = _store.LoadAll();
+
+        Assert.Empty(all);
+        Assert.True(File.Exists(backupPath), "Zero-byte file should be preserved as .bak");
+        Assert.False(File.Exists(filePath), "Original zero-byte file should be removed");
+    }
+
+    [Fact]
+    public void FilteredZeroByteFile_IsPreservedAsBackup()
+    {
+        var filePath = Path.Combine(_tempDir, "suggestions-codeindex.json");
+        var backupPath = filePath + ".bak";
+        File.WriteAllBytes(filePath, Array.Empty<byte>());
+
+        var all = _store.LoadByCategory("other");
+
+        Assert.Empty(all);
+        Assert.True(File.Exists(backupPath), "Zero-byte file should be preserved as .bak");
+        Assert.False(File.Exists(filePath), "Original zero-byte file should be removed");
+    }
+
+    [Fact]
     public void AtomicWrite_SurvivesAddAfterCorruption()
     {
         // After corruption recovery, new suggestions should work normally

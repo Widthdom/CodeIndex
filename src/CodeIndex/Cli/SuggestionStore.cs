@@ -379,6 +379,12 @@ public class SuggestionStore
         if (!File.Exists(ioPath))
             return new List<SuggestionRecord>();
 
+        if (new FileInfo(ioPath).Length == 0)
+        {
+            PreserveCorruptFile();
+            return new List<SuggestionRecord>();
+        }
+
         var json = File.ReadAllText(ioPath);
         if (string.IsNullOrWhiteSpace(json))
             return new List<SuggestionRecord>();
@@ -547,7 +553,10 @@ public class SuggestionStore
 
         var snapshot = File.ReadAllBytes(ioPath);
         if (snapshot.Length == 0)
+        {
+            PreserveCorruptFile();
             return new List<SuggestionRecord>();
+        }
 
         if (IsEmptyOrJsonWhitespace(snapshot))
             return new List<SuggestionRecord>();
@@ -650,10 +659,18 @@ public class SuggestionStore
         NormalizeRecordDefaults(records);
 
         var tempPath = _filePath + ".tmp";
-        var json = JsonSerializer.Serialize(records, s_jsonOptions);
         try
         {
-            File.WriteAllText(tempPath, json);
+            using (var stream = new FileStream(
+                       tempPath,
+                       FileMode.Create,
+                       FileAccess.Write,
+                       FileShare.None))
+            {
+                JsonSerializer.Serialize(stream, records, s_jsonOptions);
+                stream.Flush(flushToDisk: true);
+            }
+
             File.Move(tempPath, _filePath, overwrite: true);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
