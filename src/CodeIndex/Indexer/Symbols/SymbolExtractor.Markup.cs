@@ -9,6 +9,8 @@ public static partial class SymbolExtractor
 {
     private static List<SymbolRecord> ExtractHtmlSymbols(long fileId, string[] lines)
     {
+        const string defaultSlotSymbolName = "(default)";
+
         // HTML needs proper tag-structure awareness so attribute lookalikes inside
         // other attributes' quoted values (e.g. `<link title="href=evil.css" href="/real.css">`)
         // don't leak phantom imports AND real attributes on the same tag aren't
@@ -73,6 +75,7 @@ public static partial class SymbolExtractor
 
             var tagName = maskedText[tagNameStart..tagNameEnd];
             var tagNameLower = tagName.ToLowerInvariant();
+            var sawNamedSlotDeclaration = false;
 
             // Emit custom Web Components (hyphenated opening tag) at the `<` position,
             // but skip the standard HTML/SVG/MathML tags that happen to contain a hyphen
@@ -221,6 +224,25 @@ public static partial class SymbolExtractor
                     emitKind = "property";
                     emittedNames = [attrValue.Trim()];
                 }
+                else if (attrNameLower == "name" && tagNameLower == "slot")
+                {
+                    var slotName = attrValue.Trim();
+                    if (slotName.Length > 0)
+                    {
+                        emitKind = "property";
+                        emittedNames = [slotName];
+                        sawNamedSlotDeclaration = true;
+                    }
+                }
+                else if (attrNameLower == "slot")
+                {
+                    var slotName = attrValue.Trim();
+                    if (slotName.Length > 0)
+                    {
+                        emitKind = "reference";
+                        emittedNames = [slotName];
+                    }
+                }
 
                 if (emitKind == null || emittedNames == null || emittedNames.Count == 0)
                     continue;
@@ -246,6 +268,22 @@ public static partial class SymbolExtractor
                         Signature = lines[signatureIndex].Trim(),
                     });
                 }
+            }
+
+            if (tagNameLower == "slot" && !sawNamedSlotDeclaration)
+            {
+                var startLine = FindHtmlLineNumber(lineStarts, pos);
+                var signatureIndex = Math.Clamp(startLine - 1, 0, lines.Length - 1);
+                symbols.Add(new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "property",
+                    Name = defaultSlotSymbolName,
+                    Line = startLine,
+                    StartLine = startLine,
+                    EndLine = startLine,
+                    Signature = lines[signatureIndex].Trim(),
+                });
             }
 
             pos = cursor < maskedText.Length ? cursor + 1 : cursor;

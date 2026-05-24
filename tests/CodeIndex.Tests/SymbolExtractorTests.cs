@@ -22297,6 +22297,35 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Html_CapturesSlotDeclarationsAndProjectionReferences()
+    {
+        var content = """
+            <template id="card-template">
+              <slot name="header">Untitled</slot>
+              <slot></slot>
+              <slot name='footer'><slot name="nested"></slot></slot>
+            </template>
+            <article>
+              <h2 slot="header">Title</h2>
+              <p>Default content</p>
+              <span slot='footer'>Actions</span>
+              <slot slot="footer" name="forwarded"></slot>
+            </article>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "header");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "(default)");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "footer");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "nested");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "forwarded");
+        Assert.Equal(2, symbols.Count(s => s.Kind == "reference" && s.Name == "footer"));
+        Assert.Contains(symbols, s => s.Kind == "reference" && s.Name == "header");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "slot");
+    }
+
+    [Fact]
     public void Extract_Html_CapturesAllSymbolsOnSameLine()
     {
         // Minified HTML or a single line with multiple landmark-bearing tags must
