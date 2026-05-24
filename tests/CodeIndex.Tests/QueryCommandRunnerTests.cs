@@ -29513,34 +29513,65 @@ jobs:
     [InlineData("${HOME}/cdidx-logs", "cdidx-logs")]
     public void RunStatus_LogPath_ExpandsUserHomeOverrides(string overrideValue, string childDirectory)
     {
-        var originalLogDir = Environment.GetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR");
-        try
-        {
-            Environment.SetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR", overrideValue);
-            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        using var env = EnvironmentVariableScope.Capture(
+            "CDIDX_GLOBAL_TOOL_LOG_DIR",
+            "XDG_STATE_HOME",
+            "XDG_CACHE_HOME",
+            "XDG_RUNTIME_DIR");
+        env.Set("CDIDX_GLOBAL_TOOL_LOG_DIR", overrideValue);
+        env.Set("XDG_STATE_HOME", null);
+        env.Set("XDG_CACHE_HOME", null);
+        env.Set("XDG_RUNTIME_DIR", null);
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
-                ["--log-path"],
-                _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--log-path"],
+            _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(Path.GetFullPath(Path.Combine(home, childDirectory)), stdout.Trim());
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR", originalLogDir);
-        }
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Equal(Path.GetFullPath(Path.Combine(home, childDirectory)), stdout.Trim());
     }
 
     [Fact]
     public void RunStatus_LogPath_JsonPrintsResolvedDirectoryWithoutDatabase()
     {
         var logDir = Path.Combine(Path.GetTempPath(), $"cdidx_status_log_path_{Guid.NewGuid():N}");
-        var originalLogDir = Environment.GetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR");
+        using var env = EnvironmentVariableScope.Capture(
+            "CDIDX_GLOBAL_TOOL_LOG_DIR",
+            "XDG_STATE_HOME",
+            "XDG_CACHE_HOME",
+            "XDG_RUNTIME_DIR");
+        env.Set("CDIDX_GLOBAL_TOOL_LOG_DIR", logDir);
+        env.Set("XDG_STATE_HOME", null);
+        env.Set("XDG_CACHE_HOME", null);
+        env.Set("XDG_RUNTIME_DIR", null);
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--log-path", "--json"],
+            _jsonOptions));
+
+        using var document = ParseJsonOutput(stdout);
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Equal(Path.GetFullPath(logDir), document.RootElement.GetProperty("log_path").GetString());
+    }
+
+    [Fact]
+    public void RunStatus_LogPath_JsonHonorsXdgCacheHome()
+    {
+        using var env = EnvironmentVariableScope.Capture(
+            "CDIDX_GLOBAL_TOOL_LOG_DIR",
+            "XDG_STATE_HOME",
+            "XDG_CACHE_HOME",
+            "XDG_RUNTIME_DIR");
+        var cacheHome = Path.Combine(Path.GetTempPath(), $"cdidx_status_log_path_xdg_cache_{Guid.NewGuid():N}");
         try
         {
-            Environment.SetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR", logDir);
+            env.Set("CDIDX_GLOBAL_TOOL_LOG_DIR", null);
+            env.Set("XDG_STATE_HOME", null);
+            env.Set("XDG_CACHE_HOME", cacheHome);
+            env.Set("XDG_RUNTIME_DIR", Path.Combine(Path.GetTempPath(), "ignored-runtime"));
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
                 ["--log-path", "--json"],
@@ -29549,11 +29580,11 @@ jobs:
             using var document = ParseJsonOutput(stdout);
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal(Path.GetFullPath(logDir), document.RootElement.GetProperty("log_path").GetString());
+            Assert.Equal(Path.Combine(cacheHome, "cdidx", "logs"), document.RootElement.GetProperty("log_path").GetString());
         }
         finally
         {
-            Environment.SetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR", originalLogDir);
+            TestProjectHelper.DeleteDirectory(cacheHome);
         }
     }
 

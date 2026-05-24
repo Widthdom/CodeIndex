@@ -168,6 +168,18 @@ internal static class GlobalToolLog
         if (!string.IsNullOrWhiteSpace(overrideDirectory))
             return Path.GetFullPath(ExpandUserLogDirectory(overrideDirectory));
 
+        var xdgStateHome = Environment.GetEnvironmentVariable("XDG_STATE_HOME");
+        if (!string.IsNullOrWhiteSpace(xdgStateHome))
+            return Path.Combine(xdgStateHome, "cdidx", "logs");
+
+        var xdgCacheHome = Environment.GetEnvironmentVariable("XDG_CACHE_HOME");
+        if (!string.IsNullOrWhiteSpace(xdgCacheHome))
+            return Path.Combine(xdgCacheHome, "cdidx", "logs");
+
+        var xdgRuntimeDir = Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR");
+        if (!string.IsNullOrWhiteSpace(xdgRuntimeDir))
+            return Path.Combine(xdgRuntimeDir, "cdidx", "logs");
+
         if (OperatingSystem.IsWindows())
         {
             var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
@@ -178,10 +190,6 @@ internal static class GlobalToolLog
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         if (OperatingSystem.IsMacOS() && !string.IsNullOrWhiteSpace(home))
             return Path.Combine(home, "Library", "Logs", "cdidx");
-
-        var xdgStateHome = Environment.GetEnvironmentVariable("XDG_STATE_HOME");
-        if (!string.IsNullOrWhiteSpace(xdgStateHome))
-            return Path.Combine(xdgStateHome, "cdidx", "logs");
 
         if (!string.IsNullOrWhiteSpace(home))
             return Path.Combine(home, ".local", "state", "cdidx", "logs");

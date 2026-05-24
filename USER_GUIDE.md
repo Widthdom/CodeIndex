@@ -1130,11 +1130,13 @@ Inside `batch_query`, each inner slot is also checked against the inner tool's b
 Persistent lifecycle logs are written to the first available directory in this order:
 
 1. `CDIDX_GLOBAL_TOOL_LOG_DIR` (`~`, `~/...`, `$HOME/...`, and `${HOME}/...` are expanded)
-2. Windows: `%LOCALAPPDATA%\cdidx\logs`
-3. macOS: `~/Library/Logs/cdidx`
-4. Linux and other Unix-like systems: `$XDG_STATE_HOME/cdidx/logs`
-5. Linux and other Unix-like systems without `XDG_STATE_HOME`: `~/.local/state/cdidx/logs`
-6. fallback: the OS local-app-data directory, then the temp directory under `cdidx/logs`
+2. `XDG_STATE_HOME/cdidx/logs`
+3. `XDG_CACHE_HOME/cdidx/logs`
+4. `XDG_RUNTIME_DIR/cdidx/logs`
+5. Windows: `%LOCALAPPDATA%\cdidx\logs`
+6. macOS: `~/Library/Logs/cdidx`
+7. Linux and other Unix-like systems without an XDG log directory: `~/.local/state/cdidx/logs`
+8. fallback: the OS local-app-data directory, then the temp directory under `cdidx/logs`
 
 Run `cdidx status --log-path` to print the active log directory without opening the index database. Add `--json` to receive `{"log_path":"..."}`. Set `CDIDX_DISABLE_PERSISTENT_LOG=1` to disable persistent lifecycle logs.
 
@@ -2924,11 +2926,13 @@ MCP ツールで catch-all まで突き抜けた例外（想定外の SQLite 例
 永続 lifecycle log は、利用可能な最初のディレクトリに書き込まれます。解決順は次のとおりです。
 
 1. `CDIDX_GLOBAL_TOOL_LOG_DIR`（`~`、`~/...`、`$HOME/...`、`${HOME}/...` は展開されます）
-2. Windows: `%LOCALAPPDATA%\cdidx\logs`
-3. macOS: `~/Library/Logs/cdidx`
-4. Linux などの Unix 系: `$XDG_STATE_HOME/cdidx/logs`
-5. `XDG_STATE_HOME` がない Linux などの Unix 系: `~/.local/state/cdidx/logs`
-6. fallback: OS の local-app-data ディレクトリ、それも無い場合は temp 配下の `cdidx/logs`
+2. `XDG_STATE_HOME/cdidx/logs`
+3. `XDG_CACHE_HOME/cdidx/logs`
+4. `XDG_RUNTIME_DIR/cdidx/logs`
+5. Windows: `%LOCALAPPDATA%\cdidx\logs`
+6. macOS: `~/Library/Logs/cdidx`
+7. XDG のログディレクトリがない Linux などの Unix 系: `~/.local/state/cdidx/logs`
+8. fallback: OS の local-app-data ディレクトリ、それも無い場合は temp 配下の `cdidx/logs`
 
 有効なログディレクトリだけを確認したい場合は `cdidx status --log-path` を実行してください。このコマンドは index database を開きません。`--json` を付けると `{"log_path":"..."}` を返します。永続 lifecycle log を無効化するには `CDIDX_DISABLE_PERSISTENT_LOG=1` を設定します。
 

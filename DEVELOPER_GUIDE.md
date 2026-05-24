@@ -984,9 +984,11 @@ returns 2xx/3xx.
 
 For post-install troubleshooting on "silent" hosts that swallow terminal
 stderr, distributed/non-development executions also mirror stderr plus minimal
-lifecycle breadcrumbs to a per-user daily log. The log path is
-`%LOCALAPPDATA%\cdidx\logs\` on Windows, `~/Library/Logs/cdidx/` on macOS,
-and `$XDG_STATE_HOME/cdidx/logs/` (or `~/.local/state/cdidx/logs/`) on Linux.
+lifecycle breadcrumbs to a per-user daily log. The log path follows
+`CDIDX_GLOBAL_TOOL_LOG_DIR`, then `XDG_STATE_HOME/cdidx/logs/`,
+`XDG_CACHE_HOME/cdidx/logs/`, `XDG_RUNTIME_DIR/cdidx/logs/`, then the
+platform default: `%LOCALAPPDATA%\cdidx\logs\` on Windows,
+`~/Library/Logs/cdidx/` on macOS, or `~/.local/state/cdidx/logs/` on Linux.
 The file name is `stderr-YYYYMMDD.log`, and the logger keeps only the newest
 30 daily files. Repository-local development runs from `src/CodeIndex/bin/...`
 and `tests/.../bin/...` are excluded by default so ordinary build/test cycles
@@ -2434,9 +2436,11 @@ mock に頼らないリリース前検証として、`install.sh --reinstall-rea
 "silent host" で端末 stderr が握りつぶされるケースに備えて、配布済み/
 常用実行では stderr と最小限のライフサイクル情報をユーザー単位の日次
 ログにも複写するようになっている。保存先は Windows では
+`CDIDX_GLOBAL_TOOL_LOG_DIR`、`XDG_STATE_HOME/cdidx/logs/`、
+`XDG_CACHE_HOME/cdidx/logs/`、`XDG_RUNTIME_DIR/cdidx/logs/` の順に
+見つかった場所を使い、その後に platform default として Windows では
 `%LOCALAPPDATA%\cdidx\logs\`、macOS では `~/Library/Logs/cdidx/`、
-Linux では `$XDG_STATE_HOME/cdidx/logs/`（未設定時は
-`~/.local/state/cdidx/logs/`）で、ファイル名は `stderr-YYYYMMDD.log`。
+Linux では `~/.local/state/cdidx/logs/` を使う。ファイル名は `stderr-YYYYMMDD.log`。
 保持世代は新しい 30 ファイルまで。通常の開発/テストサイクルで
 ワークツリー直下に永続ログが増えないよう、`src/CodeIndex/bin/...`
 と `tests/.../bin/...` からのリポジトリ内開発実行は既定で対象外として
