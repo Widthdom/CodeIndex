@@ -64,6 +64,8 @@ public class ConsoleUiTests
         Assert.Contains("cdidx backfill-fold [--db <path>] [--json]", output);
         Assert.Contains("cdidx optimize [--db <path>] [--json]", output);
         Assert.Contains("cdidx license", output);
+        Assert.Contains("cdidx completions <shell>", output);
+        Assert.Contains("cdidx --completions <shell>", output);
         Assert.Contains("cdidx references <query>|--query <query>|-- <query>", output);
         Assert.Contains("cdidx callers <query>|--query <query>|-- <query>", output);
         Assert.Contains("cdidx callees <query>|--query <query>|-- <query>", output);
@@ -117,6 +119,9 @@ public class ConsoleUiTests
         Assert.Contains("cdidx impact FolderDiffService --json           Type query may return heuristic file-level dependency hints", output);
         Assert.Contains("license                    Show licensing, trademark, and commercial-use summary", output);
         Assert.Contains("--license                  Show licensing, trademark, and commercial-use summary", output);
+        Assert.Contains("completions <shell>        Generate shell completions for bash, zsh, fish, or PowerShell", output);
+        Assert.Contains("--completions <shell>      Generate shell completions (bash, zsh, fish, powershell)", output);
+        Assert.Contains("cdidx --completions zsh > ~/.zfunc/_cdidx      Generate a zsh completion script", output);
         Assert.Contains("cdidx license                                  Show licensing and commercial-use terms", output);
         Assert.DoesNotContain("Easter eggs", output);
         Assert.DoesNotContain("--sushi", output);
@@ -147,6 +152,8 @@ public class ConsoleUiTests
         Assert.Contains("cdidx hotspots [--db <path>] [--json] [--verbose] [--limit <n>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count]", output);
         Assert.Contains("cdidx unused [--db <path>] [--json] [--verbose] [--limit <n>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count]", output);
         Assert.Contains("cdidx license", output);
+        Assert.Contains("cdidx completions <shell>", output);
+        Assert.Contains("cdidx --completions <shell>", output);
     }
 
     [Theory]

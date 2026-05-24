@@ -94,6 +94,7 @@ public static class ConsoleUi
         ("batch", "cdidx batch [--db <path>]  # reads JSON string arrays from stdin, one query command per line"),
         ("mcp", "cdidx mcp [--db <path>]"),
         ("completions", "cdidx completions <shell>"),
+        ("--completions", "cdidx --completions <shell>"),
         ("license", "cdidx license"),
     ];
 
@@ -647,6 +648,7 @@ public static class ConsoleUi
         Console.WriteLine("  languages                  List supported languages and their capabilities");
         Console.WriteLine("  batch                      Run newline-delimited JSON query commands with one DB connection");
         Console.WriteLine("  mcp                        Start MCP server (for AI tools: Claude, Cursor, etc.)");
+        Console.WriteLine("  completions <shell>        Generate shell completions for bash, zsh, fish, or PowerShell");
         Console.WriteLine("  license                    Show licensing, trademark, and commercial-use summary");
         Console.WriteLine();
         Console.WriteLine("Index and update options:");
@@ -676,7 +678,7 @@ public static class ConsoleUi
         Console.WriteLine("  --help, -h                 Show this help message");
         Console.WriteLine("  --version, -V              Show version information");
         Console.WriteLine("  --license                  Show licensing, trademark, and commercial-use summary");
-        Console.WriteLine("  --completions <shell>      Generate shell completions (bash, zsh, fish)");
+        Console.WriteLine("  --completions <shell>      Generate shell completions (bash, zsh, fish, powershell)");
         Console.WriteLine();
         Console.WriteLine("Update workflows:");
         Console.WriteLine("  Use --commits with a project path after normal commits; git diff sees rename/delete paths too.");
@@ -770,6 +772,7 @@ public static class ConsoleUi
         Console.WriteLine("  cdidx files --since 2024-01-01                 Files modified since a date");
         Console.WriteLine("  cdidx status --json                            DB stats as JSON");
         Console.WriteLine("  cdidx languages                                Show supported languages");
+        Console.WriteLine("  cdidx --completions zsh > ~/.zfunc/_cdidx      Generate a zsh completion script");
         Console.WriteLine("  cdidx license                                  Show licensing and commercial-use terms");
     }
 

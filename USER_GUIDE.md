@@ -144,15 +144,34 @@ file statuses. Use incremental refreshes after the first run; see
 ## Shell completion
 
 Generate completion scripts with `cdidx --completions <bash|zsh|fish|powershell>`.
+The same generator is also available as `cdidx completions <shell>`.
+Supported shells are Bash, Zsh, Fish, and PowerShell.
 The generated scripts complete subcommands, flags, and common flag values.
 `--lang` suggests supported languages, `--kind` suggests symbol/reference kinds,
 and path-like options such as `--db`, `--path`, and `--output` use shell file
 completion.
 
+Install the script in the startup file or completion directory for your shell:
+
+```bash
+# Bash: append to your interactive shell startup file
+cdidx --completions bash >> ~/.bashrc
+
+# Zsh: write an fpath entry, then enable compinit from your ~/.zshrc
+mkdir -p ~/.zfunc
+cdidx --completions zsh > ~/.zfunc/_cdidx
+printf '%s\n' 'fpath=(~/.zfunc $fpath)' 'autoload -Uz compinit && compinit' >> ~/.zshrc
+
+# Fish: write to the standard per-user completions directory
+mkdir -p ~/.config/fish/completions
+cdidx --completions fish > ~/.config/fish/completions/cdidx.fish
+```
+
 For PowerShell, add the generated `Register-ArgumentCompleter` script to your
 profile after installing `cdidx`:
 
 ```powershell
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent $PROFILE)
 cdidx --completions powershell >> $PROFILE
 . $PROFILE
 ```
@@ -2373,6 +2392,40 @@ PATH追加後はターミナルを再起動してください。
 
 ```bash
 cdidx --version
+```
+
+## シェル補完
+
+`cdidx --completions <bash|zsh|fish|powershell>` で補完スクリプトを生成できます。
+同じ generator は `cdidx completions <shell>` でも利用できます。対応シェルは
+Bash、Zsh、Fish、PowerShell です。生成されたスクリプトは subcommand、flag、
+よく使う flag value を補完し、`--lang` は対応言語、`--kind` は symbol/reference
+kind、`--db` / `--path` / `--output` のような path 系 option は shell の file
+completion を使います。
+
+使っている shell の startup file または completion directory に保存してください:
+
+```bash
+# Bash: interactive shell startup file に追記
+cdidx --completions bash >> ~/.bashrc
+
+# Zsh: fpath 用の directory に書き出し、~/.zshrc で compinit を有効化
+mkdir -p ~/.zfunc
+cdidx --completions zsh > ~/.zfunc/_cdidx
+printf '%s\n' 'fpath=(~/.zfunc $fpath)' 'autoload -Uz compinit && compinit' >> ~/.zshrc
+
+# Fish: ユーザー別 completion directory に書き出し
+mkdir -p ~/.config/fish/completions
+cdidx --completions fish > ~/.config/fish/completions/cdidx.fish
+```
+
+PowerShell では、`cdidx` のインストール後に生成された
+`Register-ArgumentCompleter` script を profile に追加します:
+
+```powershell
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent $PROFILE)
+cdidx --completions powershell >> $PROFILE
+. $PROFILE
 ```
 
 ## クイックスタート
