@@ -1294,7 +1294,7 @@ public class DbContext : IDisposable
                 file_id     INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
                 line        INTEGER NOT NULL,
                 context     TEXT NOT NULL,
-                UNIQUE(file_id, line)
+                UNIQUE(file_id, line, context)
             )");
 
         // Symbols table / シンボルテーブル
@@ -1391,6 +1391,7 @@ public class DbContext : IDisposable
         EnsureColumn("symbol_references", "is_self_reference", "INTEGER NOT NULL DEFAULT 0");
         EnsureColumn("symbol_references", "is_mutual_recursion", "INTEGER NOT NULL DEFAULT 0");
         EnforceRequiredFileIdConstraints();
+        EnsureReferenceLinesContextKey();
 
         // Indexes / インデックス
         Execute("CREATE INDEX IF NOT EXISTS idx_files_lang     ON files(lang)");
@@ -1570,7 +1571,7 @@ public class DbContext : IDisposable
                 file_id     INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
                 line        INTEGER NOT NULL,
                 context     TEXT NOT NULL,
-                UNIQUE(file_id, line)
+                UNIQUE(file_id, line, context)
             )
             """;
         const string referenceLinesColumns = "id, file_id, line, context";
@@ -1609,6 +1610,97 @@ public class DbContext : IDisposable
         Execute($"INSERT INTO symbol_references ({symbolReferencesColumns}) SELECT {symbolReferencesColumns} FROM {oldSymbolReferences}");
         Execute($"DROP TABLE {oldSymbolReferences}");
         Execute($"DROP TABLE {oldReferenceLines}");
+    }
+
+    private void EnsureReferenceLinesContextKey()
+    {
+        if (ReferenceLinesHasContextUniqueKey())
+            return;
+
+        const string referenceLinesCreateSql =
+            """
+            CREATE TABLE reference_lines (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_id     INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                line        INTEGER NOT NULL,
+                context     TEXT NOT NULL,
+                UNIQUE(file_id, line, context)
+            )
+            """;
+        const string referenceLinesColumns = "id, file_id, line, context";
+        const string symbolReferencesCreateSql =
+            """
+            CREATE TABLE symbol_references (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                symbol_name     TEXT,
+                reference_kind  TEXT,
+                line            INTEGER,
+                column_number   INTEGER,
+                context         TEXT,
+                reference_line_id INTEGER REFERENCES reference_lines(id),
+                container_kind  TEXT,
+                container_name  TEXT,
+                symbol_name_folded TEXT,
+                container_name_folded TEXT,
+                is_self_reference INTEGER NOT NULL DEFAULT 0,
+                is_mutual_recursion INTEGER NOT NULL DEFAULT 0
+            )
+            """;
+        const string symbolReferencesColumns = "id, file_id, symbol_name, reference_kind, line, column_number, context, reference_line_id, container_kind, container_name, symbol_name_folded, container_name_folded, is_self_reference, is_mutual_recursion";
+
+        const string oldReferenceLines = "_reference_lines_file_line_key";
+        const string oldSymbolReferences = "_symbol_references_file_line_key";
+        var foreignKeys = ReadPragmaLong("foreign_keys");
+        Execute("PRAGMA foreign_keys=OFF");
+        try
+        {
+            Execute($"DROP TABLE IF EXISTS {oldSymbolReferences}");
+            Execute($"DROP TABLE IF EXISTS {oldReferenceLines}");
+            Execute($"ALTER TABLE symbol_references RENAME TO {oldSymbolReferences}");
+            Execute($"ALTER TABLE reference_lines RENAME TO {oldReferenceLines}");
+            Execute(referenceLinesCreateSql);
+            Execute($"INSERT INTO reference_lines ({referenceLinesColumns}) SELECT {referenceLinesColumns} FROM {oldReferenceLines}");
+            Execute(symbolReferencesCreateSql);
+            Execute($"INSERT INTO symbol_references ({symbolReferencesColumns}) SELECT {symbolReferencesColumns} FROM {oldSymbolReferences}");
+            Execute($"DROP TABLE {oldSymbolReferences}");
+            Execute($"DROP TABLE {oldReferenceLines}");
+        }
+        finally
+        {
+            Execute($"PRAGMA foreign_keys={foreignKeys}");
+        }
+
+        _schemaCache?.Refresh();
+    }
+
+    private bool ReferenceLinesHasContextUniqueKey()
+    {
+        using var listCmd = _connection.CreateCommand();
+        listCmd.CommandText = "PRAGMA index_list('reference_lines')";
+        using var indexReader = listCmd.ExecuteReader();
+        var indexNames = new List<string>();
+        while (indexReader.Read())
+        {
+            var isUnique = indexReader.GetInt32(2) == 1;
+            if (isUnique)
+                indexNames.Add(indexReader.GetString(1));
+        }
+
+        foreach (var indexName in indexNames)
+        {
+            using var infoCmd = _connection.CreateCommand();
+            infoCmd.CommandText = $"PRAGMA index_info('{indexName.Replace("'", "''")}')";
+            using var infoReader = infoCmd.ExecuteReader();
+            var columns = new List<string>();
+            while (infoReader.Read())
+                columns.Add(infoReader.GetString(2));
+
+            if (columns.SequenceEqual(["file_id", "line", "context"], StringComparer.Ordinal))
+                return true;
+        }
+
+        return false;
     }
 
     private void RebuildTableWithRequiredFileId(string tableName, string createSql, string columns)
@@ -1830,7 +1922,7 @@ public class DbContext : IDisposable
                 file_id     INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
                 line        INTEGER NOT NULL,
                 context     TEXT NOT NULL,
-                UNIQUE(file_id, line)
+                UNIQUE(file_id, line, context)
             )"));
         yield return ("CREATE TABLE symbol_references", () => Execute(@"
             CREATE TABLE IF NOT EXISTS symbol_references (

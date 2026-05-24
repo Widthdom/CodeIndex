@@ -1090,7 +1090,7 @@ public class DatabaseTests : IDisposable
                 ReferenceKind = "call",
                 Line = i % 10 + 1,
                 Column = 4,
-                Context = $"callee_{i}()",
+                Context = $"line_{i % 10}()",
                 ContainerKind = "function",
                 ContainerName = "caller",
             })
@@ -1267,6 +1267,115 @@ public class DatabaseTests : IDisposable
 
         cmd.CommandText = "SELECT context FROM reference_lines WHERE file_id = @fileId AND line = 2";
         Assert.Equal("return authenticate(user, password)", (string)cmd.ExecuteScalar()!);
+    }
+
+    [Fact]
+    public void InsertReferences_PreservesDistinctReferenceLineContextsForSameFileAndLine()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/concurrent_ref_lines.py", Lang = "python", Size = 80, Lines = 5,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+
+        _writer.InsertReferences([
+            new ReferenceRecord { FileId = fileId, SymbolName = "authenticate", ReferenceKind = "call", Line = 2, Column = 4, Context = "return authenticate(user, password)", ContainerKind = "function", ContainerName = "login" },
+        ]);
+        _writer.InsertReferences([
+            new ReferenceRecord { FileId = fileId, SymbolName = "authorize", ReferenceKind = "call", Line = 2, Column = 11, Context = "return authorize(user)", ContainerKind = "function", ContainerName = "login" },
+        ]);
+
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.Parameters.AddWithValue("@fileId", fileId);
+
+        cmd.CommandText = "SELECT COUNT(*) FROM reference_lines WHERE file_id = @fileId AND line = 2";
+        Assert.Equal(2L, (long)cmd.ExecuteScalar()!);
+
+        cmd.CommandText = """
+            SELECT r.symbol_name, rl.context
+            FROM symbol_references r
+            JOIN reference_lines rl ON rl.id = r.reference_line_id
+            WHERE r.file_id = @fileId
+            ORDER BY r.symbol_name
+            """;
+        var rows = new List<(string SymbolName, string Context)>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+            rows.Add((reader.GetString(0), reader.GetString(1)));
+
+        Assert.Equal([
+            ("authenticate", "return authenticate(user, password)"),
+            ("authorize", "return authorize(user)"),
+        ], rows);
+    }
+
+    [Fact]
+    public void InitializeSchema_MigratesReferenceLinesToContextKey()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_ref_line_context_key_{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
+            {
+                connection.Open();
+                using var seed = connection.CreateCommand();
+                seed.CommandText = """
+                    CREATE TABLE files (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        path TEXT NOT NULL UNIQUE,
+                        lang TEXT,
+                        size INTEGER,
+                        lines INTEGER,
+                        checksum TEXT,
+                        modified DATETIME,
+                        generated INTEGER NOT NULL DEFAULT 0,
+                        indexed_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    );
+                    CREATE TABLE reference_lines (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                        line INTEGER NOT NULL,
+                        context TEXT NOT NULL,
+                        UNIQUE(file_id, line)
+                    );
+                    CREATE TABLE symbol_references (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                        symbol_name TEXT,
+                        reference_kind TEXT,
+                        line INTEGER,
+                        column_number INTEGER,
+                        context TEXT,
+                        reference_line_id INTEGER REFERENCES reference_lines(id),
+                        container_kind TEXT,
+                        container_name TEXT
+                    );
+                    INSERT INTO files (id, path) VALUES (1, 'src/legacy.py');
+                    INSERT INTO reference_lines (id, file_id, line, context) VALUES (1, 1, 2, 'return authenticate(user, password)');
+                    INSERT INTO symbol_references (file_id, symbol_name, reference_kind, line, column_number, reference_line_id)
+                    VALUES (1, 'authenticate', 'call', 2, 4, 1);
+                    """;
+                seed.ExecuteNonQuery();
+            }
+
+            using var migrated = new DbContext(dbPath);
+            migrated.InitializeSchema();
+            var writer = new DbWriter(migrated.Connection);
+            writer.InsertReferences([
+                new ReferenceRecord { FileId = 1, SymbolName = "authorize", ReferenceKind = "call", Line = 2, Column = 11, Context = "return authorize(user)", ContainerKind = "function", ContainerName = "login" },
+            ]);
+
+            using var cmd = migrated.Connection.CreateCommand();
+            cmd.CommandText = "SELECT COUNT(*) FROM reference_lines WHERE file_id = 1 AND line = 2";
+            Assert.Equal(2L, (long)cmd.ExecuteScalar()!);
+
+            cmd.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE reference_line_id IS NOT NULL";
+            Assert.Equal(2L, (long)cmd.ExecuteScalar()!);
+        }
+        finally
+        {
+            DeleteDbFiles(dbPath);
+        }
     }
 
     [Fact]

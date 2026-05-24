@@ -1018,7 +1018,7 @@ public class DbWriter
             for (int j = i; j < end; j++)
             {
                 var reference = references[j];
-                var referenceLineId = referenceLineIds[(reference.FileId, reference.Line)];
+                var referenceLineId = referenceLineIds[(reference.FileId, reference.Line, reference.Context)];
 
                 if (j > i)
                     sql.Append(", ");
@@ -1052,13 +1052,13 @@ public class DbWriter
         RefreshMutualRecursionFlags();
     }
 
-    private Dictionary<(long FileId, int Line), long> UpsertReferenceLines(IReadOnlyList<ReferenceRecord> references, int start, int end)
+    private Dictionary<(long FileId, int Line, string Context), long> UpsertReferenceLines(IReadOnlyList<ReferenceRecord> references, int start, int end)
     {
-        var contextsByLine = new Dictionary<(long FileId, int Line), string>();
+        var contextsByLine = new Dictionary<(long FileId, int Line, string Context), string>();
         for (int i = start; i < end; i++)
         {
             var reference = references[i];
-            contextsByLine[(reference.FileId, reference.Line)] = reference.Context;
+            contextsByLine[(reference.FileId, reference.Line, reference.Context)] = reference.Context;
         }
 
         var rows = contextsByLine.ToArray();
@@ -1074,20 +1074,20 @@ public class DbWriter
                 if (j > i)
                     sql.Append(", ");
                 var suffix = j - i;
-                var ((fileId, line), context) = rows[j];
+                var ((fileId, line, _), context) = rows[j];
                 sql.Append($"(@fid{suffix}, @line{suffix}, @context{suffix})");
                 cmd.Parameters.Add($"@fid{suffix}", SqliteType.Integer).Value = fileId;
                 cmd.Parameters.Add($"@line{suffix}", SqliteType.Integer).Value = line;
                 cmd.Parameters.Add($"@context{suffix}", SqliteType.Text).Value = context;
             }
 
-            sql.Append(" ON CONFLICT(file_id, line) DO UPDATE SET context = excluded.context");
+            sql.Append(" ON CONFLICT(file_id, line, context) DO NOTHING");
             cmd.CommandText = sql.ToString();
             cmd.ExecuteNonQuery();
         }
 
         var fileIds = contextsByLine.Keys.Select(key => key.FileId).Distinct().ToArray();
-        var lineIds = new Dictionary<(long FileId, int Line), long>();
+        var lineIds = new Dictionary<(long FileId, int Line, string Context), long>();
         int fileIdsPerStatement = GetRowsPerInsertStatement(columnCount: 1);
         for (int i = 0; i < fileIds.Length; i += fileIdsPerStatement)
         {
@@ -1102,7 +1102,7 @@ public class DbWriter
             }
 
             cmd.CommandText = $@"
-                SELECT id, file_id, line
+                SELECT id, file_id, line, context
                 FROM reference_lines
                 WHERE file_id IN ({string.Join(", ", parameters)})";
             using var reader = cmd.ExecuteReader();
@@ -1111,7 +1111,8 @@ public class DbWriter
                 var id = reader.GetInt64(0);
                 var fileId = reader.GetInt64(1);
                 var line = reader.GetInt32(2);
-                var key = (fileId, line);
+                var context = reader.GetString(3);
+                var key = (fileId, line, context);
                 if (contextsByLine.ContainsKey(key))
                     lineIds[key] = id;
             }
