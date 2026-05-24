@@ -106,8 +106,9 @@ public class HttpMcpTransportTests : IDisposable
             Assert.Equal(HttpStatusCode.OK, okResponse.StatusCode);
         }
 
-        // Issue #2434: the successful POST response can reach the client before its
-        // best-effort request log callback runs, so assert after the async sink catches up.
+        // Issue #2419: full-suite runs can be slow enough that the successful POST response
+        // reaches the client noticeably before its best-effort request log callback runs, so
+        // assert after the async sink catches up.
         var snapshot = await WaitForRequestLogRecordsAsync(records, 3);
         Assert.Equal(3, snapshot.Length);
 
@@ -364,7 +365,8 @@ public class HttpMcpTransportTests : IDisposable
         ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord> records,
         int expectedCount)
     {
-        for (var attempt = 0; attempt < 100; attempt++)
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(5);
+        while (DateTimeOffset.UtcNow < deadline)
         {
             if (records.Count >= expectedCount)
                 return records.ToArray();
@@ -373,7 +375,10 @@ public class HttpMcpTransportTests : IDisposable
         }
 
         var snapshot = records.ToArray();
-        Assert.Equal(expectedCount, snapshot.Length);
+        var observed = string.Join(
+            ", ",
+            snapshot.Select(record => $"{record.Method} {record.Path} {record.StatusCode} auth={record.AuthOutcome} id={record.RequestId ?? "<none>"}"));
+        Assert.Fail($"Expected {expectedCount} request log records, but observed {snapshot.Length}: {observed}");
         return snapshot;
     }
 
