@@ -10,9 +10,10 @@ dotnet test
 dotnet run --project src/CodeIndex -- <command> [options]
 ```
 
-Development, CI, and NuGet tool packaging target `net8.0`. Use a .NET 8.x SDK
-for supported and tested builds; newer major .NET releases are outside the
-supported/tested matrix until CI covers them.
+The production CLI and NuGet tool packaging target `net8.0`. The test project
+multi-targets `net8.0;net9.0`, and CI runs the test suite on both frameworks
+across Linux, Windows, and macOS. Use a .NET SDK that can restore and run both
+target frameworks when validating the full CI-equivalent test matrix.
 
 For test suite structure, shared helpers, and test-writing conventions, see [TESTING_GUIDE.md](TESTING_GUIDE.md).
 
@@ -1661,9 +1662,11 @@ dotnet test
 dotnet run --project src/CodeIndex -- <command> [options]
 ```
 
-開発、CI、NuGet ツールのパッケージングは `net8.0` を対象にしています。
-サポート済みかつテスト済みのビルドには .NET 8.x SDK を使ってください。
-CI で対象になるまでは、より新しいメジャー .NET リリースはサポート・テスト対象外です。
+製品版 CLI と NuGet ツールのパッケージングは `net8.0` を対象にしています。
+テストプロジェクトは `net8.0;net9.0` の multi-target で、CI は Linux、
+Windows、macOS の各 lane で両方の framework に対してテストスイートを実行します。
+CI 相当のフル検証を行う場合は、両方の target framework を restore / 実行できる
+.NET SDK を使ってください。
 
 テストスイートの構成、共有ヘルパー、テスト作法については [TESTING_GUIDE.md#テストガイド](TESTING_GUIDE.md#テストガイド) を参照してください。
 

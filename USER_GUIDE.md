@@ -10,7 +10,7 @@ AI/MCP setup, language list, and troubleshooting details.
 [![CodeQL](https://github.com/Widthdom/CodeIndex/actions/workflows/codeql.yml/badge.svg)](https://github.com/Widthdom/CodeIndex/actions/workflows/codeql.yml)
 [![Release](https://github.com/Widthdom/CodeIndex/actions/workflows/release.yml/badge.svg)](https://github.com/Widthdom/CodeIndex/actions/workflows/release.yml)
 
-![.NET 8.x](https://img.shields.io/badge/.NET-8.x-512BD4?logo=dotnet&logoColor=white)
+![.NET 8.x / 9.x tests](https://img.shields.io/badge/.NET-8.x%20%2F%209.x%20tests-512BD4?logo=dotnet&logoColor=white)
 ![C#](https://img.shields.io/badge/C%23-12-239120?logo=csharp&logoColor=white)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 ![License](https://img.shields.io/badge/License-FSL--1.1--ALv2-orange)
@@ -451,9 +451,9 @@ RUN export CDIDX_INSTALL_DIR=/usr/local/bin \
 ### Option B: NuGet Global Tool
 
 Requires the [.NET 8.x SDK](https://dotnet.microsoft.com/download/dotnet/8.0).
-CodeIndex targets `net8.0`; .NET 8.x is the supported and tested SDK/runtime
-line. Newer major .NET releases are outside the supported/tested matrix until
-CI covers them.
+CodeIndex targets `net8.0`; .NET 8.x is the supported SDK/runtime line for the
+published tool, while the CI test suite also covers the test project on
+`net9.0`.
 
 ```bash
 dotnet tool install -g cdidx
@@ -1876,7 +1876,7 @@ The short version: `version.json` is the single source of truth, and the maintai
 <a id="cdidx日本語"></a>
 # cdidx（日本語）
 
-![.NET 8.x](https://img.shields.io/badge/.NET-8.x-512BD4?logo=dotnet&logoColor=white)
+![.NET 8.x / 9.x tests](https://img.shields.io/badge/.NET-8.x%20%2F%209.x%20tests-512BD4?logo=dotnet&logoColor=white)
 ![C#](https://img.shields.io/badge/C%23-12-239120?logo=csharp&logoColor=white)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 ![License](https://img.shields.io/badge/License-FSL--1.1--ALv2-orange)
@@ -2305,9 +2305,9 @@ RUN export CDIDX_INSTALL_DIR=/usr/local/bin \
 ### 方法B: NuGet グローバルツール
 
 [.NET 8.x SDK](https://dotnet.microsoft.com/download/dotnet/8.0) が必要です。
-CodeIndex は `net8.0` を対象にしており、.NET 8.x がサポート済みかつ
-テスト済みの SDK/runtime 系列です。CI で対象になるまでは、より新しい
-メジャー .NET リリースはサポート・テスト対象外です。
+CodeIndex は `net8.0` を対象にしており、公開ツールのサポート対象
+SDK/runtime 系列は .NET 8.x です。一方で、CI のテストスイートは
+テストプロジェクトを `net9.0` でも検証します。
 
 ```bash
 dotnet tool install -g cdidx

@@ -19,7 +19,7 @@ Use the full suite by default. Use targeted filters only while iterating locally
 ## Test Stack
 
 - Framework: xUnit
-- Target framework: `net8.0`
+- Target frameworks: `net8.0` and `net9.0`
 - Main test project: `tests/CodeIndex.Tests/CodeIndex.Tests.csproj`
 - Common direct test-only packages: `Microsoft.NET.Test.Sdk`, `xunit`, `xunit.runner.visualstudio`, `coverlet.collector`, `Microsoft.Data.Sqlite`, `FsCheck.Xunit`
 - These test-only packages are separate from the production dependency rule in `src/CodeIndex`, which still allows only `Microsoft.Data.Sqlite` at runtime.
@@ -204,8 +204,8 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 ## テストスタック
 
 - フレームワーク: xUnit
-- 対象フレームワーク: `net8.0`
 - メインのテストプロジェクト: `tests/CodeIndex.Tests/CodeIndex.Tests.csproj`
+- 対象フレームワーク: `net8.0` と `net9.0`
 - 主な直接参照の test-only package: `Microsoft.NET.Test.Sdk`、`xunit`、`xunit.runner.visualstudio`、`coverlet.collector`、`Microsoft.Data.Sqlite`、`FsCheck.Xunit`
 - これらの test-only package は `src/CodeIndex` の本番依存ルールとは別であり、runtime 側は引き続き `Microsoft.Data.Sqlite` のみを許容する。
 - `FsCheck.Xunit` はランダム生成入力に対する普遍的不変条件（never-throws、idempotence、"出力が downstream consumer で parse 可能" 等）を表明する property-based テスト専用です。例ベースの `[Fact]` / `[Theory]` を置き換えるのではなく補完するもので、普遍量化された主張なら FsCheck、特定の具体ケースが契約なら例ベースという形で使い分けてください。
