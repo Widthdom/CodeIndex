@@ -34,3 +34,8 @@ internal interface IMcpTransport : IAsyncDisposable
     /// </summary>
     Task WriteFrameAsync(string? frame, CancellationToken cancellationToken);
 }
+
+internal interface IOutOfBandMcpTransport
+{
+    Task WriteOutOfBandFrameAsync(string frame, CancellationToken cancellationToken);
+}

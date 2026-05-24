@@ -24,12 +24,13 @@ namespace CodeIndex.Mcp;
 /// SSE / マルチクライアント対応は将来作業として切り出す（現サーバーは自発的なサーバー→クライアント
 /// メッセージを発生させないため、最小単位として POST/response で十分）。
 /// </summary>
-internal sealed class HttpMcpTransport : IMcpTransport
+internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
 {
     private readonly HttpListener _listener;
     private readonly string _endpoint;
     private readonly Action<HttpRequestLogRecord>? _requestLogger;
     private readonly object _requestLoggerGate = new();
+    private readonly ConcurrentDictionary<Guid, EventStream> _eventStreams = new();
     private readonly ConcurrentBag<Task> _sseStreams = new();
     private readonly CancellationTokenSource _acceptCts = new();
     private readonly Channel<PendingRequest> _requestQueue = Channel.CreateUnbounded<PendingRequest>();
@@ -350,6 +351,25 @@ internal sealed class HttpMcpTransport : IMcpTransport
         }
     }
 
+    public async Task WriteOutOfBandFrameAsync(string frame, CancellationToken cancellationToken)
+    {
+        if (_eventStreams.IsEmpty)
+            return;
+
+        foreach (var (id, stream) in _eventStreams)
+        {
+            try
+            {
+                await stream.WriteJsonRpcEventAsync(frame, cancellationToken).ConfigureAwait(false);
+            }
+            catch
+            {
+                _eventStreams.TryRemove(id, out _);
+                try { stream.Response.Abort(); } catch { /* ignore */ }
+            }
+        }
+    }
+
     private async Task<bool> TryAuthorizeAsync(PendingRequest request)
     {
         var context = request.Context;
@@ -418,6 +438,8 @@ internal sealed class HttpMcpTransport : IMcpTransport
     private async Task RunEventStreamAsync(PendingRequest request, CancellationToken cancellationToken)
     {
         var context = request.Context;
+        var streamId = Guid.NewGuid();
+        var stream = new EventStream(context.Response);
         try
         {
             context.Response.StatusCode = (int)HttpStatusCode.OK;
@@ -425,6 +447,7 @@ internal sealed class HttpMcpTransport : IMcpTransport
             context.Response.SendChunked = true;
             context.Response.AddHeader("Cache-Control", "no-cache");
             context.Response.AddHeader("Connection", "keep-alive");
+            _eventStreams[streamId] = stream;
 
             var prelude = Encoding.UTF8.GetBytes(": cdidx mcp event stream ready\n\n");
             await context.Response.OutputStream.WriteAsync(prelude.AsMemory(), cancellationToken).ConfigureAwait(false);
@@ -445,8 +468,37 @@ internal sealed class HttpMcpTransport : IMcpTransport
         }
         finally
         {
+            _eventStreams.TryRemove(streamId, out _);
             LogRequest(request, (int)HttpStatusCode.OK);
             try { context.Response.Close(); } catch { /* ignore */ }
+        }
+    }
+
+    private sealed class EventStream(HttpListenerResponse response)
+    {
+        private readonly SemaphoreSlim _writeGate = new(1, 1);
+
+        public HttpListenerResponse Response { get; } = response;
+
+        public async Task WriteJsonRpcEventAsync(string frame, CancellationToken cancellationToken)
+        {
+            var builder = new StringBuilder();
+            builder.Append("event: message\n");
+            foreach (var line in frame.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n'))
+                builder.Append("data: ").Append(line).Append('\n');
+            builder.Append('\n');
+            var bytes = Encoding.UTF8.GetBytes(builder.ToString());
+
+            await _writeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await Response.OutputStream.WriteAsync(bytes.AsMemory(), cancellationToken).ConfigureAwait(false);
+                await Response.OutputStream.FlushAsync(cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                _writeGate.Release();
+            }
         }
     }
 

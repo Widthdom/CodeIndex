@@ -2284,7 +2284,7 @@ public partial class McpServer
         return CreateToolResult(id, summary, payload);
     }
 
-    private JsonNode ExecuteIndex(JsonNode? id, JsonNode? args)
+    private JsonNode ExecuteIndex(JsonNode? id, JsonNode? args, JsonNode? progressToken = null)
     {
         if (!TryReadRequiredStringParameter(args, "path", out var path, out var requiredError))
             return CreateToolErrorResponse(id, requiredError!);
@@ -2411,6 +2411,7 @@ public partial class McpServer
         // Scan and index / スキャン・インデックス
         var scanResult = indexer.ScanFilesDetailed();
         var files = scanResult.Files;
+        EmitProgressNotification(progressToken, 0, files.Count, "Index scan complete; indexing files.");
         var csharpWorkspace = BuildMcpCSharpStaticInterfaceWorkspaceSymbols(writer, indexer, projectPath, files);
         if (purged > 0 && hadCSharpStaticInterfaceContractsBeforePurge)
             csharpWorkspace = csharpWorkspace with { HasStaticInterfaceContracts = true };
@@ -2496,6 +2497,7 @@ public partial class McpServer
                 errors++;
             }
             processed++;
+            EmitProgressNotification(progressToken, processed, files.Count);
         }
 
         writer.OptimizeFts();
@@ -2512,6 +2514,7 @@ public partial class McpServer
         _ = priorMetadataTargetCsharp;
         if (errors == 0)
         {
+            EmitProgressNotification(progressToken, processed, files.Count, "Finalizing index metadata.");
             writer.MarkBatchInProgress();
             using var readinessTxn = writer.BeginTransaction();
             writer.MarkGraphReady();
@@ -2628,6 +2631,7 @@ public partial class McpServer
             readinessTxn.Commit();
         }
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
+        EmitProgressNotification(progressToken, files.Count, files.Count, errors == 0 ? "Indexing complete." : "Indexing completed with errors.");
 
         var structured = new JsonObject
         {
@@ -2673,7 +2677,7 @@ public partial class McpServer
             structured);
     }
 
-    private JsonNode ExecuteBackfillFold(JsonNode? id)
+    private JsonNode ExecuteBackfillFold(JsonNode? id, JsonNode? progressToken = null)
     {
         if (!DbContext.TryValidateExistingCodeIndexDb(_dbPath, out var validationMessage, out var isNotFound))
         {
@@ -2701,7 +2705,9 @@ public partial class McpServer
             var storedFoldFingerprint = db.GetMetaString("fold_key_fingerprint");
             var rewriteAll = storedFoldVersion != currentFoldVersion
                 || storedFoldFingerprint != currentFoldFingerprint;
+            EmitProgressNotification(progressToken, 0, null, "Backfilling folded-name keys.");
             var (symbols, symbolReferences) = writer.BackfillFoldedColumns(rewriteAll);
+            EmitProgressNotification(progressToken, symbols + symbolReferences, null, "Verifying folded-name keys.");
             // MarkFoldReady wraps its own re-verification in BEGIN IMMEDIATE, so a concurrent
             // writer cannot insert NULL-folded rows between the verify and the stamp. Issue #1535.
             // MarkFoldReady は BEGIN IMMEDIATE 内で再検証するため、concurrent writer による
@@ -2711,6 +2717,7 @@ public partial class McpServer
                 return CreateToolErrorResponse(id, "Folded-name backfill verification failed: some rows still have NULL folded values. Re-run backfill_fold.");
 
             var userVersionAfter = db.GetUserVersion();
+            EmitProgressNotification(progressToken, symbols + symbolReferences, symbols + symbolReferences, "Folded-name backfill complete.");
 
             var payload = new JsonObject
             {

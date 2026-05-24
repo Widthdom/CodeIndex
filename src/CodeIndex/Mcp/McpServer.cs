@@ -59,6 +59,7 @@ public partial class McpServer : IDisposable
     // 直後にリセットする。`WithDbReader` が `DbReader` にライブな cancellation token
     // を渡せるようにするため (#1567)。
     private readonly AsyncLocal<CancellationToken> _currentRequestToken = new();
+    private readonly AsyncLocal<Action<string>?> _currentOutOfBandFrameWriter = new();
     private bool _running = true;
     // Per-session DbContext reused across MCP tool calls. Holding the connection open
     // avoids reopening SQLite, reapplying pragmas, and re-registering every SQL function
@@ -433,11 +434,15 @@ public partial class McpServer : IDisposable
                         // ツールが起動する SQLite 作業が shutdown / 切断を観測できるよう per-request
                         // token を `WithDbReader` に渡す (#1567)。
                         _currentRequestToken.Value = loopToken;
+                        _currentOutOfBandFrameWriter.Value = transport is IOutOfBandMcpTransport outOfBandTransport
+                            ? frameToWrite => outOfBandTransport.WriteOutOfBandFrameAsync(frameToWrite, loopToken).GetAwaiter().GetResult()
+                            : null;
                         response = ProcessFrame(frame);
                     }
                     finally
                     {
                         _currentRequestToken.Value = CancellationToken.None;
+                        _currentOutOfBandFrameWriter.Value = null;
                         _concurrencyGate.Release();
                     }
 
@@ -529,11 +534,24 @@ public partial class McpServer : IDisposable
                     try
                     {
                         _currentRequestToken.Value = loopToken;
+                        _currentOutOfBandFrameWriter.Value = frameToWrite =>
+                        {
+                            writeGate.Wait(loopToken);
+                            try
+                            {
+                                transport.WriteFrameAsync(frameToWrite, loopToken).GetAwaiter().GetResult();
+                            }
+                            finally
+                            {
+                                writeGate.Release();
+                            }
+                        };
                         response = ProcessFrame(frame);
                     }
                     finally
                     {
                         _currentRequestToken.Value = CancellationToken.None;
+                        _currentOutOfBandFrameWriter.Value = null;
                         normalFrameGate.Release();
                     }
 
@@ -1458,6 +1476,7 @@ public partial class McpServer : IDisposable
     {
         var toolName = callParams?["name"]?.GetValue<string>();
         var args = callParams?["arguments"];
+        var progressToken = TryReadProgressToken(callParams);
 
         if (toolName == null)
         {
@@ -1548,8 +1567,8 @@ public partial class McpServer : IDisposable
                 "unused_symbols" => ExecuteUnusedSymbols(id, args),
                 "symbol_hotspots" => ExecuteSymbolHotspots(id, args),
                 "ping" => ExecutePing(id),
-                "index" => ExecuteIndex(id, args),
-                "backfill_fold" => ExecuteBackfillFold(id),
+                "index" => ExecuteIndex(id, args, progressToken),
+                "backfill_fold" => ExecuteBackfillFold(id, progressToken),
                 "suggest_improvement" => ExecuteSuggestImprovement(id, args),
                 _ => CreateErrorResponse(hasId: true, id: id, code: -32602, message: $"Unknown tool: {toolName}",
                     category: McpErrorEnvelope.CategoryToolUnknown,
@@ -1616,6 +1635,36 @@ public partial class McpServer : IDisposable
         metricsStopwatch.Stop();
         TryEmitAudit(toolName, id, args, response, metricsStartedAt, metricsStopwatch.Elapsed.TotalMilliseconds, errorType: metricsError);
         return response;
+    }
+
+    private static JsonNode? TryReadProgressToken(JsonNode? callParams)
+    {
+        var token = callParams?["_meta"]?["progressToken"];
+        return token is null ? null : JsonNode.Parse(token.ToJsonString());
+    }
+
+    private void EmitProgressNotification(JsonNode? progressToken, long progress, long? total, string? message = null)
+    {
+        if (progressToken is null || _currentOutOfBandFrameWriter.Value is not { } writer)
+            return;
+
+        var parameters = new JsonObject
+        {
+            ["progressToken"] = JsonNode.Parse(progressToken.ToJsonString()),
+            ["progress"] = progress,
+        };
+        if (total.HasValue)
+            parameters["total"] = total.Value;
+        if (!string.IsNullOrWhiteSpace(message))
+            parameters["message"] = message;
+
+        var notification = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["method"] = "notifications/progress",
+            ["params"] = parameters,
+        };
+        writer(notification.ToJsonString(_jsonOptions));
     }
 
     /// <summary>

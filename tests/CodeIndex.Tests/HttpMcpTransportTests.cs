@@ -211,6 +211,47 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
+    public async Task HttpTransport_IndexWithProgressToken_EmitsProgressOnEventsStreamAndReturnsResult()
+    {
+        var projectRoot = Path.Combine(Directory.GetCurrentDirectory(), $".tmp_mcp_http_progress_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(projectRoot);
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "one.cs"), "public class One { public void Run() { } }");
+            File.WriteAllText(Path.Combine(projectRoot, "two.cs"), "public class Two { public void Run() { } }");
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+            await using var harness = await McpHttpHarness.StartAsync(dbPath);
+
+            using var client = new HttpClient();
+            using var events = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "events"), HttpCompletionOption.ResponseHeadersRead);
+            Assert.Equal(HttpStatusCode.OK, events.StatusCode);
+
+            await using var eventStream = await events.Content.ReadAsStreamAsync();
+            using var reader = new StreamReader(eventStream, Encoding.UTF8, leaveOpen: true);
+            var progressTask = ReadUntilAsync(reader, "notifications/progress");
+
+            var body = "{\"jsonrpc\":\"2.0\",\"id\":1684,\"method\":\"tools/call\",\"params\":{\"name\":\"index\",\"arguments\":{\"path\":"
+                + JsonSerializer.Serialize(projectRoot)
+                + "},\"_meta\":{\"progressToken\":\"http-progress\"}}}";
+            using var response = await harness.PostJsonAsync(body);
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            var responseBody = await response.Content.ReadAsStringAsync();
+            using var responseDoc = JsonDocument.Parse(responseBody);
+            Assert.Equal(1684, responseDoc.RootElement.GetProperty("id").GetInt32());
+
+            var progressFrame = await progressTask.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Contains("\"method\":\"notifications/progress\"", progressFrame, StringComparison.Ordinal);
+            Assert.Contains("\"progressToken\":\"http-progress\"", progressFrame, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public async Task HttpTransport_EventsStream_UsesBearerAuth()
     {
         await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: "token");
@@ -382,9 +423,25 @@ public class HttpMcpTransportTests : IDisposable
         return snapshot;
     }
 
+    private static async Task<string> ReadUntilAsync(StreamReader reader, string expected)
+    {
+        var builder = new StringBuilder();
+        while (true)
+        {
+            var line = await reader.ReadLineAsync();
+            if (line == null)
+                break;
+            builder.AppendLine(line);
+            if (line.Contains(expected, StringComparison.Ordinal))
+                return builder.ToString();
+        }
+
+        return builder.ToString();
+    }
+
     private sealed class McpHttpHarness : IAsyncDisposable
     {
-        private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(10);
+        private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(30);
         private readonly McpServer _server;
         private readonly HttpMcpTransport _transport;
         private readonly CancellationTokenSource _cts;

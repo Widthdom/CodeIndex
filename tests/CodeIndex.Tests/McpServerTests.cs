@@ -1393,6 +1393,91 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public async Task RunAsync_IndexWithProgressToken_EmitsProgressNotificationBeforeResult()
+    {
+        var projectRoot = Path.Combine(Directory.GetCurrentDirectory(), $".tmp_mcp_progress_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(projectRoot);
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "one.cs"), "public class One { public void Run() { } }");
+            File.WriteAllText(Path.Combine(projectRoot, "two.cs"), "public class Two { public void Run() { } }");
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+            using var server = new McpServer(dbPath, "test", dbPathExplicit: true);
+            var request = new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = 1684,
+                ["method"] = "tools/call",
+                ["params"] = new JsonObject
+                {
+                    ["name"] = "index",
+                    ["arguments"] = new JsonObject { ["path"] = projectRoot },
+                    ["_meta"] = new JsonObject { ["progressToken"] = "issue-1684" },
+                },
+            };
+            var transport = new ShutdownProbeTransport("stdio", (Action<string?>?)null, request.ToJsonString());
+
+            await server.RunAsync(transport, CancellationToken.None);
+
+            var progressFrameIndex = transport.WrittenFrames.FindIndex(frame =>
+                frame?.Contains("\"method\":\"notifications/progress\"", StringComparison.Ordinal) == true);
+            var resultFrameIndex = transport.WrittenFrames.FindIndex(frame =>
+                frame?.Contains("\"id\":1684", StringComparison.Ordinal) == true);
+            Assert.True(progressFrameIndex >= 0);
+            Assert.True(resultFrameIndex >= 0);
+            Assert.True(progressFrameIndex < resultFrameIndex);
+
+            var progress = JsonNode.Parse(transport.WrittenFrames[progressFrameIndex]!)!;
+            Assert.Equal("issue-1684", progress["params"]!["progressToken"]!.GetValue<string>());
+            Assert.Equal(2, progress["params"]!["total"]!.GetValue<int>());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_NonStreamingIndexWithProgressToken_ReturnsFinalResultWithoutProgress()
+    {
+        var projectRoot = Path.Combine(Directory.GetCurrentDirectory(), $".tmp_mcp_progress_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(projectRoot);
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "one.cs"), "public class One { public void Run() { } }");
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+            using var server = new McpServer(dbPath, "test", dbPathExplicit: true);
+            var request = new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = 1685,
+                ["method"] = "tools/call",
+                ["params"] = new JsonObject
+                {
+                    ["name"] = "index",
+                    ["arguments"] = new JsonObject { ["path"] = projectRoot },
+                    ["_meta"] = new JsonObject { ["progressToken"] = "non-streaming" },
+                },
+            };
+            var transport = new ShutdownProbeTransport("http-like", (Action<string?>?)null, request.ToJsonString());
+
+            await server.RunAsync(transport, CancellationToken.None);
+
+            Assert.DoesNotContain(transport.WrittenFrames, frame =>
+                frame?.Contains("\"method\":\"notifications/progress\"", StringComparison.Ordinal) == true);
+            Assert.Contains(transport.WrittenFrames, frame =>
+                frame?.Contains("\"id\":1685", StringComparison.Ordinal) == true
+                && frame.Contains("\"structuredContent\"", StringComparison.Ordinal));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void MaxConcurrency_DefaultExposesIssueBound()
     {
         Assert.Equal(McpServer.DefaultMaxConcurrency, _server.MaxConcurrency);
