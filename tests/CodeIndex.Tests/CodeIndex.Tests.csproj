@@ -10,7 +10,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="coverlet.collector" Version="6.0.0" />
+    <PackageReference Include="coverlet.collector" Version="10.0.1" />
     <PackageReference Include="FsCheck.Xunit" Version="2.16.6" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.5" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />
