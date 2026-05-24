@@ -7862,13 +7862,13 @@ public class IndexCommandRunnerTests
         if (process.ExitCode != 0)
             throw new InvalidOperationException($"dotnet publish failed: {stdout}{stderr}".Trim());
 
-        var publishedDll = Path.Combine(outputDir, "cdidx.dll");
-        if (File.Exists(publishedDll))
-            return publishedDll;
-
         var publishedAppHost = Path.Combine(outputDir, OperatingSystem.IsWindows() ? "cdidx.exe" : "cdidx");
         if (File.Exists(publishedAppHost))
             return publishedAppHost;
+
+        var publishedDll = Path.Combine(outputDir, "cdidx.dll");
+        if (File.Exists(publishedDll))
+            return publishedDll;
 
         throw new InvalidOperationException(
             $"Published cdidx entry point not found. Expected {publishedDll} or {publishedAppHost}");
