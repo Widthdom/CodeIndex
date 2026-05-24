@@ -700,19 +700,22 @@ public class IndexCommandRunnerTests
     [Fact]
     public void ParseArgs_MaxFileBytesInvalidValue_IsIgnored()
     {
-        var originalErr = Console.Error;
-        using var stderr = new StringWriter();
-        try
+        lock (TestConsoleLock.Gate)
         {
-            Console.SetError(stderr);
-            var options = IndexCommandRunner.ParseArgs([".", "--max-file-bytes", "0"]);
+            var originalErr = Console.Error;
+            using var stderr = new StringWriter();
+            try
+            {
+                Console.SetError(stderr);
+                var options = IndexCommandRunner.ParseArgs([".", "--max-file-bytes", "0"]);
 
-            Assert.True(options.MaxFileSizeBytes is null or > 0);
-            Assert.Contains("invalid --max-file-bytes value", stderr.ToString());
-        }
-        finally
-        {
-            Console.SetError(originalErr);
+                Assert.True(options.MaxFileSizeBytes is null or > 0);
+                Assert.Contains("invalid --max-file-bytes value", stderr.ToString());
+            }
+            finally
+            {
+                Console.SetError(originalErr);
+            }
         }
     }
 
@@ -791,18 +794,21 @@ public class IndexCommandRunnerTests
     [Fact]
     public void ParseArgs_DurationFormatFlag_InvalidValue_IsIgnored()
     {
-        var originalErr = Console.Error;
-        using var stderr = new StringWriter();
-        try
+        lock (TestConsoleLock.Gate)
         {
-            Console.SetError(stderr);
-            var options = IndexCommandRunner.ParseArgs([".", "--duration-format", "bogus"]);
-            Assert.Equal(DurationOutputFormat.Auto, options.DurationFormat);
-            Assert.Contains("invalid --duration-format value", stderr.ToString());
-        }
-        finally
-        {
-            Console.SetError(originalErr);
+            var originalErr = Console.Error;
+            using var stderr = new StringWriter();
+            try
+            {
+                Console.SetError(stderr);
+                var options = IndexCommandRunner.ParseArgs([".", "--duration-format", "bogus"]);
+                Assert.Equal(DurationOutputFormat.Auto, options.DurationFormat);
+                Assert.Contains("invalid --duration-format value", stderr.ToString());
+            }
+            finally
+            {
+                Console.SetError(originalErr);
+            }
         }
     }
 

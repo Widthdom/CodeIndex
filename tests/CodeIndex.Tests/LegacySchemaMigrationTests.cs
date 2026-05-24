@@ -383,17 +383,7 @@ public class LegacySchemaMigrationTests : IDisposable
             pragma.ExecuteNonQuery();
         }
 
-        var originalError = Console.Error;
-        var capturedError = new StringWriter();
-        Console.SetError(capturedError);
-        try
-        {
-            db.TryMigrateForRead();
-        }
-        finally
-        {
-            Console.SetError(originalError);
-        }
+        var stderr = ConsoleCapture.CaptureError(db.TryMigrateForRead);
 
         // Structured failure: step description, SQLite error code, and an actionable hint
         // are all available to callers (CLI, MCP, programmatic) without reparsing stderr.
@@ -407,7 +397,6 @@ public class LegacySchemaMigrationTests : IDisposable
 
         // Single stderr line so the diagnostic is hard to miss but does not flood logs.
         // 1 行の stderr 警告。
-        var stderr = capturedError.ToString();
         Assert.Contains("schema migration step", stderr, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("BEGIN IMMEDIATE schema migration", stderr, StringComparison.Ordinal);
         Assert.Contains("SQLite error 8", stderr, StringComparison.Ordinal);
@@ -423,20 +412,10 @@ public class LegacySchemaMigrationTests : IDisposable
         // 正常完了時は LastMigrationFailure が null のまま — シグナルとして利用できる契約。
         using var db = new DbContext(_dbPath);
 
-        var originalError = Console.Error;
-        var capturedError = new StringWriter();
-        Console.SetError(capturedError);
-        try
-        {
-            db.TryMigrateForRead();
-        }
-        finally
-        {
-            Console.SetError(originalError);
-        }
+        var stderr = ConsoleCapture.CaptureError(db.TryMigrateForRead);
 
         Assert.Null(db.LastMigrationFailure);
-        Assert.DoesNotContain("schema migration step", capturedError.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("schema migration step", stderr, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

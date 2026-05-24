@@ -127,7 +127,7 @@ For boundary tests, use the smallest fixture that still crosses the boundary. If
 ### CLI and console tests
 
 - Capture stdout and stderr explicitly.
-- Lock console mutations with `TestConsoleLock.Gate`.
+- Prefer `ConsoleCapture` for simple stdout/stderr capture, and lock direct console mutations with `TestConsoleLock.Gate`.
 - Assert exit codes with `CommandExitCodes`.
 - For JSON output, parse it with `JsonDocument` instead of asserting raw strings.
 
@@ -305,7 +305,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 ### CLI / コンソール系テスト
 
 - stdout と stderr を明示的にキャプチャする。
-- コンソール差し替えは `TestConsoleLock.Gate` で直列化する。
+- 単純な stdout/stderr capture では `ConsoleCapture` を優先し、直接コンソールを差し替える場合は `TestConsoleLock.Gate` で直列化する。
 - 終了コードは `CommandExitCodes` で検証する。
 - JSON 出力は生文字列比較ではなく `JsonDocument` で解析して検証する。
 
