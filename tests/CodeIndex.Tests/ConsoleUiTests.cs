@@ -76,8 +76,18 @@ public class ConsoleUiTests
         Assert.Contains("--max-line-width <n>       search/references/find/excerpt/inspect only: clamp very long single-line snippet/context/excerpt payloads (`0` disables clamping; default: 512)", output);
         Assert.Contains("cdidx find <query> --path <glob>", output);
         Assert.Contains("--fts                      Use raw FTS5 query syntax for search (search query max 1000 chars; raw FTS parser max 2000 chars, 64 boolean ops, 16 NEAR ops", output);
-        Assert.Contains("--exact-substring          Search only: case-sensitive exact substring (no FTS5)", output);
-        Assert.Contains("--exact-name               symbols/definition/references/callers/callees/inspect: NFKC + Unicode CaseFold exact name match", output);
+        Assert.Contains("--exact                    Backward-compatible shorthand.", output);
+        Assert.Contains("                              Prefer --exact-substring for search,", output);
+        Assert.Contains("                              --exact for find,", output);
+        Assert.Contains("                              and --exact-name for symbol/graph lookups.", output);
+        Assert.Contains("                              Combining exact-match flags is rejected.", output);
+        Assert.Contains("--exact-substring          Search only: case-sensitive exact substring", output);
+        Assert.Contains("                              (no FTS5)", output);
+        Assert.Contains("--exact-name               Exact name match for symbols, definition,", output);
+        Assert.Contains("                              references, callers, callees, and inspect.", output);
+        Assert.Contains("                              Uses NFKC + Unicode CaseFold when ready.", output);
+        Assert.Contains("                              Legacy/stale-fold DBs fall back to ASCII NOCASE;", output);
+        Assert.Contains("                              run `cdidx backfill-fold` or check fold_ready.", output);
         Assert.Contains("--kind <kind>              definition/symbols/hotspots/unused: symbol kind; references: reference kind (call/instantiate/subscribe/attribute/annotation); callers/callees: call-graph kinds only (call/instantiate/subscribe — metadata kinds rejected, use references instead); validate: issue kind", output);
         Assert.Contains("--count                    Count only; search/definition/references/callers/callees/symbols/files/find/unused ignore --limit, impact/hotspots still use visible page counts", output);
         Assert.Contains("--commits <id> [id ...]    Update only files changed in the specified git commits (preferred after commits)", output);
@@ -108,7 +118,8 @@ public class ConsoleUiTests
         Assert.Contains("backfill-fold", output);
         Assert.Contains("optimize                   Optimize FTS5 segments in an existing index DB", output);
         Assert.Contains("find <query>               Find literal substring matches inside known indexed files", output);
-        Assert.Contains("Prefer --exact-substring for search, keep --exact for find", output);
+        Assert.Contains("Prefer --exact-substring for search", output);
+        Assert.Contains("--exact for find", output);
         Assert.Contains("impact <query>             Show transitive callers; type queries may return heuristic file-level dependency hints", output);
         Assert.Contains("hotspots                   Find high-impact symbols; duplicate-name families may fall back conservatively", output);
         Assert.Contains("cdidx find guard --path src/Auth.cs --after 2", output);
@@ -121,6 +132,29 @@ public class ConsoleUiTests
         Assert.DoesNotContain("Easter eggs", output);
         Assert.DoesNotContain("--sushi", output);
         Assert.DoesNotContain("--random-spinner", output);
+    }
+
+    [Fact]
+    public void PrintUsage_ExactMatchOptionLines_FitWithinEightyColumns()
+    {
+        var output = CaptureUsageOutput(showBanner: false);
+        var lines = output.Split(Environment.NewLine);
+        var exactStart = Array.FindIndex(lines, line => line.StartsWith("  --exact ", StringComparison.Ordinal));
+        var exactSubstringStart = Array.FindIndex(lines, line => line.StartsWith("  --exact-substring", StringComparison.Ordinal));
+        var exactNameStart = Array.FindIndex(lines, line => line.StartsWith("  --exact-name", StringComparison.Ordinal));
+        var kindStart = Array.FindIndex(lines, line => line.StartsWith("  --kind <kind>", StringComparison.Ordinal));
+
+        Assert.True(exactStart >= 0);
+        Assert.True(exactSubstringStart > exactStart);
+        Assert.True(exactNameStart > exactSubstringStart);
+        Assert.True(kindStart > exactNameStart);
+
+        var exactMatchLines = lines[exactStart..kindStart]
+            .Where(line => line.Length > 0)
+            .ToArray();
+
+        Assert.NotEmpty(exactMatchLines);
+        Assert.All(exactMatchLines, line => Assert.True(line.Length <= 80, $"Line exceeds 80 columns ({line.Length}): {line}"));
     }
 
     [Fact]
