@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Net;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using CodeIndex.Database;
@@ -10,6 +11,8 @@ namespace CodeIndex.Cli;
 
 internal static class ProgramRunner
 {
+    internal const string QuietEnvironmentVariable = "CDIDX_QUIET";
+
     internal static int Run(
         string[] args,
         JsonSerializerOptions? jsonOptions = null,
@@ -37,6 +40,9 @@ internal static class ProgramRunner
         if (configResult.Loaded)
             GlobalToolLog.Info($"config_file_loaded path={configResult.Path}");
         jsonOptions ??= CreateDefaultJsonOptions();
+
+        var quiet = TryConsumeQuietFlag(ref args) || IsTruthyEnvironmentVariable(QuietEnvironmentVariable);
+        using var quietScope = quiet ? QuietStderrScope.Start() : null;
 
         if (!TryConsumeColorFlag(ref args, out var colorError))
         {
@@ -241,6 +247,51 @@ internal static class ProgramRunner
     internal static bool IsProjectPathArg(string arg) =>
         !arg.StartsWith('-') && (Directory.Exists(arg) || arg.Contains('/') || arg.Contains('\\') || arg == ".");
 
+    internal static bool TryConsumeQuietFlag(ref string[] args)
+    {
+        if (args.Length == 0)
+            return false;
+
+        var kept = new List<string>(args.Length);
+        var quiet = false;
+        var passthrough = false;
+        for (var i = 0; i < args.Length; i++)
+        {
+            var arg = args[i];
+            if (passthrough)
+            {
+                kept.Add(arg);
+                continue;
+            }
+            if (arg == "--")
+            {
+                passthrough = true;
+                kept.Add(arg);
+                continue;
+            }
+            if (arg is "--quiet" or "-q" or "--silent")
+            {
+                quiet = true;
+                continue;
+            }
+
+            kept.Add(arg);
+        }
+
+        args = kept.ToArray();
+        return quiet;
+    }
+
+    private static bool IsTruthyEnvironmentVariable(string name)
+    {
+        var value = Environment.GetEnvironmentVariable(name);
+        return value != null
+               && !string.Equals(value, "0", StringComparison.OrdinalIgnoreCase)
+               && !string.Equals(value, "false", StringComparison.OrdinalIgnoreCase)
+               && !string.Equals(value, "no", StringComparison.OrdinalIgnoreCase)
+               && !string.Equals(value, "off", StringComparison.OrdinalIgnoreCase);
+    }
+
     internal static int MapCodeIndexExceptionExitCode(string code) => code switch
     {
         CommandErrorCodes.DbNotFound => CommandExitCodes.NotFound,
@@ -256,6 +307,85 @@ internal static class ProgramRunner
         CommandErrorCodes.Interrupted => CommandExitCodes.CancelledBySignal,
         _ => CommandExitCodes.DatabaseError,
     };
+
+    private sealed class QuietStderrScope : IDisposable
+    {
+        private readonly TextWriter _originalError;
+
+        private QuietStderrScope(TextWriter originalError)
+        {
+            _originalError = originalError;
+        }
+
+        public static QuietStderrScope Start()
+        {
+            var originalError = Console.Error;
+            Console.SetError(new ErrorOnlyTextWriter(originalError));
+            return new QuietStderrScope(originalError);
+        }
+
+        public void Dispose()
+        {
+            Console.Error.Flush();
+            Console.SetError(_originalError);
+        }
+    }
+
+    private sealed class ErrorOnlyTextWriter(TextWriter inner) : TextWriter
+    {
+        private readonly StringBuilder _lineBuffer = new();
+
+        public override Encoding Encoding => inner.Encoding;
+
+        public override void Write(char value)
+        {
+            if (value == '\r')
+                return;
+
+            if (value == '\n')
+            {
+                FlushBufferedLine();
+                return;
+            }
+
+            _lineBuffer.Append(value);
+        }
+
+        public override void Write(string? value)
+        {
+            if (value == null)
+                return;
+
+            foreach (var ch in value)
+                Write(ch);
+        }
+
+        public override void WriteLine(string? value)
+        {
+            Write(value);
+            FlushBufferedLine();
+        }
+
+        public override void Flush()
+        {
+            FlushBufferedLine();
+            inner.Flush();
+        }
+
+        private void FlushBufferedLine()
+        {
+            if (_lineBuffer.Length == 0)
+                return;
+
+            var line = _lineBuffer.ToString();
+            _lineBuffer.Clear();
+            if (IsErrorLine(line))
+                inner.WriteLine(line);
+        }
+
+        private static bool IsErrorLine(string line)
+            => line.StartsWith("Error", StringComparison.Ordinal);
+    }
 
     internal static bool TryConsumeColorFlag(ref string[] args, out string error)
     {

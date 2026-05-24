@@ -656,6 +656,7 @@ public static class ConsoleUi
         Console.WriteLine("  --dry-run                  Scan files without writing to the database");
         Console.WriteLine("  --force                    Bypass the per-database index lock; only use when no other cdidx index is active");
         Console.WriteLine("  --json                     Output results as JSON (for AI/machine use)");
+        Console.WriteLine("  --quiet, -q, --silent      Suppress informational stderr output; errors still print (also honors CDIDX_QUIET=1)");
         Console.WriteLine("  --duration-format <format> Index elapsed time format: `auto` (default), `seconds`, or `hms`; JSON keeps raw elapsed_ms");
         Console.WriteLine("  --max-file-bytes <bytes>  Index only files up to this size (default: 4MiB; also honors CDIDX_MAX_FILE_BYTES; accepts K/M/G suffixes)");
         Console.WriteLine("  --parallelism <n>         Full-scan extraction workers (default: CPU count capped at 16; also honors CDIDX_INDEX_PARALLELISM)");
@@ -687,6 +688,7 @@ public static class ConsoleUi
         Console.WriteLine("  --db <path>                Database file path (default: .cdidx/codeindex.db in current directory)");
         Console.WriteLine("  --json                     Output as JSON (search streams ndjson by default; use search --json=array for one array)");
         Console.WriteLine("  --verbose                  Query commands: emit debug diagnostics to stderr; with --json, append an _debug JSON object");
+        Console.WriteLine("  --quiet, -q, --silent      Query commands: suppress informational stderr output, including zero-result hints and summaries; errors still print. Overrides --verbose stderr text.");
         Console.WriteLine("  --profile                  Read commands: append SQL timing, row-count, and EXPLAIN QUERY PLAN JSON after the normal result");
         Console.WriteLine("  --slow-query-ms <n>        Read commands: log profiled SQL statements that take at least <n> ms (use 0 to log every statement)");
         Console.WriteLine("  --limit <n>, --top <n>     Max results to return (default: 20)");
