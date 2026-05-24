@@ -103,6 +103,8 @@ public static class ConsoleUi
     private const int SpinnerStopDelayMs = 20;
     private const int ConsoleLineMargin = 1;
     private static readonly object TerminalLock = new();
+    private static TextWriter? _synchronizedOut;
+    private static TextWriter? _synchronizedError;
     private static readonly string[] ByteUnits = ["bytes", "KiB", "MiB", "GiB", "TiB", "PiB"];
 
     private static readonly string[] DefaultBrailleSpinnerFrames =
@@ -126,6 +128,26 @@ public static class ConsoleUi
         return count == 0
             ? $"No {plural} found."
             : $"Found {Counted(count, singular, plural)}.";
+    }
+
+    internal static void EnsureConsoleWritersSynchronized()
+    {
+        lock (TerminalLock)
+        {
+            var output = Console.Out;
+            if (!ReferenceEquals(output, _synchronizedOut))
+            {
+                _synchronizedOut = TextWriter.Synchronized(output);
+                Console.SetOut(_synchronizedOut);
+            }
+
+            var error = Console.Error;
+            if (!ReferenceEquals(error, _synchronizedError))
+            {
+                _synchronizedError = TextWriter.Synchronized(error);
+                Console.SetError(_synchronizedError);
+            }
+        }
     }
 
     // --- Spinner / スピナー ---
@@ -185,6 +207,8 @@ public static class ConsoleUi
     /// </summary>
     public static CancellationTokenSource? StartSpinner(string message, string[] frames)
     {
+        EnsureConsoleWritersSynchronized();
+
         // Braille frames are single-char; themed frames are longer strings containing the display text
         // ブレイルフレームは1文字、テーマフレームは表示テキストを含む長い文字列
         bool isThemed = frames.Length > 0 && frames[0].Length > 2;

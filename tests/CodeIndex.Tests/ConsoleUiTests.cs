@@ -220,6 +220,50 @@ public class ConsoleUiTests
     }
 
     [Fact]
+    public void EnsureConsoleWritersSynchronized_SerializesConcurrentWholeStringWrites()
+    {
+        using var output = new SlowChunkingTextWriter();
+        using var capture = ConsoleCapture.Start(output, error: null);
+        ConsoleUi.EnsureConsoleWritersSynchronized();
+
+        const int iterations = 40;
+        var left = new Thread(() =>
+        {
+            for (var i = 0; i < iterations; i++)
+                Console.Write("[spinner-frame]\n");
+        });
+        var right = new Thread(() =>
+        {
+            for (var i = 0; i < iterations; i++)
+                Console.Write("[progress-line]\n");
+        });
+
+        left.Start();
+        right.Start();
+        left.Join();
+        right.Join();
+
+        var lines = output.ToString()
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal(iterations * 2, lines.Length);
+        Assert.All(lines, line => Assert.True(
+            line is "[spinner-frame]" or "[progress-line]",
+            $"Unexpected interleaved line: {line}"));
+    }
+
+    [Fact]
+    public void StartSpinner_RedirectedOutput_UsesSynchronizedWriterBeforeFallbackLine()
+    {
+        using var output = new StringWriter();
+        using var capture = ConsoleCapture.Start(output, error: null);
+
+        var cts = ConsoleUi.StartSpinner("Indexing...", ["|"]);
+
+        Assert.Null(cts);
+        Assert.Contains("Indexing...", output.ToString());
+    }
+
+    [Fact]
     public void GetWindowWidth_ColumnsEnvVarSet_UsesColumnsValue()
     {
         WithColumnsEnvironment("200", () =>
@@ -1445,6 +1489,21 @@ public class ConsoleUiTests
             FlushCount++;
             base.Flush();
         }
+    }
+
+    private sealed class SlowChunkingTextWriter : TextWriter
+    {
+        private readonly StringBuilder builder = new();
+
+        public override Encoding Encoding => Encoding.UTF8;
+
+        public override void Write(char value)
+        {
+            builder.Append(value);
+            Thread.Sleep(1);
+        }
+
+        public override string ToString() => builder.ToString();
     }
 
     private static string CaptureUsageOutput(bool showBanner = true)
