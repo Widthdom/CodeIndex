@@ -4390,7 +4390,10 @@ public class McpServerTests : IDisposable
         Assert.Equal("none", structured["impact_mode"]!.GetValue<string>());
         Assert.Equal(1, structured["definition_count"]!.GetValue<int>());
         Assert.Empty(structured["callers"]!.AsArray());
-        Assert.Equal("depth_zero", structured["zero_result_reason"]!.GetValue<string>());
+        Assert.Equal("depth_requested_zero", structured["zero_result_reason"]!.GetValue<string>());
+        Assert.Equal("precondition", structured["suggestion_type"]!.GetValue<string>());
+        var failureChain = Assert.IsType<JsonArray>(structured["impact_failure_chain"]);
+        Assert.Equal("depth_requested_zero", Assert.Single(failureChain)!.GetValue<string>());
         Assert.Equal("Use `cdidx impact <symbol> --max-hops 1` or higher to traverse callers.", structured["suggestion"]!.GetValue<string>());
     }
 

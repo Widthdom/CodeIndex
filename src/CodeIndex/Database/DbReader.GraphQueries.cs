@@ -1415,7 +1415,11 @@ public partial class DbReader
                 CycleDetected = false,
                 Cycles = null,
                 GraphTableAvailable = _hasReferencesTable,
-                ZeroResultReason = definitions.Count == 0 ? "no_matching_definition" : "depth_zero",
+                ZeroResultReason = definitions.Count == 0 ? "no_matching_definition" : "depth_requested_zero",
+                ImpactFailureChain = definitions.Count == 0
+                    ? ["definition_not_found", "depth_requested_zero"]
+                    : ["depth_requested_zero"],
+                SuggestionType = definitions.Count == 0 ? "resolution" : "precondition",
                 Suggestion = definitions.Count == 0
                     ? "Try `cdidx definition <symbol>` to confirm the indexed name."
                     : "Use `cdidx impact <symbol> --max-hops 1` or higher to traverse callers.",
@@ -1427,24 +1431,38 @@ public partial class DbReader
         var impactMode = "callers";
         var fileImpacts = new List<FileDependencyResult>();
         string? zeroResultReason = null;
+        List<string>? impactFailureChain = null;
+        string? suggestionType = null;
         string? suggestion = null;
         var heuristic = false;
 
         if (callers.Count == 0)
         {
             impactMode = "none";
+            impactFailureChain = [];
 
-            if (_hasReferencesTable)
+            if (!_hasReferencesTable)
+            {
+                zeroResultReason = "graph_unavailable";
+                impactFailureChain.Add("graph_unavailable");
+                suggestionType = "precondition";
+                suggestion = "Re-index with the current `cdidx` so symbol reference graph data is available.";
+            }
+            else
             {
                 if (definitions.Count > 0 && definitions.All(d => IsNonCallableImpactKind(d.Kind)))
                 {
                     zeroResultReason = "non_callable_symbol_kind";
+                    impactFailureChain.Add("callable_filter_fails");
+                    suggestionType = "resolution";
                     suggestion = "Try `cdidx definition <symbol>` and then run `impact` on a specific callable member instead.";
                 }
                 else if (hasMultipleFallbackDefinitions)
                 {
                     zeroResultReason = hasMultipleFallbackDefinitionFiles ? "multiple_definition_files" : "multiple_definitions";
-                    suggestion = BuildImpactSuggestion(fallbackDefinitionPaths, hasClassLikeDefinitions, hasMultipleDefinitions: true, hasMultipleDefinitionFiles: hasMultipleFallbackDefinitionFiles);
+                    impactFailureChain.Add(zeroResultReason);
+                    suggestionType = "resolution";
+                    suggestion = BuildImpactSuggestion(fallbackDefinitionPaths, hasClassLikeDefinitions, hasMultipleDefinitions: true, hasMultipleDefinitionFiles: hasMultipleFallbackDefinitionFiles, lang);
                 }
                 else if (fallbackDefinitions.Count == 1)
                 {
@@ -1471,18 +1489,29 @@ public partial class DbReader
                     else
                     {
                         zeroResultReason = "class_symbol_no_symbol_callers";
-                        suggestion = BuildImpactSuggestion(definitionPaths, hasClassLikeDefinitions, hasMultipleDefinitions: false, hasMultipleDefinitionFiles: false);
+                        impactFailureChain.Add("no_callers");
+                        suggestionType = "traversal";
+                        suggestion = BuildImpactSuggestion(definitionPaths, hasClassLikeDefinitions, hasMultipleDefinitions: false, hasMultipleDefinitionFiles: false, lang);
                     }
                 }
                 else if (hasMultipleDefinitions)
                 {
                     zeroResultReason = definitionPaths.Count > 1 ? "multiple_definition_files" : "multiple_definitions";
-                    suggestion = BuildImpactSuggestion(definitionPaths, hasClassLikeDefinitions, hasMultipleDefinitions: true, hasMultipleDefinitionFiles: definitionPaths.Count > 1);
+                    impactFailureChain.Add(zeroResultReason);
+                    suggestionType = "resolution";
+                    suggestion = BuildImpactSuggestion(definitionPaths, hasClassLikeDefinitions, hasMultipleDefinitions: true, hasMultipleDefinitionFiles: definitionPaths.Count > 1, lang);
                 }
                 else if (definitions.Count == 0)
                 {
                     zeroResultReason = "no_matching_definition";
+                    impactFailureChain.Add("definition_not_found");
+                    suggestionType = "resolution";
                     suggestion = "Try `cdidx definition <symbol>` to confirm the indexed name.";
+                }
+                else
+                {
+                    impactFailureChain.Add("no_callers");
+                    suggestionType = "traversal";
                 }
             }
         }
@@ -1510,6 +1539,8 @@ public partial class DbReader
             Cycles = cycles.Count > 0 ? cycles : null,
             GraphTableAvailable = _hasReferencesTable,
             ZeroResultReason = zeroResultReason,
+            ImpactFailureChain = impactFailureChain is { Count: > 0 } ? impactFailureChain : null,
+            SuggestionType = suggestionType,
             Suggestion = suggestion,
         };
     }
@@ -2055,20 +2086,24 @@ public partial class DbReader
         return kind is "class" or "struct" or "interface";
     }
 
-    private static string BuildImpactSuggestion(IReadOnlyList<string> definitionPaths, bool hasClassLikeDefinitions, bool hasMultipleDefinitions, bool hasMultipleDefinitionFiles)
+    private static string BuildImpactSuggestion(IReadOnlyList<string> definitionPaths, bool hasClassLikeDefinitions, bool hasMultipleDefinitions, bool hasMultipleDefinitionFiles, string? lang)
     {
+        var langHint = lang == null
+            ? " Use `--lang <lang>` if the same name exists in multiple languages."
+            : string.Empty;
+
         if (hasClassLikeDefinitions)
         {
             if (hasMultipleDefinitionFiles)
-                return "Try `cdidx deps --path <definition-path> --reverse` for each definition file or query a member symbol instead.";
+                return "Try `cdidx deps --path <definition-path> --reverse` for each definition file or query a member symbol instead." + langHint;
             if (hasMultipleDefinitions)
-                return "Try a fully qualified or member symbol query, or inspect the overlapping definitions with `cdidx definition <symbol> --body`.";
+                return "Try a fully qualified or member symbol query, or inspect the overlapping definitions with `cdidx definition <symbol> --body`." + langHint;
             if (definitionPaths.Count > 0)
                 return $"Try `cdidx deps --path {definitionPaths[0]} --reverse` or query a member symbol instead.";
         }
 
         if (hasMultipleDefinitions)
-            return "Try a more specific symbol name or inspect each definition file with `cdidx definition <symbol> --body`.";
+            return "Try a more specific symbol name or inspect each definition file with `cdidx definition <symbol> --body`." + langHint;
 
         return "Try `cdidx definition <symbol>` to confirm the indexed symbol and then query a more specific callable member.";
     }

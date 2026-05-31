@@ -2864,6 +2864,7 @@ public partial class McpServer
                     ["top_files"] = topFiles,
                     ["results"] = new JsonArray(),
                 };
+                AddImpactFailureFields(countOnlyPayload, analysis);
                 AddSqlGraphContractSignal(countOnlyPayload, sqlGraphSignal);
                 return CreateToolResult(id, $"Counted {ConsoleUi.Counted(count, "impact result")}.", countOnlyPayload);
             }
@@ -2920,6 +2921,7 @@ public partial class McpServer
                 payload["warnings"] = warnings;
             if (analysis.ZeroResultReason != null)
                 payload["zero_result_reason"] = analysis.ZeroResultReason;
+            AddImpactFailureFields(payload, analysis);
             if (analysis.Suggestion != null)
                 payload["suggestion"] = analysis.Suggestion;
 
@@ -2964,6 +2966,20 @@ public partial class McpServer
                 payload["note"] = "file_impacts are heuristic hints only; the current graph does not record resolved target file/type for each call.";
             return CreateToolResult(id, summary, payload);
         });
+    }
+
+    private static void AddImpactFailureFields(JsonObject payload, ImpactAnalysisResult analysis)
+    {
+        if (analysis.ImpactFailureChain is { Count: > 0 })
+        {
+            var chain = new JsonArray();
+            foreach (var code in analysis.ImpactFailureChain)
+                chain.Add(JsonValue.Create(code));
+            payload["impact_failure_chain"] = chain;
+        }
+
+        if (analysis.SuggestionType != null)
+            payload["suggestion_type"] = analysis.SuggestionType;
     }
 
     private JsonNode ExecuteValidate(JsonNode? id, JsonNode? args)

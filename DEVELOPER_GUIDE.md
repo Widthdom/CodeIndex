@@ -1167,6 +1167,10 @@ Different graph entry points walk different `reference_kind` subsets by design. 
 
 Practical consequence: `impact <ClassName>` on a class-like symbol returns the heuristic file-dependency-hint fallback (with metadata edges) when no member-level callers exist, whereas `callers <ClassName>` returns the call-graph subset (without metadata). Both are correct under their own contracts; counts will not match. To reconcile, run `references <ClassName> --kind attribute` (or `annotation`) to surface the metadata-only edges that the call-graph commands intentionally drop.
 
+`impact --json` and MCP `impact_analysis` expose zero-result diagnostics as structured routing fields. `zero_result_reason` remains the compact terminal reason; `impact_failure_chain` lists failed preconditions or traversal states in order, using values such as `definition_not_found`, `callable_filter_fails`, `multiple_definitions`, `multiple_definition_files`, `graph_unavailable`, `depth_requested_zero`, and `no_callers`. `suggestion_type` classifies the prose `suggestion` as `resolution`, `traversal`, or `precondition`. CLI `impact --strict` exits with `FeatureUnavailable` when the chain contains a resolution or precondition failure, but still treats a genuine `no_callers` traversal result as success.
+
+`definition --json` and MCP `definition` results may include `disambiguator` for C# definitions when existing symbol metadata can distinguish otherwise identical names. Current values include `overload(...)` for method signatures, `partial-class` / `partial-struct` / `partial-interface`, and `extension-method-on(<receiver>)`. Languages without overload or receiver metadata omit the field.
+
 ## Cloud Claude Code bootstrap (no .NET SDK)
 
 > **Maintainers / authorized operators only** — see [MAINTAINERS.md](MAINTAINERS.md). End users can skip this section.

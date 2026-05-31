@@ -674,6 +674,7 @@ public partial class DbReader
                 ContainerName = symbol.ContainerName,
                 Visibility = symbol.Visibility,
                 ReturnType = symbol.ReturnType,
+                Disambiguator = BuildDefinitionDisambiguator(symbol),
                 Content = definitionExcerpt.Content,
                 BodyContent = bodyContent,
                 Complexity = bodyContent != null ? SymbolExtractor.EstimateComplexity(bodyContent) : null,
@@ -681,6 +682,91 @@ public partial class DbReader
         }
 
         return results;
+    }
+
+    private static string? BuildDefinitionDisambiguator(SymbolResult symbol)
+    {
+        if (!string.Equals(symbol.Lang, "csharp", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        var signature = symbol.Signature;
+        if (string.IsNullOrWhiteSpace(signature))
+            return null;
+
+        if (signature.Contains(" partial ", StringComparison.Ordinal)
+            || signature.Contains("partial class ", StringComparison.Ordinal)
+            || signature.Contains("partial struct ", StringComparison.Ordinal)
+            || signature.Contains("partial interface ", StringComparison.Ordinal))
+            return "partial-" + (symbol.Kind ?? "definition");
+
+        if (signature.Contains("(this ", StringComparison.Ordinal)
+            || signature.Contains(", this ", StringComparison.Ordinal))
+        {
+            var receiver = ExtractExtensionReceiver(signature);
+            return receiver == null ? "extension-method" : $"extension-method-on({receiver})";
+        }
+
+        if (symbol.Kind == "function")
+        {
+            var parameters = ExtractParameterTypeList(signature);
+            if (parameters != null)
+                return $"overload({parameters})";
+        }
+
+        return null;
+    }
+
+    private static string? ExtractExtensionReceiver(string signature)
+    {
+        var parameters = ExtractParameters(signature);
+        if (parameters == null)
+            return null;
+
+        var firstParameter = parameters.Split(',', 2, StringSplitOptions.TrimEntries)[0];
+        const string ThisPrefix = "this ";
+        if (!firstParameter.StartsWith(ThisPrefix, StringComparison.Ordinal))
+            return null;
+
+        var withoutThis = firstParameter[ThisPrefix.Length..].Trim();
+        var parts = withoutThis.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length > 0 ? parts[0] : null;
+    }
+
+    private static string? ExtractParameterTypeList(string signature)
+    {
+        var parameters = ExtractParameters(signature);
+        if (parameters == null)
+            return null;
+        if (string.IsNullOrWhiteSpace(parameters))
+            return "";
+
+        var types = parameters
+            .Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .Select(ExtractParameterType)
+            .Where(type => !string.IsNullOrWhiteSpace(type))
+            .ToList();
+        return types.Count > 0 ? string.Join(", ", types) : null;
+    }
+
+    private static string? ExtractParameters(string signature)
+    {
+        var open = signature.IndexOf('(');
+        var close = signature.LastIndexOf(')');
+        if (open < 0 || close <= open)
+            return null;
+        return signature.Substring(open + 1, close - open - 1).Trim();
+    }
+
+    private static string ExtractParameterType(string parameter)
+    {
+        var tokens = parameter.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (tokens.Length == 0)
+            return string.Empty;
+        var start = tokens[0] is "this" or "ref" or "out" or "in" or "params" ? 1 : 0;
+        if (start >= tokens.Length)
+            return string.Empty;
+        var end = Math.Max(start + 1, tokens.Length - 1);
+        return string.Join(" ", tokens[start..end]);
     }
 
     public QueryCountResult CountDefinitionsTotal(string query, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)

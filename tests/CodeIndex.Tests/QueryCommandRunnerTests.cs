@@ -13171,6 +13171,9 @@ jobs:
             Assert.Equal(3, json.GetProperty("max_depth").GetInt32());
             Assert.False(json.GetProperty("truncated").GetBoolean());
             Assert.True(json.GetProperty("graph_table_available").GetBoolean());
+            Assert.Equal("no_matching_definition", json.GetProperty("zero_result_reason").GetString());
+            Assert.Equal("resolution", json.GetProperty("suggestion_type").GetString());
+            Assert.Equal("definition_not_found", Assert.Single(json.GetProperty("impact_failure_chain").EnumerateArray()).GetString());
         }
         finally
         {
@@ -13200,9 +13203,36 @@ jobs:
             Assert.Equal(0, json.GetProperty("actual_depth").GetInt32());
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.Equal(1, json.GetProperty("definition_count").GetInt32());
-            Assert.Equal("depth_zero", json.GetProperty("zero_result_reason").GetString());
+            Assert.Equal("depth_requested_zero", json.GetProperty("zero_result_reason").GetString());
+            Assert.Equal("precondition", json.GetProperty("suggestion_type").GetString());
+            Assert.Equal("depth_requested_zero", Assert.Single(json.GetProperty("impact_failure_chain").EnumerateArray()).GetString());
             Assert.Equal("Use `cdidx impact <symbol> --max-hops 1` or higher to traverse callers.", json.GetProperty("suggestion").GetString());
             Assert.Empty(json.GetProperty("callers").EnumerateArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunImpact_StrictReturnsFeatureUnavailableForResolutionFailure()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_impact_strict_resolution_failure");
+        try
+        {
+            var dbPath = CreateIndexedDbWithSingleFile(projectRoot, markGraphReady: true);
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["DefinitelyMissingSymbol", "--db", dbPath, "--json", "--strict"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.FeatureUnavailable, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("no_matching_definition", json.GetProperty("zero_result_reason").GetString());
+            Assert.Equal("definition_not_found", Assert.Single(json.GetProperty("impact_failure_chain").EnumerateArray()).GetString());
         }
         finally
         {
