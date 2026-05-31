@@ -1130,11 +1130,12 @@ public static partial class ReferenceExtractor
         string context,
         int lineNumber,
         SymbolRecord? container,
-        IReadOnlySet<string>? ignoredSegments = null)
+        IReadOnlySet<string>? ignoredSegments = null,
+        string referenceKind = "type_reference")
     {
         if (language == "typescript")
         {
-            AddTypeScriptTypeExpressionSegments(
+            AddTypeScriptTypeExpressionSegmentsCore(
                 references,
                 seen,
                 fileId,
@@ -1167,7 +1168,8 @@ public static partial class ReferenceExtractor
         int expressionStartInLine,
         string context,
         int lineNumber,
-        SymbolRecord? container)
+        SymbolRecord? container,
+        string referenceKind = "type_reference")
     {
         if (TypedLanguageReferenceExtractor.TryEmitTypeScriptFunctionTypeExpressionReferences(
                 expression,
@@ -1281,7 +1283,8 @@ public static partial class ReferenceExtractor
         int expressionStartInLine,
         string context,
         int lineNumber,
-        SymbolRecord? container)
+        SymbolRecord? container,
+        string referenceKind = "type_reference")
     {
         int i = start + 1;
         while (i < text.Length)
@@ -1850,11 +1853,12 @@ public static partial class ReferenceExtractor
         int lineNumber,
         SymbolRecord? container,
         string language,
-        IReadOnlySet<string>? ignoredSegments = null)
+        IReadOnlySet<string>? ignoredSegments = null,
+        string referenceKind = "type_reference")
     {
         if (language == "typescript")
         {
-            AddTypeScriptTypeExpressionSegments(
+            AddTypeScriptTypeExpressionSegmentsCore(
                 references,
                 seen,
                 fileId,
@@ -1863,7 +1867,8 @@ public static partial class ReferenceExtractor
                 context,
                 lineNumber,
                 container,
-                ignoredSegments);
+                ignoredSegments,
+                referenceKind);
             return;
         }
 
@@ -1906,7 +1911,7 @@ public static partial class ReferenceExtractor
                     continue;
                 }
 
-                AddReference(references, seen, fileId, rustSegment, expressionStartInLine + rustSegmentStart, "type_reference", context, lineNumber, container);
+                AddReference(references, seen, fileId, rustSegment, expressionStartInLine + rustSegmentStart, referenceKind, context, lineNumber, container);
                 i--;
                 continue;
             }
@@ -1934,7 +1939,8 @@ public static partial class ReferenceExtractor
                     lineNumber,
                     container,
                     language,
-                    ignoredSegments: ignoredSegments);
+                    ignoredSegments: ignoredSegments,
+                    referenceKind: referenceKind);
                 i = closeIndex;
                 continue;
             }
@@ -1956,7 +1962,8 @@ public static partial class ReferenceExtractor
                     lineNumber,
                     container,
                     language,
-                    ignoredSegments: ignoredSegments);
+                    ignoredSegments: ignoredSegments,
+                    referenceKind: referenceKind);
                 i = closeIndex;
                 continue;
             }
@@ -2006,7 +2013,7 @@ public static partial class ReferenceExtractor
                 continue;
             }
 
-            AddTypeReferenceSegment(references, seen, fileId, segment, expressionStartInLine + segmentStart, context, lineNumber, container, language, isEscapedCSharpIdentifier, ignoredSegments);
+            AddTypeReferenceSegment(references, seen, fileId, segment, expressionStartInLine + segmentStart, context, lineNumber, container, language, isEscapedCSharpIdentifier, ignoredSegments, referenceKind);
             i--;
         }
     }
@@ -2046,7 +2053,7 @@ public static partial class ReferenceExtractor
         return previous >= 0 && expression[previous] == '.';
     }
 
-    private static void AddTypeScriptTypeExpressionSegments(
+    private static void AddTypeScriptTypeExpressionSegmentsCore(
         List<ReferenceRecord> references,
         HashSet<string> seen,
         long fileId,
@@ -2055,7 +2062,8 @@ public static partial class ReferenceExtractor
         string context,
         int lineNumber,
         SymbolRecord? container,
-        IReadOnlySet<string>? ignoredSegments = null)
+        IReadOnlySet<string>? ignoredSegments = null,
+        string referenceKind = "type_reference")
     {
         ignoredSegments ??= TypeScriptTypeExpressionIgnoredSegments;
 
@@ -2081,7 +2089,8 @@ public static partial class ReferenceExtractor
                     seen,
                     fileId,
                     container,
-                    ignoredSegments);
+                    ignoredSegments,
+                    referenceKind);
                 continue;
             }
 
@@ -2115,7 +2124,8 @@ public static partial class ReferenceExtractor
                 lineNumber,
                 container,
                 "typescript",
-                ignoredSegments: ignoredSegments);
+                ignoredSegments: ignoredSegments,
+                referenceKind: referenceKind);
         }
     }
 
@@ -2140,7 +2150,8 @@ public static partial class ReferenceExtractor
         HashSet<string> seen,
         long fileId,
         SymbolRecord? container,
-        IReadOnlySet<string>? ignoredSegments)
+        IReadOnlySet<string>? ignoredSegments,
+        string referenceKind = "type_reference")
     {
         int i = startIndex + 1;
         while (i < expression.Length)
@@ -2165,7 +2176,7 @@ public static partial class ReferenceExtractor
                 if (holeEnd < 0)
                     return expression.Length;
 
-                AddTypeScriptTypeExpressionSegments(
+                AddTypeScriptTypeExpressionSegmentsCore(
                     references,
                     seen,
                     fileId,

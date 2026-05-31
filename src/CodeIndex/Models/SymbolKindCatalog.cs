@@ -89,6 +89,7 @@ public static class SymbolKindCatalog
         "stage",
         "razor_event_binding",
         "subscribe",
+        "type_alias_target",
         "type_reference",
         "unsubscribe",
         "use",

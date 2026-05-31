@@ -591,6 +591,30 @@ public static partial class ReferenceExtractor
         });
     }
 
+    internal static void EmitTypeAliasTargetExpressionReferences(
+        string expression,
+        int expressionStartInLine,
+        string language,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        AddTypeExpressionSegments(
+            references,
+            seen,
+            fileId,
+            expression,
+            expressionStartInLine,
+            context,
+            lineNumber,
+            container,
+            language,
+            referenceKind: "type_alias_target");
+    }
+
     private static SymbolRecord? FindInnermostContainer(IReadOnlyList<SymbolRecord> candidates, int lineNumber)
     {
         foreach (var candidate in candidates)

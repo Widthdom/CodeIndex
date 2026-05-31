@@ -1267,8 +1267,15 @@ internal static class TypeScriptReferenceExtractor
         if (rhsEnd <= rhsStart)
             return;
 
+        var rhsExpression = preparedLine.Substring(rhsStart, rhsEnd - rhsStart);
+        var rhsContainer = new SymbolRecord
+        {
+            Kind = "typealias",
+            Name = ExtractTypeAliasName(preparedLine, nameEnd),
+        };
+        var typeReferenceContainer = resolveContainerForColumn(rhsStart);
         TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
-            preparedLine.Substring(rhsStart, rhsEnd - rhsStart),
+            rhsExpression,
             rhsStart,
             "typescript",
             references,
@@ -1276,7 +1283,26 @@ internal static class TypeScriptReferenceExtractor
             fileId,
             context,
             lineNumber,
-            resolveContainerForColumn(rhsStart));
+            typeReferenceContainer);
+        ReferenceExtractor.EmitTypeAliasTargetExpressionReferences(
+            rhsExpression,
+            rhsStart,
+            "typescript",
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            rhsContainer);
+    }
+
+    private static string ExtractTypeAliasName(string line, int nameEnd)
+    {
+        var nameStart = nameEnd;
+        while (nameStart > 0 && IsTypeScriptIdentifierPart(line[nameStart - 1]))
+            nameStart--;
+
+        return line.Substring(nameStart, nameEnd - nameStart);
     }
 
     private static bool TryFindTypeAliasShape(string line, out int nameEnd, out int assignmentIndex)

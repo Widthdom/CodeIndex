@@ -1033,8 +1033,15 @@ internal static class SwiftReferenceExtractor
         if (typeEnd <= typeStart)
             return;
 
+        var rhsExpression = preparedLine.Substring(typeStart, typeEnd - typeStart);
+        var rhsContainer = new SymbolRecord
+        {
+            Kind = "typealias",
+            Name = ExtractTypealiasName(preparedLine, typealiasIndex + "typealias".Length),
+        };
+        var typeReferenceContainer = resolveContainerForColumn(typeStart);
         TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
-            preparedLine.Substring(typeStart, typeEnd - typeStart),
+            rhsExpression,
             typeStart,
             "swift",
             references,
@@ -1042,7 +1049,38 @@ internal static class SwiftReferenceExtractor
             fileId,
             context,
             lineNumber,
-            resolveContainerForColumn(typeStart));
+            typeReferenceContainer);
+        ReferenceExtractor.EmitTypeAliasTargetExpressionReferences(
+            rhsExpression,
+            typeStart,
+            "swift",
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            rhsContainer);
+    }
+
+    private static string ExtractTypealiasName(string line, int nameStart)
+    {
+        while (nameStart < line.Length && char.IsWhiteSpace(line[nameStart]))
+            nameStart++;
+        if (nameStart >= line.Length)
+            return string.Empty;
+
+        if (line[nameStart] == '`')
+        {
+            var close = line.IndexOf('`', nameStart + 1);
+            if (close > nameStart)
+                return line.Substring(nameStart, close - nameStart + 1);
+        }
+
+        var nameEnd = nameStart;
+        while (nameEnd < line.Length && (line[nameEnd] == '_' || char.IsLetterOrDigit(line[nameEnd])))
+            nameEnd++;
+
+        return line.Substring(nameStart, nameEnd - nameStart);
     }
 
     private static void EmitAssociatedTypeReferences(

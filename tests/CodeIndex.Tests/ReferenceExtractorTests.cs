@@ -5752,6 +5752,11 @@ public class ReferenceExtractorTests
             reference.SymbolName == "Record"
             && reference.ReferenceKind == "type_reference"
             && reference.Context == "type Dict<K = DefaultKey, V = DefaultValue> = Record<K, V>;");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Record"
+            && reference.ReferenceKind == "type_alias_target"
+            && reference.ContainerKind == "typealias"
+            && reference.ContainerName == "Dict");
     }
 
     [Fact]
@@ -26180,6 +26185,16 @@ public class ReferenceExtractorTests
         Assert.Contains(references, reference =>
             reference.SymbolName == "Failure"
             && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Request"
+            && reference.ReferenceKind == "type_alias_target"
+            && reference.ContainerKind == "typealias"
+            && reference.ContainerName == "Loader");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Result"
+            && reference.ReferenceKind == "type_alias_target"
+            && reference.ContainerKind == "typealias"
+            && reference.ContainerName == "LoadResult");
     }
 
     [Fact]
