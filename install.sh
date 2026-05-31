@@ -19,6 +19,8 @@
 #   CDIDX_GITHUB_BASE_URL       Release download base URL override
 #   CDIDX_GITHUB_API_BASE_URL   API base URL override for latest-release lookup
 #   CDIDX_REQUIRE_ATTESTATION=1 Require GitHub provenance verification via gh
+#   CDIDX_STRICT_VERIFY=1       Require GPG checksum-manifest signature verification
+#   CDIDX_RELEASE_GPG_FINGERPRINT Expected checksum signer fingerprint
 #   CDIDX_LOCAL_MIRROR_PORT     Local self-test HTTP server port (default: 18765)
 #   HTTPS_PROXY / HTTP_PROXY    Proxy used by curl for release and API probes
 #   NO_PROXY                    Hosts that should bypass the proxy
@@ -78,6 +80,8 @@ MANIFEST_REQUIRED_VERSION="1.24.6"
 GITHUB_BASE_URL="${CDIDX_GITHUB_BASE_URL:-https://github.com}"
 GITHUB_API_BASE_URL="${CDIDX_GITHUB_API_BASE_URL:-https://api.github.com}"
 REQUIRE_ATTESTATION="${CDIDX_REQUIRE_ATTESTATION:-0}"
+STRICT_VERIFY="${CDIDX_STRICT_VERIFY:-0}"
+RELEASE_GPG_FINGERPRINT="${CDIDX_RELEASE_GPG_FINGERPRINT:-}"
 # Normalize optional base URL overrides by removing a trailing slash.
 # 末尾スラッシュ付きでも URL 連結が壊れないようにする。
 GITHUB_BASE_URL="${GITHUB_BASE_URL%/}"
@@ -225,6 +229,71 @@ verify_release_attestation() {
     fi
 
     warn "GitHub provenance attestation verification failed for ${artifact_name}; continuing with checksum verification. Set CDIDX_REQUIRE_ATTESTATION=1 to fail closed."
+}
+
+checksum_signature_supported() {
+    if [ "${CDIDX_INSTALL_SH_LIB_ONLY:-0}" = "1" ] && [ "${CDIDX_TEST_ENABLE_SIGNATURE_VERIFY:-0}" != "1" ]; then
+        return 1
+    fi
+
+    return 0
+}
+
+normalize_gpg_fingerprint() {
+    printf '%s' "$1" | tr -d '[:space:]' | tr '[:lower:]' '[:upper:]'
+}
+
+extract_validsig_fingerprint() {
+    awk '$1 == "[GNUPG:]" && $2 == "VALIDSIG" { print $3; exit }' "$1"
+}
+
+verify_checksum_signature() {
+    local checksums_path="$1"
+    local signature_path="$2"
+
+    if ! has_cmd gpg; then
+        if [ "$STRICT_VERIFY" = "1" ]; then
+            error "GPG signature verification is required, but the 'gpg' command was not found. Install GnuPG or unset CDIDX_STRICT_VERIFY."
+        fi
+        warn "Skipping GPG signature verification for sha256sums.txt: 'gpg' command not found. Set CDIDX_STRICT_VERIFY=1 to require this verification."
+        return 0
+    fi
+
+    local gpg_status="${signature_path}.status"
+    local gpg_stderr="${signature_path}.stderr"
+    info "Verifying checksum signature..."
+    if ! gpg --batch --status-fd 1 --verify "$signature_path" "$checksums_path" > "$gpg_status" 2> "$gpg_stderr"; then
+        if [ "$STRICT_VERIFY" = "1" ]; then
+            error "GPG signature verification failed for sha256sums.txt."
+        fi
+        warn "GPG signature verification failed for sha256sums.txt; continuing with checksum verification. Set CDIDX_STRICT_VERIFY=1 to fail closed."
+        return 0
+    fi
+
+    local actual_fingerprint
+    actual_fingerprint="$(extract_validsig_fingerprint "$gpg_status")"
+    if [ -z "$actual_fingerprint" ]; then
+        if [ "$STRICT_VERIFY" = "1" ]; then
+            error "GPG signature verification did not report a signer fingerprint."
+        fi
+        warn "GPG signature verification succeeded but no signer fingerprint was reported; continuing without fingerprint pinning."
+        return 0
+    fi
+
+    if [ -z "$RELEASE_GPG_FINGERPRINT" ]; then
+        if [ "$STRICT_VERIFY" = "1" ]; then
+            error "GPG signature verification is strict, but CDIDX_RELEASE_GPG_FINGERPRINT is not set."
+        fi
+        warn "GPG signature verification succeeded for sha256sums.txt, but no expected release signing fingerprint is configured. Set CDIDX_RELEASE_GPG_FINGERPRINT to pin the signer."
+        return 0
+    fi
+
+    local expected_fingerprint
+    expected_fingerprint="$(normalize_gpg_fingerprint "$RELEASE_GPG_FINGERPRINT")"
+    actual_fingerprint="$(normalize_gpg_fingerprint "$actual_fingerprint")"
+    if [ "$actual_fingerprint" != "$expected_fingerprint" ]; then
+        error "GPG signature fingerprint mismatch for sha256sums.txt. Expected ${expected_fingerprint}, got ${actual_fingerprint}."
+    fi
 }
 
 temp_root() {
@@ -910,6 +979,20 @@ download_release_file() {
     return 0
 }
 
+download_optional_release_file() {
+    local url="$1"
+    local output_path="$2"
+    local release_host_label
+    release_host_label="$(release_host_diagnostic_label)"
+
+    local http_code
+    if ! http_code="$(curl_http_get "$url" "$output_path" "$release_host_label")"; then
+        return 1
+    fi
+
+    [ "$http_code" = "200" ]
+}
+
 # --- Detect OS and architecture / OS・アーキテクチャ検出 ---
 
 detect_platform() {
@@ -1023,6 +1106,7 @@ download_and_install() {
     base_url="$(release_download_base_url)"
     local archive_url="${base_url}/${archive_name}"
     local checksums_url="${base_url}/sha256sums.txt"
+    local checksums_signature_url="${base_url}/sha256sums.txt.asc"
 
     local tmpdir
     probe_temp_root
@@ -1039,6 +1123,17 @@ download_and_install() {
     info "Downloading checksums..."
     download_release_file "$checksums_url" "${tmpdir}/sha256sums.txt" "sha256sums.txt"
     verify_release_attestation "${tmpdir}/sha256sums.txt" "sha256sums.txt"
+
+    if checksum_signature_supported; then
+        info "Downloading checksum signature..."
+        if download_optional_release_file "$checksums_signature_url" "${tmpdir}/sha256sums.txt.asc"; then
+            verify_checksum_signature "${tmpdir}/sha256sums.txt" "${tmpdir}/sha256sums.txt.asc"
+        elif [ "$STRICT_VERIFY" = "1" ]; then
+            error "Failed to download sha256sums.txt.asc while strict verification is enabled."
+        else
+            warn "Skipping GPG signature verification: sha256sums.txt.asc was not available. Set CDIDX_STRICT_VERIFY=1 to fail closed."
+        fi
+    fi
 
     # Verify checksum / チェックサム検証
     info "Verifying checksum..."
@@ -2070,6 +2165,11 @@ main() {
 }
 
 if [ "${CDIDX_INSTALL_SH_LIB_ONLY:-0}" != "1" ]; then
+    while [ "${1:-}" = "--strict-verify" ]; do
+        STRICT_VERIFY=1
+        shift
+    done
+
     case "${1:-}" in
         --self-test-local-mirror)
             shift

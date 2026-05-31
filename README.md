@@ -118,6 +118,14 @@ Install choice and network notes:
 | ARM64 host without a preinstalled .NET 8 runtime | `install.sh` |
 | Proxy or mirrored GitHub access | `install.sh --doctor` and `CDIDX_GITHUB_BASE_URL` / `CDIDX_GITHUB_API_BASE_URL` |
 
+Installation security: release tarballs are still checked against
+`sha256sums.txt`, and the installer also downloads `sha256sums.txt.asc` and
+runs `gpg --verify` when GnuPG is available. Set `CDIDX_STRICT_VERIFY=1` or
+pass `--strict-verify` to fail closed when signature verification cannot be
+performed. Set `CDIDX_RELEASE_GPG_FINGERPRINT=<fingerprint>` to pin the
+expected release signing key; strict mode requires this fingerprint once GPG
+verification succeeds.
+
 See [DISTRIBUTION.md](DISTRIBUTION.md) for the full channel matrix and
 [isolated network install notes](USER_GUIDE.md#isolated-networks-and-proxies).
 For database compatibility across `cdidx` upgrades and downgrades, see
@@ -384,6 +392,14 @@ help の探し方:
 | 全コマンド、flag、例の完全版 | `cdidx --help-all` または `cdidx --help-extended` |
 | 共有 flag だけの一覧 | `cdidx --help-flags` |
 | 1 コマンドの usage 行 | `cdidx <command> --help` |
+
+install security: release tarball は引き続き `sha256sums.txt` と照合され、
+installer は `sha256sums.txt.asc` も取得して GnuPG がある場合は
+`gpg --verify` を実行します。署名検証できない場合に fail closed したい
+ときは `CDIDX_STRICT_VERIFY=1` または `--strict-verify` を使ってください。
+期待する release signing key を固定するには
+`CDIDX_RELEASE_GPG_FINGERPRINT=<fingerprint>` を設定します。strict mode では、
+GPG 検証が成功した後にこの fingerprint の設定も必須です。
 
 ### Validate
 

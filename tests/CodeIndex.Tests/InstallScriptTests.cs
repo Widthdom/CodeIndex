@@ -2317,6 +2317,104 @@ public sealed class InstallScriptTests : IDisposable
     }
 
     [Fact]
+    public void VerifyChecksumSignature_StrictVerifyWithoutGpg_FailsClosed()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var checksumsPath = Path.Combine(_tempRoot, "strict.sha256sums.txt");
+        var signaturePath = checksumsPath + ".asc";
+        File.WriteAllText(checksumsPath, "checksum");
+        File.WriteAllText(signaturePath, "signature");
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            command() {
+                if [ "${1:-}" = "-v" ] && [ "${2:-}" = "gpg" ]; then
+                    return 1
+                fi
+                builtin command "$@"
+            }
+
+            verify_checksum_signature "{{checksumsPath}}" "{{signaturePath}}"
+            echo "UNREACHABLE"
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_STRICT_VERIFY"] = "1",
+            },
+            enforceStrictMode: false);
+
+        Assert.Equal(1, exitCode);
+        Assert.DoesNotContain("UNREACHABLE", stdout);
+        Assert.Contains("GPG signature verification is required", stderr);
+    }
+
+    [Fact]
+    public void VerifyChecksumSignature_FingerprintMismatch_Fails()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var checksumsPath = Path.Combine(_tempRoot, "mismatch.sha256sums.txt");
+        var signaturePath = checksumsPath + ".asc";
+        File.WriteAllText(checksumsPath, "checksum");
+        File.WriteAllText(signaturePath, "signature");
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            gpg() {
+                printf '[GNUPG:] VALIDSIG AABBCCDDEEFF00112233445566778899AABBCCDD 2026-01-01 0 4 0 1 10 00 AABBCCDDEEFF00112233445566778899AABBCCDD\n'
+                return 0
+            }
+
+            verify_checksum_signature "{{checksumsPath}}" "{{signaturePath}}"
+            echo "UNREACHABLE"
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_RELEASE_GPG_FINGERPRINT"] = "1111222233334444555566667777888899990000",
+            },
+            enforceStrictMode: false);
+
+        Assert.Equal(1, exitCode);
+        Assert.DoesNotContain("UNREACHABLE", stdout);
+        Assert.Contains("GPG signature fingerprint mismatch", stderr);
+    }
+
+    [Fact]
+    public void VerifyChecksumSignature_MatchingFingerprint_Succeeds()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var checksumsPath = Path.Combine(_tempRoot, "match.sha256sums.txt");
+        var signaturePath = checksumsPath + ".asc";
+        File.WriteAllText(checksumsPath, "checksum");
+        File.WriteAllText(signaturePath, "signature");
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            gpg() {
+                printf '[GNUPG:] VALIDSIG AABBCCDDEEFF00112233445566778899AABBCCDD 2026-01-01 0 4 0 1 10 00 AABBCCDDEEFF00112233445566778899AABBCCDD\n'
+                return 0
+            }
+
+            verify_checksum_signature "{{checksumsPath}}" "{{signaturePath}}"
+            echo "VERIFIED"
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_RELEASE_GPG_FINGERPRINT"] = "aabb ccdd eeff 0011 2233 4455 6677 8899 aabb ccdd",
+            });
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Verifying checksum signature", stdout);
+        Assert.Contains("VERIFIED", stdout);
+        Assert.Equal(string.Empty, stderr);
+    }
+
+    [Fact]
     public void AcquireInstallLock_WhenFlockIsAvailable_TakesNonBlockingFileLock()
     {
         if (OperatingSystem.IsWindows())
