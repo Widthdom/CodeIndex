@@ -181,6 +181,10 @@ jobs:
       - name: Verify formatting
         run: dotnet format whitespace CodeIndex.sln --verify-no-changes --no-restore --verbosity minimal
 
+      - name: Verify Release solution build
+        if: matrix.os == 'ubuntu-latest' && matrix.test-framework == 'net8.0'
+        run: dotnet build CodeIndex.sln --configuration Release --no-restore -p:UseSharedCompilation=false
+
       - name: Verify developer task wrapper
         if: matrix.os == 'ubuntu-latest' && matrix.test-framework == 'net8.0'
         run: make lint
