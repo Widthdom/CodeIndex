@@ -484,7 +484,7 @@ jobs:
           test -s release-files/sha256sums.txt.asc
 
       - name: Attest release artifacts
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: |
             release-files/*.tar.gz
