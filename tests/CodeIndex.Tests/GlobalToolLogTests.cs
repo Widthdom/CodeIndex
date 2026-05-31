@@ -5,6 +5,7 @@ using CodeIndex.Cli;
 
 namespace CodeIndex.Tests;
 
+[Collection("SQLite pool sensitive")]
 public class GlobalToolLogTests
 {
     [Fact]

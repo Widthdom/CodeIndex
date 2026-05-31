@@ -15,6 +15,7 @@ namespace CodeIndex.Tests;
 /// Tests for FileIndexer.
 /// FileIndexerのテスト。
 /// </summary>
+[Collection("SQLite pool sensitive")]
 public class FileIndexerTests
 {
     [Fact]
