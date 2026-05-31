@@ -450,6 +450,13 @@ sha256sum -c sha256sums.txt
 The GPG signature verifies the checksum manifest through the release signing
 key.
 
+Windows release ZIPs also contain an Authenticode-signed `cdidx.exe`. After
+extracting the archive, verify that Windows trusts the signature and timestamp:
+
+```powershell
+Get-AuthenticodeSignature .\cdidx.exe | Format-List Status,SignerCertificate,TimeStamperCertificate
+```
+
 Release workflows also emit GitHub build provenance attestations for the
 published archives, SBOM, checksum manifest, and checksum signature. Verify
 that an artifact was produced by this repository's GitHub Actions release
@@ -2436,6 +2443,39 @@ runtime の管理方法とネットワーク条件に合わせて install channe
 
 完全な比較、package maintainer guidance、winget / apt / rpm / Snap /
 Flatpak などの予定チャネルは [DISTRIBUTION.md](DISTRIBUTION.md) を参照してください。
+
+### リリースアセットの検証
+
+GitHub releases は、すべての archive と SBOM asset を対象にした
+`sha256sums.txt` と、detached GPG signature の `sha256sums.txt.asc` を
+公開します。download した release artifact を信頼する前に checksum manifest
+を検証してください。
+
+```bash
+gpg --verify sha256sums.txt.asc sha256sums.txt
+sha256sum -c sha256sums.txt
+```
+
+GPG signature は release signing key を通じて checksum manifest を検証します。
+
+Windows release ZIP にも Authenticode 署名済みの `cdidx.exe` が含まれます。
+archive を展開したあと、Windows が署名と timestamp を信頼していることを
+確認してください。
+
+```powershell
+Get-AuthenticodeSignature .\cdidx.exe | Format-List Status,SignerCertificate,TimeStamperCertificate
+```
+
+release workflow は、公開された archive、SBOM、checksum manifest、checksum
+signature に対する GitHub build provenance attestation も出力します。artifact が
+この repository の GitHub Actions release workflow で生成されたことを検証できます。
+
+```bash
+gh attestation verify CodeIndex-linux-x64.tar.gz -R Widthdom/CodeIndex
+```
+
+GitHub attestation は、その artifact が repository workflow identity により
+生成されたことを検証します。
 
 ### 方法A: ワンライナーインストール（.NET 不要）
 

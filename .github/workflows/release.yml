@@ -268,6 +268,63 @@ jobs:
         shell: pwsh
         run: Get-ChildItem publish -Filter *.pdb -Recurse | Remove-Item
 
+      - name: Authenticode sign Windows executable
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          WIN_SIGNING_CERT_BASE64: ${{ secrets.WIN_SIGNING_CERT_BASE64 }}
+          WIN_SIGNING_CERT_PASSWORD: ${{ secrets.WIN_SIGNING_CERT_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:WIN_SIGNING_CERT_BASE64)) {
+            throw "WIN_SIGNING_CERT_BASE64 secret is required to Authenticode-sign Windows release binaries."
+          }
+          if ([string]::IsNullOrWhiteSpace($env:WIN_SIGNING_CERT_PASSWORD)) {
+            throw "WIN_SIGNING_CERT_PASSWORD secret is required to Authenticode-sign Windows release binaries."
+          }
+
+          $exe = Join-Path (Resolve-Path publish) "cdidx.exe"
+          if (-not (Test-Path -LiteralPath $exe)) {
+            throw "Published Windows executable was not found: $exe"
+          }
+
+          $pfxPath = Join-Path $env:RUNNER_TEMP "cdidx-signing.pfx"
+          [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:WIN_SIGNING_CERT_BASE64))
+
+          $password = ConvertTo-SecureString $env:WIN_SIGNING_CERT_PASSWORD -AsPlainText -Force
+          $cert = Import-PfxCertificate `
+            -FilePath $pfxPath `
+            -CertStoreLocation Cert:\CurrentUser\My `
+            -Password $password `
+            -Exportable:$false
+          try {
+            if (-not $cert.Thumbprint) {
+              throw "Imported signing certificate did not expose a thumbprint."
+            }
+
+            $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
+              Where-Object { $_.FullName -match '\\x64\\signtool\.exe$' } |
+              Sort-Object FullName -Descending |
+              Select-Object -First 1
+            if (-not $signtool) {
+              throw "signtool.exe was not found in the Windows Kits installation."
+            }
+
+            & $signtool.FullName sign /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com /sha1 $cert.Thumbprint $exe
+            if ($LASTEXITCODE -ne 0) {
+              throw "signtool sign failed with exit code $LASTEXITCODE."
+            }
+
+            & $signtool.FullName verify /pa /v $exe
+            if ($LASTEXITCODE -ne 0) {
+              throw "signtool verify failed with exit code $LASTEXITCODE."
+            }
+          } finally {
+            if ($cert.Thumbprint) {
+              Remove-Item -LiteralPath "Cert:\CurrentUser\My\$($cert.Thumbprint)" -Force -ErrorAction SilentlyContinue
+            }
+            Remove-Item -LiteralPath $pfxPath -Force -ErrorAction SilentlyContinue
+          }
+
       - name: Add license and trademark notices to publish output (Linux/macOS)
         if: runner.os != 'Windows'
         run: cp LICENSE LICENSES/FSL-1.1-ALv2.txt LICENSES/Apache-2.0.txt COMMERCIAL_LICENSE.md INTEGRATION_POLICY.md TRADEMARKS.md publish/ && cp -R LICENSES publish/
