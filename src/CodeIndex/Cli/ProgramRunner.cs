@@ -20,6 +20,7 @@ internal static class ProgramRunner
     internal const string QuietEnvironmentVariable = "CDIDX_QUIET";
     private const string InstallerScriptUrlTemplate = "https://raw.githubusercontent.com/Widthdom/CodeIndex/{0}/install.sh";
     private const long MaxInstallerScriptBytes = 1024 * 1024;
+    internal const long TestExtractorMaxInputBytes = 4 * 1024 * 1024;
     private static readonly TimeSpan InstallerRunTimeout = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan InstallerKillWaitTimeout = TimeSpan.FromSeconds(5);
     internal static TimeProvider TimeProvider { get; set; } = TimeProvider.System;
@@ -386,14 +387,14 @@ internal static class ProgramRunner
 
         if (string.IsNullOrWhiteSpace(language) || string.IsNullOrWhiteSpace(file))
             return CommandErrorWriter.Write("test-extractor requires --language and --file.", CommandExitCodes.InvalidArgument, "use --language <lang> --file <path> [--expect-symbols <json>] [--json].");
-        if (!File.Exists(file))
-            return CommandErrorWriter.Write($"File not found: {file}", CommandExitCodes.NotFound);
+        if (!TryReadTestExtractorFile(file, "source", out var source, out var readExitCode))
+            return readExitCode;
 
-        var source = File.ReadAllText(file);
         var symbols = Indexer.SymbolExtractor.Extract(1, language, source, file);
         if (expect != null)
         {
-            var expected = File.ReadAllText(expect);
+            if (!TryReadTestExtractorFile(expect, "expected symbols", out var expected, out readExitCode))
+                return readExitCode;
             var actual = JsonSerializer.Serialize(symbols);
             if (!JsonEquivalent(expected, actual))
             {
@@ -406,6 +407,45 @@ internal static class ProgramRunner
         if (json || expect == null)
             Console.WriteLine(JsonSerializer.Serialize(symbols));
         return CommandExitCodes.Success;
+    }
+
+    private static bool TryReadTestExtractorFile(string path, string role, out string content, out int exitCode)
+    {
+        content = string.Empty;
+        exitCode = CommandExitCodes.Success;
+        var displayRole = $"test-extractor {role} file";
+        if (!File.Exists(LongPath.EnsureWindowsPrefix(path)))
+        {
+            exitCode = CommandErrorWriter.Write($"{displayRole} not found: {path}", CommandExitCodes.NotFound);
+            return false;
+        }
+
+        try
+        {
+            using var stream = File.OpenRead(LongPath.EnsureWindowsPrefix(path));
+            if (stream.Length > TestExtractorMaxInputBytes)
+            {
+                exitCode = CommandErrorWriter.Write(
+                    $"{displayRole} is too large: {stream.Length} bytes exceeds the {TestExtractorMaxInputBytes} byte limit.",
+                    CommandExitCodes.InvalidArgument,
+                    "Use a smaller extractor fixture or expectation file.");
+                return false;
+            }
+
+            using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+            content = reader.ReadToEnd();
+            return true;
+        }
+        catch (IOException ex)
+        {
+            exitCode = CommandErrorWriter.Write($"{displayRole} could not be read: {ex.Message}", CommandExitCodes.InvalidArgument);
+            return false;
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            exitCode = CommandErrorWriter.Write($"{displayRole} could not be read: {ex.Message}", CommandExitCodes.InvalidArgument);
+            return false;
+        }
     }
 
     private static bool TryConsumeInlineOrNext(string[] args, ref int index, string arg, string flag, out string value)

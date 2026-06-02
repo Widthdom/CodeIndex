@@ -91,6 +91,64 @@ public class ProgramRunnerTests
     }
 
     [Fact]
+    public void Run_TestExtractor_SourceTooLarge_ReturnsInvalidArgument_Issue2896()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_test_extractor_large_source_{Guid.NewGuid():N}");
+            try
+            {
+                Directory.CreateDirectory(tempDir);
+                var file = Path.Combine(tempDir, "large.py");
+                File.WriteAllText(file, new string('x', (int)ProgramRunner.TestExtractorMaxInputBytes + 1));
+
+                var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                    ["test-extractor", "--language", "python", "--file", file, "--json"],
+                    appVersion: "1.10.0"));
+
+                Assert.Equal(CommandExitCodes.InvalidArgument, exitCode);
+                Assert.Empty(stdout);
+                Assert.Contains("test-extractor source file is too large", stderr);
+                Assert.Contains($"{ProgramRunner.TestExtractorMaxInputBytes} byte limit", stderr);
+            }
+            finally
+            {
+                TestProjectHelper.DeleteDirectory(tempDir);
+            }
+        }
+    }
+
+    [Fact]
+    public void Run_TestExtractor_ExpectedSymbolsTooLarge_ReturnsInvalidArgument_Issue2896()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_test_extractor_large_expect_{Guid.NewGuid():N}");
+            try
+            {
+                Directory.CreateDirectory(tempDir);
+                var file = Path.Combine(tempDir, "app.py");
+                var expect = Path.Combine(tempDir, "expected.json");
+                File.WriteAllText(file, "def hello():\n    pass\n");
+                File.WriteAllText(expect, new string('x', (int)ProgramRunner.TestExtractorMaxInputBytes + 1));
+
+                var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                    ["test-extractor", "--language", "python", "--file", file, "--expect-symbols", expect],
+                    appVersion: "1.10.0"));
+
+                Assert.Equal(CommandExitCodes.InvalidArgument, exitCode);
+                Assert.Empty(stdout);
+                Assert.Contains("test-extractor expected symbols file is too large", stderr);
+                Assert.Contains($"{ProgramRunner.TestExtractorMaxInputBytes} byte limit", stderr);
+            }
+            finally
+            {
+                TestProjectHelper.DeleteDirectory(tempDir);
+            }
+        }
+    }
+
+    [Fact]
     public void TryConsumeQueryTraceFlag_StripsTraceAndPreservesEscapedQuery()
     {
         string[] args = ["needle", "--trace=stderr", "--lang", "csharp", "--", "--trace=file"];

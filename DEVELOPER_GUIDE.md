@@ -3284,7 +3284,8 @@ Downstream users can add lightweight language support without rebuilding
   100 ms timeout;
 - `cdidx test-extractor --language <lang> --file <path> --json` runs symbol
   extraction without building an index, and `--expect-symbols <json>` compares
-  the extracted JSON to a fixture.
+  the extracted JSON to a fixture. The source and expectation files are capped
+  at 4 MiB each.
 
 Minimal examples:
 
@@ -3322,6 +3323,7 @@ a broken local experiment does not prevent indexing.
   プロセス全体では configured rule 128 件に制限され、regex match には 100 ms の timeout が付きます。
 - `cdidx test-extractor --language <lang> --file <path> --json` は index を作らずに
   symbol extraction だけを実行し、`--expect-symbols <json>` で fixture JSON と比較できます。
+  source と expectation file はそれぞれ 4 MiB に制限されます。
 
 各 regex は `name` という名前付き capture を公開することを推奨します。存在しない場合、
 `cdidx` は match 全体の文字列を symbol 名として使います。無効、symlink、過大、または
