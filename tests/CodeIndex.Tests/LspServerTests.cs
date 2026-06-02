@@ -200,4 +200,116 @@ public class LspServerTests
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
+
+    [Fact]
+    public void HandleMessage_Definition_ReturnsEmptyForUnindexedDocument()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_definition_unindexed");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var indexedPath = Path.Combine(projectRoot, "indexed.cs");
+            var indexedSource = "class Indexed { void Needle() { } }\n";
+            File.WriteAllText(indexedPath, indexedSource);
+            TestProjectHelper.InsertIndexedFile(dbPath, "indexed.cs", "csharp", indexedSource);
+            var unindexedPath = Path.Combine(projectRoot, "unindexed.cs");
+            var unindexedSource = "class Unindexed { void Call() { Needle(); } }\n";
+            File.WriteAllText(unindexedPath, unindexedSource);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var request = CreateDefinitionRequest(
+                unindexedPath,
+                4,
+                0,
+                unindexedSource.IndexOf("Needle();", StringComparison.Ordinal));
+
+            var response = server.HandleMessage(request);
+
+            Assert.NotNull(response);
+            Assert.Empty(response!["result"]!.AsArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void HandleMessage_Definition_ReturnsEmptyForOutsideProjectDocument()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_definition_project_root");
+        var outsideRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_definition_outside");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var indexedPath = Path.Combine(projectRoot, "app.cs");
+            var indexedSource = "class Indexed { void Needle() { } }\n";
+            File.WriteAllText(indexedPath, indexedSource);
+            TestProjectHelper.InsertIndexedFile(dbPath, "app.cs", "csharp", indexedSource);
+            var outsidePath = Path.Combine(outsideRoot, "app.cs");
+            var outsideSource = "class Outside { void Call() { Needle(); } }\n";
+            File.WriteAllText(outsidePath, outsideSource);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var request = CreateDefinitionRequest(
+                outsidePath,
+                5,
+                0,
+                outsideSource.IndexOf("Needle();", StringComparison.Ordinal));
+
+            var response = server.HandleMessage(request);
+
+            Assert.NotNull(response);
+            Assert.Empty(response!["result"]!.AsArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            TestProjectHelper.DeleteDirectory(outsideRoot);
+        }
+    }
+
+    [Fact]
+    public void HandleMessage_Definition_ReturnsEmptyForOversizedIndexedDocument()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_definition_oversized");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var sourcePath = Path.Combine(projectRoot, "huge.cs");
+            var indexedSource = "class App { void Needle() { } }\n";
+            TestProjectHelper.InsertIndexedFile(dbPath, "huge.cs", "csharp", indexedSource);
+            var oversizedSource = "class App { void Call() { Needle(); } }\n" + new string('x', LspServer.MaxPositionDocumentBytes);
+            File.WriteAllText(sourcePath, oversizedSource);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var request = CreateDefinitionRequest(
+                sourcePath,
+                6,
+                0,
+                oversizedSource.IndexOf("Needle();", StringComparison.Ordinal));
+
+            var response = server.HandleMessage(request);
+
+            Assert.NotNull(response);
+            Assert.Empty(response!["result"]!.AsArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    private static string CreateDefinitionRequest(string sourcePath, int id, int line, int character) =>
+        JsonSerializer.Serialize(new
+        {
+            jsonrpc = "2.0",
+            id,
+            method = "textDocument/definition",
+            @params = new
+            {
+                textDocument = new { uri = new Uri(sourcePath).AbsoluteUri },
+                position = new { line, character },
+            },
+        });
 }
