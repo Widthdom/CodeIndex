@@ -293,6 +293,140 @@ public class LspServerTests
     }
 
     [Fact]
+    public void HandleMessage_Definition_PrefersCurrentIndexedDocumentForCommonToken()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_definition_common_token");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var alphaPath = Path.Combine(projectRoot, "alpha.cs");
+            var betaPath = Path.Combine(projectRoot, "beta.cs");
+            var alphaSource = """
+                class Alpha
+                {
+                    void Run() { }
+                    void Call() { var alpha = new Alpha(); alpha.Run(); }
+                }
+                """;
+            var betaSource = """
+                class Beta
+                {
+                    void Run() { }
+                    void Call() { var beta = new Beta(); beta.Run(); }
+                }
+                """;
+            File.WriteAllText(alphaPath, alphaSource);
+            File.WriteAllText(betaPath, betaSource);
+            TestProjectHelper.InsertIndexedFile(dbPath, "alpha.cs", "csharp", alphaSource);
+            TestProjectHelper.InsertIndexedFile(dbPath, "beta.cs", "csharp", betaSource);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var request = CreateDefinitionRequest(betaPath, 31, 3, CharacterOf(betaSource, 3, "Run();"));
+
+            var response = server.HandleMessage(request);
+
+            Assert.NotNull(response);
+            var locations = response!["result"]!.AsArray();
+            var location = Assert.Single(locations);
+            Assert.Equal(new Uri(betaPath).AbsoluteUri, location!["uri"]!.GetValue<string>());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void HandleMessage_References_PrefersCurrentIndexedDocumentForCommonToken()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_references_common_token");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var alphaPath = Path.Combine(projectRoot, "alpha.cs");
+            var betaPath = Path.Combine(projectRoot, "beta.cs");
+            var alphaSource = """
+                class Worker { public Worker() { } }
+
+                class Alpha
+                {
+                    void Call() { var worker = new Worker(); }
+                }
+                """;
+            var betaSource = """
+                class Worker { public Worker() { } }
+
+                class Beta
+                {
+                    void Call() { var worker = new Worker(); }
+                }
+                """;
+            File.WriteAllText(alphaPath, alphaSource);
+            File.WriteAllText(betaPath, betaSource);
+            TestProjectHelper.InsertIndexedFile(dbPath, "alpha.cs", "csharp", alphaSource);
+            TestProjectHelper.InsertIndexedFile(dbPath, "beta.cs", "csharp", betaSource);
+            MarkGraphReady(dbPath);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var request = CreateReferencesRequest(betaPath, 32, 4, CharacterOf(betaSource, 4, "Worker();"));
+
+            var response = server.HandleMessage(request);
+
+            Assert.NotNull(response);
+            var locations = response!["result"]!.AsArray();
+            Assert.NotEmpty(locations);
+            Assert.All(locations, location => Assert.Equal(new Uri(betaPath).AbsoluteUri, location!["uri"]!.GetValue<string>()));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void HandleMessage_References_PrefersCurrentIndexedDocumentWhenCommonTokenHasNoDefinitions()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_references_common_token_no_definition");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var alphaPath = Path.Combine(projectRoot, "alpha.cs");
+            var betaPath = Path.Combine(projectRoot, "beta.cs");
+            var alphaSource = """
+                class Alpha
+                {
+                    void Call() { System.Console.WriteLine("alpha"); }
+                }
+                """;
+            var betaSource = """
+                class Beta
+                {
+                    void Call() { System.Console.WriteLine("beta"); }
+                }
+                """;
+            File.WriteAllText(alphaPath, alphaSource);
+            File.WriteAllText(betaPath, betaSource);
+            TestProjectHelper.InsertIndexedFile(dbPath, "alpha.cs", "csharp", alphaSource);
+            TestProjectHelper.InsertIndexedFile(dbPath, "beta.cs", "csharp", betaSource);
+            MarkGraphReady(dbPath);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var request = CreateReferencesRequest(betaPath, 33, 2, CharacterOf(betaSource, 2, "WriteLine"));
+
+            var response = server.HandleMessage(request);
+
+            Assert.NotNull(response);
+            var locations = response!["result"]!.AsArray();
+            Assert.NotEmpty(locations);
+            Assert.All(locations, location => Assert.Equal(new Uri(betaPath).AbsoluteUri, location!["uri"]!.GetValue<string>()));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void HandleMessage_Definition_ReturnsEmptyForUnindexedDocument()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_definition_unindexed");
@@ -513,4 +647,30 @@ public class LspServerTests
 
     private static string Frame(string payload) =>
         $"Content-Length: {Encoding.UTF8.GetByteCount(payload)}\r\n\r\n{payload}";
+
+    private static string CreateReferencesRequest(string sourcePath, int id, int line, int character) =>
+        JsonSerializer.Serialize(new
+        {
+            jsonrpc = "2.0",
+            id,
+            method = "textDocument/references",
+            @params = new
+            {
+                textDocument = new { uri = new Uri(sourcePath).AbsoluteUri },
+                position = new { line, character },
+            },
+        });
+
+    private static int CharacterOf(string source, int line, string value)
+    {
+        var lines = source.Split('\n');
+        return lines[line].IndexOf(value, StringComparison.Ordinal);
+    }
+
+    private static void MarkGraphReady(string dbPath)
+    {
+        using var db = new DbContext(dbPath);
+        var writer = new DbWriter(db.Connection);
+        writer.MarkGraphReady();
+    }
 }

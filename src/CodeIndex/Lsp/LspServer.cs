@@ -24,6 +24,8 @@ internal sealed class LspServer : IDisposable
     private bool _exitRequested;
     private bool _exitRequestedBeforeShutdown;
 
+    private readonly record struct PositionTokenContext(string Token, string IndexedPath);
+
     public LspServer(DbReader reader, string version, JsonSerializerOptions jsonOptions, string? projectRoot = null)
     {
         _reader = reader;
@@ -153,11 +155,11 @@ internal sealed class LspServer : IDisposable
 
     private JsonArray Definition(JsonElement root)
     {
-        var query = ExtractPositionToken(root);
-        if (string.IsNullOrWhiteSpace(query))
+        var context = ExtractPositionToken(root);
+        if (context == null)
             return [];
 
-        var definitions = _reader.GetDefinitions(query, DefaultLimit, exact: true);
+        var definitions = ResolveLspDefinitions(context.Value);
         var array = new JsonArray();
         foreach (var definition in definitions)
             array.Add(ToLocation(definition.Path, definition.StartLine, 1, definition.EndLine, 1));
@@ -166,18 +168,53 @@ internal sealed class LspServer : IDisposable
 
     private JsonArray References(JsonElement root)
     {
-        var query = ExtractPositionToken(root);
-        if (string.IsNullOrWhiteSpace(query))
+        var context = ExtractPositionToken(root);
+        if (context == null)
             return [];
 
-        var analysis = _reader.AnalyzeSymbol(query, DefaultLimit, exact: true);
+        var analysis = ResolveLspReferences(context.Value);
         var array = new JsonArray();
         foreach (var reference in analysis.References)
-            array.Add(ToLocation(reference.Path, reference.Line, Math.Max(reference.Column, 1), reference.Line, Math.Max(reference.Column, 1) + Math.Max(query.Length, 1)));
+            array.Add(ToLocation(reference.Path, reference.Line, Math.Max(reference.Column, 1), reference.Line, Math.Max(reference.Column, 1) + Math.Max(context.Value.Token.Length, 1)));
         return array;
     }
 
-    private string? ExtractPositionToken(JsonElement root)
+    private List<DefinitionResult> ResolveLspDefinitions(PositionTokenContext context)
+    {
+        var localDefinitions = _reader.GetDefinitions(context.Token, DefaultLimit, exact: true, pathPatterns: [context.IndexedPath]);
+        if (localDefinitions.Count > 0)
+            return localDefinitions;
+
+        var workspaceDefinitions = _reader.GetDefinitions(context.Token, DefaultLimit, exact: true);
+        return HasSingleLspDefinitionTarget(workspaceDefinitions) ? workspaceDefinitions : [];
+    }
+
+    private SymbolAnalysisResult ResolveLspReferences(PositionTokenContext context)
+    {
+        var localDefinitions = _reader.GetDefinitions(context.Token, DefaultLimit, exact: true, pathPatterns: [context.IndexedPath]);
+        if (localDefinitions.Count > 0)
+            return _reader.AnalyzeSymbol(context.Token, DefaultLimit, pathPatterns: [context.IndexedPath], exact: true);
+
+        var workspaceDefinitions = _reader.GetDefinitions(context.Token, DefaultLimit, exact: true);
+        if (workspaceDefinitions.Count == 0 || !HasSingleLspDefinitionTarget(workspaceDefinitions))
+            return _reader.AnalyzeSymbol(context.Token, DefaultLimit, pathPatterns: [context.IndexedPath], exact: true);
+
+        return _reader.AnalyzeSymbol(context.Token, DefaultLimit, exact: true);
+    }
+
+    private static bool HasSingleLspDefinitionTarget(IReadOnlyList<DefinitionResult> definitions)
+    {
+        if (definitions.Count <= 1)
+            return true;
+
+        var firstKey = BuildLspDefinitionTargetKey(definitions[0]);
+        return definitions.Skip(1).All(definition => string.Equals(BuildLspDefinitionTargetKey(definition), firstKey, StringComparison.Ordinal));
+    }
+
+    private static string BuildLspDefinitionTargetKey(DefinitionResult definition)
+        => string.Join('\0', definition.Path, definition.Kind, definition.ContainerKind, definition.ContainerName, definition.Name);
+
+    private PositionTokenContext? ExtractPositionToken(JsonElement root)
     {
         var path = GetDocumentPath(root);
         var line = GetInt32(root, "params", "position", "line");
@@ -198,7 +235,8 @@ internal sealed class LspServer : IDisposable
         if (!TryReadPositionLine(indexedFullPath, line, out var sourceLine))
             return null;
 
-        return ExtractTokenAtUtf16Position(sourceLine, character);
+        var token = ExtractTokenAtUtf16Position(sourceLine, character);
+        return string.IsNullOrWhiteSpace(token) ? null : new PositionTokenContext(token, indexedPath);
     }
 
     private static bool TryReadPositionLine(string path, int targetLine, out string sourceLine)
