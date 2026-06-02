@@ -244,7 +244,7 @@ public static partial class IndexCommandRunner
 
                 var writer = new DbWriter(db);
                 var indexer = new FileIndexer(options.ProjectPath, ignoreCase, ignoreRuleRoot, options.MaxFileSizeBytes, directoryIgnoreCaseProbe: null, symlinkPolicy: options.SymlinkPolicy);
-                var currentHotspotFamilyMarkerFingerprints = GetHotspotFamilyMarkerFingerprints(indexer);
+                var currentHotspotFamilyMarkerFingerprints = GetHotspotFamilyMarkerFingerprints(indexer, indexCancellation.Token);
                 var projectRoot = Path.GetFullPath(options.ProjectPath!);
 
                 initialExitCode = isUpdateMode
@@ -257,6 +257,10 @@ public static partial class IndexCommandRunner
         catch (IndexInterruptedException ex)
         {
             return WriteInterruptedResult(options.Json, jsonOptions, ex.FilesProcessed, ex.FilesTotal);
+        }
+        catch (OperationCanceledException) when (indexCancellation.IsCancellationRequested)
+        {
+            return WriteInterruptedResult(options.Json, jsonOptions, filesProcessed: 0, filesTotal: null);
         }
         catch (IndexExtractionStalledException ex)
         {
@@ -381,11 +385,13 @@ public static partial class IndexCommandRunner
         return total;
     }
 
-    private static Dictionary<string, string?> GetHotspotFamilyMarkerFingerprints(FileIndexer indexer)
+    private static Dictionary<string, string?> GetHotspotFamilyMarkerFingerprints(
+        FileIndexer indexer,
+        CancellationToken cancellationToken = default)
     {
         var values = new Dictionary<string, string?>(StringComparer.Ordinal);
         foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
-            values[lang] = indexer.GetProjectMarkerFingerprint(lang);
+            values[lang] = indexer.GetProjectMarkerFingerprint(lang, cancellationToken);
         return values;
     }
 

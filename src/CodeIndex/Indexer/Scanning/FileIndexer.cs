@@ -84,6 +84,13 @@ public class FileIndexer
             PathFilterKind.OutsideProjectRoot;
     }
 
+    private sealed class ProjectMarkerFingerprintTraversalState
+    {
+        public int DirectoriesVisited { get; set; }
+        public int MarkerFilesCollected { get; set; }
+        public bool Truncated { get; set; }
+    }
+
     private static readonly string[] HotspotFamilyMarkerLanguages = ["csharp", "vb", "fsharp", "msbuild"];
     private const int ConflictMarkerScanLimitBytes = 50 * 1024;
     private const int MaxDirectoryTraversalDepth = 128;
@@ -94,6 +101,8 @@ public class FileIndexer
     private const int MaxIgnoreFileBytes = 256 * 1024;
     private const int MaxIgnoreFileLines = 8192;
     private const int MaxIgnoreRulesPerFile = 4096;
+    private const int MaxProjectMarkerFingerprintDirectories = 8192;
+    private const int MaxProjectMarkerFingerprintFiles = 4096;
     private const int MaxIgnorePatternLength = 512;
     private static readonly TimeSpan IgnoreRegexMatchTimeout = TimeSpan.FromMilliseconds(100);
     // Extension-to-language mapping / 拡張子→言語名マッピング
@@ -1529,14 +1538,43 @@ public class FileIndexer
     public static bool SupportsHotspotFamilyMarkerLanguage(string? lang) =>
         GetProjectMarkerPatterns(lang) != null;
 
-    public string? GetProjectMarkerFingerprint(string? lang)
+    public string? GetProjectMarkerFingerprint(string? lang, CancellationToken cancellationToken = default) =>
+        GetProjectMarkerFingerprint(lang, MaxProjectMarkerFingerprintDirectories, MaxProjectMarkerFingerprintFiles, cancellationToken);
+
+    internal string? GetProjectMarkerFingerprintForTesting(
+        string? lang,
+        int maxDirectories,
+        int maxMarkerFiles,
+        CancellationToken cancellationToken = default) =>
+        GetProjectMarkerFingerprint(lang, maxDirectories, maxMarkerFiles, cancellationToken);
+
+    private string? GetProjectMarkerFingerprint(
+        string? lang,
+        int maxDirectories,
+        int maxMarkerFiles,
+        CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var projectMarkerPatterns = GetProjectMarkerPatterns(lang);
         if (projectMarkerPatterns == null)
             return null;
 
         var projectMarkers = new List<string>();
-        CollectProjectMarkerFiles(_projectRoot, projectMarkerPatterns, projectMarkers);
+        var traversalState = new ProjectMarkerFingerprintTraversalState();
+        CollectProjectMarkerFiles(
+            _projectRoot,
+            projectMarkerPatterns,
+            projectMarkers,
+            Math.Max(1, maxDirectories),
+            Math.Max(1, maxMarkerFiles),
+            traversalState,
+            cancellationToken);
+        if (traversalState.Truncated)
+        {
+            projectMarkers.Add(
+                $"__cdidx_project_marker_fingerprint_truncated__:directories={traversalState.DirectoriesVisited};markers={traversalState.MarkerFilesCollected}");
+        }
+
         projectMarkers.Sort(StringComparer.Ordinal);
 
         var payload = string.Join('\n', projectMarkers);
@@ -1606,39 +1644,71 @@ public class FileIndexer
         return count;
     }
 
-    private void CollectProjectMarkerFiles(string dir, IReadOnlyList<string> patterns, List<string> projectMarkers)
+    private void CollectProjectMarkerFiles(
+        string dir,
+        IReadOnlyList<string> patterns,
+        List<string> projectMarkers,
+        int maxDirectories,
+        int maxMarkerFiles,
+        ProjectMarkerFingerprintTraversalState traversalState,
+        CancellationToken cancellationToken)
     {
-        try
+        var pendingDirectories = new Stack<string>();
+        pendingDirectories.Push(dir);
+        while (pendingDirectories.Count > 0)
         {
-            var prefixedDir = LongPath.EnsureWindowsPrefix(dir);
-            foreach (var pattern in patterns)
+            cancellationToken.ThrowIfCancellationRequested();
+            if (traversalState.DirectoriesVisited >= maxDirectories)
             {
-                foreach (var file in Directory.EnumerateFiles(prefixedDir, pattern, SearchOption.TopDirectoryOnly))
+                traversalState.Truncated = true;
+                return;
+            }
+
+            var currentDirectory = pendingDirectories.Pop();
+            traversalState.DirectoriesVisited++;
+            try
+            {
+                var prefixedDir = LongPath.EnsureWindowsPrefix(currentDirectory);
+                foreach (var pattern in patterns)
                 {
-                    var markerFile = LongPath.RemoveWindowsPrefix(file);
-                    if (!HasSkippedAttributes(markerFile))
+                    foreach (var file in Directory.EnumerateFiles(prefixedDir, pattern, SearchOption.TopDirectoryOnly))
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        var markerFile = LongPath.RemoveWindowsPrefix(file);
+                        if (HasSkippedAttributes(markerFile))
+                            continue;
+
+                        if (traversalState.MarkerFilesCollected >= maxMarkerFiles)
+                        {
+                            traversalState.Truncated = true;
+                            return;
+                        }
+
                         projectMarkers.Add(NormalizeScopeKey(Path.GetRelativePath(_projectRoot, markerFile)));
+                        traversalState.MarkerFilesCollected++;
+                    }
+                }
+
+                foreach (var enumeratedSubDir in Directory.EnumerateDirectories(prefixedDir))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var subDir = LongPath.RemoveWindowsPrefix(enumeratedSubDir);
+                    if (SkipDirs.Contains(Path.GetFileName(subDir)) || HasSkippedAttributes(subDir))
+                        continue;
+
+                    pendingDirectories.Push(subDir);
                 }
             }
-
-            foreach (var enumeratedSubDir in Directory.EnumerateDirectories(prefixedDir))
+            catch (UnauthorizedAccessException)
             {
-                var subDir = LongPath.RemoveWindowsPrefix(enumeratedSubDir);
-                if (SkipDirs.Contains(Path.GetFileName(subDir)) || HasSkippedAttributes(subDir))
-                    continue;
-
-                CollectProjectMarkerFiles(subDir, patterns, projectMarkers);
+                // Best-effort like ScanFiles(): unreadable directories do not abort the whole index.
+                // ScanFiles() と同じく best-effort。読めないディレクトリでは index 全体を落とさない。
             }
-        }
-        catch (UnauthorizedAccessException)
-        {
-            // Best-effort like ScanFiles(): unreadable directories do not abort the whole index.
-            // ScanFiles() と同じく best-effort。読めないディレクトリでは index 全体を落とさない。
-        }
-        catch (IOException)
-        {
-            // Best-effort like ScanFiles(): transient IO failures should only skip that subtree.
-            // ScanFiles() と同じく best-effort。IO 失敗はその subtree だけスキップする。
+            catch (IOException)
+            {
+                // Best-effort like ScanFiles(): transient IO failures should only skip that subtree.
+                // ScanFiles() と同じく best-effort。IO 失敗はその subtree だけスキップする。
+            }
         }
     }
 

@@ -570,6 +570,79 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void GetProjectMarkerFingerprint_CancelledToken_ThrowsBeforeTraversal()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_msbuild_marker_cancel_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        try
+        {
+            var indexer = new FileIndexer(tempDir);
+
+            Assert.Throws<OperationCanceledException>(() =>
+                indexer.GetProjectMarkerFingerprint("msbuild", cancellation.Token));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void GetProjectMarkerFingerprint_DirectoryCapTruncatesTraversal()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_msbuild_marker_dir_cap_{Guid.NewGuid():N}");
+        try
+        {
+            var nestedDir = Path.Combine(tempDir, "src", "App");
+            Directory.CreateDirectory(nestedDir);
+            File.WriteAllText(Path.Combine(nestedDir, "App.csproj"), "<Project />");
+
+            var indexer = new FileIndexer(tempDir);
+
+            var fullFingerprint = indexer.GetProjectMarkerFingerprint("msbuild");
+            var cappedFingerprint = indexer.GetProjectMarkerFingerprintForTesting("msbuild", maxDirectories: 1, maxMarkerFiles: 100);
+
+            Assert.False(string.IsNullOrWhiteSpace(fullFingerprint));
+            Assert.False(string.IsNullOrWhiteSpace(cappedFingerprint));
+            Assert.NotEqual(fullFingerprint, cappedFingerprint);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void GetProjectMarkerFingerprint_FileCapTruncatesMarkerCollection()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_msbuild_marker_file_cap_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            File.WriteAllText(Path.Combine(tempDir, "App.csproj"), "<Project />");
+            File.WriteAllText(Path.Combine(tempDir, "Lib.csproj"), "<Project />");
+
+            var indexer = new FileIndexer(tempDir);
+
+            var fullFingerprint = indexer.GetProjectMarkerFingerprint("msbuild");
+            var cappedFingerprint = indexer.GetProjectMarkerFingerprintForTesting("msbuild", maxDirectories: 100, maxMarkerFiles: 1);
+
+            Assert.False(string.IsNullOrWhiteSpace(fullFingerprint));
+            Assert.False(string.IsNullOrWhiteSpace(cappedFingerprint));
+            Assert.NotEqual(fullFingerprint, cappedFingerprint);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
     public void GetFamilyScopeKey_MsbuildProjectFileIgnoresDirectoryBuildMarkersForScope()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
