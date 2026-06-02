@@ -353,6 +353,31 @@ public class ProgramRunnerTests
         }
     }
 
+    [Fact]
+    public void UpdateChecker_Check_IgnoresOversizedCache()
+    {
+        var cachePath = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json");
+        try
+        {
+            File.WriteAllText(cachePath, new string('x', UpdateChecker.MaxUpdateCheckCacheBytes + 1));
+
+            var result = UpdateChecker.Check(
+                "1.10.0",
+                cachePath,
+                DateTimeOffset.Parse("2026-01-01T00:00:00Z"),
+                _ => Task.FromResult<string?>("v1.11.0"));
+
+            Assert.False(result.FromCache);
+            Assert.Equal("v1.11.0", result.LatestVersion);
+            Assert.True(result.UpdateAvailable);
+        }
+        finally
+        {
+            if (File.Exists(cachePath))
+                File.Delete(cachePath);
+        }
+    }
+
     [Theory]
     [InlineData("v1.26.0", "https://raw.githubusercontent.com/Widthdom/CodeIndex/v1.26.0/install.sh")]
     [InlineData(" release/test ", "https://raw.githubusercontent.com/Widthdom/CodeIndex/release%2Ftest/install.sh")]
