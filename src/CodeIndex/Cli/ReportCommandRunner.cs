@@ -22,6 +22,7 @@ public static class ReportCommandRunner
 {
     internal const int DefaultLogLines = 200;
     internal const string RedactedPlaceholder = "[redacted]";
+    internal const UnixFileMode BundleFileMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
 
     public static int Run(string[] cmdArgs, JsonSerializerOptions jsonOptions, string? appVersion = null)
     {
@@ -314,7 +315,22 @@ public static class ReportCommandRunner
         if (!string.IsNullOrEmpty(dir))
             Directory.CreateDirectory(dir);
 
-        using var fileStream = new FileStream(outputPath, FileMode.Create, FileAccess.Write, FileShare.None);
+        if (!OperatingSystem.IsWindows() && File.Exists(outputPath))
+            File.SetUnixFileMode(outputPath, BundleFileMode);
+
+        var streamOptions = new FileStreamOptions
+        {
+            Mode = FileMode.Create,
+            Access = FileAccess.Write,
+            Share = FileShare.None,
+        };
+        if (!OperatingSystem.IsWindows())
+            streamOptions.UnixCreateMode = BundleFileMode;
+
+        using var fileStream = new FileStream(outputPath, streamOptions);
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(outputPath, BundleFileMode);
+
         using var gz = new GZipStream(fileStream, CompressionLevel.Optimal);
         using var tar = new TarWriter(gz, TarEntryFormat.Pax, leaveOpen: true);
 
@@ -323,7 +339,7 @@ public static class ReportCommandRunner
             var entry = new PaxTarEntry(TarEntryType.RegularFile, name)
             {
                 DataStream = new MemoryStream(bytes, writable: false),
-                Mode = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.OtherRead,
+                Mode = BundleFileMode,
                 ModificationTime = DateTimeOffset.UtcNow,
             };
             tar.WriteEntry(entry);

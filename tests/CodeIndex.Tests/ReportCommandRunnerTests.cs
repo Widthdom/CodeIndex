@@ -20,6 +20,17 @@ namespace CodeIndex.Tests;
 [Collection("SQLite pool sensitive")]
 public class ReportCommandRunnerTests
 {
+    private const UnixFileMode PermissionBits =
+        UnixFileMode.UserRead |
+        UnixFileMode.UserWrite |
+        UnixFileMode.UserExecute |
+        UnixFileMode.GroupRead |
+        UnixFileMode.GroupWrite |
+        UnixFileMode.GroupExecute |
+        UnixFileMode.OtherRead |
+        UnixFileMode.OtherWrite |
+        UnixFileMode.OtherExecute;
+
     private readonly JsonSerializerOptions _jsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
@@ -144,6 +155,39 @@ public class ReportCommandRunnerTests
             Assert.Contains("no SQLite index found", schemaText);
             Assert.Contains($"no SQLite index found at: {ReportCommandRunner.RedactedPlaceholder}", schemaText);
             Assert.DoesNotContain(missingDb, schemaText);
+        }
+        finally
+        {
+            TryDeleteDirectory(workDir);
+        }
+    }
+
+    [Fact]
+    public void Run_OutputArchiveAndEntriesUseOwnerOnlyPermissions()
+    {
+        var workDir = CreateWorkDir();
+        try
+        {
+            var output = Path.Combine(workDir, "bundle.tgz");
+
+            var (exitCode, _, _) = RunAndCaptureStreams([
+                "--output", output,
+                "--db", Path.Combine(workDir, "missing.db"),
+                "--no-log",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            if (!OperatingSystem.IsWindows())
+            {
+                var fileMode = File.GetUnixFileMode(output) & PermissionBits;
+                Assert.Equal(ReportCommandRunner.BundleFileMode, fileMode);
+            }
+
+            var entryModes = ReadTarGzEntryModes(output);
+            Assert.NotEmpty(entryModes);
+            Assert.All(
+                entryModes.Values,
+                mode => Assert.Equal(ReportCommandRunner.BundleFileMode, mode & PermissionBits));
         }
         finally
         {
@@ -467,6 +511,21 @@ public class ReportCommandRunnerTests
             using var buffer = new MemoryStream();
             entry.DataStream?.CopyTo(buffer);
             entries[entry.Name] = buffer.ToArray();
+        }
+        return entries;
+    }
+
+    private static Dictionary<string, UnixFileMode> ReadTarGzEntryModes(string path)
+    {
+        var entries = new Dictionary<string, UnixFileMode>(StringComparer.Ordinal);
+        using var fileStream = File.OpenRead(path);
+        using var gz = new GZipStream(fileStream, CompressionMode.Decompress);
+        using var tar = new TarReader(gz);
+        while (tar.GetNextEntry() is { } entry)
+        {
+            if (entry.EntryType != TarEntryType.RegularFile)
+                continue;
+            entries[entry.Name] = entry.Mode;
         }
         return entries;
     }

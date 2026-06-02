@@ -1071,7 +1071,7 @@ cdidx report --output report.tgz --json
 
 | Flag | Default | Effect |
 |---|---|---|
-| `--output <path>` / `-o <path>` | (required) | Destination `.tar.gz`. The directory is created if missing. |
+| `--output <path>` / `-o <path>` | (required) | Destination `.tar.gz`. The directory is created if missing; on POSIX, the archive and tar entries are owner-readable/writable only. |
 | `--db <path>` | `.cdidx/codeindex.db` | Override the database whose schema is summarized. If absent, `schema.txt` records that no DB was found. |
 | `--log-lines <n>` | `200` | How many trailing lifecycle-log lines to include (`0` disables the tail). |
 | `--no-log` | | Skip the lifecycle log entirely. |
@@ -3176,7 +3176,7 @@ cdidx report --output report.tgz --json
 
 | フラグ | 既定値 | 効果 |
 |---|---|---|
-| `--output <path>` / `-o <path>` | （必須） | 出力先 `.tar.gz`。親ディレクトリが無ければ作成します。 |
+| `--output <path>` / `-o <path>` | （必須） | 出力先 `.tar.gz`。親ディレクトリが無ければ作成します。POSIX では archive と tar entry は owner の読み書きのみになります。 |
 | `--db <path>` | `.cdidx/codeindex.db` | スキーマ要約対象の DB を上書きします。存在しなければ `schema.txt` に「DB が見つからなかった」旨が記録されます。 |
 | `--log-lines <n>` | `200` | ライフサイクルログ末尾を何行含めるか（`0` で末尾を含めません）。 |
 | `--no-log` | | ライフサイクルログを完全に省略します。 |
