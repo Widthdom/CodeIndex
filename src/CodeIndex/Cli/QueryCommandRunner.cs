@@ -40,6 +40,8 @@ public static class QueryCommandRunner
     internal const int MaxMapSectionsCsvEntries = 16;
     internal const int MaxStatusCheckScopesCsvLength = 256;
     internal const int MaxStatusCheckScopesCsvEntries = 16;
+    internal const int MaxVisibilityFilterCsvLength = 256;
+    internal const int MaxVisibilityFilterCsvEntries = 16;
     internal const int ExactZeroHintProbeLimit = 1;
     internal const int ExactZeroHintSampleLimit = 5;
     private const string HotspotsGroupedByNameKind = "name_kind";
@@ -6484,6 +6486,9 @@ public static class QueryCommandRunner
 
     private static void AddVisibilityFilterValues(string optionName, string rawValue, List<string> target, Action<string> addParseError)
     {
+        if (!ValidateCsvBounds(optionName, rawValue, MaxVisibilityFilterCsvLength, MaxVisibilityFilterCsvEntries, addParseError))
+            return;
+
         var values = rawValue
             .Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
             .Select(value => value.ToLowerInvariant())

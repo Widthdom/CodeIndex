@@ -77,6 +77,40 @@ public class QueryCommandRunnerTests
         Assert.True(options.NoVisibilityRank);
     }
 
+    [Theory]
+    [InlineData("--visibility")]
+    [InlineData("--exclude-visibility")]
+    public void ParseArgs_VisibilityFiltersRejectOverlongCsv_Issue2912(string optionName)
+    {
+        var tooLong = new string('p', QueryCommandRunner.MaxVisibilityFilterCsvLength + 1);
+
+        var options = QueryCommandRunner.ParseArgs(
+            ["RunSearch", optionName, tooLong],
+            jsonDefault: false,
+            allowNamedQuery: true);
+
+        Assert.Contains($"{optionName} value is too long", options.ParseError);
+        Assert.Empty(options.VisibilityFilters);
+        Assert.Empty(options.ExcludeVisibilityFilters);
+    }
+
+    [Theory]
+    [InlineData("--visibility")]
+    [InlineData("--exclude-visibility")]
+    public void ParseArgs_VisibilityFiltersRejectTooManyCsvEntries_Issue2912(string optionName)
+    {
+        var tooMany = string.Join(',', Enumerable.Repeat("public", QueryCommandRunner.MaxVisibilityFilterCsvEntries + 1));
+
+        var options = QueryCommandRunner.ParseArgs(
+            ["RunSearch", optionName, tooMany],
+            jsonDefault: false,
+            allowNamedQuery: true);
+
+        Assert.Contains($"{optionName} accepts at most", options.ParseError);
+        Assert.Empty(options.VisibilityFilters);
+        Assert.Empty(options.ExcludeVisibilityFilters);
+    }
+
     [Fact]
     public void ParseArgs_AllowsZeroMaxLineWidth()
     {
