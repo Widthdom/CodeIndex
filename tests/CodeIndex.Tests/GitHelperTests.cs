@@ -341,6 +341,63 @@ public class GitHelperTests : IDisposable
         }
     }
 
+    [Fact]
+    public void GetChangedFilesFromCommit_FailsWhenCapturedOutputExceedsLimit()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var repoDir = Path.Combine(_tempDir, "repo");
+        Directory.CreateDirectory(repoDir);
+        var fakeGitDir = Path.Combine(_tempDir, "fake-git-output-cap");
+        Directory.CreateDirectory(fakeGitDir);
+        WriteFakeGitThatExceedsStdoutLimit(fakeGitDir);
+
+        var oldPath = Environment.GetEnvironmentVariable("PATH");
+        Environment.SetEnvironmentVariable("PATH", fakeGitDir + Path.PathSeparator + oldPath);
+        try
+        {
+            var ex = Assert.Throws<InvalidOperationException>(
+                () => GitHelper.GetChangedFilesFromCommit(repoDir, "0123456789abcdef"));
+
+            Assert.Contains("captured stdout exceeded", ex.Message);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PATH", oldPath);
+        }
+    }
+
+    [Fact]
+    public void GetChangedFilesFromCommit_FailsWhenGitCommandTimesOut()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var repoDir = Path.Combine(_tempDir, "repo-timeout");
+        Directory.CreateDirectory(repoDir);
+        var fakeGitDir = Path.Combine(_tempDir, "fake-git-timeout");
+        Directory.CreateDirectory(fakeGitDir);
+        WriteFakeGitThatHangsOnDiffTree(fakeGitDir);
+
+        var oldPath = Environment.GetEnvironmentVariable("PATH");
+        var oldTimeout = GitHelper.GitCommandTimeout;
+        Environment.SetEnvironmentVariable("PATH", fakeGitDir + Path.PathSeparator + oldPath);
+        GitHelper.GitCommandTimeout = TimeSpan.FromSeconds(1);
+        try
+        {
+            var ex = Assert.Throws<InvalidOperationException>(
+                () => GitHelper.GetChangedFilesFromCommit(repoDir, "0123456789abcdef"));
+
+            Assert.Contains("timed out", ex.Message);
+        }
+        finally
+        {
+            GitHelper.GitCommandTimeout = oldTimeout;
+            Environment.SetEnvironmentVariable("PATH", oldPath);
+        }
+    }
+
     [Theory]
     [InlineData("feature")]
     [InlineData("v1.0.0")]
@@ -763,6 +820,54 @@ fi
 if [ "$1" = "diff-tree" ]; then
   perl -e 'print STDERR "x" x 131072'
   printf 'M\tchanged.txt\n'
+  exit 0
+fi
+exit 1
+""");
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+    }
+
+    private static void WriteFakeGitThatExceedsStdoutLimit(string directory)
+    {
+        var script = Path.Combine(directory, "git");
+        File.WriteAllText(script, """
+#!/bin/sh
+if [ "$1" = "rev-parse" ]; then
+  if [ "$2" = "--symbolic-full-name" ]; then
+    exit 0
+  fi
+  if [ "$2" = "--verify" ]; then
+    printf '%s\n' '0123456789abcdef0123456789abcdef01234567'
+    exit 0
+  fi
+fi
+if [ "$1" = "diff-tree" ]; then
+  perl -e 'for ($i = 0; $i < 80000; $i++) { print "M\tchanged_$i.txt\n" }'
+  exit 0
+fi
+exit 1
+""");
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+    }
+
+    private static void WriteFakeGitThatHangsOnDiffTree(string directory)
+    {
+        var script = Path.Combine(directory, "git");
+        File.WriteAllText(script, """
+#!/bin/sh
+if [ "$1" = "rev-parse" ]; then
+  if [ "$2" = "--symbolic-full-name" ]; then
+    exit 0
+  fi
+  if [ "$2" = "--verify" ]; then
+    printf '%s\n' '0123456789abcdef0123456789abcdef01234567'
+    exit 0
+  fi
+fi
+if [ "$1" = "diff-tree" ]; then
+  sleep 5
   exit 0
 fi
 exit 1
