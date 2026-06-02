@@ -493,31 +493,31 @@ public static class QueryCommandRunner
                 return ZeroResultExitCode(options);
             }
 
+            var displayRows = BuildSearchDisplayRows(results, options, exact);
+
             if (options.Json)
             {
                 if (TryWriteFormattedLocations(
                     options,
-                    results.Select(r => new FormattedLocation(r.Path, r.StartLine, null, $"search match: {options.Query}")),
+                    displayRows.SelectMany(row => ToSearchFormattedLocations(row, options.Query, exact)),
                     jsonOptions))
                     return CommandExitCodes.Success;
                 if (options.OutputFormat == OutputFormatLsp)
                 {
-                    WriteLspLocations(results.Select(ToLspLocation), jsonOptions);
+                    WriteLspLocations(displayRows.SelectMany(row => ToSearchLspLocations(row, exact)), jsonOptions);
                     return CommandExitCodes.Success;
                 }
                 if (options.OutputFormat == OutputFormatQf)
                 {
-                    WriteQuickfix(results.Select(r => (r.Path, r.StartLine, 1, $"search match: {options.Query}")));
+                    WriteQuickfix(displayRows.SelectMany(row => ToSearchQuickfixItems(row, options.Query, exact)));
                     return CommandExitCodes.Success;
                 }
                 if (options.OutputFormat == OutputFormatSarif)
                 {
-                    WriteSarif(results.Select(r => (r.Path, r.StartLine, 1, $"search match: {options.Query}", "search")), jsonOptions);
+                    WriteSarif(displayRows.SelectMany(row => ToSearchSarifItems(row, options.Query, exact)), jsonOptions);
                     return CommandExitCodes.Success;
                 }
-                var compactResults = results
-                    .Select(r => SearchSnippetFormatter.ToCompactResult(r, options.Query, options.SnippetLines, exact, options.MaxLineWidth, r.Lang, options.SnippetFocus, exposeLiteralHighlights: exact))
-                    .ToArray();
+                var compactResults = displayRows.Select(row => row.Compact).ToArray();
                 if (exactSubstringHint != null)
                 {
                     foreach (var result in compactResults)
@@ -540,16 +540,17 @@ public static class QueryCommandRunner
             }
             else
             {
-                foreach (var r in results)
+                foreach (var row in displayRows)
                 {
+                    var r = row.Result;
                     Console.WriteLine($"{r.Path}:{r.StartLine}-{r.EndLine}{FormatSearchVisibilitySuffix(r.Visibility)}");
-                    var snippetLines = SearchSnippetFormatter.Format(r.Content, options.Query, options.SnippetLines, exact, options.MaxLineWidth, r.Lang, options.SnippetFocus);
+                    var snippetLines = row.Compact.Snippet.Split('\n', StringSplitOptions.None);
                     foreach (var line in snippetLines)
                         Console.WriteLine($"  {line}");
                     Console.WriteLine();
                 }
-                var fileCount = results.Select(r => r.Path).Distinct().Count();
-                Console.Error.WriteLine($"({results.Count} results in {fileCount} files)");
+                var fileCount = displayRows.Select(row => row.Result.Path).Distinct().Count();
+                Console.Error.WriteLine($"({displayRows.Count} results in {fileCount} files)");
                 WriteExactSubstringHintIfNeeded(exactSubstringHint);
             }
             return CommandExitCodes.Success;
@@ -559,6 +560,101 @@ public static class QueryCommandRunner
                 WriteJsonStreamDone(jsonDoneCount.Value, jsonOptions);
         });
     }
+
+    private static List<SearchDisplayRow> BuildSearchDisplayRows(List<SearchResult> results, QueryCommandOptions options, bool exact)
+    {
+        var rows = new List<SearchDisplayRow>(results.Count);
+        var seenMatchLocations = !exact || options.NoDedup ? null : new HashSet<string>(StringComparer.Ordinal);
+        foreach (var result in results)
+        {
+            var compact = SearchSnippetFormatter.ToCompactResult(
+                result,
+                options.Query!,
+                options.SnippetLines,
+                exact,
+                options.MaxLineWidth,
+                result.Lang,
+                options.SnippetFocus,
+                exposeLiteralHighlights: exact);
+
+            if (seenMatchLocations != null && compact.MatchLines.Count > 0)
+            {
+                var keptLines = new List<int>(compact.MatchLines.Count);
+                foreach (var line in compact.MatchLines)
+                {
+                    var key = result.Path + "\0" + line.ToString(CultureInfo.InvariantCulture);
+                    if (seenMatchLocations.Add(key))
+                        keptLines.Add(line);
+                }
+
+                if (keptLines.Count == 0)
+                    continue;
+
+                if (keptLines.Count != compact.MatchLines.Count)
+                {
+                    var keptSet = keptLines.ToHashSet();
+                    compact.MatchLines = keptLines;
+                    compact.Highlights = compact.Highlights
+                        .Where(highlight => keptSet.Contains(highlight.Line))
+                        .ToList();
+                }
+            }
+
+            rows.Add(new SearchDisplayRow(result, compact));
+        }
+
+        return rows;
+    }
+
+    private static IEnumerable<FormattedLocation> ToSearchFormattedLocations(SearchDisplayRow row, string query, bool useMatchLines)
+    {
+        if (!useMatchLines || row.Compact.MatchLines.Count == 0)
+        {
+            yield return new FormattedLocation(row.Result.Path, row.Result.StartLine, null, $"search match: {query}");
+            yield break;
+        }
+
+        foreach (var line in row.Compact.MatchLines)
+            yield return new FormattedLocation(row.Result.Path, line, null, $"search match: {query}");
+    }
+
+    private static IEnumerable<LspLocation> ToSearchLspLocations(SearchDisplayRow row, bool useMatchLines)
+    {
+        if (!useMatchLines || row.Compact.MatchLines.Count == 0)
+        {
+            yield return ToLspLocation(row.Result);
+            yield break;
+        }
+
+        foreach (var line in row.Compact.MatchLines)
+            yield return BuildLspLocation(row.Result.Path, line, 1, line + 1, 1);
+    }
+
+    private static IEnumerable<(string Path, int Line, int Column, string Message)> ToSearchQuickfixItems(SearchDisplayRow row, string query, bool useMatchLines)
+    {
+        if (!useMatchLines || row.Compact.MatchLines.Count == 0)
+        {
+            yield return (row.Result.Path, row.Result.StartLine, 1, $"search match: {query}");
+            yield break;
+        }
+
+        foreach (var line in row.Compact.MatchLines)
+            yield return (row.Result.Path, line, 1, $"search match: {query}");
+    }
+
+    private static IEnumerable<(string Path, int Line, int Column, string Message, string RuleId)> ToSearchSarifItems(SearchDisplayRow row, string query, bool useMatchLines)
+    {
+        if (!useMatchLines || row.Compact.MatchLines.Count == 0)
+        {
+            yield return (row.Result.Path, row.Result.StartLine, 1, $"search match: {query}", "search");
+            yield break;
+        }
+
+        foreach (var line in row.Compact.MatchLines)
+            yield return (row.Result.Path, line, 1, $"search match: {query}", "search");
+    }
+
+    private sealed record SearchDisplayRow(SearchResult Result, CompactSearchResult Compact);
 
     private static void WriteJsonStreamDone(int count, JsonSerializerOptions jsonOptions)
         => Console.WriteLine(JsonSerializer.Serialize(

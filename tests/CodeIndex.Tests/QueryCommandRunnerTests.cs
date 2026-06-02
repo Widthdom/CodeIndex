@@ -11316,6 +11316,82 @@ jobs:
     }
 
     [Fact]
+    public void RunSearch_ExactSubstringJsonDeduplicatesOverlappingChunkFileLineHits_Issue2812()
+    {
+        static string BuildChunkContent(int startLine, int endLine)
+        {
+            return string.Join('\n', Enumerable.Range(startLine, (endLine - startLine) + 1)
+                .Select(line => line == 75
+                    ? "var CommandText = $\"SELECT 1\";"
+                    : $"// filler {line}"));
+        }
+
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_exact_dedup_2812");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                var fileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/sql.cs",
+                    Lang = "csharp",
+                    Size = 4096,
+                    Lines = 120,
+                    Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                    Checksum = "overlap-chunk-fixture",
+                });
+                writer.InsertChunks(
+                [
+                    new ChunkRecord
+                    {
+                        FileId = fileId,
+                        ChunkIndex = 0,
+                        StartLine = 1,
+                        EndLine = 80,
+                        Content = BuildChunkContent(1, 80),
+                    },
+                    new ChunkRecord
+                    {
+                        FileId = fileId,
+                        ChunkIndex = 1,
+                        StartLine = 71,
+                        EndLine = 120,
+                        Content = BuildChunkContent(71, 120),
+                    },
+                ]);
+            }
+
+            var (dedupExitCode, dedupStdout, dedupStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["CommandText = $", "--db", dbPath, "--json=array", "--exact-substring", "--snippet-lines", "2"],
+                _jsonOptions));
+            var (rawExitCode, rawStdout, rawStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["CommandText = $", "--db", dbPath, "--json=array", "--exact-substring", "--snippet-lines", "2", "--no-dedup"],
+                _jsonOptions));
+
+            using var dedupDocument = ParseJsonOutput(dedupStdout);
+            using var rawDocument = ParseJsonOutput(rawStdout);
+            var dedupRows = dedupDocument.RootElement.EnumerateArray().ToList();
+            var rawRows = rawDocument.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, dedupExitCode);
+            Assert.Equal(string.Empty, dedupStderr);
+            var dedupRow = Assert.Single(dedupRows);
+            Assert.Equal(75, dedupRow.GetProperty("match_lines")[0].GetInt32());
+
+            Assert.Equal(CommandExitCodes.Success, rawExitCode);
+            Assert.Equal(string.Empty, rawStderr);
+            Assert.Equal(2, rawRows.Count);
+            Assert.All(rawRows, row => Assert.Equal(75, row.GetProperty("match_lines")[0].GetInt32()));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_PunctuationHeavyTextSuggestsExactSubstring()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_exact_substring_hint_text");
