@@ -168,7 +168,7 @@ public sealed class ChangelogToolTests
     }
 
     [Fact]
-    public void PrepareFailureBeforeFragmentDeletionLeavesFragmentsForManualRecovery()
+    public void PrepareFailureBeforeFragmentDeletionRollsBackReleaseFiles()
     {
         using var scope = new TestRepositoryScope();
         scope.WriteFile("CHANGELOG.md", SampleChangelog);
@@ -197,13 +197,14 @@ public sealed class ChangelogToolTests
 
         Assert.NotNull(ex);
         Assert.Contains("injected fragment deletion failure", ex.Message);
-        Assert.Contains("English release note", scope.ReadFile("CHANGELOG.md"));
+        Assert.DoesNotContain("English release note", scope.ReadFile("CHANGELOG.md"));
         Assert.Equal("""
             {
-              "version": "1.17.0"
+              "version": "1.16.0"
             }
-            """.Replace("\r\n", "\n") + "\n", scope.ReadFile("version.json").Replace("\r\n", "\n"));
+            """.Replace("\r\n", "\n"), scope.ReadFile("version.json").Replace("\r\n", "\n"));
         Assert.True(scope.Exists("changelog.d/unreleased/195.fixed.md"));
+        Assert.DoesNotContain(scope.ListFiles("."), path => Path.GetFileName(path).EndsWith(".tmp", StringComparison.Ordinal));
     }
 
     [Fact]

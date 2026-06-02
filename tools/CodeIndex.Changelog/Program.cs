@@ -220,10 +220,12 @@ public sealed class ChangelogTool
     {
         var fragments = LoadFragments(validate: true);
         var versionPath = Path.Combine(_repositoryRoot, "version.json");
-        var currentVersion = ReadCurrentVersion(versionPath);
+        var originalVersionJson = ReadAllTextBounded(versionPath, _repositoryRoot, MaxVersionJsonBytes);
+        var currentVersion = ParseCurrentVersion(originalVersionJson);
 
         var changelogPath = Path.Combine(_repositoryRoot, "CHANGELOG.md");
-        var changelogText = ReadAllTextBounded(changelogPath, _repositoryRoot, MaxChangelogBytes).Replace("\r\n", "\n", StringComparison.Ordinal);
+        var originalChangelogText = ReadAllTextBounded(changelogPath, _repositoryRoot, MaxChangelogBytes);
+        var changelogText = originalChangelogText.Replace("\r\n", "\n", StringComparison.Ordinal);
         var changelog = ParsedChangelog.Parse(changelogText);
 
         var targetHeading = $"### [{targetVersion}] - {releaseDate:yyyy-MM-dd}";
@@ -256,8 +258,10 @@ public sealed class ChangelogTool
         {
             WritePreparedFiles(
                 changelogPath,
+                originalChangelogText,
                 updatedChangelog,
                 versionPath,
+                originalVersionJson,
                 updatedVersionJson,
                 fragments);
         }
@@ -540,10 +544,8 @@ public sealed class ChangelogTool
         return start <= end ? lines[start..(end + 1)] : [];
     }
 
-    private static Version ReadCurrentVersion(string versionPath)
+    private static Version ParseCurrentVersion(string text)
     {
-        var repositoryRoot = Path.GetDirectoryName(versionPath) ?? string.Empty;
-        var text = ReadAllTextBounded(versionPath, repositoryRoot, MaxVersionJsonBytes);
         using var document = JsonDocument.Parse(text);
         if (!document.RootElement.TryGetProperty("version", out var versionElement))
             throw new ChangelogException("version.json is missing the version property.");
@@ -568,13 +570,18 @@ public sealed class ChangelogTool
 
     private static void WritePreparedFiles(
         string changelogPath,
+        string originalChangelog,
         string updatedChangelog,
         string versionPath,
+        string originalVersionJson,
         string updatedVersionJson,
         IReadOnlyList<Fragment> fragments)
     {
         var changelogTempPath = string.Empty;
         var versionTempPath = string.Empty;
+        var changelogReplaced = false;
+        var versionReplaced = false;
+        var fragmentDeletionStarted = false;
 
         try
         {
@@ -585,15 +592,29 @@ public sealed class ChangelogTool
 
             ReplaceWithStagedFile(changelogTempPath, changelogPath);
             changelogTempPath = string.Empty;
+            changelogReplaced = true;
             NotifyPrepareWritePhase(PrepareWritePhase.ChangelogReplaced);
 
             ReplaceWithStagedFile(versionTempPath, versionPath);
             versionTempPath = string.Empty;
+            versionReplaced = true;
             NotifyPrepareWritePhase(PrepareWritePhase.VersionReplaced);
 
             NotifyPrepareWritePhase(PrepareWritePhase.BeforeFragmentsDeleted);
+            fragmentDeletionStarted = true;
             foreach (var fragment in fragments)
                 DeleteConsumedFragment(fragment);
+        }
+        catch (Exception) when (!fragmentDeletionStarted)
+        {
+            RollBackPreparedFiles(
+                changelogPath,
+                originalChangelog,
+                changelogReplaced,
+                versionPath,
+                originalVersionJson,
+                versionReplaced);
+            throw;
         }
         finally
         {
@@ -627,6 +648,43 @@ public sealed class ChangelogTool
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             throw new ChangelogException($"{fragment.RelativePath}: failed to delete consumed changelog fragment after CHANGELOG.md and version.json were updated; delete this fragment manually before retrying prepare. {ex.Message}");
+        }
+    }
+
+    private static void RollBackPreparedFiles(
+        string changelogPath,
+        string originalChangelog,
+        bool changelogReplaced,
+        string versionPath,
+        string originalVersionJson,
+        bool versionReplaced)
+    {
+        try
+        {
+            if (versionReplaced)
+                RestoreText(versionPath, originalVersionJson);
+
+            if (changelogReplaced)
+                RestoreText(changelogPath, originalChangelog);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new ChangelogException($"prepare failed before fragment deletion and rollback also failed: {ex.Message}");
+        }
+    }
+
+    private static void RestoreText(string targetPath, string contents)
+    {
+        var tempPath = string.Empty;
+        try
+        {
+            tempPath = WriteStagedText(targetPath, contents);
+            ReplaceWithStagedFile(tempPath, targetPath);
+            tempPath = string.Empty;
+        }
+        finally
+        {
+            TryDelete(tempPath);
         }
     }
 
