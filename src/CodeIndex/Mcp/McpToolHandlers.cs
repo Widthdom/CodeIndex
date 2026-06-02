@@ -1931,11 +1931,13 @@ public partial class McpServer
         return values;
     }
 
-    private static Dictionary<string, FileIndexer.ProjectMarkerFingerprintResult> GetHotspotFamilyMarkerFingerprints(FileIndexer indexer)
+    private static Dictionary<string, FileIndexer.ProjectMarkerFingerprintResult> GetHotspotFamilyMarkerFingerprints(
+        FileIndexer indexer,
+        CancellationToken cancellationToken)
     {
         var values = new Dictionary<string, FileIndexer.ProjectMarkerFingerprintResult>(StringComparer.Ordinal);
         foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
-            values[lang] = indexer.GetProjectMarkerFingerprintResult(lang);
+            values[lang] = indexer.GetProjectMarkerFingerprintResult(lang, cancellationToken);
         return values;
     }
 
@@ -3552,7 +3554,9 @@ public partial class McpServer
         var writer = new DbWriter(db);
         var indexer = new FileIndexer(projectPath, GitHelper.ResolveIgnoreCase(projectPath), GitHelper.TryGetRepositoryRoot(projectPath) ?? Path.GetFullPath(projectPath), maxFileBytes);
         var postExtractionHooks = PostExtractionHookRunner.DiscoverDefault();
-        var currentHotspotFamilyMarkerFingerprints = GetHotspotFamilyMarkerFingerprints(indexer);
+        var requestToken = _currentRequestToken.Value;
+        requestToken.ThrowIfCancellationRequested();
+        var currentHotspotFamilyMarkerFingerprints = GetHotspotFamilyMarkerFingerprints(indexer, requestToken);
         var currentCSharpSymbolNameContractVersion = DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var csharpSymbolNameContractMatchesCurrent = priorCSharpSymbolNameContractVersion == currentCSharpSymbolNameContractVersion;
         var currentSqlGraphContractVersion = DbContext.SqlGraphContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -3621,8 +3625,6 @@ public partial class McpServer
         writer.PurgeUnsupportedReferences(ReferenceExtractor.GetSupportedLanguages());
 
         // Scan and index / スキャン・インデックス
-        var requestToken = _currentRequestToken.Value;
-        requestToken.ThrowIfCancellationRequested();
         var scanResult = indexer.ScanFilesDetailed(cancellationToken: requestToken);
         var files = scanResult.Files;
         EmitProgressNotification(progressToken, 0, files.Count, "Index scan complete; indexing files.");
