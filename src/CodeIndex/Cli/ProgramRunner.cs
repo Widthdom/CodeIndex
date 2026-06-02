@@ -581,6 +581,7 @@ internal static class ProgramRunner
         error = string.Empty;
         var kept = new List<string>(args.Length);
         var passthrough = false;
+        var searchCommandSeen = false;
         for (var i = 0; i < args.Length; i++)
         {
             var arg = args[i];
@@ -593,6 +594,12 @@ internal static class ProgramRunner
             if (arg == "--")
             {
                 passthrough = true;
+                kept.Add(arg);
+                continue;
+            }
+
+            if (searchCommandSeen)
+            {
                 kept.Add(arg);
                 continue;
             }
@@ -630,6 +637,8 @@ internal static class ProgramRunner
                 continue;
             }
 
+            if (arg == "search")
+                searchCommandSeen = true;
             kept.Add(arg);
         }
 

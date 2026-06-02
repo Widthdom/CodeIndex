@@ -713,6 +713,33 @@ sleep 5
     }
 
     [Fact]
+    public void Run_SearchQueryThatLooksLikeGlobalLogFlag_IsNotConsumed_Issue2955()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue2955_search_log_flag_query");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "USER_GUIDE.md",
+                "markdown",
+                "--log-max-size-mb appears here\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["search", "--log-max-size-mb", "--path", "USER_GUIDE.md", "--db", dbPath, "--count", "--exact-substring"],
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("1", stdout.Trim());
+            Assert.Equal(string.Empty, stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_ForcedGlobalToolLogging_OnUnix_HardensExistingAndCurrentLogFiles()
     {
         if (OperatingSystem.IsWindows())

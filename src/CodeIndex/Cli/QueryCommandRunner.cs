@@ -5469,6 +5469,18 @@ public static class QueryCommandRunner
                         AddParseError("Error: --config is only supported by status.");
                     }
                     break;
+                case "--log-format":
+                case "--log-retain-count":
+                case "--log-max-size-mb":
+                    if (allowNamedQuery && query == null)
+                    {
+                        query = currentArg;
+                    }
+                    else
+                    {
+                        AddParseError($"Error: unsupported option: {currentArg}. Use `--` before a query literal that starts with `-`.");
+                    }
+                    break;
                 case "--path":
                     if (TryReadStringOptionValue(args, ref i, "--path", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var pathPattern, out var pathError))
                     {
