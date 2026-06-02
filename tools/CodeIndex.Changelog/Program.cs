@@ -69,6 +69,12 @@ public static class Program
         Console.Out.WriteLine("  dotnet run --project tools/CodeIndex.Changelog -- prepare --version X.Y.Z --date YYYY-MM-DD");
         Console.Out.WriteLine("  dotnet run --project tools/CodeIndex.Changelog -- render --version X.Y.Z --date YYYY-MM-DD");
         Console.Out.WriteLine("  dotnet run --project tools/CodeIndex.Changelog -- release-notes --version X.Y.Z");
+        Console.Out.WriteLine();
+        Console.Out.WriteLine("Limits:");
+        Console.Out.WriteLine($"  unreleased fragments: {ChangelogTool.MaxFragmentCount}");
+        Console.Out.WriteLine($"  fragment file size: {ChangelogTool.MaxFragmentBytes} bytes");
+        Console.Out.WriteLine($"  CHANGELOG.md size: {ChangelogTool.MaxChangelogBytes} bytes");
+        Console.Out.WriteLine($"  version.json size: {ChangelogTool.MaxVersionJsonBytes} bytes");
     }
 
     private static ParsedOptions ParseOptions(string[] args, bool requireDate)
@@ -146,6 +152,12 @@ public static class Program
 
 public sealed class ChangelogTool
 {
+    public const int MaxFragmentCount = 512;
+    public const long MaxFragmentBytes = 128 * 1024;
+    public const long MaxChangelogBytes = 8 * 1024 * 1024;
+    public const long MaxVersionJsonBytes = 16 * 1024;
+    internal static Action<PrepareWritePhase>? PrepareWritePhaseForTesting { get; set; }
+
     private static readonly string[] AllowedCategories =
     [
         "added",
@@ -208,10 +220,12 @@ public sealed class ChangelogTool
     {
         var fragments = LoadFragments(validate: true);
         var versionPath = Path.Combine(_repositoryRoot, "version.json");
-        var currentVersion = ReadCurrentVersion(versionPath);
+        var originalVersionJson = ReadAllTextBounded(versionPath, _repositoryRoot, MaxVersionJsonBytes);
+        var currentVersion = ParseCurrentVersion(originalVersionJson);
 
         var changelogPath = Path.Combine(_repositoryRoot, "CHANGELOG.md");
-        var changelogText = File.ReadAllText(changelogPath).Replace("\r\n", "\n", StringComparison.Ordinal);
+        var originalChangelogText = ReadAllTextBounded(changelogPath, _repositoryRoot, MaxChangelogBytes);
+        var changelogText = originalChangelogText.Replace("\r\n", "\n", StringComparison.Ordinal);
         var changelog = ParsedChangelog.Parse(changelogText);
 
         var targetHeading = $"### [{targetVersion}] - {releaseDate:yyyy-MM-dd}";
@@ -239,13 +253,17 @@ public sealed class ChangelogTool
         var updatedChangelog = changelog.Render(english, japanese, footerEntries);
 
         var consumedFragmentFiles = fragments.Select(fragment => fragment.RelativePath).ToList();
+        var updatedVersionJson = JsonSerializer.Serialize(new { version = targetVersion.ToString() }, new JsonSerializerOptions { WriteIndented = true }) + Environment.NewLine;
         if (writeChanges)
         {
-            File.WriteAllText(changelogPath, updatedChangelog);
-            File.WriteAllText(versionPath, JsonSerializer.Serialize(new { version = targetVersion.ToString() }, new JsonSerializerOptions { WriteIndented = true }) + Environment.NewLine);
-
-            foreach (var fragment in fragments)
-                File.Delete(fragment.AbsolutePath);
+            WritePreparedFiles(
+                changelogPath,
+                originalChangelogText,
+                updatedChangelog,
+                versionPath,
+                originalVersionJson,
+                updatedVersionJson,
+                fragments);
         }
 
         var changedFiles = new List<string>
@@ -268,7 +286,7 @@ public sealed class ChangelogTool
     public string RenderReleaseNotes(Version targetVersion)
     {
         var changelogPath = Path.Combine(_repositoryRoot, "CHANGELOG.md");
-        var changelogText = File.ReadAllText(changelogPath).Replace("\r\n", "\n", StringComparison.Ordinal);
+        var changelogText = ReadAllTextBounded(changelogPath, _repositoryRoot, MaxChangelogBytes).Replace("\r\n", "\n", StringComparison.Ordinal);
         var changelog = ParsedChangelog.Parse(changelogText);
         var versionPrefix = $"### [{targetVersion}]";
 
@@ -304,13 +322,23 @@ public sealed class ChangelogTool
 
         var fragments = new List<Fragment>();
         var errors = new List<string>();
+        var fragmentPaths = new List<string>();
 
-        foreach (var path in Directory.EnumerateFiles(fragmentDirectory, "*.md", SearchOption.TopDirectoryOnly).OrderBy(path => path, StringComparer.Ordinal))
+        foreach (var path in Directory.EnumerateFiles(fragmentDirectory, "*.md", SearchOption.TopDirectoryOnly))
         {
             var fileName = Path.GetFileName(path);
             if (fileName == ".gitkeep")
                 continue;
 
+            fragmentPaths.Add(path);
+            if (fragmentPaths.Count > MaxFragmentCount)
+                throw new ChangelogException($"changelog.d/unreleased: too many changelog fragments ({fragmentPaths.Count}); maximum supported count is {MaxFragmentCount}.");
+        }
+
+        fragmentPaths.Sort(StringComparer.Ordinal);
+
+        foreach (var path in fragmentPaths)
+        {
             try
             {
                 fragments.Add(ParseFragment(path, _repositoryRoot));
@@ -344,7 +372,7 @@ public sealed class ChangelogTool
         var frontMatterIssues = new List<int>();
         var frontMatterAffected = new List<string>();
 
-        var text = File.ReadAllText(absolutePath).Replace("\r\n", "\n", StringComparison.Ordinal);
+        var text = ReadAllTextBounded(absolutePath, repositoryRoot, MaxFragmentBytes).Replace("\r\n", "\n", StringComparison.Ordinal);
         var lines = text.Split('\n');
         if (lines.Length == 0)
             throw new ChangelogException($"{relativePath}: fragment is empty.");
@@ -516,14 +544,247 @@ public sealed class ChangelogTool
         return start <= end ? lines[start..(end + 1)] : [];
     }
 
-    private static Version ReadCurrentVersion(string versionPath)
+    private static Version ParseCurrentVersion(string text)
     {
-        var text = File.ReadAllText(versionPath);
         using var document = JsonDocument.Parse(text);
         if (!document.RootElement.TryGetProperty("version", out var versionElement))
             throw new ChangelogException("version.json is missing the version property.");
 
         return Version.Parse(versionElement.GetString() ?? throw new ChangelogException("version.json contains an empty version."));
+    }
+
+    private static string ReadAllTextBounded(string absolutePath, string repositoryRoot, long maxBytes)
+    {
+        var fileInfo = new FileInfo(absolutePath);
+        var length = fileInfo.Length;
+        if (fileInfo.LinkTarget is null && length > maxBytes)
+        {
+            var relativePath = string.IsNullOrWhiteSpace(repositoryRoot)
+                ? Path.GetFileName(absolutePath)
+                : Path.GetRelativePath(repositoryRoot, absolutePath).Replace('\\', '/');
+            throw new ChangelogException($"{relativePath}: file is {length} bytes; maximum supported size is {maxBytes} bytes.");
+        }
+
+        using var stream = File.Open(absolutePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        using var memory = new MemoryStream();
+        var buffer = new byte[8192];
+        var totalBytesRead = 0L;
+
+        while (true)
+        {
+            var remainingBytes = maxBytes + 1 - totalBytesRead;
+            var readLength = (int)Math.Min(buffer.Length, remainingBytes);
+            var bytesRead = stream.Read(buffer.AsSpan(0, readLength));
+            if (bytesRead == 0)
+                break;
+
+            totalBytesRead += bytesRead;
+            if (totalBytesRead > maxBytes)
+            {
+                var relativePath = string.IsNullOrWhiteSpace(repositoryRoot)
+                    ? Path.GetFileName(absolutePath)
+                    : Path.GetRelativePath(repositoryRoot, absolutePath).Replace('\\', '/');
+                throw new ChangelogException($"{relativePath}: file is larger than {maxBytes} bytes; maximum supported size is {maxBytes} bytes.");
+            }
+
+            memory.Write(buffer.AsSpan(0, bytesRead));
+        }
+
+        memory.Position = 0;
+        using var reader = new StreamReader(memory, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        return reader.ReadToEnd();
+    }
+
+    private static void WritePreparedFiles(
+        string changelogPath,
+        string originalChangelog,
+        string updatedChangelog,
+        string versionPath,
+        string originalVersionJson,
+        string updatedVersionJson,
+        IReadOnlyList<Fragment> fragments)
+    {
+        var changelogTempPath = string.Empty;
+        var versionTempPath = string.Empty;
+        var changelogReplaced = false;
+        var versionReplaced = false;
+        var fragmentDeletionStarted = false;
+        var changelogWritePath = ResolveWriteTargetPath(changelogPath);
+        var versionWritePath = ResolveWriteTargetPath(versionPath);
+
+        try
+        {
+            changelogTempPath = WriteStagedText(changelogWritePath, updatedChangelog);
+            versionTempPath = WriteStagedText(versionWritePath, updatedVersionJson);
+
+            NotifyPrepareWritePhase(PrepareWritePhase.StagedFilesWritten);
+
+            ReplaceWithStagedFile(changelogTempPath, changelogWritePath);
+            changelogTempPath = string.Empty;
+            changelogReplaced = true;
+            NotifyPrepareWritePhase(PrepareWritePhase.ChangelogReplaced);
+
+            ReplaceWithStagedFile(versionTempPath, versionWritePath);
+            versionTempPath = string.Empty;
+            versionReplaced = true;
+            NotifyPrepareWritePhase(PrepareWritePhase.VersionReplaced);
+
+            NotifyPrepareWritePhase(PrepareWritePhase.BeforeFragmentsDeleted);
+            fragmentDeletionStarted = true;
+            foreach (var fragment in fragments)
+                DeleteConsumedFragment(fragment);
+        }
+        catch (Exception) when (!fragmentDeletionStarted)
+        {
+            RollBackPreparedFiles(
+                changelogWritePath,
+                originalChangelog,
+                changelogReplaced,
+                versionWritePath,
+                originalVersionJson,
+                versionReplaced);
+            throw;
+        }
+        finally
+        {
+            TryDelete(changelogTempPath);
+            TryDelete(versionTempPath);
+        }
+    }
+
+    private static string WriteStagedText(string targetPath, string contents)
+    {
+        var tempPath = BuildTempPath(targetPath);
+        var tempCreated = false;
+        var writeCompleted = false;
+        try
+        {
+            using (var stream = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                tempCreated = true;
+                NotifyPrepareWritePhase(PrepareWritePhase.StagedTempCreated);
+
+                using var writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), bufferSize: 1024, leaveOpen: true);
+                writer.Write(contents);
+                writer.Flush();
+                stream.Flush(flushToDisk: true);
+            }
+
+            writeCompleted = true;
+        }
+        finally
+        {
+            if (tempCreated && !writeCompleted)
+                TryDelete(tempPath);
+        }
+
+        return tempPath;
+    }
+
+    private static string ResolveWriteTargetPath(string targetPath)
+    {
+        var fileInfo = new FileInfo(targetPath);
+        if (fileInfo.LinkTarget is null)
+            return targetPath;
+
+        var finalTarget = fileInfo.ResolveLinkTarget(returnFinalTarget: true);
+        if (finalTarget is not null)
+            return finalTarget.FullName;
+
+        var linkTarget = fileInfo.LinkTarget;
+        if (string.IsNullOrEmpty(linkTarget))
+            return targetPath;
+
+        if (Path.IsPathFullyQualified(linkTarget))
+            return linkTarget;
+
+        var directory = fileInfo.DirectoryName;
+        return Path.GetFullPath(Path.Combine(
+            string.IsNullOrEmpty(directory) ? Directory.GetCurrentDirectory() : directory,
+            linkTarget));
+    }
+
+    private static void ReplaceWithStagedFile(string stagedPath, string targetPath)
+    {
+        File.Move(stagedPath, targetPath, overwrite: true);
+    }
+
+    private static void DeleteConsumedFragment(Fragment fragment)
+    {
+        try
+        {
+            File.Delete(fragment.AbsolutePath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new ChangelogException($"{fragment.RelativePath}: failed to delete consumed changelog fragment after CHANGELOG.md and version.json were updated; delete this fragment manually before retrying prepare. {ex.Message}");
+        }
+    }
+
+    private static void RollBackPreparedFiles(
+        string changelogPath,
+        string originalChangelog,
+        bool changelogReplaced,
+        string versionPath,
+        string originalVersionJson,
+        bool versionReplaced)
+    {
+        try
+        {
+            if (versionReplaced)
+                RestoreText(versionPath, originalVersionJson);
+
+            if (changelogReplaced)
+                RestoreText(changelogPath, originalChangelog);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new ChangelogException($"prepare failed before fragment deletion and rollback also failed: {ex.Message}");
+        }
+    }
+
+    private static void RestoreText(string targetPath, string contents)
+    {
+        var tempPath = string.Empty;
+        try
+        {
+            tempPath = WriteStagedText(targetPath, contents);
+            ReplaceWithStagedFile(tempPath, targetPath);
+            tempPath = string.Empty;
+        }
+        finally
+        {
+            TryDelete(tempPath);
+        }
+    }
+
+    private static string BuildTempPath(string targetPath)
+    {
+        var directory = Path.GetDirectoryName(targetPath);
+        var fileName = Path.GetFileName(targetPath);
+        var tempFileName = $".{fileName}.{Guid.NewGuid():N}.tmp";
+        return string.IsNullOrEmpty(directory)
+            ? tempFileName
+            : Path.Combine(directory, tempFileName);
+    }
+
+    private static void NotifyPrepareWritePhase(PrepareWritePhase phase)
+    {
+        PrepareWritePhaseForTesting?.Invoke(phase);
+    }
+
+    private static void TryDelete(string path)
+    {
+        if (string.IsNullOrEmpty(path))
+            return;
+
+        try
+        {
+            File.Delete(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+        }
     }
 
     private static List<VersionBlock> PrepareLanguageSection(
@@ -850,6 +1111,15 @@ public sealed class ChangelogTool
         English,
         Japanese,
     }
+}
+
+internal enum PrepareWritePhase
+{
+    StagedTempCreated,
+    StagedFilesWritten,
+    ChangelogReplaced,
+    VersionReplaced,
+    BeforeFragmentsDeleted,
 }
 
 public sealed record PrepareResult(string Summary, string? RenderedChangelog);

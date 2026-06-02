@@ -78,6 +78,43 @@ public sealed class ChangelogToolTests
     }
 
     [Fact]
+    public void PrepareWritesThroughSymlinkedReleaseFiles()
+    {
+        using var scope = new TestRepositoryScope();
+        scope.WriteFile("actual-changelog.md", SampleChangelog);
+        scope.WriteFile("actual-version.json", """
+            {
+              "version": "1.16.0"
+            }
+            """);
+        scope.WriteFile("changelog.d/unreleased/195.fixed.md", SampleFragment);
+
+        var changelogLinkPath = Path.Combine(scope.Root, "CHANGELOG.md");
+        var versionLinkPath = Path.Combine(scope.Root, "version.json");
+        try
+        {
+            File.CreateSymbolicLink(changelogLinkPath, "actual-changelog.md");
+            File.CreateSymbolicLink(versionLinkPath, "actual-version.json");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+        {
+            return;
+        }
+
+        var tool = new ChangelogTool(scope.Root);
+        tool.Prepare(new Version(1, 17, 0), new DateOnly(2026, 5, 1), writeChanges: true);
+
+        Assert.NotNull(new FileInfo(changelogLinkPath).LinkTarget);
+        Assert.NotNull(new FileInfo(versionLinkPath).LinkTarget);
+        Assert.Contains("English release note", scope.ReadFile("actual-changelog.md"));
+        Assert.Contains("Japanese release note", scope.ReadFile("actual-changelog.md"));
+        Assert.Equal(scope.ReadFile("actual-changelog.md"), scope.ReadFile("CHANGELOG.md"));
+        Assert.Contains("\"version\": \"1.17.0\"", scope.ReadFile("actual-version.json"));
+        Assert.Equal(scope.ReadFile("actual-version.json"), scope.ReadFile("version.json"));
+        Assert.False(scope.Exists("changelog.d/unreleased/195.fixed.md"));
+    }
+
+    [Fact]
     public void PrepareRerunPreservesExistingReleaseAndAppendsNewFragments()
     {
         using var scope = new TestRepositoryScope();
@@ -125,6 +162,126 @@ public sealed class ChangelogToolTests
         Assert.Contains("release preparation 用の専用ワークフロー", changelog);
         Assert.Contains("[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.17.0...HEAD", changelog);
         Assert.Equal(0, scope.ListFiles("changelog.d/unreleased").Count(path => Path.GetFileName(path) is "195.fixed.md" or "+release-process.docs.md"));
+    }
+
+    [Fact]
+    public void PrepareFailureAfterStagingLeavesReleaseFilesAndFragmentsUntouched()
+    {
+        using var scope = new TestRepositoryScope();
+        scope.WriteFile("CHANGELOG.md", SampleChangelog);
+        scope.WriteFile("version.json", """
+            {
+              "version": "1.16.0"
+            }
+            """);
+        scope.WriteFile("changelog.d/unreleased/195.fixed.md", SampleFragment);
+
+        var tool = new ChangelogTool(scope.Root);
+        ChangelogException? ex = null;
+        ChangelogTool.PrepareWritePhaseForTesting = phase =>
+        {
+            if (phase == PrepareWritePhase.StagedFilesWritten)
+                throw new ChangelogException("injected staging failure");
+        };
+        try
+        {
+            ex = Assert.Throws<ChangelogException>(() => tool.Prepare(new Version(1, 17, 0), new DateOnly(2026, 5, 1), writeChanges: true));
+        }
+        finally
+        {
+            ChangelogTool.PrepareWritePhaseForTesting = null;
+        }
+
+        Assert.NotNull(ex);
+        Assert.Contains("injected staging failure", ex.Message);
+        Assert.DoesNotContain("English release note", scope.ReadFile("CHANGELOG.md"));
+        Assert.Equal("""
+            {
+              "version": "1.16.0"
+            }
+            """.Replace("\r\n", "\n"), scope.ReadFile("version.json").Replace("\r\n", "\n"));
+        Assert.True(scope.Exists("changelog.d/unreleased/195.fixed.md"));
+        Assert.DoesNotContain(scope.ListFiles("."), path => Path.GetFileName(path).EndsWith(".tmp", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void PrepareFailureDuringStagedWriteDeletesPartialTempFile()
+    {
+        using var scope = new TestRepositoryScope();
+        scope.WriteFile("CHANGELOG.md", SampleChangelog);
+        scope.WriteFile("version.json", """
+            {
+              "version": "1.16.0"
+            }
+            """);
+        scope.WriteFile("changelog.d/unreleased/195.fixed.md", SampleFragment);
+
+        var tool = new ChangelogTool(scope.Root);
+        ChangelogException? ex = null;
+        ChangelogTool.PrepareWritePhaseForTesting = phase =>
+        {
+            if (phase == PrepareWritePhase.StagedTempCreated)
+                throw new ChangelogException("injected staged write failure");
+        };
+        try
+        {
+            ex = Assert.Throws<ChangelogException>(() => tool.Prepare(new Version(1, 17, 0), new DateOnly(2026, 5, 1), writeChanges: true));
+        }
+        finally
+        {
+            ChangelogTool.PrepareWritePhaseForTesting = null;
+        }
+
+        Assert.NotNull(ex);
+        Assert.Contains("injected staged write failure", ex.Message);
+        Assert.DoesNotContain("English release note", scope.ReadFile("CHANGELOG.md"));
+        Assert.Equal("""
+            {
+              "version": "1.16.0"
+            }
+            """.Replace("\r\n", "\n"), scope.ReadFile("version.json").Replace("\r\n", "\n"));
+        Assert.True(scope.Exists("changelog.d/unreleased/195.fixed.md"));
+        Assert.DoesNotContain(scope.ListFiles("."), path => Path.GetFileName(path).EndsWith(".tmp", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void PrepareFailureBeforeFragmentDeletionRollsBackReleaseFiles()
+    {
+        using var scope = new TestRepositoryScope();
+        scope.WriteFile("CHANGELOG.md", SampleChangelog);
+        scope.WriteFile("version.json", """
+            {
+              "version": "1.16.0"
+            }
+            """);
+        scope.WriteFile("changelog.d/unreleased/195.fixed.md", SampleFragment);
+
+        var tool = new ChangelogTool(scope.Root);
+        ChangelogException? ex = null;
+        ChangelogTool.PrepareWritePhaseForTesting = phase =>
+        {
+            if (phase == PrepareWritePhase.BeforeFragmentsDeleted)
+                throw new ChangelogException("injected fragment deletion failure");
+        };
+        try
+        {
+            ex = Assert.Throws<ChangelogException>(() => tool.Prepare(new Version(1, 17, 0), new DateOnly(2026, 5, 1), writeChanges: true));
+        }
+        finally
+        {
+            ChangelogTool.PrepareWritePhaseForTesting = null;
+        }
+
+        Assert.NotNull(ex);
+        Assert.Contains("injected fragment deletion failure", ex.Message);
+        Assert.DoesNotContain("English release note", scope.ReadFile("CHANGELOG.md"));
+        Assert.Equal("""
+            {
+              "version": "1.16.0"
+            }
+            """.Replace("\r\n", "\n"), scope.ReadFile("version.json").Replace("\r\n", "\n"));
+        Assert.True(scope.Exists("changelog.d/unreleased/195.fixed.md"));
+        Assert.DoesNotContain(scope.ListFiles("."), path => Path.GetFileName(path).EndsWith(".tmp", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -240,6 +397,114 @@ public sealed class ChangelogToolTests
         Assert.Contains("missing '## 日本語' heading", ex.Message);
     }
 
+    [Fact]
+    public void CheckFragmentsRejectsTooManyFragmentsBeforeParsing()
+    {
+        using var scope = new TestRepositoryScope();
+        scope.WriteFile("CHANGELOG.md", SampleChangelog);
+        scope.WriteFile("version.json", """
+            {
+              "version": "1.16.0"
+            }
+            """);
+
+        for (var i = 0; i <= ChangelogTool.MaxFragmentCount; i++)
+            scope.WriteFile($"changelog.d/unreleased/{1000 + i}.fixed.md", string.Empty);
+
+        var tool = new ChangelogTool(scope.Root);
+        var ex = Assert.Throws<ChangelogException>(() => tool.CheckFragments());
+        Assert.Contains("too many changelog fragments", ex.Message);
+        Assert.Contains($"maximum supported count is {ChangelogTool.MaxFragmentCount}", ex.Message);
+    }
+
+    [Fact]
+    public void CheckFragmentsRejectsOversizedFragmentBeforeParsing()
+    {
+        using var scope = new TestRepositoryScope();
+        scope.WriteFile("CHANGELOG.md", SampleChangelog);
+        scope.WriteFile("version.json", """
+            {
+              "version": "1.16.0"
+            }
+            """);
+        scope.WriteFile("changelog.d/unreleased/+large.fixed.md", OversizedContent(ChangelogTool.MaxFragmentBytes));
+
+        var tool = new ChangelogTool(scope.Root);
+        var ex = Assert.Throws<ChangelogException>(() => tool.CheckFragments());
+        Assert.Contains("changelog.d/unreleased/+large.fixed.md: file is", ex.Message);
+        Assert.Contains($"maximum supported size is {ChangelogTool.MaxFragmentBytes} bytes", ex.Message);
+    }
+
+    [Fact]
+    public void CheckFragmentsRejectsOversizedSymlinkTargetBeforeParsing()
+    {
+        using var scope = new TestRepositoryScope();
+        scope.WriteFile("CHANGELOG.md", SampleChangelog);
+        scope.WriteFile("version.json", """
+            {
+              "version": "1.16.0"
+            }
+            """);
+        scope.WriteFile("large-fragment-target.md", OversizedContent(ChangelogTool.MaxFragmentBytes));
+
+        var linkPath = Path.Combine(scope.Root, "changelog.d", "unreleased", "+large-link.fixed.md");
+        Directory.CreateDirectory(Path.GetDirectoryName(linkPath)!);
+        try
+        {
+            File.CreateSymbolicLink(linkPath, Path.Combine(scope.Root, "large-fragment-target.md"));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+        {
+            return;
+        }
+
+        var tool = new ChangelogTool(scope.Root);
+        var thrown = Assert.Throws<ChangelogException>(() => tool.CheckFragments());
+        Assert.Contains("changelog.d/unreleased/+large-link.fixed.md: file is larger than", thrown.Message);
+        Assert.Contains($"maximum supported size is {ChangelogTool.MaxFragmentBytes} bytes", thrown.Message);
+    }
+
+    [Fact]
+    public void PrepareRejectsOversizedChangelogBeforeParsing()
+    {
+        using var scope = new TestRepositoryScope();
+        scope.WriteFile("CHANGELOG.md", OversizedContent(ChangelogTool.MaxChangelogBytes));
+        scope.WriteFile("version.json", """
+            {
+              "version": "1.16.0"
+            }
+            """);
+
+        var tool = new ChangelogTool(scope.Root);
+        var ex = Assert.Throws<ChangelogException>(() => tool.Prepare(new Version(1, 17, 0), new DateOnly(2026, 5, 1), writeChanges: true));
+        Assert.Contains("CHANGELOG.md: file is", ex.Message);
+        Assert.Contains($"maximum supported size is {ChangelogTool.MaxChangelogBytes} bytes", ex.Message);
+    }
+
+    [Fact]
+    public void ConfiguredChangelogLimitFitsRepositoryChangelog()
+    {
+        var repositoryRoot = FindRepositoryRootForTest();
+        var changelogLength = new FileInfo(Path.Combine(repositoryRoot, "CHANGELOG.md")).Length;
+
+        Assert.True(
+            changelogLength <= ChangelogTool.MaxChangelogBytes,
+            $"CHANGELOG.md is {changelogLength} bytes, but MaxChangelogBytes is {ChangelogTool.MaxChangelogBytes}.");
+    }
+
+    [Fact]
+    public void PrepareRejectsOversizedVersionBeforeParsing()
+    {
+        using var scope = new TestRepositoryScope();
+        scope.WriteFile("CHANGELOG.md", SampleChangelog);
+        scope.WriteFile("version.json", OversizedContent(ChangelogTool.MaxVersionJsonBytes));
+
+        var tool = new ChangelogTool(scope.Root);
+        var ex = Assert.Throws<ChangelogException>(() => tool.Prepare(new Version(1, 17, 0), new DateOnly(2026, 5, 1), writeChanges: true));
+        Assert.Contains("version.json: file is", ex.Message);
+        Assert.Contains($"maximum supported size is {ChangelogTool.MaxVersionJsonBytes} bytes", ex.Message);
+    }
+
     private static int CountOccurrences(string text, string value)
     {
         var count = 0;
@@ -251,6 +516,25 @@ public sealed class ChangelogToolTests
         }
 
         return count;
+    }
+
+    private static string OversizedContent(long maxBytes) => new('x', checked((int)maxBytes + 1));
+
+    private static string FindRepositoryRootForTest()
+    {
+        var current = new DirectoryInfo(AppContext.BaseDirectory);
+        while (current is not null)
+        {
+            if (File.Exists(Path.Combine(current.FullName, "CHANGELOG.md")) &&
+                File.Exists(Path.Combine(current.FullName, "CodeIndex.sln")))
+            {
+                return current.FullName;
+            }
+
+            current = current.Parent;
+        }
+
+        throw new InvalidOperationException("Could not locate repository root.");
     }
 
     private sealed class TestRepositoryScope : IDisposable
