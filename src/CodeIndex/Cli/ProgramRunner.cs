@@ -18,6 +18,7 @@ internal static class ProgramRunner
 {
     internal const string QuietEnvironmentVariable = "CDIDX_QUIET";
     private const string InstallerScriptUrlTemplate = "https://raw.githubusercontent.com/Widthdom/CodeIndex/{0}/install.sh";
+    private const long MaxInstallerScriptBytes = 1024 * 1024;
     internal static TimeProvider TimeProvider { get; set; } = TimeProvider.System;
 
     internal static int Run(
@@ -2177,10 +2178,18 @@ internal static class ProgramRunner
         {
             using (var client = new HttpClient { Timeout = TimeSpan.FromSeconds(20) })
             {
-                var script = client.GetStringAsync(BuildInstallerScriptUrl(result.LatestVersion))
+                using var request = new HttpRequestMessage(HttpMethod.Get, BuildInstallerScriptUrl(result.LatestVersion));
+                using var response = client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead)
                     .GetAwaiter()
                     .GetResult();
-                File.WriteAllText(scriptPath, script);
+                response.EnsureSuccessStatusCode();
+                BoundedHttpContentReader.WriteToPrivateFileAsync(
+                        response.Content,
+                        scriptPath,
+                        MaxInstallerScriptBytes,
+                        CancellationToken.None)
+                    .GetAwaiter()
+                    .GetResult();
             }
 
             var startInfo = new ProcessStartInfo("bash", $"{QuoteShellArg(scriptPath)} {QuoteShellArg(result.LatestVersion)}")
