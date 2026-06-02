@@ -638,8 +638,30 @@ internal static class ProgramRunner
         return subArgs;
     }
 
-    private static bool ShouldPreserveQueryCommandToken(string[] args, int index) =>
-        GetQueryCommandTokenRole(args, index) is QueryCommandTokenRole.CommandOptionValue or QueryCommandTokenRole.FirstQueryLiteral;
+    private static bool ShouldPreserveQueryCommandToken(string[] args, int index)
+    {
+        var role = GetQueryCommandTokenRole(args, index);
+        if (role == QueryCommandTokenRole.CommandOptionValue)
+            return true;
+        if (role != QueryCommandTokenRole.FirstQueryLiteral)
+            return false;
+        return !IsSeparatedNonLogGlobalValueOptionWithConsumableValue(args, index);
+    }
+
+    private static bool IsSeparatedNonLogGlobalValueOptionWithConsumableValue(string[] args, int index)
+    {
+        if (index + 1 >= args.Length)
+            return false;
+
+        var value = args[index + 1];
+        return args[index] switch
+        {
+            "--color" => ConsoleUi.TryParseColorMode(value, out _),
+            "--palette" => ConsoleUi.TryParseColorPalette(value, out _),
+            "--metrics" => !string.IsNullOrWhiteSpace(value) && !value.StartsWith("-", StringComparison.Ordinal),
+            _ => false,
+        };
+    }
 
     private static QueryCommandTokenRole GetQueryCommandTokenRole(string[] args, int index)
     {
