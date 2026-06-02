@@ -32553,6 +32553,8 @@ jobs:
         Directory.CreateDirectory(outputDir);
         var buildOutputDir = Path.Combine(outputDir, "bin", "publish") + Path.DirectorySeparatorChar;
         var intermediateDir = Path.Combine(outputDir, "obj", "publish") + Path.DirectorySeparatorChar;
+        Directory.CreateDirectory(intermediateDir);
+        var lockFilePath = Path.Combine(intermediateDir, "packages.lock.json");
 
         var psi = new System.Diagnostics.ProcessStartInfo("dotnet")
         {
@@ -32575,6 +32577,7 @@ jobs:
         psi.ArgumentList.Add("-p:PublishSingleFile=false");
         psi.ArgumentList.Add($"-p:OutputPath={buildOutputDir}");
         psi.ArgumentList.Add($"-p:IntermediateOutputPath={intermediateDir}");
+        psi.ArgumentList.Add($"-p:NuGetLockFilePath={lockFilePath}");
         psi.ArgumentList.Add("-p:UseSharedCompilation=false");
 
         using var process = System.Diagnostics.Process.Start(psi)
