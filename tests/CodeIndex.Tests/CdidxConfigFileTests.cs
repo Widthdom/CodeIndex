@@ -1,4 +1,5 @@
 using CodeIndex.Cli;
+using System.Text;
 
 namespace CodeIndex.Tests;
 
@@ -68,6 +69,26 @@ public class CdidxConfigFileTests
             Assert.Equal("index", env.Writes["CDIDX_MCP_TOOLS_DENY"]);
             Assert.Equal("5", env.Writes["CDIDX_MCP_RATE_LIMIT_RPS"]);
             Assert.Equal("10", env.Writes["CDIDX_MCP_RATE_LIMIT_BURST"]);
+        }
+        finally { TestProjectHelper.DeleteDirectory(dir); }
+    }
+
+    [Fact]
+    public void LoadAndApply_Utf8BomConfigMaterializesKnownKeysIntoEnvironment()
+    {
+        var dir = CreateTempDir();
+        try
+        {
+            var path = Path.Combine(dir, ".cdidxrc.json");
+            var json = """{ "metrics_path": "/tmp/bom.jsonl" }""";
+            File.WriteAllBytes(path, [0xEF, 0xBB, 0xBF, .. Encoding.UTF8.GetBytes(json)]);
+
+            var env = new TestEnvironment();
+            var result = CdidxConfigFile.LoadAndApply(dir, env.Read, env.Write);
+
+            Assert.True(result.Loaded);
+            Assert.Null(result.Error);
+            Assert.Equal("/tmp/bom.jsonl", env.Writes["CDIDX_METRICS"]);
         }
         finally { TestProjectHelper.DeleteDirectory(dir); }
     }

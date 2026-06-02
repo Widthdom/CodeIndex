@@ -85,7 +85,14 @@ internal static class DataDirectorySecurity
     public static string? ReadTextWithinLimit(string path, int maxBytes, FileShare share = FileShare.Read)
     {
         var bytes = ReadBytesWithinLimit(path, maxBytes, share);
-        return bytes is null ? null : Encoding.UTF8.GetString(bytes);
+        return bytes is null ? null : DecodeText(bytes);
+    }
+
+    private static string DecodeText(byte[] bytes)
+    {
+        using var stream = new MemoryStream(bytes);
+        using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        return reader.ReadToEnd();
     }
 
     public static string? GetUnixModeString(string? path)

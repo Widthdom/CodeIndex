@@ -1,4 +1,5 @@
 using CodeIndex.Cli;
+using System.Text;
 using System.Text.Json;
 
 namespace CodeIndex.Tests;
@@ -56,6 +57,33 @@ public class WorkspaceCommandRunnerTests
             var ex = Assert.Throws<InvalidDataException>(() => WorkspaceManifestLoader.Load(manifestPath));
 
             Assert.Contains($"{WorkspaceManifestLoader.MaxManifestBytes} byte limit", ex.Message);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
+    public void WorkspaceManifestLoader_Load_AcceptsUtf8BomManifest()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_manifest_bom");
+        try
+        {
+            var manifestPath = Path.Combine(root, "cdidx.workspace.json");
+            var json = """
+                {
+                  "members": ["src/A"],
+                  "index_strategy": "per_member",
+                  "default_db_name": "index.db"
+                }
+                """;
+            File.WriteAllBytes(manifestPath, [0xEF, 0xBB, 0xBF, .. Encoding.UTF8.GetBytes(json)]);
+
+            var manifest = WorkspaceManifestLoader.Load(manifestPath);
+
+            Assert.Equal("index.db", manifest.DefaultDbName);
+            Assert.Single(manifest.Members);
         }
         finally
         {
