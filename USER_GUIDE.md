@@ -809,6 +809,8 @@ cdidx search "計算" --prefix                            # widen every token to
 cdidx search "content:auth*" --fts                      # raw FTS5 syntax; `content:` is the only valid column qualifier, and NEAR distance is capped at 100
 cdidx search "Run();" --exact-substring                 # case-sensitive exact substring, no FTS5
 cdidx search "Foo.Bar" --lang csharp --exact-substring  # Java/Kotlin/C# exact search/find canonicalizes escaped source identifiers
+cdidx search "File.ReadAllText" --exact-substring --reject-before "Length" --guard-window 8  # API calls missing a nearby preceding guard
+cdidx search "FileMode.Create" --exact-substring --require-after "File.Move" --guard-window 12  # require a nearby follow-up action
 cdidx search "--open-reports" --path README.md --count  # quoted literal that starts with --
 cdidx search --query "--path" --path README.md          # search for an option-looking literal
 ```
@@ -817,6 +819,14 @@ Search normalizes literal FTS queries to Unicode NFC before matching. If every
 literal token exceeds SQLite FTS5 unicode61's 1000-character token cap,
 zero-result JSON includes `query_degraded_reason` and `tokens_dropped`. Index
 validation reports long unbroken FTS tokens as `fts_token_too_long`.
+Guard-aware search filters primary `search` matches by nearby literal guards:
+`--require-before` / `--require-after` keep matches only when the guard query
+appears in the selected line window, while `--reject-before` / `--reject-after`
+drop matches when the guard query appears. JSON search results include
+`guard_evidence` for required guards that matched.
+The MCP `search` tool exposes the same mode as camelCase arguments:
+`requireBefore`, `requireAfter`, `rejectBefore`, `rejectAfter`, and
+`guardWindow`.
 
 ### Debugging queries
 
@@ -2917,6 +2927,8 @@ cdidx search "計算" --prefix                            # クエリ全体を p
 cdidx search "content:auth*" --fts                      # 生のFTS5構文。列修飾子は `content:` だけが有効で、NEAR distance は 100 まで
 cdidx search "Run();" --exact-substring                 # 大文字小文字区別の完全部分一致、FTS5 なし
 cdidx search "Foo.Bar" --lang csharp --exact-substring  # Java/Kotlin/C# の exact 検索 / find は escaped source identifier を正規化する
+cdidx search "File.ReadAllText" --exact-substring --reject-before "Length" --guard-window 8  # 直前の guard がない API 呼び出し
+cdidx search "FileMode.Create" --exact-substring --require-after "File.Move" --guard-window 12  # 近傍の後続処理を要求
 cdidx search "--open-reports" --path README.md --count  # `--` で始まる引用済みリテラル
 cdidx search --query "--path" --path README.md          # オプションに見えるリテラルを検索
 ```
@@ -2925,6 +2937,12 @@ literal FTS クエリは照合前に Unicode NFC へ正規化されます。す�
 token が SQLite FTS5 unicode61 の 1000 文字 token 上限を超える場合、0 件
 JSON には `query_degraded_reason` と `tokens_dropped` が含まれます。index
 validation は長い連続 FTS token を `fts_token_too_long` として報告します。
+guard-aware search は primary の `search` 一致を近傍の literal guard で絞り込みます:
+`--require-before` / `--require-after` は指定行窓内に guard query がある場合だけ残し、
+`--reject-before` / `--reject-after` は guard query がある一致を落とします。JSON の検索結果には
+一致した required guard の `guard_evidence` が含まれます。
+MCP `search` tool では同じ mode を camelCase 引数 `requireBefore`, `requireAfter`,
+`rejectBefore`, `rejectAfter`, `guardWindow` で指定できます。
 
 ### クエリのデバッグ
 

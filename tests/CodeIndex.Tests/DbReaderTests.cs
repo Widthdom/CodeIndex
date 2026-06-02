@@ -149,6 +149,65 @@ public class DbReaderTests : IDisposable
         Assert.Contains(results, r => r.Path == "src/cafe.md");
     }
 
+    [Fact]
+    public void Search_GuardFiltersReadAcrossChunkBoundaries_Issue2852()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/chunked.cs",
+            Lang = "csharp",
+            Size = 128,
+            Lines = 5,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 3,
+                Content = "public void Guarded(string path)\n{\n    var length = new FileInfo(path).Length;",
+            },
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 1,
+                StartLine = 4,
+                EndLine = 5,
+                Content = "    var text = File.ReadAllText(path);\n}",
+            },
+        ]);
+
+        var requireResults = _reader.Search(
+            "File.ReadAllText",
+            exact: true,
+            pathPatterns: ["src/chunked.cs"],
+            guardFilters: [new SearchGuardFilter(SearchGuardRole.Require, SearchGuardDirection.Before, "Length")],
+            guardWindow: 2);
+        var rejectResults = _reader.Search(
+            "File.ReadAllText",
+            exact: true,
+            pathPatterns: ["src/chunked.cs"],
+            guardFilters: [new SearchGuardFilter(SearchGuardRole.Reject, SearchGuardDirection.Before, "Length")],
+            guardWindow: 2);
+        var cursorResults = _reader.Search(
+            "File.ReadAllText",
+            exact: true,
+            pathPatterns: ["src/chunked.cs"],
+            cursor: new SearchCursor(0, 0, 0),
+            guardFilters: [new SearchGuardFilter(SearchGuardRole.Require, SearchGuardDirection.Before, "Length")],
+            guardWindow: 2);
+
+        var result = Assert.Single(requireResults);
+        Assert.Equal(4, result.StartLine);
+        var evidence = Assert.Single(result.GuardEvidence!);
+        Assert.Equal(3, evidence.Line);
+        Assert.Empty(rejectResults);
+        Assert.Single(cursorResults);
+    }
+
     [Theory]
     [InlineData("rowid:authenticate", "rowid:")]
     [InlineData("title:authenticate", "title:")]

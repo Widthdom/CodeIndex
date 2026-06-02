@@ -3081,6 +3081,43 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_Search_GuardFiltersReturnEvidence_Issue2852()
+    {
+        InsertIndexedFile(
+            "src/guard-mcp.cs",
+            "csharp",
+            """
+            using System.IO;
+
+            public class GuardMcp
+            {
+                public void Atomic(string path, string tempPath)
+                {
+                    using var stream = new FileStream(path, FileMode.Create);
+                    File.Move(tempPath, path, overwrite: true);
+                }
+
+                public void NonAtomic(string path)
+                {
+                    using var stream = new FileStream(path, FileMode.Create);
+                }
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"FileMode.Create","exactSubstring":true,"requireAfter":"File.Move","guardWindow":2}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(1, structured["count"]!.GetValue<int>());
+        var result = structured["results"]![0]!;
+        Assert.Equal("src/guard-mcp.cs", result["path"]!.GetValue<string>());
+        var evidence = Assert.Single(result["guardEvidence"]!.AsArray());
+        Assert.Equal("require", evidence!["role"]!.GetValue<string>());
+        Assert.Equal("after", evidence["direction"]!.GetValue<string>());
+        Assert.Equal("File.Move", evidence["query"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void ToolsCall_Search_ExcludesGeneratedFilesByDefault()
     {
         InsertIndexedFile("src/generated.g.cs", "csharp", "class Generated { void Needle() {} }\n", generated: true);

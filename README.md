@@ -62,6 +62,7 @@ cdidx status --check --json
 cdidx search "handleRequest"
 cdidx definition UserService
 cdidx search "Handle" --project MyApp
+cdidx search "File.ReadAllText" --exact-substring --reject-before "Length" --guard-window 8
 cdidx validate
 cdidx mcp
 cdidx lsp --db .cdidx/codeindex.db
@@ -343,6 +344,7 @@ cdidx status --check --json
 cdidx search "handleRequest"
 cdidx definition UserService
 cdidx search "Handle" --project MyApp
+cdidx search "File.ReadAllText" --exact-substring --reject-before "Length" --guard-window 8
 cdidx validate
 cdidx mcp
 cdidx lsp --db .cdidx/codeindex.db

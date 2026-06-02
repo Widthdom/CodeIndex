@@ -979,6 +979,8 @@ public static class ConsoleUi
         WriteHelpLine("  --count                    Count only; search/definition/references/callers/callees/symbols/files/find/unused ignore --limit, impact/hotspots still use visible page counts");
         Console.WriteLine("  --since <datetime>         Filter to files modified since this timestamp (ISO 8601)");
         Console.WriteLine("  --no-dedup                 search only: return every raw overlapping chunk hit (debug/density)");
+        WriteHelpLine($"  --require-before/--require-after <query>  search only: keep primary matches only when the guard query appears within --guard-window lines before/after the match (default {DbReader.DefaultSearchGuardWindow}, max {DbReader.MaxSearchGuardWindow})");
+        WriteHelpLine("  --reject-before/--reject-after <query>    search only: drop primary matches when the guard query appears within the same before/after window; useful for finding API calls missing nearby checks");
         Console.WriteLine("  --bytes                    Show raw byte counts in human output for files/map instead of binary units; JSON always keeps raw integer bytes");
         Console.WriteLine("  --min-entrypoint-confidence <n>  map only: omit entrypoint candidates below this 0.0..1.0 confidence");
         WriteHelpLine("  --max-hops <n>             Max BFS hops for impact analysis, inclusive (default: 5; --max-hops 2 returns callers at hop 1 and 2; --max-hops 0 resolves the symbol without traversing callers)");
@@ -1011,6 +1013,8 @@ public static class ConsoleUi
         Console.WriteLine("  cdidx search \"auth*\"                          Prefix shorthand in literal-safe mode");
         Console.WriteLine("  cdidx search --query --path --path README.md   Search for a literal option token");
         Console.WriteLine("  cdidx search \"Run();\" --exact-substring        Case-sensitive exact substring search");
+        Console.WriteLine("  cdidx search \"File.ReadAllText\" --exact-substring --reject-before \"Length\" --guard-window 8");
+        Console.WriteLine("                                              Find calls without a nearby preceding size guard");
         Console.WriteLine("  cdidx search authenticate --json=array         Emit search results as one JSON array");
         Console.WriteLine("  cdidx search authenticate --profile            Append SQL profile JSON for slow-query debugging");
         Console.WriteLine("  cdidx search authenticate --verbose            Emit query debug diagnostics on stderr");
