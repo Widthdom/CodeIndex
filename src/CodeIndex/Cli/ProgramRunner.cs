@@ -2178,15 +2178,11 @@ internal static class ProgramRunner
         {
             using (var client = new HttpClient { Timeout = TimeSpan.FromSeconds(20) })
             {
-                using var request = new HttpRequestMessage(HttpMethod.Get, BuildInstallerScriptUrl(result.LatestVersion));
-                using var response = client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead)
-                    .GetAwaiter()
-                    .GetResult();
-                response.EnsureSuccessStatusCode();
-                BoundedHttpContentReader.WriteToPrivateFileAsync(
-                        response.Content,
+                DownloadInstallerScriptAsync(
+                        client,
+                        result.LatestVersion,
                         scriptPath,
-                        MaxInstallerScriptBytes,
+                        TimeSpan.FromSeconds(20),
                         CancellationToken.None)
                     .GetAwaiter()
                     .GetResult();
@@ -2223,6 +2219,28 @@ internal static class ProgramRunner
             CultureInfo.InvariantCulture,
             InstallerScriptUrlTemplate,
             Uri.EscapeDataString(releaseTag.Trim()));
+
+    internal static async Task DownloadInstallerScriptAsync(
+        HttpClient client,
+        string releaseTag,
+        string scriptPath,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
+        using var downloadCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        downloadCts.CancelAfter(timeout);
+        using var request = new HttpRequestMessage(HttpMethod.Get, BuildInstallerScriptUrl(releaseTag));
+        using var response = await client.SendAsync(
+            request,
+            HttpCompletionOption.ResponseHeadersRead,
+            downloadCts.Token).ConfigureAwait(false);
+        response.EnsureSuccessStatusCode();
+        await BoundedHttpContentReader.WriteToPrivateFileAsync(
+            response.Content,
+            scriptPath,
+            MaxInstallerScriptBytes,
+            downloadCts.Token).ConfigureAwait(false);
+    }
 
     private static bool CanWriteDirectory(string directory)
     {

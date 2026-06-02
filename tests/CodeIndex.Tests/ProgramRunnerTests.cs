@@ -1,3 +1,4 @@
+using System.Net;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -312,6 +313,31 @@ public class ProgramRunnerTests
     public void BuildInstallerScriptUrl_UsesResolvedReleaseTag(string releaseTag, string expected)
     {
         Assert.Equal(expected, ProgramRunner.BuildInstallerScriptUrl(releaseTag));
+    }
+
+    [Fact]
+    public async Task DownloadInstallerScriptAsync_CancelsStalledBody()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"cdidx-install-timeout-{Guid.NewGuid():N}.sh");
+        using var client = new HttpClient(new StaticResponseHandler(new StalledContent()))
+        {
+            Timeout = Timeout.InfiniteTimeSpan,
+        };
+        try
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                ProgramRunner.DownloadInstallerScriptAsync(
+                    client,
+                    "v1.27.0",
+                    path,
+                    TimeSpan.FromMilliseconds(25),
+                    CancellationToken.None));
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
     }
 
     [Fact]
@@ -1552,5 +1578,68 @@ public class ProgramRunnerTests
         Assert.True(ok, $"expected success but got error: {error}");
         Assert.Null(options.Path);
         Assert.Equal(new[] { "--db", "--audit-log" }, args);
+    }
+
+    private sealed class StaticResponseHandler : HttpMessageHandler
+    {
+        private readonly HttpContent _content;
+
+        internal StaticResponseHandler(HttpContent content)
+        {
+            _content = content;
+        }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = _content });
+    }
+
+    private sealed class StalledContent : HttpContent
+    {
+        protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context)
+            => Task.CompletedTask;
+
+        protected override Task<Stream> CreateContentReadStreamAsync()
+            => Task.FromResult<Stream>(new StalledStream());
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = 0;
+            return false;
+        }
+    }
+
+    private sealed class StalledStream : Stream
+    {
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override int Read(byte[] buffer, int offset, int count)
+            => throw new NotSupportedException();
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return 0;
+        }
+
+        public override long Seek(long offset, SeekOrigin origin)
+            => throw new NotSupportedException();
+
+        public override void SetLength(long value)
+            => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count)
+            => throw new NotSupportedException();
     }
 }
