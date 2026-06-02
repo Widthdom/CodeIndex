@@ -390,6 +390,8 @@ be audited whenever the matching help text changes.
 | ANSI palette | `basic` fallback, auto-upgraded from terminal hints unless overridden | `ConsoleUi` |
 | Report log tail | `200` lines (`--log-lines`) | report runner help |
 | JSON envelope capture | `10,485,760` characters | `JsonEnvelopeWrapper` |
+| CLI batch line | `1,048,576` characters | `QueryCommandRunner` |
+| CLI batch arguments | `256` arguments after command name | `QueryCommandRunner` |
 
 When a default changes, update the help text, this table, affected examples, and
 the changelog fragment in the same PR so users are not asked to reconcile
@@ -859,7 +861,9 @@ cdidx search "authenticate" --json --verbose
 For scripts or editor integrations that need several queries against the same
 index, `cdidx batch --db <path>` keeps one SQLite connection open and reads one
 JSON string array per stdin line. Each array starts with a query command name,
-followed by that command's normal arguments:
+followed by that command's normal arguments. Each stdin line is capped at
+1,048,576 characters, and each command can carry at most 256 arguments after
+the command name:
 
 ```bash
 printf '%s\n' \
@@ -2518,6 +2522,8 @@ render できます。
 | ANSI palette | `basic` fallback。terminal hints で自動昇格、または明示上書き | `ConsoleUi` |
 | Report log tail | `200` lines（`--log-lines`） | report runner help |
 | JSON envelope capture | `10,485,760` 文字 | `JsonEnvelopeWrapper` |
+| CLI batch line | `1,048,576` 文字 | `QueryCommandRunner` |
+| CLI batch arguments | command 名の後ろに `256` 引数 | `QueryCommandRunner` |
 
 既定値を変更するときは、help text、この表、影響する examples、changelog fragment を
 同じ PR で更新してください。
@@ -2998,7 +3004,8 @@ cdidx search "authenticate" --json --verbose
 
 同じインデックスに対して複数の query を投げる script や editor integration では、
 `cdidx batch --db <path>` を使うと 1 つの SQLite connection を開いたまま処理できます。
-stdin の各行は JSON 文字列配列で、先頭に query command 名、その後ろに通常の引数を並べます:
+stdin の各行は JSON 文字列配列で、先頭に query command 名、その後ろに通常の引数を並べます。
+各 stdin 行は 1,048,576 文字まで、各 command は command 名の後ろに最大 256 引数までです:
 
 ```bash
 printf '%s\n' \

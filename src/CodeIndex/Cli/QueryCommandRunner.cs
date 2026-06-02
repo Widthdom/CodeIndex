@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -21,6 +22,8 @@ public static class QueryCommandRunner
     internal const int DefaultQueryLimit = 20;
     internal const int DefaultMapLimit = 10;
     internal const int DefaultImpactLimit = 50;
+    internal const int BatchMaxLineChars = 1024 * 1024;
+    internal const int BatchMaxArgumentCount = 256;
     internal const string DefaultLimitEnvironmentVariable = "CDIDX_DEFAULT_LIMIT";
     internal const string DefaultSnippetLinesEnvironmentVariable = "CDIDX_DEFAULT_SNIPPET_LINES";
     internal const string DefaultMaxLineWidthEnvironmentVariable = "CDIDX_DEFAULT_MAX_LINE_WIDTH";
@@ -285,11 +288,18 @@ public static class QueryCommandRunner
             db.TryMigrateForRead();
             s_batchReader = new DbReader(db);
             var firstFailure = CommandExitCodes.Success;
-            string? line;
             var lineNumber = 0;
-            while ((line = Console.In.ReadLine()) != null)
+            while (TryReadBatchLine(Console.In, out var line, out var lineExceededLimit))
             {
                 lineNumber++;
+                if (lineExceededLimit)
+                {
+                    Console.Error.WriteLine($"Error: batch line {lineNumber} exceeds the {BatchMaxLineChars} character limit.");
+                    if (firstFailure == CommandExitCodes.Success)
+                        firstFailure = CommandExitCodes.UsageError;
+                    continue;
+                }
+
                 if (string.IsNullOrWhiteSpace(line))
                     continue;
 
@@ -313,6 +323,41 @@ public static class QueryCommandRunner
         }
     }
 
+    private static bool TryReadBatchLine(TextReader reader, out string? line, out bool exceededLimit)
+    {
+        line = null;
+        exceededLimit = false;
+        var builder = new StringBuilder();
+        while (true)
+        {
+            var next = reader.Read();
+            if (next < 0)
+            {
+                if (builder.Length == 0 && !exceededLimit)
+                    return false;
+                line = exceededLimit ? string.Empty : builder.ToString();
+                return true;
+            }
+
+            var ch = (char)next;
+            if (ch == '\n')
+            {
+                line = exceededLimit ? string.Empty : builder.ToString();
+                return true;
+            }
+
+            if (exceededLimit)
+                continue;
+            if (builder.Length >= BatchMaxLineChars)
+            {
+                exceededLimit = true;
+                continue;
+            }
+
+            builder.Append(ch);
+        }
+    }
+
     private static bool TryParseBatchLine(string line, int lineNumber, out string commandName, out string[] subArgs, out int exitCode)
     {
         commandName = string.Empty;
@@ -325,6 +370,11 @@ public static class QueryCommandRunner
             if (document.RootElement.ValueKind != JsonValueKind.Array || document.RootElement.GetArrayLength() == 0)
             {
                 Console.Error.WriteLine($"Error: batch line {lineNumber} must be a non-empty JSON string array.");
+                return false;
+            }
+            if (document.RootElement.GetArrayLength() > BatchMaxArgumentCount + 1)
+            {
+                Console.Error.WriteLine($"Error: batch line {lineNumber} must contain at most {BatchMaxArgumentCount} command arguments.");
                 return false;
             }
 

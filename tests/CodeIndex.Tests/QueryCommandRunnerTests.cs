@@ -1246,6 +1246,60 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunBatch_LineExceedsLimit_SkipsParsingAndContinues_Issue2891()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_batch_long_line");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var input = new string('x', QueryCommandRunner.BatchMaxLineChars + 1)
+                + "\n[\"status\",\"--json\"]\n";
+
+            var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
+                input,
+                () => QueryCommandRunner.RunBatch(["--db", dbPath], _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains($"exceeds the {QueryCommandRunner.BatchMaxLineChars} character limit", stderr);
+            var lines = ParseJsonLines(stdout);
+            Assert.Single(lines);
+            using var statusDocument = lines[0];
+            Assert.True(statusDocument.RootElement.TryGetProperty("files", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunBatch_ArgumentCountExceedsLimit_ReturnsUsageError_Issue2891()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_batch_too_many_args");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var values = Enumerable
+                .Range(0, QueryCommandRunner.BatchMaxArgumentCount + 2)
+                .Select(i => i == 0 ? "search" : $"arg{i}")
+                .ToArray();
+            var input = JsonSerializer.Serialize(values) + "\n";
+
+            var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
+                input,
+                () => QueryCommandRunner.RunBatch(["--db", dbPath], _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains($"at most {QueryCommandRunner.BatchMaxArgumentCount} command arguments", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void ParseArgs_ImpactDepthZeroIsRetainedWhenExplicit()
     {
         var options = QueryCommandRunner.ParseArgs(["RunImpact", "--depth", "0"], jsonDefault: false, allowNamedQuery: true);
