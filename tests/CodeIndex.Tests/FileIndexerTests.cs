@@ -694,6 +694,37 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void GetProjectMarkerFingerprint_IgnoredGeneratedTreeDoesNotExhaustDirectoryCap()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_msbuild_marker_ignored_cap_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "generated/\n");
+            var generatedDir = Path.Combine(tempDir, "generated");
+            Directory.CreateDirectory(generatedDir);
+            for (var i = 0; i < 8; i++)
+                Directory.CreateDirectory(Path.Combine(generatedDir, $"project-{i}"));
+
+            var appDir = Path.Combine(tempDir, "src", "App");
+            Directory.CreateDirectory(appDir);
+            File.WriteAllText(Path.Combine(appDir, "App.csproj"), "<Project />");
+
+            var indexer = new FileIndexer(tempDir);
+
+            var result = indexer.GetProjectMarkerFingerprintResultForTesting("msbuild", maxDirectories: 4, maxMarkerFiles: 100);
+
+            Assert.True(result.IsComplete);
+            Assert.False(string.IsNullOrWhiteSpace(result.Fingerprint));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
     public void GetProjectMarkerFingerprint_FileCapTruncatesMarkerCollection()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_msbuild_marker_file_cap_{Guid.NewGuid():N}");
