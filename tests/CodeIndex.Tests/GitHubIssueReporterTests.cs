@@ -315,6 +315,39 @@ public class GitHubIssueReporterTests : IDisposable
     }
 
     [Fact]
+    public void BuildApiFailureMessage_RedactsAndBoundsSensitiveErrorBody()
+    {
+        var errorBody = $$"""
+        {
+            "message": "validation failed",
+            "token": "ghp_secret_token",
+            "details": "{{new string('x', 2000)}}"
+        }
+        """;
+
+        var message = GitHubIssueReporter.BuildApiFailureMessage(403, errorBody);
+
+        Assert.DoesNotContain("ghp_secret_token", message);
+        Assert.Contains("\"token\":\"[redacted]\"", message);
+        Assert.True(message.Length < 900);
+    }
+
+    [Fact]
+    public void BuildRateLimitFailureMessage_RedactsSensitiveErrorBody()
+    {
+        var retryAt = new DateTime(2026, 5, 23, 10, 0, 0, DateTimeKind.Utc);
+
+        var message = GitHubIssueReporter.BuildRateLimitFailureMessage(
+            429,
+            """{ "authorization": "Bearer ghp_secret_token", "message": "rate limited" }""",
+            retryAt);
+
+        Assert.DoesNotContain("ghp_secret_token", message);
+        Assert.Contains("\"authorization\":\"[redacted]\"", message);
+        Assert.Contains(retryAt.ToString("O"), message);
+    }
+
+    [Fact]
     public void BuildIssueLabels_MapsSuggestionCategoriesToExistingRepositoryLabels()
     {
         Assert.Equal(["enhancement"], GitHubIssueReporter.BuildIssueLabels(new SuggestionRecord { Category = "output_format" }));
@@ -656,6 +689,64 @@ public class GitHubIssueReporterTests : IDisposable
     }
 
     [Fact]
+    public async Task TryCreateIssueDetailedAsync_CreateApiFails_ReadsBoundedSanitizedErrorBody()
+    {
+        _env.Set("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
+
+        var errorBody = "{\"message\":\"validation failed\",\"token\":\"ghp_secret_token\",\"details\":\""
+            + new string('x', GitHubIssueReporter.MaxGitHubApiErrorBodyBytes * 2)
+            + "\"}";
+
+        var handler = new RecordingHandler();
+        handler.AddResponse(req => req.Method == HttpMethod.Get && req.RequestUri!.AbsolutePath == "/search/issues",
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = MakeJsonContent("""{ "total_count": 0, "items": [] }"""),
+            });
+        handler.AddResponse(req => req.Method == HttpMethod.Get && req.RequestUri!.AbsolutePath == "/repos/widthdom/CodeIndex/issues",
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = MakeJsonContent("[]"),
+            });
+        handler.AddResponse(req => req.Method == HttpMethod.Post && req.RequestUri!.AbsolutePath.Contains("/issues"),
+            new HttpResponseMessage(HttpStatusCode.UnprocessableEntity)
+            {
+                Content = new ByteArrayContent(Encoding.UTF8.GetBytes(errorBody)),
+            });
+        using var mockClient = new HttpClient(handler);
+        GitHubIssueReporter.s_httpClientOverride = mockClient;
+        try
+        {
+            var record = MakeRecordWithKnownHash();
+            var result = await GitHubIssueReporter.TryCreateIssueDetailedAsync(record, "1.0.0-test");
+
+            Assert.Null(result.IssueUrl);
+            Assert.DoesNotContain("ghp_secret_token", result.Error);
+            Assert.Contains("[redacted]", result.Error);
+            Assert.True(result.Error!.Length <= 512);
+        }
+        finally
+        {
+            GitHubIssueReporter.s_httpClientOverride = null;
+        }
+    }
+
+    [Fact]
+    public async Task ReadBoundedApiErrorBodyAsync_StopsAfterByteCap()
+    {
+        var errorBody = Encoding.UTF8.GetBytes(
+            "prefix " + new string('x', GitHubIssueReporter.MaxGitHubApiErrorBodyBytes * 2));
+        var stream = new ThrowIfOverReadStream(
+            errorBody,
+            GitHubIssueReporter.MaxGitHubApiErrorBodyBytes + 1);
+
+        var result = await GitHubIssueReporter.ReadBoundedApiErrorBodyAsync(stream, CancellationToken.None);
+
+        Assert.True(stream.BytesRead <= GitHubIssueReporter.MaxGitHubApiErrorBodyBytes + 1);
+        Assert.EndsWith(" [response body truncated]", result);
+    }
+
+    [Fact]
     public async Task TryCreateIssueDetailedAsync_UserCancellation_Propagates()
     {
         _env.Set("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
@@ -882,6 +973,60 @@ public class GitHubIssueReporterTests : IDisposable
         {
             return Task.FromException<HttpResponseMessage>(exception);
         }
+    }
+
+    private sealed class ThrowIfOverReadStream(byte[] data, int maxBytesRead) : Stream
+    {
+        private int _position;
+
+        public int BytesRead { get; private set; }
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => data.Length;
+
+        public override long Position
+        {
+            get => _position;
+            set => throw new NotSupportedException();
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) =>
+            ReadCore(buffer.AsSpan(offset, count));
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            Task.FromResult(ReadCore(buffer.AsSpan(offset, count)));
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) =>
+            ValueTask.FromResult(ReadCore(buffer.Span));
+
+        private int ReadCore(Span<byte> destination)
+        {
+            if (_position >= data.Length)
+                return 0;
+
+            var count = Math.Min(destination.Length, data.Length - _position);
+            if (BytesRead + count > maxBytesRead)
+                throw new InvalidOperationException("Response body read exceeded bounded limit.");
+
+            data.AsSpan(_position, count).CopyTo(destination);
+            _position += count;
+            BytesRead += count;
+            return count;
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) =>
+            throw new NotSupportedException();
+
+        public override void SetLength(long value) =>
+            throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) =>
+            throw new NotSupportedException();
     }
 
     private sealed class DelayingHandler(TimeSpan delay) : HttpMessageHandler
