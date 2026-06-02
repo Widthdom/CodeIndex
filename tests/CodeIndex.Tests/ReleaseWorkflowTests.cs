@@ -252,6 +252,7 @@ public class ReleaseWorkflowTests
             var exception = Assert.Throws<InvalidOperationException>(() => PackageCorePropertiesNormalizer.NormalizePackage(packagePath, limits));
             Assert.Contains("[Content_Types].xml", exception.Message);
             Assert.Contains("text limit of 5 characters", exception.Message);
+            Assert.False(File.Exists(packagePath + ".normalize-tmp"));
         }
         finally
         {

@@ -41,50 +41,61 @@ public static class PackageCorePropertiesNormalizer
 
         var fullPath = Path.GetFullPath(packagePath);
         var tempPath = fullPath + ".normalize-tmp";
-        if (File.Exists(tempPath))
-            File.Delete(tempPath);
+        var completed = false;
 
-        using (var sourceStream = File.Open(fullPath, FileMode.Open, FileAccess.Read, FileShare.Read))
-        using (var sourceArchive = new ZipArchive(sourceStream, ZipArchiveMode.Read, leaveOpen: false))
+        try
         {
-            var originalCorePropertiesPath = ValidateSourceArchive(sourceArchive, packagePath, limits);
-            ValidateEntryNamesBeforeRewrite(sourceArchive, originalCorePropertiesPath);
+            if (File.Exists(tempPath))
+                File.Delete(tempPath);
 
-            using var destinationStream = File.Open(tempPath, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None);
-            using var destinationArchive = new ZipArchive(destinationStream, ZipArchiveMode.Create, leaveOpen: false);
-            var readBudget = new PackageNormalizeReadBudget(limits);
-            var usedNames = new HashSet<string>(StringComparer.Ordinal);
-
-            foreach (var sourceEntry in sourceArchive.Entries)
+            using (var sourceStream = File.Open(fullPath, FileMode.Open, FileAccess.Read, FileShare.Read))
+            using (var sourceArchive = new ZipArchive(sourceStream, ZipArchiveMode.Read, leaveOpen: false))
             {
-                var destinationName = sourceEntry.FullName == originalCorePropertiesPath
-                    ? CanonicalCorePropertiesPath
-                    : sourceEntry.FullName;
+                var originalCorePropertiesPath = ValidateSourceArchive(sourceArchive, packagePath, limits);
+                ValidateEntryNamesBeforeRewrite(sourceArchive, originalCorePropertiesPath);
 
-                if (!usedNames.Add(destinationName))
-                    throw new InvalidOperationException($"Duplicate ZIP entry after normalization: {destinationName}");
+                using var destinationStream = File.Open(tempPath, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None);
+                using var destinationArchive = new ZipArchive(destinationStream, ZipArchiveMode.Create, leaveOpen: false);
+                var readBudget = new PackageNormalizeReadBudget(limits);
+                var usedNames = new HashSet<string>(StringComparer.Ordinal);
 
-                var destinationEntry = destinationArchive.CreateEntry(destinationName, CompressionLevel.Optimal);
-                destinationEntry.LastWriteTime = StableZipTimestamp;
-                destinationEntry.ExternalAttributes = sourceEntry.ExternalAttributes;
-
-                using var rawSourceEntryStream = sourceEntry.Open();
-                using var sourceEntryStream = new BudgetedEntryReadStream(rawSourceEntryStream, sourceEntry, readBudget);
-                using var destinationEntryStream = destinationEntry.Open();
-
-                if (NeedsXmlReferenceRewrite(sourceEntry.FullName))
+                foreach (var sourceEntry in sourceArchive.Entries)
                 {
-                    using var writer = new StreamWriter(destinationEntryStream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), leaveOpen: false);
-                    writer.Write(RewriteCorePropertiesReferences(ReadXmlEntryText(sourceEntry, sourceEntryStream, limits), originalCorePropertiesPath));
-                }
-                else
-                {
-                    CopyEntry(sourceEntryStream, destinationEntryStream);
+                    var destinationName = sourceEntry.FullName == originalCorePropertiesPath
+                        ? CanonicalCorePropertiesPath
+                        : sourceEntry.FullName;
+
+                    if (!usedNames.Add(destinationName))
+                        throw new InvalidOperationException($"Duplicate ZIP entry after normalization: {destinationName}");
+
+                    var destinationEntry = destinationArchive.CreateEntry(destinationName, CompressionLevel.Optimal);
+                    destinationEntry.LastWriteTime = StableZipTimestamp;
+                    destinationEntry.ExternalAttributes = sourceEntry.ExternalAttributes;
+
+                    using var rawSourceEntryStream = sourceEntry.Open();
+                    using var sourceEntryStream = new BudgetedEntryReadStream(rawSourceEntryStream, sourceEntry, readBudget);
+                    using var destinationEntryStream = destinationEntry.Open();
+
+                    if (NeedsXmlReferenceRewrite(sourceEntry.FullName))
+                    {
+                        using var writer = new StreamWriter(destinationEntryStream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), leaveOpen: false);
+                        writer.Write(RewriteCorePropertiesReferences(ReadXmlEntryText(sourceEntry, sourceEntryStream, limits), originalCorePropertiesPath));
+                    }
+                    else
+                    {
+                        CopyEntry(sourceEntryStream, destinationEntryStream);
+                    }
                 }
             }
-        }
 
-        File.Move(tempPath, fullPath, overwrite: true);
+            File.Move(tempPath, fullPath, overwrite: true);
+            completed = true;
+        }
+        finally
+        {
+            if (!completed)
+                TryDeleteFile(tempPath);
+        }
     }
 
     private static string ValidateSourceArchive(ZipArchive sourceArchive, string packagePath, PackageNormalizeLimits limits)
@@ -231,6 +242,18 @@ public static class PackageCorePropertiesNormalizer
                 return;
 
             destinationEntryStream.Write(buffer, 0, bytesRead);
+        }
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
         }
     }
 
