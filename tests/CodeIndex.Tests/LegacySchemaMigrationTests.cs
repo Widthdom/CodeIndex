@@ -1563,6 +1563,45 @@ public class LegacySchemaMigrationTests : IDisposable
     }
 
     [Fact]
+    public void TryMigrateForRead_CurrentSchema_DoesNotTakeWriterLockDuringActiveWrite_Issue2932()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"codeindex_read_migration_current_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var dbPath = Path.Combine(dir, "codeindex.db");
+        try
+        {
+            using (var setup = new DbContext(dbPath))
+            {
+                setup.InitializeSchema();
+            }
+
+            using var readDb = new DbContext(dbPath);
+            using var writeDb = new DbContext(dbPath);
+            var writer = new DbWriter(writeDb.Connection);
+            using var txn = writer.BeginTransaction();
+            writer.UpsertFile(new FileRecord
+            {
+                Path = "src/active-writer.cs",
+                Lang = "csharp",
+                Size = 10,
+                Lines = 1,
+                Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime,
+                Checksum = "active-writer",
+            });
+
+            readDb.TryMigrateForRead();
+
+            Assert.Null(readDb.LastMigrationFailure);
+            txn.Commit();
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public async Task TryMigrateForRead_ConcurrentLegacyMigrations_SerializeAndComplete()
     {
         var dir = Path.Combine(Path.GetTempPath(), $"codeindex_concurrent_migration_{Guid.NewGuid():N}");

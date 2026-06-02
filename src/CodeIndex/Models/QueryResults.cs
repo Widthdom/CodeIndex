@@ -19,6 +19,8 @@ public class SearchResult
     public string Content { get; set; } = string.Empty;
     public double Score { get; set; }
     public string? Visibility { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<SearchGuardEvidence>? GuardEvidence { get; set; }
     [JsonIgnore]
     public long ChunkId { get; set; }
     [JsonIgnore]
@@ -28,6 +30,29 @@ public class SearchResult
 public readonly record struct SearchCursor(double Score, long ChunkId, int Offset);
 
 public readonly record struct QueryCountResult(int Count, int FileCount, bool IncludesSql = false);
+
+public enum SearchGuardRole
+{
+    Require,
+    Reject,
+}
+
+public enum SearchGuardDirection
+{
+    Before,
+    After,
+}
+
+public sealed record SearchGuardFilter(SearchGuardRole Role, SearchGuardDirection Direction, string Query);
+
+public sealed class SearchGuardEvidence
+{
+    public string Role { get; set; } = string.Empty;
+    public string Direction { get; set; } = string.Empty;
+    public string Query { get; set; } = string.Empty;
+    public int Line { get; set; }
+    public string Text { get; set; } = string.Empty;
+}
 
 public sealed record FtsQueryDiagnostics(
     [property: JsonPropertyName("query_degraded_reason")] string? QueryDegradedReason,

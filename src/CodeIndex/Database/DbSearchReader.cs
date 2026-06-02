@@ -16,6 +16,9 @@ public partial class DbReader
     internal const int MaxRawFtsNearOperators = 16;
     internal const int MaxRawFtsParenthesisDepth = 16;
     internal const int MaxRawFtsNearDistance = 100;
+    internal const int DefaultSearchGuardWindow = 8;
+    internal const int MaxSearchGuardWindow = 200;
+    internal const int MaxSearchGuardFilters = 8;
 
     /// <summary>
     /// Sanitize user input for FTS5 MATCH by quoting each token as a phrase.
@@ -99,7 +102,7 @@ public partial class DbReader
     /// Full-text search across indexed chunks using FTS5.
     /// FTS5を使ったチャンク全文検索。
     /// </summary>
-    public List<SearchResult> Search(string query, int limit = 20, string? lang = null, bool rawQuery = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool deduplicate = true, DateTime? since = null, bool exact = false, bool prefix = false, bool visibilityRank = true, SearchCursor? cursor = null)
+    public List<SearchResult> Search(string query, int limit = 20, string? lang = null, bool rawQuery = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool deduplicate = true, DateTime? since = null, bool exact = false, bool prefix = false, bool visibilityRank = true, SearchCursor? cursor = null, IReadOnlyList<SearchGuardFilter>? guardFilters = null, int guardWindow = DefaultSearchGuardWindow)
     {
         // Guard against empty/whitespace queries that would match everything
         // 空白のみのクエリが全件マッチするのを防止
@@ -109,6 +112,7 @@ public partial class DbReader
         lang = NormalizeQueryLanguage(lang);
         var normalizedQuery = rawQuery ? query : NormalizeLiteralSearchQuery(query, lang);
         var coverageTokens = exact ? new List<string>() : GetSearchCoverageTokens(normalizedQuery, rawQuery);
+        var hasGuardFilters = guardFilters is { Count: > 0 };
         using var cmd = _conn.CreateCommand();
         string sql;
 
@@ -149,8 +153,10 @@ public partial class DbReader
         if (since != null && _fileColumns.Contains("modified"))
             sql += " AND f.modified >= @since";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        sql += $" ORDER BY {GetSearchOrderSql(coverageTokens.Count)} LIMIT @limit";
-        if (cursor is { })
+        sql += $" ORDER BY {GetSearchOrderSql(coverageTokens.Count)}";
+        if (!hasGuardFilters)
+            sql += " LIMIT @limit";
+        if (cursor is { } && !hasGuardFilters)
             sql += " OFFSET @cursorOffset";
 
         cmd.CommandText = sql;
@@ -160,19 +166,20 @@ public partial class DbReader
         cmd.Parameters.AddWithValue("@rankingQueryPrefix", $"{EscapeLikeQuery(normalizedQuery.Trim())}%");
         cmd.Parameters.AddWithValue("@visibilityRank", visibilityRank ? 1 : 0);
         AddSearchCoverageParameters(cmd, coverageTokens);
-        cmd.Parameters.AddWithValue("@limit", limit);
+        if (!hasGuardFilters)
+            cmd.Parameters.AddWithValue("@limit", limit);
         if (lang != null)
             cmd.Parameters.AddWithValue("@lang", lang);
         if (since != null && _fileColumns.Contains("modified"))
             cmd.Parameters.AddWithValue("@since", since.Value);
-        if (cursor is { } searchCursorParameter)
+        if (cursor is { } searchCursorParameter && !hasGuardFilters)
         {
             cmd.Parameters.AddWithValue("@cursorOffset", searchCursorParameter.Offset);
         }
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
 
         var raw = new List<SearchResult>();
-        var nextOffset = cursor?.Offset ?? 0;
+        var nextOffset = hasGuardFilters ? 0 : cursor?.Offset ?? 0;
         try
         {
             using var reader = cmd.ExecuteTrackedReader();
@@ -197,13 +204,24 @@ public partial class DbReader
         {
             throw new FtsQuerySyntaxException(ex.Message, ex);
         }
-        return deduplicate ? DeduplicateOverlappingResults(raw) : raw;
+
+        if (hasGuardFilters)
+            raw = FilterBySearchGuards(raw, query, normalizedQuery, rawQuery, exact, lang, guardFilters!, guardWindow);
+
+        var results = deduplicate ? DeduplicateOverlappingResults(raw) : raw;
+        return hasGuardFilters ? PageGuardedSearchResults(results, limit, cursor) : results;
     }
 
-    public QueryCountResult CountSearchResults(string query, string? lang = null, bool rawQuery = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool deduplicate = true, DateTime? since = null, bool exact = false, bool prefix = false, bool visibilityRank = true)
+    public QueryCountResult CountSearchResults(string query, string? lang = null, bool rawQuery = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool deduplicate = true, DateTime? since = null, bool exact = false, bool prefix = false, bool visibilityRank = true, IReadOnlyList<SearchGuardFilter>? guardFilters = null, int guardWindow = DefaultSearchGuardWindow)
     {
         if (string.IsNullOrWhiteSpace(query))
             return new QueryCountResult(0, 0);
+
+        if (guardFilters is { Count: > 0 })
+        {
+            var guardedResults = Search(query, int.MaxValue, lang, rawQuery, pathPatterns, excludePathPatterns, excludeTests, deduplicate, since, exact, prefix, visibilityRank, guardFilters: guardFilters, guardWindow: guardWindow);
+            return new QueryCountResult(guardedResults.Count, guardedResults.Select(result => result.Path).Distinct(StringComparer.Ordinal).Count());
+        }
 
         lang = NormalizeQueryLanguage(lang);
         var normalizedQuery = rawQuery ? query : NormalizeLiteralSearchQuery(query, lang);
@@ -302,6 +320,207 @@ public partial class DbReader
 
         return new QueryCountResult(count, fileCount);
     }
+
+    private List<SearchResult> FilterBySearchGuards(
+        List<SearchResult> results,
+        string query,
+        string normalizedQuery,
+        bool rawQuery,
+        bool exact,
+        string? lang,
+        IReadOnlyList<SearchGuardFilter> guardFilters,
+        int guardWindow)
+    {
+        guardWindow = Math.Clamp(guardWindow, 0, MaxSearchGuardWindow);
+        var filtered = new List<SearchResult>(results.Count);
+        foreach (var result in results)
+        {
+            foreach (var (focusLine, focusText) in FindPrimarySearchMatchLines(result, query, normalizedQuery, rawQuery, exact, lang))
+            {
+                var guardEvidence = new List<SearchGuardEvidence>();
+                var keep = true;
+                foreach (var filter in guardFilters)
+                {
+                    var match = FindGuardEvidence(result.Path, focusLine, filter, guardWindow, lang ?? result.Lang);
+                    var matched = match != null;
+                    if (filter.Role == SearchGuardRole.Require && !matched)
+                    {
+                        keep = false;
+                        break;
+                    }
+                    if (filter.Role == SearchGuardRole.Reject && matched)
+                    {
+                        keep = false;
+                        break;
+                    }
+                    if (match != null)
+                        guardEvidence.Add(match);
+                }
+
+                if (!keep)
+                    continue;
+
+                filtered.Add(new SearchResult
+                {
+                    Path = result.Path,
+                    Lang = result.Lang,
+                    StartLine = focusLine,
+                    EndLine = focusLine,
+                    Content = focusText,
+                    Score = result.Score,
+                    Visibility = result.Visibility,
+                    GuardEvidence = guardEvidence.Count == 0 ? null : guardEvidence,
+                    ChunkId = result.ChunkId,
+                    NextOffset = result.NextOffset,
+                });
+            }
+        }
+
+        return filtered;
+    }
+
+    private static List<(int LineNumber, string Text)> FindPrimarySearchMatchLines(SearchResult result, string query, string normalizedQuery, bool rawQuery, bool exact, string? lang)
+    {
+        var terms = BuildPrimarySearchMatchTerms(query, normalizedQuery, rawQuery, exact);
+        var lines = SplitContentLines(result.Content);
+        if (terms.Length == 0)
+            return [(result.StartLine, lines.FirstOrDefault() ?? string.Empty)];
+
+        var normalizeCSharp = string.Equals(lang ?? result.Lang, "csharp", StringComparison.OrdinalIgnoreCase);
+        var comparison = exact ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+        var requireAllTermsOnLine = !rawQuery && !exact && terms.Length > 1;
+        var matches = new List<(int LineNumber, string Text)>();
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var line = normalizeCSharp ? CSharpVerbatimNameNormalizer.Normalize(lines[i]) : lines[i];
+            var lineMatches = requireAllTermsOnLine
+                ? terms.All(term => line.Contains(term, comparison))
+                : terms.Any(term => line.Contains(term, comparison));
+            if (lineMatches)
+                matches.Add((result.StartLine + i, lines[i]));
+        }
+
+        return matches;
+    }
+
+    private static string[] BuildPrimarySearchMatchTerms(string query, string normalizedQuery, bool rawQuery, bool exact)
+    {
+        IEnumerable<string> rawTerms = !exact && !rawQuery
+            ? normalizedQuery.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
+            : [rawQuery ? query.Trim() : normalizedQuery.Trim()];
+        var terms = rawTerms.Select(NormalizeGuardSearchTerm).ToList();
+        if (!exact && rawQuery)
+            terms.AddRange(GetSearchCoverageTokens(normalizedQuery, rawQuery));
+
+        return terms
+            .Select(NormalizeGuardSearchTerm)
+            .Where(term => term.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private SearchGuardEvidence? FindGuardEvidence(string path, int focusLine, SearchGuardFilter filter, int guardWindow, string? lang)
+    {
+        var windowStart = filter.Direction == SearchGuardDirection.Before
+            ? Math.Max(1, focusLine - guardWindow)
+            : focusLine + 1;
+        var windowEnd = filter.Direction == SearchGuardDirection.Before
+            ? Math.Max(0, focusLine - 1)
+            : focusLine + guardWindow;
+
+        if (windowEnd < windowStart)
+            return null;
+
+        var lineWindow = ReadLineWindow(path, windowStart, windowEnd);
+        if (lineWindow.Count == 0)
+            return null;
+
+        var guardQuery = NormalizeGuardQuery(filter.Query, lang);
+        if (guardQuery.Length == 0)
+            return null;
+
+        foreach (var (lineNumber, text) in lineWindow)
+        {
+            var candidate = string.Equals(lang, "csharp", StringComparison.OrdinalIgnoreCase)
+                ? CSharpVerbatimNameNormalizer.Normalize(text)
+                : text;
+            if (!candidate.Contains(guardQuery, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            return new SearchGuardEvidence
+            {
+                Role = FormatSearchGuardRole(filter.Role),
+                Direction = FormatSearchGuardDirection(filter.Direction),
+                Query = filter.Query,
+                Line = lineNumber,
+                Text = text,
+            };
+        }
+
+        return null;
+    }
+
+    private SortedDictionary<int, string> ReadLineWindow(string path, int startLine, int endLine)
+    {
+        var linesByNumber = new SortedDictionary<int, string>();
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = @"
+            SELECT c.start_line, c.content
+            FROM chunks c
+            JOIN files f ON c.file_id = f.id
+            WHERE f.path = @path
+              AND c.end_line >= @startLine
+              AND c.start_line <= @endLine
+            ORDER BY c.start_line ASC, c.id ASC";
+        cmd.Parameters.AddWithValue("@path", path);
+        cmd.Parameters.AddWithValue("@startLine", startLine);
+        cmd.Parameters.AddWithValue("@endLine", endLine);
+
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+        {
+            var chunkStartLine = reader.GetInt32(0);
+            var chunkLines = SplitContentLines(reader.GetString(1));
+            for (var i = 0; i < chunkLines.Length; i++)
+            {
+                var lineNumber = chunkStartLine + i;
+                if (lineNumber < startLine || lineNumber > endLine)
+                    continue;
+                linesByNumber.TryAdd(lineNumber, chunkLines[i]);
+            }
+        }
+
+        return linesByNumber;
+    }
+
+    private static List<SearchResult> PageGuardedSearchResults(List<SearchResult> results, int limit, SearchCursor? cursor)
+    {
+        var offset = Math.Max(0, cursor?.Offset ?? 0);
+        var page = results.Skip(offset).Take(Math.Max(0, limit)).ToList();
+        for (var i = 0; i < page.Count; i++)
+            page[i].NextOffset = offset + i + 1;
+        return page;
+    }
+
+    private static string NormalizeGuardQuery(string query, string? lang)
+    {
+        var normalized = NormalizeGuardSearchTerm(query.Normalize(NormalizationForm.FormC));
+        return string.Equals(lang, "csharp", StringComparison.OrdinalIgnoreCase)
+            ? CSharpVerbatimNameNormalizer.Normalize(normalized)
+            : normalized;
+    }
+
+    private static string NormalizeGuardSearchTerm(string value)
+        => value.Trim().Trim('"', '\'', '(', ')').TrimEnd('*');
+
+    private static string[] SplitContentLines(string content)
+        => content.Replace("\r\n", "\n").Split('\n');
+
+    private static string FormatSearchGuardRole(SearchGuardRole role)
+        => role == SearchGuardRole.Require ? "require" : "reject";
+
+    private static string FormatSearchGuardDirection(SearchGuardDirection direction)
+        => direction == SearchGuardDirection.Before ? "before" : "after";
 
     private static string NormalizeLiteralSearchQuery(string query, string? lang)
     {

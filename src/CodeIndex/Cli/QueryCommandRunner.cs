@@ -81,6 +81,11 @@ public static class QueryCommandRunner
         "--snippet-lines",
         "--snippet-focus",
         "--path",
+        "--require-before",
+        "--require-after",
+        "--reject-before",
+        "--reject-after",
+        "--guard-window",
         "--project",
         "--solution",
         "--exclude-path",
@@ -420,7 +425,7 @@ public static class QueryCommandRunner
         {
             if (options.CountOnly)
             {
-                var counts = reader.CountSearchResults(options.Query, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank);
+                var counts = reader.CountSearchResults(options.Query, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank, options.GuardFilters, options.GuardWindow);
                 var queryDiagnostics = DbReader.AnalyzeFtsQuery(options.Query, options.RawFts, options.Prefix, options.Lang);
                 if (counts.Count == 0)
                 {
@@ -448,7 +453,7 @@ public static class QueryCommandRunner
                 return CommandExitCodes.Success;
             }
 
-            var results = reader.Search(options.Query, options.Limit, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank);
+            var results = reader.Search(options.Query, options.Limit, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank, guardFilters: options.GuardFilters, guardWindow: options.GuardWindow);
             var ftsQueryDiagnostics = DbReader.AnalyzeFtsQuery(options.Query, options.RawFts, options.Prefix, options.Lang);
             if (results.Count == 0)
             {
@@ -4936,6 +4941,8 @@ public static class QueryCommandRunner
         bool exact = false;
         bool regex = false;
         bool prefix = false;
+        var guardFilters = new List<SearchGuardFilter>();
+        var guardWindow = DbReader.DefaultSearchGuardWindow;
         List<string>? parseErrors = null;
         bool exactName = false;
         bool exactSubstring = false;
@@ -4970,6 +4977,22 @@ public static class QueryCommandRunner
         {
             parseErrors ??= [];
             parseErrors.Add(error);
+        }
+
+        void AddSearchGuardFilter(string optionName, SearchGuardRole role, SearchGuardDirection direction, string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                AddParseError(BuildMissingOptionValueError(optionName));
+                return;
+            }
+            if (value.Length > QueryLimits.MaxQueryLength)
+            {
+                AddParseError($"Error: {optionName} query too long (max {QueryLimits.MaxQueryLength} characters).");
+                return;
+            }
+
+            guardFilters.Add(new SearchGuardFilter(role, direction, value));
         }
 
         void AddStatusCheckScopes(string rawScopes)
@@ -5163,6 +5186,48 @@ public static class QueryCommandRunner
                     }
                     else
                         AddParseError(queryError!);
+                    break;
+                case "--require-before":
+                    if (TryReadStringOptionValue(args, ref i, "--require-before", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var requireBeforeValue, out var requireBeforeError))
+                        AddSearchGuardFilter("--require-before", SearchGuardRole.Require, SearchGuardDirection.Before, requireBeforeValue!);
+                    else
+                        AddParseError(requireBeforeError!);
+                    break;
+                case "--require-after":
+                    if (TryReadStringOptionValue(args, ref i, "--require-after", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var requireAfterValue, out var requireAfterError))
+                        AddSearchGuardFilter("--require-after", SearchGuardRole.Require, SearchGuardDirection.After, requireAfterValue!);
+                    else
+                        AddParseError(requireAfterError!);
+                    break;
+                case "--reject-before":
+                    if (TryReadStringOptionValue(args, ref i, "--reject-before", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var rejectBeforeValue, out var rejectBeforeError))
+                        AddSearchGuardFilter("--reject-before", SearchGuardRole.Reject, SearchGuardDirection.Before, rejectBeforeValue!);
+                    else
+                        AddParseError(rejectBeforeError!);
+                    break;
+                case "--reject-after":
+                    if (TryReadStringOptionValue(args, ref i, "--reject-after", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var rejectAfterValue, out var rejectAfterError))
+                        AddSearchGuardFilter("--reject-after", SearchGuardRole.Reject, SearchGuardDirection.After, rejectAfterValue!);
+                    else
+                        AddParseError(rejectAfterError!);
+                    break;
+                case "--guard-window":
+                    if (!TryReadRawOptionValue(args, ref i, "--guard-window", inlineValue, out var guardWindowValue, out var missingGuardWindowError))
+                    {
+                        AddParseError(missingGuardWindowError!);
+                    }
+                    else if (TryParseNonNegativeInt(guardWindowValue!, "--guard-window", out var parsedGuardWindow, out var guardWindowError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--guard-window", guardWindowValue!);
+                        if (parsedGuardWindow > DbReader.MaxSearchGuardWindow)
+                            AddParseError($"Error: --guard-window must be between 0 and {DbReader.MaxSearchGuardWindow}; got {parsedGuardWindow}.");
+                        else
+                            guardWindow = parsedGuardWindow;
+                    }
+                    else
+                    {
+                        AddParseError(guardWindowError!);
+                    }
                     break;
                 case "--kind":
                     if (TryReadStringOptionValue(args, ref i, "--kind", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var kindValue, out var kindError))
@@ -5600,6 +5665,8 @@ public static class QueryCommandRunner
         }
 
         ValidateQueryPathOptionValues(userPathPatterns, excludePaths, AddParseError);
+        if (guardFilters.Count > DbReader.MaxSearchGuardFilters)
+            AddParseError($"Error: search accepts at most {DbReader.MaxSearchGuardFilters} guard filters; got {guardFilters.Count}.");
 
         if (validateDefaultLimit && !limitExplicit && defaultLimitError != null)
             AddParseError(defaultLimitError);
@@ -5657,6 +5724,8 @@ public static class QueryCommandRunner
             Exact = exact,
             Regex = regex,
             Prefix = prefix,
+            GuardFilters = guardFilters,
+            GuardWindow = guardWindow,
             ExactName = exactName,
             ExactSubstring = exactSubstring,
             CheckWorkspace = checkWorkspace,
@@ -8343,6 +8412,8 @@ public sealed class QueryCommandOptions
     public bool Exact { get; init; }
     public bool Regex { get; init; }
     public bool Prefix { get; init; }
+    public List<SearchGuardFilter> GuardFilters { get; init; } = [];
+    public int GuardWindow { get; init; } = DbReader.DefaultSearchGuardWindow;
     public bool ExactName { get; init; }
     public bool ExactSubstring { get; init; }
     public bool CheckWorkspace { get; init; }

@@ -106,9 +106,7 @@ internal static class ExportImportCommandRunner
                 SqliteConnection.ClearAllPools();
             }
 
-            DeleteSqliteSidecars(fullDbPath);
-            File.Move(tempPath, fullDbPath, overwrite: true);
-            DeleteSqliteSidecars(fullDbPath);
+            ReplaceImportedDatabase(tempPath, fullDbPath);
             if (wantsJson)
             {
                 Console.WriteLine(JsonSerializer.Serialize(new ImportResult("1", fullDbPath, prunePaths), jsonOptions));
@@ -126,6 +124,7 @@ internal static class ExportImportCommandRunner
         finally
         {
             try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { }
+            try { DeleteSqliteSidecars(tempPath); } catch { }
         }
     }
 
@@ -193,18 +192,7 @@ internal static class ExportImportCommandRunner
             }
             SqliteConnection.ClearAllPools();
             manifest = manifest with { DatabaseSha256 = ComputeSha256(snapshotPath) };
-            if (File.Exists(outputPath))
-                File.Delete(outputPath);
-
-            using (var archive = ZipFile.Open(outputPath, ZipArchiveMode.Create))
-            {
-                AddTextEntry(archive, ManifestEntryName, JsonSerializer.Serialize(manifest, jsonOptions));
-                var dbEntry = archive.CreateEntry(DatabaseEntryName, CompressionLevel.SmallestSize);
-                dbEntry.LastWriteTime = DeterministicZipTimestamp;
-                using var source = File.OpenRead(snapshotPath);
-                using var target = dbEntry.Open();
-                source.CopyTo(target);
-            }
+            WriteExportArchiveFile(outputPath, snapshotPath, manifest, jsonOptions);
 
             if (wantsJson)
                 Console.WriteLine(JsonSerializer.Serialize(new ExportArchiveResult("1", Path.GetFullPath(outputPath), fullSourceDbPath), jsonOptions));
@@ -263,26 +251,28 @@ internal static class ExportImportCommandRunner
             if (!string.IsNullOrWhiteSpace(outputDirectory))
                 Directory.CreateDirectory(outputDirectory);
 
-            using var writer = new StreamWriter(outputPath, append: false, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
-            writer.WriteLine("!_TAG_FILE_FORMAT\t2\t/extended format/");
-            writer.WriteLine("!_TAG_FILE_SORTED\t1\t/0=unsorted, 1=sorted, 2=foldcase/");
-
-            using var cmd = db.Connection.CreateCommand();
-            cmd.CommandText = @"
-                SELECT s.name, f.path, COALESCE(s.start_line, s.line, 1), s.kind
-                FROM symbols s
-                JOIN files f ON s.file_id = f.id
-                WHERE s.name IS NOT NULL AND s.name != ''
-                ORDER BY s.name COLLATE NOCASE, f.path, COALESCE(s.start_line, s.line, 1)";
-            using var reader = cmd.ExecuteReader();
-            while (reader.Read())
+            WriteCtagsFile(outputPath, writer =>
             {
-                var name = SanitizeCtagsField(reader.GetString(0));
-                var path = SanitizeCtagsField(reader.GetString(1));
-                var line = Math.Max(1, reader.GetInt32(2));
-                var kind = SanitizeCtagsField(reader.GetString(3));
-                writer.WriteLine($"{name}\t{path}\t{line};\"\tkind:{kind}\tline:{line}");
-            }
+                writer.WriteLine("!_TAG_FILE_FORMAT\t2\t/extended format/");
+                writer.WriteLine("!_TAG_FILE_SORTED\t1\t/0=unsorted, 1=sorted, 2=foldcase/");
+
+                using var cmd = db.Connection.CreateCommand();
+                cmd.CommandText = @"
+                    SELECT s.name, f.path, COALESCE(s.start_line, s.line, 1), s.kind
+                    FROM symbols s
+                    JOIN files f ON s.file_id = f.id
+                    WHERE s.name IS NOT NULL AND s.name != ''
+                    ORDER BY s.name COLLATE NOCASE, f.path, COALESCE(s.start_line, s.line, 1)";
+                using var reader = cmd.ExecuteReader();
+                while (reader.Read())
+                {
+                    var name = SanitizeCtagsField(reader.GetString(0));
+                    var path = SanitizeCtagsField(reader.GetString(1));
+                    var line = Math.Max(1, reader.GetInt32(2));
+                    var kind = SanitizeCtagsField(reader.GetString(3));
+                    writer.WriteLine($"{name}\t{path}\t{line};\"\tkind:{kind}\tline:{line}");
+                }
+            });
 
             Console.WriteLine($"Exported ctags to {outputPath}");
             return CommandExitCodes.Success;
@@ -311,6 +301,39 @@ internal static class ExportImportCommandRunner
         entry.LastWriteTime = DeterministicZipTimestamp;
         using var writer = new StreamWriter(entry.Open(), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
         writer.Write(content);
+    }
+
+    internal static void WriteExportArchiveFile(string outputPath, string snapshotPath, ExportManifest manifest, JsonSerializerOptions jsonOptions)
+    {
+        AtomicFileWriter.Write(
+            outputPath,
+            stream =>
+            {
+                using var archive = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true);
+                AddTextEntry(archive, ManifestEntryName, JsonSerializer.Serialize(manifest, jsonOptions));
+                var dbEntry = archive.CreateEntry(DatabaseEntryName, CompressionLevel.SmallestSize);
+                dbEntry.LastWriteTime = DeterministicZipTimestamp;
+                using var source = File.OpenRead(snapshotPath);
+                using var target = dbEntry.Open();
+                source.CopyTo(target);
+            });
+    }
+
+    internal static void WriteCtagsFile(string outputPath, Action<TextWriter> writeContents)
+    {
+        ArgumentNullException.ThrowIfNull(writeContents);
+
+        AtomicFileWriter.Write(
+            outputPath,
+            stream =>
+            {
+                using var writer = new StreamWriter(
+                    stream,
+                    new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+                    bufferSize: 1024,
+                    leaveOpen: true);
+                writeContents(writer);
+            });
     }
 
     private static string ComputeSha256(string path)
@@ -476,6 +499,12 @@ internal static class ExportImportCommandRunner
 
     private static string CreateUnpooledConnectionString(string dbPath)
         => new SqliteConnectionStringBuilder { DataSource = dbPath, Pooling = false }.ConnectionString;
+
+    internal static void ReplaceImportedDatabase(string tempPath, string fullDbPath)
+    {
+        File.Move(tempPath, fullDbPath, overwrite: true);
+        DeleteSqliteSidecars(fullDbPath);
+    }
 
     private static void DeleteSqliteSidecars(string dbPath)
     {
