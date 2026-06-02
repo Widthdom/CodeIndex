@@ -1,10 +1,11 @@
 using System.Text.RegularExpressions;
+using CodeIndex.Indexer;
 
 namespace CodeIndex.Cli;
 
 internal static class RuntimeSafety
 {
-    internal static readonly TimeSpan RegexMatchTimeout = TimeSpan.FromSeconds(2);
+    internal static readonly TimeSpan RegexMatchTimeout = BoundedRegex.DefaultMatchTimeout;
 
     public static void Configure()
     {
