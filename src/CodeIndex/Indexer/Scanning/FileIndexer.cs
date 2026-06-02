@@ -2827,6 +2827,9 @@ public class FileIndexer
         string? line;
         while ((line = reader.ReadLine()) != null)
         {
+            if (result.Count == 0 && line.Length > 0 && line[0] == '\uFEFF')
+                line = line[1..];
+
             if (result.Count >= maxLines)
             {
                 skippedReason = $"it exceeds {maxLines} lines";
