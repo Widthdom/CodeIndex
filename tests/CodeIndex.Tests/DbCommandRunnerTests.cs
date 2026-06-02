@@ -1,3 +1,4 @@
+using System.Runtime.Versioning;
 using System.Text.Json;
 using CodeIndex.Cli;
 using CodeIndex.Database;
@@ -282,6 +283,41 @@ public class DbCommandRunnerTests
     }
 
     [Fact]
+    public void Run_Checkpoint_OnPosix_WritesPrivateSnapshotPermissions()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_private_{Guid.NewGuid():N}");
+        var dbPath = Path.Combine(root, "codeindex.db");
+        try
+        {
+            Directory.CreateDirectory(root);
+            File.WriteAllText(dbPath, "db");
+            File.WriteAllText(dbPath + "-wal", "wal");
+            File.WriteAllText(dbPath + "-shm", "shm");
+
+            var (checkpointExit, _, _) = RunAndCaptureStreams(["checkpoint", "private", "--db", dbPath]);
+
+            Assert.Equal(CommandExitCodes.Success, checkpointExit);
+            var checkpointRoot = dbPath + ".checkpoints";
+            var checkpointPath = Path.Combine(checkpointRoot, "private");
+            AssertPrivateDirectory(checkpointRoot);
+            AssertPrivateDirectory(checkpointPath);
+            AssertPrivateFile(Path.Combine(checkpointPath, "codeindex.db"));
+            AssertPrivateFile(Path.Combine(checkpointPath, "codeindex.db-wal"));
+            AssertPrivateFile(Path.Combine(checkpointPath, "codeindex.db-shm"));
+            AssertPrivateFile(Path.Combine(checkpointPath, "manifest.txt"));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Run_CheckpointsList_JsonIncludesCreatedCheckpoint()
     {
         var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_list_{Guid.NewGuid():N}");
@@ -424,6 +460,22 @@ public class DbCommandRunnerTests
         var exitCode = DbCommandRunner.RunIntegrityCheck(args, _jsonOptions);
         using var document = JsonDocument.Parse(capture.Out!.ToString()!);
         return (exitCode, document.RootElement.Clone());
+    }
+
+    [UnsupportedOSPlatform("windows")]
+    private static void AssertPrivateDirectory(string path)
+    {
+        Assert.Equal(
+            DataDirectorySecurity.PrivateDirectoryMode,
+            File.GetUnixFileMode(path) & DataDirectorySecurity.PermissionBits);
+    }
+
+    [UnsupportedOSPlatform("windows")]
+    private static void AssertPrivateFile(string path)
+    {
+        Assert.Equal(
+            DataDirectorySecurity.PrivateFileMode,
+            File.GetUnixFileMode(path) & DataDirectorySecurity.PermissionBits);
     }
 
     private static void SeedOrphans(string dbPath)

@@ -581,15 +581,15 @@ public static class DbCommandRunner
         if (Directory.Exists(checkpointPath))
             throw new InvalidOperationException($"checkpoint already exists: {name}");
 
-        Directory.CreateDirectory(root);
+        DataDirectorySecurity.CreateSensitiveDirectory(root);
         var tempPath = Path.Combine(root, ".tmp-" + name + "-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(tempPath);
+        DataDirectorySecurity.CreateSensitiveDirectory(tempPath);
         try
         {
-            CopyIfExists(fullDbPath, Path.Combine(tempPath, Path.GetFileName(fullDbPath)));
-            CopyIfExists(fullDbPath + "-wal", Path.Combine(tempPath, Path.GetFileName(fullDbPath) + "-wal"));
-            CopyIfExists(fullDbPath + "-shm", Path.Combine(tempPath, Path.GetFileName(fullDbPath) + "-shm"));
-            File.WriteAllText(Path.Combine(tempPath, "manifest.txt"), $"name={name}{Environment.NewLine}created_at_utc={DateTimeOffset.UtcNow:O}{Environment.NewLine}db={fullDbPath}{Environment.NewLine}");
+            CopyIfExists(fullDbPath, Path.Combine(tempPath, Path.GetFileName(fullDbPath)), privateDestination: true);
+            CopyIfExists(fullDbPath + "-wal", Path.Combine(tempPath, Path.GetFileName(fullDbPath) + "-wal"), privateDestination: true);
+            CopyIfExists(fullDbPath + "-shm", Path.Combine(tempPath, Path.GetFileName(fullDbPath) + "-shm"), privateDestination: true);
+            DataDirectorySecurity.WritePrivateText(Path.Combine(tempPath, "manifest.txt"), $"name={name}{Environment.NewLine}created_at_utc={DateTimeOffset.UtcNow:O}{Environment.NewLine}db={fullDbPath}{Environment.NewLine}");
             Directory.Move(tempPath, checkpointPath);
         }
         catch
@@ -689,10 +689,14 @@ public static class DbCommandRunner
         return Path.Combine(GetCheckpointRoot(fullDbPath), name);
     }
 
-    private static void CopyIfExists(string source, string destination)
+    private static void CopyIfExists(string source, string destination, bool privateDestination = false)
     {
         if (File.Exists(LongPath.EnsureWindowsPrefix(source)))
+        {
             File.Copy(LongPath.EnsureWindowsPrefix(source), LongPath.EnsureWindowsPrefix(destination), overwrite: false);
+            if (privateDestination)
+                DataDirectorySecurity.ApplyPrivateFileMode(destination);
+        }
     }
 
     private static void MoveIfExists(string source, string destination)
