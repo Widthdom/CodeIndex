@@ -642,7 +642,7 @@ Default locations are `%LOCALAPPDATA%\cdidx\logs\` on Windows,
 `~/.local/state/cdidx/logs/`) on Linux. Logs use per-process filenames,
 rotate daily, rotate again when a file reaches 50 MiB by default, and keep the
 newest 30 files. Set `CDIDX_GLOBAL_TOOL_LOG_MAX_BYTES` or
-`--log-max-size-mb` to tune the size cap. Set
+`--log-max-size-mb` to tune the size cap up to 1024 MiB / 1 GiB. Set
 `CDIDX_DISABLE_PERSISTENT_LOG=1` to opt out. The opt-out toggle accepts `1`,
 `true`, `yes`, or `on` case-insensitively.
 Developer and packaging smoke tests can force this lifecycle log on with
@@ -1689,7 +1689,7 @@ Default locations are `%LOCALAPPDATA%\cdidx\logs\` on Windows,
 `~/.local/state/cdidx/logs/`) on Linux. Logs use per-process filenames,
 rotate daily, rotate again when a file reaches 50 MiB by default, and keep the
 newest 30 files. Set `CDIDX_GLOBAL_TOOL_LOG_MAX_BYTES` or
-`--log-max-size-mb` to tune the size cap. Set
+`--log-max-size-mb` to tune the size cap up to 1024 MiB / 1 GiB. Set
 `CDIDX_DISABLE_PERSISTENT_LOG=1` to opt out.
 
 **If already installed**, reinstall or switch to a specific version explicitly:

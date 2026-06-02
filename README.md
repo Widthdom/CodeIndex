@@ -93,7 +93,7 @@ Output controls:
 
 | Need | Option |
 |---|---|
-| Owner-only persistent stderr logs on POSIX | Global tool stderr logs are forced to `0600` permissions on every open, including existing date/process-stamped log files. Use `--log-format text|json`, `--log-retain-count <N>`, `--log-max-size-mb <N>`, `CDIDX_LOG_*`, or `CDIDX_GLOBAL_TOOL_LOG_MAX_BYTES` to make lifecycle logs JSONL-friendly and rotate them for aggregation. |
+| Owner-only persistent stderr logs on POSIX | Global tool stderr logs are forced to `0600` permissions on every open, including existing date/process-stamped log files. Use `--log-format text|json`, `--log-retain-count <N>`, `--log-max-size-mb <N>`, `CDIDX_LOG_*`, or `CDIDX_GLOBAL_TOOL_LOG_MAX_BYTES` to make lifecycle logs JSONL-friendly and rotate them for aggregation. Log size caps are limited to 1024 MiB / 1 GiB. |
 | Checked-in configuration | Use `.cdidx/config.json` for repository defaults such as `search.limit`, `search.snippet_lines`, and `search.max_line_width`; run `cdidx validate-config` to validate the discovered file and `cdidx config show` to inspect precedence. |
 | Workspaces | Use `cdidx.workspace.json` or `.cdidx-workspace.json` to declare monorepo members, `cdidx workspace list` to inspect them, and `cdidx workspace use <name>` / `cdidx workspace current` for a persisted active workspace. |
 | ASCII-only terminal output | Use `--ascii`, `CDIDX_ASCII=1`, `NO_UNICODE`, `TERM=dumb`, accessibility env hints, or a non-UTF-8 locale. Spinners use pipe, slash, dash, and backslash frames; progress bars use `#` / `-`; very narrow terminals fall back to percentage-only progress. Use `--no-progress`, `CDIDX_DISABLE_PROGRESS=1`, or `PREFERS_REDUCED_MOTION` to keep static progress text without animation. |

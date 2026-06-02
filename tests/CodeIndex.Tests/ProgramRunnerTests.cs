@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -1127,6 +1128,20 @@ sleep 5
             GlobalToolLog.TimeProvider = TimeProvider.System;
             TestProjectHelper.DeleteDirectory(logDir);
         }
+    }
+
+    [Fact]
+    public void Run_LogMaxSizeMbAboveMaximum_ReturnsInvalidArgument()
+    {
+        using var env = EnvironmentVariableScope.Capture(GlobalToolLog.LogMaxSizeMbEnvironmentVariable);
+        var tooLarge = GlobalToolLog.MaxLogSizeMb + 1;
+
+        var (exitCode, _, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            [$"--log-max-size-mb={tooLarge.ToString(CultureInfo.InvariantCulture)}", "status"],
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.InvalidArgument, exitCode);
+        Assert.Contains($"--log-max-size-mb must be an integer between 1 and {GlobalToolLog.MaxLogSizeMb}", stderr);
     }
 
     [Fact]

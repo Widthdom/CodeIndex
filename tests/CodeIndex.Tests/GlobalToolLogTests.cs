@@ -64,6 +64,63 @@ public class GlobalToolLogTests
     }
 
     [Fact]
+    public void LogOptionsFromEnvironment_AcceptsMaximumMbValue()
+    {
+        using var env = EnvironmentVariableScope.Capture(
+            GlobalToolLog.LogMaxSizeMbEnvironmentVariable,
+            GlobalToolLog.GlobalToolLogMaxBytesEnvironmentVariable);
+        env.Set(GlobalToolLog.LogMaxSizeMbEnvironmentVariable, GlobalToolLog.MaxLogSizeMb.ToString(CultureInfo.InvariantCulture));
+        env.Set(GlobalToolLog.GlobalToolLogMaxBytesEnvironmentVariable, null);
+
+        var options = GlobalToolLog.LogOptions.FromEnvironment();
+
+        Assert.Equal(GlobalToolLog.MaxLogSizeBytes, options.MaxSizeBytes);
+    }
+
+    [Fact]
+    public void LogOptionsFromEnvironment_MbAboveMaximumUsesDefault()
+    {
+        using var env = EnvironmentVariableScope.Capture(
+            GlobalToolLog.LogMaxSizeMbEnvironmentVariable,
+            GlobalToolLog.GlobalToolLogMaxBytesEnvironmentVariable);
+        var tooLarge = GlobalToolLog.MaxLogSizeMb + 1;
+        env.Set(GlobalToolLog.LogMaxSizeMbEnvironmentVariable, tooLarge.ToString(CultureInfo.InvariantCulture));
+        env.Set(GlobalToolLog.GlobalToolLogMaxBytesEnvironmentVariable, (GlobalToolLog.MaxLogSizeBytes / 2).ToString(CultureInfo.InvariantCulture));
+
+        var options = GlobalToolLog.LogOptions.FromEnvironment();
+
+        Assert.Equal(50L * 1024L * 1024L, options.MaxSizeBytes);
+    }
+
+    [Fact]
+    public void LogOptionsFromEnvironment_AcceptsMaximumBytesValue()
+    {
+        using var env = EnvironmentVariableScope.Capture(
+            GlobalToolLog.LogMaxSizeMbEnvironmentVariable,
+            GlobalToolLog.GlobalToolLogMaxBytesEnvironmentVariable);
+        env.Set(GlobalToolLog.LogMaxSizeMbEnvironmentVariable, null);
+        env.Set(GlobalToolLog.GlobalToolLogMaxBytesEnvironmentVariable, GlobalToolLog.MaxLogSizeBytes.ToString(CultureInfo.InvariantCulture));
+
+        var options = GlobalToolLog.LogOptions.FromEnvironment();
+
+        Assert.Equal(GlobalToolLog.MaxLogSizeBytes, options.MaxSizeBytes);
+    }
+
+    [Fact]
+    public void LogOptionsFromEnvironment_BytesAboveMaximumUsesDefault()
+    {
+        using var env = EnvironmentVariableScope.Capture(
+            GlobalToolLog.LogMaxSizeMbEnvironmentVariable,
+            GlobalToolLog.GlobalToolLogMaxBytesEnvironmentVariable);
+        env.Set(GlobalToolLog.LogMaxSizeMbEnvironmentVariable, null);
+        env.Set(GlobalToolLog.GlobalToolLogMaxBytesEnvironmentVariable, (GlobalToolLog.MaxLogSizeBytes + 1).ToString(CultureInfo.InvariantCulture));
+
+        var options = GlobalToolLog.LogOptions.FromEnvironment();
+
+        Assert.Equal(50L * 1024L * 1024L, options.MaxSizeBytes);
+    }
+
+    [Fact]
     public void ResolveLogDirectoryForStatus_SkipsUnwritableCandidate()
     {
         var root = Path.Combine(Path.GetTempPath(), $"cdidx_log_probe_{Guid.NewGuid():N}");

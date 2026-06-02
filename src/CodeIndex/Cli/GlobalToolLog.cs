@@ -19,6 +19,8 @@ internal static class GlobalToolLog
     internal const string LogMaxSizeMbEnvironmentVariable = "CDIDX_LOG_MAX_SIZE_MB";
     internal const string GlobalToolLogMaxBytesEnvironmentVariable = "CDIDX_GLOBAL_TOOL_LOG_MAX_BYTES";
     private const long DefaultLogMaxSizeBytes = 50L * 1024L * 1024L;
+    internal const int MaxLogSizeMb = 1024;
+    internal const long MaxLogSizeBytes = MaxLogSizeMb * 1024L * 1024L;
     private const string RedactedValue = "<redacted>";
     internal static TimeProvider TimeProvider { get; set; } = TimeProvider.System;
     private static readonly AsyncLocal<Session?> CurrentSession = new();
@@ -623,10 +625,16 @@ internal static class GlobalToolLog
                 retainCount = Math.Clamp(parsedRetain, 1, 10_000);
 
             var maxSizeBytes = DefaultLogMaxSizeBytes;
-            if (int.TryParse(Environment.GetEnvironmentVariable(LogMaxSizeMbEnvironmentVariable), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsedMb) && parsedMb > 0)
-                maxSizeBytes = parsedMb * 1024L * 1024L;
-            else if (long.TryParse(Environment.GetEnvironmentVariable(GlobalToolLogMaxBytesEnvironmentVariable), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsedBytes) && parsedBytes > 0)
+            if (int.TryParse(Environment.GetEnvironmentVariable(LogMaxSizeMbEnvironmentVariable), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedMb) && parsedMb > 0)
+            {
+                if (parsedMb <= MaxLogSizeMb)
+                    maxSizeBytes = parsedMb * 1024L * 1024L;
+            }
+            else if (long.TryParse(Environment.GetEnvironmentVariable(GlobalToolLogMaxBytesEnvironmentVariable), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedBytes)
+                && parsedBytes is > 0 and <= MaxLogSizeBytes)
+            {
                 maxSizeBytes = parsedBytes;
+            }
 
             return new LogOptions(format, retainCount, maxSizeBytes);
         }

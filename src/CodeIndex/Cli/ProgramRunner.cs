@@ -682,9 +682,10 @@ internal static class ProgramRunner
 
             if (TryConsumeValueFlag(args, ref i, arg, "--log-max-size-mb", out var maxSizeMb))
             {
-                if (!int.TryParse(maxSizeMb, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) || parsed < 1)
+                if (!int.TryParse(maxSizeMb, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed)
+                    || parsed is < 1 or > GlobalToolLog.MaxLogSizeMb)
                 {
-                    error = "--log-max-size-mb must be a positive integer.";
+                    error = $"--log-max-size-mb must be an integer between 1 and {GlobalToolLog.MaxLogSizeMb}.";
                     return false;
                 }
                 Environment.SetEnvironmentVariable(GlobalToolLog.LogMaxSizeMbEnvironmentVariable, parsed.ToString(CultureInfo.InvariantCulture));

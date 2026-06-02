@@ -1367,7 +1367,12 @@ logger commits to it, so read-only state/cache/runtime mounts fall through to
 the next candidate instead of losing the first log write. The file name is
 `stderr-YYYYMMDD.log`, timestamps inside the file are ISO-8601 UTC
 (`yyyy-MM-ddTHH:mm:ss.fffZ`) using invariant culture, and the logger keeps
-only the newest 30 daily files. Repository-local development runs from
+only the newest 30 daily files. `CDIDX_LOG_FORMAT` / `--log-format` switch
+between text and JSONL, `CDIDX_LOG_RETAIN` / `--log-retain-count` set retained
+file count, and `CDIDX_LOG_MAX_SIZE_MB` / `--log-max-size-mb` or
+`CDIDX_GLOBAL_TOOL_LOG_MAX_BYTES` set the size-rotation cap. The default size
+cap is 50 MiB and accepted values are capped at 1024 MiB / 1 GiB.
+Repository-local development runs from
 `src/CodeIndex/bin/...` and `tests/.../bin/...` are excluded by default so
 ordinary build/test cycles do not accumulate persistent logs. Set
 `CDIDX_DISABLE_PERSISTENT_LOG=1` to opt out entirely; the toggle accepts `1`,
@@ -2915,7 +2920,8 @@ Linux では `~/.local/state/cdidx/logs/` を使う。ファイル名はプロ�
 `--log-retain-count` は保持ファイル数、`CDIDX_LOG_MAX_SIZE_MB` /
 `--log-max-size-mb` または `CDIDX_GLOBAL_TOOL_LOG_MAX_BYTES` は日次ファイルの
 サイズローテーション上限を指定する。サイズ上限の既定は 50 MiB、保持世代の
-既定は新しい 30 ファイルまで。通常の開発/テストサイクルで
+既定は新しい 30 ファイルまでで、サイズ上限は最大 1024 MiB / 1 GiB。
+通常の開発/テストサイクルで
 ワークツリー直下に永続ログが増えないよう、`src/CodeIndex/bin/...`
 と `tests/.../bin/...` からのリポジトリ内開発実行は既定で対象外として
 いる。完全に無効化したい場合は `CDIDX_DISABLE_PERSISTENT_LOG=1`、
