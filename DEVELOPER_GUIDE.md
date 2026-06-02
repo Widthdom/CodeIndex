@@ -94,6 +94,8 @@ checkout and the restored DB should advertise the current workspace root. The
 archive contains `manifest.json` plus `codeindex.db`; import validates the
 manifest format, manifest `user_version`, `database_sha256`, and embedded
 SQLite file as a CodeIndex database before replacing the destination DB.
+Import rejects archive `codeindex.db` entries whose compressed or uncompressed
+metadata exceeds 8 GiB, and the extraction stream is also capped at 8 GiB.
 
 Use `cdidx db checkpoint <name>` to take a filesystem snapshot of
 `codeindex.db` plus existing WAL/SHM sidecars before risky maintenance, and use
