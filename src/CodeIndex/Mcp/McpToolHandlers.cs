@@ -3707,9 +3707,7 @@ public partial class McpServer
             // readiness is stamped, preserving the failure-path safety contract.
             // MCP の no-op full-scan root backfill も readiness stamp 後に限定する。
             WriteProjectRootOnce();
-            writer.SetMeta(
-                DbContext.UnknownExtensionFileCountMetaKey,
-                scanResult.UnknownExtensionFiles.Count.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            writer.WriteUnknownExtensionFileMetadata(scanResult.UnknownExtensionFiles);
             writer.SetMeta(DbContext.LastIndexRunModeMetaKey, rebuild ? "rebuild" : "mcp");
             writer.SetMeta(DbContext.LastIndexRunStartedAtMetaKey, runStartedAtUtc.ToString("o", System.Globalization.CultureInfo.InvariantCulture));
             writer.SetMeta(DbContext.LastIndexRunDurationMsMetaKey, runStopwatch.ElapsedMilliseconds.ToString(System.Globalization.CultureInfo.InvariantCulture));

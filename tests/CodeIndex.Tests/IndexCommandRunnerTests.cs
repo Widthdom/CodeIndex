@@ -1610,6 +1610,43 @@ public class IndexCommandRunnerTests
             Assert.Contains("notes.mystery", stdout);
             Assert.Equal(CommandExitCodes.Success, statusExitCode);
             Assert.Equal(2, statusJson.GetProperty("unknown_extension_file_count").GetInt64());
+            Assert.False(statusJson.GetProperty("unknown_extension_files_truncated").GetBoolean());
+            Assert.Equal(50, statusJson.GetProperty("unknown_extension_file_path_limit").GetInt64());
+            var paths = statusJson.GetProperty("unknown_extension_files")
+                .EnumerateArray()
+                .Select(path => path.GetString())
+                .ToArray();
+            Assert.Equal(["data.unmapped", "notes.mystery"], paths);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_StatusJsonCapsUnknownExtensionPathSample()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "class App { }\n");
+            for (var i = 0; i < 52; i++)
+                File.WriteAllText(Path.Combine(projectRoot, $"unknown-{i:D2}.mystery"), "unknown extension\n");
+
+            var (exitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(CommandExitCodes.Success, statusExitCode);
+            Assert.Equal(52, statusJson.GetProperty("unknown_extension_file_count").GetInt64());
+            Assert.True(statusJson.GetProperty("unknown_extension_files_truncated").GetBoolean());
+            Assert.Equal(50, statusJson.GetProperty("unknown_extension_file_path_limit").GetInt64());
+            var paths = statusJson.GetProperty("unknown_extension_files").EnumerateArray().ToArray();
+            Assert.Equal(50, paths.Length);
+            Assert.Equal("unknown-00.mystery", paths[0].GetString());
+            Assert.Equal("unknown-49.mystery", paths[^1].GetString());
         }
         finally
         {
