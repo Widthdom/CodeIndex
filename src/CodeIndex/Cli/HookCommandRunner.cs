@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using CodeIndex.Indexer;
 
@@ -88,14 +89,13 @@ public static class HookCommandRunner
             {
                 if (File.Exists(ioChainedHookPath) && !options.Force)
                     return WriteResult(options.Json, jsonOptions, "error", $"chained hook already exists: {chainedHookPath}", projectPath, hookPath, chainedHookPath, CommandExitCodes.UsageError);
-                if (File.Exists(ioChainedHookPath))
-                    File.Delete(ioChainedHookPath);
-                File.Move(ioHookPath, ioChainedHookPath);
+
+                ReplaceCustomHookWithManagedHook(hooksDir, hookPath, chainedHookPath);
+                return WriteResult(options.Json, jsonOptions, "installed", "cdidx pre-commit hook installed", projectPath, hookPath, chainedHookPath, CommandExitCodes.Success);
             }
         }
 
-        File.WriteAllText(ioHookPath, BuildHookScript(chainedHookPath));
-        MakeExecutable(ioHookPath);
+        AtomicFileWriter.WriteText(hookPath, BuildHookScript(chainedHookPath), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), MakeExecutable);
 
         return WriteResult(options.Json, jsonOptions, "installed", "cdidx pre-commit hook installed", projectPath, hookPath, File.Exists(ioChainedHookPath) ? chainedHookPath : null, CommandExitCodes.Success);
     }
@@ -110,9 +110,15 @@ public static class HookCommandRunner
         if (!IsManagedHookFile(ioHookPath) && !options.Force)
             return WriteResult(options.Json, jsonOptions, "error", "pre-commit hook is not managed by cdidx; pass --force to remove it", projectPath, hookPath, null, CommandExitCodes.UsageError);
 
-        File.Delete(ioHookPath);
         if (File.Exists(ioChainedHookPath))
-            File.Move(ioChainedHookPath, ioHookPath);
+        {
+            File.Replace(ioChainedHookPath, ioHookPath, destinationBackupFileName: null, ignoreMetadataErrors: true);
+            MakeExecutable(ioHookPath);
+        }
+        else
+        {
+            File.Delete(ioHookPath);
+        }
 
         return WriteResult(options.Json, jsonOptions, "uninstalled", "cdidx pre-commit hook uninstalled", projectPath, hookPath, null, CommandExitCodes.Success);
     }
@@ -141,6 +147,60 @@ public static class HookCommandRunner
     {
         var content = DataDirectorySecurity.ReadTextWithinLimit(ioHookPath, MaxHookMarkerBytes, FileShare.ReadWrite);
         return content is not null && IsManagedHook(content);
+    }
+
+    private static void ReplaceCustomHookWithManagedHook(string hooksDir, string hookPath, string chainedHookPath)
+    {
+        var stagedHookPath = Path.Combine(hooksDir, $".{HookName}.{Guid.NewGuid():N}.tmp");
+        var ioStagedHookPath = LongPath.EnsureWindowsPrefix(stagedHookPath);
+        var ioHookPath = LongPath.EnsureWindowsPrefix(hookPath);
+        var ioChainedHookPath = LongPath.EnsureWindowsPrefix(chainedHookPath);
+        var stagedHookMoved = false;
+
+        try
+        {
+            WriteStagedHookScript(ioStagedHookPath, chainedHookPath);
+            File.Replace(ioStagedHookPath, ioHookPath, ioChainedHookPath, ignoreMetadataErrors: true);
+            stagedHookMoved = true;
+            MakeExecutable(ioHookPath);
+        }
+        finally
+        {
+            if (!stagedHookMoved)
+                TryDeleteFile(ioStagedHookPath);
+        }
+    }
+
+    private static void WriteStagedHookScript(string ioStagedHookPath, string chainedHookPath)
+    {
+        using (var stream = new FileStream(ioStagedHookPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+        {
+            using (var writer = new StreamWriter(
+                stream,
+                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+                bufferSize: 1024,
+                leaveOpen: true))
+            {
+                writer.Write(BuildHookScript(chainedHookPath));
+                writer.Flush();
+            }
+
+            stream.Flush(flushToDisk: true);
+        }
+
+        MakeExecutable(ioStagedHookPath);
+    }
+
+    private static void TryDeleteFile(string ioPath)
+    {
+        try
+        {
+            if (File.Exists(ioPath))
+                File.Delete(ioPath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+        }
     }
 
     private static string BuildHookScript(string chainedHookPath)

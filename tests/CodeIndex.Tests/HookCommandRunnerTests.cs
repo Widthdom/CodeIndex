@@ -85,6 +85,64 @@ public class HookCommandRunnerTests
             Assert.True(File.Exists(chainedHookPath));
             Assert.Contains("echo existing", File.ReadAllText(chainedHookPath));
             Assert.Contains(chainedHookPath, File.ReadAllText(hookPath));
+            AssertNoHookTempFiles(hooksDir);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Hooks_InstallForce_ReplacesExistingChainedHookAtomically()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("hook_force_chain");
+        try
+        {
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+            var hooksDir = Path.Combine(projectRoot, ".git", "hooks");
+            Directory.CreateDirectory(hooksDir);
+            var hookPath = Path.Combine(hooksDir, "pre-commit");
+            var chainedHookPath = Path.Combine(hooksDir, "pre-commit.cdidx-chain");
+            File.WriteAllText(hookPath, "#!/bin/sh\necho current\n");
+            File.WriteAllText(chainedHookPath, "#!/bin/sh\necho stale\n");
+
+            var exitCode = RunHooksAndCaptureStreams(["install", "--project", projectRoot, "--force"]).ExitCode;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("BEGIN CDIDX MANAGED PRE-COMMIT", File.ReadAllText(hookPath));
+            Assert.Contains("echo current", File.ReadAllText(chainedHookPath));
+            Assert.DoesNotContain("echo stale", File.ReadAllText(chainedHookPath));
+            AssertNoHookTempFiles(hooksDir);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Hooks_Uninstall_RestoresChainedPreCommitHook()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("hook_uninstall_chain");
+        try
+        {
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+            var hooksDir = Path.Combine(projectRoot, ".git", "hooks");
+            Directory.CreateDirectory(hooksDir);
+            var hookPath = Path.Combine(hooksDir, "pre-commit");
+            var chainedHookPath = Path.Combine(hooksDir, "pre-commit.cdidx-chain");
+            File.WriteAllText(hookPath, "#!/bin/sh\necho existing\n");
+
+            Assert.Equal(CommandExitCodes.Success, RunHooksAndCaptureStreams(["install", "--project", projectRoot]).ExitCode);
+            var uninstallExit = RunHooksAndCaptureStreams(["uninstall", "--project", projectRoot]).ExitCode;
+
+            Assert.Equal(CommandExitCodes.Success, uninstallExit);
+            Assert.True(File.Exists(hookPath));
+            Assert.False(File.Exists(chainedHookPath));
+            Assert.Contains("echo existing", File.ReadAllText(hookPath));
+            Assert.DoesNotContain("BEGIN CDIDX MANAGED PRE-COMMIT", File.ReadAllText(hookPath));
+            AssertNoHookTempFiles(hooksDir);
         }
         finally
         {
@@ -192,4 +250,7 @@ public class HookCommandRunnerTests
         command.Parameters.AddWithValue("$path", relativePath);
         return (long)command.ExecuteScalar()!;
     }
+
+    private static void AssertNoHookTempFiles(string hooksDir)
+        => Assert.Empty(Directory.GetFiles(hooksDir, ".pre-commit.*.tmp"));
 }
