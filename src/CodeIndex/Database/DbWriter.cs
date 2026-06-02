@@ -41,6 +41,7 @@ public class DbWriter
     private int _transactionDepth;
     private int _transactionOwnerThreadId;
     private Guid _transactionOwnerToken;
+    private bool? _hasIssueMetadataColumns;
     // Outermost SqliteTransaction currently held open by this writer (null when no
     // transaction is active OR after the outermost transaction has been committed /
     // rolled back). Tracked so cached prepared commands can be re-pointed at the live
@@ -486,6 +487,8 @@ public class DbWriter
             return null;
         if (!SymbolExtractorVersionMatchesCurrent(language))
             return null;
+        if (HasStaleIssueMetadata(relativePath))
+            return null;
 
         // Keep the unchanged check and timestamp touch in one SQLite statement so
         // concurrent row drift cannot slip between a SELECT and a later UPDATE (#1735).
@@ -533,6 +536,31 @@ public class DbWriter
             ReleaseCommand(cmd);
         }
     }
+
+    private bool HasStaleIssueMetadata(string relativePath)
+    {
+        if (!HasIssueMetadataColumns())
+        {
+            return false;
+        }
+
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = @"
+            SELECT 1
+            FROM file_issues i
+            JOIN files f ON i.file_id = f.id
+            WHERE f.path = @path
+              AND i.kind IN ('replacement_char', 'non_utf8_likely')
+              AND (i.origin IS NULL OR i.severity IS NULL)
+            LIMIT 1";
+        cmd.Parameters.AddWithValue("@path", relativePath);
+        return cmd.ExecuteScalar() != null;
+    }
+
+    private bool HasIssueMetadataColumns() =>
+        _hasIssueMetadataColumns ??= TableExists("file_issues")
+            && ColumnExists("file_issues", "origin")
+            && ColumnExists("file_issues", "severity");
 
     /// <summary>
     /// Check whether the DB currently contains any indexed files for the given language.
@@ -1536,11 +1564,13 @@ public class DbWriter
         if (issues.Count == 0) return;
 
         using var cmd = _conn.CreateCommand();
-        cmd.CommandText = "INSERT INTO file_issues (file_id, kind, line, message) VALUES (@fid, @kind, @line, @message)";
+        cmd.CommandText = "INSERT INTO file_issues (file_id, kind, line, message, origin, severity) VALUES (@fid, @kind, @line, @message, @origin, @severity)";
         var pFid = cmd.Parameters.Add("@fid", SqliteType.Integer);
         var pKind = cmd.Parameters.Add("@kind", SqliteType.Text);
         var pLine = cmd.Parameters.Add("@line", SqliteType.Integer);
         var pMessage = cmd.Parameters.Add("@message", SqliteType.Text);
+        var pOrigin = cmd.Parameters.Add("@origin", SqliteType.Text);
+        var pSeverity = cmd.Parameters.Add("@severity", SqliteType.Text);
 
         foreach (var issue in issues)
         {
@@ -1548,6 +1578,8 @@ public class DbWriter
             pKind.Value = issue.Kind;
             pLine.Value = issue.Line;
             pMessage.Value = issue.Message;
+            pOrigin.Value = issue.Origin ?? (object)DBNull.Value;
+            pSeverity.Value = issue.Severity ?? (object)DBNull.Value;
             cmd.ExecuteNonQuery();
         }
     }

@@ -1334,6 +1334,90 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void GetUnchangedFileId_ReturnsNullWhenIssueMetadataMissing()
+    {
+        var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var file = new FileRecord
+        {
+            Path = "src/literal.py",
+            Lang = "python",
+            Size = 50,
+            Lines = 5,
+            Modified = modified,
+        };
+        var fileId = _writer.UpsertFile(file);
+        _writer.InsertIssues(fileId,
+        [
+            new FileIssue
+            {
+                Path = file.Path,
+                Kind = "replacement_char",
+                Line = 1,
+                Message = "legacy replacement_char row without metadata",
+            },
+        ]);
+
+        Assert.Null(_writer.GetUnchangedFileId(file.Path, modified));
+
+        _writer.InsertIssues(fileId,
+        [
+            new FileIssue
+            {
+                Path = file.Path,
+                Kind = "replacement_char",
+                Line = 1,
+                Message = "U+FFFD source literal at line 1",
+                Origin = FileIssue.OriginSourceLiteral,
+                Severity = FileIssue.SeverityInfo,
+            },
+        ]);
+
+        Assert.NotNull(_writer.GetUnchangedFileId(file.Path, modified));
+    }
+
+    [Fact]
+    public void GetUnchangedFileId_ReturnsNullWhenNonUtf8LikelyMetadataMissing()
+    {
+        var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var file = new FileRecord
+        {
+            Path = "src/garbled.py",
+            Lang = "python",
+            Size = 50,
+            Lines = 5,
+            Modified = modified,
+        };
+        var fileId = _writer.UpsertFile(file);
+        _writer.InsertIssues(fileId,
+        [
+            new FileIssue
+            {
+                Path = file.Path,
+                Kind = "non_utf8_likely",
+                Line = 0,
+                Message = "legacy non_utf8_likely row without metadata",
+            },
+        ]);
+
+        Assert.Null(_writer.GetUnchangedFileId(file.Path, modified));
+
+        _writer.InsertIssues(fileId,
+        [
+            new FileIssue
+            {
+                Path = file.Path,
+                Kind = "non_utf8_likely",
+                Line = 0,
+                Message = "Likely non-UTF8 encoding",
+                Origin = FileIssue.OriginDecodeReplacement,
+                Severity = FileIssue.SeverityWarning,
+            },
+        ]);
+
+        Assert.NotNull(_writer.GetUnchangedFileId(file.Path, modified));
+    }
+
+    [Fact]
     public void GetUnchangedFileId_WithNullChecksumUsesModifiedAndSize()
     {
         var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);

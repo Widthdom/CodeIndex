@@ -4063,20 +4063,22 @@ public class FileIndexerTests
         // SHIFT_JIS / GBK / ISO-8859-1 を UTF-8 で読んで化けた content は per-line
         // `replacement_char` で埋め尽くすのではなく `non_utf8_likely` 1 件に集約する。
         // Closes #1540.
-        // Build content with > 1% U+FFFD ratio and many lines.
-        var sb = new System.Text.StringBuilder();
+        // Build invalid UTF-8 bytes that decode to > 1% U+FFFD ratio and many lines.
+        var raw = new List<byte>();
         for (int i = 0; i < 50; i++)
         {
-            sb.Append("alpha � beta\n");
+            raw.AddRange(System.Text.Encoding.UTF8.GetBytes("alpha "));
+            raw.Add(0xFF);
+            raw.AddRange(System.Text.Encoding.UTF8.GetBytes(" beta\n"));
         }
-        var content = sb.ToString();
-        // Raw bytes do not matter here for non_utf8_likely (it reads `content`), so use
-        // ASCII-safe bytes that won't trip the raw-byte heuristics.
-        var rawBytes = System.Text.Encoding.UTF8.GetBytes("placeholder\n");
+        var rawBytes = raw.ToArray();
+        var content = new System.Text.UTF8Encoding(false, throwOnInvalidBytes: false).GetString(rawBytes);
 
         var issues = FileIndexer.ValidateContent("garbled.cs", rawBytes, content);
 
-        Assert.Contains(issues, i => i.Kind == "non_utf8_likely");
+        var issue = Assert.Single(issues.Where(i => i.Kind == "non_utf8_likely"));
+        Assert.Equal(FileIssue.OriginDecodeReplacement, issue.Origin);
+        Assert.Equal(FileIssue.SeverityWarning, issue.Severity);
         // Per-line replacement_char emission must be suppressed when the aggregate fires.
         // アグリゲートが出た場合は per-line replacement_char を抑止する。
         Assert.DoesNotContain(issues, i => i.Kind == "replacement_char");
@@ -4093,20 +4095,49 @@ public class FileIndexerTests
         // Closes #1540.
         // 4 U+FFFD chars in a long file → far below 1% ratio AND below the minimum-count
         // floor of 5, so the aggregate must not fire.
-        var sb = new System.Text.StringBuilder();
-        sb.Append("line1 clean\n");
-        sb.Append("line2 has � here\n");
-        sb.Append("line3 has � here\n");
-        for (int i = 0; i < 200; i++) sb.Append("filler ascii ascii ascii\n");
-        sb.Append("trailing �\n");
-        sb.Append("another �\n");
-        var content = sb.ToString();
-        var rawBytes = System.Text.Encoding.UTF8.GetBytes("placeholder\n");
+        var raw = new List<byte>();
+        void AddUtf8(string text) => raw.AddRange(System.Text.Encoding.UTF8.GetBytes(text));
+
+        AddUtf8("line1 clean\n");
+        AddUtf8("line2 has ");
+        raw.Add(0xFF);
+        AddUtf8(" here\n");
+        AddUtf8("line3 has ");
+        raw.Add(0xFF);
+        AddUtf8(" here\n");
+        for (int i = 0; i < 200; i++) AddUtf8("filler ascii ascii ascii\n");
+        AddUtf8("trailing ");
+        raw.Add(0xFF);
+        AddUtf8("\n");
+        AddUtf8("another ");
+        raw.Add(0xFF);
+        AddUtf8("\n");
+        var rawBytes = raw.ToArray();
+        var content = new System.Text.UTF8Encoding(false, throwOnInvalidBytes: false).GetString(rawBytes);
 
         var issues = FileIndexer.ValidateContent("partial.cs", rawBytes, content);
 
         Assert.DoesNotContain(issues, i => i.Kind == "non_utf8_likely");
-        Assert.Contains(issues, i => i.Kind == "replacement_char");
+        Assert.Contains(issues, i =>
+            i.Kind == "replacement_char"
+            && i.Origin == FileIssue.OriginDecodeReplacement
+            && i.Severity == FileIssue.SeverityWarning);
+    }
+
+    [Fact]
+    public void ValidateContent_SourceLiteralFffd_AnnotatesInfoOrigin()
+    {
+        var content = "line1 clean\nline2 has \uFFFD literal\n";
+        var rawBytes = System.Text.Encoding.UTF8.GetBytes(content);
+
+        var issues = FileIndexer.ValidateContent("literal.cs", rawBytes, content);
+
+        var issue = Assert.Single(issues.Where(i => i.Kind == "replacement_char"));
+        Assert.Equal(2, issue.Line);
+        Assert.Equal(FileIssue.OriginSourceLiteral, issue.Origin);
+        Assert.Equal(FileIssue.SeverityInfo, issue.Severity);
+        Assert.Contains("source literal", issue.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(issues, i => i.Kind == "non_utf8_likely");
     }
 
     [Fact]

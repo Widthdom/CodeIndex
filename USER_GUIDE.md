@@ -280,7 +280,7 @@ sections below show examples and option details for the most common workflows.
 | Analysis | `impact` | Traverse transitive callers from a resolved symbol | `impact_analysis` |
 | Analysis | `unused` | Find symbols defined but not referenced, with confidence buckets | `unused_symbols` |
 | Analysis | `hotspots` | Rank high-impact symbols or statements by reference volume | `symbol_hotspots` |
-| Analysis | `validate` | Report encoding and line-ending issues in indexed files | `validate` |
+| Analysis | `validate` | Report encoding and line-ending issues in indexed files; U+FFFD rows include origin/severity metadata | `validate` |
 | Status | `status` | Show DB statistics, freshness, and readiness metadata | `status` |
 | Status | `languages` | List language extensions and symbol/graph capabilities | `languages` |
 | Diagnostics | `db --integrity-check` | Run SQLite `PRAGMA integrity_check` against the DB | -- |
@@ -400,13 +400,16 @@ conflicting instructions.
 
 ```bash
 cdidx validate
-cdidx validate --kind replacement-character --path src/
+cdidx validate --kind replacement_char --path src/
 cdidx validate --json --path legacy/
 ```
 
 `validate` reports indexed files that are likely to produce misleading snippets
 or symbol names: U+FFFD replacement characters, UTF-16 BOMs, null bytes, mixed or
 CR-only line endings, likely non-UTF-8 content, and Git LFS pointer placeholders.
+For `replacement_char`, JSON and MCP responses include `origin` (`source_literal`
+or `decode_replacement`) and `severity` so agents can distinguish intentional
+U+FFFD literals from likely encoding damage.
 LFS pointers are recorded as `lfs_pointer_skipped` and their placeholder body is
 not indexed; run `git lfs pull` and then `cdidx index .` to index the real file
 content.
@@ -1946,7 +1949,7 @@ The MCP `tools/list` response includes an `examples` array for every registered 
 | `unused_symbols` | Find symbols defined but never referenced, with confidence buckets for dead-code triage |
 | `symbol_hotspots` | Find high-impact hotspots. `groupBy` supports `symbol`, `file`, and `statement`; SQL scopes default to statement grouping while non-SQL scopes default to symbol grouping. |
 | `batch_query` | Execute multiple queries in a single call (MCP only, max 10). The response includes a top-level `metadata` object with `submitted`, `executed`, `errors`, `total_elapsed_ms`, `success_count`, and `failure_count`; every entry in `results` carries `request_index`, `ok`, `elapsed_ms`, and compact `args_summary` fields so callers can correlate partial failures and slow inner queries without relying on positional guesses. |
-| `validate` | Report encoding issues (U+FFFD, BOM, null bytes, mixed/CR-only line endings, UTF-16 BOM detection, likely non-UTF8 encodings) |
+| `validate` | Report encoding issues (U+FFFD with origin/severity, BOM, null bytes, mixed/CR-only line endings, UTF-16 BOM detection, likely non-UTF8 encodings) |
 | `languages` | List all supported languages, file extensions, and capabilities |
 | `ping` | Lightweight connection check |
 | `index` | Index or re-index a project directory |
@@ -2413,7 +2416,7 @@ cdidx index . --quiet
 | Analysis | `impact` | 解決した symbol から transitive callers を探索 | `impact_analysis` |
 | Analysis | `unused` | 参照されていない可能性がある symbols を confidence bucket 付きで表示 | `unused_symbols` |
 | Analysis | `hotspots` | reference volume で high-impact symbols/statements を ranking | `symbol_hotspots` |
-| Analysis | `validate` | indexed files の encoding / line-ending 問題を報告 | `validate` |
+| Analysis | `validate` | indexed files の encoding / line-ending 問題を報告。U+FFFD 行には origin/severity metadata が付く | `validate` |
 | Status | `status` | DB stats、freshness、readiness metadata を表示 | `status` |
 | Status | `languages` | language extensions と symbol/graph capabilities を一覧 | `languages` |
 | Diagnostics | `db --integrity-check` | DB に対して SQLite `PRAGMA integrity_check` を実行 | -- |
@@ -2523,13 +2526,16 @@ render できます。
 
 ```bash
 cdidx validate
-cdidx validate --kind replacement-character --path src/
+cdidx validate --kind replacement_char --path src/
 cdidx validate --json --path legacy/
 ```
 
 `validate` は、snippet や symbol name を誤らせやすい indexed file を報告します。
 対象は U+FFFD replacement character、UTF-16 BOM、null byte、mixed / CR-only line
-ending、likely non-UTF-8 content、Git LFS pointer placeholder などです。LFS pointer
+ending、likely non-UTF-8 content、Git LFS pointer placeholder などです。
+`replacement_char` の JSON / MCP response には `origin` (`source_literal` /
+`decode_replacement`) と `severity` が入り、意図的な U+FFFD literal と
+エンコーディング破損の可能性を agent が区別できます。LFS pointer
 は `lfs_pointer_skipped` として記録され、placeholder 本文は index されません。
 実体を index するには `git lfs pull` の後に `cdidx index .` を再実行してください。
 
@@ -4079,7 +4085,7 @@ OpenAI Codex CLI (`codex.json` または `~/.codex/config.json`):
 | `unused_symbols` | 定義されているが参照されていないシンボルを bucket 付きで検索（デッドコード検出向け） |
 | `symbol_hotspots` | 影響の大きい hotspot を検索。`groupBy` は `symbol` / `file` / `statement` を指定でき、SQL scope は statement grouping、非 SQL scope は symbol grouping が既定。 |
 | `batch_query` | 複数クエリを1回で実行（MCP専用、最大10件）。レスポンスにはトップレベル `metadata`（`submitted` / `executed` / `errors` / `total_elapsed_ms` / `success_count` / `failure_count`）と各 `results` エントリの `request_index` / `ok` / `elapsed_ms` / `args_summary` が含まれ、位置だけに依存せず部分失敗や遅い内部クエリを把握できます。 |
-| `validate` | エンコーディング問題（U+FFFD、BOM、null バイト、改行混在 / CR-only 行末、UTF-16 BOM 検出、UTF-8 以外と推定されるエンコーディング）を報告 |
+| `validate` | エンコーディング問題（origin/severity 付き U+FFFD、BOM、null バイト、改行混在 / CR-only 行末、UTF-16 BOM 検出、UTF-8 以外と推定されるエンコーディング）を報告 |
 | `languages` | 対応言語一覧を拡張子・機能付きで表示 |
 | `ping` | 軽量な接続確認 |
 | `index` | プロジェクトのインデックス作成・更新 |
