@@ -366,7 +366,7 @@ public partial class McpServer
                 ReadOnlyAnnotations()),
             CreateToolDefinition(
                 "validate",
-                "Report encoding issues found during indexing: U+FFFD replacement chars, BOM markers, null bytes, mixed/CR-only line endings, UTF-16 BOM detection, likely non-UTF8 encodings. / インデックス時に検出したエンコーディング問題を報告。",
+                "Report encoding issues found during indexing: U+FFFD replacement chars, BOM markers, null bytes, mixed/CR-only line endings, UTF-16 BOM detection, likely non-UTF8 encodings. replacement_char rows include origin/severity metadata so agents can separate source literals from decoder replacements. / インデックス時に検出したエンコーディング問題を報告。replacement_char 行は source literal と decoder replacement を分ける origin/severity metadata を含む。",
                 new JsonObject
                 {
                     ["type"] = "object",

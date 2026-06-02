@@ -3332,7 +3332,11 @@ public class FileIndexer
         const double NonUtf8LikelyRatioThreshold = 0.01;
         const int NonUtf8LikelyMinCount = 5;
         var fffdCount = CountReplacementChars(content);
-        var nonUtf8Likely = fffdCount >= NonUtf8LikelyMinCount
+        var replacementCharOrigin = fffdCount > 0
+            ? DetermineReplacementCharOrigin(rawBytes, isUtf16, utf16BigEndian, hasUtf16Bom)
+            : null;
+        var nonUtf8Likely = replacementCharOrigin == FileIssue.OriginDecodeReplacement
+            && fffdCount >= NonUtf8LikelyMinCount
             && content.Length > 0
             && (double)fffdCount / content.Length >= NonUtf8LikelyRatioThreshold;
         if (nonUtf8Likely)
@@ -3344,6 +3348,8 @@ public class FileIndexer
                 Kind = "non_utf8_likely",
                 Line = 0,
                 Message = $"Likely non-UTF8 encoding ({fffdCount} U+FFFD over {content.Length} chars, {ratioPercent:F1}%); source may be SHIFT_JIS, GBK, ISO-8859-1, or UTF-16 without BOM",
+                Origin = FileIssue.OriginDecodeReplacement,
+                Severity = FileIssue.SeverityWarning,
             });
         }
 
@@ -3359,12 +3365,17 @@ public class FileIndexer
                 {
                     // Find line number / 行番号を特定
                     var lineNum = content[..i].Count(c => c == '\n') + 1;
+                    var isSourceLiteral = replacementCharOrigin == FileIssue.OriginSourceLiteral;
                     issues.Add(new FileIssue
                     {
                         Path = relativePath,
                         Kind = "replacement_char",
                         Line = lineNum,
-                        Message = $"U+FFFD replacement character at line {lineNum}",
+                        Message = isSourceLiteral
+                            ? $"U+FFFD source literal at line {lineNum}"
+                            : $"U+FFFD decoder replacement character at line {lineNum}",
+                        Origin = replacementCharOrigin,
+                        Severity = isSourceLiteral ? FileIssue.SeverityInfo : FileIssue.SeverityWarning,
                     });
                     // Skip to next line to avoid reporting every char on the same line
                     // 同じ行の連続報告を避けるため次の行までスキップ
@@ -3727,6 +3738,29 @@ public class FileIndexer
             if (content[i] == '�') count++;
         }
         return count;
+    }
+
+    private static string DetermineReplacementCharOrigin(byte[] rawBytes, bool isUtf16, bool utf16BigEndian, bool hasUtf16Bom)
+    {
+        try
+        {
+            if (isUtf16)
+            {
+                _ = new UnicodeEncoding(utf16BigEndian, byteOrderMark: hasUtf16Bom, throwOnInvalidBytes: true)
+                    .GetString(rawBytes);
+            }
+            else
+            {
+                _ = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true)
+                    .GetString(rawBytes);
+            }
+
+            return FileIssue.OriginSourceLiteral;
+        }
+        catch (DecoderFallbackException)
+        {
+            return FileIssue.OriginDecodeReplacement;
+        }
     }
 
     /// <summary>

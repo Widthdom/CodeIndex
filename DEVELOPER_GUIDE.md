@@ -229,6 +229,12 @@ Directory scan / shared path filter (built-in skip lists + `.gitignore` / `.cdid
   → Populate FTS5 index
 ```
 
+`FileIssue` rows may include nullable `origin` and `severity` metadata.
+For `replacement_char`, `origin: source_literal` means the file contains a
+valid encoded U+FFFD literal, while `origin: decode_replacement` means the
+decoder inserted U+FFFD for invalid bytes. `severity: info` is used for source
+literals, and `severity: warning` is used for likely encoding damage.
+
 Scoped `--files` / `--commits` refreshes reuse the same path filter as full scans. Before scanning a nested project root, `FileIndexer` loads ignore files from the resolved ignore-rule root through each existing ancestor directory down to the project root's parent, then loads the project directory's own rules during the normal walk. Within each directory, `FileIndexer` loads `.gitignore` before `.cdidxignore`, appends both rule sets in that order, and honors later `!` patterns as re-includes. If an ancestor ignore directory cannot be read, scanning fails closed with a scan error instead of silently skipping those rules; `ScanFilesResult.AncestorIgnoreDirectories` records the resolved ancestor list for troubleshooting. If a commit-scoped refresh includes `.gitignore` or `.cdidxignore` changes, `IndexCommandRunner` falls back to a full scan so newly ignored files are purged safely. Malformed ignore lines are reported as scan errors and skipped instead of aborting the whole run. Directory symlinks default to `--follow-symlinks none`; `internal` follows only targets that resolve under the workspace root, and `all` preserves the broad historical behavior. Dangling symlinks are counted and warned separately. On Windows, files and directories with Hidden or System attributes are rejected before language detection; clear those attributes before indexing project-owned sources because ignore rules cannot re-include them.
 
 Incremental refreshes that mutate `fts_chunks` increment `codeindex_meta.fts_incremental_writes_since_optimize`. When the counter reaches `DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold`, the update path runs `INSERT INTO fts_chunks(fts_chunks) VALUES('optimize')`, resets the counter, and stamps `fts_last_optimized_at`. Users can run the same maintenance directly with `cdidx optimize --db <path>` or `cdidx index <projectPath> --optimize`; this may briefly hold the writer lock on large indexes.
@@ -2132,6 +2138,12 @@ CI で `NU1004 The packages lock file is inconsistent with the project dependenc
   → チャンク＋シンボル＋参照をバッチ挿入（1トランザクション500件）
   → FTS5インデックス反映
 ```
+
+`FileIssue` rows には nullable な `origin` / `severity` metadata が入ることがある。
+`replacement_char` では `origin: source_literal` が正規にエンコードされた U+FFFD
+literal、`origin: decode_replacement` が不正 byte に対して decoder が挿入した U+FFFD
+を意味する。source literal は `severity: info`、エンコーディング破損の可能性は
+`severity: warning` として返す。
 
 `--files` / `--commits` の部分更新も、フルスキャンと同じパスフィルタを再利用する。各ディレクトリでは `FileIndexer` が `.gitignore` を `.cdidxignore` より先に読み、この順序でルールを追加し、後続の `!` パターンを再包含として扱う。commit 単位更新に `.gitignore` または `.cdidxignore` の変更が含まれる場合、`IndexCommandRunner` は newly ignored file を安全に purge するため自動でフルスキャンへフォールバックする。malformed な ignore 行は走査エラーとして報告し、その行だけをスキップして index 全体は継続する。Windows では Hidden または System 属性が付いたファイルとディレクトリを言語検出前に拒否する。プロジェクト所有のソースを索引したい場合、ignore ルールでは再包含できないため先にそれらの属性を外す。
 
