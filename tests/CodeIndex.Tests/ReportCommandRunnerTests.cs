@@ -142,6 +142,8 @@ public class ReportCommandRunnerTests
 
             var schemaText = Encoding.UTF8.GetString(entries["schema.txt"]);
             Assert.Contains("no SQLite index found", schemaText);
+            Assert.Contains($"no SQLite index found at: {ReportCommandRunner.RedactedPlaceholder}", schemaText);
+            Assert.DoesNotContain(missingDb, schemaText);
         }
         finally
         {
@@ -174,6 +176,8 @@ public class ReportCommandRunnerTests
             Assert.Contains("files", schemaText);
             Assert.Contains("symbols", schemaText);
             Assert.Contains("row_count", schemaText);
+            Assert.Contains($"database: {ReportCommandRunner.RedactedPlaceholder}", schemaText);
+            Assert.DoesNotContain(dbPath, schemaText);
             Assert.DoesNotContain("no SQLite index found", schemaText);
         }
         finally
@@ -213,8 +217,10 @@ public class ReportCommandRunnerTests
             var entries = ReadTarGzEntries(output);
             Assert.True(entries.ContainsKey("log/stderr-recent.log"));
             var logText = Encoding.UTF8.GetString(entries["log/stderr-recent.log"]);
+            Assert.Contains($"# source directory: {ReportCommandRunner.RedactedPlaceholder}", logText);
             Assert.Contains("args=[redacted]", logText);
             Assert.Contains("cwd=[redacted]", logText);
+            Assert.DoesNotContain(logDir, logText);
             Assert.DoesNotContain("/Users/widthdom/secret", logText);
             Assert.DoesNotContain("SELECT * FROM secret", logText);
             Assert.Contains("session_start", logText);
@@ -253,7 +259,8 @@ public class ReportCommandRunnerTests
             var logText = Encoding.UTF8.GetString(entries["log/stderr-recent.log"]);
             Assert.Contains("cwd=/tmp/keep-this", logText);
             Assert.Contains("args=index .", logText);
-            Assert.DoesNotContain("[redacted]", logText);
+            Assert.DoesNotContain("cwd=[redacted]", logText);
+            Assert.DoesNotContain("args=[redacted]", logText);
         }
         finally
         {

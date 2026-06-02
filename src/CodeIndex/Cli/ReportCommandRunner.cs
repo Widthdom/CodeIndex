@@ -188,7 +188,7 @@ public static class ReportCommandRunner
     {
         if (!File.Exists(LongPath.EnsureWindowsPrefix(dbPath)))
         {
-            var missingText = $"no SQLite index found at: {dbPath}\nRun `cdidx index <projectPath>` first if you want schema details attached.\n";
+            var missingText = $"no SQLite index found at: {RedactedPlaceholder}\nRun `cdidx index <projectPath>` first if you want schema details attached.\n";
             return (missingText, new List<ReportSchemaTable>(), dbPath, false);
         }
 
@@ -228,7 +228,7 @@ public static class ReportCommandRunner
         }
 
         var sb = new StringBuilder();
-        sb.AppendLine($"database: {Path.GetFullPath(dbPath)}");
+        sb.AppendLine($"database: {RedactedPlaceholder}");
         sb.AppendLine($"tables  : {tables.Count}");
         sb.AppendLine();
         sb.AppendLine("name | row_count");
@@ -244,14 +244,14 @@ public static class ReportCommandRunner
         linesIncluded = 0;
         var logDir = GlobalToolLog.ResolveLogDirectoryForReport();
         if (string.IsNullOrWhiteSpace(logDir) || !Directory.Exists(logDir))
-            return $"no cdidx lifecycle log directory found (looked at: {logDir ?? "<unknown>"}).\n";
+            return $"no cdidx lifecycle log directory found (looked at: {RedactedPlaceholder}).\n";
 
         var logFiles = new DirectoryInfo(logDir)
             .EnumerateFiles("stderr-*.log", SearchOption.TopDirectoryOnly)
             .OrderByDescending(f => f.Name, StringComparer.Ordinal)
             .ToList();
         if (logFiles.Count == 0)
-            return $"no cdidx lifecycle log files found in: {logDir}\n";
+            return $"no cdidx lifecycle log files found in: {RedactedPlaceholder}\n";
 
         var collected = new LinkedList<string>();
         foreach (var file in logFiles)
@@ -273,7 +273,7 @@ public static class ReportCommandRunner
 
         var sb = new StringBuilder();
         sb.AppendLine($"# cdidx lifecycle log (last {collected.Count} lines, newest last)");
-        sb.AppendLine($"# source directory: {logDir}");
+        sb.AppendLine($"# source directory: {RedactedPlaceholder}");
         sb.AppendLine();
         foreach (var line in collected)
         {
