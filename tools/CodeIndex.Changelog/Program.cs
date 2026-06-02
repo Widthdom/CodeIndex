@@ -557,7 +557,7 @@ public sealed class ChangelogTool
     {
         var fileInfo = new FileInfo(absolutePath);
         var length = fileInfo.Length;
-        if (length > maxBytes)
+        if (fileInfo.LinkTarget is null && length > maxBytes)
         {
             var relativePath = string.IsNullOrWhiteSpace(repositoryRoot)
                 ? Path.GetFileName(absolutePath)
@@ -565,7 +565,34 @@ public sealed class ChangelogTool
             throw new ChangelogException($"{relativePath}: file is {length} bytes; maximum supported size is {maxBytes} bytes.");
         }
 
-        return File.ReadAllText(absolutePath);
+        using var stream = File.Open(absolutePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        using var memory = new MemoryStream();
+        var buffer = new byte[8192];
+        var totalBytesRead = 0L;
+
+        while (true)
+        {
+            var remainingBytes = maxBytes + 1 - totalBytesRead;
+            var readLength = (int)Math.Min(buffer.Length, remainingBytes);
+            var bytesRead = stream.Read(buffer.AsSpan(0, readLength));
+            if (bytesRead == 0)
+                break;
+
+            totalBytesRead += bytesRead;
+            if (totalBytesRead > maxBytes)
+            {
+                var relativePath = string.IsNullOrWhiteSpace(repositoryRoot)
+                    ? Path.GetFileName(absolutePath)
+                    : Path.GetRelativePath(repositoryRoot, absolutePath).Replace('\\', '/');
+                throw new ChangelogException($"{relativePath}: file is larger than {maxBytes} bytes; maximum supported size is {maxBytes} bytes.");
+            }
+
+            memory.Write(buffer.AsSpan(0, bytesRead));
+        }
+
+        memory.Position = 0;
+        using var reader = new StreamReader(memory, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        return reader.ReadToEnd();
     }
 
     private static void WritePreparedFiles(

@@ -399,6 +399,35 @@ public sealed class ChangelogToolTests
     }
 
     [Fact]
+    public void CheckFragmentsRejectsOversizedSymlinkTargetBeforeParsing()
+    {
+        using var scope = new TestRepositoryScope();
+        scope.WriteFile("CHANGELOG.md", SampleChangelog);
+        scope.WriteFile("version.json", """
+            {
+              "version": "1.16.0"
+            }
+            """);
+        scope.WriteFile("large-fragment-target.md", OversizedContent(ChangelogTool.MaxFragmentBytes));
+
+        var linkPath = Path.Combine(scope.Root, "changelog.d", "unreleased", "+large-link.fixed.md");
+        Directory.CreateDirectory(Path.GetDirectoryName(linkPath)!);
+        try
+        {
+            File.CreateSymbolicLink(linkPath, Path.Combine(scope.Root, "large-fragment-target.md"));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+        {
+            return;
+        }
+
+        var tool = new ChangelogTool(scope.Root);
+        var thrown = Assert.Throws<ChangelogException>(() => tool.CheckFragments());
+        Assert.Contains("changelog.d/unreleased/+large-link.fixed.md: file is larger than", thrown.Message);
+        Assert.Contains($"maximum supported size is {ChangelogTool.MaxFragmentBytes} bytes", thrown.Message);
+    }
+
+    [Fact]
     public void PrepareRejectsOversizedChangelogBeforeParsing()
     {
         using var scope = new TestRepositoryScope();
