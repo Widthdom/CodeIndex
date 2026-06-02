@@ -1364,6 +1364,7 @@ Example output:
 |---|---|
 | `CDIDX_MCP_RATE_LIMIT_RPS` | Refill rate in tokens per second. Required to enable rate limiting; values that are missing, non-numeric, zero, negative, or non-finite (`Infinity`, `NaN`) leave the limiter disabled and emit a one-line warning on `stderr`. |
 | `CDIDX_MCP_RATE_LIMIT_BURST` | Bucket capacity (maximum burst). Optional. Defaults to `max(rps, 1)`. Invalid or non-finite values fall back to the default and emit a warning while leaving `rps` honored. |
+| `CDIDX_MCP_RATE_LIMIT_BUCKET_IDLE_SECONDS` | Idle bucket TTL. Optional. Defaults to 900 seconds. Stale `(tool, caller)` buckets are pruned on later calls so long-lived servers do not retain historical caller identities forever. Invalid or non-finite values fall back to the default and emit a warning. |
 
 Caller identity is captured from the `clientInfo.name` (and `version` when present) of the MCP `initialize` request. Tool calls received before `initialize` are billed against an anonymous `"unknown"` bucket so an unidentified client cannot bypass the limiter. The captured caller is sticky for the lifetime of the session — once a named identity has been recorded, subsequent `initialize` calls under a different name are ignored (with a one-line `stderr` warning) so a long-lived stdio or networked session cannot reset its bucket mid-flight by re-identifying.
 
@@ -3484,6 +3485,7 @@ MCP ツールで catch-all まで突き抜けた例外（想定外の SQLite 例
 |---|---|
 | `CDIDX_MCP_RATE_LIMIT_RPS` | 1 秒あたりのトークン補充レート。レート制限を有効化するために必須。未設定・非数値・0 以下・非有限値（`Infinity`/`NaN`）の場合は無効のまま、1 行の警告を `stderr` に出力します。 |
 | `CDIDX_MCP_RATE_LIMIT_BURST` | バケット容量（最大バースト）。任意。既定は `max(rps, 1)`。不正値・非有限値は既定にフォールバックし警告を出力。`rps` はそのまま尊重されます。 |
+| `CDIDX_MCP_RATE_LIMIT_BUCKET_IDLE_SECONDS` | 未使用バケットの TTL。任意。既定は 900 秒です。古い `(tool, caller)` バケットは後続呼び出し時に pruning され、長時間稼働するサーバーが過去の caller ID を永続保持しません。不正値・非有限値は既定にフォールバックし警告を出力します。 |
 
 呼び出し元 ID は MCP `initialize` リクエストの `clientInfo.name`（および `version` があれば併記）から取得します。`initialize` 前に届いたツール呼び出しは匿名 `"unknown"` バケットで計量され、未識別クライアントによる制限回避を防ぎます。取得済みの caller はセッション中 sticky で、名前付き ID が一度記録されると以降の別名 `initialize` は無視され（`stderr` に 1 行警告）、長期 stdio / 通信セッションが途中で再 initialize してバケットをリセットする経路を塞ぎます。
 
