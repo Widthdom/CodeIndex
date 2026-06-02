@@ -1289,7 +1289,7 @@ sleep 5
     [Theory]
     [InlineData(new[] { "--color=always", "status" }, ColorMode.Always, new[] { "status" })]
     [InlineData(new[] { "status", "--color", "never" }, ColorMode.Never, new[] { "status" })]
-    [InlineData(new[] { "search", "--color=auto", "foo" }, ColorMode.Auto, new[] { "search", "foo" })]
+    [InlineData(new[] { "search", "foo", "--color=auto" }, ColorMode.Auto, new[] { "search", "foo" })]
     [InlineData(new[] { "status" }, ColorMode.Auto, new[] { "status" })]
     public void TryConsumeColorFlag_StripsFlagAndSetsMode(string[] input, ColorMode expectedMode, string[] expectedKept)
     {
@@ -1312,6 +1312,63 @@ sleep 5
     }
 
     [Fact]
+    public void TryConsumeColorFlag_QueryCommandFirstLiteral_PreservesFlagLikeQuery()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalMode = ConsoleUi.GetColorMode();
+            try
+            {
+                var args = new[] { "search", "--color", "--path", "src/app.cs" };
+                Assert.True(ProgramRunner.TryConsumeColorFlag(ref args, out var error));
+                Assert.Empty(error);
+                Assert.Equal(ColorMode.Auto, ConsoleUi.GetColorMode());
+                Assert.Equal(new[] { "search", "--color", "--path", "src/app.cs" }, args);
+            }
+            finally
+            {
+                ConsoleUi.SetColorMode(originalMode);
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData("--color")]
+    [InlineData("--palette")]
+    [InlineData("--metrics")]
+    public void RunSearch_FirstQueryLiteralMatchingNonLogGlobalFlag_Issue2975(string query)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue2975_global_flag_query");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                $$"""
+                public static class App
+                {
+                    public const string Flag = "{{query}}";
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["search", query, "--db", dbPath, "--path", "src/app.cs", "--json", "--exact-substring"],
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Contains("src/app.cs", stdout);
+            Assert.Contains(query, stdout);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void TryConsumeColorFlag_InvalidValue_ReturnsError()
     {
         lock (TestConsoleLock.Gate)
@@ -1319,7 +1376,7 @@ sleep 5
             var originalMode = ConsoleUi.GetColorMode();
             try
             {
-                var args = new[] { "search", "--color=sparkly" };
+                var args = new[] { "search", "foo", "--color=sparkly" };
                 Assert.False(ProgramRunner.TryConsumeColorFlag(ref args, out var error));
                 Assert.Contains("sparkly", error);
             }
@@ -1338,7 +1395,7 @@ sleep 5
             var originalMode = ConsoleUi.GetColorMode();
             try
             {
-                var args = new[] { "search", "--color" };
+                var args = new[] { "search", "foo", "--color" };
                 Assert.False(ProgramRunner.TryConsumeColorFlag(ref args, out var error));
                 Assert.Contains("requires a value", error);
             }
@@ -1383,7 +1440,7 @@ sleep 5
             var originalMode = ConsoleUi.GetColorMode();
             try
             {
-                var args = new[] { "search", "--color=always", "--", "--color=auto" };
+                var args = new[] { "--color=always", "search", "--", "--color=auto" };
                 Assert.True(ProgramRunner.TryConsumeColorFlag(ref args, out var error));
                 Assert.Empty(error);
                 Assert.Equal(ColorMode.Always, ConsoleUi.GetColorMode());
@@ -1453,7 +1510,7 @@ sleep 5
     [Theory]
     [InlineData(new[] { "--palette=truecolor", "status" }, ColorPalette.Truecolor, new[] { "status" })]
     [InlineData(new[] { "status", "--palette", "256" }, ColorPalette.Color256, new[] { "status" })]
-    [InlineData(new[] { "search", "--palette=basic", "foo" }, ColorPalette.Basic, new[] { "search", "foo" })]
+    [InlineData(new[] { "search", "foo", "--palette=basic" }, ColorPalette.Basic, new[] { "search", "foo" })]
     public void TryConsumePaletteFlag_StripsFlagAndSetsPalette(string[] input, ColorPalette expected, string[] expectedKept)
     {
         lock (TestConsoleLock.Gate)
@@ -1504,7 +1561,7 @@ sleep 5
             var original = ConsoleUi.GetExplicitColorPalette();
             try
             {
-                var args = new[] { "search", "--palette=fancy" };
+                var args = new[] { "search", "foo", "--palette=fancy" };
                 Assert.False(ProgramRunner.TryConsumePaletteFlag(ref args, out var error));
                 Assert.Contains("fancy", error);
             }
@@ -1523,7 +1580,7 @@ sleep 5
             var original = ConsoleUi.GetExplicitColorPalette();
             try
             {
-                var args = new[] { "search", "--palette" };
+                var args = new[] { "search", "foo", "--palette" };
                 Assert.False(ProgramRunner.TryConsumePaletteFlag(ref args, out var error));
                 Assert.Contains("requires a value", error);
             }
@@ -1710,7 +1767,7 @@ sleep 5
             DbDebug.ResetForTesting();
             try
             {
-                var args = new[] { "search", "--debug-unsafe", "foo" };
+                var args = new[] { "search", "foo", "--debug-unsafe" };
                 Assert.True(ProgramRunner.TryConsumeDebugUnsafeFlag(ref args));
                 Assert.Equal(new[] { "search", "foo" }, args);
                 Assert.True(DbDebug.IsUnsafeAllowedForProcess());

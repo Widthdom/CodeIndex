@@ -9,7 +9,7 @@ public class MetricsSinkTests
     [Fact]
     public void TryConsumeMetricsFlag_StripsSeparatedFormAndReturnsPath()
     {
-        var args = new[] { "search", "--metrics", "/tmp/metrics.jsonl", "foo" };
+        var args = new[] { "search", "foo", "--metrics", "/tmp/metrics.jsonl" };
 
         Assert.True(ProgramRunner.TryConsumeMetricsFlag(ref args, out var path, out var error));
         Assert.Empty(error);
@@ -20,7 +20,7 @@ public class MetricsSinkTests
     [Fact]
     public void TryConsumeMetricsFlag_StripsEqualsFormAndReturnsPath()
     {
-        var args = new[] { "search", "--metrics=/tmp/m.jsonl", "foo" };
+        var args = new[] { "search", "foo", "--metrics=/tmp/m.jsonl" };
 
         Assert.True(ProgramRunner.TryConsumeMetricsFlag(ref args, out var path, out var error));
         Assert.Empty(error);
@@ -31,7 +31,7 @@ public class MetricsSinkTests
     [Fact]
     public void TryConsumeMetricsFlag_MissingValue_ReturnsUsageError()
     {
-        var args = new[] { "search", "--metrics" };
+        var args = new[] { "search", "foo", "--metrics" };
 
         Assert.False(ProgramRunner.TryConsumeMetricsFlag(ref args, out var path, out var error));
         Assert.Null(path);
@@ -41,7 +41,7 @@ public class MetricsSinkTests
     [Fact]
     public void TryConsumeMetricsFlag_EmptyEqualsValue_ReturnsUsageError()
     {
-        var args = new[] { "search", "--metrics=" };
+        var args = new[] { "search", "foo", "--metrics=" };
 
         Assert.False(ProgramRunner.TryConsumeMetricsFlag(ref args, out var path, out var error));
         Assert.Null(path);
