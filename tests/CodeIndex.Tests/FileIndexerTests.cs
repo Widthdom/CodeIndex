@@ -3441,6 +3441,37 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void GetFamilyScopeKey_IgnoresIgnoredProjectMarkers()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            var libDir = Path.Combine(tempDir, "src", "Lib");
+            var featureDir = Path.Combine(libDir, "Feature");
+            Directory.CreateDirectory(featureDir);
+            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "src/Lib/Lib.csproj\n");
+            var projectPath = Path.Combine(libDir, "Lib.csproj");
+            File.WriteAllText(projectPath, "<Project />");
+            var sourcePath = Path.Combine(featureDir, "Api.Part1.cs");
+            File.WriteAllText(sourcePath, "public partial class Api {}");
+
+            var indexer = new FileIndexer(tempDir);
+            var familyScopeKey = indexer.GetFamilyScopeKey(sourcePath, "csharp");
+            var ignoredMarkerFingerprint = indexer.GetProjectMarkerFingerprint("csharp");
+            File.Delete(projectPath);
+            var markerlessFingerprint = new FileIndexer(tempDir).GetProjectMarkerFingerprint("csharp");
+
+            Assert.Equal("src", familyScopeKey);
+            Assert.Equal(markerlessFingerprint, ignoredMarkerFingerprint);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
     public void GetFamilyScopeKey_MultipleProjectMarkersInOneDirectoryUseNarrowerSubtreeScope()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
