@@ -3041,9 +3041,14 @@ public static partial class SymbolExtractor
                             signature = (csharpWrappedModifierPrefix + " " + nameLineContent.TrimStart()).Trim();
                         }
                         else if (lang == "csharp"
+                            && pattern.Kind == "function"
                             && pattern.BodyStyle == BodyStyle.Brace
                             && bodyStartLine.HasValue
                             && bodyEndLine != startLine
+                            && !IsCSharpMultilineExpressionBodiedMember(
+                                lines,
+                                i,
+                                csharpSignatureRawStartColumn)
                             && TryFindCSharpBraceBodyHeaderExtent(
                                 lines,
                                 i,

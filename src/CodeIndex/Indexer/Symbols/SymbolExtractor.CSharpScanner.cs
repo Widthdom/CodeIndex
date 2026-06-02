@@ -2644,8 +2644,19 @@ public static partial class SymbolExtractor
                         break;
                     case '{' when parenDepth == 0 && bracketDepth == 0:
                         lastLineIndex = i;
-                        lastLineExclusiveEndColumn = column;
+                        lastLineExclusiveEndColumn = column + 1;
                         return true;
+                    case ';' when parenDepth == 0 && bracketDepth == 0:
+                        lastLineIndex = startLineIndex;
+                        lastLineExclusiveEndColumn = null;
+                        return false;
+                    case '=' when parenDepth == 0
+                        && bracketDepth == 0
+                        && column + 1 < sanitizedLine.Length
+                        && sanitizedLine[column + 1] == '>':
+                        lastLineIndex = startLineIndex;
+                        lastLineExclusiveEndColumn = null;
+                        return false;
                 }
             }
         }

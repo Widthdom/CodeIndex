@@ -67,7 +67,7 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var first = Assert.Single(symbols.Where(symbol => symbol.Kind == "function" && symbol.Name == "First"));
 
-        Assert.Equal("public static void First(string value)", first.Signature);
+        Assert.Equal("public static void First(string value) {", first.Signature);
         Assert.DoesNotContain("Second", first.Signature, StringComparison.Ordinal);
     }
 
