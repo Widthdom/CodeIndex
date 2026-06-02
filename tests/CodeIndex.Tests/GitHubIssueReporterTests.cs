@@ -315,27 +315,19 @@ public class GitHubIssueReporterTests : IDisposable
     }
 
     [Fact]
-    public void BuildIssueLabels_MapsSuggestionCategoriesToExistingRepositoryLabels()
-    {
-        Assert.Equal(["enhancement"], GitHubIssueReporter.BuildIssueLabels(new SuggestionRecord { Category = "output_format" }));
-        Assert.Equal(["bug"], GitHubIssueReporter.BuildIssueLabels(new SuggestionRecord { Category = "crash_report" }));
-        Assert.Equal(["bug"], GitHubIssueReporter.BuildIssueLabels(new SuggestionRecord { Category = "unexpected_error" }));
-    }
-
-    [Fact]
     public void BuildApiFailureMessage_RedactsAndBoundsSensitiveErrorBody()
     {
         var errorBody = $$"""
         {
             "message": "validation failed",
-            "token": "ghp_secret_token",
+            "token": "value-that-must-not-leak",
             "details": "{{new string('x', 2000)}}"
         }
         """;
 
         var message = GitHubIssueReporter.BuildApiFailureMessage(403, errorBody);
 
-        Assert.DoesNotContain("ghp_secret_token", message);
+        Assert.DoesNotContain("value-that-must-not-leak", message);
         Assert.Contains("\"token\":\"[redacted]\"", message);
         Assert.True(message.Length < 900);
     }
@@ -347,12 +339,20 @@ public class GitHubIssueReporterTests : IDisposable
 
         var message = GitHubIssueReporter.BuildRateLimitFailureMessage(
             429,
-            """{ "authorization": "Bearer ghp_secret_token", "message": "rate limited" }""",
+            """{ "authorization": "Bearer value-that-must-not-leak", "message": "rate limited" }""",
             retryAt);
 
-        Assert.DoesNotContain("ghp_secret_token", message);
+        Assert.DoesNotContain("value-that-must-not-leak", message);
         Assert.Contains("\"authorization\":\"[redacted]\"", message);
         Assert.Contains(retryAt.ToString("O"), message);
+    }
+
+    [Fact]
+    public void BuildIssueLabels_MapsSuggestionCategoriesToExistingRepositoryLabels()
+    {
+        Assert.Equal(["enhancement"], GitHubIssueReporter.BuildIssueLabels(new SuggestionRecord { Category = "output_format" }));
+        Assert.Equal(["bug"], GitHubIssueReporter.BuildIssueLabels(new SuggestionRecord { Category = "crash_report" }));
+        Assert.Equal(["bug"], GitHubIssueReporter.BuildIssueLabels(new SuggestionRecord { Category = "unexpected_error" }));
     }
 
     [Fact]
@@ -693,7 +693,7 @@ public class GitHubIssueReporterTests : IDisposable
     {
         _env.Set("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
 
-        var errorBody = "{\"message\":\"validation failed\",\"token\":\"ghp_secret_token\",\"details\":\""
+        var errorBody = "{\"message\":\"validation failed\",\"token\":\"value-that-must-not-leak\",\"details\":\""
             + new string('x', GitHubIssueReporter.MaxGitHubApiErrorBodyBytes * 2)
             + "\"}";
 
@@ -721,7 +721,7 @@ public class GitHubIssueReporterTests : IDisposable
             var result = await GitHubIssueReporter.TryCreateIssueDetailedAsync(record, "1.0.0-test");
 
             Assert.Null(result.IssueUrl);
-            Assert.DoesNotContain("ghp_secret_token", result.Error);
+            Assert.DoesNotContain("value-that-must-not-leak", result.Error);
             Assert.Contains("[redacted]", result.Error);
             Assert.True(result.Error!.Length <= 512);
         }
