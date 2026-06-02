@@ -1298,6 +1298,30 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void ParseArgs_ParallelismFlagClampsOversizedValue_Issue2904()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalError = Console.Error;
+            using var stderr = new StringWriter();
+            try
+            {
+                Console.SetError(stderr);
+
+                var options = IndexCommandRunner.ParseArgs([".", "--parallelism", "999"]);
+
+                Assert.Equal(IndexCommandRunner.MaxIndexParallelism, options.Parallelism);
+                Assert.Contains("--parallelism", stderr.ToString());
+                Assert.Contains($"maximum {IndexCommandRunner.MaxIndexParallelism}", stderr.ToString());
+            }
+            finally
+            {
+                Console.SetError(originalError);
+            }
+        }
+    }
+
+    [Fact]
     public void ParseArgs_IndexParallelismEnvironment_ProvidesDefault()
     {
         var original = Environment.GetEnvironmentVariable(IndexCommandRunner.IndexParallelismEnvironmentVariable);
@@ -1312,6 +1336,32 @@ public class IndexCommandRunnerTests
         finally
         {
             Environment.SetEnvironmentVariable(IndexCommandRunner.IndexParallelismEnvironmentVariable, original);
+        }
+    }
+
+    [Fact]
+    public void ParseArgs_IndexParallelismEnvironmentClampsOversizedValue_Issue2904()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalError = Console.Error;
+            using var stderr = new StringWriter();
+            using var env = EnvironmentVariableScope.Capture(IndexCommandRunner.IndexParallelismEnvironmentVariable);
+            try
+            {
+                Console.SetError(stderr);
+                Environment.SetEnvironmentVariable(IndexCommandRunner.IndexParallelismEnvironmentVariable, "999");
+
+                var options = IndexCommandRunner.ParseArgs(["."]);
+
+                Assert.Equal(IndexCommandRunner.MaxIndexParallelism, options.Parallelism);
+                Assert.Contains(IndexCommandRunner.IndexParallelismEnvironmentVariable, stderr.ToString());
+                Assert.Contains($"maximum {IndexCommandRunner.MaxIndexParallelism}", stderr.ToString());
+            }
+            finally
+            {
+                Console.SetError(originalError);
+            }
         }
     }
 

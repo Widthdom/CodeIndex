@@ -22,6 +22,7 @@ public static partial class IndexCommandRunner
     ];
 
     internal const string IndexParallelismEnvironmentVariable = "CDIDX_INDEX_PARALLELISM";
+    internal const int MaxIndexParallelism = 16;
     internal const int MaxSymbolKindFilterCsvLength = 2048;
     internal const int MaxSymbolKindFilterCsvEntries = 128;
 
@@ -412,7 +413,7 @@ public static partial class IndexCommandRunner
     }
 
     internal static int DefaultIndexParallelism()
-        => Math.Clamp(Environment.ProcessorCount, 1, 16);
+        => Math.Clamp(Environment.ProcessorCount, 1, MaxIndexParallelism);
 
     private static int ReadIndexParallelismFromEnvironment()
     {
@@ -427,7 +428,13 @@ public static partial class IndexCommandRunner
     private static int ParseIndexParallelism(string value, int fallback, string source)
     {
         if (int.TryParse(value, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsed) && parsed > 0)
-            return parsed;
+        {
+            if (parsed <= MaxIndexParallelism)
+                return parsed;
+
+            Console.Error.WriteLine($"Warning: {source} value '{value}' exceeds the maximum {MaxIndexParallelism}; using {MaxIndexParallelism} / {source} 値 '{value}' は最大 {MaxIndexParallelism} を超えています。{MaxIndexParallelism} を使用します");
+            return MaxIndexParallelism;
+        }
 
         Console.Error.WriteLine($"Warning: invalid {source} value '{value}' (ignored; use a positive integer) / 不正な {source} 値 '{value}'（無視。正の整数を指定）");
         return fallback;
