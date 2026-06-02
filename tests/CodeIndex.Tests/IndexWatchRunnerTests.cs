@@ -94,7 +94,29 @@ public class IndexWatchRunnerTests
         Assert.True(batcher.TryDrain(out var batch, out var rescan, out var reason));
         Assert.True(rescan);
         Assert.Equal("buffer overflowed", reason);
-        Assert.Single(batch);
+        Assert.Empty(batch);
+    }
+
+    [Fact]
+    public void FileChangeBatcher_Add_WhenPendingPathLimitExceeded_CollapsesToFullRescan()
+    {
+        var clock = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var batcher = new FileChangeBatcher(
+            TimeSpan.FromMilliseconds(100),
+            () => clock,
+            maxPendingPaths: 2);
+
+        batcher.Add("/repo/a.py");
+        batcher.Add("/repo/b.py");
+        batcher.Add("/repo/c.py");
+        batcher.Add("/repo/d.py");
+
+        clock = clock.AddMilliseconds(200);
+        Assert.True(batcher.TryDrain(out var batch, out var rescan, out var reason));
+        Assert.True(rescan);
+        Assert.Empty(batch);
+        Assert.Contains("pending path limit exceeded", reason);
+        Assert.Contains("2", reason);
     }
 
     [Fact]

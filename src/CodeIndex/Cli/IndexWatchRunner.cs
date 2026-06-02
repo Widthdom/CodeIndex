@@ -373,6 +373,8 @@ internal static class IndexWatchRunner
 /// </summary>
 internal sealed class FileChangeBatcher
 {
+    internal const int DefaultMaxPendingPaths = 4096;
+
     private readonly object _gate = new();
     private readonly HashSet<string> _pending;
     private DateTime _lastEventUtc = DateTime.MinValue;
@@ -380,11 +382,20 @@ internal sealed class FileChangeBatcher
     private string? _overflowReason;
     private readonly TimeSpan _debounce;
     private readonly Func<DateTime> _clock;
+    private readonly int _maxPendingPaths;
 
-    public FileChangeBatcher(TimeSpan debounce, Func<DateTime>? clock = null, bool ignoreCase = true)
+    public FileChangeBatcher(
+        TimeSpan debounce,
+        Func<DateTime>? clock = null,
+        bool ignoreCase = true,
+        int maxPendingPaths = DefaultMaxPendingPaths)
     {
+        if (maxPendingPaths <= 0)
+            throw new ArgumentOutOfRangeException(nameof(maxPendingPaths), "Maximum pending path count must be positive.");
+
         _debounce = debounce;
         _clock = clock ?? (() => DateTime.UtcNow);
+        _maxPendingPaths = maxPendingPaths;
         // On case-sensitive filesystems (Linux ext4), `foo.py` and `Foo.py` are distinct files,
         // so coalescing them via OrdinalIgnoreCase would drop one rename leg and leave the
         // renamed-to file unindexed. The watch loop passes the filesystem's case sensitivity in.
@@ -397,7 +408,24 @@ internal sealed class FileChangeBatcher
     {
         lock (_gate)
         {
-            _pending.Add(path);
+            if (_overflowRequested)
+            {
+                _lastEventUtc = _clock();
+                return;
+            }
+
+            if (!_pending.Contains(path))
+            {
+                if (_pending.Count >= _maxPendingPaths)
+                {
+                    RequestFullRescanLocked(
+                        $"pending path limit exceeded ({_maxPendingPaths.ToString("N0", CultureInfo.InvariantCulture)} paths)");
+                    return;
+                }
+
+                _pending.Add(path);
+            }
+
             _lastEventUtc = _clock();
         }
     }
@@ -406,10 +434,7 @@ internal sealed class FileChangeBatcher
     {
         lock (_gate)
         {
-            _overflowRequested = true;
-            if (!string.IsNullOrEmpty(reason))
-                _overflowReason = reason;
-            _lastEventUtc = _clock();
+            RequestFullRescanLocked(reason);
         }
     }
 
@@ -444,5 +469,14 @@ internal sealed class FileChangeBatcher
             _overflowReason = null;
             return true;
         }
+    }
+
+    private void RequestFullRescanLocked(string? reason)
+    {
+        _pending.Clear();
+        _overflowRequested = true;
+        if (!string.IsNullOrEmpty(reason))
+            _overflowReason = reason;
+        _lastEventUtc = _clock();
     }
 }
