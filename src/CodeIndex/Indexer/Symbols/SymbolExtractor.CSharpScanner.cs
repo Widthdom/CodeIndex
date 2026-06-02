@@ -1165,7 +1165,7 @@ public static partial class SymbolExtractor
             return true;
 
         var lastChar = trimmed[^1];
-        if (lastChar is '<' or '=' or ':' or ',' or '+' or '-' or '/' or '%' or '!' or '&' or '|' or '^' or '~' or '.')
+        if (lastChar is '<' or '=' or ':' or '+' or '-' or '/' or '%' or '!' or '&' or '|' or '^' or '~' or '.')
             return true;
 
         var tokenStart = trimmed.Length - 1;
