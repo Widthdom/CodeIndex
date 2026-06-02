@@ -736,19 +736,26 @@ public static class GitHelper
         {
             MarkFailure($"git command timed out after {FormatDuration(GitCommandTimeout)}.");
             if (!process.WaitForExit(ToWaitMilliseconds(GitKillWaitTimeout)))
-                return (GitProcessFailureExitCode, stdout.ToString(), CombineCapturedError(stderr.ToString(), failureReason!));
+                return (GitProcessFailureExitCode, ReadCaptured(stdout), CombineCapturedError(ReadCaptured(stderr), failureReason!));
+            process.WaitForExit();
         }
         else
         {
             process.WaitForExit();
         }
 
-        var output = stdout.ToString();
-        var error = stderr.ToString();
+        var output = ReadCaptured(stdout);
+        var error = ReadCaptured(stderr);
         if (failureReason != null)
             return (GitProcessFailureExitCode, output, CombineCapturedError(error, failureReason));
 
         return (process.ExitCode, output, error);
+    }
+
+    private static string ReadCaptured(StringBuilder builder)
+    {
+        lock (builder)
+            return builder.ToString();
     }
 
     private static void AppendBoundedCapturedLine(
