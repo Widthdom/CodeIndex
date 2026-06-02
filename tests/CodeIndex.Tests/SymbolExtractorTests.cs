@@ -46,6 +46,32 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_BraceBodiedFunctionSignatureStopsAtDeclarationHeader()
+    {
+        const string content = """
+            internal static class Example
+            {
+                public static void First(string value)
+                {
+                    if (value == null)
+                        return;
+                }
+
+                private static bool Second()
+                {
+                    return true;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var first = Assert.Single(symbols.Where(symbol => symbol.Kind == "function" && symbol.Name == "First"));
+
+        Assert.Equal("public static void First(string value)", first.Signature);
+        Assert.DoesNotContain("Second", first.Signature, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Extract_BuiltInSymbolRegexes_AdversarialLongLinesDoNotThrow()
     {
         var typeScriptLine = "export const Component = React.memo<" + new string('A', 20000) + new string('<', 2000) + new string('>', 2000) + ">(value);";
