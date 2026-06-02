@@ -619,6 +619,8 @@ internal static class ProgramRunner
 
         for (var i = 0; i < subArgs.Length; i++)
         {
+            if (subArgs[i] == "--")
+                return subArgs;
             if (!IsNonLogGlobalOptionToken(subArgs[i]))
                 continue;
             if (GetQueryCommandTokenRole(commandName, subArgs, i) != QueryCommandTokenRole.FirstQueryLiteral)

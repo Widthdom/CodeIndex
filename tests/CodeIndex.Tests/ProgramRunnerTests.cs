@@ -1369,6 +1369,40 @@ sleep 5
     }
 
     [Fact]
+    public void RunSearch_ExistingQueryEscapePreservesFlagLikeQuery_Issue2975()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue2975_existing_query_escape");
+        const string query = "--color=auto";
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                $$"""
+                public static class App
+                {
+                    public const string Flag = "{{query}}";
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["search", "--", query, "--db", dbPath, "--path", "src/app.cs", "--json", "--exact-substring"],
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Contains("src/app.cs", stdout);
+            Assert.Contains(query, stdout);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void TryConsumeColorFlag_InvalidValue_ReturnsError()
     {
         lock (TestConsoleLock.Gate)
