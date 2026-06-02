@@ -91,6 +91,9 @@ public class FileIndexer
     private const int MaxGitmodulesBytes = 256 * 1024;
     private const int MaxGitmodulesLines = 4096;
     private static readonly string[] IgnoreFileNames = [".gitignore", ".cdidxignore"];
+    private const int MaxIgnoreFileBytes = 256 * 1024;
+    private const int MaxIgnoreFileLines = 8192;
+    private const int MaxIgnoreRulesPerFile = 4096;
     private const int MaxIgnorePatternLength = 512;
     private static readonly TimeSpan IgnoreRegexMatchTimeout = TimeSpan.FromMilliseconds(100);
     // Extension-to-language mapping / 拡張子→言語名マッピング
@@ -2421,36 +2424,14 @@ public class FileIndexer
         foreach (var ignoreFileName in IgnoreFileNames)
         {
             var ignorePath = Path.Combine(dir, ignoreFileName);
-            var prefixedIgnorePath = LongPath.EnsureWindowsPrefix(ignorePath);
-
-            try
+            if (!TryAppendIgnoreRulesFromFile(
+                    dir,
+                    ignorePath,
+                    ignoreFileName,
+                    rules,
+                    errors,
+                    ref fullyScanned))
             {
-                var lineNumber = 0;
-                foreach (var line in File.ReadLines(prefixedIgnorePath, Encoding.UTF8))
-                {
-                    lineNumber++;
-                    if (IgnoreRule.TryParse(dir, line, _ignoreCase, out var rule, out var errorMessage) && rule != null)
-                        rules.Add(rule);
-                    else if (errorMessage != null)
-                        errors.Add(new ScanError($"{ToRelativePath(ignorePath)}:{lineNumber}", errorMessage, ScanIssueSeverity.Warning));
-                }
-            }
-            catch (UnauthorizedAccessException)
-            {
-                if (!File.Exists(prefixedIgnorePath))
-                    throw;
-
-                errors.Add(new ScanError(ToRelativePath(ignorePath), $"Could not read {ignoreFileName} due to permissions.", ScanIssueSeverity.Warning));
-            }
-            catch (FileNotFoundException)
-            {
-            }
-            catch (DirectoryNotFoundException)
-            {
-            }
-            catch (IOException)
-            {
-                errors.Add(new ScanError(ToRelativePath(ignorePath), $"Could not read {ignoreFileName}."));
                 fullyScanned = false;
                 ignoreRulesAvailable = false;
             }
@@ -2506,18 +2487,70 @@ public class FileIndexer
         ref bool fullyScanned)
     {
         var rules = new List<IgnoreRule>();
+        if (!TryAppendIgnoreRulesFromFile(
+                sourceDirectory,
+                ignorePath,
+                ignoreFileName,
+                rules,
+                errors,
+                ref fullyScanned))
+        {
+            fullyScanned = false;
+            return new IgnoreRuleLoadResult(inheritedIgnoreRules, IgnoreRulesAvailable: false);
+        }
+
+        return new IgnoreRuleLoadResult(IgnoreRuleSet.CreateChild(inheritedIgnoreRules, rules), IgnoreRulesAvailable: true);
+    }
+
+    private bool TryAppendIgnoreRulesFromFile(
+        string sourceDirectory,
+        string ignorePath,
+        string ignoreFileName,
+        List<IgnoreRule> rules,
+        List<ScanError> errors,
+        ref bool fullyScanned)
+    {
         var prefixedIgnorePath = LongPath.EnsureWindowsPrefix(ignorePath);
 
         try
         {
+            if (!TryReadBoundedUtf8SidecarLines(
+                    prefixedIgnorePath,
+                    MaxIgnoreFileBytes,
+                    MaxIgnoreFileLines,
+                    out var lines,
+                    out var skippedReason))
+            {
+                errors.Add(new ScanError(
+                    ToRelativePath(ignorePath),
+                    $"Skipped {ignoreFileName} because {skippedReason}.",
+                    ScanIssueSeverity.Warning));
+                return true;
+            }
+
             var lineNumber = 0;
-            foreach (var line in File.ReadLines(prefixedIgnorePath, Encoding.UTF8))
+            var rulesInFile = 0;
+            foreach (var line in lines)
             {
                 lineNumber++;
                 if (IgnoreRule.TryParse(sourceDirectory, line, _ignoreCase, out var rule, out var errorMessage) && rule != null)
+                {
+                    if (rulesInFile >= MaxIgnoreRulesPerFile)
+                    {
+                        errors.Add(new ScanError(
+                            $"{ToRelativePath(ignorePath)}:{lineNumber}",
+                            $"Ignored remaining {ignoreFileName} rules because the file exceeds {MaxIgnoreRulesPerFile} rules.",
+                            ScanIssueSeverity.Warning));
+                        break;
+                    }
+
                     rules.Add(rule);
+                    rulesInFile++;
+                }
                 else if (errorMessage != null)
+                {
                     errors.Add(new ScanError($"{ToRelativePath(ignorePath)}:{lineNumber}", errorMessage, ScanIssueSeverity.Warning));
+                }
             }
         }
         catch (UnauthorizedAccessException)
@@ -2526,24 +2559,24 @@ public class FileIndexer
                 throw;
 
             errors.Add(new ScanError(ToRelativePath(ignorePath), $"Could not read {ignoreFileName} due to permissions.", ScanIssueSeverity.Warning));
-            return new IgnoreRuleLoadResult(inheritedIgnoreRules, IgnoreRulesAvailable: true);
+            return true;
         }
         catch (FileNotFoundException)
         {
-            return new IgnoreRuleLoadResult(inheritedIgnoreRules, IgnoreRulesAvailable: true);
+            return true;
         }
         catch (DirectoryNotFoundException)
         {
-            return new IgnoreRuleLoadResult(inheritedIgnoreRules, IgnoreRulesAvailable: true);
+            return true;
         }
         catch (IOException)
         {
             errors.Add(new ScanError(ToRelativePath(ignorePath), $"Could not read {ignoreFileName}."));
             fullyScanned = false;
-            return new IgnoreRuleLoadResult(inheritedIgnoreRules, IgnoreRulesAvailable: false);
+            return false;
         }
 
-        return new IgnoreRuleLoadResult(IgnoreRuleSet.CreateChild(inheritedIgnoreRules, rules), IgnoreRulesAvailable: true);
+        return true;
     }
 
     private string NormalizeIgnoreRuleRoot(string? ignoreRuleRoot)

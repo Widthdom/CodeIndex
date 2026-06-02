@@ -150,6 +150,69 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void ScanFilesDetailed_OversizedGitignoreSkipsRulesWithWarning()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-oversize-gitignore-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "generated.py\n" + new string('x', 300 * 1024));
+            File.WriteAllText(Path.Combine(tempDir, "generated.py"), "print('generated')\n");
+
+            var result = new FileIndexer(tempDir).ScanFilesDetailed();
+            var files = result.Files
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .ToList();
+
+            Assert.Contains("generated.py", files);
+            Assert.Contains(
+                result.Errors,
+                error => error.Path == ".gitignore"
+                    && error.Severity == FileIndexer.ScanIssueSeverity.Warning
+                    && error.Message.Contains("exceeds", StringComparison.OrdinalIgnoreCase));
+            Assert.False(result.HadErrors);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFilesDetailed_GitignoreRuleCountCapTruncatesRemainingRulesWithWarning()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-gitignore-rule-cap-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var rules = Enumerable.Range(0, 4096)
+                .Select(i => $"unused{i}.py")
+                .Concat(["late.py"]);
+            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), string.Join('\n', rules) + "\n");
+            File.WriteAllText(Path.Combine(tempDir, "late.py"), "print('late')\n");
+
+            var result = new FileIndexer(tempDir).ScanFilesDetailed();
+            var files = result.Files
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .ToList();
+
+            Assert.Contains("late.py", files);
+            Assert.Contains(
+                result.Errors,
+                error => error.Path == ".gitignore:4097"
+                    && error.Severity == FileIndexer.ScanIssueSeverity.Warning
+                    && error.Message.Contains("4096 rules", StringComparison.OrdinalIgnoreCase));
+            Assert.False(result.HadErrors);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
     public void ScanFilesDetailed_HardlinkedFiles_SkipsDuplicatePathWithWarning()
     {
         if (OperatingSystem.IsWindows())
