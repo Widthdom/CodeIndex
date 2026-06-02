@@ -336,6 +336,23 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
+    public async Task HttpTransport_EventsStream_RemovesDisconnectedStreams()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_MCP_KEEP_ALIVE_INTERVAL_S");
+        env.Set("CDIDX_MCP_KEEP_ALIVE_INTERVAL_S", "0.02");
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath);
+
+        using var client = new HttpClient();
+        using var events = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "events"), HttpCompletionOption.ResponseHeadersRead);
+        Assert.Equal(HttpStatusCode.OK, events.StatusCode);
+        await WaitUntilAsync(() => harness.HasEventStreams, "the event stream to be registered");
+
+        events.Dispose();
+
+        await WaitUntilAsync(() => !harness.HasEventStreams, "the disconnected event stream to be removed");
+    }
+
+    [Fact]
     public async Task HttpTransport_IndexWithProgressToken_EmitsProgressOnEventsStreamAndReturnsResult()
     {
         var projectRoot = Path.Combine(Directory.GetCurrentDirectory(), $".tmp_mcp_http_progress_{Guid.NewGuid():N}");
@@ -596,6 +613,8 @@ public class HttpMcpTransportTests : IDisposable
         }
 
         public string Endpoint { get; }
+
+        public bool HasEventStreams => _transport.HasEventStreams;
 
         public static async Task<McpHttpHarness> StartAsync(
             string dbPath,

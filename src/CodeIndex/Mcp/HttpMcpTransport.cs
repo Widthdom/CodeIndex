@@ -36,7 +36,6 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     private readonly Action<HttpRequestLogRecord>? _requestLogger;
     private readonly object _requestLoggerGate = new();
     private readonly ConcurrentDictionary<Guid, EventStream> _eventStreams = new();
-    private readonly ConcurrentBag<Task> _sseStreams = new();
     private readonly CancellationTokenSource _acceptCts = new();
     private readonly Channel<PendingRequest> _requestQueue;
     private readonly int _maxRequestBodyBytes;
@@ -302,7 +301,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
                 return;
             }
 
-            _sseStreams.Add(Task.Run(() => RunEventStreamAsync(request, cancellationToken), CancellationToken.None));
+            _ = Task.Run(() => RunEventStreamAsync(request, cancellationToken), CancellationToken.None);
             return;
         }
 
