@@ -20,6 +20,8 @@ public sealed class McpToolFilter
 {
     internal const string AllowEnvVarName = "CDIDX_MCP_TOOLS_ALLOW";
     internal const string DenyEnvVarName = "CDIDX_MCP_TOOLS_DENY";
+    internal const int MaxToolFilterCsvLength = 2048;
+    internal const int MaxToolFilterCsvEntries = 128;
 
     private readonly HashSet<string> _enabled;
 
@@ -83,7 +85,7 @@ public sealed class McpToolFilter
 
     internal static McpToolFilter Parse(string? allowValue, string? denyValue)
     {
-        var allow = SplitCsv(allowValue);
+        var allow = SplitCsv(allowValue, AllowEnvVarName);
         if (allow.Count > 0)
         {
             var filtered = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -96,7 +98,7 @@ public sealed class McpToolFilter
         }
 
         var enabled = new HashSet<string>(KnownToolNames, StringComparer.OrdinalIgnoreCase);
-        var deny = SplitCsv(denyValue);
+        var deny = SplitCsv(denyValue, DenyEnvVarName);
         if (deny.Count > 0)
         {
             foreach (var name in deny)
@@ -121,11 +123,14 @@ public sealed class McpToolFilter
         !string.IsNullOrEmpty(toolName)
         && KnownToolNames.Any(known => string.Equals(known, toolName, StringComparison.OrdinalIgnoreCase));
 
-    private static HashSet<string> SplitCsv(string? value)
+    private static HashSet<string> SplitCsv(string? value, string source)
     {
         var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         if (string.IsNullOrWhiteSpace(value))
             return set;
+        if (!ValidateCsvBounds(source, value))
+            return set;
+
         foreach (var raw in value.Split(','))
         {
             var trimmed = raw.Trim();
@@ -134,5 +139,38 @@ public sealed class McpToolFilter
             set.Add(trimmed);
         }
         return set;
+    }
+
+    private static bool ValidateCsvBounds(string source, string value)
+    {
+        if (value.Length > MaxToolFilterCsvLength)
+        {
+            Console.Error.WriteLine($"Warning: {source} is too long ({value.Length} characters; max {MaxToolFilterCsvLength}) and was ignored.");
+            return false;
+        }
+
+        var entries = CountCsvEntries(value);
+        if (entries > MaxToolFilterCsvEntries)
+        {
+            Console.Error.WriteLine($"Warning: {source} accepts at most {MaxToolFilterCsvEntries} comma-separated entries and was ignored.");
+            return false;
+        }
+
+        return true;
+    }
+
+    private static int CountCsvEntries(string value)
+    {
+        if (value.Length == 0)
+            return 0;
+
+        var count = 1;
+        foreach (var ch in value)
+        {
+            if (ch == ',')
+                count++;
+        }
+
+        return count;
     }
 }
