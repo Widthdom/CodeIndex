@@ -150,7 +150,7 @@ public class FileIndexerTests
     }
 
     [Fact]
-    public void ScanFilesDetailed_OversizedGitignoreSkipsRulesWithWarning()
+    public void ScanFilesDetailed_OversizedGitignoreFailsClosedWithError()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-oversize-gitignore-{Guid.NewGuid():N}");
         try
@@ -164,13 +164,13 @@ public class FileIndexerTests
                 .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
                 .ToList();
 
-            Assert.Contains("generated.py", files);
+            Assert.Empty(files);
             Assert.Contains(
                 result.Errors,
                 error => error.Path == ".gitignore"
-                    && error.Severity == FileIndexer.ScanIssueSeverity.Warning
+                    && error.Severity == FileIndexer.ScanIssueSeverity.Error
                     && error.Message.Contains("exceeds", StringComparison.OrdinalIgnoreCase));
-            Assert.False(result.HadErrors);
+            Assert.True(result.HadErrors);
         }
         finally
         {
@@ -180,7 +180,7 @@ public class FileIndexerTests
     }
 
     [Fact]
-    public void ScanFilesDetailed_GitignoreRuleCountCapTruncatesRemainingRulesWithWarning()
+    public void ScanFilesDetailed_GitignoreRuleCountCapFailsClosedWithError()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-gitignore-rule-cap-{Guid.NewGuid():N}");
         try
@@ -197,13 +197,13 @@ public class FileIndexerTests
                 .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
                 .ToList();
 
-            Assert.Contains("late.py", files);
+            Assert.Empty(files);
             Assert.Contains(
                 result.Errors,
                 error => error.Path == ".gitignore:4097"
-                    && error.Severity == FileIndexer.ScanIssueSeverity.Warning
+                    && error.Severity == FileIndexer.ScanIssueSeverity.Error
                     && error.Message.Contains("4096 rules", StringComparison.OrdinalIgnoreCase));
-            Assert.False(result.HadErrors);
+            Assert.True(result.HadErrors);
         }
         finally
         {

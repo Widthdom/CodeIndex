@@ -2659,9 +2659,9 @@ public class FileIndexer
             {
                 errors.Add(new ScanError(
                     ToRelativePath(ignorePath),
-                    $"Skipped {ignoreFileName} because {skippedReason}.",
-                    ScanIssueSeverity.Warning));
-                return true;
+                    $"Could not safely read {ignoreFileName} because {skippedReason}."));
+                fullyScanned = false;
+                return false;
             }
 
             var lineNumber = 0;
@@ -2675,9 +2675,9 @@ public class FileIndexer
                     {
                         errors.Add(new ScanError(
                             $"{ToRelativePath(ignorePath)}:{lineNumber}",
-                            $"Ignored remaining {ignoreFileName} rules because the file exceeds {MaxIgnoreRulesPerFile} rules.",
-                            ScanIssueSeverity.Warning));
-                        break;
+                            $"Stopped scanning because {ignoreFileName} exceeds {MaxIgnoreRulesPerFile} rules."));
+                        fullyScanned = false;
+                        return false;
                     }
 
                     rules.Add(rule);
