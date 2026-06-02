@@ -1812,7 +1812,7 @@ internal static class LanguageReferenceExtractionSupport
                     continue;
 
                 var argumentList = line.Substring(open + 1, close - open - 1);
-                var arguments = ReferenceExtractor.SplitTopLevelCommaSpans(argumentList);
+                var arguments = SplitTopLevelCArgumentSpans(argumentList);
                 if (arguments.Count < 2)
                     continue;
 
@@ -1839,6 +1839,50 @@ internal static class LanguageReferenceExtractionSupport
                     language);
             }
         }
+    }
+
+    private static List<(int Start, int Length)> SplitTopLevelCArgumentSpans(string text)
+    {
+        var spans = new List<(int Start, int Length)>();
+        int parenDepth = 0;
+        int squareDepth = 0;
+        int braceDepth = 0;
+        int start = 0;
+
+        for (int i = 0; i < text.Length; i++)
+        {
+            switch (text[i])
+            {
+                case '(':
+                    parenDepth++;
+                    break;
+                case ')':
+                    if (parenDepth > 0)
+                        parenDepth--;
+                    break;
+                case '[':
+                    squareDepth++;
+                    break;
+                case ']':
+                    if (squareDepth > 0)
+                        squareDepth--;
+                    break;
+                case '{':
+                    braceDepth++;
+                    break;
+                case '}':
+                    if (braceDepth > 0)
+                        braceDepth--;
+                    break;
+                case ',' when parenDepth == 0 && squareDepth == 0 && braceDepth == 0:
+                    spans.Add((start, i - start));
+                    start = i + 1;
+                    break;
+            }
+        }
+
+        spans.Add((start, text.Length - start));
+        return spans;
     }
 
     private static bool LooksLikeCVaArgTypeOperand(string expression)
