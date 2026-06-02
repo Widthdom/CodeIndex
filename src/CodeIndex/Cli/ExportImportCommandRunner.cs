@@ -169,9 +169,7 @@ internal static class ExportImportCommandRunner
 
         var fullSourceDbPath = Path.GetFullPath(normalizedDbPath);
         var fullOutputPath = Path.GetFullPath(outputPath);
-        if (IsSamePath(fullOutputPath, fullSourceDbPath)
-            || IsSamePath(fullOutputPath, fullSourceDbPath + "-wal")
-            || IsSamePath(fullOutputPath, fullSourceDbPath + "-shm"))
+        if (IsDatabaseOrSqliteSidecarPath(fullOutputPath, fullSourceDbPath))
         {
             return WriteError("export archive path must not be the source database or a SQLite sidecar.", "choose a separate archive path, for example `codeindex.cdidx.zip`.", "cdidx export <archive> [--db <path>] [--json]");
         }
@@ -240,6 +238,13 @@ internal static class ExportImportCommandRunner
 
         dbPath ??= DbPathResolver.ResolveForQuery(Environment.CurrentDirectory, explicitDbPath: null, explicitDataDir: null).DbPath;
         var normalizedDbPath = DbPathResolver.NormalizeDbPath(dbPath);
+        var fullSourceDbPath = Path.GetFullPath(normalizedDbPath);
+        var fullOutputPath = Path.GetFullPath(outputPath);
+        if (IsDatabaseOrSqliteSidecarPath(fullOutputPath, fullSourceDbPath))
+        {
+            return WriteError("ctags output path must not be the source database or a SQLite sidecar.", "choose a separate tags path, for example `tags`.", "cdidx export ctags [--output <path>] [--db <path>]");
+        }
+
         if (!DbContext.TryValidateExistingCodeIndexDb(normalizedDbPath, out var validationMessage, out _))
             return WriteError(validationMessage, "run `cdidx index <projectPath>` first or pass `--db <path>`.", "cdidx export ctags [--output <path>] [--db <path>]");
 
@@ -523,6 +528,11 @@ internal static class ExportImportCommandRunner
             Path.GetFullPath(left).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
             Path.GetFullPath(right).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
             OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+
+    private static bool IsDatabaseOrSqliteSidecarPath(string path, string dbPath)
+        => IsSamePath(path, dbPath)
+            || IsSamePath(path, dbPath + "-wal")
+            || IsSamePath(path, dbPath + "-shm");
 
     private static string SanitizeCtagsField(string value)
         => value.Replace('\t', ' ').Replace('\r', ' ').Replace('\n', ' ');
