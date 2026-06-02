@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -10,6 +11,8 @@ namespace CodeIndex.Lsp;
 internal sealed class LspServer : IDisposable
 {
     private const int DefaultLimit = 50;
+    internal const int MaxLspFrameBytes = 8 * 1024 * 1024;
+    internal const int MaxLspHeaderLineBytes = 8 * 1024;
     private readonly DbReader _reader;
     private readonly string _version;
     private readonly JsonSerializerOptions _jsonOptions;
@@ -333,9 +336,15 @@ internal sealed class LspServer : IDisposable
                 continue;
             var name = line[..colon].Trim();
             var value = line[(colon + 1)..].Trim();
-            if (string.Equals(name, "Content-Length", StringComparison.OrdinalIgnoreCase)
-                && int.TryParse(value, out var parsed))
+            if (string.Equals(name, "Content-Length", StringComparison.OrdinalIgnoreCase))
             {
+                if (!int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed)
+                    || parsed < 0
+                    || parsed > MaxLspFrameBytes)
+                {
+                    return false;
+                }
+
                 contentLength = parsed;
             }
         }
@@ -383,7 +392,11 @@ internal sealed class LspServer : IDisposable
             if (value == '\n')
                 break;
             if (value != '\r')
+            {
+                if (bytes.Count >= MaxLspHeaderLineBytes)
+                    return null;
                 bytes.Add((byte)value);
+            }
         }
         return Encoding.ASCII.GetString(bytes.ToArray());
     }

@@ -28,6 +28,39 @@ public class LspServerTests
     }
 
     [Fact]
+    public void TryReadMessage_AcceptsHeaderLineAtMaxLength()
+    {
+        const string payload = "{}";
+        var maxLengthHeader = "X-" + new string('A', LspServer.MaxLspHeaderLineBytes - 2);
+        var bytes = Encoding.UTF8.GetBytes($"{maxLengthHeader}\r\nContent-Length: {payload.Length}\r\n\r\n{payload}");
+        using var stream = new MemoryStream(bytes);
+
+        Assert.True(LspServer.TryReadMessage(stream, out var actual));
+        Assert.Equal(payload, actual);
+    }
+
+    [Fact]
+    public void TryReadMessage_RejectsHeaderLineOverMaxLength()
+    {
+        var oversizedHeader = "X-" + new string('A', LspServer.MaxLspHeaderLineBytes - 1);
+        var bytes = Encoding.UTF8.GetBytes($"{oversizedHeader}\r\nContent-Length: 2\r\n\r\n{{}}");
+        using var stream = new MemoryStream(bytes);
+
+        Assert.False(LspServer.TryReadMessage(stream, out var actual));
+        Assert.Equal(string.Empty, actual);
+    }
+
+    [Fact]
+    public void TryReadMessage_RejectsFrameOverMaxLength()
+    {
+        var bytes = Encoding.UTF8.GetBytes($"Content-Length: {LspServer.MaxLspFrameBytes + 1}\r\n\r\n");
+        using var stream = new MemoryStream(bytes);
+
+        Assert.False(LspServer.TryReadMessage(stream, out var actual));
+        Assert.Equal(string.Empty, actual);
+    }
+
+    [Fact]
     public void HandleMessage_Initialize_AdvertisesCoreCapabilities()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_initialize");
