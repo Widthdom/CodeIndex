@@ -81,9 +81,11 @@ public class DbPathResolverTests
     public void ResolveDataDirForQuery_WithXdgPrefersAncestorWorkspaceDataDir()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_xdg_root_db");
+        var configHome = TestProjectHelper.CreateTempProject("cdidx_query_xdg_config");
         var xdgDir = Path.Combine(Path.GetTempPath(), $"cdidx_xdg_dir_{Guid.NewGuid():N}");
         try
         {
+            using var env = IsolateActiveWorkspace(configHome);
             var child = Path.Combine(projectRoot, "src", "App");
             Directory.CreateDirectory(child);
             var indexedRootResolution = DbPathResolver.ResolveDataDir(projectRoot, explicitDataDir: null, environmentDataDir: null, xdgDataHome: xdgDir);
@@ -98,6 +100,7 @@ public class DbPathResolverTests
         finally
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
+            TestProjectHelper.DeleteDirectory(configHome);
             TestProjectHelper.DeleteDirectory(xdgDir);
         }
     }
@@ -106,8 +109,10 @@ public class DbPathResolverTests
     public void ResolveDataDirForQuery_PrefersOutermostAncestorCdidx()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_root_db");
+        var configHome = TestProjectHelper.CreateTempProject("cdidx_query_root_config");
         try
         {
+            using var env = IsolateActiveWorkspace(configHome);
             var child = Path.Combine(projectRoot, "src", "App");
             Directory.CreateDirectory(child);
             Directory.CreateDirectory(Path.Combine(projectRoot, ".cdidx"));
@@ -121,6 +126,7 @@ public class DbPathResolverTests
         finally
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
+            TestProjectHelper.DeleteDirectory(configHome);
         }
     }
 
@@ -128,8 +134,10 @@ public class DbPathResolverTests
     public void ResolveDataDirForQuery_FallsBackToCurrentDirectoryWhenNoAncestorCdidxExists()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_no_root_db");
+        var configHome = TestProjectHelper.CreateTempProject("cdidx_query_no_root_config");
         try
         {
+            using var env = IsolateActiveWorkspace(configHome);
             var child = Path.Combine(projectRoot, "src", "App");
             Directory.CreateDirectory(child);
 
@@ -141,6 +149,7 @@ public class DbPathResolverTests
         finally
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
+            TestProjectHelper.DeleteDirectory(configHome);
         }
     }
 
@@ -699,5 +708,13 @@ public class DbPathResolverTests
         {
             TestProjectHelper.DeleteFile(dbPath);
         }
+    }
+
+    private static EnvironmentVariableScope IsolateActiveWorkspace(string configHome)
+    {
+        var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME");
+        env.Set(ActiveWorkspace.EnvironmentVariable, null);
+        env.Set("XDG_CONFIG_HOME", configHome);
+        return env;
     }
 }
