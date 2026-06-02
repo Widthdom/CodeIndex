@@ -50,6 +50,7 @@ The test project mirrors the production areas closely.
   publishes a trimmed RID-specific CLI and runs whichever entry point the SDK emits (`cdidx.dll` through `dotnet` or the native `cdidx`/`cdidx.exe` apphost). It is reported as skipped on macOS arm64 while SDK/ILLink can crash before exercising `cdidx` (#2586). Do not assume every SDK/runtime pair writes a `cdidx.dll` into self-contained publish output.
 - `QueryCommandRunnerTests.RunPublishedTrimmedCli_SearchSupportsCSharpRazorAliases`
   uses the same trimmed RID-specific publish path to verify C# Razor language aliases. It is also reported as skipped on macOS arm64 because the SDK/ILLink crash happens before the test reaches `cdidx`.
+  RID-specific publish helpers must route `NuGetLockFilePath` into the temporary publish output so local test runs do not add runtime sections to source `packages.lock.json` files (#2918).
 - `McpServerTests.cs`
   MCP JSON-RPC behavior and tool outputs.
 - `HttpMcpTransportTests.cs`
@@ -250,6 +251,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   は trimmed な RID 固有 CLI を publish し、SDK が生成した entry point（`dotnet` 経由の `cdidx.dll`、または native の `cdidx`/`cdidx.exe` apphost）を実行します。self-contained publish output に常に `cdidx.dll` が出るとは仮定しないでください。
 - `QueryCommandRunnerTests.RunPublishedTrimmedCli_SearchSupportsCSharpRazorAliases`
   は同じ trimmed RID 固有 publish 経路で C# Razor の言語 alias を検証します。このテストも macOS arm64 では、`cdidx` に到達する前に SDK/ILLink がクラッシュし得るため skipped として報告されます。
+  RID 固有 publish helper は `NuGetLockFilePath` を一時 publish 出力へ向け、ローカル test run が source の `packages.lock.json` に runtime section を追加しないようにしてください (#2918)。
 - `McpServerTests.cs`
   MCP の JSON-RPC 挙動とツール出力のテスト。
 - `GitHelperTests.cs`
