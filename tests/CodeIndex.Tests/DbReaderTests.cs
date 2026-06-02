@@ -149,6 +149,65 @@ public class DbReaderTests : IDisposable
         Assert.Contains(results, r => r.Path == "src/cafe.md");
     }
 
+    [Fact]
+    public void Search_GuardFiltersReadAcrossChunkBoundaries_Issue2852()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/chunked.cs",
+            Lang = "csharp",
+            Size = 128,
+            Lines = 5,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 3,
+                Content = "public void Guarded(string path)\n{\n    var length = new FileInfo(path).Length;",
+            },
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 1,
+                StartLine = 4,
+                EndLine = 5,
+                Content = "    var text = File.ReadAllText(path);\n}",
+            },
+        ]);
+
+        var requireResults = _reader.Search(
+            "File.ReadAllText",
+            exact: true,
+            pathPatterns: ["src/chunked.cs"],
+            guardFilters: [new SearchGuardFilter(SearchGuardRole.Require, SearchGuardDirection.Before, "Length")],
+            guardWindow: 2);
+        var rejectResults = _reader.Search(
+            "File.ReadAllText",
+            exact: true,
+            pathPatterns: ["src/chunked.cs"],
+            guardFilters: [new SearchGuardFilter(SearchGuardRole.Reject, SearchGuardDirection.Before, "Length")],
+            guardWindow: 2);
+        var cursorResults = _reader.Search(
+            "File.ReadAllText",
+            exact: true,
+            pathPatterns: ["src/chunked.cs"],
+            cursor: new SearchCursor(0, 0, 0),
+            guardFilters: [new SearchGuardFilter(SearchGuardRole.Require, SearchGuardDirection.Before, "Length")],
+            guardWindow: 2);
+
+        var result = Assert.Single(requireResults);
+        Assert.Equal(4, result.StartLine);
+        var evidence = Assert.Single(result.GuardEvidence!);
+        Assert.Equal(3, evidence.Line);
+        Assert.Empty(rejectResults);
+        Assert.Single(cursorResults);
+    }
+
     [Theory]
     [InlineData("rowid:authenticate", "rowid:")]
     [InlineData("title:authenticate", "title:")]
@@ -13792,6 +13851,93 @@ public class DbReaderTests : IDisposable
         Assert.Equal("public_or_exported_no_refs", Assert.Single(unused, symbol => symbol.Name == "TokenService").UnusedBucket);
         Assert.Equal("public_or_exported_no_refs", Assert.Single(unused, symbol => symbol.Name == "ApplyConfiguration").UnusedBucket);
         Assert.Equal("public_or_exported_no_refs", Assert.Single(unused, symbol => symbol.Name == "UseIOptions").UnusedBucket);
+    }
+
+    [Fact]
+    public void GetUnusedSymbols_NonSqlScope_FiltersReferencedPrivateSymbolsBeforeLimit()
+    {
+        const string path = "src/fast_unused_limit_fixture.cs";
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = path,
+            Lang = "csharp",
+            Size = 4096,
+            Lines = 80,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+
+        var content = new StringBuilder();
+        var symbols = new List<SymbolRecord>();
+        var references = new List<ReferenceRecord>();
+        for (var i = 0; i < 64; i++)
+        {
+            var name = $"UsedBeforeLimit{i:D2}";
+            var line = i + 1;
+            content.AppendLine($"    private void {name}() {{ }}");
+            symbols.Add(new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = name,
+                Line = line,
+                StartLine = line,
+                EndLine = line,
+                Signature = $"private void {name}() {{ }}",
+                Visibility = "private",
+                ContainerKind = "class",
+                ContainerName = "FastUnusedLimitFixture",
+            });
+            references.Add(new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = name,
+                ReferenceKind = "call",
+                Line = line,
+                Column = 17,
+                Context = $"{name}();",
+                ContainerKind = "class",
+                ContainerName = "FastUnusedLimitFixture",
+            });
+        }
+
+        content.AppendLine("    private void HiddenUnusedAfterReferencedPrefix() { }");
+        symbols.Add(new SymbolRecord
+        {
+            FileId = fileId,
+            Kind = "function",
+            Name = "HiddenUnusedAfterReferencedPrefix",
+            Line = 65,
+            StartLine = 65,
+            EndLine = 65,
+            Signature = "private void HiddenUnusedAfterReferencedPrefix() { }",
+            Visibility = "private",
+            ContainerKind = "class",
+            ContainerName = "FastUnusedLimitFixture",
+        });
+
+        _writer.InsertChunks([
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 65,
+                Content = content.ToString(),
+            }
+        ]);
+        _writer.InsertSymbols(symbols);
+        _writer.InsertReferences(references);
+
+        var unused = _reader.GetUnusedSymbols(limit: 1, kind: null, lang: "csharp",
+            pathPatterns: ["fast_unused_limit_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+        var count = _reader.CountUnusedSymbols(kind: null, lang: "csharp",
+            pathPatterns: ["fast_unused_limit_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+
+        var result = Assert.Single(unused);
+        Assert.Equal("HiddenUnusedAfterReferencedPrefix", result.Name);
+        Assert.Equal("likely_unused_private", result.UnusedBucket);
+        Assert.Equal(1, count.Count);
+        Assert.Equal(1, count.FileCount);
     }
 
     [Fact]

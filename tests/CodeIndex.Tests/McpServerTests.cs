@@ -3081,6 +3081,81 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_Search_GuardFiltersReturnEvidence_Issue2852()
+    {
+        InsertIndexedFile(
+            "src/guard-mcp.cs",
+            "csharp",
+            """
+            using System.IO;
+
+            public class GuardMcp
+            {
+                public void Atomic(string path, string tempPath)
+                {
+                    using var stream = new FileStream(path, FileMode.Create);
+                    File.Move(tempPath, path, overwrite: true);
+                }
+
+                public void NonAtomic(string path)
+                {
+                    using var stream = new FileStream(path, FileMode.Create);
+                }
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"FileMode.Create","exactSubstring":true,"requireAfter":"File.Move","guardWindow":2}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(1, structured["count"]!.GetValue<int>());
+        var result = structured["results"]![0]!;
+        Assert.Equal("src/guard-mcp.cs", result["path"]!.GetValue<string>());
+        var evidence = Assert.Single(result["guardEvidence"]!.AsArray());
+        Assert.Equal("require", evidence!["role"]!.GetValue<string>());
+        Assert.Equal("after", evidence["direction"]!.GetValue<string>());
+        Assert.Equal("File.Move", evidence["query"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Search_GuardPaginationResumesWithinSplitChunk_Issue2852()
+    {
+        InsertIndexedFile(
+            "src/guard-paged.cs",
+            "csharp",
+            """
+            using System.IO;
+
+            public class GuardPaged
+            {
+                public void First(string path)
+                {
+                    var one = File.ReadAllText(path);
+                }
+
+                public void Second(string path)
+                {
+                    var two = File.ReadAllText(path);
+                }
+            }
+            """);
+
+        var firstRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"File.ReadAllText","exactSubstring":true,"rejectBefore":"Length","guardWindow":1,"limit":1}}}""")!;
+        var firstResponse = _server.HandleMessage(firstRequest)!;
+        var firstStructured = firstResponse["result"]!["structuredContent"]!;
+        var firstSnippet = firstStructured["results"]![0]!["snippet"]!.GetValue<string>();
+        var cursor = firstStructured["next_cursor"]!.GetValue<string>();
+
+        var secondRequest = JsonNode.Parse("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"search\",\"arguments\":{\"query\":\"File.ReadAllText\",\"exactSubstring\":true,\"rejectBefore\":\"Length\",\"guardWindow\":1,\"limit\":1,\"cursor\":\"" + cursor + "\"}}}")!;
+        var secondResponse = _server.HandleMessage(secondRequest)!;
+        var secondStructured = secondResponse["result"]!["structuredContent"]!;
+        var secondSnippet = secondStructured["results"]![0]!["snippet"]!.GetValue<string>();
+
+        Assert.Contains("one", firstSnippet);
+        Assert.Contains("two", secondSnippet);
+    }
+
+    [Fact]
     public void ToolsCall_Search_ExactSubstringReturnsLiteralHighlightMetadata()
     {
         InsertIndexedFile("src/sql.cs", "csharp", "var CommandText = $\"SELECT 1\";\nvar CommandText = other;\n");

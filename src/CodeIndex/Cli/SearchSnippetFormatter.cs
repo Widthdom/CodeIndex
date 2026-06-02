@@ -51,6 +51,7 @@ public static class SearchSnippetFormatter
             TruncatedLineCount = excerpt.TruncatedLineCount,
             DroppedMatchLineCount = excerpt.DroppedMatchLineCount,
             TruncationContext = excerpt.TruncationContext,
+            GuardEvidence = result.GuardEvidence,
             Score = result.Score,
         };
     }
@@ -517,6 +518,8 @@ public sealed class CompactSearchResult
     public int TruncatedLineCount { get; set; }
     public int DroppedMatchLineCount { get; set; }
     public SearchTruncationContext TruncationContext { get; set; } = new();
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<SearchGuardEvidence>? GuardEvidence { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public SearchQueryHint? ExactSubstringHint { get; set; }
     public double Score { get; set; }

@@ -406,6 +406,71 @@ public partial class McpServer
             : [];
     }
 
+    private JsonNode? TryReadStringOrStringList(JsonNode? id, JsonNode? args, string propertyName, out List<string> values)
+    {
+        values = [];
+        var node = args?[propertyName];
+        if (node is null)
+            return null;
+
+        if (node is JsonValue singleValue && singleValue.TryGetValue<string>(out var singleText))
+        {
+            values.Add(singleText);
+            return null;
+        }
+
+        if (node is JsonArray array)
+        {
+            foreach (var item in array)
+            {
+                if (item is not JsonValue value || !value.TryGetValue<string>(out var text))
+                    return CreateToolErrorResponse(id, $"'{propertyName}' entries must be strings.");
+                values.Add(text);
+            }
+            return null;
+        }
+
+        return CreateToolErrorResponse(id, $"'{propertyName}' must be a string or string array.");
+    }
+
+    private JsonNode? TryReadSearchGuardFilters(JsonNode? id, JsonNode? args, out List<SearchGuardFilter> filters)
+    {
+        filters = [];
+        var collected = new List<SearchGuardFilter>();
+
+        JsonNode? AddFilters(string propertyName, SearchGuardRole role, SearchGuardDirection direction)
+        {
+            if (TryReadStringOrStringList(id, args, propertyName, out var values) is JsonNode readError)
+                return readError;
+
+            foreach (var value in values)
+            {
+                if (string.IsNullOrWhiteSpace(value))
+                    return CreateToolErrorResponse(id, $"'{propertyName}' entries must be non-empty strings.");
+                if (value.Length > QueryLimits.MaxQueryLength)
+                    return CreateToolErrorResponse(id, $"'{propertyName}' query too long (max {QueryLimits.MaxQueryLength} characters).");
+
+                collected.Add(new SearchGuardFilter(role, direction, value));
+            }
+
+            return null;
+        }
+
+        if (AddFilters("requireBefore", SearchGuardRole.Require, SearchGuardDirection.Before) is JsonNode requireBeforeError)
+            return requireBeforeError;
+        if (AddFilters("requireAfter", SearchGuardRole.Require, SearchGuardDirection.After) is JsonNode requireAfterError)
+            return requireAfterError;
+        if (AddFilters("rejectBefore", SearchGuardRole.Reject, SearchGuardDirection.Before) is JsonNode rejectBeforeError)
+            return rejectBeforeError;
+        if (AddFilters("rejectAfter", SearchGuardRole.Reject, SearchGuardDirection.After) is JsonNode rejectAfterError)
+            return rejectAfterError;
+
+        filters = collected;
+        return filters.Count > DbReader.MaxSearchGuardFilters
+            ? CreateToolErrorResponse(id, $"search accepts at most {DbReader.MaxSearchGuardFilters} guard filters; got {filters.Count}.")
+            : null;
+    }
+
     private static JsonObject? ValidateCommonListArguments(JsonNode? args)
     {
         foreach (var propertyName in new[] { "path", "project", "excludePaths", "names" })
@@ -494,10 +559,11 @@ public partial class McpServer
         {
             "limit" or "offset" or "snippetLines" or "maxLineWidth" or "before" or "after" or
                 "focusLine" or "focusColumn" or "focusLength" or "startLine" or "endLine" or
-                "maxHops" or "maxDepth" or "depth" or "parallelism" or "maxFileBytes" => "integer",
+                "maxHops" or "maxDepth" or "depth" or "parallelism" or "maxFileBytes" or "guardWindow" => "integer",
             "excludeTests" or "includeGenerated" or "rawQuery" or "noDedup" or "exactSubstring" or
                 "exactName" or "exact" or "prefix" or "countOnly" or "includeBody" or "lsp_compatible" or
                 "regex" or "withPaths" or "rebuild" or "dryRun" or "dry_run" or "force" or "optimize" => "boolean",
+            "requireBefore" or "requireAfter" or "rejectBefore" or "rejectAfter" => "string_or_array",
             "query" or "lang" or "kind" or "format" or "rankBy" or "since" or "path" or "project" or
                 "solution" or "symbol" or "direction" or "groupBy" or "category" or "language" or
                 "description" or "context" or "toolInvocationContext" or "db" => "string",
@@ -516,6 +582,7 @@ public partial class McpServer
         "integer" => node is JsonValue value && value.TryGetValue<int>(out _),
         "boolean" => node is JsonValue value && value.TryGetValue<bool>(out _),
         "string" => node is JsonValue value && value.TryGetValue<string>(out _),
+        "string_or_array" => node is JsonArray || node is JsonValue value && value.TryGetValue<string>(out _),
         "array" => node is JsonArray,
         _ => true,
     };
@@ -548,7 +615,7 @@ public partial class McpServer
 
     private static IReadOnlySet<string> GetAllowedToolArguments(string toolName) => toolName switch
     {
-        "search" => new HashSet<string>(StringComparer.Ordinal) { "query", "limit", "lang", "snippetLines", "maxLineWidth", "rawQuery", "cursor", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "noDedup", "exactSubstring", "exact", "prefix", "countOnly", "format", "project", "solution" },
+        "search" => new HashSet<string>(StringComparer.Ordinal) { "query", "limit", "lang", "snippetLines", "maxLineWidth", "rawQuery", "cursor", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "noDedup", "exactSubstring", "exact", "prefix", "requireBefore", "requireAfter", "rejectBefore", "rejectAfter", "guardWindow", "countOnly", "format", "project", "solution" },
         "definition" => new HashSet<string>(StringComparer.Ordinal) { "query", "kind", "lang", "limit", "includeBody", "lsp_compatible", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "exactName", "exact", "format", "project", "solution" },
         "references" => new HashSet<string>(StringComparer.Ordinal) { "query", "kind", "lang", "limit", "offset", "maxLineWidth", "lsp_compatible", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "countOnly", "format", "project", "solution" },
         "callers" or "callees" => new HashSet<string>(StringComparer.Ordinal) { "query", "kind", "rankBy", "lang", "limit", "offset", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "countOnly", "format", "project", "solution" },
@@ -998,13 +1065,18 @@ public partial class McpServer
         var prefix = args?["prefix"]?.GetValue<bool>() ?? false;
         if (prefix && exact)
             return CreateToolErrorResponse(id, "'prefix' cannot be combined with 'exact' / 'exactSubstring' (exact uses instr(), not FTS5 prefix phrases).");
+        if (TryReadSearchGuardFilters(id, args, out var guardFilters) is JsonNode guardError)
+            return guardError;
+        var guardWindow = args?["guardWindow"]?.GetValue<int>() ?? DbReader.DefaultSearchGuardWindow;
+        if (guardWindow < 0 || guardWindow > DbReader.MaxSearchGuardWindow)
+            return CreateToolErrorResponse(id, $"'guardWindow' must be between 0 and {DbReader.MaxSearchGuardWindow}; got {guardWindow}.");
         var suggestExactSubstring = SearchQueryAdvisor.ShouldSuggestExactSubstring(query, rawQuery, exact, prefix);
 
         return WithDbReader(id, args, reader =>
         {
             if (countOnly)
             {
-                var countResults = reader.Search(query, MaxLimit, lang, rawQuery, pathPatterns, excludePaths, excludeTests, deduplicate, since, exact, prefix);
+                var countResults = reader.Search(query, MaxLimit, lang, rawQuery, pathPatterns, excludePaths, excludeTests, deduplicate, since, exact, prefix, guardFilters: guardFilters, guardWindow: guardWindow);
                 var truncatedCount = countResults.Count >= MaxLimit;
                 var payload = BuildCountOnlyPayload(countResults.Count, truncatedCount ? null : countResults.Count, truncatedCount, countResults, result => result.Path);
                 payload["query"] = query;
@@ -1019,7 +1091,7 @@ public partial class McpServer
                 return CreateToolResult(id, $"Counted {countResults.Count} search result(s).", payload);
             }
 
-            var results = reader.Search(query, FetchLimitForEnvelope(limit), lang, rawQuery, pathPatterns, excludePaths, excludeTests, deduplicate, since, exact, prefix, cursor: cursor);
+            var results = reader.Search(query, FetchLimitForEnvelope(limit), lang, rawQuery, pathPatterns, excludePaths, excludeTests, deduplicate, since, exact, prefix, cursor: cursor, guardFilters: guardFilters, guardWindow: guardWindow);
             var ftsDiagnostics = DbReader.AnalyzeFtsQuery(query, rawQuery, prefix, lang);
             var truncated = TrimToRequestedLimit(results, limit);
             if (results.Count == 0)

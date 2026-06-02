@@ -1223,7 +1223,7 @@ Process exit codes are coarse (`0` success including valid zero-row queries, `1`
 
 - **Cross-compiled linux-arm64 without runtime smoke test** — The `release.yml` workflow cross-compiles `linux-arm64` on an x64 runner (`dotnet publish -r linux-arm64 --self-contained`). Tests are skipped because the runner cannot execute ARM binaries natively. Ideally, a QEMU-based smoke test (`cdidx --version`) would run before publishing, but GitHub Actions free-tier runners do not include QEMU or ARM runners. Adding a QEMU setup step is possible but increases CI complexity and wall-clock time for every release. .NET's cross-compilation is an officially supported and widely used feature, so the risk of a broken artifact is low in practice. If ARM-specific failures are reported in the future, adding `docker run --platform linux/arm64` with QEMU should be the first mitigation step.
 - **CLI / MCP only — no public library API (#1557)** — The `cdidx` assembly is shipped as `OutputType=Exe` with `PackAsTool=true` and is published as a .NET global tool, not as a referenceable library. The supported, versioned surfaces are the `cdidx` CLI (including its `--json` output) and the `cdidx mcp` JSON-RPC server. `public` types on the assembly (for example `CodeIndex.Database.DbReader` and DTOs in `CodeIndex.Models` / `CodeIndex.Database`) exist to satisfy CLI / MCP composition and the `CodeIndex.Tests` `InternalsVisibleTo` boundary — they are implementation details that may change, move, or become `internal` without a deprecation cycle. Embedders are expected to depend on the CLI / MCP / JSON surfaces, not on the assembly. See [INTEGRATION_POLICY.md — API Surface and Library Use](INTEGRATION_POLICY.md#api-surface-and-library-use). If a real library API is ever justified, it will be carved out as a separate package with its own interface and versioning contract rather than being implied by whatever happens to be `public` on this assembly.
-- **Extractor plugins (#1937)** — `CodeIndex.Indexer.Extensibility.ISymbolExtractor` and `IReferenceExtractor` are the only supported assembly-extension surface. `cdidx` discovers trusted plugin DLLs in workspace `.cdidx/plugins/` and user `~/.cdidx/plugins/`. A plugin assembly must declare `[assembly: CdidxPlugin(minApiVersion: 1, maxApiVersion: 1)]` and expose a public parameterless type implementing one or both interfaces. Set `FileExtensions` when the plugin owns new file extensions so `FileIndexer` can route those files to the plugin language. Plugins run inside the `cdidx` process and are not sandboxed; install only trusted local DLLs. This narrow contract lets teams add DSL-specific symbols/references without forking CodeIndex, but it is not a general library/SDK embedding API.
+- **Extractor plugins (#1937)** — `CodeIndex.Indexer.Extensibility.ISymbolExtractor` and `IReferenceExtractor` are the only supported assembly-extension surface. `cdidx` discovers trusted plugin DLLs in the user-owned `~/.cdidx/plugins/` directory by default. Workspace `.cdidx/plugins/` DLL discovery is fail-closed unless the process sets `CDIDX_TRUST_WORKSPACE_PLUGINS=1` (also accepts `true`, `yes`, or `on`), because loading a workspace DLL executes checkout-provided code inside the `cdidx` process. A plugin assembly must declare `[assembly: CdidxPlugin(minApiVersion: 1, maxApiVersion: 1)]` and expose a public parameterless type implementing one or both interfaces. Set `FileExtensions` when the plugin owns new file extensions so `FileIndexer` can route those files to the plugin language. Plugins run inside the `cdidx` process and are not sandboxed; install only trusted local DLLs. This narrow contract lets teams add DSL-specific symbols/references without forking CodeIndex, but it is not a general library/SDK embedding API.
 
 <a id="reference-kind-filtering-matrix"></a>
 
@@ -3251,7 +3251,10 @@ Downstream users can add lightweight language support without rebuilding
   workspace ancestor `.cdidx-langmap.yaml`; workspace entries override user
   entries;
 - regex-backed symbol patterns are read from `.cdidx/patterns/*.yaml` and
-  `~/.config/cdidx/patterns/*.yaml`;
+  `~/.config/cdidx/patterns/*.yaml`; sidecars must be regular files under
+  non-symlink pattern directories, each file is capped at 64 KiB / 128 rules,
+  the process loads at most 128 configured rules total, and regex matches use a
+  100 ms timeout;
 - `cdidx test-extractor --language <lang> --file <path> --json` runs symbol
   extraction without building an index, and `--expect-symbols <json>` compares
   the extracted JSON to a fixture.
@@ -3276,8 +3279,9 @@ patterns:
 ```
 
 Each configured regex should expose a named `name` capture. If it does not,
-`cdidx` uses the full match text as the symbol name. Invalid sidecar files are
-ignored so a broken local experiment does not prevent indexing.
+`cdidx` uses the full match text as the symbol name. Invalid, symlinked,
+oversized, or over-budget sidecar files are skipped with a stderr diagnostic so
+a broken local experiment does not prevent indexing.
 
 ## カスタム言語抽出
 
@@ -3286,9 +3290,15 @@ ignored so a broken local experiment does not prevent indexing.
 - 拡張子 alias は `~/.config/cdidx/langmap.yaml` と、最初に見つかった workspace
   祖先の `.cdidx-langmap.yaml` から読み込まれ、workspace 側が user 側を上書きします。
 - regex ベースのシンボルパターンは `.cdidx/patterns/*.yaml` と
-  `~/.config/cdidx/patterns/*.yaml` から読み込まれます。
+  `~/.config/cdidx/patterns/*.yaml` から読み込まれます。sidecar は symlink ではない
+  pattern directory 配下の通常ファイルのみが対象で、各ファイルは 64 KiB / 128 ルール、
+  プロセス全体では configured rule 128 件に制限され、regex match には 100 ms の timeout が付きます。
 - `cdidx test-extractor --language <lang> --file <path> --json` は index を作らずに
   symbol extraction だけを実行し、`--expect-symbols <json>` で fixture JSON と比較できます。
+
+各 regex は `name` という名前付き capture を公開することを推奨します。存在しない場合、
+`cdidx` は match 全体の文字列を symbol 名として使います。無効、symlink、過大、または
+上限超過の sidecar は stderr の診断付きで skip されるため、壊れたローカル実験が indexing を止めません。
 
 ## SQLite reader のデバッグ
 

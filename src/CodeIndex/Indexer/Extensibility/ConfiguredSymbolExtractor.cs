@@ -8,6 +8,10 @@ internal sealed class ConfiguredSymbolExtractor(
     IReadOnlyCollection<string> fileExtensions,
     IReadOnlyList<ConfiguredSymbolExtractor.PatternRule> patterns) : ISymbolExtractor
 {
+    private readonly object timeoutGate = new();
+    private readonly HashSet<PatternRule> disabledTimeoutPatterns = [];
+    private readonly HashSet<string> timeoutWarnings = new(StringComparer.Ordinal);
+
     internal sealed record PatternRule(string Kind, Regex Regex);
 
     public string Language { get; } = language;
@@ -23,7 +27,20 @@ internal sealed class ConfiguredSymbolExtractor(
             lineNumber++;
             foreach (var pattern in patterns)
             {
-                var match = pattern.Regex.Match(line);
+                if (IsPatternDisabled(pattern))
+                    continue;
+
+                Match match;
+                try
+                {
+                    match = pattern.Regex.Match(line);
+                }
+                catch (RegexMatchTimeoutException)
+                {
+                    DisablePatternAfterTimeout(pattern);
+                    continue;
+                }
+
                 if (!match.Success)
                     continue;
 
@@ -46,5 +63,27 @@ internal sealed class ConfiguredSymbolExtractor(
         }
 
         return symbols;
+    }
+
+    private bool IsPatternDisabled(PatternRule pattern)
+    {
+        lock (timeoutGate)
+            return disabledTimeoutPatterns.Contains(pattern);
+    }
+
+    private void DisablePatternAfterTimeout(PatternRule pattern)
+    {
+        var shouldReport = false;
+        lock (timeoutGate)
+        {
+            disabledTimeoutPatterns.Add(pattern);
+            shouldReport = timeoutWarnings.Add(pattern.Kind + "\0" + pattern.Regex);
+        }
+
+        if (!shouldReport)
+            return;
+
+        Console.Error.WriteLine(
+            $"[cdidx] Pattern extractor for language '{Language}' kind '{pattern.Kind}' timed out after {(int)ExtractorPluginRegistry.PatternRegexTimeout.TotalMilliseconds}ms; skipped this pattern.");
     }
 }

@@ -432,6 +432,8 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(RepoModuleResult))]
 [JsonSerializable(typeof(ReportBundleSummary))]
 [JsonSerializable(typeof(SearchHighlight))]
+[JsonSerializable(typeof(SearchGuardEvidence))]
+[JsonSerializable(typeof(List<SearchGuardEvidence>))]
 [JsonSerializable(typeof(SearchQueryHint))]
 [JsonSerializable(typeof(SearchResult))]
 [JsonSerializable(typeof(SearchTermOccurrence))]

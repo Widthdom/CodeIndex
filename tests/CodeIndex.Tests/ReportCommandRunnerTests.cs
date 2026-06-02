@@ -196,6 +196,32 @@ public class ReportCommandRunnerTests
     }
 
     [Fact]
+    public void WriteBundle_FailurePreservesExistingBundle()
+    {
+        var workDir = CreateWorkDir();
+        try
+        {
+            var output = Path.Combine(workDir, "bundle.tgz");
+            File.WriteAllText(output, "existing bundle");
+            var bundle = new ReportBundle();
+            bundle.AddText("metadata.txt", "partial");
+
+            Assert.Throws<IOException>(() =>
+                ReportCommandRunner.WriteBundle(
+                    output,
+                    bundle,
+                    beforeWriteEntries: () => throw new IOException("simulated report failure")));
+
+            Assert.Equal("existing bundle", File.ReadAllText(output));
+            Assert.Single(Directory.GetFiles(workDir));
+        }
+        finally
+        {
+            TryDeleteDirectory(workDir);
+        }
+    }
+
+    [Fact]
     public void Run_WithRealDb_SchemaTxtListsTablesAndRowCounts()
     {
         var workDir = CreateWorkDir();

@@ -62,6 +62,7 @@ cdidx status --check --json
 cdidx search "handleRequest"
 cdidx definition UserService
 cdidx search "Handle" --project MyApp
+cdidx search "File.ReadAllText" --exact-substring --reject-before "Length" --guard-window 8
 cdidx validate
 cdidx mcp
 cdidx lsp --db .cdidx/codeindex.db
@@ -70,7 +71,9 @@ cdidx lsp --db .cdidx/codeindex.db
 Custom language loops can stay out of tree: put extension aliases in
 `.cdidx-langmap.yaml`, put regex symbol patterns in `.cdidx/patterns/*.yaml`,
 and run `cdidx test-extractor --language <lang> --file <path> --json` to test
-an extractor fixture without building a full index. See
+an extractor fixture without building a full index. Pattern sidecars are
+limited to regular files under non-symlink pattern directories, size/count
+bounded per file and per process, and regex matches are time-limited. See
 [Custom Language Extraction](DEVELOPER_GUIDE.md#custom-language-extraction).
 
 After the first command, use these cues and follow-up commands:
@@ -350,6 +353,7 @@ cdidx status --check --json
 cdidx search "handleRequest"
 cdidx definition UserService
 cdidx search "Handle" --project MyApp
+cdidx search "File.ReadAllText" --exact-substring --reject-before "Length" --guard-window 8
 cdidx validate
 cdidx mcp
 cdidx lsp --db .cdidx/codeindex.db
@@ -358,7 +362,9 @@ cdidx lsp --db .cdidx/codeindex.db
 カスタム言語の開発ループは out-of-tree で回せます。拡張子 alias は
 `.cdidx-langmap.yaml`、regex シンボルパターンは `.cdidx/patterns/*.yaml` に置き、
 `cdidx test-extractor --language <lang> --file <path> --json` で full index を作らずに
-extractor fixture を確認できます。詳細は
+extractor fixture を確認できます。pattern sidecar は symlink ではない pattern directory
+配下の通常ファイルだけが対象で、size / count は file 単位と process 単位で制限され、
+regex match には timeout が付きます。詳細は
 [Custom Language Extraction](DEVELOPER_GUIDE.md#custom-language-extraction) を参照してください。
 
 初回実行後は、次の見方と追加コマンドをよく使います。
