@@ -707,6 +707,34 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void Search_ReturnsEnclosingSymbolForActualMatchLine_Issue2838()
+    {
+        const string token = "issue2838_multifunction_needle";
+        InsertIndexedFile("src/issue2838/MultiFunctionSearch.cs", "csharp",
+            $$"""
+            namespace Issue2838;
+
+            public sealed class MultiFunctionSearch
+            {
+                public void Tiny() { }
+
+                public void Larger()
+                {
+                    var message = "{{token}}";
+                    Console.WriteLine(message);
+                }
+            }
+            """);
+
+        var result = Assert.Single(_reader.Search(token, lang: "csharp")
+            .Where(result => result.Path == "src/issue2838/MultiFunctionSearch.cs"));
+
+        Assert.Equal("Larger", result.EnclosingSymbolName);
+        Assert.Equal("function", result.EnclosingSymbolKind);
+        Assert.Equal("MultiFunctionSearch", result.EnclosingContainerName);
+    }
+
+    [Fact]
     public void GetSymbolHotspots_RanksRealCallsAboveManyLowerWeightSubscribeEdges()
     {
         var fileId = _writer.UpsertFile(new FileRecord

@@ -124,12 +124,7 @@ public partial class DbReader
                 SELECT f.path, f.lang, c.start_line, c.end_line, c.content,
                        0.0 AS rank,
                        {GetSearchVisibilitySql()} AS visibility,
-                       c.id AS chunk_id,
-                       {GetSearchEnclosingSymbolColumnSql("s_enclosing.name")} AS enclosing_symbol_name,
-                       {GetSearchEnclosingSymbolColumnSql("s_enclosing.kind")} AS enclosing_symbol_kind,
-                       {GetSearchEnclosingSymbolColumnSql(GetSymbolColumnSql("start_line", "s_enclosing.line", "s_enclosing"))} AS enclosing_symbol_start_line,
-                       {GetSearchEnclosingSymbolColumnSql(GetSymbolColumnSql("end_line", "s_enclosing.line", "s_enclosing"))} AS enclosing_symbol_end_line,
-                       {GetSearchEnclosingSymbolColumnSql(GetSymbolColumnSql("container_name", symbolAlias: "s_enclosing"))} AS enclosing_container_name
+                       c.id AS chunk_id
                 FROM chunks c
                 JOIN files f ON c.file_id = f.id{SearchSymbolMatchJoinsSql}
                 WHERE instr(
@@ -146,12 +141,7 @@ public partial class DbReader
                 SELECT f.path, f.lang, c.start_line, c.end_line, c.content,
                        rank,
                        {GetSearchVisibilitySql()} AS visibility,
-                       c.id AS chunk_id,
-                       {GetSearchEnclosingSymbolColumnSql("s_enclosing.name")} AS enclosing_symbol_name,
-                       {GetSearchEnclosingSymbolColumnSql("s_enclosing.kind")} AS enclosing_symbol_kind,
-                       {GetSearchEnclosingSymbolColumnSql(GetSymbolColumnSql("start_line", "s_enclosing.line", "s_enclosing"))} AS enclosing_symbol_start_line,
-                       {GetSearchEnclosingSymbolColumnSql(GetSymbolColumnSql("end_line", "s_enclosing.line", "s_enclosing"))} AS enclosing_symbol_end_line,
-                       {GetSearchEnclosingSymbolColumnSql(GetSymbolColumnSql("container_name", symbolAlias: "s_enclosing"))} AS enclosing_container_name
+                       c.id AS chunk_id
                 FROM fts_chunks
                 JOIN chunks c ON fts_chunks.rowid = c.id
                 JOIN files f ON c.file_id = f.id{SearchSymbolMatchJoinsSql}";
@@ -206,11 +196,6 @@ public partial class DbReader
                     Score = reader.GetDouble(5),
                     Visibility = GetNullableString(reader, 6),
                     ChunkId = reader.GetInt64(7),
-                    EnclosingSymbolName = GetNullableString(reader, 8),
-                    EnclosingSymbolKind = GetNullableString(reader, 9),
-                    EnclosingSymbolStartLine = GetNullableInt32(reader, 10),
-                    EnclosingSymbolEndLine = GetNullableInt32(reader, 11),
-                    EnclosingContainerName = GetNullableString(reader, 12),
                     NextOffset = nextOffset,
                 });
             }
@@ -224,37 +209,133 @@ public partial class DbReader
             raw = FilterBySearchGuards(raw, query, normalizedQuery, rawQuery, exact, lang, guardFilters!, guardWindow);
 
         var results = deduplicate ? DeduplicateOverlappingResults(raw) : raw;
+        AttachSearchEnclosingSymbols(results, query, exact);
         return hasGuardFilters ? PageGuardedSearchResults(results, limit, cursor) : results;
     }
 
-    private string GetSearchEnclosingSymbolColumnSql(string columnSql)
+    private void AttachSearchEnclosingSymbols(IReadOnlyList<SearchResult> results, string query, bool caseSensitive)
     {
-        var startLineSql = GetSymbolColumnSql("start_line", "s_enclosing.line", "s_enclosing");
-        var endLineSql = GetSymbolColumnSql("end_line", "s_enclosing.line", "s_enclosing");
-        return $@"
-            (
-                SELECT {columnSql}
-                FROM symbols s_enclosing
-                WHERE s_enclosing.file_id = f.id
-                  AND {startLineSql} <= c.end_line
-                  AND {endLineSql} >= c.start_line
-                ORDER BY CASE s_enclosing.kind
-                             WHEN 'function' THEN 0
-                             WHEN 'test.method' THEN 0
-                             WHEN 'property' THEN 1
-                             WHEN 'class' THEN 2
-                             WHEN 'interface' THEN 2
-                             WHEN 'struct' THEN 2
-                             WHEN 'enum' THEN 2
-                             ELSE 3
-                         END,
-                         ({endLineSql} - {startLineSql}) ASC,
-                         {startLineSql} DESC,
-                         s_enclosing.line DESC,
-                         s_enclosing.id ASC
-                LIMIT 1
-            )";
+        foreach (var result in results)
+        {
+            var matchLine = GetFirstSearchMatchLine(result, query, caseSensitive);
+            if (!matchLine.HasValue)
+                continue;
+
+            var symbol = GetSearchEnclosingSymbol(result.Path, matchLine.Value);
+            if (symbol == null)
+                continue;
+
+            result.EnclosingSymbolName = symbol.Name;
+            result.EnclosingSymbolKind = symbol.Kind;
+            result.EnclosingSymbolStartLine = symbol.StartLine;
+            result.EnclosingSymbolEndLine = symbol.EndLine;
+            result.EnclosingContainerName = symbol.ContainerName;
+        }
     }
+
+    private static int? GetFirstSearchMatchLine(SearchResult result, string query, bool caseSensitive)
+    {
+        var lines = result.Content.Replace("\r\n", "\n").Split('\n');
+        if (lines.Length == 0)
+            return null;
+
+        var normalizedQuery = ExactSourceSearchNormalizer.Normalize(query.Trim(), result.Lang);
+        var normalizedLines = new string[lines.Length];
+        for (int i = 0; i < lines.Length; i++)
+            normalizedLines[i] = ExactSourceSearchNormalizer.Normalize(lines[i], result.Lang);
+
+        var tokens = query
+            .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
+            .Select(NormalizeSearchSnippetToken)
+            .Where(token => token.Length > 0)
+            .Where(token => token is not "AND" and not "OR" and not "NOT" and not "NEAR")
+            .Select(token => ExactSourceSearchNormalizer.Normalize(token, result.Lang))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        var matchIndexes = FindSearchMatchingLineIndexes(normalizedLines, normalizedQuery, tokens, caseSensitive);
+        return matchIndexes.Count > 0 ? result.StartLine + matchIndexes[0] : null;
+    }
+
+    private static List<int> FindSearchMatchingLineIndexes(string[] lines, string query, string[] tokens, bool caseSensitive)
+    {
+        var comparison = caseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+        var matches = new List<int>();
+
+        if (!string.IsNullOrWhiteSpace(query))
+        {
+            for (int i = 0; i < lines.Length; i++)
+            {
+                if (lines[i].Contains(query, comparison))
+                    matches.Add(i);
+            }
+        }
+
+        if (matches.Count > 0 || tokens.Length == 0)
+            return matches;
+
+        for (int i = 0; i < lines.Length; i++)
+        {
+            if (tokens.Any(token => lines[i].Contains(token, comparison)))
+                matches.Add(i);
+        }
+
+        return matches;
+    }
+
+    private static string NormalizeSearchSnippetToken(string token)
+        => token
+            .Trim('"', '\'', '(', ')')
+            .TrimEnd('*');
+
+    private SearchEnclosingSymbol? GetSearchEnclosingSymbol(string path, int matchLine)
+    {
+        using var cmd = _conn.CreateCommand();
+        var startLineSql = GetSymbolColumnSql("start_line", "s.line", "s");
+        var endLineSql = GetSymbolColumnSql("end_line", "s.line", "s");
+        var containerNameSql = GetSymbolColumnSql("container_name", symbolAlias: "s");
+        cmd.CommandText = $@"
+            SELECT s.name,
+                   s.kind,
+                   {startLineSql} AS start_line,
+                   {endLineSql} AS end_line,
+                   {containerNameSql} AS container_name
+            FROM symbols s
+            JOIN files f ON s.file_id = f.id
+            WHERE f.path = @path
+              AND {startLineSql} <= @matchLine
+              AND {endLineSql} >= @matchLine
+            ORDER BY CASE s.kind
+                         WHEN 'function' THEN 0
+                         WHEN 'test.method' THEN 0
+                         WHEN 'property' THEN 1
+                         WHEN 'class' THEN 2
+                         WHEN 'interface' THEN 2
+                         WHEN 'struct' THEN 2
+                         WHEN 'enum' THEN 2
+                         ELSE 3
+                     END,
+                     ({endLineSql} - {startLineSql}) ASC,
+                     {startLineSql} DESC,
+                     s.line DESC,
+                     s.id ASC
+            LIMIT 1";
+        cmd.Parameters.AddWithValue("@path", path);
+        cmd.Parameters.AddWithValue("@matchLine", matchLine);
+
+        using var reader = cmd.ExecuteTrackedReader();
+        if (!reader.TrackedRead())
+            return null;
+
+        return new SearchEnclosingSymbol(
+            reader.GetString(0),
+            reader.GetString(1),
+            reader.GetInt32(2),
+            reader.GetInt32(3),
+            GetNullableString(reader, 4));
+    }
+
+    private sealed record SearchEnclosingSymbol(string Name, string Kind, int StartLine, int EndLine, string? ContainerName);
 
     public QueryCountResult CountSearchResults(string query, string? lang = null, bool rawQuery = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool deduplicate = true, DateTime? since = null, bool exact = false, bool prefix = false, bool visibilityRank = true, IReadOnlyList<SearchGuardFilter>? guardFilters = null, int guardWindow = DefaultSearchGuardWindow)
     {
