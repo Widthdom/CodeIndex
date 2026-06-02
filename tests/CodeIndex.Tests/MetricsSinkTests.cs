@@ -101,6 +101,71 @@ public class MetricsSinkTests
     }
 
     [Fact]
+    public void Run_WithMetricsFlag_OnUnixCreatesPrivateFile()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var metricsPath = Path.Combine(Path.GetTempPath(), $"cdidx_metrics_private_{Guid.NewGuid():N}.jsonl");
+        try
+        {
+            var (exitCode, _, _) = CaptureConsole(() => ProgramRunner.Run(
+                ["--metrics", metricsPath, "definitely-not-a-command"],
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(PrivateLogFile.PrivateFileMode, File.GetUnixFileMode(metricsPath));
+        }
+        finally
+        {
+            if (File.Exists(metricsPath))
+                File.Delete(metricsPath);
+        }
+    }
+
+    [Fact]
+    public void Record_RotatesMetricsLogAtMaxBytes()
+    {
+        var metricsPath = Path.Combine(Path.GetTempPath(), $"cdidx_metrics_rotate_{Guid.NewGuid():N}.jsonl");
+        try
+        {
+            using var session = MetricsSink.TryStartForTesting(metricsPath, maxBytes: 1024);
+            Assert.NotNull(session);
+
+            MetricsSink.Record(new MetricsEvent(
+                Timestamp: DateTimeOffset.UtcNow,
+                Tool: "search",
+                Source: "cli",
+                ElapsedMs: 1.0,
+                ExitCode: 1,
+                Error: new string('x', 2000)));
+            MetricsSink.Record(new MetricsEvent(
+                Timestamp: DateTimeOffset.UtcNow,
+                Tool: "status",
+                Source: "cli",
+                ElapsedMs: 1.0,
+                ExitCode: 0));
+
+            Assert.True(File.Exists(metricsPath + ".1"));
+            Assert.True(File.Exists(metricsPath));
+            Assert.False(File.Exists(metricsPath + ".3"));
+            if (!OperatingSystem.IsWindows())
+            {
+                Assert.Equal(PrivateLogFile.PrivateFileMode, File.GetUnixFileMode(metricsPath + ".1"));
+                Assert.Equal(PrivateLogFile.PrivateFileMode, File.GetUnixFileMode(metricsPath));
+            }
+        }
+        finally
+        {
+            foreach (var path in new[] { metricsPath, metricsPath + ".1", metricsPath + ".2", metricsPath + ".3" })
+            {
+                if (File.Exists(path))
+                    File.Delete(path);
+            }
+        }
+    }
+
+    [Fact]
     public void Run_WithEnvVarFallback_StillEmitsMetrics()
     {
         var metricsPath = Path.Combine(Path.GetTempPath(), $"cdidx_metrics_env_{Guid.NewGuid():N}.jsonl");
