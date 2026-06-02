@@ -151,6 +151,8 @@ internal static partial class SolutionProjectResolver
         var start = Path.GetFullPath(startDirectory);
         if (!IsPathEqualOrParent(root, start) || indexer.EvaluatePathFilter(start, isDirectory: true).ShouldSkip)
             yield break;
+        if (!PathCasing.PathsEqual(root, start) && indexer.ShouldSkipDirectoryTraversal(start))
+            yield break;
 
         var pending = new Stack<string>();
         pending.Push(start);
@@ -159,6 +161,8 @@ internal static partial class SolutionProjectResolver
             var directory = pending.Pop();
             foreach (var childDirectory in Directory.EnumerateDirectories(directory))
             {
+                if (indexer.ShouldSkipDirectoryTraversal(childDirectory))
+                    continue;
                 if (!indexer.EvaluatePathFilter(childDirectory, isDirectory: true).ShouldSkip)
                     pending.Push(childDirectory);
             }

@@ -1426,6 +1426,12 @@ public class FileIndexer
         return true;
     }
 
+    internal bool ShouldSkipDirectoryTraversal(string directory)
+        => ShouldSkipDirectoryLink(
+            directory,
+            errors: new List<ScanError>(),
+            danglingSymlinks: new HashSet<string>(StringComparer.Ordinal));
+
     private static string GetDirectoryTraversalIdentity(string directory)
     {
         if (!IsReparsePoint(directory))
