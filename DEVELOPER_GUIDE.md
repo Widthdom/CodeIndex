@@ -126,9 +126,9 @@ metadata sidecars and the active workspace `active.json` state file are also
 written as owner-only files and read through small bounded buffers so stale or
 corrupted diagnostics cannot expose local paths more broadly or force unbounded
 allocation. Database checkpoint roots, snapshot directories, manifest files,
-and copied DB/WAL/SHM snapshots are also forced owner-only on POSIX. `status
---json` reports `data_dir_mode` and `db_file_mode` when the platform exposes
-Unix file modes.
+copied DB/WAL/SHM snapshots, and restore staging/backup directories are also
+forced owner-only on POSIX. `status --json` reports `data_dir_mode` and
+`db_file_mode` when the platform exposes Unix file modes.
 
 ## Release Distribution Checklist
 
