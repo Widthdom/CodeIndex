@@ -15,25 +15,28 @@ internal static class UpdateChecker
     private static readonly TimeSpan CacheTtl = TimeSpan.FromHours(24);
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(2);
 
-    internal static string? GetNewerReleaseHint(string currentVersion)
+    internal static string? GetNewerReleaseHint(string currentVersion, CancellationToken cancellationToken = default)
         => GetNewerReleaseHint(
             currentVersion,
             ResolveDefaultCachePath(),
             DateTimeOffset.UtcNow,
-            FetchLatestReleaseTagAsync);
+            FetchLatestReleaseTagAsync,
+            cancellationToken);
 
-    internal static UpdateCheckResult Check(string currentVersion)
+    internal static UpdateCheckResult Check(string currentVersion, CancellationToken cancellationToken = default)
         => Check(
             currentVersion,
             ResolveDefaultCachePath(),
             DateTimeOffset.UtcNow,
-            FetchLatestReleaseTagAsync);
+            FetchLatestReleaseTagAsync,
+            cancellationToken);
 
     internal static UpdateCheckResult Check(
         string currentVersion,
         string cachePath,
         DateTimeOffset now,
-        Func<CancellationToken, Task<string?>> fetchLatestReleaseTagAsync)
+        Func<CancellationToken, Task<string?>> fetchLatestReleaseTagAsync,
+        CancellationToken cancellationToken = default)
     {
         if (IsDisabled())
             return new UpdateCheckResult(currentVersion, null, false, false, "disabled");
@@ -47,9 +50,13 @@ internal static class UpdateChecker
         {
             try
             {
-                latestTag = fetchLatestReleaseTagAsync(CancellationToken.None)
+                latestTag = fetchLatestReleaseTagAsync(cancellationToken)
                     .GetAwaiter()
                     .GetResult();
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
             }
             catch (Exception ex)
             {
@@ -72,7 +79,8 @@ internal static class UpdateChecker
         string currentVersion,
         string cachePath,
         DateTimeOffset now,
-        Func<CancellationToken, Task<string?>> fetchLatestReleaseTagAsync)
+        Func<CancellationToken, Task<string?>> fetchLatestReleaseTagAsync,
+        CancellationToken cancellationToken = default)
     {
         if (IsDisabled())
             return null;
@@ -92,9 +100,13 @@ internal static class UpdateChecker
         string? latestTag = null;
         try
         {
-            latestTag = fetchLatestReleaseTagAsync(CancellationToken.None)
+            latestTag = fetchLatestReleaseTagAsync(cancellationToken)
                 .GetAwaiter()
                 .GetResult();
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch
         {

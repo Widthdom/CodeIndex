@@ -436,6 +436,58 @@ public class ProgramRunnerTests
         }
     }
 
+    [Fact]
+    public void UpdateChecker_Check_PassesCallerCancellationTokenToFetch()
+    {
+        var cachePath = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json");
+        using var cts = new CancellationTokenSource();
+        CancellationToken observedToken = default;
+        try
+        {
+            var result = UpdateChecker.Check(
+                "1.10.0",
+                cachePath,
+                DateTimeOffset.Parse("2026-01-01T00:00:00Z"),
+                token =>
+                {
+                    observedToken = token;
+                    return Task.FromResult<string?>("v1.11.0");
+                },
+                cts.Token);
+
+            Assert.Equal(cts.Token, observedToken);
+            Assert.True(result.UpdateAvailable);
+        }
+        finally
+        {
+            if (File.Exists(cachePath))
+                File.Delete(cachePath);
+        }
+    }
+
+    [Fact]
+    public void UpdateChecker_Check_PropagatesCallerCancellation()
+    {
+        var cachePath = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json");
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        try
+        {
+            Assert.Throws<OperationCanceledException>(() =>
+                UpdateChecker.Check(
+                    "1.10.0",
+                    cachePath,
+                    DateTimeOffset.Parse("2026-01-01T00:00:00Z"),
+                    token => throw new OperationCanceledException(token),
+                    cts.Token));
+        }
+        finally
+        {
+            if (File.Exists(cachePath))
+                File.Delete(cachePath);
+        }
+    }
+
     [Theory]
     [InlineData("v1.26.0", "https://raw.githubusercontent.com/Widthdom/CodeIndex/v1.26.0/install.sh")]
     [InlineData(" release/test ", "https://raw.githubusercontent.com/Widthdom/CodeIndex/release%2Ftest/install.sh")]
@@ -1689,6 +1741,23 @@ sleep 5
             _ => throw new InvalidOperationException("should not fetch"));
 
         Assert.Null(hint);
+    }
+
+    [Fact]
+    public void UpdateChecker_GetNewerReleaseHint_PropagatesCallerCancellation()
+    {
+        using var env = EnvironmentVariableScope.Capture(UpdateChecker.DisableEnvVar);
+        env.Set(UpdateChecker.DisableEnvVar, null);
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        Assert.Throws<OperationCanceledException>(() =>
+            UpdateChecker.GetNewerReleaseHint(
+                "1.10.0",
+                Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json"),
+                DateTimeOffset.UtcNow,
+                token => throw new OperationCanceledException(token),
+                cts.Token));
     }
 
     [Fact]

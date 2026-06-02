@@ -30,7 +30,8 @@ internal static class ProgramRunner
         JsonSerializerOptions? jsonOptions = null,
         string? appVersion = null,
         string? configStartDirectory = null,
-        Action? beforeDispatchForTesting = null)
+        Action? beforeDispatchForTesting = null,
+        CancellationToken cancellationToken = default)
     {
         appVersion ??= ConsoleUi.LoadVersion();
 
@@ -130,7 +131,7 @@ internal static class ProgramRunner
 
         if (args[0] is "--version" or "-V")
         {
-            var versionExitCode = RunVersion(args[1..], jsonOptions, appVersion);
+            var versionExitCode = RunVersion(args[1..], jsonOptions, appVersion, cancellationToken);
             GlobalToolLog.Info($"command_complete exit_code={versionExitCode} version_only=true");
             EmitCommandMetric("version", args, commandStartTimestamp, commandStopwatch, versionExitCode);
             return versionExitCode;
@@ -138,7 +139,7 @@ internal static class ProgramRunner
 
         if (args[0] == "--check-updates")
         {
-            var updateExitCode = RunCheckUpdates(args[1..], jsonOptions, appVersion);
+            var updateExitCode = RunCheckUpdates(args[1..], jsonOptions, appVersion, cancellationToken);
             GlobalToolLog.Info($"command_complete exit_code={updateExitCode} check_updates=true");
             EmitCommandMetric("check-updates", args, commandStartTimestamp, commandStopwatch, updateExitCode);
             return updateExitCode;
@@ -239,7 +240,7 @@ internal static class ProgramRunner
                 "map" => a => QueryCommandRunner.RunMap(a, jsonOptions),
                 "inspect" => a => QueryCommandRunner.RunInspect(a, jsonOptions),
                 "outline" => a => QueryCommandRunner.RunOutline(a, jsonOptions),
-                "status" => a => QueryCommandRunner.RunStatus(a, jsonOptions, appVersion),
+                "status" => a => QueryCommandRunner.RunStatus(a, jsonOptions, appVersion, cancellationToken),
                 "validate" => a => QueryCommandRunner.RunValidate(a, jsonOptions),
                 "languages" => a => QueryCommandRunner.RunLanguages(a, jsonOptions),
                 "impact" => a => QueryCommandRunner.RunImpact(a, jsonOptions),
@@ -272,7 +273,7 @@ internal static class ProgramRunner
             {
                 exitCode = commandName switch
                 {
-                    "upgrade" => RunUpgrade(subArgs, jsonOptions, appVersion),
+                    "upgrade" => RunUpgrade(subArgs, jsonOptions, appVersion, cancellationToken),
                     "index" => IndexCommandRunner.Run(subArgs, jsonOptions),
                     "export" => ExportImportCommandRunner.RunExport(subArgs, jsonOptions, appVersion),
                     "import" => ExportImportCommandRunner.RunImport(subArgs, jsonOptions),
@@ -2285,7 +2286,11 @@ internal static class ProgramRunner
 
     internal readonly record struct AuditLogOptions(string? Path, long MaxBytes, bool IncludeValues);
 
-    internal static int RunCheckUpdates(string[] cmdArgs, JsonSerializerOptions jsonOptions, string appVersion)
+    internal static int RunCheckUpdates(
+        string[] cmdArgs,
+        JsonSerializerOptions jsonOptions,
+        string appVersion,
+        CancellationToken cancellationToken = default)
     {
         var wantsJson = false;
         foreach (var arg in cmdArgs)
@@ -2300,7 +2305,7 @@ internal static class ProgramRunner
             return CommandExitCodes.UsageError;
         }
 
-        var result = UpdateChecker.Check(appVersion);
+        var result = UpdateChecker.Check(appVersion, cancellationToken);
         if (wantsJson)
         {
             Console.WriteLine(JsonSerializer.Serialize(result, jsonOptions));
@@ -2316,7 +2321,11 @@ internal static class ProgramRunner
         return CommandExitCodes.Success;
     }
 
-    internal static int RunUpgrade(string[] cmdArgs, JsonSerializerOptions jsonOptions, string appVersion)
+    internal static int RunUpgrade(
+        string[] cmdArgs,
+        JsonSerializerOptions jsonOptions,
+        string appVersion,
+        CancellationToken cancellationToken = default)
     {
         var checkOnly = false;
         var wantsJson = false;
@@ -2343,7 +2352,7 @@ internal static class ProgramRunner
             return CommandExitCodes.UsageError;
         }
 
-        var result = UpdateChecker.Check(appVersion);
+        var result = UpdateChecker.Check(appVersion, cancellationToken);
         if (checkOnly || !result.UpdateAvailable || result.LatestVersion == null)
         {
             if (wantsJson)
@@ -2512,7 +2521,11 @@ internal static class ProgramRunner
     // ビルド情報付きにする (#1550)。人間出力は 1 行に保ち、install.sh の
     // reinstall validator が末尾診断文を誤って許容しないよう、括弧で囲った
     // メタデータ以外を許さない形に揃える。
-    internal static int RunVersion(string[] cmdArgs, JsonSerializerOptions jsonOptions, string? appVersion = null)
+    internal static int RunVersion(
+        string[] cmdArgs,
+        JsonSerializerOptions jsonOptions,
+        string? appVersion = null,
+        CancellationToken cancellationToken = default)
     {
         var wantsJson = false;
         foreach (var arg in cmdArgs)
@@ -2550,7 +2563,7 @@ internal static class ProgramRunner
             return CommandExitCodes.Success;
         }
 
-        var updateHint = UpdateChecker.GetNewerReleaseHint(metadata.Version);
+        var updateHint = UpdateChecker.GetNewerReleaseHint(metadata.Version, cancellationToken);
         Console.WriteLine(FormatVersionLine(metadata, updateHint));
         return CommandExitCodes.Success;
     }
