@@ -3966,8 +3966,6 @@ public partial class McpServer
     /// </summary>
     private const int MaxContextLength = 1000;
 
-    private const int MaxEvidencePathCount = 20;
-    private const int MaxEvidencePathLength = 260;
     private const int MaxSamplingPromptBytes = 4096;
     private const int MaxSamplingShortFieldChars = 80;
     private const int MaxSamplingDescriptionChars = 800;
@@ -4158,9 +4156,9 @@ public partial class McpServer
             error = "evidencePaths must be an array of path strings.";
             return null;
         }
-        if (array.Count > MaxEvidencePathCount)
+        if (array.Count > SuggestionEvidencePaths.MaxCount)
         {
-            error = $"evidencePaths has too many entries ({array.Count}, max {MaxEvidencePathCount}).";
+            error = $"evidencePaths has too many entries ({array.Count}, max {SuggestionEvidencePaths.MaxCount}).";
             return null;
         }
 
@@ -4180,19 +4178,13 @@ public partial class McpServer
 
             if (string.IsNullOrWhiteSpace(path))
                 continue;
-            path = path.Trim();
-            if (path.Length > MaxEvidencePathLength)
+            if (!SuggestionEvidencePaths.TryNormalize(path, out var normalizedPath, out var pathError))
             {
-                error = $"evidencePaths contains a path longer than {MaxEvidencePathLength} characters.";
+                error = pathError;
                 return null;
             }
-            if (path.Contains('\r') || path.Contains('\n'))
-            {
-                error = "evidencePaths entries must not contain newlines.";
-                return null;
-            }
-            if (!paths.Contains(path, StringComparer.Ordinal))
-                paths.Add(path);
+            if (normalizedPath.Length > 0 && !paths.Contains(normalizedPath, StringComparer.Ordinal))
+                paths.Add(normalizedPath);
         }
 
         return paths.Count == 0 ? null : paths.ToArray();

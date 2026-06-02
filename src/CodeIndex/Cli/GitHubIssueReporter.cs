@@ -491,16 +491,7 @@ internal static class GitHubIssueReporter
     }
 
     private static List<string> NormalizeEvidencePaths(string[]? paths)
-    {
-        if (paths == null || paths.Length == 0)
-            return [];
-        return paths
-            .Where(path => !string.IsNullOrWhiteSpace(path))
-            .Select(path => path.Trim())
-            .Where(path => path.Length > 0)
-            .Distinct(StringComparer.Ordinal)
-            .ToList();
-    }
+        => SuggestionEvidencePaths.Normalize(paths);
 
     internal static string SanitizeIssueTitleText(string value)
     {

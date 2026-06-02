@@ -397,7 +397,7 @@ internal static class SuggestionsCommandRunner
     }
 
     private static List<string> NormalizeEvidencePaths(SuggestionRecord record)
-        => NormalizeNullableArray(record.EvidencePaths);
+        => SuggestionEvidencePaths.Normalize(record.EvidencePaths);
 
     private static List<string> NormalizeNullableArray(string[]? values)
     {

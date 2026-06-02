@@ -9478,6 +9478,34 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void SuggestImprovement_RejectsNonRelativeEvidencePath()
+    {
+        var uniqueDesc = $"Evidence path validation regression {Guid.NewGuid():N}";
+        var json = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "suggest_improvement",
+                ["arguments"] = new JsonObject
+                {
+                    ["category"] = "other",
+                    ["description"] = uniqueDesc,
+                    ["evidencePaths"] = new JsonArray { "/Users/example/project/src/File.cs" }
+                }
+            }
+        };
+
+        var response = _server.HandleMessage((JsonNode)json)!;
+
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+        var message = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("repository-relative", message);
+    }
+
+    [Fact]
     public void SuggestImprovement_WhenSamplingAvailable_StoresSampledMetadata()
     {
         _server.HandleMessage(JsonNode.Parse(

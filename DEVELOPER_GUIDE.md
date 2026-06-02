@@ -1092,7 +1092,7 @@ The `suggest_improvement` MCP tool allows AI agents to report gaps or errors.
 - Language name (e.g. `typescript`)
 - Description text (natural language, validated by SourceCodeDetector)
 - Context text (natural language, validated by SourceCodeDetector)
-- Optional evidence paths supplied by the caller. These are path strings only; file contents are never read for the payload.
+- Optional repository-relative evidence paths supplied by the caller. These are path strings only; file contents are never read for the payload.
 - cdidx version string
 - Attribution metadata: `created_by_agent`, `session_id`, `client_version`, `mcp_client_name`, `mcp_client_version`, and optional `tool_invocation_context`
 - SHA256 suggestion hash (for deduplication)
