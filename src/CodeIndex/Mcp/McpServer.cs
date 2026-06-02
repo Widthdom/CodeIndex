@@ -160,6 +160,7 @@ public partial class McpServer : IDisposable
     internal const int MaxLineByteLength = 1_048_576;
     internal const int DefaultMaxResponseBytes = 10 * 1024 * 1024;
     internal const int MaxConfiguredResponseBytes = 64 * 1024 * 1024;
+    internal const int MaxMcpPaginationOffset = 10_000;
     private const string MaxResponseBytesEnvVar = "CDIDX_MCP_RESPONSE_MAX_BYTES";
     private const string KeepAliveIntervalEnvironmentVariable = "CDIDX_MCP_KEEP_ALIVE_INTERVAL_S";
     internal const string DebugEnvironmentVariable = "CDIDX_DEBUG";

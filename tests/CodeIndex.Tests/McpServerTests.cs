@@ -5218,6 +5218,63 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsList_ReferencesOffsetSchemaAdvertisesCap()
+    {
+        var response = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!)!;
+
+        var tools = response["result"]!["tools"]!.AsArray();
+        var references = tools.First(tool => tool!["name"]!.GetValue<string>() == "references")!;
+        var offset = references["inputSchema"]!["properties"]!["offset"]!;
+        Assert.Equal(0, offset["minimum"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxMcpPaginationOffset, offset["maximum"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsCall_References_ClampsTooLargeOffset()
+    {
+        InsertIndexedFile(
+            "src/offset-clamp.cs",
+            "csharp",
+            """
+            public class OffsetClampCaller { public void Hit(App app) { app.Run(); } }
+            """);
+
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "references",
+                ["arguments"] = new JsonObject
+                {
+                    ["query"] = "Run",
+                    ["lang"] = "csharp",
+                    ["offset"] = McpServer.MaxMcpPaginationOffset + 1,
+                    ["limit"] = 1,
+                },
+            },
+        };
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(McpServer.MaxMcpPaginationOffset, structured["offset"]!.GetValue<int>());
+        Assert.True(structured["total"]!.GetValue<int>() > 0);
+    }
+
+    [Fact]
+    public void ToolsCall_Status_ReportsPaginationOffsetCap()
+    {
+        var response = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status"}}""")!)!;
+
+        var limits = response["result"]!["structuredContent"]!["mcp"]!["limits"]!;
+        Assert.Equal(McpServer.MaxMcpPaginationOffset, limits["max_pagination_offset"]!.GetValue<int>());
+    }
+
+    [Fact]
     public async Task ProcessFrameAsync_BatchResponseOverByteLimit_ReturnsStructuredError()
     {
         using var env = EnvironmentVariableScope.Capture("CDIDX_MCP_RESPONSE_MAX_BYTES");

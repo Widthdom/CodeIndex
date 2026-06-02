@@ -291,7 +291,7 @@ public partial class McpServer
     private static int ClampLimit(int limit) => Math.Clamp(limit, 1, MaxLimit);
 
     private static int ReadOffset(JsonNode? args)
-        => Math.Max(0, args?["offset"]?.GetValue<int>() ?? 0);
+        => Math.Clamp(args?["offset"]?.GetValue<int>() ?? 0, 0, MaxMcpPaginationOffset);
 
     private static string ReadResponseFormat(JsonNode? args)
         => args?["format"]?.GetValue<string>()?.Trim().ToLowerInvariant() ?? "full";
@@ -1974,6 +1974,7 @@ public partial class McpServer
                     ["max_configured_response_bytes"] = MaxConfiguredResponseBytes,
                     ["batch_response_bytes"] = GetBatchQueryResponseByteLimit(),
                     ["max_batch_response_bytes"] = MaxBatchQueryResponseByteLimit,
+                    ["max_pagination_offset"] = MaxMcpPaginationOffset,
                     ["max_json_depth"] = MaxJsonDepth,
                     ["max_batch_requests"] = MaxBatchRequestCount,
                 }

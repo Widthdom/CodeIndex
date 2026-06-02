@@ -1364,6 +1364,8 @@ MCP response-size limits are bounded so environment overrides cannot disable the
 
 Values above the maximum are clamped with a warning. `status` reports effective response caps under `mcp.limits.max_response_bytes` and `mcp.limits.batch_response_bytes`.
 
+Pagination-style MCP graph tools clamp `offset` to `10000` before querying SQLite; `tools/list` advertises the schema maximum, and `status` reports the offset cap under `mcp.limits.max_pagination_offset`.
+
 Caller identity is captured from the `clientInfo.name` (and `version` when present) of the MCP `initialize` request. Tool calls received before `initialize` are billed against an anonymous `"unknown"` bucket so an unidentified client cannot bypass the limiter. The captured caller is sticky for the lifetime of the session — once a named identity has been recorded, subsequent `initialize` calls under a different name are ignored (with a one-line `stderr` warning) so a long-lived stdio or networked session cannot reset its bucket mid-flight by re-identifying.
 
 Over-quota tool calls receive a structured JSON-RPC `-32000` error:
@@ -3484,6 +3486,8 @@ MCP のレスポンスサイズ上限は、環境変数 override で guard が�
 | `CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES` | `1048576` (1 MiB) | `10485760` (10 MiB) | 警告を出して既定値を使用 |
 
 最大値を超える値は警告付きでクランプされます。`status` は有効なレスポンス上限を `mcp.limits.max_response_bytes` と `mcp.limits.batch_response_bytes` に返します。
+
+ページング型の MCP graph ツールは SQLite クエリ前に `offset` を `10000` へクランプします。`tools/list` は schema の最大値を広告し、`status` は offset 上限を `mcp.limits.max_pagination_offset` に返します。
 
 呼び出し元 ID は MCP `initialize` リクエストの `clientInfo.name`（および `version` があれば併記）から取得します。`initialize` 前に届いたツール呼び出しは匿名 `"unknown"` バケットで計量され、未識別クライアントによる制限回避を防ぎます。取得済みの caller はセッション中 sticky で、名前付き ID が一度記録されると以降の別名 `initialize` は無視され（`stderr` に 1 行警告）、長期 stdio / 通信セッションが途中で再 initialize してバケットをリセットする経路を塞ぎます。
 
