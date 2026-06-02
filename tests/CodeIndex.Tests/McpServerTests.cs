@@ -5299,6 +5299,30 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_Status_ReportsEffectiveRateLimitCaps()
+    {
+        using var env = EnvironmentVariableScope.Capture(
+            "CDIDX_MCP_RATE_LIMIT_RPS",
+            "CDIDX_MCP_RATE_LIMIT_BURST");
+        env.Set("CDIDX_MCP_RATE_LIMIT_RPS", "1000000");
+        env.Set("CDIDX_MCP_RATE_LIMIT_BURST", "1000000");
+
+        using var server = new McpServer(_dbPath, "1.0", dbPathExplicit: true);
+        var response = server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status"}}""")!)!;
+
+        var mcp = response["result"]!["structuredContent"]!["mcp"]!;
+        var limits = mcp["limits"]!;
+        Assert.Equal(RateLimiterOptions.MaxRefillTokensPerSecond, limits["rate_limit_max_rps"]!.GetValue<double>());
+        Assert.Equal(RateLimiterOptions.MaxBurstCapacity, limits["rate_limit_max_burst"]!.GetValue<double>());
+
+        var rateLimit = mcp["rate_limit"]!;
+        Assert.True(rateLimit["enabled"]!.GetValue<bool>());
+        Assert.Equal(RateLimiterOptions.MaxRefillTokensPerSecond, rateLimit["rps"]!.GetValue<double>());
+        Assert.Equal(RateLimiterOptions.MaxBurstCapacity, rateLimit["burst"]!.GetValue<double>());
+    }
+
+    [Fact]
     public async Task ProcessFrameAsync_BatchResponseOverByteLimit_ReturnsStructuredError()
     {
         using var env = EnvironmentVariableScope.Capture("CDIDX_MCP_RESPONSE_MAX_BYTES");

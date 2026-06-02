@@ -202,6 +202,41 @@ public class RateLimiterTests
     }
 
     [Fact]
+    public void FromEnvironment_TooLargeRps_ClampsAndWarns()
+    {
+        var warnings = new List<string>();
+        var opts = RateLimiterOptions.FromEnvironment(
+            key => key == RateLimiterOptions.RpsEnvVar ? "1000000" : null,
+            warnings.Add);
+
+        Assert.True(opts.IsEnabled);
+        Assert.Equal(RateLimiterOptions.MaxRefillTokensPerSecond, opts.RefillTokensPerSecond);
+        Assert.Equal(RateLimiterOptions.MaxRefillTokensPerSecond, opts.BurstCapacity);
+        Assert.Single(warnings);
+        Assert.Contains("Clamping CDIDX_MCP_RATE_LIMIT_RPS", warnings[0]);
+    }
+
+    [Fact]
+    public void FromEnvironment_TooLargeBurst_ClampsAndWarns()
+    {
+        var warnings = new List<string>();
+        var opts = RateLimiterOptions.FromEnvironment(
+            key => key switch
+            {
+                RateLimiterOptions.RpsEnvVar => "3",
+                RateLimiterOptions.BurstEnvVar => "1000000",
+                _ => null,
+            },
+            warnings.Add);
+
+        Assert.True(opts.IsEnabled);
+        Assert.Equal(3.0, opts.RefillTokensPerSecond);
+        Assert.Equal(RateLimiterOptions.MaxBurstCapacity, opts.BurstCapacity);
+        Assert.Single(warnings);
+        Assert.Contains("Clamping CDIDX_MCP_RATE_LIMIT_BURST", warnings[0]);
+    }
+
+    [Fact]
     public void FromEnvironment_InvalidRps_WarnsAndDisables()
     {
         var warnings = new List<string>();

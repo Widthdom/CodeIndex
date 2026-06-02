@@ -1979,7 +1979,15 @@ public partial class McpServer
                     ["max_batch_requests"] = MaxBatchRequestCount,
                     ["keep_alive_min_interval_s"] = MinKeepAliveIntervalSeconds,
                     ["keep_alive_max_interval_s"] = MaxKeepAliveIntervalSeconds,
-                }
+                    ["rate_limit_max_rps"] = RateLimiterOptions.MaxRefillTokensPerSecond,
+                    ["rate_limit_max_burst"] = RateLimiterOptions.MaxBurstCapacity,
+                },
+                ["rate_limit"] = new JsonObject
+                {
+                    ["enabled"] = RateLimiter.Options.IsEnabled,
+                    ["rps"] = RateLimiter.Options.RefillTokensPerSecond,
+                    ["burst"] = RateLimiter.Options.BurstCapacity,
+                },
             };
             return CreateToolResult(id, "Database stats returned.", structured);
         });
