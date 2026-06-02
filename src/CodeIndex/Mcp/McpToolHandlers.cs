@@ -2732,6 +2732,11 @@ public partial class McpServer
                 // #2849: classify and sanitize slot exceptions the same way standalone
                 // tools/call does, so bound values, paths, and SQL/content snippets stay
                 // in stderr instead of the batch_query response.
+                DeferFrameLog(() =>
+                {
+                    WriteMcpLogLine(BuildToolErrorLog(toolName, ex.Message));
+                    Database.DbDebug.DumpToStderr(ex);
+                });
                 var classification = McpErrorEnvelope.ClassifyException(ex);
                 AppendSlotError(requestIndex, toolName, toolArgs, slotStopwatch, BuildSanitizedToolErrorMessage(toolName, ex),
                     category: classification.Category,
