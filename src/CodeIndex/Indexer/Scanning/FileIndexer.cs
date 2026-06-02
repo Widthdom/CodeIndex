@@ -88,6 +88,8 @@ public class FileIndexer
     private const int ConflictMarkerScanLimitBytes = 50 * 1024;
     private const int MaxDirectoryTraversalDepth = 128;
     private const int GitLfsPointerMaxBytes = 1024;
+    private const int MaxGitmodulesBytes = 256 * 1024;
+    private const int MaxGitmodulesLines = 4096;
     private static readonly string[] IgnoreFileNames = [".gitignore", ".cdidxignore"];
     private const int MaxIgnorePatternLength = 512;
     private static readonly TimeSpan IgnoreRegexMatchTimeout = TimeSpan.FromMilliseconds(100);
@@ -440,6 +442,7 @@ public class FileIndexer
     // _submodulePaths 各要素の祖先パス（submodule 自身は含まない）。SkipDirs 名と一致した場合は
     // 通過モードとしてその直下ファイルを索引せず、submodule 方向のみ降りる。
     private readonly HashSet<string> _submoduleAncestorPaths;
+    private readonly IReadOnlyList<ScanError> _submoduleLoadWarnings;
 
     private sealed class IgnoreRuleSet
     {
@@ -964,7 +967,7 @@ public class FileIndexer
         _maxFileSizeBytes = ResolveMaxFileSizeBytes(maxFileSizeBytes);
         _symlinkPolicy = symlinkPolicy;
         var pathComparer = _ignoreCase ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
-        (_submodulePaths, _submoduleAncestorPaths) = LoadGitSubmodulePaths(_ignoreRuleRoot, _projectRoot, pathComparer);
+        (_submodulePaths, _submoduleAncestorPaths, _submoduleLoadWarnings) = LoadGitSubmodulePaths(_ignoreRuleRoot, _projectRoot, pathComparer);
     }
 
     internal static bool TryParseMaxFileSizeBytes(string? value, out long bytes)
@@ -1846,6 +1849,7 @@ public class FileIndexer
         var danglingSymlinks = new HashSet<string>(StringComparer.Ordinal);
         var visitedFileIdentities = new HashSet<FileIdentity>();
         var visitedDirectories = new HashSet<string>(StringComparer.Ordinal) { NormalizePathForComparison(_projectRoot) };
+        errors.AddRange(_submoduleLoadWarnings);
         var fullyScanned = true;
         var preloadResult = LoadAncestorIgnoreRules(errors, ref fullyScanned);
         if (preloadResult.IgnoreRulesAvailable)
@@ -2610,58 +2614,127 @@ public class FileIndexer
     // <ignoreRuleRoot>/.gitmodules を解析し、projectRoot 相対の submodule ワークツリーパスと
     // その祖先ディレクトリを返す。projectRoot 外の submodule は無視。.gitmodules が無い・
     // 読めない場合は空集合を返し、submodule の無いリポジトリと同じ形を保つ。
-    private static (HashSet<string> Paths, HashSet<string> AncestorPaths) LoadGitSubmodulePaths(
+    private static (HashSet<string> Paths, HashSet<string> AncestorPaths, IReadOnlyList<ScanError> Warnings) LoadGitSubmodulePaths(
         string ignoreRuleRoot, string projectRoot, StringComparer pathComparer)
     {
         var submodulePaths = new HashSet<string>(pathComparer);
         var ancestorPaths = new HashSet<string>(pathComparer);
+        var warnings = new List<ScanError>();
 
         var gitmodulesPath = Path.Combine(ignoreRuleRoot, ".gitmodules");
         var prefixedGitmodulesPath = LongPath.EnsureWindowsPrefix(gitmodulesPath);
         if (!File.Exists(prefixedGitmodulesPath))
-            return (submodulePaths, ancestorPaths);
+            return (submodulePaths, ancestorPaths, warnings);
 
-        string[] lines;
         try
         {
-            lines = File.ReadAllLines(prefixedGitmodulesPath);
+            if (!TryReadBoundedUtf8SidecarLines(
+                    prefixedGitmodulesPath,
+                    MaxGitmodulesBytes,
+                    MaxGitmodulesLines,
+                    out var lines,
+                    out var skippedReason))
+            {
+                warnings.Add(new ScanError(
+                    NormalizeIgnorePath(Path.GetRelativePath(projectRoot, gitmodulesPath)),
+                    $"Skipped .gitmodules because {skippedReason}.",
+                    ScanIssueSeverity.Warning));
+                return (submodulePaths, ancestorPaths, warnings);
+            }
+
+            foreach (var rawSubmodulePath in ParseSubmodulePathsFromGitmodules(lines))
+            {
+                string absolute;
+                try
+                {
+                    absolute = Path.GetFullPath(Path.Combine(ignoreRuleRoot, rawSubmodulePath));
+                }
+                catch (ArgumentException)
+                {
+                    continue;
+                }
+
+                var relativeToProject = NormalizeIgnorePath(Path.GetRelativePath(projectRoot, absolute));
+                if (relativeToProject.Length == 0
+                    || relativeToProject == "."
+                    || relativeToProject.StartsWith("../", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                submodulePaths.Add(relativeToProject);
+                var segments = relativeToProject.Split('/', StringSplitOptions.RemoveEmptyEntries);
+                for (var i = 1; i < segments.Length; i++)
+                    ancestorPaths.Add(string.Join('/', segments, 0, i));
+            }
         }
         catch (IOException)
         {
-            return (submodulePaths, ancestorPaths);
         }
         catch (UnauthorizedAccessException)
         {
-            return (submodulePaths, ancestorPaths);
         }
 
-        foreach (var rawSubmodulePath in ParseSubmodulePathsFromGitmodules(lines))
+        return (submodulePaths, ancestorPaths, warnings);
+    }
+
+    private static bool TryReadBoundedUtf8SidecarLines(
+        string path,
+        int maxBytes,
+        int maxLines,
+        out IReadOnlyList<string> lines,
+        out string skippedReason)
+    {
+        lines = [];
+        skippedReason = string.Empty;
+
+        using var stream = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete,
+            bufferSize: 8192,
+            useAsync: false);
+
+        if (stream.Length > maxBytes)
         {
-            string absolute;
-            try
-            {
-                absolute = Path.GetFullPath(Path.Combine(ignoreRuleRoot, rawSubmodulePath));
-            }
-            catch (ArgumentException)
-            {
-                continue;
-            }
-
-            var relativeToProject = NormalizeIgnorePath(Path.GetRelativePath(projectRoot, absolute));
-            if (relativeToProject.Length == 0
-                || relativeToProject == "."
-                || relativeToProject.StartsWith("../", StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            submodulePaths.Add(relativeToProject);
-            var segments = relativeToProject.Split('/', StringSplitOptions.RemoveEmptyEntries);
-            for (var i = 1; i < segments.Length; i++)
-                ancestorPaths.Add(string.Join('/', segments, 0, i));
+            skippedReason = $"it exceeds {maxBytes} bytes";
+            return false;
         }
 
-        return (submodulePaths, ancestorPaths);
+        using var accumulator = new MemoryStream((int)Math.Min(stream.Length, maxBytes));
+        var buffer = new byte[8192];
+        long total = 0;
+        int read;
+        while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
+        {
+            total += read;
+            if (total > maxBytes)
+            {
+                skippedReason = $"it exceeds {maxBytes} bytes";
+                return false;
+            }
+
+            accumulator.Write(buffer, 0, read);
+        }
+
+        var text = new UTF8Encoding(false, throwOnInvalidBytes: false).GetString(accumulator.ToArray());
+        var result = new List<string>();
+        using var reader = new StringReader(text);
+        string? line;
+        while ((line = reader.ReadLine()) != null)
+        {
+            if (result.Count >= maxLines)
+            {
+                skippedReason = $"it exceeds {maxLines} lines";
+                return false;
+            }
+
+            result.Add(line);
+        }
+
+        lines = result;
+        return true;
     }
 
     // Tolerant .gitmodules reader: yields each declared submodule's "path = ..." value.

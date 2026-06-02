@@ -3437,6 +3437,40 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void ScanFilesDetailed_OversizedGitmodulesSkipsSubmodulePassthroughWithWarning()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(Path.Combine(tempDir, "app.py"), "print('hello')");
+            File.WriteAllText(Path.Combine(tempDir, ".gitmodules"), new string('x', 300 * 1024));
+
+            var submoduleDir = Path.Combine(tempDir, "vendor", "foo");
+            Directory.CreateDirectory(submoduleDir);
+            File.WriteAllText(Path.Combine(submoduleDir, ".git"), "gitdir: ../../.git/modules/foo\n");
+            File.WriteAllText(Path.Combine(submoduleDir, "lib.py"), "def f(): pass");
+
+            var result = new FileIndexer(tempDir).ScanFilesDetailed();
+            var rel = result.Files.Select(f => Path.GetRelativePath(tempDir, f).Replace('\\', '/')).ToHashSet();
+
+            Assert.Contains("app.py", rel);
+            Assert.DoesNotContain("vendor/foo/lib.py", rel);
+            Assert.Contains(
+                result.Errors,
+                error => error.Path == ".gitmodules"
+                    && error.Severity == FileIndexer.ScanIssueSeverity.Warning
+                    && error.Message.Contains("exceeds", StringComparison.OrdinalIgnoreCase));
+            Assert.False(result.HadErrors);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
     public void PurgeFilesOutsideRetainedSet_UsesNfcRetainedPaths()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
