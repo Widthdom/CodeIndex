@@ -156,7 +156,7 @@ public static partial class IndexCommandRunner
                     jsonOptions,
                     $"failed to resolve changed files from git commits: {ex.Message}",
                     CommandExitCodes.UsageError,
-                    "Check the commit IDs and rerun `cdidx index <projectPath> --commits <id> [id ...]`.",
+                    "Check the commit refs and rerun `cdidx index <projectPath> --commits <commit-ref> [commit-ref ...]`.",
                     CommandErrorCodes.UsageError);
                 return false;
             }

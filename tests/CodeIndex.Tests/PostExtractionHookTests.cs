@@ -6,6 +6,8 @@ namespace CodeIndex.Tests;
 
 public class PostExtractionHookTests
 {
+    internal const string SlowHookDelayEnvironmentVariable = "CDIDX_TEST_SLOW_POST_EXTRACTION_HOOK_MS";
+
     [Fact]
     public void Discover_LoadsHooksAndAllowsSymbolAndReferenceMutation()
     {
@@ -70,6 +72,72 @@ public class PostExtractionHookTests
         }
     }
 
+    [Fact]
+    public void CallbackBudgetExceeded_AddsDiagnosticAndSkipsTimedOutMutation()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("post-extraction-hook-budget");
+        lock (TestConsoleLock.Gate)
+        {
+            var originalDelay = Environment.GetEnvironmentVariable(SlowHookDelayEnvironmentVariable);
+            var originalBudget = PostExtractionHookRunner.CallbackBudgetForTesting;
+            try
+            {
+                Environment.SetEnvironmentVariable(SlowHookDelayEnvironmentVariable, "200");
+                PostExtractionHookRunner.CallbackBudgetForTesting = () => TimeSpan.FromMilliseconds(50);
+                var hooksDir = Path.Combine(projectRoot, "hooks");
+                Directory.CreateDirectory(hooksDir);
+                File.Copy(Assembly.GetExecutingAssembly().Location, Path.Combine(hooksDir, "CodeIndex.Tests.dll"));
+
+                using var runner = PostExtractionHookRunner.Discover(hooksDir);
+                var context = new FileContext(projectRoot, "src/App.cs", Path.Combine(projectRoot, "src", "App.cs"), "csharp");
+                var symbols = new List<SymbolRecord>();
+
+                runner.OnSymbolsExtracted(context, symbols);
+                Thread.Sleep(250);
+
+                Assert.DoesNotContain(symbols, symbol => symbol.Name == "SlowHookTag");
+                var diagnostic = Assert.Single(
+                    runner.Diagnostics,
+                    item => item.TypeName == typeof(SlowPostExtractionHook).FullName
+                            && item.Callback == nameof(IPostExtractionHook.OnSymbolsExtracted));
+                Assert.Contains("exceeded", diagnostic.Message, StringComparison.Ordinal);
+                Assert.True(diagnostic.DurationMs >= 50);
+                Assert.Equal(50, (long)Math.Round(runner.CallbackBudget.TotalMilliseconds, MidpointRounding.AwayFromZero));
+            }
+            finally
+            {
+                PostExtractionHookRunner.CallbackBudgetForTesting = originalBudget;
+                Environment.SetEnvironmentVariable(SlowHookDelayEnvironmentVariable, originalDelay);
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void CallbackBudget_NormalizesInvalidAndTooLargeValues()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalBudget = PostExtractionHookRunner.CallbackBudgetForTesting;
+            try
+            {
+                PostExtractionHookRunner.CallbackBudgetForTesting = () => TimeSpan.Zero;
+                using (var defaulted = PostExtractionHookRunner.Discover(null))
+                {
+                    Assert.Equal(PostExtractionHookRunner.DefaultCallbackBudget, defaulted.CallbackBudget);
+                }
+
+                PostExtractionHookRunner.CallbackBudgetForTesting = () => TimeSpan.FromMilliseconds((double)int.MaxValue + 1);
+                using var capped = PostExtractionHookRunner.Discover(null);
+                Assert.Equal(int.MaxValue, (long)Math.Round(capped.CallbackBudget.TotalMilliseconds, MidpointRounding.AwayFromZero));
+            }
+            finally
+            {
+                PostExtractionHookRunner.CallbackBudgetForTesting = originalBudget;
+            }
+        }
+    }
+
     private static void CollectUnloadedHookAssemblies()
     {
         GC.Collect();
@@ -115,4 +183,47 @@ public sealed class ThrowingPostExtractionHook : IPostExtractionHook
 
     public void OnReferencesExtracted(FileContext context, IList<ReferenceRecord> references)
         => throw new InvalidOperationException("boom");
+}
+
+public sealed class SlowPostExtractionHook : IPostExtractionHook
+{
+    public void OnSymbolsExtracted(FileContext context, IList<SymbolRecord> symbols)
+    {
+        if (!DelayWhenRequested())
+            return;
+
+        symbols.Add(new SymbolRecord
+        {
+            Kind = "domain_tag",
+            Name = "SlowHookTag",
+            Line = 1,
+            StartLine = 1,
+            EndLine = 1,
+        });
+    }
+
+    public void OnReferencesExtracted(FileContext context, IList<ReferenceRecord> references)
+    {
+        if (!DelayWhenRequested())
+            return;
+
+        references.Add(new ReferenceRecord
+        {
+            SymbolName = "SlowHookTag",
+            ReferenceKind = "domain_reference",
+            Line = 1,
+            Column = 1,
+            Context = context.Path,
+        });
+    }
+
+    private static bool DelayWhenRequested()
+    {
+        var raw = Environment.GetEnvironmentVariable(PostExtractionHookTests.SlowHookDelayEnvironmentVariable);
+        if (!int.TryParse(raw, out var milliseconds) || milliseconds <= 0)
+            return false;
+
+        Thread.Sleep(milliseconds);
+        return true;
+    }
 }

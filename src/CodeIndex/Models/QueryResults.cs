@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Models;
 
 namespace CodeIndex.Database;
@@ -505,6 +506,15 @@ public class StatusResult
     [JsonPropertyName("unknown_extension_file_count")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public long? UnknownExtensionFileCount { get; set; }
+    [JsonPropertyName("unknown_extension_files")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? UnknownExtensionFiles { get; set; }
+    [JsonPropertyName("unknown_extension_files_truncated")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? UnknownExtensionFilesTruncated { get; set; }
+    [JsonPropertyName("unknown_extension_file_path_limit")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? UnknownExtensionFilePathLimit { get; set; }
     public DateTime? IndexedAt { get; set; }
     public DateTime? LatestModified { get; set; }
     public string? ProjectRoot { get; set; }
@@ -607,6 +617,9 @@ public class StatusResult
     public List<string>? GraphSupportedLanguages { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<PostExtractionHookStatus>? Hooks { get; set; }
+    [JsonPropertyName("extractors")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ExtractorRegistryStatus? Extractors { get; set; }
     public string? Version { get; set; }
     [JsonPropertyName("update_check")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -882,6 +895,8 @@ public class PostExtractionHookStatus
     public string Name { get; set; } = string.Empty;
     public string AssemblyPath { get; set; } = string.Empty;
     public string TypeName { get; set; } = string.Empty;
+    [JsonPropertyName("callback_budget_ms")]
+    public long CallbackBudgetMs { get; set; }
 }
 
 public class RepoMapResult

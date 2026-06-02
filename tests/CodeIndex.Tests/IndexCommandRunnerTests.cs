@@ -6,6 +6,7 @@ using System.Runtime.InteropServices;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
+using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
 
@@ -1226,13 +1227,13 @@ public class IndexCommandRunnerTests
     [InlineData("feature")]
     [InlineData("v1.0.0")]
     [InlineData("main..feature")]
-    public void ParseArgs_CommitsRejectsBranchTagAndRangeRefs(string commitRef)
+    [InlineData("HEAD")]
+    public void ParseArgs_CommitsAcceptsCommitishRefsForGitValidation(string commitRef)
     {
         var options = IndexCommandRunner.ParseArgs([".", "--commits", commitRef]);
 
         Assert.Equal([commitRef], options.Commits);
-        Assert.NotNull(options.ParseError);
-        Assert.Contains("expected a 7-40 character hex commit ID", options.ParseError);
+        Assert.Null(options.ParseError);
     }
 
     [Fact]
@@ -1472,7 +1473,7 @@ public class IndexCommandRunnerTests
             Assert.Contains("--rebuild cannot be used with --commits, --changed-between, or --files", stderr);
             Assert.Contains("Hint: use one of:", stderr);
             Assert.Contains("`cdidx index <projectPath> --rebuild`", stderr);
-            Assert.Contains("`cdidx index <projectPath> --commits <id> [id ...]`", stderr);
+            Assert.Contains("`cdidx index <projectPath> --commits <commit-ref> [commit-ref ...]`", stderr);
             Assert.Contains("`cdidx index <projectPath> --changed-between <old-ref> <new-ref>`", stderr);
             Assert.Contains("`cdidx index <projectPath> --files <path> [path ...]`", stderr);
         }
@@ -1497,9 +1498,42 @@ public class IndexCommandRunnerTests
             Assert.NotNull(hint);
             Assert.StartsWith("Use one of:", hint);
             Assert.Contains("`cdidx index <projectPath> --rebuild`", hint);
-            Assert.Contains("`cdidx index <projectPath> --commits <id> [id ...]`", hint);
+            Assert.Contains("`cdidx index <projectPath> --commits <commit-ref> [commit-ref ...]`", hint);
             Assert.Contains("`cdidx index <projectPath> --changed-between <old-ref> <new-ref>`", hint);
             Assert.Contains("`cdidx index <projectPath> --files <path> [path ...]`", hint);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("HEAD..HEAD", false)]
+    [InlineData("v1.0.0", true)]
+    public void Run_CommitsInvalidCommitRef_JsonRejectsBeforeDbSetup(string commitRef, bool createTag)
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            RunGit(projectRoot, "init");
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { }\n");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "init");
+            if (createTag)
+                RunGit(projectRoot, "tag", commitRef);
+
+            var excludePath = Path.Combine(projectRoot, ".git", "info", "exclude");
+            var excludeBefore = File.Exists(excludePath) ? File.ReadAllText(excludePath) : null;
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--commits", commitRef, "--json"]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal("error", json.GetProperty("status").GetString());
+            Assert.Contains("failed to resolve changed files from git commits", json.GetProperty("message").GetString());
+            Assert.False(File.Exists(Path.Combine(projectRoot, ".cdidx", "codeindex.db")));
+            var excludeAfter = File.Exists(excludePath) ? File.ReadAllText(excludePath) : null;
+            Assert.Equal(excludeBefore, excludeAfter);
         }
         finally
         {
@@ -1610,10 +1644,92 @@ public class IndexCommandRunnerTests
             Assert.Contains("notes.mystery", stdout);
             Assert.Equal(CommandExitCodes.Success, statusExitCode);
             Assert.Equal(2, statusJson.GetProperty("unknown_extension_file_count").GetInt64());
+            Assert.False(statusJson.GetProperty("unknown_extension_files_truncated").GetBoolean());
+            Assert.Equal(50, statusJson.GetProperty("unknown_extension_file_path_limit").GetInt64());
+            var paths = statusJson.GetProperty("unknown_extension_files")
+                .EnumerateArray()
+                .Select(path => path.GetString())
+                .ToArray();
+            Assert.Equal(["data.unmapped", "notes.mystery"], paths);
         }
         finally
         {
             DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_StatusJsonCapsUnknownExtensionPathSample()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "class App { }\n");
+            for (var i = 0; i < 52; i++)
+                File.WriteAllText(Path.Combine(projectRoot, $"unknown-{i:D2}.mystery"), "unknown extension\n");
+
+            var (exitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(CommandExitCodes.Success, statusExitCode);
+            Assert.Equal(52, statusJson.GetProperty("unknown_extension_file_count").GetInt64());
+            Assert.True(statusJson.GetProperty("unknown_extension_files_truncated").GetBoolean());
+            Assert.Equal(50, statusJson.GetProperty("unknown_extension_file_path_limit").GetInt64());
+            var paths = statusJson.GetProperty("unknown_extension_files").EnumerateArray().ToArray();
+            Assert.Equal(50, paths.Length);
+            Assert.Equal("unknown-00.mystery", paths[0].GetString());
+            Assert.Equal("unknown-49.mystery", paths[^1].GetString());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_StatusJsonIncludesExtractorPluginDiagnostics()
+    {
+        var projectRoot = CreateTempProject();
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                var patternsDir = Path.Combine(projectRoot, ".cdidx", "patterns");
+                Directory.CreateDirectory(patternsDir);
+                File.WriteAllText(
+                    Path.Combine(patternsDir, "toydsl.yaml"),
+                    "language: \"toydsl\"\nextensions:\n  - extension: \".toy\"\npatterns:\n  - kind: \"class\"\n    regex: \"^entity (?<name>\\\\w+)\"\n");
+                File.WriteAllText(
+                    Path.Combine(patternsDir, "broken.yaml"),
+                    "language: \"broken\"\npatterns:\n  - kind: \"class\"\n    regex: \"(?<name>\"\n");
+                File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "class App { }\n");
+
+                var (exitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+                var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+                var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(CommandExitCodes.Success, statusExitCode);
+                var extractors = statusJson.GetProperty("extractors");
+                Assert.True(extractors.GetProperty("pattern_config_count").GetInt32() >= 1);
+                Assert.True(extractors.GetProperty("skipped_file_count").GetInt32() >= 1);
+                Assert.True(extractors.GetProperty("diagnostic_count").GetInt32() >= 1);
+                Assert.Equal(20, extractors.GetProperty("diagnostic_limit").GetInt32());
+                Assert.True(extractors.GetProperty("symbol_extractor_count").GetInt32() >= 1);
+                var diagnostic = Assert.Single(
+                    extractors.GetProperty("diagnostics").EnumerateArray(),
+                    item => item.GetProperty("path").GetString()?.EndsWith("broken.yaml", StringComparison.Ordinal) == true);
+                Assert.Equal("pattern", diagnostic.GetProperty("kind").GetString());
+                Assert.Equal("error", diagnostic.GetProperty("severity").GetString());
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                DeleteDirectory(projectRoot);
+            }
         }
     }
 
@@ -8523,9 +8639,8 @@ public class IndexCommandRunnerTests
             RunGit(projectRoot, "add", ".");
             RunGit(projectRoot, "commit", "-m", "add run");
             var currentHead = RunGitCaptureStdOut(projectRoot, "rev-parse", "HEAD").Trim();
-            var shortCurrentHead = currentHead[..12];
 
-            var (refreshExitCode, _) = RunAndCaptureJson([projectRoot, "--commits", shortCurrentHead, "--json"]);
+            var (refreshExitCode, _) = RunAndCaptureJson([projectRoot, "--commits", "HEAD", "--json"]);
             Assert.Equal(CommandExitCodes.Success, refreshExitCode);
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
@@ -8538,6 +8653,68 @@ public class IndexCommandRunnerTests
             Assert.Equal("matched", check.GetProperty("reason").GetString());
             Assert.Equal(currentHead, statusJson.GetProperty("indexed_head_sha").GetString());
             Assert.Equal(0, statusJson.GetProperty("commits_ahead_of_indexed_head").GetInt32());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunStatusCheck_AfterChangedBetweenRefreshAtHead_DotCommandRestampsFullScanHead()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            RunGit(projectRoot, "init");
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            File.WriteAllText(sourcePath, "public class App { }\n");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "init");
+            var initialHead = RunGitCaptureStdOut(projectRoot, "rev-parse", "HEAD").Trim();
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            RunGit(projectRoot, "checkout", "-b", "feature");
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } }\n");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "add run");
+            var currentHead = RunGitCaptureStdOut(projectRoot, "rev-parse", "HEAD").Trim();
+
+            var (refreshExitCode, _) = RunAndCaptureJson([projectRoot, "--changed-between", initialHead, "HEAD", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, refreshExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var db = new DbContext(dbPath))
+            {
+                // `--changed-between` proves the current HEAD is covered for status freshness,
+                // but it must not overwrite the full-scan-only HEAD stamp.
+                // `--changed-between` は status freshness だけを満たし、full-scan 専用 HEAD は進めない。
+                Assert.Equal(initialHead, db.GetMetaString(DbContext.IndexedHeadCommitMetaKey));
+            }
+
+            var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--check", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, statusExitCode);
+            var check = statusJson.GetProperty("workspace_check");
+            Assert.False(check.GetProperty("head_changed").GetBoolean());
+            Assert.True(check.GetProperty("matches_workspace").GetBoolean());
+            Assert.Equal("matched", check.GetProperty("reason").GetString());
+
+            var (dotExitCode, dotJson) = RunProgramAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, dotExitCode);
+            Assert.Equal("success", dotJson.GetProperty("status").GetString());
+            Assert.True(dotJson.GetProperty("head_changed").GetBoolean());
+            Assert.Equal(initialHead, dotJson.GetProperty("prior_indexed_head_commit").GetString());
+            Assert.Equal(currentHead, dotJson.GetProperty("current_head_commit").GetString());
+
+            using (var db = new DbContext(dbPath))
+                Assert.Equal(currentHead, db.GetMetaString(DbContext.IndexedHeadCommitMetaKey));
+
+            var (postDotStatusExitCode, postDotStatusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--check", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, postDotStatusExitCode);
+            Assert.True(postDotStatusJson.GetProperty("workspace_check").GetProperty("matches_workspace").GetBoolean());
         }
         finally
         {
@@ -8600,6 +8777,31 @@ public class IndexCommandRunnerTests
             finally
             {
                 Console.SetOut(originalOut);
+            }
+        }
+    }
+
+    private (int ExitCode, JsonElement Json) RunProgramAndCaptureJson(string[] args)
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalOut = Console.Out;
+            var originalError = Console.Error;
+            using var stdout = new StringWriter();
+            using var stderr = new StringWriter();
+
+            try
+            {
+                Console.SetOut(stdout);
+                Console.SetError(stderr);
+                var exitCode = ProgramRunner.Run(args, _jsonOptions, appVersion: "1.0.0-test", configStartDirectory: args[0]);
+                using var document = JsonDocument.Parse(stdout.ToString());
+                return (exitCode, document.RootElement.Clone());
+            }
+            finally
+            {
+                Console.SetOut(originalOut);
+                Console.SetError(originalError);
             }
         }
     }

@@ -170,6 +170,9 @@ public static class GitHelper
     public static bool IsCommitObjectId(string value)
         => !string.IsNullOrWhiteSpace(value) && Regex.IsMatch(value, "^[0-9a-fA-F]{7,40}$");
 
+    public static void ValidateCommitRef(string projectRoot, string commitRef)
+        => ValidateSingleCommitRef(projectRoot, commitRef);
+
     private static void ValidateSingleCommitRef(string projectRoot, string commitId)
     {
         // Reject range/pathspec syntax before invoking git so --commits remains a list
@@ -272,6 +275,19 @@ public static class GitHelper
         return result.State is GitHeadCommitState.Resolved or GitHeadCommitState.DetachedHead
             ? result.Sha
             : null;
+    }
+
+    public static string? TryResolveCommit(string projectRoot, string refName)
+    {
+        try
+        {
+            ValidateGitRef(refName, nameof(refName));
+            return TryRunGit(projectRoot, "rev-parse", "--verify", $"{refName}^{{commit}}")?.Trim();
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     public static GitHeadCommitResult TryGetHeadCommitResult(string projectRoot)

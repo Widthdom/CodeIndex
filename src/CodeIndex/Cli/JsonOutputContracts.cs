@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using CodeIndex.Database;
+using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Models;
 
 namespace CodeIndex.Cli;
@@ -433,9 +434,12 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(SearchHighlight))]
 [JsonSerializable(typeof(SearchGuardEvidence))]
 [JsonSerializable(typeof(List<SearchGuardEvidence>))]
+[JsonSerializable(typeof(SearchQueryHint))]
 [JsonSerializable(typeof(SearchResult))]
 [JsonSerializable(typeof(SearchTermOccurrence))]
 [JsonSerializable(typeof(SearchTruncationContext))]
+[JsonSerializable(typeof(ExtractorRegistryDiagnostic))]
+[JsonSerializable(typeof(ExtractorRegistryStatus))]
 [JsonSerializable(typeof(StatusResult))]
 [JsonSerializable(typeof(StatusReadinessDegradation))]
 [JsonSerializable(typeof(StatusDbPragmaSettings))]
@@ -443,6 +447,12 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(StatusProcessMetrics))]
 [JsonSerializable(typeof(SuggestionDetailJsonResult))]
 [JsonSerializable(typeof(SuggestionExportJsonResult))]
+[JsonSerializable(typeof(SuggestionIssueDraftDuplicateMatchJsonResult))]
+[JsonSerializable(typeof(SuggestionIssueDraftDuplicatePreflightJsonResult))]
+[JsonSerializable(typeof(SuggestionIssueDraftExportJsonResult))]
+[JsonSerializable(typeof(SuggestionIssueDraftJsonResult))]
+[JsonSerializable(typeof(SuggestionIssueDraftPreflightSummaryJsonResult))]
+[JsonSerializable(typeof(SuggestionIssueDraftSourceJsonResult))]
 [JsonSerializable(typeof(SuggestionListItemJsonResult))]
 [JsonSerializable(typeof(SymbolAnalysisResult))]
 [JsonSerializable(typeof(SymbolHotspotJsonResult))]

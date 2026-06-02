@@ -87,7 +87,7 @@ public static partial class IndexCommandRunner
                     jsonOptions,
                     $"failed to resolve changed files from git commits: {ex.Message}",
                     CommandExitCodes.UsageError,
-                    "Check the commit IDs and rerun `cdidx index <projectPath> --commits <id> [id ...]`.",
+                    "Check the commit refs and rerun `cdidx index <projectPath> --commits <commit-ref> [commit-ref ...]`.",
                     CommandErrorCodes.UsageError);
             }
             finally
@@ -1116,7 +1116,7 @@ public static partial class IndexCommandRunner
         if (errors == 0)
         {
             StampIndexedHeadMetadata(writer, projectRoot);
-            StampCommitScopedFreshHeadMetadata(writer, options, currentHeadCommit);
+            StampCommitScopedFreshHeadMetadata(writer, options, projectRoot, currentHeadCommit);
             if (options.MemoryTrace)
                 memorySamples.Add(CaptureMemorySample("finalize", stopwatch));
             var memoryTimelineForStamp = BuildMemoryTimeline(memorySamples);

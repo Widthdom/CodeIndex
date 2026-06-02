@@ -52,13 +52,8 @@ internal static class DataDirectorySecurity
 
     public static void WritePrivateText(string path, string contents, Encoding? encoding = null)
     {
-        var ioPath = LongPath.EnsureWindowsPrefix(path);
-        using var stream = File.Open(ioPath, FileMode.OpenOrCreate, FileAccess.Write, FileShare.Read);
-        ApplyPrivateFileMode(ioPath);
-        stream.SetLength(0);
         var outputEncoding = encoding is null || encoding.CodePage == Encoding.UTF8.CodePage ? Utf8NoBom : encoding;
-        using var writer = new StreamWriter(stream, outputEncoding);
-        writer.Write(contents);
+        AtomicFileWriter.WriteText(path, contents, outputEncoding, ApplyPrivateFileMode);
     }
 
     public static string? ReadTextWithinLimit(string path, int maxBytes, FileShare share = FileShare.Read)
