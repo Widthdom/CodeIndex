@@ -247,6 +247,56 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
+    public async Task HttpTransport_RequestBodyOverLimit_Returns413AndDoesNotKillServer()
+    {
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath, maxRequestBodyBytes: 64);
+
+        using var oversized = await harness.PostJsonAsync(new string('x', 65));
+
+        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, oversized.StatusCode);
+        var rejectedBody = await oversized.Content.ReadAsStringAsync();
+        Assert.Contains("64 byte limit", rejectedBody, StringComparison.Ordinal);
+
+        using var follow = await harness.PostJsonAsync("""{"jsonrpc":"2.0","id":7,"method":"ping"}""");
+        Assert.Equal(HttpStatusCode.OK, follow.StatusCode);
+        var body = await follow.Content.ReadAsStringAsync();
+        using var doc = JsonDocument.Parse(body);
+        Assert.Equal(7, doc.RootElement.GetProperty("id").GetInt32());
+    }
+
+    [Fact]
+    public async Task HttpTransport_RequestQueueFull_Returns429()
+    {
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        await using var transport = new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null,
+            maxQueuedRequests: 1);
+
+        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+        var first = client.PostAsync(
+            listen.Prefix,
+            new StringContent("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", Encoding.UTF8, "application/json"));
+        await WaitUntilAsync(() => transport.QueuedRequestCount == 1, "the first request to fill the HTTP MCP queue");
+
+        using var second = await client.PostAsync(
+            listen.Prefix,
+            new StringContent("""{"jsonrpc":"2.0","id":2,"method":"ping"}""", Encoding.UTF8, "application/json"));
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, second.StatusCode);
+        Assert.Contains(second.Headers, header => header.Key == "Retry-After");
+
+        var frame = await transport.ReadFrameAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.NotNull(frame);
+        Assert.Contains("\"id\":1", frame, StringComparison.Ordinal);
+        await transport.WriteFrameAsync("""{"jsonrpc":"2.0","id":1,"result":{}}""", CancellationToken.None);
+        using var firstResponse = await first.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(HttpStatusCode.OK, firstResponse.StatusCode);
+    }
+
+    [Fact]
     public async Task HttpTransport_EventsStream_DoesNotBlockPostRequests()
     {
         await using var harness = await McpHttpHarness.StartAsync(_dbPath);
@@ -283,6 +333,23 @@ public class HttpMcpTransportTests : IDisposable
 
         Assert.Contains("\"method\":\"notifications/keep_alive\"", frame, StringComparison.Ordinal);
         Assert.Contains("\"uptime_s\":", frame, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task HttpTransport_EventsStream_RemovesDisconnectedStreams()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_MCP_KEEP_ALIVE_INTERVAL_S");
+        env.Set("CDIDX_MCP_KEEP_ALIVE_INTERVAL_S", "1");
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath);
+
+        using var client = new HttpClient();
+        using var events = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "events"), HttpCompletionOption.ResponseHeadersRead);
+        Assert.Equal(HttpStatusCode.OK, events.StatusCode);
+        await WaitUntilAsync(() => harness.HasEventStreams, "the event stream to be registered");
+
+        events.Dispose();
+
+        await WaitUntilAsync(() => !harness.HasEventStreams, "the disconnected event stream to be removed");
     }
 
     [Fact]
@@ -514,6 +581,20 @@ public class HttpMcpTransportTests : IDisposable
         return builder.ToString();
     }
 
+    private static async Task WaitUntilAsync(Func<bool> condition, string description)
+    {
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(5);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            if (condition())
+                return;
+
+            await Task.Delay(10);
+        }
+
+        Assert.Fail($"Timed out waiting for {description}.");
+    }
+
     private sealed class McpHttpHarness : IAsyncDisposable
     {
         private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(30);
@@ -533,10 +614,24 @@ public class HttpMcpTransportTests : IDisposable
 
         public string Endpoint { get; }
 
-        public static async Task<McpHttpHarness> StartAsync(string dbPath, string? bearerToken = null, Action<HttpMcpTransport.HttpRequestLogRecord>? requestLogger = null)
+        public bool HasEventStreams => _transport.HasEventStreams;
+
+        public static async Task<McpHttpHarness> StartAsync(
+            string dbPath,
+            string? bearerToken = null,
+            Action<HttpMcpTransport.HttpRequestLogRecord>? requestLogger = null,
+            int? maxRequestBodyBytes = null,
+            int? maxQueuedRequests = null)
         {
             var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
-            var transport = new HttpMcpTransport(listen.Prefix, listen.Host, listen.Port, bearerToken, requestLogger);
+            var transport = new HttpMcpTransport(
+                listen.Prefix,
+                listen.Host,
+                listen.Port,
+                bearerToken,
+                requestLogger,
+                maxRequestBodyBytes,
+                maxQueuedRequests);
             var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
             var cts = new CancellationTokenSource();
             var loopTask = Task.Run(() => server.RunAsync(transport, cts.Token));
