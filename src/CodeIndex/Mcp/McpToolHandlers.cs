@@ -231,6 +231,19 @@ public partial class McpServer
         payload["recovery_hint"] = hint;
     }
 
+    private static void AddExactSubstringRecoveryHint(JsonObject payload, string query)
+        => AddRecoveryHint(
+            payload,
+            SearchQueryAdvisor.ExactSubstringHintReason,
+            SearchQueryAdvisor.McpExactSubstringSuggestedAction,
+            "search",
+            new JsonObject
+            {
+                ["query"] = query,
+                ["exactSubstring"] = true,
+                ["limit"] = 5,
+            });
+
     private static void AddSymbolRecoveryHint(JsonObject payload, string query, string toolName, string? lang, string? kind, JsonNode? path)
     {
         var args = new JsonObject
@@ -984,6 +997,7 @@ public partial class McpServer
         var prefix = args?["prefix"]?.GetValue<bool>() ?? false;
         if (prefix && exact)
             return CreateToolErrorResponse(id, "'prefix' cannot be combined with 'exact' / 'exactSubstring' (exact uses instr(), not FTS5 prefix phrases).");
+        var suggestExactSubstring = SearchQueryAdvisor.ShouldSuggestExactSubstring(query, rawQuery, exact, prefix);
 
         return WithDbReader(id, args, reader =>
         {
@@ -997,6 +1011,8 @@ public partial class McpServer
                 payload["path"] = PathEcho(pathPatterns);
                 payload["excludeTests"] = excludeTests;
                 AddSearchStabilityMetadata(payload, reader, cursor, []);
+                if (suggestExactSubstring)
+                    AddExactSubstringRecoveryHint(payload, query);
                 if (countResults.Count == 0)
                     AddFtsQueryDiagnostics(payload, DbReader.AnalyzeFtsQuery(query, rawQuery, prefix, lang));
                 return CreateToolResult(id, $"Counted {countResults.Count} search result(s).", payload);
@@ -1020,12 +1036,19 @@ public partial class McpServer
                 AddSearchStabilityMetadata(payload, reader, cursor, results);
                 AddFtsQueryDiagnostics(payload, ftsDiagnostics);
                 AddResultEnvelope(payload, 0, 0, truncated: false);
-                AddRecoveryHint(
-                    payload,
-                    "no_results",
-                    "search returned no rows; try removing lang/path filters, using prefix for token-prefix matches, or using exactSubstring for literal punctuation or emoji.",
-                    "search",
-                    new JsonObject { ["query"] = query, ["limit"] = 5 });
+                if (suggestExactSubstring)
+                {
+                    AddExactSubstringRecoveryHint(payload, query);
+                }
+                else
+                {
+                    AddRecoveryHint(
+                        payload,
+                        "no_results",
+                        "search returned no rows; try removing lang/path filters, using prefix for token-prefix matches, or using exactSubstring for literal punctuation or emoji.",
+                        "search",
+                        new JsonObject { ["query"] = query, ["limit"] = 5 });
+                }
                 AddFreshnessHint(payload, reader);
                 return CreateToolResult(id, "No results found.", payload);
             }
@@ -1050,6 +1073,8 @@ public partial class McpServer
                 structured,
                 "excerpt",
                 BuildExcerptArgs(topResult.Path, topResult.StartLine, topResult.EndLine));
+            if (suggestExactSubstring)
+                AddExactSubstringRecoveryHint(structured, query);
             // Include top file paths in summary for quick AI orientation
             // AIが素早く位置把握できるよう、サマリにトップファイルパスを含める
             var topPaths = results.Select(r => r.Path).Distinct().Take(3);

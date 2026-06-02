@@ -3098,6 +3098,21 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_Search_PunctuationHeavyQueryAddsExactSubstringRecoveryHint()
+    {
+        InsertIndexedFile("src/sql.cs", "csharp", "var CommandText = $\"SELECT 1\";\nvar CommandText = other;\n");
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"CommandText = $","limit":1}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var recoveryHint = response["result"]!["structuredContent"]!["recovery_hint"]!;
+        Assert.Equal("punctuation_heavy_query", recoveryHint["reason"]!.GetValue<string>());
+        Assert.Equal("search", recoveryHint["tool"]!.GetValue<string>());
+        Assert.Equal("CommandText = $", recoveryHint["args"]!["query"]!.GetValue<string>());
+        Assert.True(recoveryHint["args"]!["exactSubstring"]!.GetValue<bool>());
+    }
+
+    [Fact]
     public void ToolsCall_Search_ExcludesGeneratedFilesByDefault()
     {
         InsertIndexedFile("src/generated.g.cs", "csharp", "class Generated { void Needle() {} }\n", generated: true);

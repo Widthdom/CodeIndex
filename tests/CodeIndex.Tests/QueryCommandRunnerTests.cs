@@ -10961,6 +10961,65 @@ jobs:
     }
 
     [Fact]
+    public void RunSearch_PunctuationHeavyTextSuggestsExactSubstring()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_exact_substring_hint_text");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/sql.cs",
+                "csharp",
+                "var CommandText = $\"SELECT 1\";\nvar CommandText = other;");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["CommandText = $", "--db", dbPath, "--limit", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("src/sql.cs", stdout);
+            Assert.Contains("Hint: This looks like a literal code phrase; try --exact-substring for punctuation-sensitive matching.", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_PunctuationHeavyJsonAddsExactSubstringHint()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_exact_substring_hint_json");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/sql.cs",
+                "csharp",
+                "var CommandText = $\"SELECT 1\";\nvar CommandText = other;");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["CommandText = $", "--db", dbPath, "--json", "--limit", "1"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var hint = document.RootElement.GetProperty("exact_substring_hint");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("punctuation_heavy_query", hint.GetProperty("reason").GetString());
+            Assert.Equal("--exact-substring", hint.GetProperty("flag").GetString());
+            Assert.Equal("exactSubstring", hint.GetProperty("mcp_argument").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_ExactSubstringAliasMatchesBackwardCompatibleExact()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_exact_alias");

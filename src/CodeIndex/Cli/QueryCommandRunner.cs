@@ -413,6 +413,7 @@ public static class QueryCommandRunner
         if (TryWriteUnexpectedExtraPositionals("search", options))
             return CommandExitCodes.UsageError;
 
+        var exactSubstringHint = SearchQueryAdvisor.BuildExactSubstringHint(options.Query, options.RawFts, exact, options.Prefix);
         int? jsonDoneCount = null;
         return WithDb(options, jsonOptions, reader =>
         {
@@ -422,15 +423,27 @@ public static class QueryCommandRunner
                 var queryDiagnostics = DbReader.AnalyzeFtsQuery(options.Query, options.RawFts, options.Prefix, options.Lang);
                 if (counts.Count == 0)
                 {
-                    Console.WriteLine(options.Json
-                        ? BuildJsonZeroResultPayload(reader, jsonOptions, includeFiles: true, query: options.Query, ftsQueryDiagnostics: queryDiagnostics, queryOptions: options).ToJsonString(jsonOptions)
-                        : "0");
+                    if (options.Json)
+                    {
+                        Console.WriteLine(BuildJsonZeroResultPayload(reader, jsonOptions, includeFiles: true, query: options.Query, ftsQueryDiagnostics: queryDiagnostics, queryOptions: options, exactSubstringHint: exactSubstringHint).ToJsonString(jsonOptions));
+                    }
+                    else
+                    {
+                        Console.WriteLine("0");
+                        WriteExactSubstringHintIfNeeded(exactSubstringHint);
+                    }
                     return CommandExitCodes.Success;
                 }
 
-                Console.WriteLine(options.Json
-                    ? JsonSerializer.Serialize(new QueryCountFilesJsonResult(counts.Count, counts.FileCount, options.Query), CliJsonSerializerContextFactory.Create(jsonOptions).QueryCountFilesJsonResult)
-                    : $"{counts.Count}");
+                if (options.Json)
+                {
+                    Console.WriteLine(JsonSerializer.Serialize(new QueryCountFilesJsonResult(counts.Count, counts.FileCount, options.Query), CliJsonSerializerContextFactory.Create(jsonOptions).QueryCountFilesJsonResult));
+                }
+                else
+                {
+                    Console.WriteLine($"{counts.Count}");
+                    WriteExactSubstringHintIfNeeded(exactSubstringHint);
+                }
                 return CommandExitCodes.Success;
             }
 
@@ -452,7 +465,7 @@ public static class QueryCommandRunner
                     }
                     else
                     {
-                        Console.WriteLine(BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "results", query: options.Query, ftsQueryDiagnostics: ftsQueryDiagnostics, queryOptions: options).ToJsonString(jsonOptions));
+                        Console.WriteLine(BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "results", query: options.Query, ftsQueryDiagnostics: ftsQueryDiagnostics, queryOptions: options, exactSubstringHint: exactSubstringHint).ToJsonString(jsonOptions));
                         jsonDoneCount = 0;
                     }
                 }
@@ -460,6 +473,7 @@ public static class QueryCommandRunner
                 {
                     Console.Error.WriteLine(BuildZeroResultLine("No results found", options));
                     WriteLangHint(options.Lang, reader);
+                    WriteExactSubstringHintIfNeeded(exactSubstringHint);
                     WriteZeroResultHints(options, reader);
                 }
                 return ZeroResultExitCode(options);
@@ -490,6 +504,11 @@ public static class QueryCommandRunner
                 var compactResults = results
                     .Select(r => SearchSnippetFormatter.ToCompactResult(r, options.Query, options.SnippetLines, exact, options.MaxLineWidth, r.Lang, options.SnippetFocus, exposeLiteralHighlights: exact))
                     .ToArray();
+                if (exactSubstringHint != null)
+                {
+                    foreach (var result in compactResults)
+                        result.ExactSubstringHint = exactSubstringHint;
+                }
                 if (options.JsonOutputFormat == JsonOutputFormatArray)
                 {
                     Console.WriteLine(JsonSerializer.Serialize(
@@ -517,6 +536,7 @@ public static class QueryCommandRunner
                 }
                 var fileCount = results.Select(r => r.Path).Distinct().Count();
                 Console.Error.WriteLine($"({results.Count} results in {fileCount} files)");
+                WriteExactSubstringHintIfNeeded(exactSubstringHint);
             }
             return CommandExitCodes.Success;
         }, exitCode =>
@@ -6726,6 +6746,14 @@ public static class QueryCommandRunner
         }
     }
 
+    private static void WriteExactSubstringHintIfNeeded(SearchQueryHint? hint)
+    {
+        if (hint == null)
+            return;
+
+        Console.Error.WriteLine($"Hint: {hint.SuggestedAction}");
+    }
+
     private static string BuildZeroResultLine(string message, QueryCommandOptions options)
     {
         var context = BuildQueryContextParts(options, includeDefaultLimit: true).ToList();
@@ -6877,6 +6905,7 @@ public static class QueryCommandRunner
         bool? degraded = null,
         ExactQuerySignal? exactSignal = null,
         QueryCommandOptions? queryOptions = null,
+        SearchQueryHint? exactSubstringHint = null,
         Action<JsonObject>? extraFields = null)
     {
         var payload = new JsonObject
@@ -6907,6 +6936,8 @@ public static class QueryCommandRunner
             payload["query_degraded_reason"] = ftsQueryDiagnostics.QueryDegradedReason;
             payload["tokens_dropped"] = JsonSerializer.SerializeToNode(ftsQueryDiagnostics.TokensDropped.ToList(), CliJsonSerializerContextFactory.Create(jsonOptions).ListString);
         }
+        if (exactSubstringHint != null)
+            payload["exact_substring_hint"] = BuildSearchQueryHintJson(exactSubstringHint);
         if (queryOptions != null)
             payload["query_context"] = BuildQueryContextJson(queryOptions, jsonOptions);
         extraFields?.Invoke(payload);
@@ -6914,6 +6945,14 @@ public static class QueryCommandRunner
 
         return payload;
     }
+
+    private static JsonObject BuildSearchQueryHintJson(SearchQueryHint hint) => new()
+    {
+        ["reason"] = hint.Reason,
+        ["suggested_action"] = hint.SuggestedAction,
+        ["flag"] = hint.Flag,
+        ["mcp_argument"] = hint.McpArgument,
+    };
 
     private static JsonObject BuildGroupedHotspotsZeroJsonPayload(DbReader reader, JsonSerializerOptions jsonOptions, bool countOnly, bool graphAvailable, QueryCommandOptions? queryOptions = null)
     {

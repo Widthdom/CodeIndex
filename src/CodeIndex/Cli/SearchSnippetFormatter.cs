@@ -517,6 +517,8 @@ public sealed class CompactSearchResult
     public int TruncatedLineCount { get; set; }
     public int DroppedMatchLineCount { get; set; }
     public SearchTruncationContext TruncationContext { get; set; } = new();
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SearchQueryHint? ExactSubstringHint { get; set; }
     public double Score { get; set; }
 }
 

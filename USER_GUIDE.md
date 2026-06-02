@@ -362,6 +362,10 @@ In `search --json` and MCP `search` responses, exact substring highlights add
 `literal_terms` / `literal_term_occurrences` (camelCase in MCP) so clients can
 render only the requested literal phrase while keeping the broader diagnostic
 `terms` / `term_occurrences` fields.
+When a normal `search` query looks like a punctuation-heavy code phrase,
+text output suggests `--exact-substring`, JSON results include
+`exact_substring_hint`, and MCP `search` includes a `recovery_hint` with
+`exactSubstring: true` arguments.
 
 For single-value CLI flags, repeated occurrences keep the long-standing
 rightmost-wins behavior. `cdidx` prints a warning that names the winning value:
@@ -2460,6 +2464,9 @@ name-based tools では `exactName` を使い、`exact` は後方互換 client �
 `literal_terms` / `literal_term_occurrences`（MCP では camelCase）も追加されるため、
 広めの診断用 `terms` / `term_occurrences` を残したまま、要求した literal phrase だけを
 render できます。
+通常の `search` query が記号の多い code phrase に見える場合、text output は
+`--exact-substring` を提案し、JSON 結果は `exact_substring_hint`、MCP `search` は
+`exactSubstring: true` arguments 付きの `recovery_hint` を返します。
 
 単一値の CLI フラグを複数回指定した場合は、従来どおり右端の指定が採用されます。
 `cdidx` は採用される値を含む警告を出し、最後の CLI 指定がそれ以前の CLI 指定や
