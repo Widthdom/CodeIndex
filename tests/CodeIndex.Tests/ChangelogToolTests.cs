@@ -240,6 +240,74 @@ public sealed class ChangelogToolTests
         Assert.Contains("missing '## 日本語' heading", ex.Message);
     }
 
+    [Fact]
+    public void CheckFragmentsRejectsTooManyFragmentsBeforeParsing()
+    {
+        using var scope = new TestRepositoryScope();
+        scope.WriteFile("CHANGELOG.md", SampleChangelog);
+        scope.WriteFile("version.json", """
+            {
+              "version": "1.16.0"
+            }
+            """);
+
+        for (var i = 0; i <= ChangelogTool.MaxFragmentCount; i++)
+            scope.WriteFile($"changelog.d/unreleased/{1000 + i}.fixed.md", string.Empty);
+
+        var tool = new ChangelogTool(scope.Root);
+        var ex = Assert.Throws<ChangelogException>(() => tool.CheckFragments());
+        Assert.Contains("too many changelog fragments", ex.Message);
+        Assert.Contains($"maximum supported count is {ChangelogTool.MaxFragmentCount}", ex.Message);
+    }
+
+    [Fact]
+    public void CheckFragmentsRejectsOversizedFragmentBeforeParsing()
+    {
+        using var scope = new TestRepositoryScope();
+        scope.WriteFile("CHANGELOG.md", SampleChangelog);
+        scope.WriteFile("version.json", """
+            {
+              "version": "1.16.0"
+            }
+            """);
+        scope.WriteFile("changelog.d/unreleased/+large.fixed.md", OversizedContent(ChangelogTool.MaxFragmentBytes));
+
+        var tool = new ChangelogTool(scope.Root);
+        var ex = Assert.Throws<ChangelogException>(() => tool.CheckFragments());
+        Assert.Contains("changelog.d/unreleased/+large.fixed.md: file is", ex.Message);
+        Assert.Contains($"maximum supported size is {ChangelogTool.MaxFragmentBytes} bytes", ex.Message);
+    }
+
+    [Fact]
+    public void PrepareRejectsOversizedChangelogBeforeParsing()
+    {
+        using var scope = new TestRepositoryScope();
+        scope.WriteFile("CHANGELOG.md", OversizedContent(ChangelogTool.MaxChangelogBytes));
+        scope.WriteFile("version.json", """
+            {
+              "version": "1.16.0"
+            }
+            """);
+
+        var tool = new ChangelogTool(scope.Root);
+        var ex = Assert.Throws<ChangelogException>(() => tool.Prepare(new Version(1, 17, 0), new DateOnly(2026, 5, 1), writeChanges: true));
+        Assert.Contains("CHANGELOG.md: file is", ex.Message);
+        Assert.Contains($"maximum supported size is {ChangelogTool.MaxChangelogBytes} bytes", ex.Message);
+    }
+
+    [Fact]
+    public void PrepareRejectsOversizedVersionBeforeParsing()
+    {
+        using var scope = new TestRepositoryScope();
+        scope.WriteFile("CHANGELOG.md", SampleChangelog);
+        scope.WriteFile("version.json", OversizedContent(ChangelogTool.MaxVersionJsonBytes));
+
+        var tool = new ChangelogTool(scope.Root);
+        var ex = Assert.Throws<ChangelogException>(() => tool.Prepare(new Version(1, 17, 0), new DateOnly(2026, 5, 1), writeChanges: true));
+        Assert.Contains("version.json: file is", ex.Message);
+        Assert.Contains($"maximum supported size is {ChangelogTool.MaxVersionJsonBytes} bytes", ex.Message);
+    }
+
     private static int CountOccurrences(string text, string value)
     {
         var count = 0;
@@ -252,6 +320,8 @@ public sealed class ChangelogToolTests
 
         return count;
     }
+
+    private static string OversizedContent(long maxBytes) => new('x', checked((int)maxBytes + 1));
 
     private sealed class TestRepositoryScope : IDisposable
     {

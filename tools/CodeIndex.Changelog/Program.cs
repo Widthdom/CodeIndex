@@ -69,6 +69,12 @@ public static class Program
         Console.Out.WriteLine("  dotnet run --project tools/CodeIndex.Changelog -- prepare --version X.Y.Z --date YYYY-MM-DD");
         Console.Out.WriteLine("  dotnet run --project tools/CodeIndex.Changelog -- render --version X.Y.Z --date YYYY-MM-DD");
         Console.Out.WriteLine("  dotnet run --project tools/CodeIndex.Changelog -- release-notes --version X.Y.Z");
+        Console.Out.WriteLine();
+        Console.Out.WriteLine("Limits:");
+        Console.Out.WriteLine($"  unreleased fragments: {ChangelogTool.MaxFragmentCount}");
+        Console.Out.WriteLine($"  fragment file size: {ChangelogTool.MaxFragmentBytes} bytes");
+        Console.Out.WriteLine($"  CHANGELOG.md size: {ChangelogTool.MaxChangelogBytes} bytes");
+        Console.Out.WriteLine($"  version.json size: {ChangelogTool.MaxVersionJsonBytes} bytes");
     }
 
     private static ParsedOptions ParseOptions(string[] args, bool requireDate)
@@ -146,6 +152,11 @@ public static class Program
 
 public sealed class ChangelogTool
 {
+    public const int MaxFragmentCount = 512;
+    public const long MaxFragmentBytes = 128 * 1024;
+    public const long MaxChangelogBytes = 2 * 1024 * 1024;
+    public const long MaxVersionJsonBytes = 16 * 1024;
+
     private static readonly string[] AllowedCategories =
     [
         "added",
@@ -211,7 +222,7 @@ public sealed class ChangelogTool
         var currentVersion = ReadCurrentVersion(versionPath);
 
         var changelogPath = Path.Combine(_repositoryRoot, "CHANGELOG.md");
-        var changelogText = File.ReadAllText(changelogPath).Replace("\r\n", "\n", StringComparison.Ordinal);
+        var changelogText = ReadAllTextBounded(changelogPath, _repositoryRoot, MaxChangelogBytes).Replace("\r\n", "\n", StringComparison.Ordinal);
         var changelog = ParsedChangelog.Parse(changelogText);
 
         var targetHeading = $"### [{targetVersion}] - {releaseDate:yyyy-MM-dd}";
@@ -268,7 +279,7 @@ public sealed class ChangelogTool
     public string RenderReleaseNotes(Version targetVersion)
     {
         var changelogPath = Path.Combine(_repositoryRoot, "CHANGELOG.md");
-        var changelogText = File.ReadAllText(changelogPath).Replace("\r\n", "\n", StringComparison.Ordinal);
+        var changelogText = ReadAllTextBounded(changelogPath, _repositoryRoot, MaxChangelogBytes).Replace("\r\n", "\n", StringComparison.Ordinal);
         var changelog = ParsedChangelog.Parse(changelogText);
         var versionPrefix = $"### [{targetVersion}]";
 
@@ -304,13 +315,23 @@ public sealed class ChangelogTool
 
         var fragments = new List<Fragment>();
         var errors = new List<string>();
+        var fragmentPaths = new List<string>();
 
-        foreach (var path in Directory.EnumerateFiles(fragmentDirectory, "*.md", SearchOption.TopDirectoryOnly).OrderBy(path => path, StringComparer.Ordinal))
+        foreach (var path in Directory.EnumerateFiles(fragmentDirectory, "*.md", SearchOption.TopDirectoryOnly))
         {
             var fileName = Path.GetFileName(path);
             if (fileName == ".gitkeep")
                 continue;
 
+            fragmentPaths.Add(path);
+            if (fragmentPaths.Count > MaxFragmentCount)
+                throw new ChangelogException($"changelog.d/unreleased: too many changelog fragments ({fragmentPaths.Count}); maximum supported count is {MaxFragmentCount}.");
+        }
+
+        fragmentPaths.Sort(StringComparer.Ordinal);
+
+        foreach (var path in fragmentPaths)
+        {
             try
             {
                 fragments.Add(ParseFragment(path, _repositoryRoot));
@@ -344,7 +365,7 @@ public sealed class ChangelogTool
         var frontMatterIssues = new List<int>();
         var frontMatterAffected = new List<string>();
 
-        var text = File.ReadAllText(absolutePath).Replace("\r\n", "\n", StringComparison.Ordinal);
+        var text = ReadAllTextBounded(absolutePath, repositoryRoot, MaxFragmentBytes).Replace("\r\n", "\n", StringComparison.Ordinal);
         var lines = text.Split('\n');
         if (lines.Length == 0)
             throw new ChangelogException($"{relativePath}: fragment is empty.");
@@ -518,12 +539,28 @@ public sealed class ChangelogTool
 
     private static Version ReadCurrentVersion(string versionPath)
     {
-        var text = File.ReadAllText(versionPath);
+        var repositoryRoot = Path.GetDirectoryName(versionPath) ?? string.Empty;
+        var text = ReadAllTextBounded(versionPath, repositoryRoot, MaxVersionJsonBytes);
         using var document = JsonDocument.Parse(text);
         if (!document.RootElement.TryGetProperty("version", out var versionElement))
             throw new ChangelogException("version.json is missing the version property.");
 
         return Version.Parse(versionElement.GetString() ?? throw new ChangelogException("version.json contains an empty version."));
+    }
+
+    private static string ReadAllTextBounded(string absolutePath, string repositoryRoot, long maxBytes)
+    {
+        var fileInfo = new FileInfo(absolutePath);
+        var length = fileInfo.Length;
+        if (length > maxBytes)
+        {
+            var relativePath = string.IsNullOrWhiteSpace(repositoryRoot)
+                ? Path.GetFileName(absolutePath)
+                : Path.GetRelativePath(repositoryRoot, absolutePath).Replace('\\', '/');
+            throw new ChangelogException($"{relativePath}: file is {length} bytes; maximum supported size is {maxBytes} bytes.");
+        }
+
+        return File.ReadAllText(absolutePath);
     }
 
     private static List<VersionBlock> PrepareLanguageSection(
