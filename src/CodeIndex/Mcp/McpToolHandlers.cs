@@ -3966,6 +3966,9 @@ public partial class McpServer
     /// </summary>
     private const int MaxContextLength = 1000;
 
+    private const int MaxSamplingResponseTextChars = 8192;
+    private const int MaxSamplingResponseJsonDepth = 16;
+
     /// <summary>
     /// Handle the suggest_improvement tool call.
     /// Records a structured suggestion to .cdidx/suggestions-*.json.
@@ -4197,9 +4200,11 @@ public partial class McpServer
         var text = ExtractSamplingText(result);
         if (string.IsNullOrWhiteSpace(text))
             return null;
+        if (text.Length > MaxSamplingResponseTextChars)
+            return null;
         try
         {
-            var parsed = JsonNode.Parse(text);
+            var parsed = JsonNode.Parse(text, documentOptions: new JsonDocumentOptions { MaxDepth = MaxSamplingResponseJsonDepth });
             var title = SanitizeSampledTitle(TryReadStringValue(parsed?["title"]));
             var tags = parsed?["tags"] is JsonArray tagArray
                 ? tagArray.Select(TryReadStringValue)
