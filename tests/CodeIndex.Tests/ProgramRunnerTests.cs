@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
@@ -311,6 +312,37 @@ public class ProgramRunnerTests
     public void BuildInstallerScriptUrl_UsesResolvedReleaseTag(string releaseTag, string expected)
     {
         Assert.Equal(expected, ProgramRunner.BuildInstallerScriptUrl(releaseTag));
+    }
+
+    [Fact]
+    public async Task UpdateChecker_ReadLatestReleaseTagAsync_ParsesTagName()
+    {
+        using var content = new ByteArrayContent(Encoding.UTF8.GetBytes("""{"tag_name":"v1.27.0"}"""));
+
+        var tag = await UpdateChecker.ReadLatestReleaseTagAsync(content, CancellationToken.None);
+
+        Assert.Equal("v1.27.0", tag);
+    }
+
+    [Fact]
+    public async Task UpdateChecker_ReadLatestReleaseTagAsync_RejectsOverLimitResponse()
+    {
+        using var content = new ByteArrayContent(new byte[(int)UpdateChecker.MaxLatestReleaseResponseBytes + 1]);
+
+        var ex = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            UpdateChecker.ReadLatestReleaseTagAsync(content, CancellationToken.None));
+
+        Assert.Contains($"{UpdateChecker.MaxLatestReleaseResponseBytes} byte limit", ex.Message);
+    }
+
+    [Fact]
+    public async Task UpdateChecker_ReadLatestReleaseTagAsync_RejectsDeepJson()
+    {
+        var depth = UpdateChecker.MaxLatestReleaseJsonDepth + 8;
+        using var content = new ByteArrayContent(Encoding.UTF8.GetBytes(new string('[', depth) + new string(']', depth)));
+
+        await Assert.ThrowsAnyAsync<JsonException>(() =>
+            UpdateChecker.ReadLatestReleaseTagAsync(content, CancellationToken.None));
     }
 
     [Theory]
