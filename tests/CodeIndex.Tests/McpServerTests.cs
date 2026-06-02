@@ -5318,6 +5318,40 @@ public class McpServerTests : IDisposable
         Assert.Equal("response_too_large", response["error"]!["data"]!["reason"]!.GetValue<string>());
         Assert.Equal(256, response["error"]!["data"]!["limit_bytes"]!.GetValue<int>());
         Assert.True(response["error"]!["data"]!["actual_bytes"]!.GetValue<int>() > 256);
+        Assert.False(response["error"]!["data"]!["actual_bytes_exact"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public void ResponseLimitSerializer_StopsBeforeFullStringMaterialization_Issue2860()
+    {
+        var payload = new JsonObject
+        {
+            ["value"] = new string('x', 10_000),
+        };
+
+        var withinLimit = _server.TrySerializeJsonNodeWithinByteLimitForTests(payload, 256, out var serialized, out var bytesWritten);
+
+        Assert.False(withinLimit);
+        Assert.Null(serialized);
+        Assert.True(bytesWritten > 256);
+        Assert.True(bytesWritten < 10_000);
+    }
+
+    [Fact]
+    public void ResponseLimitSerializer_ReturnsCapturedJsonWhenWithinLimit_Issue2860()
+    {
+        var payload = new JsonObject
+        {
+            ["value"] = "ok",
+        };
+
+        var withinLimit = _server.TrySerializeJsonNodeWithinByteLimitForTests(payload, 256, out var serialized, out var bytesWritten);
+
+        Assert.True(withinLimit);
+        Assert.NotNull(serialized);
+        Assert.Equal(Encoding.UTF8.GetByteCount(serialized), bytesWritten);
+        using var parsed = JsonDocument.Parse(serialized);
+        Assert.Equal("ok", parsed.RootElement.GetProperty("value").GetString());
     }
 
     [Fact]

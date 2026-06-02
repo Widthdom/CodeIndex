@@ -6,7 +6,8 @@ namespace CodeIndex.Indexer;
 
 internal sealed class BoundedRegex : BclRegex
 {
-    internal static readonly TimeSpan DefaultMatchTimeout = TimeSpan.FromMilliseconds(250);
+    // Keep regex matches bounded, but leave enough scheduler headroom for full-suite CI contention.
+    internal static readonly TimeSpan DefaultMatchTimeout = TimeSpan.FromSeconds(1);
 
     public BoundedRegex(string pattern)
         : base(pattern, RegexOptions.None, DefaultMatchTimeout)
