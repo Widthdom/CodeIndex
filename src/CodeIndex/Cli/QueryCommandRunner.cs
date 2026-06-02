@@ -42,6 +42,8 @@ public static class QueryCommandRunner
     internal const int MaxStatusCheckScopesCsvEntries = 16;
     internal const int MaxVisibilityFilterCsvLength = 256;
     internal const int MaxVisibilityFilterCsvEntries = 16;
+    internal const int MaxQueryPathFilterCount = 128;
+    internal const int MaxQueryPathFilterLength = 1024;
     internal const int ExactZeroHintProbeLimit = 1;
     internal const int ExactZeroHintSampleLimit = 5;
     private const string HotspotsGroupedByNameKind = "name_kind";
@@ -5758,10 +5760,28 @@ public static class QueryCommandRunner
         IReadOnlyList<string> excludePaths,
         Action<string> addParseError)
     {
-        foreach (var pattern in pathPatterns)
-            ValidatePathGlobPattern("--path", pattern, addParseError);
-        foreach (var pattern in excludePaths)
-            ValidatePathGlobPattern("--exclude-path", pattern, addParseError);
+        ValidatePathOptionValues("--path", pathPatterns, addParseError);
+        ValidatePathOptionValues("--exclude-path", excludePaths, addParseError);
+    }
+
+    private static void ValidatePathOptionValues(
+        string optionName,
+        IReadOnlyList<string> patterns,
+        Action<string> addParseError)
+    {
+        if (patterns.Count > MaxQueryPathFilterCount)
+            addParseError($"Error: {optionName} accepts at most {MaxQueryPathFilterCount} values.");
+
+        foreach (var pattern in patterns)
+        {
+            if (pattern.Length > MaxQueryPathFilterLength)
+            {
+                addParseError($"Error: {optionName} value is too long ({pattern.Length} characters; max {MaxQueryPathFilterLength}).");
+                continue;
+            }
+
+            ValidatePathGlobPattern(optionName, pattern, addParseError);
+        }
     }
 
     private static bool TryParseJsonOutputFormat(string rawValue, out string format)

@@ -3102,6 +3102,41 @@ jobs:
         }
     }
 
+    [Theory]
+    [InlineData("--path")]
+    [InlineData("--exclude-path")]
+    public void ParseArgs_PathFiltersRejectTooManyValues_Issue2911(string optionName)
+    {
+        var args = new List<string> { "RunSearch" };
+        for (var i = 0; i <= QueryCommandRunner.MaxQueryPathFilterCount; i++)
+        {
+            args.Add(optionName);
+            args.Add("src/**");
+        }
+
+        var options = QueryCommandRunner.ParseArgs(
+            args.ToArray(),
+            jsonDefault: false,
+            allowNamedQuery: true);
+
+        Assert.Contains($"{optionName} accepts at most", options.ParseError);
+    }
+
+    [Theory]
+    [InlineData("--path")]
+    [InlineData("--exclude-path")]
+    public void ParseArgs_PathFiltersRejectOverlongPattern_Issue2911(string optionName)
+    {
+        var tooLong = new string('a', QueryCommandRunner.MaxQueryPathFilterLength + 1);
+
+        var options = QueryCommandRunner.ParseArgs(
+            ["RunSearch", optionName, tooLong],
+            jsonDefault: false,
+            allowNamedQuery: true);
+
+        Assert.Contains($"{optionName} value is too long", options.ParseError);
+    }
+
     // Issue #1507: missing-value errors for CLI flags must append a per-flag `Hint:` line that
     // shows the expected value type or range (e.g. positive integer, glob pattern, language id),
     // so users do not need to consult `--help` for trivial mistakes. The hint is sourced from
