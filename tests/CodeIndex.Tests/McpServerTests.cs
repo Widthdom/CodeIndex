@@ -2883,7 +2883,7 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
-    public void McpToolFilter_Parse_OverlongAllowListIsIgnored_Issue2905()
+    public void McpToolFilter_Parse_OverlongAllowListFailsClosed_Issue2905()
     {
         lock (TestConsoleLock.Gate)
         {
@@ -2894,10 +2894,10 @@ public class McpServerTests : IDisposable
                 Console.SetError(stderr);
                 var filter = McpToolFilter.Parse(new string('s', McpToolFilter.MaxToolFilterCsvLength + 1), null);
 
-                Assert.True(filter.IsEnabled("search"));
-                Assert.True(filter.IsEnabled("index"));
+                foreach (var name in McpToolFilter.KnownToolNames)
+                    Assert.False(filter.IsEnabled(name), $"{name} should be disabled when an invalid allowlist is supplied");
                 Assert.Contains(McpToolFilter.AllowEnvVarName, stderr.ToString());
-                Assert.Contains("was ignored", stderr.ToString());
+                Assert.Contains("was rejected", stderr.ToString());
             }
             finally
             {
@@ -2907,7 +2907,7 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
-    public void McpToolFilter_Parse_TooManyDenyEntriesAreIgnored_Issue2905()
+    public void McpToolFilter_Parse_TooManyDenyEntriesAreRejected_Issue2905()
     {
         lock (TestConsoleLock.Gate)
         {
@@ -2922,6 +2922,7 @@ public class McpServerTests : IDisposable
                 Assert.True(filter.IsEnabled("index"));
                 Assert.Contains(McpToolFilter.DenyEnvVarName, stderr.ToString());
                 Assert.Contains("accepts at most", stderr.ToString());
+                Assert.Contains("was rejected", stderr.ToString());
             }
             finally
             {

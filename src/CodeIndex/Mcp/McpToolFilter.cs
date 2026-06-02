@@ -73,10 +73,9 @@ public sealed class McpToolFilter
 
     /// <summary>
     /// Build a filter from `CDIDX_MCP_TOOLS_ALLOW` / `CDIDX_MCP_TOOLS_DENY`. When both are
-    /// unset or only contain unknown names, returns <see cref="AllowAll"/> so default
-    /// behavior is preserved.
+    /// unset, returns <see cref="AllowAll"/> so default behavior is preserved.
     /// `CDIDX_MCP_TOOLS_ALLOW` / `CDIDX_MCP_TOOLS_DENY` から filter を組み立てる。両方とも
-    /// 未指定、または未知の名前しか含まない場合は <see cref="AllowAll"/> を返し既定挙動を保つ。
+    /// 未指定の場合は <see cref="AllowAll"/> を返し既定挙動を保つ。
     /// </summary>
     public static McpToolFilter FromEnvironment() =>
         Parse(
@@ -85,9 +84,12 @@ public sealed class McpToolFilter
 
     internal static McpToolFilter Parse(string? allowValue, string? denyValue)
     {
-        var allow = SplitCsv(allowValue, AllowEnvVarName);
-        if (allow.Count > 0)
+        var allow = SplitCsv(allowValue, AllowEnvVarName, out var allowSpecified, out var allowInvalid);
+        if (allowSpecified)
         {
+            if (allowInvalid)
+                return new McpToolFilter(new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+
             var filtered = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var name in KnownToolNames)
             {
@@ -98,7 +100,7 @@ public sealed class McpToolFilter
         }
 
         var enabled = new HashSet<string>(KnownToolNames, StringComparer.OrdinalIgnoreCase);
-        var deny = SplitCsv(denyValue, DenyEnvVarName);
+        var deny = SplitCsv(denyValue, DenyEnvVarName, out _, out _);
         if (deny.Count > 0)
         {
             foreach (var name in deny)
@@ -123,13 +125,19 @@ public sealed class McpToolFilter
         !string.IsNullOrEmpty(toolName)
         && KnownToolNames.Any(known => string.Equals(known, toolName, StringComparison.OrdinalIgnoreCase));
 
-    private static HashSet<string> SplitCsv(string? value, string source)
+    private static HashSet<string> SplitCsv(string? value, string source, out bool specified, out bool invalid)
     {
         var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        specified = !string.IsNullOrWhiteSpace(value);
+        invalid = false;
+
         if (string.IsNullOrWhiteSpace(value))
             return set;
         if (!ValidateCsvBounds(source, value))
+        {
+            invalid = true;
             return set;
+        }
 
         foreach (var raw in value.Split(','))
         {
@@ -145,14 +153,14 @@ public sealed class McpToolFilter
     {
         if (value.Length > MaxToolFilterCsvLength)
         {
-            Console.Error.WriteLine($"Warning: {source} is too long ({value.Length} characters; max {MaxToolFilterCsvLength}) and was ignored.");
+            Console.Error.WriteLine($"Warning: {source} is too long ({value.Length} characters; max {MaxToolFilterCsvLength}) and was rejected.");
             return false;
         }
 
         var entries = CountCsvEntries(value);
         if (entries > MaxToolFilterCsvEntries)
         {
-            Console.Error.WriteLine($"Warning: {source} accepts at most {MaxToolFilterCsvEntries} comma-separated entries and was ignored.");
+            Console.Error.WriteLine($"Warning: {source} accepts at most {MaxToolFilterCsvEntries} comma-separated entries and was rejected.");
             return false;
         }
 
