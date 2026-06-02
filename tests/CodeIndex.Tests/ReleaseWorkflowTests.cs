@@ -262,6 +262,7 @@ public class ReleaseWorkflowTests
     [Theory]
     [InlineData("/payload.txt", "must be a relative path")]
     [InlineData("C:/payload.txt", "must be a relative path")]
+    [InlineData("./C:/payload.txt", "must be a relative path")]
     [InlineData("../payload.txt", "must not contain parent-directory segments")]
     [InlineData("folder\\payload.txt", "must use '/' separators")]
     [InlineData("folder//payload.txt", "must not contain empty path segments")]

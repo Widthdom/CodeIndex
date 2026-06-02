@@ -175,7 +175,11 @@ public static class PackageCorePropertiesNormalizer
         if (normalizedSegments.Count == 0)
             throw new InvalidOperationException($"ZIP {role} entry {entryName} must not normalize to an empty path.");
 
-        return string.Join('/', normalizedSegments);
+        var normalizedName = string.Join('/', normalizedSegments);
+        if (normalizedName[0] == '/' || StartsWithWindowsDrivePrefix(normalizedName))
+            throw new InvalidOperationException($"ZIP {role} entry {entryName} must be a relative path.");
+
+        return normalizedName;
     }
 
     private static bool StartsWithWindowsDrivePrefix(string entryName)
