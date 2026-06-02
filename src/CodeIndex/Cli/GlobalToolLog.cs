@@ -87,10 +87,7 @@ internal static class GlobalToolLog
     }
 
     private static StreamWriter CreateLogWriter(string logPath) =>
-        new(new FileStream(logPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite), new UTF8Encoding(false))
-        {
-            AutoFlush = true,
-        };
+        PrivateLogFile.OpenAppendText(logPath);
 
     internal static void Info(string message) => CurrentSession.Value?.Write("INFO", message);
 
@@ -406,15 +403,7 @@ internal static class GlobalToolLog
     {
         try
         {
-            var oldLogs = new DirectoryInfo(logDirectory)
-                .EnumerateFiles("stderr-*.log", SearchOption.TopDirectoryOnly)
-                .OrderByDescending(file => file.LastWriteTimeUtc)
-                .ThenByDescending(file => file.Name, StringComparer.Ordinal)
-                .Skip(retainedLogFileCount)
-                .ToList();
-
-            foreach (var file in oldLogs)
-                file.Delete();
+            PrivateLogFile.PruneOldFiles(logDirectory, "stderr-*.log", retainedLogFileCount);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -429,8 +418,7 @@ internal static class GlobalToolLog
 
         try
         {
-            foreach (var file in new DirectoryInfo(logDirectory).EnumerateFiles("stderr-*.log", SearchOption.TopDirectoryOnly))
-                SetLogFilePermissions(file.FullName);
+            PrivateLogFile.HardenExisting(logDirectory, "stderr-*.log");
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -445,7 +433,7 @@ internal static class GlobalToolLog
 
         try
         {
-            File.SetUnixFileMode(logPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            PrivateLogFile.TrySetPrivatePermissions(logPath);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
