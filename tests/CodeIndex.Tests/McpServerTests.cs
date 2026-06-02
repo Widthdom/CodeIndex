@@ -9532,6 +9532,63 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void SuggestImprovement_WhenSamplingAvailable_BoundsPromptAndSummarizesInvocationContext()
+    {
+        _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"capabilities":{"sampling":{}}}}""")!);
+        string? capturedPrompt = null;
+        _server.ClientRequestHandlerForTests = (method, parameters) =>
+        {
+            Assert.Equal("sampling/createMessage", method);
+            capturedPrompt = parameters?["messages"]?[0]?["content"]?["text"]?.GetValue<string>();
+            return new JsonObject
+            {
+                ["content"] = new JsonObject
+                {
+                    ["type"] = "text",
+                    ["text"] = """{"title":"Bound sampling prompt","tags":["security"]}"""
+                }
+            };
+        };
+        var uniqueDesc = new string('\u3042', 2000);
+        var context = new string('\u3044', 1000);
+        const string secretValue = "secret-token-1234567890";
+        var toolInvocationContext = $"search request included token {secretValue} and detailed invocation payload";
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "suggest_improvement",
+                ["arguments"] = new JsonObject
+                {
+                    ["category"] = "other",
+                    ["description"] = uniqueDesc,
+                    ["context"] = context,
+                    ["toolInvocationContext"] = toolInvocationContext,
+                }
+            }
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal("recorded", structured["status"]!.GetValue<string>());
+        Assert.Equal("Bound sampling prompt", structured["sampled_title"]!.GetValue<string>());
+        Assert.NotNull(capturedPrompt);
+        Assert.True(Encoding.UTF8.GetByteCount(capturedPrompt) <= 4096);
+        Assert.Contains("tool_invocation_context: provided;", capturedPrompt);
+        Assert.Contains("raw content withheld", capturedPrompt);
+        Assert.DoesNotContain(secretValue, capturedPrompt);
+        Assert.Contains("[truncated]", capturedPrompt);
+        var stored = new SuggestionStore(Path.GetDirectoryName(_dbPath)!, Path.GetFileNameWithoutExtension(_dbPath)).LoadAll()
+            .Single(s => s.Description == uniqueDesc);
+        Assert.Equal(toolInvocationContext, stored.ToolInvocationContext);
+    }
+
+    [Fact]
     public void SuggestImprovement_WhenSamplingDisabled_DoesNotCallClientSampling()
     {
         using var env = EnvironmentVariableScope.Capture("CDIDX_MCP_SAMPLING");
