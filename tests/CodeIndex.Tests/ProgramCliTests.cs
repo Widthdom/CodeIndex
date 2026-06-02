@@ -467,7 +467,7 @@ public class ProgramCliTests
         Assert.Equal(0, fullExit);
         Assert.Equal(string.Empty, fullStderr);
         Assert.Contains("Index and update options:", fullStdout);
-        Assert.Contains("cdidx index <projectPath> --commits <id>", fullStdout);
+        Assert.Contains("cdidx index <projectPath> --commits <commit-ref>", fullStdout);
         Assert.Contains("--limit <n>, --top <n>", fullStdout);
     }
 

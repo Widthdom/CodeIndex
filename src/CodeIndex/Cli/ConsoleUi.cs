@@ -75,7 +75,7 @@ public static class ConsoleUi
         ("backfill-fold", "cdidx backfill-fold [--db <path>] [--dry-run] [--no-checkpoint] [--json]"),
         ("optimize", "cdidx optimize [--db <path>] [--json]"),
         ("vacuum", "cdidx vacuum [--db <path>] [--json]"),
-        ("index-commits", "cdidx index <projectPath> --commits <id> [id ...] [--db <path>] [--verbose] [--dry-run] [--json] [--memory-trace] [--duration-format <auto|seconds|hms>] [--max-file-bytes <bytes>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]]"),
+        ("index-commits", "cdidx index <projectPath> --commits <commit-ref> [commit-ref ...] [--db <path>] [--verbose] [--dry-run] [--json] [--memory-trace] [--duration-format <auto|seconds|hms>] [--max-file-bytes <bytes>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]]"),
         ("index-changed-between", "cdidx index <projectPath> --changed-between <old-ref> <new-ref> [--db <path>] [--verbose] [--dry-run] [--json] [--memory-trace] [--duration-format <auto|seconds|hms>] [--max-file-bytes <bytes>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]]"),
         ("index-files", "cdidx index <projectPath> --files <path> [path ...] [--db <path>] [--verbose] [--dry-run] [--json] [--memory-trace] [--duration-format <auto|seconds|hms>] [--max-file-bytes <bytes>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]]"),
         ("search", "cdidx search <query>|--query <query>|-- <query> [--db <path>] [--json[=ndjson|array]] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--snippet-lines <n>] [--snippet-focus <leftmost|quality|proximity>] [--max-line-width <n>] [--fts] [--exact|--exact-substring] [--prefix] [--count] [--since <datetime>] [--no-dedup] [--no-visibility-rank]"),
@@ -917,7 +917,8 @@ public static class ConsoleUi
         WriteHelpLine("  --follow-symlinks <mode>  Directory symlink policy: none (default), internal, or all");
         WriteHelpLine("  --include-symbol-kind <kind>[,<kind>]  Keep only matching symbol kinds during indexing");
         WriteHelpLine("  --exclude-symbol-kind <kind>[,<kind>]  Drop matching symbol kinds during indexing");
-        Console.WriteLine("  --commits <id> [id ...]    Update only files changed in the specified git commits (preferred after commits)");
+        Console.WriteLine("  --commits <commit-ref> [commit-ref ...]");
+        Console.WriteLine("                              Update only files changed in the specified git commits (preferred after commits)");
         Console.WriteLine("  --changed-between <old-ref> <new-ref>");
         Console.WriteLine("                              Update only files changed between two git refs (useful after branch switches)");
         Console.WriteLine("  --files <path> [path ...]  Update only the specified files; old rename/delete paths are not purged unless also listed");

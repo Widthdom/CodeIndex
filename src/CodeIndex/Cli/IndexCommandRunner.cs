@@ -642,12 +642,13 @@ public static partial class IndexCommandRunner
         StampWorkspacePathCaseSensitivity(writer, projectRoot);
     }
 
-    private static void StampCommitScopedFreshHeadMetadata(DbWriter writer, IndexCommandOptions options, string? currentHeadCommit)
+    private static void StampCommitScopedFreshHeadMetadata(DbWriter writer, IndexCommandOptions options, string projectRoot, string? currentHeadCommit)
     {
         try
         {
             var coveredHead = !string.IsNullOrWhiteSpace(currentHeadCommit)
-                && options.Commits.Any(commit => currentHeadCommit.StartsWith(commit, StringComparison.OrdinalIgnoreCase))
+                && (options.Commits.Any(commit => GitRefCoversCurrentHead(projectRoot, commit, currentHeadCommit))
+                    || TryChangedBetweenCoversCurrentHead(options, projectRoot, currentHeadCommit))
                 ? currentHeadCommit
                 : null;
             writer.SetMeta(DbContext.CommitScopedFreshHeadShaMetaKey, coveredHead);
@@ -657,6 +658,23 @@ public static partial class IndexCommandRunner
             // Best-effort metadata only; never fail an otherwise-successful index run.
             // best-effort のみ。stamp 失敗で index 全体を落とさない。
         }
+    }
+
+    private static bool GitRefCoversCurrentHead(string projectRoot, string refName, string currentHeadCommit)
+    {
+        if (currentHeadCommit.StartsWith(refName, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        var resolvedRef = GitHelper.TryResolveCommit(projectRoot, refName);
+        return string.Equals(resolvedRef, currentHeadCommit, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool TryChangedBetweenCoversCurrentHead(IndexCommandOptions options, string projectRoot, string currentHeadCommit)
+    {
+        if (options.ChangedBetweenRefs.Count != 2)
+            return false;
+
+        return GitRefCoversCurrentHead(projectRoot, options.ChangedBetweenRefs[1], currentHeadCommit);
     }
 
     // Issue #1546: capture the actual case-sensitivity of the workspace filesystem so

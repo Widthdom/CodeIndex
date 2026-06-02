@@ -93,7 +93,7 @@ public class ConsoleUiTests
 
         Assert.Contains("██████╗", output);
         Assert.Contains("Usage:", output);
-        Assert.Contains("cdidx index <projectPath> --commits <id> [id ...]", output);
+        Assert.Contains("cdidx index <projectPath> --commits <commit-ref> [commit-ref ...]", output);
     }
 
     [Fact]
@@ -105,7 +105,7 @@ public class ConsoleUiTests
         Assert.Contains("Usage:", output);
         Assert.Contains("cdidx index <projectPath> [--db <path>] [--rebuild] [--optimize] [--verbose] [--dry-run] [--force] [--quiet] [--json] [--memory-trace] [--duration-format <auto|seconds|hms>] [--notify <auto|bell|osc9|desktop|none>] [--max-file-bytes <bytes>] [--max-symbols-per-file <n>] [--follow-symlinks <none|internal|all>]", output);
         Assert.Contains("cdidx hooks <install|uninstall|status> [--project <path>] [--force] [--json]", output);
-        Assert.Contains("cdidx index <projectPath> --commits <id> [id ...] [--db <path>] [--verbose] [--dry-run] [--json] [--memory-trace] [--duration-format <auto|seconds|hms>]", output);
+        Assert.Contains("cdidx index <projectPath> --commits <commit-ref> [commit-ref ...] [--db <path>] [--verbose] [--dry-run] [--json] [--memory-trace] [--duration-format <auto|seconds|hms>]", output);
         Assert.Contains("cdidx index <projectPath> --files <path> [path ...] [--db <path>] [--verbose] [--dry-run] [--json] [--memory-trace] [--duration-format <auto|seconds|hms>]", output);
         Assert.Contains("cdidx backfill-fold [--db <path>] [--dry-run] [--no-checkpoint] [--json]", output);
         Assert.Contains("cdidx optimize [--db <path>] [--json]", output);
@@ -139,7 +139,8 @@ public class ConsoleUiTests
         Assert.Contains("--kind <kind>              definition/symbols/hotspots/unused: symbol kind; references: reference kind (call/instantiate/subscribe/attribute/annotation); callers/callees: call-graph kinds only (call/instantiate/subscribe — metadata kinds rejected, use references instead); validate: issue kind", output);
         Assert.Contains("--count                    Count only; search/definition/references/callers/callees/symbols/files/find/unused ignore --limit, impact/hotspots still use visible page counts", output);
         Assert.Contains("--no-dedup                 search only: return every raw overlapping chunk hit (debug/density)", output);
-        Assert.Contains("--commits <id> [id ...]    Update only files changed in the specified git commits (preferred after commits)", output);
+        Assert.Contains("--commits <commit-ref> [commit-ref ...]", output);
+        Assert.Contains("Update only files changed in the specified git commits (preferred after commits)", output);
         Assert.Contains("--files <path> [path ...]  Update only the specified files; old rename/delete paths are not purged unless also listed", output);
         Assert.Contains("--optimize                 index only: optimize the existing FTS5 table for this project's DB without scanning files", output);
         Assert.Contains("--duration-format <format> Index elapsed time format: `auto` (default), `seconds`, or `hms`; JSON keeps raw elapsed_ms", output);
@@ -1007,7 +1008,7 @@ public class ConsoleUiTests
         Assert.Contains("cdidx --help-flags", output);
         Assert.Contains("validate                   Report encoding issues", output);
         Assert.DoesNotContain("Index and update options:", output);
-        Assert.DoesNotContain("cdidx index <projectPath> --commits <id>", output);
+        Assert.DoesNotContain("cdidx index <projectPath> --commits <commit-ref>", output);
     }
 
     [Fact]

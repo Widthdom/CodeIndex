@@ -44,6 +44,10 @@ public static partial class IndexCommandRunner
                 CommandErrorCodes.UsageError);
         }
 
+        var commitRefValidationExitCode = ValidateCommitRefsBeforeIndexSetup(options, jsonOptions);
+        if (commitRefValidationExitCode != null)
+            return commitRefValidationExitCode.Value;
+
         if (options.SymbolKindFilter.ParseError != null)
         {
             return WriteCommandError(
@@ -84,6 +88,29 @@ public static partial class IndexCommandRunner
         return null;
     }
 
+    private static int? ValidateCommitRefsBeforeIndexSetup(IndexCommandOptions options, JsonSerializerOptions jsonOptions)
+    {
+        if (options.Commits.Count == 0)
+            return null;
+
+        try
+        {
+            foreach (var commit in options.Commits)
+                GitHelper.ValidateCommitRef(options.ProjectPath!, commit);
+            return null;
+        }
+        catch (Exception ex)
+        {
+            return WriteCommandError(
+                options.Json,
+                jsonOptions,
+                $"failed to resolve changed files from git commits: {ex.Message}",
+                CommandExitCodes.UsageError,
+                "Check the commit refs and rerun `cdidx index <projectPath> --commits <commit-ref> [commit-ref ...]`.",
+                CommandErrorCodes.UsageError);
+        }
+    }
+
     private static int? ValidateWatchOptions(IndexCommandOptions options, JsonSerializerOptions jsonOptions)
     {
         // --watch is the only mode that holds the process open after the initial scan, so
@@ -113,7 +140,7 @@ public static partial class IndexCommandRunner
         // does not require a second `--help` round-trip to find the correct command.
         const string rebuildConflictSynopsis =
             "`cdidx index <projectPath> --rebuild`, "
-            + "`cdidx index <projectPath> --commits <id> [id ...]`, "
+            + "`cdidx index <projectPath> --commits <commit-ref> [commit-ref ...]`, "
             + "`cdidx index <projectPath> --changed-between <old-ref> <new-ref>`, "
             + "or `cdidx index <projectPath> --files <path> [path ...]`";
         if (options.Json)
