@@ -68,6 +68,59 @@ public class ExportImportCommandRunnerTests
     }
 
     [Fact]
+    public void ReplaceImportedDatabase_MoveFailurePreservesExistingSidecars()
+    {
+        var workDir = Path.Combine(Path.GetTempPath(), $"cdidx_import_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(workDir);
+        try
+        {
+            var dbPath = Path.Combine(workDir, "codeindex.db");
+            File.WriteAllText(dbPath, "existing db");
+            File.WriteAllText(dbPath + "-wal", "existing wal");
+            File.WriteAllText(dbPath + "-shm", "existing shm");
+            var missingTempPath = Path.Combine(workDir, "missing.db");
+
+            Assert.ThrowsAny<IOException>(() =>
+                ExportImportCommandRunner.ReplaceImportedDatabase(missingTempPath, dbPath));
+
+            Assert.Equal("existing db", File.ReadAllText(dbPath));
+            Assert.Equal("existing wal", File.ReadAllText(dbPath + "-wal"));
+            Assert.Equal("existing shm", File.ReadAllText(dbPath + "-shm"));
+        }
+        finally
+        {
+            Directory.Delete(workDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ReplaceImportedDatabase_SuccessDeletesDestinationSidecarsAfterMove()
+    {
+        var workDir = Path.Combine(Path.GetTempPath(), $"cdidx_import_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(workDir);
+        try
+        {
+            var dbPath = Path.Combine(workDir, "codeindex.db");
+            var tempPath = Path.Combine(workDir, "staged.db");
+            File.WriteAllText(dbPath, "existing db");
+            File.WriteAllText(dbPath + "-wal", "existing wal");
+            File.WriteAllText(dbPath + "-shm", "existing shm");
+            File.WriteAllText(tempPath, "imported db");
+
+            ExportImportCommandRunner.ReplaceImportedDatabase(tempPath, dbPath);
+
+            Assert.Equal("imported db", File.ReadAllText(dbPath));
+            Assert.False(File.Exists(dbPath + "-wal"));
+            Assert.False(File.Exists(dbPath + "-shm"));
+            Assert.False(File.Exists(tempPath));
+        }
+        finally
+        {
+            Directory.Delete(workDir, recursive: true);
+        }
+    }
+
+    [Fact]
     public void TryValidateDatabaseEntrySize_RejectsOversizedUncompressedLength()
     {
         var ok = ExportImportCommandRunner.TryValidateDatabaseEntrySize(

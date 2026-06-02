@@ -106,9 +106,7 @@ internal static class ExportImportCommandRunner
                 SqliteConnection.ClearAllPools();
             }
 
-            DeleteSqliteSidecars(fullDbPath);
-            File.Move(tempPath, fullDbPath, overwrite: true);
-            DeleteSqliteSidecars(fullDbPath);
+            ReplaceImportedDatabase(tempPath, fullDbPath);
             if (wantsJson)
             {
                 Console.WriteLine(JsonSerializer.Serialize(new ImportResult("1", fullDbPath, prunePaths), jsonOptions));
@@ -126,6 +124,7 @@ internal static class ExportImportCommandRunner
         finally
         {
             try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { }
+            try { DeleteSqliteSidecars(tempPath); } catch { }
         }
     }
 
@@ -500,6 +499,12 @@ internal static class ExportImportCommandRunner
 
     private static string CreateUnpooledConnectionString(string dbPath)
         => new SqliteConnectionStringBuilder { DataSource = dbPath, Pooling = false }.ConnectionString;
+
+    internal static void ReplaceImportedDatabase(string tempPath, string fullDbPath)
+    {
+        File.Move(tempPath, fullDbPath, overwrite: true);
+        DeleteSqliteSidecars(fullDbPath);
+    }
 
     private static void DeleteSqliteSidecars(string dbPath)
     {
