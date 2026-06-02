@@ -92,8 +92,8 @@ consumer can run `cdidx import codeindex.cdidx.zip --db <path>` before query
 commands. Use `--prune-paths` on import when the archive comes from another
 checkout and the restored DB should advertise the current workspace root. The
 archive contains `manifest.json` plus `codeindex.db`; import validates the
-embedded SQLite file as a CodeIndex database before replacing the destination
-DB.
+manifest format, manifest `user_version`, `database_sha256`, and embedded
+SQLite file as a CodeIndex database before replacing the destination DB.
 
 Use `cdidx db checkpoint <name>` to take a filesystem snapshot of
 `codeindex.db` plus existing WAL/SHM sidecars before risky maintenance, and use
