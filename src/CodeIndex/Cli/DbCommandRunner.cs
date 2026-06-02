@@ -581,15 +581,15 @@ public static class DbCommandRunner
         if (Directory.Exists(checkpointPath))
             throw new InvalidOperationException($"checkpoint already exists: {name}");
 
-        Directory.CreateDirectory(root);
+        DataDirectorySecurity.CreateSensitiveDirectory(root);
         var tempPath = Path.Combine(root, ".tmp-" + name + "-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(tempPath);
+        DataDirectorySecurity.CreateSensitiveDirectory(tempPath);
         try
         {
-            CopyIfExists(fullDbPath, Path.Combine(tempPath, Path.GetFileName(fullDbPath)));
-            CopyIfExists(fullDbPath + "-wal", Path.Combine(tempPath, Path.GetFileName(fullDbPath) + "-wal"));
-            CopyIfExists(fullDbPath + "-shm", Path.Combine(tempPath, Path.GetFileName(fullDbPath) + "-shm"));
-            File.WriteAllText(Path.Combine(tempPath, "manifest.txt"), $"name={name}{Environment.NewLine}created_at_utc={DateTimeOffset.UtcNow:O}{Environment.NewLine}db={fullDbPath}{Environment.NewLine}");
+            CopyIfExists(fullDbPath, Path.Combine(tempPath, Path.GetFileName(fullDbPath)), privateDestination: true);
+            CopyIfExists(fullDbPath + "-wal", Path.Combine(tempPath, Path.GetFileName(fullDbPath) + "-wal"), privateDestination: true);
+            CopyIfExists(fullDbPath + "-shm", Path.Combine(tempPath, Path.GetFileName(fullDbPath) + "-shm"), privateDestination: true);
+            DataDirectorySecurity.WritePrivateText(Path.Combine(tempPath, "manifest.txt"), $"name={name}{Environment.NewLine}created_at_utc={DateTimeOffset.UtcNow:O}{Environment.NewLine}db={fullDbPath}{Environment.NewLine}");
             Directory.Move(tempPath, checkpointPath);
         }
         catch
@@ -633,25 +633,25 @@ public static class DbCommandRunner
 
         var restoreTempPath = fullDbPath + ".restore-tmp-" + DateTimeOffset.UtcNow.ToString("yyyyMMddHHmmssfff", System.Globalization.CultureInfo.InvariantCulture);
         var backupPath = fullDbPath + ".restore-backup-" + DateTimeOffset.UtcNow.ToString("yyyyMMddHHmmssfff", System.Globalization.CultureInfo.InvariantCulture);
-        Directory.CreateDirectory(restoreTempPath);
+        DataDirectorySecurity.CreateSensitiveDirectory(restoreTempPath);
         try
         {
-            CopyIfExists(checkpointDbPath, Path.Combine(restoreTempPath, Path.GetFileName(fullDbPath)));
-            CopyIfExists(Path.Combine(checkpointPath, Path.GetFileName(fullDbPath) + "-wal"), Path.Combine(restoreTempPath, Path.GetFileName(fullDbPath) + "-wal"));
-            CopyIfExists(Path.Combine(checkpointPath, Path.GetFileName(fullDbPath) + "-shm"), Path.Combine(restoreTempPath, Path.GetFileName(fullDbPath) + "-shm"));
+            CopyIfExists(checkpointDbPath, Path.Combine(restoreTempPath, Path.GetFileName(fullDbPath)), privateDestination: true);
+            CopyIfExists(Path.Combine(checkpointPath, Path.GetFileName(fullDbPath) + "-wal"), Path.Combine(restoreTempPath, Path.GetFileName(fullDbPath) + "-wal"), privateDestination: true);
+            CopyIfExists(Path.Combine(checkpointPath, Path.GetFileName(fullDbPath) + "-shm"), Path.Combine(restoreTempPath, Path.GetFileName(fullDbPath) + "-shm"), privateDestination: true);
             if (!File.Exists(LongPath.EnsureWindowsPrefix(Path.Combine(restoreTempPath, Path.GetFileName(fullDbPath)))))
                 throw new InvalidOperationException($"checkpoint staging failed: {name}");
 
-            Directory.CreateDirectory(backupPath);
-            MoveIfExists(fullDbPath, Path.Combine(backupPath, Path.GetFileName(fullDbPath)));
-            MoveIfExists(fullDbPath + "-wal", Path.Combine(backupPath, Path.GetFileName(fullDbPath) + "-wal"));
-            MoveIfExists(fullDbPath + "-shm", Path.Combine(backupPath, Path.GetFileName(fullDbPath) + "-shm"));
+            DataDirectorySecurity.CreateSensitiveDirectory(backupPath);
+            MoveIfExists(fullDbPath, Path.Combine(backupPath, Path.GetFileName(fullDbPath)), privateDestination: true);
+            MoveIfExists(fullDbPath + "-wal", Path.Combine(backupPath, Path.GetFileName(fullDbPath) + "-wal"), privateDestination: true);
+            MoveIfExists(fullDbPath + "-shm", Path.Combine(backupPath, Path.GetFileName(fullDbPath) + "-shm"), privateDestination: true);
 
             RestoreFailureAfterBackupForTesting?.Invoke();
 
-            MoveIfExists(Path.Combine(restoreTempPath, Path.GetFileName(fullDbPath)), fullDbPath);
-            MoveIfExists(Path.Combine(restoreTempPath, Path.GetFileName(fullDbPath) + "-wal"), fullDbPath + "-wal");
-            MoveIfExists(Path.Combine(restoreTempPath, Path.GetFileName(fullDbPath) + "-shm"), fullDbPath + "-shm");
+            MoveIfExists(Path.Combine(restoreTempPath, Path.GetFileName(fullDbPath)), fullDbPath, privateDestination: true);
+            MoveIfExists(Path.Combine(restoreTempPath, Path.GetFileName(fullDbPath) + "-wal"), fullDbPath + "-wal", privateDestination: true);
+            MoveIfExists(Path.Combine(restoreTempPath, Path.GetFileName(fullDbPath) + "-shm"), fullDbPath + "-shm", privateDestination: true);
         }
         catch
         {
@@ -689,16 +689,24 @@ public static class DbCommandRunner
         return Path.Combine(GetCheckpointRoot(fullDbPath), name);
     }
 
-    private static void CopyIfExists(string source, string destination)
+    private static void CopyIfExists(string source, string destination, bool privateDestination = false)
     {
         if (File.Exists(LongPath.EnsureWindowsPrefix(source)))
+        {
             File.Copy(LongPath.EnsureWindowsPrefix(source), LongPath.EnsureWindowsPrefix(destination), overwrite: false);
+            if (privateDestination)
+                DataDirectorySecurity.ApplyPrivateFileMode(destination);
+        }
     }
 
-    private static void MoveIfExists(string source, string destination)
+    private static void MoveIfExists(string source, string destination, bool privateDestination = false)
     {
         if (File.Exists(LongPath.EnsureWindowsPrefix(source)))
+        {
             File.Move(LongPath.EnsureWindowsPrefix(source), LongPath.EnsureWindowsPrefix(destination));
+            if (privateDestination)
+                DataDirectorySecurity.ApplyPrivateFileMode(destination);
+        }
     }
 
     private static void RestoreBackedUpFiles(string fullDbPath, string backupPath)
@@ -709,9 +717,9 @@ public static class DbCommandRunner
         DeleteIfExists(fullDbPath);
         DeleteIfExists(fullDbPath + "-wal");
         DeleteIfExists(fullDbPath + "-shm");
-        MoveIfExists(Path.Combine(backupPath, Path.GetFileName(fullDbPath)), fullDbPath);
-        MoveIfExists(Path.Combine(backupPath, Path.GetFileName(fullDbPath) + "-wal"), fullDbPath + "-wal");
-        MoveIfExists(Path.Combine(backupPath, Path.GetFileName(fullDbPath) + "-shm"), fullDbPath + "-shm");
+        MoveIfExists(Path.Combine(backupPath, Path.GetFileName(fullDbPath)), fullDbPath, privateDestination: true);
+        MoveIfExists(Path.Combine(backupPath, Path.GetFileName(fullDbPath) + "-wal"), fullDbPath + "-wal", privateDestination: true);
+        MoveIfExists(Path.Combine(backupPath, Path.GetFileName(fullDbPath) + "-shm"), fullDbPath + "-shm", privateDestination: true);
     }
 
     private static void DeleteIfExists(string path)

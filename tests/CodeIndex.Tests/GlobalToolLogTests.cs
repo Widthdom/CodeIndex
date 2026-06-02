@@ -9,6 +9,29 @@ namespace CodeIndex.Tests;
 public class GlobalToolLogTests
 {
     [Fact]
+    public void PrivateLogFile_OpenAppend_OnUnixCreatesPrivateFile()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var path = Path.Combine(Path.GetTempPath(), $"cdidx_private_log_{Guid.NewGuid():N}.log");
+        try
+        {
+            using (var stream = PrivateLogFile.OpenAppend(path))
+            {
+                stream.WriteByte((byte)'x');
+            }
+
+            Assert.Equal(PrivateLogFile.PrivateFileMode, File.GetUnixFileMode(path));
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void FormatArgs_RedactsSensitiveArgumentsByDefault()
     {
         using var env = EnvironmentVariableScope.Capture("CDIDX_LOG_REDACT");

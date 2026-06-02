@@ -1,11 +1,13 @@
 using System.Diagnostics;
 using System.Text.Json;
+using CodeIndex.Cli;
 
 namespace CodeIndex.Mcp;
 
 internal sealed class McpIndexRunLock : IDisposable
 {
     internal const string LockFileName = "index.lock";
+    private const int MaxInfoBytes = 4 * 1024;
     private static readonly TimeSpan StaleInfoGracePeriod = TimeSpan.FromSeconds(2);
 
     private readonly FileStream _stream;
@@ -65,7 +67,7 @@ internal sealed class McpIndexRunLock : IDisposable
         var since = DateTimeOffset.UtcNow.ToString("o", System.Globalization.CultureInfo.InvariantCulture);
         try
         {
-            File.WriteAllText(_infoPath, $$"""{"pid":{{Environment.ProcessId}},"since":"{{since}}"}""");
+            DataDirectorySecurity.WritePrivateText(_infoPath, $$"""{"pid":{{Environment.ProcessId}},"since":"{{since}}"}""");
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -91,7 +93,11 @@ internal sealed class McpIndexRunLock : IDisposable
             if (!File.Exists(infoPath))
                 return null;
 
-            using var document = JsonDocument.Parse(File.ReadAllText(infoPath));
+            var text = DataDirectorySecurity.ReadTextWithinLimit(infoPath, MaxInfoBytes, FileShare.ReadWrite);
+            if (string.IsNullOrWhiteSpace(text))
+                return null;
+
+            using var document = JsonDocument.Parse(text);
             var root = document.RootElement;
             if (!root.TryGetProperty("pid", out var pidElement) || !pidElement.TryGetInt32(out var pid))
                 return null;
@@ -107,7 +113,7 @@ internal sealed class McpIndexRunLock : IDisposable
 
             return new HolderInfo(pid, since.ToUniversalTime(), IsProcessStillRunning(pid));
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or ArgumentException or NotSupportedException)
         {
             return null;
         }

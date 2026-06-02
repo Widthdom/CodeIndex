@@ -3966,6 +3966,14 @@ public partial class McpServer
     /// </summary>
     private const int MaxContextLength = 1000;
 
+    private const int MaxSamplingPromptBytes = 4096;
+    private const int MaxSamplingShortFieldChars = 80;
+    private const int MaxSamplingDescriptionChars = 800;
+    private const int MaxSamplingContextChars = 400;
+    private const int MaxSamplingToolInvocationSummaryChars = 160;
+    private const int MaxSamplingResponseTextChars = 8192;
+    private const int MaxSamplingResponseJsonDepth = 16;
+
     /// <summary>
     /// Handle the suggest_improvement tool call.
     /// Records a structured suggestion to .cdidx/suggestions-*.json.
@@ -4164,18 +4172,7 @@ public partial class McpServer
         if (!IsSamplingEnabled() || !HasClientCapability("sampling"))
             return null;
 
-        var prompt = new StringBuilder();
-        prompt.AppendLine("Extract structured metadata for a cdidx improvement suggestion.");
-        prompt.AppendLine("Return only compact JSON with keys: title (one line, <=80 chars) and tags (array of 1-6 lowercase identifiers).");
-        prompt.AppendLine("Do not include source code.");
-        prompt.AppendLine($"category: {category}");
-        if (!string.IsNullOrWhiteSpace(language))
-            prompt.AppendLine($"language: {language}");
-        prompt.AppendLine($"description: {description}");
-        if (!string.IsNullOrWhiteSpace(context))
-            prompt.AppendLine($"context: {context}");
-        if (!string.IsNullOrWhiteSpace(toolInvocationContext))
-            prompt.AppendLine($"tool_invocation_context: {toolInvocationContext}");
+        var prompt = BuildSuggestionSamplingPrompt(category, language, description, context, toolInvocationContext);
 
         var result = await SendClientRequestAsync("sampling/createMessage", new JsonObject
         {
@@ -4187,7 +4184,7 @@ public partial class McpServer
                     ["content"] = new JsonObject
                     {
                         ["type"] = "text",
-                        ["text"] = prompt.ToString(),
+                        ["text"] = prompt,
                     }
                 }
             },
@@ -4197,9 +4194,11 @@ public partial class McpServer
         var text = ExtractSamplingText(result);
         if (string.IsNullOrWhiteSpace(text))
             return null;
+        if (text.Length > MaxSamplingResponseTextChars)
+            return null;
         try
         {
-            var parsed = JsonNode.Parse(text);
+            var parsed = JsonNode.Parse(text, documentOptions: new JsonDocumentOptions { MaxDepth = MaxSamplingResponseJsonDepth });
             var title = SanitizeSampledTitle(TryReadStringValue(parsed?["title"]));
             var tags = parsed?["tags"] is JsonArray tagArray
                 ? tagArray.Select(TryReadStringValue)
@@ -4219,6 +4218,143 @@ public partial class McpServer
         {
             return null;
         }
+    }
+
+    private static string BuildSuggestionSamplingPrompt(
+        string category,
+        string? language,
+        string description,
+        string? context,
+        string? toolInvocationContext)
+    {
+        var prompt = new StringBuilder();
+        var remainingBytes = MaxSamplingPromptBytes;
+        AppendSamplingPromptLine(prompt, "Extract structured metadata for a cdidx improvement suggestion.", ref remainingBytes);
+        AppendSamplingPromptLine(prompt, "Return only compact JSON with keys: title (one line, <=80 chars) and tags (array of 1-6 lowercase identifiers).", ref remainingBytes);
+        AppendSamplingPromptLine(prompt, "Do not include source code.", ref remainingBytes);
+        AppendSamplingPromptField(prompt, "category", category, MaxSamplingShortFieldChars, ref remainingBytes);
+        if (!string.IsNullOrWhiteSpace(language))
+            AppendSamplingPromptField(prompt, "language", language, MaxSamplingShortFieldChars, ref remainingBytes);
+        AppendSamplingPromptField(prompt, "description", description, MaxSamplingDescriptionChars, ref remainingBytes);
+        if (!string.IsNullOrWhiteSpace(context))
+            AppendSamplingPromptField(prompt, "context", context, MaxSamplingContextChars, ref remainingBytes);
+        if (!string.IsNullOrWhiteSpace(toolInvocationContext))
+        {
+            var summary = SummarizeToolInvocationContextForSampling(toolInvocationContext);
+            AppendSamplingPromptField(prompt, "tool_invocation_context", summary, MaxSamplingToolInvocationSummaryChars, ref remainingBytes);
+        }
+
+        return prompt.ToString();
+    }
+
+    private static void AppendSamplingPromptField(StringBuilder prompt, string name, string value, int maxChars, ref int remainingBytes)
+    {
+        var sanitized = SanitizeSamplingPromptField(value, maxChars);
+        if (sanitized.Length == 0)
+            return;
+        AppendSamplingPromptLine(prompt, $"{name}: {sanitized}", ref remainingBytes);
+    }
+
+    private static void AppendSamplingPromptLine(StringBuilder prompt, string line, ref int remainingBytes)
+    {
+        if (remainingBytes <= 0)
+            return;
+
+        var lineBytes = Encoding.UTF8.GetByteCount(line) + 1;
+        if (lineBytes > remainingBytes)
+        {
+            const string suffix = " ... [truncated]";
+            var suffixBytes = Encoding.UTF8.GetByteCount(suffix);
+            var prefixBudget = remainingBytes - suffixBytes - 1;
+            if (prefixBudget <= 0)
+                return;
+            line = TruncateUtf8(line, prefixBudget).TrimEnd() + suffix;
+            lineBytes = Encoding.UTF8.GetByteCount(line) + 1;
+            if (lineBytes > remainingBytes)
+                return;
+        }
+
+        prompt.Append(line);
+        prompt.Append('\n');
+        remainingBytes -= lineBytes;
+    }
+
+    private static string SanitizeSamplingPromptField(string value, int maxChars)
+    {
+        var collapsed = CollapseSamplingPromptWhitespace(value);
+        if (collapsed.Length <= maxChars)
+            return collapsed;
+        var end = Math.Min(maxChars, collapsed.Length);
+        if (end > 0 && char.IsHighSurrogate(collapsed[end - 1]))
+            end--;
+        return collapsed[..end].TrimEnd() + " ... [truncated]";
+    }
+
+    private static string CollapseSamplingPromptWhitespace(string value)
+    {
+        var trimmed = value.Trim();
+        var collapsed = new StringBuilder(trimmed.Length);
+        var previousWhitespace = false;
+        foreach (var ch in trimmed)
+        {
+            if (char.IsControl(ch) || char.IsWhiteSpace(ch))
+            {
+                if (!previousWhitespace)
+                    collapsed.Append(' ');
+                previousWhitespace = true;
+                continue;
+            }
+
+            collapsed.Append(ch);
+            previousWhitespace = false;
+        }
+
+        return collapsed.ToString().Trim();
+    }
+
+    private static string SummarizeToolInvocationContextForSampling(string value)
+    {
+        var trimmed = value.Trim();
+        var lineCount = CountLogicalLines(trimmed);
+        var byteCount = Encoding.UTF8.GetByteCount(trimmed);
+        return $"provided; {trimmed.Length} chars; {byteCount} UTF-8 bytes; {lineCount} line(s); raw content withheld";
+    }
+
+    private static int CountLogicalLines(string value)
+    {
+        if (value.Length == 0)
+            return 0;
+        var lines = 1;
+        foreach (var ch in value)
+        {
+            if (ch == '\n')
+                lines++;
+        }
+        return lines;
+    }
+
+    private static string TruncateUtf8(string value, int maxBytes)
+    {
+        if (maxBytes <= 0)
+            return string.Empty;
+        if (Encoding.UTF8.GetByteCount(value) <= maxBytes)
+            return value;
+
+        var low = 0;
+        var high = value.Length;
+        while (low < high)
+        {
+            var mid = low + ((high - low + 1) / 2);
+            var bytes = Encoding.UTF8.GetByteCount(value.AsSpan(0, mid));
+            if (bytes <= maxBytes)
+                low = mid;
+            else
+                high = mid - 1;
+        }
+
+        if (low > 0 && char.IsHighSurrogate(value[low - 1]))
+            low--;
+        return value[..low];
     }
 
     private bool HasClientCapability(string name)

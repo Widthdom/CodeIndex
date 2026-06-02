@@ -1067,11 +1067,11 @@ cdidx report --output report.tgz
 cdidx report --output report.tgz --json
 ```
 
-`cdidx report --output <path>` packages a redacted `.tar.gz` you can attach to a GitHub issue. The bundle includes the cdidx version, .NET runtime, OS / process architecture, and a `schema.txt` listing each SQLite table with its row count (no user content). It also tails the recent cdidx lifecycle log (`stderr-yyyyMMdd.log`), with `cwd=` and `args=` lines replaced by `[redacted]` so working-directory paths and literal query strings never leave your machine.
+`cdidx report --output <path>` packages a redacted `.tar.gz` you can attach to a GitHub issue. The bundle includes the cdidx version, .NET runtime, OS / process architecture, and a `schema.txt` listing each SQLite table with its row count (no user content). It also tails the recent cdidx lifecycle log (`stderr-yyyyMMdd.log`), with the database path, lifecycle-log source directory, `process_path=`, `base_dir=`, `cwd=`, `db=`, `path=`, and `args=` lines replaced by `[redacted]` so local filesystem paths and literal query strings never leave your machine.
 
 | Flag | Default | Effect |
 |---|---|---|
-| `--output <path>` / `-o <path>` | (required) | Destination `.tar.gz`. The directory is created if missing. |
+| `--output <path>` / `-o <path>` | (required) | Destination `.tar.gz`. The directory is created if missing; on POSIX, the archive and tar entries are owner-readable/writable only. |
 | `--db <path>` | `.cdidx/codeindex.db` | Override the database whose schema is summarized. If absent, `schema.txt` records that no DB was found. |
 | `--log-lines <n>` | `200` | How many trailing lifecycle-log lines to include (`0` disables the tail). |
 | `--no-log` | | Skip the lifecycle log entirely. |
@@ -2002,7 +2002,7 @@ When both are set, the allowlist wins. `tools/list` only advertises enabled tool
 
 #### MCP roots and sampling
 
-`cdidx mcp` advertises roots and sampling support during `initialize`. When the client supports roots, `index` refreshes `roots/list` and rejects paths outside the granted client roots. `suggest_improvement` uses `sampling/createMessage` to extract an optional one-line title and tag list before storing the raw suggestion. Set `CDIDX_MCP_SAMPLING=0` (or `false` / `off`) to disable server-to-client sampling requests.
+`cdidx mcp` advertises roots and sampling support during `initialize`. When the client supports roots, `index` refreshes `roots/list` and rejects paths outside the granted client roots. `suggest_improvement` uses `sampling/createMessage` to extract an optional one-line title and tag list before storing the raw suggestion. Sampling prompts are byte-bounded, long fields are clamped to one-line summaries, and `toolInvocationContext` is summarized without sending its raw content to the sampling client. Set `CDIDX_MCP_SAMPLING=0` (or `false` / `off`) to disable server-to-client sampling requests.
 
 ### Why cdidx over grep/ripgrep for AI workflows?
 
@@ -3172,11 +3172,11 @@ cdidx report --output report.tgz
 cdidx report --output report.tgz --json
 ```
 
-`cdidx report --output <path>` は GitHub Issue に添付できる匿名化済み `.tar.gz` を生成します。バンドルには cdidx のバージョン、.NET ランタイム、OS / プロセスアーキテクチャ、各 SQLite テーブル名と整数の行数のみを記録した `schema.txt`（ユーザコンテンツは含まれません）が入ります。さらに直近のライフサイクルログ（`stderr-yyyyMMdd.log`）の末尾も含まれますが、`cwd=` と `args=` 行は `[redacted]` に置換されるため、作業ディレクトリのパスや具体的なクエリ文字列が端末から外に出ることはありません。
+`cdidx report --output <path>` は GitHub Issue に添付できる匿名化済み `.tar.gz` を生成します。バンドルには cdidx のバージョン、.NET ランタイム、OS / プロセスアーキテクチャ、各 SQLite テーブル名と整数の行数のみを記録した `schema.txt`（ユーザコンテンツは含まれません）が入ります。さらに直近のライフサイクルログ（`stderr-yyyyMMdd.log`）の末尾も含まれますが、DB パス、ライフサイクルログの source directory、`process_path=`、`base_dir=`、`cwd=`、`db=`、`path=`、`args=` 行は `[redacted]` に置換されるため、ローカルファイルシステムのパスや具体的なクエリ文字列が端末から外に出ることはありません。
 
 | フラグ | 既定値 | 効果 |
 |---|---|---|
-| `--output <path>` / `-o <path>` | （必須） | 出力先 `.tar.gz`。親ディレクトリが無ければ作成します。 |
+| `--output <path>` / `-o <path>` | （必須） | 出力先 `.tar.gz`。親ディレクトリが無ければ作成します。POSIX では archive と tar entry は owner の読み書きのみになります。 |
 | `--db <path>` | `.cdidx/codeindex.db` | スキーマ要約対象の DB を上書きします。存在しなければ `schema.txt` に「DB が見つからなかった」旨が記録されます。 |
 | `--log-lines <n>` | `200` | ライフサイクルログ末尾を何行含めるか（`0` で末尾を含めません）。 |
 | `--no-log` | | ライフサイクルログを完全に省略します。 |
@@ -4087,7 +4087,7 @@ stdio トランスポートはバイト単位で挙動が変わらないため�
 
 #### MCP roots と sampling
 
-`cdidx mcp` は `initialize` で roots と sampling support を広告します。クライアントが roots をサポートする場合、`index` は `roots/list` を更新し、許可された client root の外にある path を拒否します。`suggest_improvement` は raw suggestion を保存する前に `sampling/createMessage` で任意の 1 行タイトルとタグ一覧を抽出します。server-to-client sampling request を無効化するには `CDIDX_MCP_SAMPLING=0`（または `false` / `off`）を設定してください。
+`cdidx mcp` は `initialize` で roots と sampling support を広告します。クライアントが roots をサポートする場合、`index` は `roots/list` を更新し、許可された client root の外にある path を拒否します。`suggest_improvement` は raw suggestion を保存する前に `sampling/createMessage` で任意の 1 行タイトルとタグ一覧を抽出します。sampling prompt は byte 上限内に収められ、長い field は 1 行 summary に切り詰められ、`toolInvocationContext` は raw 内容を sampling client に送らず summary 化されます。server-to-client sampling request を無効化するには `CDIDX_MCP_SAMPLING=0`（または `false` / `off`）を設定してください。
 
 ### AIワークフローで grep/ripgrep より cdidx が優れる理由
 

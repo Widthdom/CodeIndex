@@ -1,3 +1,5 @@
+using System.Net;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
@@ -155,9 +157,55 @@ public class ProgramRunnerTests
             Assert.DoesNotContain('{', stderr);
             var tracePath = Path.Combine(logRoot, $"query-trace-{DateTime.UtcNow:yyyyMMdd}.jsonl");
             Assert.True(File.Exists(tracePath));
+            if (!OperatingSystem.IsWindows())
+                Assert.Equal(PrivateLogFile.PrivateFileMode, File.GetUnixFileMode(tracePath));
             var line = File.ReadAllLines(tracePath).Single();
             using var document = JsonDocument.Parse(line);
             Assert.Equal("search", document.RootElement.GetProperty("tool").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            if (Directory.Exists(logRoot))
+                Directory.Delete(logRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Run_QueryTraceFile_PrunesToThirtyTraceFiles()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("query-trace-prune");
+        var logRoot = Path.Combine(Path.GetTempPath(), $"cdidx_query_trace_prune_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(logRoot);
+            for (var i = 0; i < 35; i++)
+            {
+                var date = new DateTime(2024, 1, 1).AddDays(i);
+                var path = Path.Combine(logRoot, $"query-trace-{date:yyyyMMdd}.jsonl");
+                File.WriteAllText(path, $"old {i}");
+                File.SetLastWriteTimeUtc(path, date);
+            }
+
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "public class App { public void Needle() { } }");
+            using var env = EnvironmentVariableScope.Capture("CDIDX_GLOBAL_TOOL_LOG_DIR");
+            env.Set("CDIDX_GLOBAL_TOOL_LOG_DIR", logRoot);
+
+            var (exitCode, _, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["search", "Needle", "--db", dbPath, "--trace=file"],
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.DoesNotContain('{', stderr);
+
+            var traces = Directory.GetFiles(logRoot, "query-trace-*.jsonl", SearchOption.TopDirectoryOnly)
+                .Select(Path.GetFileName)
+                .OrderBy(name => name, StringComparer.Ordinal)
+                .ToArray();
+            Assert.Equal(30, traces.Length);
+            Assert.DoesNotContain("query-trace-20240101.jsonl", traces);
+            Assert.Contains($"query-trace-{DateTime.UtcNow:yyyyMMdd}.jsonl", traces);
         }
         finally
         {
@@ -303,6 +351,85 @@ public class ProgramRunnerTests
             if (File.Exists(cachePath))
                 File.Delete(cachePath);
         }
+    }
+
+    [Theory]
+    [InlineData("v1.26.0", "https://raw.githubusercontent.com/Widthdom/CodeIndex/v1.26.0/install.sh")]
+    [InlineData(" release/test ", "https://raw.githubusercontent.com/Widthdom/CodeIndex/release%2Ftest/install.sh")]
+    public void BuildInstallerScriptUrl_UsesResolvedReleaseTag(string releaseTag, string expected)
+    {
+        Assert.Equal(expected, ProgramRunner.BuildInstallerScriptUrl(releaseTag));
+    }
+
+    [Fact]
+    public async Task DownloadInstallerScriptAsync_CancelsStalledBody()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"cdidx-install-timeout-{Guid.NewGuid():N}.sh");
+        using var client = new HttpClient(new StaticResponseHandler(new StalledContent()))
+        {
+            Timeout = Timeout.InfiniteTimeSpan,
+        };
+        try
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                ProgramRunner.DownloadInstallerScriptAsync(
+                    client,
+                    "v1.27.0",
+                    path,
+                    TimeSpan.FromMilliseconds(25),
+                    CancellationToken.None));
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task UpdateChecker_ReadLatestReleaseTagAsync_ParsesTagName()
+    {
+        using var content = new ByteArrayContent(Encoding.UTF8.GetBytes("""{"tag_name":"v1.27.0"}"""));
+
+        var tag = await UpdateChecker.ReadLatestReleaseTagAsync(content, CancellationToken.None);
+
+        Assert.Equal("v1.27.0", tag);
+    }
+
+    [Fact]
+    public async Task UpdateChecker_ReadLatestReleaseTagAsync_RejectsOverLimitResponse()
+    {
+        using var content = new ByteArrayContent(new byte[(int)UpdateChecker.MaxLatestReleaseResponseBytes + 1]);
+
+        var ex = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            UpdateChecker.ReadLatestReleaseTagAsync(content, CancellationToken.None));
+
+        Assert.Contains($"{UpdateChecker.MaxLatestReleaseResponseBytes} byte limit", ex.Message);
+    }
+
+    [Fact]
+    public async Task UpdateChecker_ReadLatestReleaseTagAsync_RejectsDeepJson()
+    {
+        var depth = UpdateChecker.MaxLatestReleaseJsonDepth + 8;
+        using var content = new ByteArrayContent(Encoding.UTF8.GetBytes(new string('[', depth) + new string(']', depth)));
+
+        await Assert.ThrowsAnyAsync<JsonException>(() =>
+            UpdateChecker.ReadLatestReleaseTagAsync(content, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task UpdateChecker_FetchLatestReleaseTagAsync_CancelsStalledBody()
+    {
+        using var client = new HttpClient(new StaticResponseHandler(new StalledContent()))
+        {
+            Timeout = Timeout.InfiniteTimeSpan,
+        };
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            UpdateChecker.FetchLatestReleaseTagAsync(
+                client,
+                TimeSpan.FromMilliseconds(25),
+                CancellationToken.None));
     }
 
     [Theory]
@@ -1512,5 +1639,68 @@ public class ProgramRunnerTests
         Assert.True(ok, $"expected success but got error: {error}");
         Assert.Null(options.Path);
         Assert.Equal(new[] { "--db", "--audit-log" }, args);
+    }
+
+    private sealed class StaticResponseHandler : HttpMessageHandler
+    {
+        private readonly HttpContent _content;
+
+        internal StaticResponseHandler(HttpContent content)
+        {
+            _content = content;
+        }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = _content });
+    }
+
+    private sealed class StalledContent : HttpContent
+    {
+        protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context)
+            => Task.CompletedTask;
+
+        protected override Task<Stream> CreateContentReadStreamAsync()
+            => Task.FromResult<Stream>(new StalledStream());
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = 0;
+            return false;
+        }
+    }
+
+    private sealed class StalledStream : Stream
+    {
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override int Read(byte[] buffer, int offset, int count)
+            => throw new NotSupportedException();
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return 0;
+        }
+
+        public override long Seek(long offset, SeekOrigin origin)
+            => throw new NotSupportedException();
+
+        public override void SetLength(long value)
+            => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count)
+            => throw new NotSupportedException();
     }
 }

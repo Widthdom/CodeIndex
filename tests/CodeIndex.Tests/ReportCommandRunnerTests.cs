@@ -20,6 +20,17 @@ namespace CodeIndex.Tests;
 [Collection("SQLite pool sensitive")]
 public class ReportCommandRunnerTests
 {
+    private const UnixFileMode PermissionBits =
+        UnixFileMode.UserRead |
+        UnixFileMode.UserWrite |
+        UnixFileMode.UserExecute |
+        UnixFileMode.GroupRead |
+        UnixFileMode.GroupWrite |
+        UnixFileMode.GroupExecute |
+        UnixFileMode.OtherRead |
+        UnixFileMode.OtherWrite |
+        UnixFileMode.OtherExecute;
+
     private readonly JsonSerializerOptions _jsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
@@ -142,6 +153,41 @@ public class ReportCommandRunnerTests
 
             var schemaText = Encoding.UTF8.GetString(entries["schema.txt"]);
             Assert.Contains("no SQLite index found", schemaText);
+            Assert.Contains($"no SQLite index found at: {ReportCommandRunner.RedactedPlaceholder}", schemaText);
+            Assert.DoesNotContain(missingDb, schemaText);
+        }
+        finally
+        {
+            TryDeleteDirectory(workDir);
+        }
+    }
+
+    [Fact]
+    public void Run_OutputArchiveAndEntriesUseOwnerOnlyPermissions()
+    {
+        var workDir = CreateWorkDir();
+        try
+        {
+            var output = Path.Combine(workDir, "bundle.tgz");
+
+            var (exitCode, _, _) = RunAndCaptureStreams([
+                "--output", output,
+                "--db", Path.Combine(workDir, "missing.db"),
+                "--no-log",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            if (!OperatingSystem.IsWindows())
+            {
+                var fileMode = File.GetUnixFileMode(output) & PermissionBits;
+                Assert.Equal(ReportCommandRunner.BundleFileMode, fileMode);
+            }
+
+            var entryModes = ReadTarGzEntryModes(output);
+            Assert.NotEmpty(entryModes);
+            Assert.All(
+                entryModes.Values,
+                mode => Assert.Equal(ReportCommandRunner.BundleFileMode, mode & PermissionBits));
         }
         finally
         {
@@ -174,6 +220,8 @@ public class ReportCommandRunnerTests
             Assert.Contains("files", schemaText);
             Assert.Contains("symbols", schemaText);
             Assert.Contains("row_count", schemaText);
+            Assert.Contains($"database: {ReportCommandRunner.RedactedPlaceholder}", schemaText);
+            Assert.DoesNotContain(dbPath, schemaText);
             Assert.DoesNotContain("no SQLite index found", schemaText);
         }
         finally
@@ -193,7 +241,11 @@ public class ReportCommandRunnerTests
             Path.Combine(logDir, "stderr-20260516.log"),
             string.Join('\n',
                 "2026-05-16T03:00:00Z [INFO] session_start pid=1 version=1.21.0",
+                "2026-05-16T03:00:00Z [INFO] process_path=/Users/widthdom/.dotnet/tools/cdidx",
+                "2026-05-16T03:00:00Z [INFO] base_dir=/Users/widthdom/.dotnet/tools/.store/cdidx",
                 "2026-05-16T03:00:00Z [INFO] cwd=/Users/widthdom/secret",
+                "2026-05-16T03:00:00Z [ERROR] database_open_failed db=/Users/widthdom/secret/.cdidx/codeindex.db",
+                "2026-05-16T03:00:00Z [INFO] config_file_loaded path=/Users/widthdom/secret/.cdidx/config.json",
                 "2026-05-16T03:00:00Z [INFO] args=query \"SELECT * FROM secret\"",
                 "2026-05-16T03:00:01Z [ERROR] sample error",
                 ""));
@@ -213,9 +265,19 @@ public class ReportCommandRunnerTests
             var entries = ReadTarGzEntries(output);
             Assert.True(entries.ContainsKey("log/stderr-recent.log"));
             var logText = Encoding.UTF8.GetString(entries["log/stderr-recent.log"]);
+            Assert.Contains($"# source directory: {ReportCommandRunner.RedactedPlaceholder}", logText);
             Assert.Contains("args=[redacted]", logText);
             Assert.Contains("cwd=[redacted]", logText);
+            Assert.Contains("process_path=[redacted]", logText);
+            Assert.Contains("base_dir=[redacted]", logText);
+            Assert.Contains("db=[redacted]", logText);
+            Assert.Contains("path=[redacted]", logText);
+            Assert.DoesNotContain(logDir, logText);
             Assert.DoesNotContain("/Users/widthdom/secret", logText);
+            Assert.DoesNotContain("/Users/widthdom/.dotnet/tools/cdidx", logText);
+            Assert.DoesNotContain("/Users/widthdom/.dotnet/tools/.store/cdidx", logText);
+            Assert.DoesNotContain("/Users/widthdom/secret/.cdidx/codeindex.db", logText);
+            Assert.DoesNotContain("/Users/widthdom/secret/.cdidx/config.json", logText);
             Assert.DoesNotContain("SELECT * FROM secret", logText);
             Assert.Contains("session_start", logText);
         }
@@ -227,14 +289,21 @@ public class ReportCommandRunnerTests
     }
 
     [Fact]
-    public void Run_IncludeArgs_PreservesLiteralArgsAndCwd()
+    public void Run_IncludeArgs_PreservesLiteralArgsButRedactsPaths()
     {
         var workDir = CreateWorkDir();
         var logDir = Path.Combine(workDir, "logs");
         Directory.CreateDirectory(logDir);
         File.WriteAllText(
             Path.Combine(logDir, "stderr-20260516.log"),
-            "2026-05-16T03:00:00Z [INFO] cwd=/tmp/keep-this\n2026-05-16T03:00:00Z [INFO] args=index .\n");
+            string.Join('\n',
+                "2026-05-16T03:00:00Z [INFO] process_path=/tmp/cdidx",
+                "2026-05-16T03:00:00Z [INFO] base_dir=/tmp/cdidx-store",
+                "2026-05-16T03:00:00Z [INFO] cwd=/tmp/keep-this",
+                "2026-05-16T03:00:00Z [ERROR] database_open_failed db=/tmp/keep-this/.cdidx/codeindex.db",
+                "2026-05-16T03:00:00Z [INFO] config_file_loaded path=/tmp/keep-this/.cdidx/config.json",
+                "2026-05-16T03:00:00Z [INFO] args=index .",
+                ""));
 
         var previousLogDir = Environment.GetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR");
         Environment.SetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR", logDir);
@@ -251,9 +320,18 @@ public class ReportCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             var entries = ReadTarGzEntries(output);
             var logText = Encoding.UTF8.GetString(entries["log/stderr-recent.log"]);
-            Assert.Contains("cwd=/tmp/keep-this", logText);
             Assert.Contains("args=index .", logText);
-            Assert.DoesNotContain("[redacted]", logText);
+            Assert.Contains("cwd=[redacted]", logText);
+            Assert.Contains("process_path=[redacted]", logText);
+            Assert.Contains("base_dir=[redacted]", logText);
+            Assert.Contains("db=[redacted]", logText);
+            Assert.Contains("path=[redacted]", logText);
+            Assert.DoesNotContain("/tmp/keep-this", logText);
+            Assert.DoesNotContain("/tmp/cdidx", logText);
+            Assert.DoesNotContain("/tmp/cdidx-store", logText);
+            Assert.DoesNotContain("/tmp/keep-this/.cdidx/codeindex.db", logText);
+            Assert.DoesNotContain("/tmp/keep-this/.cdidx/config.json", logText);
+            Assert.DoesNotContain("args=[redacted]", logText);
         }
         finally
         {
@@ -296,6 +374,46 @@ public class ReportCommandRunnerTests
 
         Assert.Contains("cwd=[redacted]", redacted);
         Assert.DoesNotContain("/private/foo/secret-project", redacted);
+    }
+
+    [Fact]
+    public void RedactSensitiveFields_RedactsProcessPathLine()
+    {
+        var redacted = ReportCommandRunner.RedactSensitiveFields(
+            "2026-05-16T03:00:00Z [INFO] process_path=/Users/example/.dotnet/tools/cdidx");
+
+        Assert.Contains("process_path=[redacted]", redacted);
+        Assert.DoesNotContain("/Users/example/.dotnet/tools/cdidx", redacted);
+    }
+
+    [Fact]
+    public void RedactSensitiveFields_RedactsBaseDirLine()
+    {
+        var redacted = ReportCommandRunner.RedactSensitiveFields(
+            "2026-05-16T03:00:00Z [INFO] base_dir=/Users/example/.dotnet/tools/.store/cdidx");
+
+        Assert.Contains("base_dir=[redacted]", redacted);
+        Assert.DoesNotContain("/Users/example/.dotnet/tools/.store/cdidx", redacted);
+    }
+
+    [Fact]
+    public void RedactSensitiveFields_RedactsDatabasePathLine()
+    {
+        var redacted = ReportCommandRunner.RedactSensitiveFields(
+            "2026-05-16T03:00:00Z [ERROR] database_open_failed db=/Users/example/project/.cdidx/codeindex.db");
+
+        Assert.Contains("db=[redacted]", redacted);
+        Assert.DoesNotContain("/Users/example/project/.cdidx/codeindex.db", redacted);
+    }
+
+    [Fact]
+    public void RedactSensitiveFields_RedactsConfigPathLine()
+    {
+        var redacted = ReportCommandRunner.RedactSensitiveFields(
+            "2026-05-16T03:00:00Z [INFO] config_file_loaded path=/Users/example/project/.cdidx/config.json");
+
+        Assert.Contains("path=[redacted]", redacted);
+        Assert.DoesNotContain("/Users/example/project/.cdidx/config.json", redacted);
     }
 
     [Fact]
@@ -393,6 +511,21 @@ public class ReportCommandRunnerTests
             using var buffer = new MemoryStream();
             entry.DataStream?.CopyTo(buffer);
             entries[entry.Name] = buffer.ToArray();
+        }
+        return entries;
+    }
+
+    private static Dictionary<string, UnixFileMode> ReadTarGzEntryModes(string path)
+    {
+        var entries = new Dictionary<string, UnixFileMode>(StringComparer.Ordinal);
+        using var fileStream = File.OpenRead(path);
+        using var gz = new GZipStream(fileStream, CompressionMode.Decompress);
+        using var tar = new TarReader(gz);
+        while (tar.GetNextEntry() is { } entry)
+        {
+            if (entry.EntryType != TarEntryType.RegularFile)
+                continue;
+            entries[entry.Name] = entry.Mode;
         }
         return entries;
     }

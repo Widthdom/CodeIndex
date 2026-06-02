@@ -1,7 +1,9 @@
 using System.Buffers;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Models;
 
@@ -10,10 +12,14 @@ namespace CodeIndex.Lsp;
 internal sealed class LspServer : IDisposable
 {
     private const int DefaultLimit = 50;
+    internal const int MaxLspFrameBytes = 8 * 1024 * 1024;
+    internal const int MaxLspHeaderLineBytes = 8 * 1024;
+    internal const int MaxPositionDocumentBytes = 4 * 1024 * 1024;
     private readonly DbReader _reader;
     private readonly string _version;
     private readonly JsonSerializerOptions _jsonOptions;
     private readonly string? _projectRoot;
+    private readonly StringComparison _pathStringComparison;
     private bool _shutdownRequested;
 
     public LspServer(DbReader reader, string version, JsonSerializerOptions jsonOptions, string? projectRoot = null)
@@ -22,6 +28,7 @@ internal sealed class LspServer : IDisposable
         _version = version;
         _jsonOptions = jsonOptions;
         _projectRoot = string.IsNullOrWhiteSpace(projectRoot) ? null : projectRoot;
+        _pathStringComparison = PathCasing.ComparisonFor(_projectRoot ?? Environment.CurrentDirectory);
     }
 
     public void Run(Stream input, Stream output)
@@ -147,15 +154,50 @@ internal sealed class LspServer : IDisposable
         if (line < 0 || character < 0)
             return null;
 
-        var resolved = Path.IsPathRooted(path) ? path : Path.GetFullPath(path);
-        if (!File.Exists(resolved))
+        if (!TryResolveDocumentPath(path, out var resolvedPath, out var projectRelativePath))
             return null;
 
-        var lines = File.ReadAllLines(resolved);
-        if (line >= lines.Length)
+        var indexedPath = ResolveIndexedPath(path, resolvedPath, projectRelativePath);
+        if (indexedPath == null || !TryResolveIndexedFilePath(indexedPath, out var indexedFullPath))
             return null;
 
-        return ExtractTokenAtUtf16Position(lines[line], character);
+        if (!string.Equals(resolvedPath, indexedFullPath, _pathStringComparison))
+            return null;
+
+        if (!TryReadPositionLine(indexedFullPath, line, out var sourceLine))
+            return null;
+
+        return ExtractTokenAtUtf16Position(sourceLine, character);
+    }
+
+    private static bool TryReadPositionLine(string path, int targetLine, out string sourceLine)
+    {
+        sourceLine = string.Empty;
+        try
+        {
+            using var stream = File.OpenRead(path);
+            if (stream.Length > MaxPositionDocumentBytes)
+                return false;
+
+            using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+            for (var currentLine = 0; currentLine <= targetLine; currentLine++)
+            {
+                var line = reader.ReadLine();
+                if (line == null)
+                    return false;
+                if (currentLine == targetLine)
+                {
+                    sourceLine = line;
+                    return true;
+                }
+            }
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+
+        return false;
     }
 
     internal static string? ExtractTokenAtUtf16Position(string line, int character)
@@ -181,25 +223,124 @@ internal sealed class LspServer : IDisposable
 
     private static bool IsTokenChar(char c) => char.IsLetterOrDigit(c) || c == '_' || c == '@';
 
-    private static bool MatchesDocumentPath(string indexedPath, string documentPath)
+    private bool MatchesDocumentPath(string indexedPath, string documentPath, string? projectRelativePath)
     {
+        var normalizedIndexed = indexedPath.Replace('\\', '/');
+        if (_projectRoot != null)
+        {
+            if (Path.IsPathRooted(indexedPath)
+                && TryResolveIndexedFilePath(indexedPath, out var indexedFullPath)
+                && TryGetProjectRelativePath(indexedFullPath, out var indexedRelativePath)
+                && indexedRelativePath != null)
+            {
+                normalizedIndexed = indexedRelativePath.Replace('\\', '/');
+            }
+
+            return projectRelativePath != null
+                && string.Equals(normalizedIndexed, projectRelativePath.Replace('\\', '/'), _pathStringComparison);
+        }
+
         if (string.Equals(indexedPath, documentPath, StringComparison.Ordinal))
             return true;
 
-        var normalizedIndexed = indexedPath.Replace('\\', '/');
         var normalizedDocument = documentPath.Replace('\\', '/');
         return normalizedDocument.EndsWith("/" + normalizedIndexed, StringComparison.Ordinal);
     }
 
     private string? ResolveIndexedPath(string documentPath)
     {
+        if (!TryResolveDocumentPath(documentPath, out var resolvedPath, out var projectRelativePath))
+            return null;
+
+        return ResolveIndexedPath(documentPath, resolvedPath, projectRelativePath);
+    }
+
+    private string? ResolveIndexedPath(string documentPath, string resolvedPath, string? projectRelativePath)
+    {
+        if (projectRelativePath != null)
+        {
+            var exactPath = projectRelativePath.Replace('\\', '/');
+            var exactFile = _reader.GetFileByPath(exactPath);
+            if (exactFile != null)
+                return exactFile.Path;
+        }
+
         var fileName = Path.GetFileName(documentPath);
+        if (string.IsNullOrEmpty(fileName))
+            fileName = Path.GetFileName(resolvedPath);
+        if (string.IsNullOrEmpty(fileName))
+            return null;
+
         var files = _reader.ListFiles(fileName, 1000);
         var matches = files
-            .Where(file => MatchesDocumentPath(file.Path, documentPath))
+            .Where(file => MatchesDocumentPath(file.Path, documentPath, projectRelativePath))
             .Take(2)
             .ToList();
         return matches.Count == 1 ? matches[0].Path : null;
+    }
+
+    private bool TryResolveDocumentPath(string documentPath, out string resolvedPath, out string? projectRelativePath)
+    {
+        resolvedPath = string.Empty;
+        projectRelativePath = null;
+        try
+        {
+            resolvedPath = Path.IsPathRooted(documentPath)
+                ? Path.GetFullPath(documentPath)
+                : Path.GetFullPath(documentPath, _projectRoot ?? Environment.CurrentDirectory);
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+
+        if (_projectRoot == null)
+            return true;
+
+        return TryGetProjectRelativePath(resolvedPath, out projectRelativePath);
+    }
+
+    private bool TryResolveIndexedFilePath(string indexedPath, out string resolvedPath)
+    {
+        resolvedPath = string.Empty;
+        try
+        {
+            resolvedPath = Path.IsPathRooted(indexedPath)
+                ? Path.GetFullPath(indexedPath)
+                : Path.GetFullPath(indexedPath, _projectRoot ?? Environment.CurrentDirectory);
+            return true;
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    private bool TryGetProjectRelativePath(string resolvedPath, out string? relativePath)
+    {
+        relativePath = null;
+        if (_projectRoot == null)
+            return false;
+
+        try
+        {
+            var relative = Path.GetRelativePath(Path.GetFullPath(_projectRoot), resolvedPath);
+            if (relative == "."
+                || relative == ".."
+                || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+                || relative.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal)
+                || Path.IsPathRooted(relative))
+            {
+                return false;
+            }
+
+            relativePath = relative;
+            return true;
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException or UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     private JsonObject ToWorkspaceSymbol(SymbolResult symbol) => new()
@@ -333,9 +474,15 @@ internal sealed class LspServer : IDisposable
                 continue;
             var name = line[..colon].Trim();
             var value = line[(colon + 1)..].Trim();
-            if (string.Equals(name, "Content-Length", StringComparison.OrdinalIgnoreCase)
-                && int.TryParse(value, out var parsed))
+            if (string.Equals(name, "Content-Length", StringComparison.OrdinalIgnoreCase))
             {
+                if (!int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed)
+                    || parsed < 0
+                    || parsed > MaxLspFrameBytes)
+                {
+                    return false;
+                }
+
                 contentLength = parsed;
             }
         }
@@ -383,7 +530,11 @@ internal sealed class LspServer : IDisposable
             if (value == '\n')
                 break;
             if (value != '\r')
+            {
+                if (bytes.Count >= MaxLspHeaderLineBytes)
+                    return null;
                 bytes.Add((byte)value);
+            }
         }
         return Encoding.ASCII.GetString(bytes.ToArray());
     }

@@ -23,6 +23,8 @@ namespace CodeIndex.Cli;
 /// </summary>
 internal sealed class IndexLock : IDisposable
 {
+    private const int MaxInfoBytes = 16 * 1024;
+
     private readonly FileStream _stream;
     private readonly string _lockPath;
     private readonly string _infoPath;
@@ -100,7 +102,7 @@ internal sealed class IndexLock : IDisposable
                 StartedAt: DateTime.UtcNow,
                 Host: Environment.MachineName,
                 ProjectPath: Path.GetFullPath(projectPath));
-            File.WriteAllText(infoPath, SerializeInfo(info), Encoding.UTF8);
+            DataDirectorySecurity.WritePrivateText(infoPath, SerializeInfo(info), Encoding.UTF8);
         }
         catch (Exception)
         {
@@ -129,13 +131,7 @@ internal sealed class IndexLock : IDisposable
             // diagnostic read is never rejected for share-mode mismatch.
             // 保持者が .info を上書きしている可能性があるため FileShare.ReadWrite で
             // 開き、共有モード不一致で読みを失敗させない。
-            using var stream = new FileStream(
-                ioInfoPath,
-                FileMode.Open,
-                FileAccess.Read,
-                FileShare.ReadWrite);
-            using var reader = new StreamReader(stream, Encoding.UTF8);
-            var text = reader.ReadToEnd();
+            var text = DataDirectorySecurity.ReadTextWithinLimit(ioInfoPath, MaxInfoBytes, FileShare.ReadWrite);
             if (string.IsNullOrWhiteSpace(text))
                 return null;
             return ParseInfo(text);

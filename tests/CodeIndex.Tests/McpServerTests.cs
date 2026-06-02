@@ -6907,6 +6907,87 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void McpIndexRunLock_TryAcquire_OnPosix_WritesPrivateInfoFile()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_private_lock_{Guid.NewGuid():N}.db");
+        var lockPath = McpIndexRunLock.ResolveLockPath(dbPath);
+        var infoPath = lockPath + ".info";
+        try
+        {
+            Assert.True(McpIndexRunLock.TryAcquire(dbPath, out var runLock, out var error), error);
+            Assert.NotNull(runLock);
+            using (runLock!)
+            {
+                Assert.True(File.Exists(infoPath));
+                Assert.Equal(
+                    DataDirectorySecurity.PrivateFileMode,
+                    File.GetUnixFileMode(infoPath) & DataDirectorySecurity.PermissionBits);
+            }
+        }
+        finally
+        {
+            if (File.Exists(infoPath))
+                File.Delete(infoPath);
+            if (File.Exists(lockPath))
+                File.Delete(lockPath);
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_WhenDbLockInfoTooLarge_ReturnsBusyWithoutHolderDetails()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_large_lock_fixture_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(fixtureDir);
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_index_large_lock_{Guid.NewGuid():N}.db");
+        var lockPath = McpIndexRunLock.ResolveLockPath(dbPath);
+        Directory.CreateDirectory(Path.GetDirectoryName(lockPath)!);
+        var infoPath = lockPath + ".info";
+        File.WriteAllText(infoPath, $$"""{"pid":{{Environment.ProcessId}},"since":"2026-01-02T03:04:05.0000000+00:00","padding":"{{new string('x', 5 * 1024)}}"}""");
+        using var heldLock = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        using var server = new McpServer(dbPath, ConsoleUi.LoadVersion(), dbPathExplicit: true);
+        try
+        {
+            var request = new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = 1,
+                ["method"] = "tools/call",
+                ["params"] = new JsonObject
+                {
+                    ["name"] = "index",
+                    ["arguments"] = new JsonObject
+                    {
+                        ["path"] = fixtureDir
+                    }
+                }
+            };
+
+            var response = server.HandleMessage(request)!;
+
+            Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+            var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+            Assert.Contains("index already running on this DB", text);
+            Assert.Contains("holder metadata unavailable", text);
+            Assert.DoesNotContain($"pid {Environment.ProcessId}", text);
+        }
+        finally
+        {
+            heldLock.Dispose();
+            File.Delete(infoPath);
+            File.Delete(lockPath);
+            if (Directory.Exists(fixtureDir))
+                Directory.Delete(fixtureDir, recursive: true);
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
     public void ToolsCall_Index_NonexistentDir_ReturnsError()
     {
         // Use a path within CWD that doesn't exist / CWD内の存在しないパスを使用
@@ -9438,6 +9519,154 @@ public class McpServerTests : IDisposable
             .Single(s => s.Description == uniqueDesc);
         Assert.Equal("Improve TypeScript arrow symbol extraction", stored.SampledTitle);
         Assert.Contains("symbol_extraction", stored.SampledTags!);
+    }
+
+    [Fact]
+    public void SuggestImprovement_WhenSamplingResponseIsTooLarge_IgnoresSampledMetadata()
+    {
+        _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"capabilities":{"sampling":{}}}}""")!);
+        _server.ClientRequestHandlerForTests = (method, _) =>
+        {
+            Assert.Equal("sampling/createMessage", method);
+            return new JsonObject
+            {
+                ["content"] = new JsonObject
+                {
+                    ["type"] = "text",
+                    ["text"] = $$"""{"title":"{{new string('A', 9000)}}","tags":["security"]}"""
+                }
+            };
+        };
+        var uniqueDesc = $"Oversized sampling response regression {Guid.NewGuid():N}";
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "suggest_improvement",
+                ["arguments"] = new JsonObject
+                {
+                    ["category"] = "other",
+                    ["description"] = uniqueDesc,
+                }
+            }
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal("recorded", structured["status"]!.GetValue<string>());
+        Assert.Null(structured["sampled_title"]);
+        var stored = new SuggestionStore(Path.GetDirectoryName(_dbPath)!, Path.GetFileNameWithoutExtension(_dbPath)).LoadAll()
+            .Single(s => s.Description == uniqueDesc);
+        Assert.Null(stored.SampledTitle);
+        Assert.Null(stored.SampledTags);
+    }
+
+    [Fact]
+    public void SuggestImprovement_WhenSamplingResponseJsonIsTooDeep_IgnoresSampledMetadata()
+    {
+        _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"capabilities":{"sampling":{}}}}""")!);
+        _server.ClientRequestHandlerForTests = (method, _) =>
+        {
+            Assert.Equal("sampling/createMessage", method);
+            var deepTail = new string('[', 40) + "null" + new string(']', 40);
+            return new JsonObject
+            {
+                ["content"] = new JsonObject
+                {
+                    ["type"] = "text",
+                    ["text"] = $$"""{"title":"Deep sampling metadata","tags":["security"],"nested":{{deepTail}}}"""
+                }
+            };
+        };
+        var uniqueDesc = $"Deep sampling response regression {Guid.NewGuid():N}";
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "suggest_improvement",
+                ["arguments"] = new JsonObject
+                {
+                    ["category"] = "other",
+                    ["description"] = uniqueDesc,
+                }
+            }
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal("recorded", structured["status"]!.GetValue<string>());
+        Assert.Null(structured["sampled_title"]);
+        var stored = new SuggestionStore(Path.GetDirectoryName(_dbPath)!, Path.GetFileNameWithoutExtension(_dbPath)).LoadAll()
+            .Single(s => s.Description == uniqueDesc);
+        Assert.Null(stored.SampledTitle);
+        Assert.Null(stored.SampledTags);
+    }
+
+    [Fact]
+    public void SuggestImprovement_WhenSamplingAvailable_BoundsPromptAndSummarizesInvocationContext()
+    {
+        _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"capabilities":{"sampling":{}}}}""")!);
+        string? capturedPrompt = null;
+        _server.ClientRequestHandlerForTests = (method, parameters) =>
+        {
+            Assert.Equal("sampling/createMessage", method);
+            capturedPrompt = parameters?["messages"]?[0]?["content"]?["text"]?.GetValue<string>();
+            return new JsonObject
+            {
+                ["content"] = new JsonObject
+                {
+                    ["type"] = "text",
+                    ["text"] = """{"title":"Bound sampling prompt","tags":["security"]}"""
+                }
+            };
+        };
+        var uniqueDesc = new string('\u3042', 2000);
+        var context = new string('\u3044', 1000);
+        const string secretValue = "secret-token-1234567890";
+        var toolInvocationContext = $"search request included token {secretValue} and detailed invocation payload";
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "suggest_improvement",
+                ["arguments"] = new JsonObject
+                {
+                    ["category"] = "other",
+                    ["description"] = uniqueDesc,
+                    ["context"] = context,
+                    ["toolInvocationContext"] = toolInvocationContext,
+                }
+            }
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal("recorded", structured["status"]!.GetValue<string>());
+        Assert.Equal("Bound sampling prompt", structured["sampled_title"]!.GetValue<string>());
+        Assert.NotNull(capturedPrompt);
+        Assert.True(Encoding.UTF8.GetByteCount(capturedPrompt) <= 4096);
+        Assert.Contains("tool_invocation_context: provided;", capturedPrompt);
+        Assert.Contains("raw content withheld", capturedPrompt);
+        Assert.DoesNotContain(secretValue, capturedPrompt);
+        Assert.Contains("[truncated]", capturedPrompt);
+        var stored = new SuggestionStore(Path.GetDirectoryName(_dbPath)!, Path.GetFileNameWithoutExtension(_dbPath)).LoadAll()
+            .Single(s => s.Description == uniqueDesc);
+        Assert.Equal(toolInvocationContext, stored.ToolInvocationContext);
     }
 
     [Fact]

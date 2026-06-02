@@ -9225,6 +9225,61 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void IndexLock_Acquire_OnPosix_WritesPrivateInfoFile()
+    {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            return;
+
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_private_lock_{Guid.NewGuid():N}.db");
+        var lockPath = dbPath + ".lock";
+        var infoPath = lockPath + ".info";
+        try
+        {
+            using var indexLock = IndexLock.Acquire(lockPath, projectRoot);
+
+            Assert.True(File.Exists(infoPath));
+            Assert.Equal(
+                DataDirectorySecurity.PrivateFileMode,
+                File.GetUnixFileMode(infoPath) & DataDirectorySecurity.PermissionBits);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+            if (File.Exists(infoPath))
+                File.Delete(infoPath);
+            if (File.Exists(lockPath))
+                File.Delete(lockPath);
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void IndexLock_TryReadHolderInfo_WhenInfoFileTooLarge_ReturnsNull()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_large_lock_{Guid.NewGuid():N}.db");
+        var lockPath = dbPath + ".lock";
+        var infoPath = lockPath + ".info";
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(lockPath)!);
+            File.WriteAllText(infoPath, new string('x', 17 * 1024));
+
+            Assert.Null(IndexLock.TryReadHolderInfo(lockPath));
+        }
+        finally
+        {
+            if (File.Exists(infoPath))
+                File.Delete(infoPath);
+            if (File.Exists(lockPath))
+                File.Delete(lockPath);
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
     public void Run_LockHeldByAnotherHolder_RejectedWithHolderInfo()
     {
         var projectRoot = CreateTempProject();

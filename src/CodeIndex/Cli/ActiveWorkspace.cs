@@ -8,6 +8,7 @@ internal sealed record ActiveWorkspaceState(string Name, string Root, string DbP
 internal static class ActiveWorkspace
 {
     internal const string EnvironmentVariable = "CDIDX_ACTIVE_WORKSPACE";
+    private const int MaxStateBytes = 64 * 1024;
 
     internal static string StatePath
     {
@@ -33,7 +34,14 @@ internal static class ActiveWorkspace
 
         try
         {
-            using var document = JsonDocument.Parse(File.ReadAllText(LongPath.EnsureWindowsPrefix(path)));
+            var text = DataDirectorySecurity.ReadTextWithinLimit(path, MaxStateBytes, FileShare.ReadWrite);
+            if (text is null)
+            {
+                WriteLoadWarning(path, $"file exceeds {MaxStateBytes} bytes");
+                return null;
+            }
+
+            using var document = JsonDocument.Parse(text);
             var root = document.RootElement;
             var name = ReadString(root, "name") ?? "default";
             var workspaceRoot = ReadString(root, "root") ?? Environment.CurrentDirectory;
@@ -44,17 +52,21 @@ internal static class ActiveWorkspace
         }
         catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
+            WriteLoadWarning(path, ex.Message);
             return null;
         }
     }
 
     internal static void Save(ActiveWorkspaceState state)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(StatePath)!);
+        DataDirectorySecurity.CreateSensitiveDirectory(Path.GetDirectoryName(StatePath)!);
         var payload = new ActiveWorkspaceState(state.Name, Path.GetFullPath(state.Root), Path.GetFullPath(state.DbPath));
-        File.WriteAllText(StatePath, JsonSerializer.Serialize(payload, ProgramRunner.CreateDefaultJsonOptions()));
+        DataDirectorySecurity.WritePrivateText(StatePath, JsonSerializer.Serialize(payload, ProgramRunner.CreateDefaultJsonOptions()));
     }
 
     private static string? ReadString(JsonElement element, string name)
         => element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+
+    private static void WriteLoadWarning(string path, string reason)
+        => Console.Error.WriteLine($"[cdidx] Ignoring active workspace state at {path}: {reason}");
 }

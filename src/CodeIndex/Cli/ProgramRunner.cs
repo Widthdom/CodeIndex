@@ -16,7 +16,10 @@ namespace CodeIndex.Cli;
 
 internal static class ProgramRunner
 {
+    private const int RetainedQueryTraceFileCount = 30;
     internal const string QuietEnvironmentVariable = "CDIDX_QUIET";
+    private const string InstallerScriptUrlTemplate = "https://raw.githubusercontent.com/Widthdom/CodeIndex/{0}/install.sh";
+    private const long MaxInstallerScriptBytes = 1024 * 1024;
     internal static TimeProvider TimeProvider { get; set; } = TimeProvider.System;
 
     internal static int Run(
@@ -1271,13 +1274,27 @@ internal static class ProgramRunner
 
             var directory = GlobalToolLog.ResolveLogDirectoryForStatus();
             Directory.CreateDirectory(directory);
-            var path = Path.Combine(directory, $"query-trace-{TimeProvider.GetUtcNow().UtcDateTime:yyyyMMdd}.jsonl");
-            File.AppendAllText(path, payload + Environment.NewLine);
+            PrivateLogFile.HardenExisting(directory, "query-trace-*.jsonl");
+            var path = ResolveQueryTracePath(directory);
+            var encoded = Encoding.UTF8.GetBytes(payload + Environment.NewLine);
+            using (var stream = PrivateLogFile.OpenAppend(path, FileShare.ReadWrite))
+            {
+                stream.Write(encoded, 0, encoded.Length);
+                stream.Flush();
+            }
+            PrivateLogFile.TrySetPrivatePermissions(path);
+            PrivateLogFile.PruneOldFiles(directory, "query-trace-*.jsonl", RetainedQueryTraceFileCount);
         }
         catch
         {
             // Best-effort only: trace output must never change query command behavior.
         }
+    }
+
+    private static string ResolveQueryTracePath(string directory)
+    {
+        var date = TimeProvider.GetUtcNow().UtcDateTime.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
+        return Path.Combine(directory, $"query-trace-{date}.jsonl");
     }
 
     private static string BuildQueryTraceJson(string commandName, string[] subArgs, DateTimeOffset timestamp, double elapsedMs, int exitCode, int? resultCount)
@@ -1569,7 +1586,14 @@ internal static class ProgramRunner
             }
 
             db.TryMigrateForRead();
-            using var server = new LspServer(new DbReader(db), appVersion, jsonOptions, db.GetMetaString(DbContext.IndexedProjectRootMetaKey));
+            var indexedProjectRoot = db.GetMetaString(DbContext.IndexedProjectRootMetaKey);
+            if (!string.IsNullOrWhiteSpace(indexedProjectRoot)
+                && bool.TryParse(db.GetMetaString(DbContext.WorkspacePathCaseSensitiveMetaKey), out var pathCaseSensitive))
+            {
+                PathCasing.SeedFromWorkspace(indexedProjectRoot, ignoreCase: !pathCaseSensitive);
+            }
+
+            using var server = new LspServer(new DbReader(db), appVersion, jsonOptions, indexedProjectRoot);
             server.Run(Console.OpenStandardInput(), Console.OpenStandardOutput());
             return CommandExitCodes.Success;
         }
@@ -2176,10 +2200,14 @@ internal static class ProgramRunner
         {
             using (var client = new HttpClient { Timeout = TimeSpan.FromSeconds(20) })
             {
-                var script = client.GetStringAsync("https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh")
+                DownloadInstallerScriptAsync(
+                        client,
+                        result.LatestVersion,
+                        scriptPath,
+                        TimeSpan.FromSeconds(20),
+                        CancellationToken.None)
                     .GetAwaiter()
                     .GetResult();
-                File.WriteAllText(scriptPath, script);
             }
 
             var startInfo = new ProcessStartInfo("bash", $"{QuoteShellArg(scriptPath)} {QuoteShellArg(result.LatestVersion)}")
@@ -2206,6 +2234,34 @@ internal static class ProgramRunner
         {
             try { File.Delete(scriptPath); } catch { }
         }
+    }
+
+    internal static string BuildInstallerScriptUrl(string releaseTag)
+        => string.Format(
+            CultureInfo.InvariantCulture,
+            InstallerScriptUrlTemplate,
+            Uri.EscapeDataString(releaseTag.Trim()));
+
+    internal static async Task DownloadInstallerScriptAsync(
+        HttpClient client,
+        string releaseTag,
+        string scriptPath,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
+        using var downloadCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        downloadCts.CancelAfter(timeout);
+        using var request = new HttpRequestMessage(HttpMethod.Get, BuildInstallerScriptUrl(releaseTag));
+        using var response = await client.SendAsync(
+            request,
+            HttpCompletionOption.ResponseHeadersRead,
+            downloadCts.Token).ConfigureAwait(false);
+        response.EnsureSuccessStatusCode();
+        await BoundedHttpContentReader.WriteToPrivateFileAsync(
+            response.Content,
+            scriptPath,
+            MaxInstallerScriptBytes,
+            downloadCts.Token).ConfigureAwait(false);
     }
 
     private static bool CanWriteDirectory(string directory)

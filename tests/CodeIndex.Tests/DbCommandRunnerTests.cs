@@ -282,6 +282,41 @@ public class DbCommandRunnerTests
     }
 
     [Fact]
+    public void Run_Checkpoint_OnPosix_WritesPrivateSnapshotPermissions()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_private_{Guid.NewGuid():N}");
+        var dbPath = Path.Combine(root, "codeindex.db");
+        try
+        {
+            Directory.CreateDirectory(root);
+            File.WriteAllText(dbPath, "db");
+            File.WriteAllText(dbPath + "-wal", "wal");
+            File.WriteAllText(dbPath + "-shm", "shm");
+
+            var (checkpointExit, _, _) = RunAndCaptureStreams(["checkpoint", "private", "--db", dbPath]);
+
+            Assert.Equal(CommandExitCodes.Success, checkpointExit);
+            var checkpointRoot = dbPath + ".checkpoints";
+            var checkpointPath = Path.Combine(checkpointRoot, "private");
+            AssertPrivateDirectory(checkpointRoot);
+            AssertPrivateDirectory(checkpointPath);
+            AssertPrivateFile(Path.Combine(checkpointPath, "codeindex.db"));
+            AssertPrivateFile(Path.Combine(checkpointPath, "codeindex.db-wal"));
+            AssertPrivateFile(Path.Combine(checkpointPath, "codeindex.db-shm"));
+            AssertPrivateFile(Path.Combine(checkpointPath, "manifest.txt"));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Run_CheckpointsList_JsonIncludesCreatedCheckpoint()
     {
         var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_list_{Guid.NewGuid():N}");
@@ -380,6 +415,52 @@ public class DbCommandRunnerTests
     }
 
     [Fact]
+    public void Run_Restore_OnPosix_CreatesPrivateStagingAndBackupPermissions()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_restore_private_{Guid.NewGuid():N}");
+        var dbPath = Path.Combine(root, "codeindex.db");
+        var inspected = false;
+        try
+        {
+            Directory.CreateDirectory(root);
+            File.WriteAllText(dbPath, "original");
+            var (checkpointExit, _, _) = RunAndCaptureStreams(["checkpoint", "saved", "--db", dbPath]);
+            Assert.Equal(CommandExitCodes.Success, checkpointExit);
+
+            File.WriteAllText(dbPath, "changed");
+            DbCommandRunner.RestoreFailureAfterBackupForTesting = () =>
+            {
+                var restoreTempPath = Assert.Single(Directory.GetDirectories(root, "codeindex.db.restore-tmp-*"));
+                var backupPath = Assert.Single(Directory.GetDirectories(root, "codeindex.db.restore-backup-*"));
+                AssertPrivateDirectory(restoreTempPath);
+                AssertPrivateDirectory(backupPath);
+                AssertPrivateFile(Path.Combine(restoreTempPath, "codeindex.db"));
+                AssertPrivateFile(Path.Combine(backupPath, "codeindex.db"));
+                inspected = true;
+            };
+
+            var (restoreExit, _, _) = RunAndCaptureStreams(["restore", "saved", "--db", dbPath]);
+
+            Assert.Equal(CommandExitCodes.Success, restoreExit);
+            Assert.True(inspected);
+            AssertPrivateFile(dbPath);
+            var finalBackupPath = Assert.Single(Directory.GetDirectories(root, "codeindex.db.restore-backup-*"));
+            AssertPrivateDirectory(finalBackupPath);
+            AssertPrivateFile(Path.Combine(finalBackupPath, "codeindex.db"));
+        }
+        finally
+        {
+            DbCommandRunner.RestoreFailureAfterBackupForTesting = null;
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Run_CorruptedDb_ReturnsDatabaseError()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_corrupt_{Guid.NewGuid():N}.db");
@@ -424,6 +505,24 @@ public class DbCommandRunnerTests
         var exitCode = DbCommandRunner.RunIntegrityCheck(args, _jsonOptions);
         using var document = JsonDocument.Parse(capture.Out!.ToString()!);
         return (exitCode, document.RootElement.Clone());
+    }
+
+    private static void AssertPrivateDirectory(string path)
+    {
+#pragma warning disable CA1416
+        Assert.Equal(
+            DataDirectorySecurity.PrivateDirectoryMode,
+            File.GetUnixFileMode(path) & DataDirectorySecurity.PermissionBits);
+#pragma warning restore CA1416
+    }
+
+    private static void AssertPrivateFile(string path)
+    {
+#pragma warning disable CA1416
+        Assert.Equal(
+            DataDirectorySecurity.PrivateFileMode,
+            File.GetUnixFileMode(path) & DataDirectorySecurity.PermissionBits);
+#pragma warning restore CA1416
     }
 
     private static void SeedOrphans(string dbPath)

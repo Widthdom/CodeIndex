@@ -20,8 +20,16 @@ internal static class MetricsSink
 {
     private static readonly AsyncLocal<Session?> CurrentSession = new();
     internal const string EnvVarName = "CDIDX_METRICS";
+    internal const long DefaultMaxBytes = 50L * 1024 * 1024;
+    internal const int RotationKeep = 3;
 
-    internal static IDisposable? TryStart(string? explicitPath)
+    internal static IDisposable? TryStart(string? explicitPath) =>
+        TryStart(explicitPath, DefaultMaxBytes);
+
+    internal static IDisposable? TryStartForTesting(string? explicitPath, long maxBytes) =>
+        TryStart(explicitPath, maxBytes);
+
+    private static IDisposable? TryStart(string? explicitPath, long maxBytes)
     {
         var path = ResolvePath(explicitPath);
         if (string.IsNullOrWhiteSpace(path))
@@ -34,12 +42,14 @@ internal static class MetricsSink
             if (!string.IsNullOrEmpty(directory))
                 Directory.CreateDirectory(directory);
 
-            var stream = new FileStream(fullPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
-            var writer = new StreamWriter(stream, new UTF8Encoding(false))
+            long bytesWritten;
+            using (var probe = PrivateLogFile.OpenAppend(fullPath, FileShare.ReadWrite))
             {
-                AutoFlush = true,
-            };
-            var session = new Session(writer, fullPath);
+                bytesWritten = probe.Length;
+            }
+            PrivateLogFile.TrySetPrivatePermissions(fullPath);
+
+            var session = new Session(fullPath, maxBytes, bytesWritten);
             CurrentSession.Value = session;
             return session;
         }
@@ -72,13 +82,16 @@ internal static class MetricsSink
     internal sealed class Session : IDisposable
     {
         private readonly object _gate = new();
-        private readonly StreamWriter _writer;
+        private readonly Encoding _utf8NoBom = new UTF8Encoding(false);
+        private readonly long _maxBytes;
+        private long _bytesWritten;
         private bool _disposed;
 
-        public Session(StreamWriter writer, string path)
+        public Session(string path, long maxBytes, long bytesWritten)
         {
-            _writer = writer;
             Path = path;
+            _maxBytes = maxBytes;
+            _bytesWritten = bytesWritten;
         }
 
         public string Path { get; }
@@ -92,7 +105,15 @@ internal static class MetricsSink
 
                 try
                 {
-                    _writer.WriteLine(SerializeEvent(evt));
+                    RotateIfNeededLocked();
+                    var encoded = _utf8NoBom.GetBytes(SerializeEvent(evt) + Environment.NewLine);
+                    using (var stream = PrivateLogFile.OpenAppend(Path, FileShare.ReadWrite))
+                    {
+                        stream.Write(encoded, 0, encoded.Length);
+                        stream.Flush();
+                    }
+                    _bytesWritten += encoded.Length;
+                    RotateIfNeededLocked();
                 }
                 catch
                 {
@@ -110,15 +131,16 @@ internal static class MetricsSink
 
                 _disposed = true;
                 CurrentSession.Value = null;
-                try
-                {
-                    _writer.Dispose();
-                }
-                catch
-                {
-                    // Best-effort only / ベストエフォートのみ
-                }
             }
+        }
+
+        private void RotateIfNeededLocked()
+        {
+            if (_bytesWritten < _maxBytes)
+                return;
+
+            if (PrivateLogFile.TryRotateSlots(Path, RotationKeep))
+                _bytesWritten = 0;
         }
     }
 

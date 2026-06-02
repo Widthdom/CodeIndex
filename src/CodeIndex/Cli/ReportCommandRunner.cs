@@ -22,6 +22,7 @@ public static class ReportCommandRunner
 {
     internal const int DefaultLogLines = 200;
     internal const string RedactedPlaceholder = "[redacted]";
+    internal const UnixFileMode BundleFileMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
 
     public static int Run(string[] cmdArgs, JsonSerializerOptions jsonOptions, string? appVersion = null)
     {
@@ -169,8 +170,8 @@ public static class ReportCommandRunner
         {
             sb.AppendLine("- `log/stderr-recent.log` — last N lines of the cdidx lifecycle log");
             sb.AppendLine(includeArgs
-                ? "  (includes literal `args=` lines; rerun without `--include-args` to redact them)."
-                : "  (`args=` lines are redacted; rerun with `--include-args` to keep them literal).");
+                ? "  (includes literal `args=` lines; path-bearing lifecycle fields stay redacted)."
+                : "  (`args=` and path-bearing lifecycle fields are redacted; rerun with `--include-args` to keep arguments literal).");
         }
         else
         {
@@ -180,6 +181,7 @@ public static class ReportCommandRunner
         sb.AppendLine("## Redactions");
         sb.AppendLine();
         sb.AppendLine("- Indexed source content, file paths, query strings, and `args=` lines are not included by default.");
+        sb.AppendLine("- Path-bearing lifecycle fields such as `process_path=`, `base_dir=`, `cwd=`, `db=`, and `path=` are redacted by default.");
         sb.AppendLine("- Schema reporting only emits table names and integer row counts.");
         return sb.ToString();
     }
@@ -188,7 +190,7 @@ public static class ReportCommandRunner
     {
         if (!File.Exists(LongPath.EnsureWindowsPrefix(dbPath)))
         {
-            var missingText = $"no SQLite index found at: {dbPath}\nRun `cdidx index <projectPath>` first if you want schema details attached.\n";
+            var missingText = $"no SQLite index found at: {RedactedPlaceholder}\nRun `cdidx index <projectPath>` first if you want schema details attached.\n";
             return (missingText, new List<ReportSchemaTable>(), dbPath, false);
         }
 
@@ -228,7 +230,7 @@ public static class ReportCommandRunner
         }
 
         var sb = new StringBuilder();
-        sb.AppendLine($"database: {Path.GetFullPath(dbPath)}");
+        sb.AppendLine($"database: {RedactedPlaceholder}");
         sb.AppendLine($"tables  : {tables.Count}");
         sb.AppendLine();
         sb.AppendLine("name | row_count");
@@ -244,14 +246,14 @@ public static class ReportCommandRunner
         linesIncluded = 0;
         var logDir = GlobalToolLog.ResolveLogDirectoryForReport();
         if (string.IsNullOrWhiteSpace(logDir) || !Directory.Exists(logDir))
-            return $"no cdidx lifecycle log directory found (looked at: {logDir ?? "<unknown>"}).\n";
+            return $"no cdidx lifecycle log directory found (looked at: {RedactedPlaceholder}).\n";
 
         var logFiles = new DirectoryInfo(logDir)
             .EnumerateFiles("stderr-*.log", SearchOption.TopDirectoryOnly)
             .OrderByDescending(f => f.Name, StringComparer.Ordinal)
             .ToList();
         if (logFiles.Count == 0)
-            return $"no cdidx lifecycle log files found in: {logDir}\n";
+            return $"no cdidx lifecycle log files found in: {RedactedPlaceholder}\n";
 
         var collected = new LinkedList<string>();
         foreach (var file in logFiles)
@@ -273,11 +275,11 @@ public static class ReportCommandRunner
 
         var sb = new StringBuilder();
         sb.AppendLine($"# cdidx lifecycle log (last {collected.Count} lines, newest last)");
-        sb.AppendLine($"# source directory: {logDir}");
+        sb.AppendLine($"# source directory: {RedactedPlaceholder}");
         sb.AppendLine();
         foreach (var line in collected)
         {
-            sb.AppendLine(includeArgs ? line : RedactSensitiveFields(line));
+            sb.AppendLine(includeArgs ? RedactPathFields(line) : RedactSensitiveFields(line));
         }
         linesIncluded = collected.Count;
         return sb.ToString();
@@ -286,7 +288,16 @@ public static class ReportCommandRunner
     internal static string RedactSensitiveFields(string line)
     {
         var redacted = RedactKeyValue(line, "args=");
-        redacted = RedactKeyValue(redacted, "cwd=");
+        return RedactPathFields(redacted);
+    }
+
+    private static string RedactPathFields(string line)
+    {
+        var redacted = RedactKeyValue(line, "cwd=");
+        redacted = RedactKeyValue(redacted, "process_path=");
+        redacted = RedactKeyValue(redacted, "base_dir=");
+        redacted = RedactKeyValue(redacted, "db=");
+        redacted = RedactKeyValue(redacted, "path=");
         return redacted;
     }
 
@@ -304,7 +315,22 @@ public static class ReportCommandRunner
         if (!string.IsNullOrEmpty(dir))
             Directory.CreateDirectory(dir);
 
-        using var fileStream = new FileStream(outputPath, FileMode.Create, FileAccess.Write, FileShare.None);
+        if (!OperatingSystem.IsWindows() && File.Exists(outputPath))
+            File.SetUnixFileMode(outputPath, BundleFileMode);
+
+        var streamOptions = new FileStreamOptions
+        {
+            Mode = FileMode.Create,
+            Access = FileAccess.Write,
+            Share = FileShare.None,
+        };
+        if (!OperatingSystem.IsWindows())
+            streamOptions.UnixCreateMode = BundleFileMode;
+
+        using var fileStream = new FileStream(outputPath, streamOptions);
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(outputPath, BundleFileMode);
+
         using var gz = new GZipStream(fileStream, CompressionLevel.Optimal);
         using var tar = new TarWriter(gz, TarEntryFormat.Pax, leaveOpen: true);
 
@@ -313,7 +339,7 @@ public static class ReportCommandRunner
             var entry = new PaxTarEntry(TarEntryType.RegularFile, name)
             {
                 DataStream = new MemoryStream(bytes, writable: false),
-                Mode = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.OtherRead,
+                Mode = BundleFileMode,
                 ModificationTime = DateTimeOffset.UtcNow,
             };
             tar.WriteEntry(entry);

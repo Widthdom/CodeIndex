@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Regex = CodeIndex.Indexer.BoundedRegex;
 using System.Runtime.CompilerServices;
 using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Models;

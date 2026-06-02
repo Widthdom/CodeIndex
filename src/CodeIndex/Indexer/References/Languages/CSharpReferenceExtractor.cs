@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using Regex = CodeIndex.Indexer.BoundedRegex;
 using CodeIndex.Models;
 using CSharpContainingTypeValueReceiverNames = CodeIndex.Indexer.ReferenceExtractor.CSharpContainingTypeValueReceiverNames;
 using CSharpFunctionValueReceiverNameRecord = CodeIndex.Indexer.ReferenceExtractor.CSharpFunctionValueReceiverNameRecord;

@@ -1,4 +1,8 @@
+using System.Collections;
+using System.Diagnostics;
+using System.Reflection;
 using System.Text;
+using System.Text.RegularExpressions;
 using CodeIndex.Indexer;
 using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Models;
@@ -19,6 +23,48 @@ public class ReferenceExtractorTests
 
         Assert.Throws<OperationCanceledException>(() =>
             ReferenceExtractor.Extract(1, "csharp", "public class App { }", [], cancellationToken: cancellation.Token));
+    }
+
+    [Fact]
+    public void BuiltInReferenceRegexes_HaveBoundedMatchTimeouts()
+    {
+        var regexes = EnumerateStaticRegexValues(
+            typeof(ReferenceExtractor).Assembly.GetTypes().Where(IsReferenceRegexOwnerType))
+            .ToList();
+
+        Assert.NotEmpty(regexes);
+
+        var infiniteTimeouts = regexes
+            .Where(item => item.Regex.MatchTimeout == Regex.InfiniteMatchTimeout)
+            .Select(item => item.Path)
+            .ToList();
+
+        Assert.True(
+            infiniteTimeouts.Count == 0,
+            "Built-in reference regexes must have explicit match timeouts: " + string.Join(", ", infiniteTimeouts));
+    }
+
+    [Fact]
+    public void Extract_BuiltInReferenceRegexes_AdversarialLongLinesDoNotThrow()
+    {
+        var pythonContent = "def use(value: '" + new string('A', 2000) + "'):\n    return value\n";
+        const string goContent = "func main() { go worker.Run(); ch <- value; value = <-ch }\n";
+
+        var stopwatch = Stopwatch.StartNew();
+        var exception = Record.Exception(() =>
+        {
+            var pythonSymbols = SymbolExtractor.Extract(1, "python", pythonContent);
+            ReferenceExtractor.Extract(1, "python", pythonContent, pythonSymbols);
+
+            var goSymbols = SymbolExtractor.Extract(2, "go", goContent);
+            ReferenceExtractor.Extract(2, "go", goContent, goSymbols);
+        });
+        stopwatch.Stop();
+
+        Assert.Null(exception);
+        Assert.True(
+            stopwatch.Elapsed < TimeSpan.FromSeconds(10),
+            $"Adversarial reference extraction took {stopwatch.Elapsed}.");
     }
 
     [Fact]
@@ -32992,6 +33038,104 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, r =>
             r.SymbolName == "seed"
             && r.ReferenceKind == "capture");
+    }
+
+    private static bool IsReferenceRegexOwnerType(Type type) =>
+        type.Namespace == "CodeIndex.Indexer"
+        && (type.Name.Contains("Reference", StringComparison.Ordinal)
+            || type.Name == "StructuralLineMasker"
+            || type.Name == "SqlNameResolver");
+
+    private static IEnumerable<(string Path, Regex Regex)> EnumerateStaticRegexValues(IEnumerable<Type> types)
+    {
+        foreach (var type in types)
+        {
+            foreach (var field in type.GetFields(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic))
+            {
+                object? value;
+                try
+                {
+                    value = field.GetValue(null);
+                }
+                catch (TargetInvocationException)
+                {
+                    throw;
+                }
+
+                foreach (var item in EnumerateRegexValues(value, $"{type.Name}.{field.Name}", new HashSet<object>(ReferenceEqualityComparer.Instance)))
+                    yield return item;
+            }
+        }
+    }
+
+    private static IEnumerable<(string Path, Regex Regex)> EnumerateRegexValues(object? value, string path, HashSet<object> seen)
+    {
+        if (value is null)
+            yield break;
+
+        if (value is Regex regex)
+        {
+            yield return (path, regex);
+            yield break;
+        }
+
+        if (value is string or Type or MemberInfo or Delegate)
+            yield break;
+
+        var valueType = value.GetType();
+        if (valueType.IsPrimitive || valueType.IsEnum)
+            yield break;
+
+        if (!valueType.IsValueType && !seen.Add(value))
+            yield break;
+
+        if (value is IEnumerable enumerable)
+        {
+            var index = 0;
+            foreach (var item in enumerable)
+            {
+                foreach (var nested in EnumerateRegexValues(item, $"{path}[{index}]", seen))
+                    yield return nested;
+                index++;
+            }
+
+            yield break;
+        }
+
+        foreach (var field in valueType.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+        {
+            object? child;
+            try
+            {
+                child = field.GetValue(value);
+            }
+            catch (TargetInvocationException)
+            {
+                continue;
+            }
+
+            foreach (var nested in EnumerateRegexValues(child, $"{path}.{field.Name}", seen))
+                yield return nested;
+        }
+
+        foreach (var property in valueType.GetProperties(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+        {
+            if (property.GetIndexParameters().Length != 0)
+                continue;
+
+            object? child;
+            try
+            {
+                child = property.GetValue(value);
+            }
+            catch (TargetInvocationException)
+            {
+                continue;
+            }
+
+            foreach (var nested in EnumerateRegexValues(child, $"{path}.{property.Name}", seen))
+                yield return nested;
+        }
     }
 
     private static SymbolRecord Container(string name, string kind, int startLine, int endLine) =>
