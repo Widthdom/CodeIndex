@@ -1273,6 +1273,10 @@ public class DbContext : IDisposable
     // ファイル数。index 済み件数ではなく scan coverage の信号であり、現行 index が stamp
     // するまでは reader 側で省略する。
     public const string UnknownExtensionFileCountMetaKey = "unknown_extension_file_count";
+    public const string UnknownExtensionFilePathsMetaKey = "unknown_extension_file_paths_json";
+    public const string UnknownExtensionFilesTruncatedMetaKey = "unknown_extension_files_truncated";
+    public const string UnknownExtensionFilePathLimitMetaKey = "unknown_extension_file_path_limit";
+    public const int UnknownExtensionFilePathSampleLimit = 50;
     public const string BatchInProgressMetaKey = "batch_in_progress";
     // Issue #1546: case-sensitivity of the workspace filesystem the most recent successful
     // index ran on, persisted as the string "true" / "false". Resolved via the probe in

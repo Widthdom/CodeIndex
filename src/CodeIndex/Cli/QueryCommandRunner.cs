@@ -5,6 +5,7 @@ using System.Text.Json.Nodes;
 using System.Text.Json.Serialization.Metadata;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
+using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Indexer.Hooks;
 using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
@@ -2930,7 +2931,10 @@ public static class QueryCommandRunner
             // Attach runtime metadata / ランタイムメタデータを付加
             status.SymbolKinds = reader.GetSymbolKindCounts();
             status.GraphSupportedLanguages = ReferenceExtractor.GetSupportedLanguages().OrderBy(l => l).ToList();
-            var postExtractionHooks = PostExtractionHookRunner.DiscoverDefault().Hooks;
+            ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(status.ProjectRoot);
+            status.Extractors = ExtractorPluginRegistry.GetStatusSnapshot();
+            using var postExtractionHookRunner = PostExtractionHookRunner.DiscoverDefault();
+            var postExtractionHooks = postExtractionHookRunner.Hooks;
             if (postExtractionHooks.Count > 0)
             {
                 status.Hooks = postExtractionHooks
@@ -2939,6 +2943,7 @@ public static class QueryCommandRunner
                         Name = hook.Name,
                         AssemblyPath = hook.AssemblyPath,
                         TypeName = hook.TypeName,
+                        CallbackBudgetMs = (long)Math.Round(postExtractionHookRunner.CallbackBudget.TotalMilliseconds, MidpointRounding.AwayFromZero),
                     })
                     .ToList();
             }

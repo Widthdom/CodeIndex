@@ -3,6 +3,7 @@ using CodeIndex.Cli;
 using CodeIndex.Indexer;
 using CodeIndex.Models;
 using System.Text;
+using System.Text.Json;
 
 namespace CodeIndex.Database;
 
@@ -2066,6 +2067,33 @@ public class DbWriter
         if (string.IsNullOrWhiteSpace(version))
             return;
         SetMeta(DbContext.CdidxWriterVersionMetaKey, version);
+    }
+
+    /// <summary>
+    /// Stamp unknown-extension scan coverage from the latest successful full-worktree scan.
+    /// Stores the total count plus a bounded path sample so status callers can identify the
+    /// first files that need a language mapping or ignore rule without unbounded metadata.
+    /// 未知拡張子の scan coverage を保存する。件数と上限付き path sample を status で返す。
+    /// </summary>
+    public void WriteUnknownExtensionFileMetadata(IReadOnlyList<string> paths)
+    {
+        ArgumentNullException.ThrowIfNull(paths);
+
+        var sample = paths
+            .Take(DbContext.UnknownExtensionFilePathSampleLimit)
+            .ToArray();
+        SetMeta(
+            DbContext.UnknownExtensionFileCountMetaKey,
+            paths.Count.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        SetMeta(
+            DbContext.UnknownExtensionFilePathsMetaKey,
+            JsonSerializer.Serialize(sample));
+        SetMeta(
+            DbContext.UnknownExtensionFilesTruncatedMetaKey,
+            (paths.Count > sample.Length).ToString(System.Globalization.CultureInfo.InvariantCulture));
+        SetMeta(
+            DbContext.UnknownExtensionFilePathLimitMetaKey,
+            DbContext.UnknownExtensionFilePathSampleLimit.ToString(System.Globalization.CultureInfo.InvariantCulture));
     }
 
     /// <summary>

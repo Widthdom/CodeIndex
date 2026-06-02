@@ -21,6 +21,8 @@ internal sealed class LspServer : IDisposable
     private readonly string? _projectRoot;
     private readonly StringComparison _pathStringComparison;
     private bool _shutdownRequested;
+    private bool _exitRequested;
+    private bool _exitRequestedBeforeShutdown;
 
     public LspServer(DbReader reader, string version, JsonSerializerOptions jsonOptions, string? projectRoot = null)
     {
@@ -31,45 +33,67 @@ internal sealed class LspServer : IDisposable
         _pathStringComparison = PathCasing.ComparisonFor(_projectRoot ?? Environment.CurrentDirectory);
     }
 
-    public void Run(Stream input, Stream output)
+    public int Run(Stream input, Stream output)
     {
         while (TryReadMessage(input, out var payload))
         {
             var response = HandleMessage(payload);
             if (response != null)
                 WriteMessage(output, response.ToJsonString(_jsonOptions));
+            if (_exitRequested)
+                break;
         }
+
+        return _exitRequestedBeforeShutdown ? CommandExitCodes.UsageError : CommandExitCodes.Success;
     }
 
     internal JsonObject? HandleMessage(string payload)
     {
-        using var document = JsonDocument.Parse(payload);
-        var root = document.RootElement;
-        var method = root.TryGetProperty("method", out var methodElement) ? methodElement.GetString() : null;
-        var hasId = root.TryGetProperty("id", out var idElement);
-        JsonNode? id = hasId ? JsonNode.Parse(idElement.GetRawText()) : null;
-
-        if (method == null)
-            return hasId ? Error(id, -32600, "Invalid Request") : null;
-
+        JsonDocument document;
         try
         {
-            return method switch
-            {
-                "initialize" => Result(id, BuildInitializeResult()),
-                "initialized" => null,
-                "shutdown" => HandleShutdown(id),
-                "exit" => null,
-                "workspace/symbol" => Result(id, WorkspaceSymbol(root)),
-                "textDocument/documentSymbol" => Result(id, DocumentSymbol(root)),
-                "textDocument/definition" => Result(id, Definition(root)),
-                "textDocument/references" => Result(id, References(root)),
-                _ => hasId ? Error(id, -32601, $"Method not found: {method}") : null,
-            };
+            document = JsonDocument.Parse(payload);
         }
-        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or JsonException or IOException)
+        catch (JsonException)
         {
-            return hasId ? Error(id, -32602, ex.Message) : null;
+            return Error(null, -32700, "Parse error");
+        }
+
+        using (document)
+        {
+            JsonNode? id = null;
+            var hasId = false;
+
+            try
+            {
+                var root = document.RootElement;
+                if (root.ValueKind != JsonValueKind.Object)
+                    return Error(null, -32600, "Invalid Request");
+
+                var method = root.TryGetProperty("method", out var methodElement) ? methodElement.GetString() : null;
+                hasId = root.TryGetProperty("id", out var idElement);
+                id = hasId ? JsonNode.Parse(idElement.GetRawText()) : null;
+
+                if (method == null)
+                    return hasId ? Error(id, -32600, "Invalid Request") : null;
+
+                return method switch
+                {
+                    "initialize" => Result(id, BuildInitializeResult()),
+                    "initialized" => null,
+                    "shutdown" => HandleShutdown(id),
+                    "exit" => HandleExit(),
+                    "workspace/symbol" => Result(id, WorkspaceSymbol(root)),
+                    "textDocument/documentSymbol" => Result(id, DocumentSymbol(root)),
+                    "textDocument/definition" => Result(id, Definition(root)),
+                    "textDocument/references" => Result(id, References(root)),
+                    _ => hasId ? Error(id, -32601, $"Method not found: {method}") : null,
+                };
+            }
+            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or JsonException or IOException)
+            {
+                return hasId ? Error(id, -32602, ex.Message) : null;
+            }
         }
     }
 
@@ -77,6 +101,13 @@ internal sealed class LspServer : IDisposable
     {
         _shutdownRequested = true;
         return Result(id, null);
+    }
+
+    private JsonObject? HandleExit()
+    {
+        _exitRequestedBeforeShutdown = !_shutdownRequested;
+        _exitRequested = true;
+        return null;
     }
 
     private JsonObject BuildInitializeResult() => new()

@@ -75,6 +75,16 @@
     "vue",
     "zig"
   ],
+  "extractors": {
+    "plugin_assembly_count": 0,
+    "pattern_config_count": 0,
+    "symbol_extractor_count": 0,
+    "reference_extractor_count": 0,
+    "skipped_file_count": 0,
+    "diagnostic_count": 0,
+    "diagnostic_limit": 20,
+    "diagnostics_truncated": false
+  },
   "version": null,
   "summary": "1 files, 3 symbols, 0 refs across 1 languages (csharp); index fresh, DEGRADED",
   "graph_table_available": false,
