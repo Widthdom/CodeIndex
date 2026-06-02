@@ -20,7 +20,7 @@ internal static class ProgramRunner
     internal const string QuietEnvironmentVariable = "CDIDX_QUIET";
     private const string InstallerScriptUrlTemplate = "https://raw.githubusercontent.com/Widthdom/CodeIndex/{0}/install.sh";
     private const long MaxInstallerScriptBytes = 1024 * 1024;
-    internal static TimeSpan InstallerRunTimeout { get; set; } = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan InstallerRunTimeout = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan InstallerKillWaitTimeout = TimeSpan.FromSeconds(5);
     internal static TimeProvider TimeProvider { get; set; } = TimeProvider.System;
 
