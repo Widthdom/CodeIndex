@@ -736,6 +736,9 @@ public partial class DbReader : IDisposable
             return DegradationReasonCodes.HotspotFamilyMetadataStale;
         }
 
+        if (DbContext.IsIncompleteHotspotFamilyMarkerFingerprint(fingerprint))
+            return DegradationReasonCodes.HotspotFamilyMarkerFingerprintIncomplete;
+
         return string.IsNullOrWhiteSpace(fingerprint)
             ? DegradationReasonCodes.HotspotFamilyDisabledAtIndexTime
             : HasIncompleteHotspotFamilyRows(lang)
@@ -816,7 +819,13 @@ public partial class DbReader : IDisposable
             .Select(ResolveHotspotFamilyDegradedReason)
             .ToHashSet(StringComparer.Ordinal);
 
-        if (reasons.SetEquals([DegradationReasonCodes.HotspotFamilyMetadataStale]))
+        if (reasons.Count == 1)
+            return DegradationReasonCodes.GetMetadata(reasons.Single()).RecommendedAction;
+
+        if (reasons.Contains(DegradationReasonCodes.HotspotFamilyMarkerFingerprintIncomplete))
+            return DegradationReasonCodes.GetMetadata(DegradationReasonCodes.HotspotFamilyMarkerFingerprintIncomplete).RecommendedAction;
+
+        if (reasons.Contains(DegradationReasonCodes.HotspotFamilyMetadataStale))
             return DegradationReasonCodes.GetMetadata(DegradationReasonCodes.HotspotFamilyMetadataStale).RecommendedAction;
 
         return DegradationReasonCodes.GetMetadata(DegradationReasonCodes.HotspotFamilySupportNotIndexed).RecommendedAction;
@@ -923,6 +932,7 @@ public partial class DbReader : IDisposable
                 && int.TryParse(s, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var version)
                 && version == DbContext.HotspotFamilyVersion
                 && !string.IsNullOrWhiteSpace(fingerprint)
+                && !DbContext.IsIncompleteHotspotFamilyMarkerFingerprint(fingerprint)
                 && !HasIncompleteHotspotFamilyRows(lang))
             {
                 readyLangs.Add(lang);

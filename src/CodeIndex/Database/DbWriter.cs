@@ -2052,6 +2052,18 @@ public class DbWriter
         SetMeta(DbContext.HotspotFamilyMarkerFingerprintMetaKey, null);
     }
 
+    public void MarkHotspotFamilyMarkerFingerprintIncomplete(string lang, string? markerFingerprint)
+    {
+        SetMeta(
+            DbContext.GetHotspotFamilyVersionMetaKey(lang),
+            DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        SetMeta(
+            DbContext.GetHotspotFamilyMarkerFingerprintMetaKey(lang),
+            DbContext.BuildIncompleteHotspotFamilyMarkerFingerprint(markerFingerprint));
+        SetMeta(DbContext.HotspotFamilyVersionMetaKey, null);
+        SetMeta(DbContext.HotspotFamilyMarkerFingerprintMetaKey, null);
+    }
+
     /// <summary>
     /// Demote hotspot-family trust. Called at the start of any indexing run that may leave
     /// a mixed legacy/current symbol set so readers fall back conservatively unless the run

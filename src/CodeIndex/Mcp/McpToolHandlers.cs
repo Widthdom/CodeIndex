@@ -1951,8 +1951,14 @@ public partial class McpServer
         var currentVersion = DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
         foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
         {
-            if (!currentFingerprints.TryGetValue(lang, out var currentFingerprint) || !currentFingerprint.IsComplete)
+            if (!currentFingerprints.TryGetValue(lang, out var currentFingerprint))
                 continue;
+
+            if (!currentFingerprint.IsComplete)
+            {
+                writer.MarkHotspotFamilyMarkerFingerprintIncomplete(lang, currentFingerprint.Fingerprint);
+                continue;
+            }
 
             priorVersions.TryGetValue(lang, out var priorVersion);
             priorFingerprints.TryGetValue(lang, out var priorFingerprint);

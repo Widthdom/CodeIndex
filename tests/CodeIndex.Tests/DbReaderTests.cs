@@ -4493,6 +4493,35 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetHotspotFamilySignal_IncompleteMarkerFingerprintReportsSpecificReason()
+    {
+        InsertIndexedFile("src/Api.Part1.cs", "csharp",
+            """
+            public partial class Api
+            {
+                public void Run() { }
+            }
+            """);
+
+        _writer.MarkHotspotFamilyMarkerFingerprintIncomplete("csharp", "truncated-fixture");
+
+        var reader = new DbReader(_db.Connection);
+        var signal = reader.GetHotspotFamilySignal("csharp");
+        var status = reader.GetStatus();
+
+        Assert.True(signal.Relevant);
+        Assert.False(signal.Ready);
+        Assert.Contains($"{DegradationReasonCodes.HotspotFamilyMarkerFingerprintIncomplete}=csharp", signal.DegradedReason);
+        Assert.Contains(".gitignore", signal.DegradedReason);
+        Assert.False(status.HotspotFamilyReady);
+        Assert.Contains($"{DegradationReasonCodes.HotspotFamilyMarkerFingerprintIncomplete}=csharp", status.HotspotFamilyDegradedReason);
+        Assert.False(status.LanguageReadiness!["csharp"]["hotspot_family"].Ready);
+        Assert.Contains(
+            DegradationReasonCodes.HotspotFamilyMarkerFingerprintIncomplete,
+            status.LanguageReadiness["csharp"]["hotspot_family"].DegradedReason);
+    }
+
+    [Fact]
     public void GetSymbolHotspots_StaleVersionOneMarkerlessFamiliesDegradeAndDoNotMerge()
     {
         InsertIndexedFile("projA/src/Api.Part1.cs", "csharp",

@@ -404,10 +404,17 @@ public static partial class IndexCommandRunner
         var currentVersion = DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
         foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
         {
+            if (!currentFingerprints.TryGetValue(lang, out var currentFingerprint))
+                continue;
+
+            if (!currentFingerprint.IsComplete)
+            {
+                writer.MarkHotspotFamilyMarkerFingerprintIncomplete(lang, currentFingerprint.Fingerprint);
+                continue;
+            }
+
             if (priorVersions.TryGetValue(lang, out var priorVersion)
                 && priorFingerprints.TryGetValue(lang, out var priorFingerprint)
-                && currentFingerprints.TryGetValue(lang, out var currentFingerprint)
-                && currentFingerprint.IsComplete
                 && priorVersion == currentVersion
                 && priorFingerprint == currentFingerprint.Fingerprint)
             {
@@ -426,8 +433,14 @@ public static partial class IndexCommandRunner
         var currentVersion = DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
         foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
         {
-            if (!currentFingerprints.TryGetValue(lang, out var currentFingerprint) || !currentFingerprint.IsComplete)
+            if (!currentFingerprints.TryGetValue(lang, out var currentFingerprint))
                 continue;
+
+            if (!currentFingerprint.IsComplete)
+            {
+                writer.MarkHotspotFamilyMarkerFingerprintIncomplete(lang, currentFingerprint.Fingerprint);
+                continue;
+            }
 
             priorVersions.TryGetValue(lang, out var priorVersion);
             priorFingerprints.TryGetValue(lang, out var priorFingerprint);

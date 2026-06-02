@@ -1266,8 +1266,14 @@ public class DbContext : IDisposable
     public const int HotspotFamilyVersion = 2;
     public const string HotspotFamilyVersionMetaKey = "hotspot_family_version";
     public const string HotspotFamilyMarkerFingerprintMetaKey = "hotspot_family_marker_fingerprint";
+    public const string HotspotFamilyIncompleteMarkerFingerprintPrefix = "incomplete:";
     public static string GetHotspotFamilyVersionMetaKey(string lang) => $"hotspot_family_version_{lang}";
     public static string GetHotspotFamilyMarkerFingerprintMetaKey(string lang) => $"hotspot_family_marker_fingerprint_{lang}";
+    public static bool IsIncompleteHotspotFamilyMarkerFingerprint(string? fingerprint)
+        => !string.IsNullOrWhiteSpace(fingerprint)
+           && fingerprint.StartsWith(HotspotFamilyIncompleteMarkerFingerprintPrefix, StringComparison.Ordinal);
+    public static string BuildIncompleteHotspotFamilyMarkerFingerprint(string? fingerprint)
+        => HotspotFamilyIncompleteMarkerFingerprintPrefix + (string.IsNullOrWhiteSpace(fingerprint) ? "unknown" : fingerprint);
     public const int CSharpSymbolNameContractVersion = 2;
     public const string CSharpSymbolNameContractVersionMetaKey = "csharp_symbol_name_contract_version";
     public const int SqlGraphContractVersion = 1;

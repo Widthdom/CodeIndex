@@ -19,6 +19,7 @@ public static class DegradationReasonCodes
     public const string HotspotFamilySupportNotIndexed = "hotspot_family_support_not_indexed";
     public const string HotspotFamilyMetadataStale = "hotspot_family_metadata_stale";
     public const string HotspotFamilyDisabledAtIndexTime = "hotspot_family_disabled_at_index_time";
+    public const string HotspotFamilyMarkerFingerprintIncomplete = "hotspot_family_marker_fingerprint_incomplete";
     public const string HotspotFamilyRowsIncomplete = "partial_family_key_population";
     public const string GraphTableMissing = "graph_table_available=false";
     public const string IssuesTableMissing = "issues_table_available=false";
@@ -43,6 +44,7 @@ public static class DegradationReasonCodes
         HotspotFamilySupportNotIndexed,
         HotspotFamilyMetadataStale,
         HotspotFamilyDisabledAtIndexTime,
+        HotspotFamilyMarkerFingerprintIncomplete,
         HotspotFamilyRowsIncomplete,
         GraphTableMissing,
         IssuesTableMissing,
@@ -148,6 +150,11 @@ public static class DegradationReasonCodes
                 "Cross-file hotspot grouping metadata was stamped without marker fingerprints, so authoritative family grouping cannot be trusted.",
                 "Run `cdidx index <projectPath> --rebuild` to rebuild and stamp authoritative hotspot families for every indexed row.",
                 "Run `cdidx index <projectPath> --files <changedFiles>` only when you can enumerate every affected file."),
+            HotspotFamilyMarkerFingerprintIncomplete => new(
+                code,
+                "Cross-file hotspot grouping metadata is degraded because project-marker fingerprint traversal hit safety limits.",
+                "Exclude generated or irrelevant project-marker trees with `.gitignore` or `.cdidxignore`, then run `cdidx index <projectPath> --rebuild`.",
+                "Run `cdidx status --json` to monitor degraded readiness until the project-marker tree can be bounded."),
             HotspotFamilyRowsIncomplete => new(
                 code,
                 "Cross-file hotspot grouping metadata is stamped, but some indexed symbols still lack family keys.",
