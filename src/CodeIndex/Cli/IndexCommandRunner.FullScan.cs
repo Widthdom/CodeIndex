@@ -333,7 +333,7 @@ public static partial class IndexCommandRunner
                     .Where(directory => directory.Length > 0)
                     .OrderBy(directory => directory, StringComparer.Ordinal)
                     .ToList());
-            File.WriteAllText(path, JsonSerializer.Serialize(checkpoint, new JsonSerializerOptions { WriteIndented = true }));
+            AtomicFileWriter.WriteJson(path, checkpoint, new JsonSerializerOptions { WriteIndented = true });
         }
         catch (IOException)
         {
