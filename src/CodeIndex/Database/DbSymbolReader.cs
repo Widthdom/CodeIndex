@@ -267,14 +267,15 @@ public partial class DbReader
         return false;
     }
 
-    private string BuildQualifiedSymbolMatchSql(string parameterStem, bool useFoldedName, string symbolAlias = "s")
+    private string BuildQualifiedSymbolMatchSql(string parameterStem, bool useFoldedName, string symbolAlias = "s", string fileAlias = "f")
     {
         var containerNameSql = GetSymbolColumnSql("container_name", "''", symbolAlias);
         var containerQualifiedNameSql = GetSymbolColumnSql("container_qualified_name", containerNameSql, symbolAlias);
         var nameMatchSql = useFoldedName
             ? $"{symbolAlias}.name_folded = @{parameterStem}LeafFolded"
             : $"{symbolAlias}.name = @{parameterStem}Leaf COLLATE NOCASE";
-        return $@"({nameMatchSql}
+        return $@"({fileAlias}.lang = 'csharp'
+                  AND {nameMatchSql}
                   AND ({containerNameSql} = @{parameterStem}Container COLLATE NOCASE
                        OR {containerQualifiedNameSql} = @{parameterStem}Container COLLATE NOCASE
                        OR {containerQualifiedNameSql} COLLATE NOCASE LIKE @{parameterStem}ContainerSuffixLike ESCAPE '\'))";
@@ -317,6 +318,14 @@ public partial class DbReader
         return leafMatches.Count == 1;
     }
 
+    private bool HasQualifiedSymbolDefinition(string query, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
+    {
+        if (!SqlNameResolver.HasQualifier(query))
+            return false;
+
+        return SearchSymbols(query, 1, kind: null, lang, pathPatterns: null, excludePathPatterns: null, excludeTests, since: null, exact: false).Count > 0;
+    }
+
     private static string BuildQualifiedContextMatchSql(string contextSql, string columnSql, bool folded, bool like)
     {
         var functionName = (folded, like) switch
@@ -331,14 +340,18 @@ public partial class DbReader
 
     private static string BuildQualifiedLeafFallbackSql(string nameSql, string foldedNameSql, bool folded)
         => folded
-            ? $"(@allowQualifiedLeafFallback = 1 AND {foldedNameSql} = @aliasQueryLeafFolded)"
-            : $"(@allowQualifiedLeafFallback = 1 AND {nameSql} = @aliasQueryLeaf COLLATE NOCASE)";
+            ? $"(@allowQualifiedLeafFallback = 1 AND f.lang = 'csharp' AND {foldedNameSql} = @aliasQueryLeafFolded)"
+            : $"(@allowQualifiedLeafFallback = 1 AND f.lang = 'csharp' AND {nameSql} = @aliasQueryLeaf COLLATE NOCASE)";
 
-    private static void AddQualifiedGraphQueryParameters(SqliteCommand cmd, string query, bool allowLeafFallback)
+    private static string BuildCSharpQualifiedContextFallbackSql(string qualifiedContextSql)
+        => $"(@allowCSharpQualifiedContextMatch = 1 AND f.lang = 'csharp' AND {qualifiedContextSql})";
+
+    private static void AddQualifiedGraphQueryParameters(SqliteCommand cmd, string query, bool allowLeafFallback, bool allowCSharpContextMatch = false)
     {
         cmd.Parameters.AddWithValue("@aliasQuerySuffix", GetQualifiedQuerySuffix(query));
         cmd.Parameters.AddWithValue("@aliasQueryLeaf", SqlNameResolver.GetLeafName(query));
         cmd.Parameters.AddWithValue("@allowQualifiedLeafFallback", allowLeafFallback ? 1 : 0);
+        cmd.Parameters.AddWithValue("@allowCSharpQualifiedContextMatch", allowCSharpContextMatch ? 1 : 0);
     }
 
     public int CountSearchSymbols(IReadOnlyList<string>? queries, int limit = 20, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)

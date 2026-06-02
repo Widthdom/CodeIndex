@@ -135,6 +135,9 @@ public partial class DbReader
         var referencesCssScssVariableAliasScope = referencesCssScssVariableAlias != null
             ? " AND f.lang = 'css'"
             : string.Empty;
+        var allowCSharpQualifiedContextMatch = query != null
+            && SqlNameResolver.HasQualifier(query)
+            && !HasQualifiedSymbolDefinition(query, lang, pathPatterns, excludePathPatterns, excludeTests);
         var allowQualifiedLeafFallback = query != null && HasSingleQualifiedSymbolDefinition(query, lang, pathPatterns, excludePathPatterns, excludeTests);
         const string sqlLeafReferenceScope = " AND f.lang = 'sql'";
         if (query != null)
@@ -158,34 +161,38 @@ public partial class DbReader
             if (useSqlQualifiedContextMatch && exact && _foldReady)
             {
                 var qualifiedContextSql = BuildQualifiedContextMatchSql(contextSql, "r.column_number", folded: true, like: false);
+                var csharpQualifiedContextSql = BuildCSharpQualifiedContextFallbackSql(qualifiedContextSql);
                 var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: true);
                 sql += referencesSuffixAlias != null
-                    ? $" AND ({qualifiedContextSql} OR r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryAttributeAlias{referencesAliasScope}) OR {qualifiedLeafFallbackSql})"
-                    : $" AND ({qualifiedContextSql} OR r.symbol_name_folded = @query OR {qualifiedLeafFallbackSql})";
+                    ? $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryAttributeAlias{referencesAliasScope}))) OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})"
+                    : $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND r.symbol_name_folded = @query) OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})";
             }
             else if (useSqlQualifiedContextMatch && exact)
             {
                 var qualifiedContextSql = BuildQualifiedContextMatchSql(contextSql, "r.column_number", folded: false, like: false);
+                var csharpQualifiedContextSql = BuildCSharpQualifiedContextFallbackSql(qualifiedContextSql);
                 var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: false);
                 sql += referencesSuffixAlias != null
-                    ? $" AND ({qualifiedContextSql} OR r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{referencesAliasScope}) OR {qualifiedLeafFallbackSql})"
-                    : $" AND ({qualifiedContextSql} OR r.symbol_name = @query COLLATE NOCASE OR {qualifiedLeafFallbackSql})";
+                    ? $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{referencesAliasScope}))) OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})"
+                    : $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND r.symbol_name = @query COLLATE NOCASE) OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})";
             }
             else if (useSqlQualifiedContextMatch && _foldReady)
             {
                 var qualifiedContextSql = BuildQualifiedContextMatchSql(contextSql, "r.column_number", folded: true, like: true);
+                var csharpQualifiedContextSql = BuildCSharpQualifiedContextFallbackSql(qualifiedContextSql);
                 var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: true);
                 sql += referencesSuffixAlias != null
-                    ? $" AND ({qualifiedContextSql} OR r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{referencesAliasScope}) OR {qualifiedLeafFallbackSql})"
-                    : $" AND ({qualifiedContextSql} OR r.symbol_name LIKE @query ESCAPE '\\' OR {qualifiedLeafFallbackSql})";
+                    ? $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{referencesAliasScope}))) OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})"
+                    : $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND r.symbol_name LIKE @query ESCAPE '\\') OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})";
             }
             else if (useSqlQualifiedContextMatch)
             {
                 var qualifiedContextSql = BuildQualifiedContextMatchSql(contextSql, "r.column_number", folded: false, like: true);
+                var csharpQualifiedContextSql = BuildCSharpQualifiedContextFallbackSql(qualifiedContextSql);
                 var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: false);
                 sql += referencesSuffixAlias != null
-                    ? $" AND ({qualifiedContextSql} OR r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{referencesAliasScope}) OR {qualifiedLeafFallbackSql})"
-                    : $" AND ({qualifiedContextSql} OR r.symbol_name LIKE @query ESCAPE '\\' OR {qualifiedLeafFallbackSql})";
+                    ? $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{referencesAliasScope}))) OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})"
+                    : $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND r.symbol_name LIKE @query ESCAPE '\\') OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})";
             }
             else if (exact && _foldReady)
                 sql += referencesSuffixAlias != null
@@ -241,7 +248,7 @@ public partial class DbReader
                 queryParam = query;
             cmd.Parameters.AddWithValue("@query", queryParam);
             cmd.Parameters.AddWithValue("@aliasQuery", query);
-            AddQualifiedGraphQueryParameters(cmd, query, allowQualifiedLeafFallback);
+            AddQualifiedGraphQueryParameters(cmd, query, allowQualifiedLeafFallback, allowCSharpQualifiedContextMatch);
             cmd.Parameters.AddWithValue("@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
             if (referencesSuffixAlias != null)
             {
@@ -529,6 +536,9 @@ public partial class DbReader
         var countAliasScope = countSuffixAlias != null
             ? " AND f.lang = 'csharp' AND r.reference_kind = 'attribute'"
             : string.Empty;
+        var allowCSharpQualifiedContextMatch = query != null
+            && SqlNameResolver.HasQualifier(query)
+            && !HasQualifiedSymbolDefinition(query, lang, pathPatterns, excludePathPatterns, excludeTests);
         var allowQualifiedLeafFallback = query != null && HasSingleQualifiedSymbolDefinition(query, lang, pathPatterns, excludePathPatterns, excludeTests);
         const string sqlLeafCountScope = " AND f.lang = 'sql'";
         if (query != null)
@@ -538,34 +548,38 @@ public partial class DbReader
             if (useSqlQualifiedContextMatch && exact && _foldReady)
             {
                 var qualifiedContextSql = BuildQualifiedContextMatchSql(contextSql, "r.column_number", folded: true, like: false);
+                var csharpQualifiedContextSql = BuildCSharpQualifiedContextFallbackSql(qualifiedContextSql);
                 var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: true);
                 innerSql += countSuffixAlias != null
-                    ? $" AND ({qualifiedContextSql} OR r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryAttributeAlias{countAliasScope}) OR {qualifiedLeafFallbackSql})"
-                    : $" AND ({qualifiedContextSql} OR r.symbol_name_folded = @query OR {qualifiedLeafFallbackSql})";
+                    ? $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryAttributeAlias{countAliasScope}))) OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})"
+                    : $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND r.symbol_name_folded = @query) OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})";
             }
             else if (useSqlQualifiedContextMatch && exact)
             {
                 var qualifiedContextSql = BuildQualifiedContextMatchSql(contextSql, "r.column_number", folded: false, like: false);
+                var csharpQualifiedContextSql = BuildCSharpQualifiedContextFallbackSql(qualifiedContextSql);
                 var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: false);
                 innerSql += countSuffixAlias != null
-                    ? $" AND ({qualifiedContextSql} OR r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{countAliasScope}) OR {qualifiedLeafFallbackSql})"
-                    : $" AND ({qualifiedContextSql} OR r.symbol_name = @query COLLATE NOCASE OR {qualifiedLeafFallbackSql})";
+                    ? $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{countAliasScope}))) OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})"
+                    : $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND r.symbol_name = @query COLLATE NOCASE) OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})";
             }
             else if (useSqlQualifiedContextMatch && _foldReady)
             {
                 var qualifiedContextSql = BuildQualifiedContextMatchSql(contextSql, "r.column_number", folded: true, like: true);
+                var csharpQualifiedContextSql = BuildCSharpQualifiedContextFallbackSql(qualifiedContextSql);
                 var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: true);
                 innerSql += countSuffixAlias != null
-                    ? $" AND ({qualifiedContextSql} OR r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{countAliasScope}) OR {qualifiedLeafFallbackSql})"
-                    : $" AND ({qualifiedContextSql} OR r.symbol_name LIKE @query ESCAPE '\\' OR {qualifiedLeafFallbackSql})";
+                    ? $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{countAliasScope}))) OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})"
+                    : $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND r.symbol_name LIKE @query ESCAPE '\\') OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})";
             }
             else if (useSqlQualifiedContextMatch)
             {
                 var qualifiedContextSql = BuildQualifiedContextMatchSql(contextSql, "r.column_number", folded: false, like: true);
+                var csharpQualifiedContextSql = BuildCSharpQualifiedContextFallbackSql(qualifiedContextSql);
                 var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: false);
                 innerSql += countSuffixAlias != null
-                    ? $" AND ({qualifiedContextSql} OR r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{countAliasScope}) OR {qualifiedLeafFallbackSql})"
-                    : $" AND ({qualifiedContextSql} OR r.symbol_name LIKE @query ESCAPE '\\' OR {qualifiedLeafFallbackSql})";
+                    ? $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{countAliasScope}))) OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})"
+                    : $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND r.symbol_name LIKE @query ESCAPE '\\') OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})";
             }
             else if (exact && _foldReady)
                 innerSql += countSuffixAlias != null
@@ -603,7 +617,7 @@ public partial class DbReader
                     : query;
             cmd.Parameters.AddWithValue("@query", value);
             cmd.Parameters.AddWithValue("@aliasQuery", query);
-            AddQualifiedGraphQueryParameters(cmd, query, allowQualifiedLeafFallback);
+            AddQualifiedGraphQueryParameters(cmd, query, allowQualifiedLeafFallback, allowCSharpQualifiedContextMatch);
             cmd.Parameters.AddWithValue("@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
             if (countSuffixAlias != null)
             {
@@ -655,6 +669,9 @@ public partial class DbReader
         var totalCssScssVariableAliasScope = totalCssScssVariableAlias != null
             ? " AND f.lang = 'css'"
             : string.Empty;
+        var allowCSharpQualifiedContextMatch = query != null
+            && SqlNameResolver.HasQualifier(query)
+            && !HasQualifiedSymbolDefinition(query, lang, pathPatterns, excludePathPatterns, excludeTests);
         var allowQualifiedLeafFallback = query != null && HasSingleQualifiedSymbolDefinition(query, lang, pathPatterns, excludePathPatterns, excludeTests);
         const string sqlLeafTotalScope = " AND f.lang = 'sql'";
         if (query != null)
@@ -664,34 +681,38 @@ public partial class DbReader
             if (useSqlQualifiedContextMatch && exact && _foldReady)
             {
                 var qualifiedContextSql = BuildQualifiedContextMatchSql(contextSql, "r.column_number", folded: true, like: false);
+                var csharpQualifiedContextSql = BuildCSharpQualifiedContextFallbackSql(qualifiedContextSql);
                 var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: true);
                 innerSql += totalSuffixAlias != null
-                    ? $" AND ({qualifiedContextSql} OR r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryAttributeAlias{totalAliasScope}) OR {qualifiedLeafFallbackSql})"
-                    : $" AND ({qualifiedContextSql} OR r.symbol_name_folded = @query OR {qualifiedLeafFallbackSql})";
+                    ? $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryAttributeAlias{totalAliasScope}))) OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})"
+                    : $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND r.symbol_name_folded = @query) OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})";
             }
             else if (useSqlQualifiedContextMatch && exact)
             {
                 var qualifiedContextSql = BuildQualifiedContextMatchSql(contextSql, "r.column_number", folded: false, like: false);
+                var csharpQualifiedContextSql = BuildCSharpQualifiedContextFallbackSql(qualifiedContextSql);
                 var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: false);
                 innerSql += totalSuffixAlias != null
-                    ? $" AND ({qualifiedContextSql} OR r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{totalAliasScope}) OR {qualifiedLeafFallbackSql})"
-                    : $" AND ({qualifiedContextSql} OR r.symbol_name = @query COLLATE NOCASE OR {qualifiedLeafFallbackSql})";
+                    ? $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{totalAliasScope}))) OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})"
+                    : $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND r.symbol_name = @query COLLATE NOCASE) OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})";
             }
             else if (useSqlQualifiedContextMatch && _foldReady)
             {
                 var qualifiedContextSql = BuildQualifiedContextMatchSql(contextSql, "r.column_number", folded: true, like: true);
+                var csharpQualifiedContextSql = BuildCSharpQualifiedContextFallbackSql(qualifiedContextSql);
                 var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: true);
                 innerSql += totalSuffixAlias != null
-                    ? $" AND ({qualifiedContextSql} OR r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{totalAliasScope}) OR {qualifiedLeafFallbackSql})"
-                    : $" AND ({qualifiedContextSql} OR r.symbol_name LIKE @query ESCAPE '\\' OR {qualifiedLeafFallbackSql})";
+                    ? $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{totalAliasScope}))) OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})"
+                    : $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND r.symbol_name LIKE @query ESCAPE '\\') OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})";
             }
             else if (useSqlQualifiedContextMatch)
             {
                 var qualifiedContextSql = BuildQualifiedContextMatchSql(contextSql, "r.column_number", folded: false, like: true);
+                var csharpQualifiedContextSql = BuildCSharpQualifiedContextFallbackSql(qualifiedContextSql);
                 var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: false);
                 innerSql += totalSuffixAlias != null
-                    ? $" AND ({qualifiedContextSql} OR r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{totalAliasScope}) OR {qualifiedLeafFallbackSql})"
-                    : $" AND ({qualifiedContextSql} OR r.symbol_name LIKE @query ESCAPE '\\' OR {qualifiedLeafFallbackSql})";
+                    ? $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{totalAliasScope}))) OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})"
+                    : $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND r.symbol_name LIKE @query ESCAPE '\\') OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})";
             }
             else if (exact && _foldReady)
                 innerSql += totalSuffixAlias != null
@@ -735,7 +756,7 @@ public partial class DbReader
                     : query;
             cmd.Parameters.AddWithValue("@query", value);
             cmd.Parameters.AddWithValue("@aliasQuery", query);
-            AddQualifiedGraphQueryParameters(cmd, query, allowQualifiedLeafFallback);
+            AddQualifiedGraphQueryParameters(cmd, query, allowQualifiedLeafFallback, allowCSharpQualifiedContextMatch);
             cmd.Parameters.AddWithValue("@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
             if (totalSuffixAlias != null)
             {
