@@ -107,6 +107,32 @@ public class GitHelperTests : IDisposable
     }
 
     [Fact]
+    public void GitFileWithOversizedContent_ReturnsNull()
+    {
+        File.WriteAllText(Path.Combine(_tempDir, ".git"), new string('x', GitHelper.MaxGitMetadataFileBytes + 1));
+
+        var result = GitHelper.ResolveGitCommonDir(_tempDir);
+
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public void WorktreeWithOversizedCommonDir_ReturnsNull()
+    {
+        var worktreeGitDir = Path.Combine(_tempDir, "fake-git-dir");
+        Directory.CreateDirectory(worktreeGitDir);
+        File.WriteAllText(Path.Combine(worktreeGitDir, "commondir"), new string('x', GitHelper.MaxGitMetadataFileBytes + 1));
+
+        var projectRoot = Path.Combine(_tempDir, "project");
+        Directory.CreateDirectory(projectRoot);
+        File.WriteAllText(Path.Combine(projectRoot, ".git"), $"gitdir: {worktreeGitDir}");
+
+        var result = GitHelper.ResolveGitCommonDir(projectRoot);
+
+        Assert.Null(result);
+    }
+
+    [Fact]
     public void WorktreeWithoutCommonDir_FallsBackToWorktreeGitDir()
     {
         // Arrange: worktree git dir exists but has no commondir file / commondirファイルがない場合のフォールバック

@@ -37,6 +37,8 @@ public sealed record GitHeadCommitResult(GitHeadCommitState State, string? Sha =
 /// </summary>
 public static class GitHelper
 {
+    internal const int MaxGitMetadataFileBytes = 4 * 1024;
+
     public sealed record WorktreeStatus(bool IsDirty, IReadOnlyList<string> UnresolvedMergeFiles);
 
     private static readonly HashSet<string> UnresolvedMergeStatuses = new(StringComparer.Ordinal)
@@ -73,7 +75,11 @@ public static class GitHelper
                 : null;
         }
 
-        var gitFileContent = File.ReadAllText(ioDotGit).Trim();
+        var gitFileContent = DataDirectorySecurity.ReadTextWithinLimit(ioDotGit, MaxGitMetadataFileBytes);
+        if (gitFileContent is null)
+            return null;
+
+        gitFileContent = gitFileContent.Trim();
         if (!gitFileContent.StartsWith("gitdir:")) return null;
 
         var worktreeGitDir = gitFileContent["gitdir:".Length..].Trim();
@@ -85,7 +91,11 @@ public static class GitHelper
         var ioCommonDirFile = LongPath.EnsureWindowsPrefix(commonDirFile);
         if (File.Exists(ioCommonDirFile))
         {
-            var commonDirRelative = File.ReadAllText(ioCommonDirFile).Trim();
+            var commonDirRelative = DataDirectorySecurity.ReadTextWithinLimit(ioCommonDirFile, MaxGitMetadataFileBytes);
+            if (commonDirRelative is null)
+                return null;
+
+            commonDirRelative = commonDirRelative.Trim();
             return Path.GetFullPath(Path.Combine(worktreeGitDir, commonDirRelative));
         }
 
