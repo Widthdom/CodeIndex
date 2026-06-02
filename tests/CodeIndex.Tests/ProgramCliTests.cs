@@ -2,6 +2,7 @@ using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
+using System.IO.Compression;
 using System.Text.Json;
 
 namespace CodeIndex.Tests;
@@ -374,6 +375,62 @@ public class ProgramCliTests
     }
 
     [Fact]
+    public void ImportArchive_RejectsDatabaseHashMismatch()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_import_hash_mismatch");
+        var replacementRoot = TestProjectHelper.CreateTempProject("cdidx_import_hash_replacement");
+        try
+        {
+            var sourceDbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(sourceDbPath, "src/app.cs", "csharp", "class App { void Run() {} }\n");
+            var replacementDbPath = TestProjectHelper.CreateProjectDb(replacementRoot);
+            TestProjectHelper.InsertIndexedFile(replacementDbPath, "src/other.cs", "csharp", "class Other { void Run() {} }\n");
+            var archivePath = Path.Combine(projectRoot, "codeindex.cdidx.zip");
+            var importedDbPath = Path.Combine(projectRoot, "imported", "codeindex.db");
+
+            var (exportExit, _, exportStderr) = RunCliInSubprocess(["export", archivePath, "--db", sourceDbPath]);
+            ReplaceZipEntryWithFile(archivePath, "codeindex.db", replacementDbPath);
+            var (importExit, _, importStderr) = RunCliInSubprocess(["import", archivePath, "--db", importedDbPath]);
+
+            Assert.True(exportExit == 0, exportStderr);
+            Assert.Equal(CommandExitCodes.UsageError, importExit);
+            Assert.Contains("database_sha256 does not match codeindex.db", importStderr);
+            Assert.False(File.Exists(importedDbPath));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            TestProjectHelper.DeleteDirectory(replacementRoot);
+        }
+    }
+
+    [Fact]
+    public void ImportArchive_RejectsManifestUserVersionMismatch()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_import_user_version_mismatch");
+        try
+        {
+            var sourceDbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(sourceDbPath, "src/app.cs", "csharp", "class App { void Run() {} }\n");
+            var archivePath = Path.Combine(projectRoot, "codeindex.cdidx.zip");
+            var importedDbPath = Path.Combine(projectRoot, "imported", "codeindex.db");
+
+            var (exportExit, _, exportStderr) = RunCliInSubprocess(["export", archivePath, "--db", sourceDbPath]);
+            ReplaceManifestUserVersion(archivePath, newUserVersion: 1);
+            var (importExit, _, importStderr) = RunCliInSubprocess(["import", archivePath, "--db", importedDbPath]);
+
+            Assert.True(exportExit == 0, exportStderr);
+            Assert.Equal(CommandExitCodes.UsageError, importExit);
+            Assert.Contains("user_version", importStderr);
+            Assert.False(File.Exists(importedDbPath));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void ExportArchive_RejectsSourceDatabaseAsOutput()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_export_same_db");
@@ -701,6 +758,44 @@ public class ProgramCliTests
         }
 
         throw new InvalidOperationException("Could not locate repository root / リポジトリルートを特定できませんでした");
+    }
+
+    private static void ReplaceZipEntryWithFile(string archivePath, string entryName, string sourcePath)
+    {
+        using var archive = ZipFile.Open(archivePath, ZipArchiveMode.Update);
+        archive.GetEntry(entryName)?.Delete();
+        var entry = archive.CreateEntry(entryName, CompressionLevel.SmallestSize);
+        using var source = File.OpenRead(sourcePath);
+        using var target = entry.Open();
+        source.CopyTo(target);
+    }
+
+    private static void ReplaceManifestUserVersion(string archivePath, int newUserVersion)
+    {
+        using var archive = ZipFile.Open(archivePath, ZipArchiveMode.Update);
+        var entry = archive.GetEntry("manifest.json")
+            ?? throw new InvalidOperationException("manifest.json entry was not found");
+
+        string manifestJson;
+        using (var reader = new StreamReader(entry.Open()))
+        {
+            manifestJson = reader.ReadToEnd();
+        }
+
+        using var document = JsonDocument.Parse(manifestJson);
+        var oldUserVersion = document.RootElement.GetProperty("user_version").GetInt32();
+        var replacementUserVersion = newUserVersion == oldUserVersion
+            ? (oldUserVersion == 0 ? 1 : 0)
+            : newUserVersion;
+        var updatedManifestJson = manifestJson.Replace(
+            $"\"user_version\":{oldUserVersion}",
+            $"\"user_version\":{replacementUserVersion}",
+            StringComparison.Ordinal);
+
+        entry.Delete();
+        var replacementEntry = archive.CreateEntry("manifest.json", CompressionLevel.SmallestSize);
+        using var writer = new StreamWriter(replacementEntry.Open());
+        writer.Write(updatedManifestJson);
     }
 
     private sealed class SuggestionFixture : IDisposable
