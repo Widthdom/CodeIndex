@@ -740,6 +740,35 @@ sleep 5
     }
 
     [Fact]
+    public void Run_SearchStillConsumesValidGlobalLogFlagBeforeQuery_Issue2955()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue2955_search_log_flag_option");
+        using var env = EnvironmentVariableScope.Capture(GlobalToolLog.LogMaxSizeMbEnvironmentVariable);
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "USER_GUIDE.md",
+                "markdown",
+                "needle appears here\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["search", "--log-max-size-mb", "1", "needle", "--path", "USER_GUIDE.md", "--db", dbPath, "--count"],
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("1", stdout.Trim());
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("1", Environment.GetEnvironmentVariable(GlobalToolLog.LogMaxSizeMbEnvironmentVariable));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_ForcedGlobalToolLogging_OnUnix_HardensExistingAndCurrentLogFiles()
     {
         if (OperatingSystem.IsWindows())

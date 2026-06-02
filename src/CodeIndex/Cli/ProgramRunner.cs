@@ -598,7 +598,7 @@ internal static class ProgramRunner
                 continue;
             }
 
-            if (searchCommandSeen)
+            if (searchCommandSeen && IsSearchGlobalLogFlagLiteral(args, i, arg))
             {
                 kept.Add(arg);
                 continue;
@@ -644,6 +644,20 @@ internal static class ProgramRunner
 
         args = kept.ToArray();
         return true;
+    }
+
+    private static bool IsSearchGlobalLogFlagLiteral(string[] args, int index, string arg)
+    {
+        static bool NextTokenLooksLikeSearchOption(string[] args, int index)
+            => index + 1 >= args.Length || args[index + 1].StartsWith("-", StringComparison.Ordinal);
+
+        if (arg is "--log-format" or "--log-retain-count" or "--log-max-size-mb")
+            return NextTokenLooksLikeSearchOption(args, index);
+
+        return (arg.StartsWith("--log-format=", StringComparison.Ordinal) ||
+                arg.StartsWith("--log-retain-count=", StringComparison.Ordinal) ||
+                arg.StartsWith("--log-max-size-mb=", StringComparison.Ordinal)) &&
+               NextTokenLooksLikeSearchOption(args, index);
     }
 
     private static bool TryConsumeValueFlag(string[] args, ref int index, string arg, string flag, out string value)
