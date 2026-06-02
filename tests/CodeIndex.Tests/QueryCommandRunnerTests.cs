@@ -12707,6 +12707,36 @@ jobs:
     }
 
     [Fact]
+    public void ParseArgs_MapSectionsRejectsOverlongCsv_Issue2914()
+    {
+        var tooLong = new string('t', QueryCommandRunner.MaxMapSectionsCsvLength + 1);
+
+        var options = QueryCommandRunner.ParseArgs(
+            ["--sections", tooLong],
+            jsonDefault: false,
+            validateDefaultSnippetLines: false,
+            validateDefaultMaxLineWidth: false);
+
+        Assert.Contains("--sections value is too long", options.ParseError);
+        Assert.Empty(options.MapSections!);
+    }
+
+    [Fact]
+    public void ParseArgs_MapSectionsRejectsTooManyCsvEntries_Issue2914()
+    {
+        var tooMany = string.Join(',', Enumerable.Repeat("tree", QueryCommandRunner.MaxMapSectionsCsvEntries + 1));
+
+        var options = QueryCommandRunner.ParseArgs(
+            ["--sections", tooMany],
+            jsonDefault: false,
+            validateDefaultSnippetLines: false,
+            validateDefaultMaxLineWidth: false);
+
+        Assert.Contains("--sections accepts at most", options.ParseError);
+        Assert.Empty(options.MapSections!);
+    }
+
+    [Fact]
     public void ParseArgs_GraphFormatOutsideDeps_ReturnsParseError()
     {
         var options = QueryCommandRunner.ParseArgs(

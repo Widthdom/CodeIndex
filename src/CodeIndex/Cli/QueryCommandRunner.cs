@@ -36,6 +36,8 @@ public static class QueryCommandRunner
     // OR 結合の `symbols` 名は SQLite の式木深さ上限 1000 を十分下回る値で頭打ちにし、
     // 大量バッチを SQLite 例外ではなく明確な usage error で早期に弾く。
     internal const int MaxSymbolQueryNames = 256;
+    internal const int MaxMapSectionsCsvLength = 256;
+    internal const int MaxMapSectionsCsvEntries = 16;
     internal const int ExactZeroHintProbeLimit = 1;
     internal const int ExactZeroHintSampleLimit = 5;
     private const string HotspotsGroupedByNameKind = "name_kind";
@@ -5679,6 +5681,9 @@ public static class QueryCommandRunner
     private static List<string> ParseMapSections(string rawValue, Action<string> addParseError)
     {
         var sections = new List<string>();
+        if (!ValidateCsvBounds("--sections", rawValue, MaxMapSectionsCsvLength, MaxMapSectionsCsvEntries, addParseError))
+            return sections;
+
         foreach (var rawSection in rawValue.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
             var section = rawSection.ToLowerInvariant();
@@ -5702,6 +5707,44 @@ public static class QueryCommandRunner
         if (sections.Count == 0)
             addParseError("Error: --sections cannot be empty. Use one or more of tree, languages, hotspots, metrics.");
         return sections.Distinct(StringComparer.Ordinal).ToList();
+    }
+
+    private static bool ValidateCsvBounds(
+        string optionName,
+        string rawValue,
+        int maxLength,
+        int maxEntries,
+        Action<string> addParseError)
+    {
+        if (rawValue.Length > maxLength)
+        {
+            addParseError($"Error: {optionName} value is too long ({rawValue.Length} characters; max {maxLength}).");
+            return false;
+        }
+
+        var entries = CountCsvEntries(rawValue);
+        if (entries > maxEntries)
+        {
+            addParseError($"Error: {optionName} accepts at most {maxEntries} comma-separated entries.");
+            return false;
+        }
+
+        return true;
+    }
+
+    private static int CountCsvEntries(string rawValue)
+    {
+        if (rawValue.Length == 0)
+            return 0;
+
+        var count = 1;
+        foreach (var ch in rawValue)
+        {
+            if (ch == ',')
+                count++;
+        }
+
+        return count;
     }
 
     private static void ValidateQueryPathOptionValues(
