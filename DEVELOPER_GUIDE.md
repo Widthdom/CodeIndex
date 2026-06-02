@@ -1084,6 +1084,7 @@ The `suggest_improvement` MCP tool allows AI agents to report gaps or errors.
 | [`src/CodeIndex/Cli/GitHubIssueReporter.cs`](src/CodeIndex/Cli/GitHubIssueReporter.cs) | GitHub Issues API client (best-effort) |
 | [`src/CodeIndex/Mcp/McpToolHandlers.cs`](src/CodeIndex/Mcp/McpToolHandlers.cs) | `ExecuteSuggestImprovement` handler |
 | [`src/CodeIndex/Mcp/McpToolDefinitions.cs`](src/CodeIndex/Mcp/McpToolDefinitions.cs) | Tool schema definition |
+| [`src/CodeIndex/Cli/SuggestionsCommandRunner.cs`](src/CodeIndex/Cli/SuggestionsCommandRunner.cs) | Local suggestion listing, export, issue-draft generation, and open-issue duplicate preflight |
 
 ### What is sent (when GitHub token is configured)
 
@@ -1091,6 +1092,7 @@ The `suggest_improvement` MCP tool allows AI agents to report gaps or errors.
 - Language name (e.g. `typescript`)
 - Description text (natural language, validated by SourceCodeDetector)
 - Context text (natural language, validated by SourceCodeDetector)
+- Optional evidence paths supplied by the caller. These are path strings only; file contents are never read for the payload.
 - cdidx version string
 - Attribution metadata: `created_by_agent`, `session_id`, `client_version`, `mcp_client_name`, `mcp_client_version`, and optional `tool_invocation_context`
 - SHA256 suggestion hash (for deduplication)
@@ -1107,13 +1109,13 @@ Local suggestion records use the `status` lifecycle field instead of a binary su
 
 `SuggestionStore.TryAddAndSubmit` keeps local read/write and submission reservation under the suggestion-store file lock, but invokes the GitHub callback after releasing the lock. The reservation stamps `last_submit_attempt`, increments `submit_attempt_count`, and sets a short `next_retry_at` guard so another writer will not submit the same duplicate while the first remote call is still in flight. The callback result is persisted by re-taking the lock briefly after the remote call completes.
 
-Before creating an upstream Issue, `GitHubIssueReporter` checks whether an Issue with the same SHA256 suggestion hash already exists. It first queries GitHub Search for the hash in issue bodies, then falls back to listing `ai-suggestion` Issues directly and matching the hash in each body. The fallback avoids GitHub Search indexing latency, so a retry immediately after a lost create response can still find the just-created Issue and avoid a duplicate POST. Lookup failures remain best-effort: if both checks fail because GitHub is unavailable, the reporter proceeds to the normal create path instead of blocking a legitimate first submission.
+Before creating an upstream Issue, `GitHubIssueReporter` checks whether an Issue with the same SHA256 suggestion hash already exists. It first queries GitHub Search for the hash in issue bodies, then falls back to listing Issues with the existing repository labels cdidx applies (`enhancement` for ordinary suggestions, `bug` for crash/error reports) and matching the hash in each body. The fallback avoids GitHub Search indexing latency, so a retry immediately after a lost create response can still find the just-created Issue and avoid a duplicate POST. Lookup failures remain best-effort: if both checks fail because GitHub is unavailable, the reporter proceeds to the normal create path instead of blocking a legitimate first submission.
 
 The shared GitHub HTTP client uses an explicit 10-second submission timeout by default, configurable with `CDIDX_GITHUB_SUBMIT_TIMEOUT_SECONDS`, and the platform default proxy (`HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`, and `NO_PROXY` through .NET default proxy handling). Create failures mention proxy environment variables in their diagnostic hint. `429` responses and `403` responses with `x-ratelimit-remaining: 0` are treated as rate limits; `Retry-After` wins, then `x-ratelimit-reset`, then a one-minute fallback retry window.
 
 ### What is NOT included in the payload by design
 
-- File paths from the user's project
+- Source file contents from the user's project
 - Any data from the indexed SQLite database
 - Any data from `.cdidx/codeindex.db`
 - Operating system or environment information

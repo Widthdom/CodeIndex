@@ -280,6 +280,14 @@ public class GitHubIssueReporterTests : IDisposable
     }
 
     [Fact]
+    public void BuildIssueLabels_MapsSuggestionCategoriesToExistingRepositoryLabels()
+    {
+        Assert.Equal(["enhancement"], GitHubIssueReporter.BuildIssueLabels(new SuggestionRecord { Category = "output_format" }));
+        Assert.Equal(["bug"], GitHubIssueReporter.BuildIssueLabels(new SuggestionRecord { Category = "crash_report" }));
+        Assert.Equal(["bug"], GitHubIssueReporter.BuildIssueLabels(new SuggestionRecord { Category = "unexpected_error" }));
+    }
+
+    [Fact]
     public void BuildApiErrorDetail_UsesStatusAndSingleLineBodyExcerpt()
     {
         var detail = GitHubIssueReporter.BuildApiErrorDetail(422, "{\n\"message\":\"validation failed\"\n}");
@@ -470,7 +478,7 @@ public class GitHubIssueReporterTests : IDisposable
             Assert.Equal(HttpMethod.Get, handler.Requests[0].Method);
             Assert.Equal("/search/issues", handler.Requests[0].RequestUri!.AbsolutePath);
             Assert.Equal("/repos/widthdom/CodeIndex/issues", handler.Requests[1].RequestUri!.AbsolutePath);
-            Assert.Contains("labels=ai-suggestion", handler.Requests[1].RequestUri!.Query);
+            Assert.Contains("labels=enhancement", handler.Requests[1].RequestUri!.Query);
             Assert.Contains("state=all", handler.Requests[1].RequestUri!.Query);
             Assert.DoesNotContain(handler.Requests, r => r.Method == HttpMethod.Post);
         }
@@ -523,6 +531,8 @@ public class GitHubIssueReporterTests : IDisposable
             Assert.Contains("session-123", postedJson);
             Assert.Contains("MCP client: codex", postedJson);
             Assert.Contains("Tool invocation context: Investigating suggestion triage", postedJson);
+            var payload = JsonNode.Parse(postedJson)!;
+            Assert.Equal("enhancement", payload["labels"]![0]!.GetValue<string>());
         }
         finally
         {

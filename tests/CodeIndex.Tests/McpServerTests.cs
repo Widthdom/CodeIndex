@@ -9456,7 +9456,8 @@ public class McpServerTests : IDisposable
                 {
                     ["category"] = "other",
                     ["description"] = uniqueDesc,
-                    ["toolInvocationContext"] = "Investigating suggestion triage"
+                    ["toolInvocationContext"] = "Investigating suggestion triage",
+                    ["evidencePaths"] = new JsonArray { "src/CodeIndex/Mcp/McpToolHandlers.cs" }
                 }
             }
         };
@@ -9473,6 +9474,7 @@ public class McpServerTests : IDisposable
         Assert.Equal("codex", stored.McpClientName);
         Assert.Equal("5.0", stored.McpClientVersion);
         Assert.Equal("Investigating suggestion triage", stored.ToolInvocationContext);
+        Assert.Equal(["src/CodeIndex/Mcp/McpToolHandlers.cs"], stored.EvidencePaths);
     }
 
     [Fact]

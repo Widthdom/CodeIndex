@@ -88,6 +88,7 @@ internal static class GitHubIssueReporter
     private const string RepoOwner = "widthdom";
     private const string RepoName = "CodeIndex";
     private const string ApiBase = "https://api.github.com";
+    private static readonly string[] ExistingSuggestionLookupLabels = ["enhancement", "bug"];
 
     /// <summary>
     /// Try to create a GitHub Issue for the given suggestion.
@@ -132,7 +133,7 @@ internal static class GitHubIssueReporter
             // レスポンスが消失した場合、ローカルレコードでは SubmittedToGitHub=false の
             // ままになる。再試行で重複 Issue を作らないよう、新規 POST 前に
             // 当該提案ハッシュを含む既存 Issue を探す。
-            var existingUrl = await FindExistingIssueByHashAsync(record.Hash, token, linkedCts.Token);
+            var existingUrl = await FindExistingIssueByHashAsync(record.Hash, token, BuildIssueLabels(record), linkedCts.Token);
             if (existingUrl != null)
                 return SuggestionStore.SubmitAttemptResult.Success(existingUrl);
 
@@ -197,20 +198,27 @@ internal static class GitHubIssueReporter
     /// <summary>
     /// Search the target GitHub repository for an existing Issue whose body
     /// contains the suggestion hash. The primary check uses GitHub Search;
-    /// the backstop lists ai-suggestion issues directly so same-second retries
+    /// the backstop lists issues by the labels cdidx would apply so same-second retries
     /// are not exposed to Search indexing latency. Returns the html_url of the
     /// first match, or null if no match is found or the hash looks unsafe to
     /// search with. On API failure this returns null — the caller falls through
     /// to the normal create path so a GitHub-side lookup outage never blocks a
     /// legitimate first submission.
     /// 当該提案ハッシュを含む既存 Issue を対象リポジトリから検索する。
-    /// 主経路は GitHub Search を使い、backstop として ai-suggestion Issue を
+    /// 主経路は GitHub Search を使い、backstop として cdidx が付ける label の Issue を
     /// 直接一覧取得することで、同秒の再試行が Search の index 遅延に影響されない
     /// ようにする。一致した最初の Issue の html_url を返す。一致なし、またはハッシュが
     /// 検索に使えない形の場合は null。API 失敗時も null を返し、GitHub 側 lookup の
     /// 障害によって新規送信がブロックされないようにする。
     /// </summary>
     internal static async Task<string?> FindExistingIssueByHashAsync(string hash, string token, CancellationToken cancellationToken = default)
+        => await FindExistingIssueByHashAsync(hash, token, ExistingSuggestionLookupLabels, cancellationToken);
+
+    private static async Task<string?> FindExistingIssueByHashAsync(
+        string hash,
+        string token,
+        IReadOnlyList<string> lookupLabels,
+        CancellationToken cancellationToken)
     {
         // Defensive: only search with hex-shaped hashes to avoid accidentally
         // injecting search operators if the field ever held arbitrary text.
@@ -222,7 +230,7 @@ internal static class GitHubIssueReporter
         if (searchUrl != null)
             return searchUrl;
 
-        return await ListExistingSuggestionIssueByHashAsync(hash, token, cancellationToken);
+        return await ListExistingSuggestionIssueByHashAsync(hash, token, lookupLabels, cancellationToken);
     }
 
     private static async Task<string?> SearchExistingIssueByHashAsync(string hash, string token, CancellationToken cancellationToken)
@@ -246,35 +254,44 @@ internal static class GitHubIssueReporter
         return items[0]?["html_url"]?.GetValue<string>();
     }
 
-    private static async Task<string?> ListExistingSuggestionIssueByHashAsync(string hash, string token, CancellationToken cancellationToken)
+    private static async Task<string?> ListExistingSuggestionIssueByHashAsync(
+        string hash,
+        string token,
+        IReadOnlyList<string> lookupLabels,
+        CancellationToken cancellationToken)
     {
-        for (var page = 1; ; page++)
+        foreach (var label in lookupLabels.Distinct(StringComparer.OrdinalIgnoreCase))
         {
-            var labels = Uri.EscapeDataString("ai-suggestion");
-            var url = $"{ApiBase}/repos/{RepoOwner}/{RepoName}/issues?labels={labels}&state=all&per_page=100&page={page}";
-
-            using var requestMessage = new HttpRequestMessage(HttpMethod.Get, url);
-            requestMessage.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-
-            var response = await HttpClient.SendAsync(requestMessage, cancellationToken);
-            if (!response.IsSuccessStatusCode)
-                return null;
-
-            var responseJson = await response.Content.ReadAsStringAsync(cancellationToken);
-            var items = JsonNode.Parse(responseJson) as JsonArray;
-            if (items == null || items.Count == 0)
-                return null;
-
-            foreach (var item in items)
+            for (var page = 1; ; page++)
             {
-                var body = item?["body"]?.GetValue<string>();
-                if (body != null && body.Contains(hash, StringComparison.Ordinal))
-                    return item?["html_url"]?.GetValue<string>();
-            }
+                var labels = Uri.EscapeDataString(label);
+                var url = $"{ApiBase}/repos/{RepoOwner}/{RepoName}/issues?labels={labels}&state=all&per_page=100&page={page}";
 
-            if (items.Count < 100)
-                return null;
+                using var requestMessage = new HttpRequestMessage(HttpMethod.Get, url);
+                requestMessage.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+                var response = await HttpClient.SendAsync(requestMessage, cancellationToken);
+                if (!response.IsSuccessStatusCode)
+                    return null;
+
+                var responseJson = await response.Content.ReadAsStringAsync(cancellationToken);
+                var items = JsonNode.Parse(responseJson) as JsonArray;
+                if (items == null || items.Count == 0)
+                    break;
+
+                foreach (var item in items)
+                {
+                    var body = item?["body"]?.GetValue<string>();
+                    if (body != null && body.Contains(hash, StringComparison.Ordinal))
+                        return item?["html_url"]?.GetValue<string>();
+                }
+
+                if (items.Count < 100)
+                    break;
+            }
         }
+
+        return null;
     }
 
     private static bool IsHexHash(string value)
@@ -346,6 +363,18 @@ internal static class GitHubIssueReporter
         body.AppendLine("## Language");
         body.AppendLine(record.Language ?? "N/A");
         body.AppendLine();
+        body.AppendLine("## Evidence paths");
+        var evidencePaths = NormalizeEvidencePaths(record.EvidencePaths);
+        if (evidencePaths.Count == 0)
+        {
+            body.AppendLine("N/A");
+        }
+        else
+        {
+            foreach (var path in evidencePaths)
+                body.AppendLine($"- {path}");
+        }
+        body.AppendLine();
         body.AppendLine("## Description");
         body.AppendLine(scrubbedDescription);
         body.AppendLine();
@@ -367,7 +396,7 @@ internal static class GitHubIssueReporter
         {
             ["title"] = title,
             ["body"] = body.ToString(),
-            ["labels"] = new JsonArray { "ai-suggestion" },
+            ["labels"] = new JsonArray(BuildIssueLabels(record).Select(label => JsonValue.Create(label)).ToArray<JsonNode?>()),
         };
 
         var content = new StringContent(
@@ -452,6 +481,25 @@ internal static class GitHubIssueReporter
         return title.Length <= MaxGitHubIssueTitleLength
             ? title
             : title[..MaxGitHubIssueTitleLength];
+    }
+
+    internal static string[] BuildIssueLabels(SuggestionRecord record)
+    {
+        return record.Category is "crash_report" or "unexpected_error"
+            ? ["bug"]
+            : ["enhancement"];
+    }
+
+    private static List<string> NormalizeEvidencePaths(string[]? paths)
+    {
+        if (paths == null || paths.Length == 0)
+            return [];
+        return paths
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Select(path => path.Trim())
+            .Where(path => path.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
     }
 
     internal static string SanitizeIssueTitleText(string value)

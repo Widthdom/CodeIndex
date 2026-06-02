@@ -104,7 +104,7 @@ public static class ConsoleUi
         ("deps", "cdidx deps [--db <path>] [--json] [--format <dot|graphml|json-graph|edgelist>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--reverse] [--cycles]"),
         ("unused", "cdidx unused [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count]"),
         ("hotspots", "cdidx hotspots [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--group-by <symbol|file|statement>] [--group-by-name]"),
-        ("suggestions", "cdidx suggestions <list|show|export> [id] [--db <path>] [--json] [--status <all|submitted|unsubmitted>] [--language <lang>] [--category <category>] [--since <datetime>] [--agent <name>] [--format <json|markdown>]"),
+        ("suggestions", "cdidx suggestions <list|show|export> [id] [--db <path>] [--json] [--status <all|submitted|unsubmitted>] [--language <lang>] [--category <category>] [--since <datetime>] [--agent <name>] [--format <json|markdown|issue-drafts>] [--open-issues <path>]"),
         ("export", "cdidx export <archive> [--db <path>] [--json]"),
         ("export", "cdidx export ctags [--output <path>] [--db <path>]"),
         ("import", "cdidx import <archive> [--db <path>] [--prune-paths] [--json]"),

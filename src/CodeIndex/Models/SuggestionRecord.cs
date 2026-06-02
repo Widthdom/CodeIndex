@@ -95,6 +95,9 @@ public class SuggestionRecord
     /// <summary>Structured tags extracted by MCP sampling, when available / MCP sampling で抽出された構造化タグ（取得可能な場合）</summary>
     public string[]? SampledTags { get; set; }
 
+    /// <summary>Repository-relative paths that support the suggestion / 提案の根拠となるリポジトリ相対パス</summary>
+    public string[]? EvidencePaths { get; set; }
+
     /// <summary>Upstream GitHub Issue number when known / 判明している場合の upstream GitHub Issue 番号</summary>
     public int? UpstreamIssueNumber { get; set; }
 

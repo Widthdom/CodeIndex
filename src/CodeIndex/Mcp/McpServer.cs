@@ -3157,6 +3157,7 @@ public partial class McpServer : IDisposable
             {
                 ["category"] = "output_format",
                 ["description"] = "The tool response should make truncation easier to detect.",
+                ["evidencePaths"] = new JsonArray { "src/CodeIndex/Mcp/McpToolHandlers.cs" },
             },
             _ => new JsonObject(),
         };

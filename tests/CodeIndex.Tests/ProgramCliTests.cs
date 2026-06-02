@@ -628,6 +628,49 @@ public class ProgramCliTests
         Assert.DoesNotContain("Add parser support", stdout);
     }
 
+    [Fact]
+    public void Suggestions_ExportIssueDraftsIncludesEvidenceAndDuplicatePreflight()
+    {
+        using var fixture = SuggestionFixture.Create();
+        var record = fixture.Add(
+            "output_format",
+            "csharp",
+            "Issue draft export should preserve structured triage evidence",
+            submitted: false,
+            sampledTitle: "Add issue draft export",
+            evidencePaths: ["src/CodeIndex/Cli/SuggestionsCommandRunner.cs", "tests/CodeIndex.Tests/ProgramCliTests.cs"]);
+        var openIssuesPath = fixture.WriteOpenIssuesJson($$"""
+        [
+          {
+            "number": 2878,
+            "title": "[AI Suggestion] output_format: Add issue draft export",
+            "url": "https://github.com/Widthdom/CodeIndex/issues/2878",
+            "labels": [{ "name": "enhancement" }]
+          }
+        ]
+        """);
+
+        var (exitCode, stdout, stderr) = RunCliInSubprocess([
+            "suggestions", "export", "--db", fixture.DbPath, "--format", "issue-drafts", "--open-issues", openIssuesPath
+        ]);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var doc = JsonDocument.Parse(stdout);
+        var root = doc.RootElement;
+        Assert.True(root.GetProperty("duplicate_preflight").GetProperty("checked").GetBoolean());
+        Assert.Equal(1, root.GetProperty("duplicate_preflight").GetProperty("open_issue_count").GetInt32());
+        var draft = root.GetProperty("drafts")[0];
+        Assert.Equal(record.Hash, draft.GetProperty("suggestion_id").GetString());
+        Assert.Equal("enhancement", draft.GetProperty("labels")[0].GetString());
+        Assert.Equal("src/CodeIndex/Cli/SuggestionsCommandRunner.cs", draft.GetProperty("evidence_paths")[0].GetString());
+        Assert.Contains("## Evidence paths", draft.GetProperty("body").GetString());
+        var preflight = draft.GetProperty("duplicate_preflight");
+        Assert.Equal(1, preflight.GetProperty("match_count").GetInt32());
+        Assert.Equal(2878, preflight.GetProperty("matches")[0].GetProperty("number").GetInt32());
+        Assert.Equal("title_exact", preflight.GetProperty("matches")[0].GetProperty("reason").GetString());
+    }
+
     private static (int ExitCode, string StdOut, string StdErr) RunCliInSubprocess(string[] args, IReadOnlyDictionary<string, string?>? environment = null)
     {
         var psi = new System.Diagnostics.ProcessStartInfo
@@ -731,7 +774,9 @@ public class ProgramCliTests
             bool submitted,
             DateTime? lastSubmitAttempt = null,
             int submitAttemptCount = 0,
-            string? lastSubmitError = null)
+            string? lastSubmitError = null,
+            string? sampledTitle = null,
+            string[]? evidencePaths = null)
         {
             var record = new SuggestionRecord
             {
@@ -746,10 +791,19 @@ public class ProgramCliTests
                 LastSubmitAttempt = lastSubmitAttempt,
                 SubmitAttemptCount = submitAttemptCount,
                 LastSubmitError = lastSubmitError,
+                SampledTitle = sampledTitle,
+                EvidencePaths = evidencePaths,
             };
             _records.Add(record);
             Write();
             return record;
+        }
+
+        public string WriteOpenIssuesJson(string json)
+        {
+            var path = Path.Combine(_root, "open-issues.json");
+            File.WriteAllText(path, json);
+            return path;
         }
 
         private void Write()
