@@ -159,6 +159,10 @@ public partial class McpServer : IDisposable
     internal const int MaxLineCharacterCount = 1_000_000;
     internal const int MaxLineByteLength = 1_048_576;
     internal const int DefaultMaxResponseBytes = 10 * 1024 * 1024;
+    internal const int MaxConfiguredResponseBytes = 64 * 1024 * 1024;
+    internal const int MaxMcpPaginationOffset = 10_000;
+    internal const double MinKeepAliveIntervalSeconds = 1.0;
+    internal const double MaxKeepAliveIntervalSeconds = 300.0;
     private const string MaxResponseBytesEnvVar = "CDIDX_MCP_RESPONSE_MAX_BYTES";
     private const string KeepAliveIntervalEnvironmentVariable = "CDIDX_MCP_KEEP_ALIVE_INTERVAL_S";
     internal const string DebugEnvironmentVariable = "CDIDX_DEBUG";
@@ -1336,8 +1340,14 @@ public partial class McpServer : IDisposable
         if (string.IsNullOrWhiteSpace(raw))
             return null;
         if (!double.TryParse(raw, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var seconds)
-            || seconds <= 0)
+            || !double.IsFinite(seconds)
+            || seconds < MinKeepAliveIntervalSeconds
+            || seconds > MaxKeepAliveIntervalSeconds)
+        {
+            Console.Error.WriteLine(
+                $"[cdidx-mcp] Ignoring invalid {KeepAliveIntervalEnvironmentVariable}='{raw}'. Expected a finite value between {MinKeepAliveIntervalSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} and {MaxKeepAliveIntervalSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} seconds. Keep-alive notifications stay disabled.");
             return null;
+        }
         return TimeSpan.FromSeconds(seconds);
     }
 
@@ -3026,11 +3036,32 @@ public partial class McpServer : IDisposable
     }
 
     private static int GetMaxResponseBytes()
+        => ReadPositiveIntEnvironmentLimit(
+            MaxResponseBytesEnvVar,
+            DefaultMaxResponseBytes,
+            MaxConfiguredResponseBytes,
+            "MCP response byte limit");
+
+    private static int ReadPositiveIntEnvironmentLimit(string envVar, int defaultValue, int maximumValue, string description)
     {
-        var configured = Environment.GetEnvironmentVariable(MaxResponseBytesEnvVar);
-        if (int.TryParse(configured, out var limit) && limit > 0)
-            return limit;
-        return DefaultMaxResponseBytes;
+        var raw = Environment.GetEnvironmentVariable(envVar);
+        if (string.IsNullOrWhiteSpace(raw))
+            return defaultValue;
+
+        if (!int.TryParse(raw, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var limit)
+            || limit <= 0)
+        {
+            Console.Error.WriteLine($"[cdidx-mcp] Ignoring invalid {envVar}='{raw}'. Expected a positive integer for {description}. Using default {defaultValue.ToString(System.Globalization.CultureInfo.InvariantCulture)}.");
+            return defaultValue;
+        }
+
+        if (limit > maximumValue)
+        {
+            Console.Error.WriteLine($"[cdidx-mcp] Clamping {envVar}='{raw}' to maximum {maximumValue.ToString(System.Globalization.CultureInfo.InvariantCulture)} for {description}.");
+            return maximumValue;
+        }
+
+        return limit;
     }
 
     /// <summary>

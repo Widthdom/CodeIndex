@@ -5272,6 +5272,132 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_Status_ReportsResponseByteLimitCaps()
+    {
+        using var env = EnvironmentVariableScope.Capture(
+            "CDIDX_MCP_RESPONSE_MAX_BYTES",
+            "CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES");
+        env.Set("CDIDX_MCP_RESPONSE_MAX_BYTES", int.MaxValue.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        env.Set("CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES", int.MaxValue.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+        using var server = new McpServer(_dbPath, "1.0", dbPathExplicit: true);
+        var response = server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status"}}""")!)!;
+
+        var mcp = response["result"]!["structuredContent"]!["mcp"]!;
+        var limits = mcp["limits"]!;
+        Assert.Equal(McpServer.MaxConfiguredResponseBytes, limits["max_response_bytes"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxConfiguredResponseBytes, limits["max_configured_response_bytes"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxBatchQueryResponseByteLimit, limits["batch_response_bytes"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxBatchQueryResponseByteLimit, limits["max_batch_response_bytes"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsList_ReferencesOffsetSchemaAdvertisesCap()
+    {
+        var response = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!)!;
+
+        var tools = response["result"]!["tools"]!.AsArray();
+        var references = tools.First(tool => tool!["name"]!.GetValue<string>() == "references")!;
+        var offset = references["inputSchema"]!["properties"]!["offset"]!;
+        Assert.Equal(0, offset["minimum"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxMcpPaginationOffset, offset["maximum"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsCall_References_ClampsTooLargeOffset()
+    {
+        InsertIndexedFile(
+            "src/offset-clamp.cs",
+            "csharp",
+            """
+            public class OffsetClampCaller { public void Hit(App app) { app.Run(); } }
+            """);
+
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "references",
+                ["arguments"] = new JsonObject
+                {
+                    ["query"] = "Run",
+                    ["lang"] = "csharp",
+                    ["offset"] = McpServer.MaxMcpPaginationOffset + 1,
+                    ["limit"] = 1,
+                },
+            },
+        };
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(McpServer.MaxMcpPaginationOffset, structured["offset"]!.GetValue<int>());
+        Assert.True(structured["total"]!.GetValue<int>() > 0);
+    }
+
+    [Fact]
+    public void ToolsCall_Status_ReportsPaginationOffsetCap()
+    {
+        var response = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status"}}""")!)!;
+
+        var limits = response["result"]!["structuredContent"]!["mcp"]!["limits"]!;
+        Assert.Equal(McpServer.MaxMcpPaginationOffset, limits["max_pagination_offset"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void Constructor_InvalidKeepAliveEnvironment_DoesNotThrow()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_MCP_KEEP_ALIVE_INTERVAL_S");
+        env.Set("CDIDX_MCP_KEEP_ALIVE_INTERVAL_S", "Infinity");
+
+        using var server = new McpServer(_dbPath, "1.0", dbPathExplicit: true);
+        var response = server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"ping"}""")!)!;
+
+        Assert.Equal("ok", response["result"]!["status"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Status_ReportsKeepAliveIntervalBounds()
+    {
+        var response = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status"}}""")!)!;
+
+        var limits = response["result"]!["structuredContent"]!["mcp"]!["limits"]!;
+        Assert.Equal(McpServer.MinKeepAliveIntervalSeconds, limits["keep_alive_min_interval_s"]!.GetValue<double>());
+        Assert.Equal(McpServer.MaxKeepAliveIntervalSeconds, limits["keep_alive_max_interval_s"]!.GetValue<double>());
+    }
+
+    [Fact]
+    public void ToolsCall_Status_ReportsEffectiveRateLimitCaps()
+    {
+        using var env = EnvironmentVariableScope.Capture(
+            "CDIDX_MCP_RATE_LIMIT_RPS",
+            "CDIDX_MCP_RATE_LIMIT_BURST");
+        env.Set("CDIDX_MCP_RATE_LIMIT_RPS", "1000000");
+        env.Set("CDIDX_MCP_RATE_LIMIT_BURST", "1000000");
+
+        using var server = new McpServer(_dbPath, "1.0", dbPathExplicit: true);
+        var response = server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status"}}""")!)!;
+
+        var mcp = response["result"]!["structuredContent"]!["mcp"]!;
+        var limits = mcp["limits"]!;
+        Assert.Equal(RateLimiterOptions.MaxRefillTokensPerSecond, limits["rate_limit_max_rps"]!.GetValue<double>());
+        Assert.Equal(RateLimiterOptions.MaxBurstCapacity, limits["rate_limit_max_burst"]!.GetValue<double>());
+
+        var rateLimit = mcp["rate_limit"]!;
+        Assert.True(rateLimit["enabled"]!.GetValue<bool>());
+        Assert.Equal(RateLimiterOptions.MaxRefillTokensPerSecond, rateLimit["rps"]!.GetValue<double>());
+        Assert.Equal(RateLimiterOptions.MaxBurstCapacity, rateLimit["burst"]!.GetValue<double>());
+    }
+
+    [Fact]
     public async Task ProcessFrameAsync_BatchResponseOverByteLimit_ReturnsStructuredError()
     {
         using var env = EnvironmentVariableScope.Capture("CDIDX_MCP_RESPONSE_MAX_BYTES");
@@ -6839,6 +6965,19 @@ public class McpServerTests : IDisposable
         {
             Environment.SetEnvironmentVariable("CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES", previous);
         }
+    }
+
+    [Fact]
+    public void ToolsCall_BatchQuery_ClampsTooLargeResponseLimitEnvironment()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES");
+        env.Set("CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES", int.MaxValue.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[{"tool":"ping"}]}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var metadata = response["result"]!["structuredContent"]!["metadata"]!;
+        Assert.Equal(McpServer.MaxBatchQueryResponseByteLimit, metadata["response_byte_limit"]!.GetValue<int>());
     }
 
     [Fact]

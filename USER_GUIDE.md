@@ -1362,8 +1362,19 @@ Example output:
 
 | Environment variable | Meaning |
 |---|---|
-| `CDIDX_MCP_RATE_LIMIT_RPS` | Refill rate in tokens per second. Required to enable rate limiting; values that are missing, non-numeric, zero, negative, or non-finite (`Infinity`, `NaN`) leave the limiter disabled and emit a one-line warning on `stderr`. |
-| `CDIDX_MCP_RATE_LIMIT_BURST` | Bucket capacity (maximum burst). Optional. Defaults to `max(rps, 1)`. Invalid or non-finite values fall back to the default and emit a warning while leaving `rps` honored. |
+| `CDIDX_MCP_RATE_LIMIT_RPS` | Refill rate in tokens per second. Required to enable rate limiting; values that are missing, non-numeric, zero, negative, or non-finite (`Infinity`, `NaN`) leave the limiter disabled and emit a one-line warning on `stderr`. Values above `100` are clamped to `100` with a warning. |
+| `CDIDX_MCP_RATE_LIMIT_BURST` | Bucket capacity (maximum burst). Optional. Defaults to `max(rps, 1)`. Invalid or non-finite values fall back to the default and emit a warning while leaving `rps` honored. Values above `1000` are clamped to `1000` with a warning. |
+
+MCP response-size limits are bounded so environment overrides cannot disable the response guards:
+
+| Environment variable | Default | Maximum | Invalid value |
+|---|---:|---:|---|
+| `CDIDX_MCP_RESPONSE_MAX_BYTES` | `10485760` (10 MiB) | `67108864` (64 MiB) | Uses the default and emits a warning |
+| `CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES` | `1048576` (1 MiB) | `10485760` (10 MiB) | Uses the default and emits a warning |
+
+Values above the maximum are clamped with a warning. `status` reports effective response caps under `mcp.limits.max_response_bytes` and `mcp.limits.batch_response_bytes`.
+
+Pagination-style MCP graph tools clamp `offset` to `10000` before querying SQLite; `tools/list` advertises the schema maximum, and `status` reports the offset cap under `mcp.limits.max_pagination_offset`. `status` also reports the current rate limiter settings under `mcp.rate_limit`.
 
 Caller identity is captured from the `clientInfo.name` (and `version` when present) of the MCP `initialize` request. Tool calls received before `initialize` are billed against an anonymous `"unknown"` bucket so an unidentified client cannot bypass the limiter. The captured caller is sticky for the lifetime of the session — once a named identity has been recorded, subsequent `initialize` calls under a different name are ignored (with a one-line `stderr` warning) so a long-lived stdio or networked session cannot reset its bucket mid-flight by re-identifying.
 
@@ -1990,7 +2001,7 @@ CDIDX_MCP_HTTP_TOKEN=s3cret cdidx mcp \
   --transport http --http-listen 0.0.0.0:9000          # LAN bind; bearer token is mandatory
 ```
 
-Each HTTP `POST /` carries one JSON-RPC frame in the request body, the matching response is returned in the same HTTP body (`200 OK`, `application/json`), and notifications return `204 No Content`. `GET /events` opens a `text/event-stream` channel for server-to-client frames; the current server does not emit unsolicited frames, but the stream is independent and does not block normal POST requests. Non-POST verbs on `/` return `405 Method Not Allowed` with `Allow: POST`. When the persistent lifecycle log is enabled, HTTP mode also writes one `mcp_http_request` record per request with method, path, status, duration, auth outcome, remote peer, correlation id, and JSON-RPC request id when available. Request and response bodies are not logged.
+Each HTTP `POST /` carries one JSON-RPC frame in the request body, the matching response is returned in the same HTTP body (`200 OK`, `application/json`), and notifications return `204 No Content`. `GET /events` opens a `text/event-stream` channel for server-to-client frames; the server emits no unsolicited frames unless keep-alive notifications are opted in with `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S`. Accepted keep-alive values are finite seconds from `1` to `300`; invalid or out-of-range values leave keep-alive disabled with a `stderr` warning. The stream is independent and does not block normal POST requests. Non-POST verbs on `/` return `405 Method Not Allowed` with `Allow: POST`. When the persistent lifecycle log is enabled, HTTP mode also writes one `mcp_http_request` record per request with method, path, status, duration, auth outcome, remote peer, correlation id, and JSON-RPC request id when available. Request and response bodies are not logged.
 
 Security defaults:
 
@@ -3482,8 +3493,19 @@ MCP ツールで catch-all まで突き抜けた例外（想定外の SQLite 例
 
 | 環境変数 | 意味 |
 |---|---|
-| `CDIDX_MCP_RATE_LIMIT_RPS` | 1 秒あたりのトークン補充レート。レート制限を有効化するために必須。未設定・非数値・0 以下・非有限値（`Infinity`/`NaN`）の場合は無効のまま、1 行の警告を `stderr` に出力します。 |
-| `CDIDX_MCP_RATE_LIMIT_BURST` | バケット容量（最大バースト）。任意。既定は `max(rps, 1)`。不正値・非有限値は既定にフォールバックし警告を出力。`rps` はそのまま尊重されます。 |
+| `CDIDX_MCP_RATE_LIMIT_RPS` | 1 秒あたりのトークン補充レート。レート制限を有効化するために必須。未設定・非数値・0 以下・非有限値（`Infinity`/`NaN`）の場合は無効のまま、1 行の警告を `stderr` に出力します。`100` を超える値は警告付きで `100` にクランプされます。 |
+| `CDIDX_MCP_RATE_LIMIT_BURST` | バケット容量（最大バースト）。任意。既定は `max(rps, 1)`。不正値・非有限値は既定にフォールバックし警告を出力。`rps` はそのまま尊重されます。`1000` を超える値は警告付きで `1000` にクランプされます。 |
+
+MCP のレスポンスサイズ上限は、環境変数 override で guard が実質無効化されないよう上限付きです:
+
+| 環境変数 | 既定 | 最大 | 不正値 |
+|---|---:|---:|---|
+| `CDIDX_MCP_RESPONSE_MAX_BYTES` | `10485760` (10 MiB) | `67108864` (64 MiB) | 警告を出して既定値を使用 |
+| `CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES` | `1048576` (1 MiB) | `10485760` (10 MiB) | 警告を出して既定値を使用 |
+
+最大値を超える値は警告付きでクランプされます。`status` は有効なレスポンス上限を `mcp.limits.max_response_bytes` と `mcp.limits.batch_response_bytes` に返します。
+
+ページング型の MCP graph ツールは SQLite クエリ前に `offset` を `10000` へクランプします。`tools/list` は schema の最大値を広告し、`status` は offset 上限を `mcp.limits.max_pagination_offset` に返します。`status` は現在のレート制限設定も `mcp.rate_limit` に返します。
 
 呼び出し元 ID は MCP `initialize` リクエストの `clientInfo.name`（および `version` があれば併記）から取得します。`initialize` 前に届いたツール呼び出しは匿名 `"unknown"` バケットで計量され、未識別クライアントによる制限回避を防ぎます。取得済みの caller はセッション中 sticky で、名前付き ID が一度記録されると以降の別名 `initialize` は無視され（`stderr` に 1 行警告）、長期 stdio / 通信セッションが途中で再 initialize してバケットをリセットする経路を塞ぎます。
 
@@ -4091,7 +4113,7 @@ CDIDX_MCP_HTTP_TOKEN=s3cret cdidx mcp \
   --transport http --http-listen 0.0.0.0:9000          # LAN 公開時は bearer token が必須
 ```
 
-HTTP の `POST /` 1 件が JSON-RPC フレーム 1 件に対応し、応答は同じ HTTP レスポンスのボディに `200 OK` / `application/json` で返ります。通知は `204 No Content` です。`GET /events` はサーバー→クライアントフレーム用の `text/event-stream` channel を開きます。現サーバーは自発的な frame をまだ送信しませんが、この stream は独立しており通常の POST リクエストを塞ぎません。`/` への POST 以外は `405 Method Not Allowed`（`Allow: POST` 付き）です。永続 lifecycle log が有効な場合、HTTP mode はリクエストごとに `mcp_http_request` レコードも出力し、method、path、status、duration、auth outcome、remote peer、correlation id、利用可能な JSON-RPC request id を記録します。リクエスト/レスポンス本文は記録しません。
+HTTP の `POST /` 1 件が JSON-RPC フレーム 1 件に対応し、応答は同じ HTTP レスポンスのボディに `200 OK` / `application/json` で返ります。通知は `204 No Content` です。`GET /events` はサーバー→クライアントフレーム用の `text/event-stream` channel を開きます。server-initiated frame は `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S` で keep-alive notification を opt-in した場合だけ送信されます。受理される値は有限な `1`〜`300` 秒で、不正値や範囲外の値では `stderr` に警告を出して keep-alive を無効のままにします。この stream は独立しており通常の POST リクエストを塞ぎません。`/` への POST 以外は `405 Method Not Allowed`（`Allow: POST` 付き）です。永続 lifecycle log が有効な場合、HTTP mode はリクエストごとに `mcp_http_request` レコードも出力し、method、path、status、duration、auth outcome、remote peer、correlation id、利用可能な JSON-RPC request id を記録します。リクエスト/レスポンス本文は記録しません。
 
 セキュリティ既定:
 

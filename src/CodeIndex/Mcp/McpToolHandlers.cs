@@ -20,6 +20,7 @@ namespace CodeIndex.Mcp;
 public partial class McpServer
 {
     private const int DefaultBatchQueryResponseByteLimit = MaxLineByteLength;
+    internal const int MaxBatchQueryResponseByteLimit = 10 * 1024 * 1024;
     private const int DefaultExcerptOutputByteLimit = MaxLineByteLength;
     private const string BatchQueryResponseByteLimitEnvVar = "CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES";
     internal const int MaxMcpArrayFilterCount = 100;
@@ -291,7 +292,7 @@ public partial class McpServer
     private static int ClampLimit(int limit) => Math.Clamp(limit, 1, MaxLimit);
 
     private static int ReadOffset(JsonNode? args)
-        => Math.Max(0, args?["offset"]?.GetValue<int>() ?? 0);
+        => Math.Clamp(args?["offset"]?.GetValue<int>() ?? 0, 0, MaxMcpPaginationOffset);
 
     private static string ReadResponseFormat(JsonNode? args)
         => args?["format"]?.GetValue<string>()?.Trim().ToLowerInvariant() ?? "full";
@@ -2047,9 +2048,23 @@ public partial class McpServer
                     ["max_request_characters"] = MaxLineCharacterCount,
                     ["max_request_bytes"] = MaxLineByteLength,
                     ["max_response_bytes"] = GetMaxResponseBytes(),
+                    ["max_configured_response_bytes"] = MaxConfiguredResponseBytes,
+                    ["batch_response_bytes"] = GetBatchQueryResponseByteLimit(),
+                    ["max_batch_response_bytes"] = MaxBatchQueryResponseByteLimit,
+                    ["max_pagination_offset"] = MaxMcpPaginationOffset,
                     ["max_json_depth"] = MaxJsonDepth,
                     ["max_batch_requests"] = MaxBatchRequestCount,
-                }
+                    ["keep_alive_min_interval_s"] = MinKeepAliveIntervalSeconds,
+                    ["keep_alive_max_interval_s"] = MaxKeepAliveIntervalSeconds,
+                    ["rate_limit_max_rps"] = RateLimiterOptions.MaxRefillTokensPerSecond,
+                    ["rate_limit_max_burst"] = RateLimiterOptions.MaxBurstCapacity,
+                },
+                ["rate_limit"] = new JsonObject
+                {
+                    ["enabled"] = RateLimiter.Options.IsEnabled,
+                    ["rps"] = RateLimiter.Options.RefillTokensPerSecond,
+                    ["burst"] = RateLimiter.Options.BurstCapacity,
+                },
             };
             return CreateToolResult(id, "Database stats returned.", structured);
         });
@@ -2806,12 +2821,11 @@ public partial class McpServer
     }
 
     private static int GetBatchQueryResponseByteLimit()
-    {
-        var configured = Environment.GetEnvironmentVariable(BatchQueryResponseByteLimitEnvVar);
-        if (int.TryParse(configured, out var limit) && limit > 0)
-            return limit;
-        return DefaultBatchQueryResponseByteLimit;
-    }
+        => ReadPositiveIntEnvironmentLimit(
+            BatchQueryResponseByteLimitEnvVar,
+            DefaultBatchQueryResponseByteLimit,
+            MaxBatchQueryResponseByteLimit,
+            "MCP batch_query response byte limit");
 
     private int EstimateJsonUtf8Bytes(JsonNode node) =>
         Encoding.UTF8.GetByteCount(node.ToJsonString(_jsonOptions));
