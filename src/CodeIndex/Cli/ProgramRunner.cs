@@ -1569,7 +1569,14 @@ internal static class ProgramRunner
             }
 
             db.TryMigrateForRead();
-            using var server = new LspServer(new DbReader(db), appVersion, jsonOptions, db.GetMetaString(DbContext.IndexedProjectRootMetaKey));
+            var indexedProjectRoot = db.GetMetaString(DbContext.IndexedProjectRootMetaKey);
+            if (!string.IsNullOrWhiteSpace(indexedProjectRoot)
+                && bool.TryParse(db.GetMetaString(DbContext.WorkspacePathCaseSensitiveMetaKey), out var pathCaseSensitive))
+            {
+                PathCasing.SeedFromWorkspace(indexedProjectRoot, ignoreCase: !pathCaseSensitive);
+            }
+
+            using var server = new LspServer(new DbReader(db), appVersion, jsonOptions, indexedProjectRoot);
             server.Run(Console.OpenStandardInput(), Console.OpenStandardOutput());
             return CommandExitCodes.Success;
         }

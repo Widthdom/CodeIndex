@@ -301,6 +301,72 @@ public class LspServerTests
     }
 
     [Fact]
+    public void HandleMessage_Definition_HonorsCaseInsensitiveWorkspaceCasing()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_definition_case_insensitive");
+        try
+        {
+            PathCasing.SeedFromWorkspace(projectRoot, ignoreCase: true);
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var sourcePath = Path.Combine(projectRoot, "src", "Foo.cs");
+            var requestPath = Path.Combine(projectRoot, "src", "foo.cs");
+            Directory.CreateDirectory(Path.GetDirectoryName(sourcePath)!);
+            var source = "class App { void Needle() { } void Call() { Needle(); } }\n";
+            File.WriteAllText(sourcePath, source);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Foo.cs", "csharp", source);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var request = CreateDefinitionRequest(
+                requestPath,
+                8,
+                0,
+                source.IndexOf("Needle();", StringComparison.Ordinal));
+
+            var response = server.HandleMessage(request);
+
+            Assert.NotNull(response);
+            Assert.NotEmpty(response!["result"]!.AsArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void HandleMessage_Definition_RejectsCaseVariantWhenWorkspaceCaseSensitive()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_definition_case_sensitive");
+        try
+        {
+            PathCasing.SeedFromWorkspace(projectRoot, ignoreCase: false);
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var sourcePath = Path.Combine(projectRoot, "src", "Foo.cs");
+            var requestPath = Path.Combine(projectRoot, "src", "foo.cs");
+            Directory.CreateDirectory(Path.GetDirectoryName(sourcePath)!);
+            var source = "class App { void Needle() { } void Call() { Needle(); } }\n";
+            File.WriteAllText(sourcePath, source);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Foo.cs", "csharp", source);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var request = CreateDefinitionRequest(
+                requestPath,
+                9,
+                0,
+                source.IndexOf("Needle();", StringComparison.Ordinal));
+
+            var response = server.HandleMessage(request);
+
+            Assert.NotNull(response);
+            Assert.Empty(response!["result"]!.AsArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void HandleMessage_Definition_ResolvesIndexedDocumentBeyondBasenameCandidateCap()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_definition_many_basenames");

@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Models;
 
@@ -18,6 +19,7 @@ internal sealed class LspServer : IDisposable
     private readonly string _version;
     private readonly JsonSerializerOptions _jsonOptions;
     private readonly string? _projectRoot;
+    private readonly StringComparison _pathStringComparison;
     private bool _shutdownRequested;
 
     public LspServer(DbReader reader, string version, JsonSerializerOptions jsonOptions, string? projectRoot = null)
@@ -26,6 +28,7 @@ internal sealed class LspServer : IDisposable
         _version = version;
         _jsonOptions = jsonOptions;
         _projectRoot = string.IsNullOrWhiteSpace(projectRoot) ? null : projectRoot;
+        _pathStringComparison = PathCasing.ComparisonFor(_projectRoot ?? Environment.CurrentDirectory);
     }
 
     public void Run(Stream input, Stream output)
@@ -158,7 +161,7 @@ internal sealed class LspServer : IDisposable
         if (indexedPath == null || !TryResolveIndexedFilePath(indexedPath, out var indexedFullPath))
             return null;
 
-        if (!string.Equals(resolvedPath, indexedFullPath, PathStringComparison))
+        if (!string.Equals(resolvedPath, indexedFullPath, _pathStringComparison))
             return null;
 
         if (!TryReadPositionLine(indexedFullPath, line, out var sourceLine))
@@ -234,7 +237,7 @@ internal sealed class LspServer : IDisposable
             }
 
             return projectRelativePath != null
-                && string.Equals(normalizedIndexed, projectRelativePath.Replace('\\', '/'), PathStringComparison);
+                && string.Equals(normalizedIndexed, projectRelativePath.Replace('\\', '/'), _pathStringComparison);
         }
 
         if (string.Equals(indexedPath, documentPath, StringComparison.Ordinal))
@@ -339,9 +342,6 @@ internal sealed class LspServer : IDisposable
             return false;
         }
     }
-
-    private static StringComparison PathStringComparison =>
-        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
 
     private JsonObject ToWorkspaceSymbol(SymbolResult symbol) => new()
     {
