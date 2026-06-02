@@ -1734,7 +1734,9 @@ Piping `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}` into
   a server-side ready signal can proceed without optimistic polling (#1780).
   MCP also defines `notifications/initialized` as a client-to-server
   notification; cdidx still accepts that direction as a no-op, and the
-  server-origin emission is intentionally limited to this compatibility signal.
+  compatibility signal is the only server-origin emission for non-HTTP
+  transports. HTTP sessions can also receive opt-in keep-alive notifications
+  on `/events` when `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S` is configured.
   On HTTP transport, out-of-band notifications are delivered only to connected
   `/events` SSE streams; POST-only clients receive the initialize response but
   no separate notification frame.
@@ -1822,8 +1824,9 @@ return `-32600`.
   response body (`200 OK` / `application/json; charset=utf-8`) or
   `204 No Content` for notifications. `GET /events` opens an independent
   `text/event-stream` subscription for future server→client frames; the
-  current server does not yet emit unsolicited frames, but a long-lived
-  event stream does not block normal POST requests. Non-POST verbs on `/` return
+  server emits no unsolicited frames unless keep-alive notifications are opted
+  in with `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S`. A long-lived event stream does not
+  block normal POST requests. Non-POST verbs on `/` return
   `405 Method Not Allowed`. Empty / whitespace bodies are treated like
   a closed stdio line and return `204 No Content` *without* killing the
   loop, so a misbehaving client cannot pin the server on a junk frame.
@@ -3114,7 +3117,7 @@ sequenceDiagram
 
 - `McpServer` が stdin/stdout を持ち、JSON-RPC 2.0 フレームを解析する。
 - レスポンス構築は `JsonSerializer.Serialize<T>(...)` ではなく、`System.Text.Json.Nodes.JsonObject` / `JsonArray` を**手組み**する。これが、トリミング済みバイナリでリフレクションベースのシリアライズが無効でも MCP パスが動き続ける理由。
-- `initialize` レスポンスは `protocolVersion`、`capabilities`、`serverInfo.name`、`serverInfo.version`（`ConsoleUi.LoadVersion()` — `version.json` が源）、および AI クライアントにツール選択を案内する長い `instructions` 文字列を返す。レスポンスを書き終えた後、サーバーはセッションごとに 1 回だけ互換性用の `notifications/initialized` ready signal を送るため、サーバー側の ready signal を待つクライアントも optimistic polling なしで進める（#1780）。MCP は `notifications/initialized` を client-to-server 通知としても定義しており、cdidx はその方向も no-op として受理する。server-origin emission はこの互換性 signal に限定する。HTTP transport では out-of-band 通知は接続済みの `/events` SSE stream にだけ配送され、POST のみのクライアントは initialize response だけを受け取り、別通知 frame は受け取らない。
+- `initialize` レスポンスは `protocolVersion`、`capabilities`、`serverInfo.name`、`serverInfo.version`（`ConsoleUi.LoadVersion()` — `version.json` が源）、および AI クライアントにツール選択を案内する長い `instructions` 文字列を返す。レスポンスを書き終えた後、サーバーはセッションごとに 1 回だけ互換性用の `notifications/initialized` ready signal を送るため、サーバー側の ready signal を待つクライアントも optimistic polling なしで進める（#1780）。MCP は `notifications/initialized` を client-to-server 通知としても定義しており、cdidx はその方向も no-op として受理する。非 HTTP transport では、この互換性 signal が唯一の server-origin emission です。HTTP session は `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S` を設定した場合、opt-in の keep-alive notification も `/events` で受け取れる。HTTP transport では out-of-band 通知は接続済みの `/events` SSE stream にだけ配送され、POST のみのクライアントは initialize response だけを受け取り、別通知 frame は受け取らない。
 - advertised capability には `tools`、`resources`、`prompts`、`logging` が含まれる。`logging` は MCP `notifications/message` を示し、`logging/setLevel` は `debug`、`info`、`notice`、`warning`、`error`、`critical`、`alert`、`emergency` を受け付ける。
 - `protocolVersion` は**ハードコードではなく交渉**で決まる（#1554）。サーバーは `McpServer.SupportedProtocolVersions`（新しい順: `2025-03-26`, `2024-11-05`）を保持し、`initialize` パラメータからクライアント要求バージョンを読み取って、対応集合にあればそれを返し（合意）、未指定／非文字列なら既定の最新バージョンに fallback し、対応外なら `error.data` に `requestedVersion` と `supportedVersions` を入れた JSON-RPC `-32602` で拒否する。これにより将来 MCP 仕様が改訂されても、wire format が黙ってずれるのではなく actionable な handshake 失敗として表面化する。配列を新バージョンで更新する際は `ProtocolVersion` を先頭エントリと揃えて意図的に bump する。
 - **認証ミドルウェア**（#1559）。`McpServer` はパース済み JSON-RPC リクエストごとに、メソッド抽出 *後*・dispatch *前* で `IMcpAuthenticator` を呼ぶ。既定の `LocalStdioAuthenticator` は permissive で（従来の stdio 動作を維持し、呼び出し元を `stdio` / `local` でタグ付けする）、`CDIDX_MCP_AUTH_TOKEN` を設定すると `TokenMcpAuthenticator` に切り替わる。`TokenMcpAuthenticator` は応答が必要な全リクエストに対し、`params.auth.token` が一致することを要求し、比較は `CryptographicOperations.FixedTimeEquals` による定数時間比較で行う。失敗は統一された JSON-RPC `-32001 "Unauthorized"` を返し（#1530 の sanitization 方針に従い、ワイヤでは未提示と不一致を区別しない）、`BuildAuthFailureLog` が詳細を stderr に書き出す。通知（`notifications/initialized`、`notifications/cancelled`）は応答もエラーコードも持たないため、ゲート *より前* で short-circuit する。このミドルウェアが将来 transport の差し替え seam になる — ネットワーク listener は別の `IMcpAuthenticator` を提供しつつ、`McpCallerIdentity`（`Source` + `Subject`）の形を保ち、監査ログ（#1562）から再利用できる。
