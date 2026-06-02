@@ -48,34 +48,38 @@ internal static class TestProjectHelper
         var lines = normalized.Split('\n');
         var lineCount = FileIndexer.CountPhysicalLines(content);
 
-        using var db = new DbContext(dbPath);
-        db.InitializeSchema();
-
-        var writer = new DbWriter(db.Connection);
-        var fileId = writer.UpsertFile(new FileRecord
+        using (var db = new DbContext(dbPath))
         {
-            Path = path,
-            Lang = lang,
-            Size = normalized.Length,
-            Lines = lineCount,
-            Modified = modified ?? new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
-            Checksum = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalized))).ToLowerInvariant(),
-        });
+            db.InitializeSchema();
 
-        writer.InsertChunks([
-            new ChunkRecord
+            var writer = new DbWriter(db.Connection);
+            var fileId = writer.UpsertFile(new FileRecord
             {
-                FileId = fileId,
-                ChunkIndex = 0,
-                StartLine = 1,
-                EndLine = lines.Length,
-                Content = normalized,
-            }
-        ]);
+                Path = path,
+                Lang = lang,
+                Size = normalized.Length,
+                Lines = lineCount,
+                Modified = modified ?? new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                Checksum = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalized))).ToLowerInvariant(),
+            });
 
-        var symbols = SymbolExtractor.Extract(fileId, lang, normalized, path);
-        writer.InsertSymbols(symbols);
-        writer.InsertReferences(ReferenceExtractor.Extract(fileId, lang, normalized, symbols));
+            writer.InsertChunks([
+                new ChunkRecord
+                {
+                    FileId = fileId,
+                    ChunkIndex = 0,
+                    StartLine = 1,
+                    EndLine = lines.Length,
+                    Content = normalized,
+                }
+            ]);
+
+            var symbols = SymbolExtractor.Extract(fileId, lang, normalized, path);
+            writer.InsertSymbols(symbols);
+            writer.InsertReferences(ReferenceExtractor.Extract(fileId, lang, normalized, symbols));
+        }
+
+        SqlitePoolCleanup.ClearPoolsForWindowsFileRelease();
     }
 
     internal static string RunGit(string workDir, params string[] args)
