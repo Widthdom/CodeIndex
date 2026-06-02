@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using CodeIndex.Cli;
 using CodeIndex.Mcp;
 
 namespace CodeIndex.Tests;
@@ -174,6 +175,81 @@ public class AuditLogSinkTests
         {
             if (File.Exists(path))
                 File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Constructor_OnUnixCreatesPrivateLogFile()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var path = Path.Combine(Path.GetTempPath(), $"cdidx_audit_private_{Guid.NewGuid():N}.jsonl");
+        try
+        {
+            using var sink = new AuditLogSink(path, AuditLogSink.DefaultMaxBytes, includeValues: false);
+
+            Assert.Equal(PrivateLogFile.PrivateFileMode, File.GetUnixFileMode(path));
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Record_OnUnixCreatesPrivateLogFileAfterRotation()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var path = Path.Combine(Path.GetTempPath(), $"cdidx_audit_private_rotation_{Guid.NewGuid():N}.jsonl");
+        var rotation1 = path + ".1";
+        try
+        {
+            using var sink = new AuditLogSink(path, AuditLogSink.MinMaxBytes, includeValues: true);
+            var payloadKey = new string('k', 32);
+            var bigEvent = new AuditLogSink.AuditEvent(
+                Timestamp: DateTimeOffset.UtcNow,
+                Tool: "search",
+                CallerName: "test",
+                CallerVersion: "1.0.0",
+                RequestId: "1",
+                ArgKeys: new[] { payloadKey },
+                ArgLengths: new[] { new KeyValuePair<string, int>(payloadKey, 5000) },
+                ArgValues: JsonNode.Parse($"{{\"{payloadKey}\":\"{new string('x', 5000)}\"}}"),
+                ResultCount: 0,
+                ElapsedMs: 1.0,
+                ErrorCode: 0,
+                ErrorType: null);
+            var smallEvent = new AuditLogSink.AuditEvent(
+                Timestamp: DateTimeOffset.UtcNow,
+                Tool: "ping",
+                CallerName: null,
+                CallerVersion: null,
+                RequestId: "2",
+                ArgKeys: Array.Empty<string>(),
+                ArgLengths: Array.Empty<KeyValuePair<string, int>>(),
+                ArgValues: null,
+                ResultCount: 0,
+                ElapsedMs: 0.5,
+                ErrorCode: 0,
+                ErrorType: null);
+
+            sink.Record(bigEvent);
+            sink.Record(smallEvent);
+
+            Assert.Equal(PrivateLogFile.PrivateFileMode, File.GetUnixFileMode(rotation1));
+            Assert.Equal(PrivateLogFile.PrivateFileMode, File.GetUnixFileMode(path));
+        }
+        finally
+        {
+            foreach (var p in new[] { path, rotation1, path + ".2" })
+            {
+                if (File.Exists(p))
+                    File.Delete(p);
+            }
         }
     }
 

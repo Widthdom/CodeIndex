@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using CodeIndex.Cli;
 using CodeIndex.Indexer;
 
 namespace CodeIndex.Mcp;
@@ -57,10 +58,11 @@ internal sealed class AuditLogSink : IDisposable
         // 構築時に append open を試行する。既存ディレクトリや書き込み不可ファイルなど
         // 設定不備を、ProgramRunner が「audit 有効で起動」と表示する前に検出する。
         // 後で Record() が握り潰すと操作者には audit 有効に見えるがログは空、となる。
-        using (var probe = new FileStream(_path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite))
+        using (var probe = PrivateLogFile.OpenAppend(_path, FileShare.ReadWrite))
         {
             _bytesWritten = probe.Length;
         }
+        PrivateLogFile.TrySetPrivatePermissions(_path);
     }
 
     /// <summary>Path the sink writes to (absolute, post normalisation).</summary>
@@ -102,7 +104,7 @@ internal sealed class AuditLogSink : IDisposable
                 // 1 レコードごとに open/write/close する。外部 `tail -F` の rotation 追従と
                 // rename 中のロック回避のため。ツール呼び出し頻度はループのホットパスではない
                 // ので open のコストは許容範囲。
-                using (var stream = new FileStream(_path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite))
+                using (var stream = PrivateLogFile.OpenAppend(_path, FileShare.ReadWrite))
                 {
                     stream.Write(encoded, 0, encoded.Length);
                     stream.Flush();
