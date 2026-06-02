@@ -7,6 +7,7 @@ using System.Text.RegularExpressions;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
+using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Indexer.Hooks;
 using CodeIndex.Models;
 
@@ -1909,6 +1910,8 @@ public partial class McpServer
             WorkspaceMetadataEnricher.Enrich(status, _dbPath, _dbPathExplicit);
             status.MacProfile = MacProfileDetector.DetectCurrent();
             status.GraphSupportedLanguages = ReferenceExtractor.GetSupportedLanguages().OrderBy(l => l).ToList();
+            ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(status.ProjectRoot);
+            status.Extractors = ExtractorPluginRegistry.GetStatusSnapshot();
             var postExtractionHooks = PostExtractionHookRunner.DiscoverDefault().Hooks;
             if (postExtractionHooks.Count > 0)
             {

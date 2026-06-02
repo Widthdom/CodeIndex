@@ -6,6 +6,7 @@ using System.Runtime.InteropServices;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
+using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
 
@@ -1651,6 +1652,51 @@ public class IndexCommandRunnerTests
         finally
         {
             DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_StatusJsonIncludesExtractorPluginDiagnostics()
+    {
+        var projectRoot = CreateTempProject();
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                var patternsDir = Path.Combine(projectRoot, ".cdidx", "patterns");
+                Directory.CreateDirectory(patternsDir);
+                File.WriteAllText(
+                    Path.Combine(patternsDir, "toydsl.yaml"),
+                    "language: \"toydsl\"\nextensions:\n  - extension: \".toy\"\npatterns:\n  - kind: \"class\"\n    regex: \"^entity (?<name>\\\\w+)\"\n");
+                File.WriteAllText(
+                    Path.Combine(patternsDir, "broken.yaml"),
+                    "language: \"broken\"\npatterns:\n  - kind: \"class\"\n    regex: \"(?<name>\"\n");
+                File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "class App { }\n");
+
+                var (exitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+                var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+                var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(CommandExitCodes.Success, statusExitCode);
+                var extractors = statusJson.GetProperty("extractors");
+                Assert.True(extractors.GetProperty("pattern_config_count").GetInt32() >= 1);
+                Assert.True(extractors.GetProperty("skipped_file_count").GetInt32() >= 1);
+                Assert.True(extractors.GetProperty("diagnostic_count").GetInt32() >= 1);
+                Assert.Equal(20, extractors.GetProperty("diagnostic_limit").GetInt32());
+                Assert.True(extractors.GetProperty("symbol_extractor_count").GetInt32() >= 1);
+                var diagnostic = Assert.Single(
+                    extractors.GetProperty("diagnostics").EnumerateArray(),
+                    item => item.GetProperty("path").GetString()?.EndsWith("broken.yaml", StringComparison.Ordinal) == true);
+                Assert.Equal("pattern", diagnostic.GetProperty("kind").GetString());
+                Assert.Equal("error", diagnostic.GetProperty("severity").GetString());
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                DeleteDirectory(projectRoot);
+            }
         }
     }
 

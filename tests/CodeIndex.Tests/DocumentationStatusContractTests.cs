@@ -28,6 +28,7 @@ public class DocumentationStatusContractTests
         "unknown_extension_files",
         "unknown_extension_files_truncated",
         "unknown_extension_file_path_limit",
+        "extractors",
         "path_case_sensitive",
         "mac_profile",
         "stale_after_seconds",

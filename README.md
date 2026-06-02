@@ -198,13 +198,15 @@ The documented `status --json` trust contract covers these fields:
 <tr><td><code>data_dir_mode</code></td><td><code>mac_profile</code></td><td><code>db_size_bytes</code></td><td><code>wal_size_bytes</code></td></tr>
 <tr><td><code>db_pragma_settings</code></td><td><code>symbols_by_language</code></td><td><code>process</code></td><td><code>last_index_run</code></td></tr>
 <tr><td><code>hooks</code></td><td><code>stale_after_seconds</code></td><td><code>index_age_seconds</code></td><td><code>degraded_reason</code></td></tr>
-<tr><td><code>recommended_action</code></td><td><code>alternative_action</code></td><td><code>mcp_session</code></td><td></td></tr>
+<tr><td><code>recommended_action</code></td><td><code>alternative_action</code></td><td><code>mcp_session</code></td><td><code>extractors</code></td></tr>
 </tbody>
 </table>
 
 When any readiness field is degraded, `degraded_root_cause` identifies the primary stable code and `readiness_degradations[]` lists every degraded field with `root_cause`, human `degraded_reason`, `recommended_action`, and `alternative_action`. `issues_table_available` reports physical table presence; use `file_issues_data_current` to decide whether `file_issues` rows are current for the index generation.
 
 After a current full-repository scan, `unknown_extension_file_count` reports how many skipped files had unmapped non-empty extensions, while `unknown_extension_files` lists up to `unknown_extension_file_path_limit` paths and `unknown_extension_files_truncated` marks when more paths exist.
+
+`extractors` reports runtime extractor plugin and pattern-config diagnostics, including loaded counts, skipped file counts, and a bounded diagnostics list for load failures.
 
 For MCP `status`, `mcp_session` is session-scoped diagnostic data rather than persisted index state. It includes `log_level`, `roots`, optional `client_info`, and optional `client_capabilities`.
 
@@ -455,13 +457,15 @@ upgrade / downgrade 後はインストール済み補完 script を再生成し�
 <tr><td><code>data_dir_mode</code></td><td><code>mac_profile</code></td><td><code>db_size_bytes</code></td><td><code>wal_size_bytes</code></td></tr>
 <tr><td><code>db_pragma_settings</code></td><td><code>symbols_by_language</code></td><td><code>process</code></td><td><code>last_index_run</code></td></tr>
 <tr><td><code>hooks</code></td><td><code>stale_after_seconds</code></td><td><code>index_age_seconds</code></td><td><code>degraded_reason</code></td></tr>
-<tr><td><code>recommended_action</code></td><td><code>alternative_action</code></td><td><code>mcp_session</code></td><td></td></tr>
+<tr><td><code>recommended_action</code></td><td><code>alternative_action</code></td><td><code>mcp_session</code></td><td><code>extractors</code></td></tr>
 </tbody>
 </table>
 
 readiness field のいずれかが degraded の場合、`degraded_root_cause` は primary の安定コードを示し、`readiness_degradations[]` は degraded な各 field と `root_cause`、人間向け `degraded_reason`、`recommended_action`、`alternative_action` を列挙します。`issues_table_available` は物理 table の有無を表し、`file_issues` 行が現在の index generation に対して current かどうかは `file_issues_data_current` を使って判定します。
 
 現行の全体 scan 後、`unknown_extension_file_count` は未知の非空拡張子で skip された件数を返し、`unknown_extension_files` は `unknown_extension_file_path_limit` 件までの path sample、`unknown_extension_files_truncated` は sample より多くの path があることを示します。
+
+`extractors` は extractor plugin と pattern config の runtime 診断で、読み込み済み件数、skip されたファイル数、読み込み失敗の上限付き diagnostics list を含みます。
 
 MCP `status` の `mcp_session` は永続化された index 状態ではなく、セッション単位の診断情報です。`log_level`、`roots`、任意の `client_info`、任意の `client_capabilities` を含みます。
 
