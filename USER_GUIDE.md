@@ -1355,6 +1355,15 @@ Example output:
 | `CDIDX_MCP_RATE_LIMIT_RPS` | Refill rate in tokens per second. Required to enable rate limiting; values that are missing, non-numeric, zero, negative, or non-finite (`Infinity`, `NaN`) leave the limiter disabled and emit a one-line warning on `stderr`. |
 | `CDIDX_MCP_RATE_LIMIT_BURST` | Bucket capacity (maximum burst). Optional. Defaults to `max(rps, 1)`. Invalid or non-finite values fall back to the default and emit a warning while leaving `rps` honored. |
 
+MCP response-size limits are bounded so environment overrides cannot disable the response guards:
+
+| Environment variable | Default | Maximum | Invalid value |
+|---|---:|---:|---|
+| `CDIDX_MCP_RESPONSE_MAX_BYTES` | `10485760` (10 MiB) | `67108864` (64 MiB) | Uses the default and emits a warning |
+| `CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES` | `1048576` (1 MiB) | `10485760` (10 MiB) | Uses the default and emits a warning |
+
+Values above the maximum are clamped with a warning. `status` reports effective response caps under `mcp.limits.max_response_bytes` and `mcp.limits.batch_response_bytes`.
+
 Caller identity is captured from the `clientInfo.name` (and `version` when present) of the MCP `initialize` request. Tool calls received before `initialize` are billed against an anonymous `"unknown"` bucket so an unidentified client cannot bypass the limiter. The captured caller is sticky for the lifetime of the session — once a named identity has been recorded, subsequent `initialize` calls under a different name are ignored (with a one-line `stderr` warning) so a long-lived stdio or networked session cannot reset its bucket mid-flight by re-identifying.
 
 Over-quota tool calls receive a structured JSON-RPC `-32000` error:
@@ -3466,6 +3475,15 @@ MCP ツールで catch-all まで突き抜けた例外（想定外の SQLite 例
 |---|---|
 | `CDIDX_MCP_RATE_LIMIT_RPS` | 1 秒あたりのトークン補充レート。レート制限を有効化するために必須。未設定・非数値・0 以下・非有限値（`Infinity`/`NaN`）の場合は無効のまま、1 行の警告を `stderr` に出力します。 |
 | `CDIDX_MCP_RATE_LIMIT_BURST` | バケット容量（最大バースト）。任意。既定は `max(rps, 1)`。不正値・非有限値は既定にフォールバックし警告を出力。`rps` はそのまま尊重されます。 |
+
+MCP のレスポンスサイズ上限は、環境変数 override で guard が実質無効化されないよう上限付きです:
+
+| 環境変数 | 既定 | 最大 | 不正値 |
+|---|---:|---:|---|
+| `CDIDX_MCP_RESPONSE_MAX_BYTES` | `10485760` (10 MiB) | `67108864` (64 MiB) | 警告を出して既定値を使用 |
+| `CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES` | `1048576` (1 MiB) | `10485760` (10 MiB) | 警告を出して既定値を使用 |
+
+最大値を超える値は警告付きでクランプされます。`status` は有効なレスポンス上限を `mcp.limits.max_response_bytes` と `mcp.limits.batch_response_bytes` に返します。
 
 呼び出し元 ID は MCP `initialize` リクエストの `clientInfo.name`（および `version` があれば併記）から取得します。`initialize` 前に届いたツール呼び出しは匿名 `"unknown"` バケットで計量され、未識別クライアントによる制限回避を防ぎます。取得済みの caller はセッション中 sticky で、名前付き ID が一度記録されると以降の別名 `initialize` は無視され（`stderr` に 1 行警告）、長期 stdio / 通信セッションが途中で再 initialize してバケットをリセットする経路を塞ぎます。
 

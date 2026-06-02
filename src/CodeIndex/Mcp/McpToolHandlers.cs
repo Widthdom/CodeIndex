@@ -19,6 +19,7 @@ namespace CodeIndex.Mcp;
 public partial class McpServer
 {
     private const int DefaultBatchQueryResponseByteLimit = MaxLineByteLength;
+    internal const int MaxBatchQueryResponseByteLimit = 10 * 1024 * 1024;
     private const int DefaultExcerptOutputByteLimit = MaxLineByteLength;
     private const string BatchQueryResponseByteLimitEnvVar = "CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES";
     internal const int MaxMcpArrayFilterCount = 100;
@@ -1970,6 +1971,9 @@ public partial class McpServer
                     ["max_request_characters"] = MaxLineCharacterCount,
                     ["max_request_bytes"] = MaxLineByteLength,
                     ["max_response_bytes"] = GetMaxResponseBytes(),
+                    ["max_configured_response_bytes"] = MaxConfiguredResponseBytes,
+                    ["batch_response_bytes"] = GetBatchQueryResponseByteLimit(),
+                    ["max_batch_response_bytes"] = MaxBatchQueryResponseByteLimit,
                     ["max_json_depth"] = MaxJsonDepth,
                     ["max_batch_requests"] = MaxBatchRequestCount,
                 }
@@ -2729,12 +2733,11 @@ public partial class McpServer
     }
 
     private static int GetBatchQueryResponseByteLimit()
-    {
-        var configured = Environment.GetEnvironmentVariable(BatchQueryResponseByteLimitEnvVar);
-        if (int.TryParse(configured, out var limit) && limit > 0)
-            return limit;
-        return DefaultBatchQueryResponseByteLimit;
-    }
+        => ReadPositiveIntEnvironmentLimit(
+            BatchQueryResponseByteLimitEnvVar,
+            DefaultBatchQueryResponseByteLimit,
+            MaxBatchQueryResponseByteLimit,
+            "MCP batch_query response byte limit");
 
     private int EstimateJsonUtf8Bytes(JsonNode node) =>
         Encoding.UTF8.GetByteCount(node.ToJsonString(_jsonOptions));

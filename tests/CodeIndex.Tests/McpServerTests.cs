@@ -5197,6 +5197,27 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_Status_ReportsResponseByteLimitCaps()
+    {
+        using var env = EnvironmentVariableScope.Capture(
+            "CDIDX_MCP_RESPONSE_MAX_BYTES",
+            "CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES");
+        env.Set("CDIDX_MCP_RESPONSE_MAX_BYTES", int.MaxValue.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        env.Set("CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES", int.MaxValue.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+        using var server = new McpServer(_dbPath, "1.0", dbPathExplicit: true);
+        var response = server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status"}}""")!)!;
+
+        var mcp = response["result"]!["structuredContent"]!["mcp"]!;
+        var limits = mcp["limits"]!;
+        Assert.Equal(McpServer.MaxConfiguredResponseBytes, limits["max_response_bytes"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxConfiguredResponseBytes, limits["max_configured_response_bytes"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxBatchQueryResponseByteLimit, limits["batch_response_bytes"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxBatchQueryResponseByteLimit, limits["max_batch_response_bytes"]!.GetValue<int>());
+    }
+
+    [Fact]
     public async Task ProcessFrameAsync_BatchResponseOverByteLimit_ReturnsStructuredError()
     {
         using var env = EnvironmentVariableScope.Capture("CDIDX_MCP_RESPONSE_MAX_BYTES");
@@ -6764,6 +6785,19 @@ public class McpServerTests : IDisposable
         {
             Environment.SetEnvironmentVariable("CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES", previous);
         }
+    }
+
+    [Fact]
+    public void ToolsCall_BatchQuery_ClampsTooLargeResponseLimitEnvironment()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES");
+        env.Set("CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES", int.MaxValue.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[{"tool":"ping"}]}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var metadata = response["result"]!["structuredContent"]!["metadata"]!;
+        Assert.Equal(McpServer.MaxBatchQueryResponseByteLimit, metadata["response_byte_limit"]!.GetValue<int>());
     }
 
     [Fact]
