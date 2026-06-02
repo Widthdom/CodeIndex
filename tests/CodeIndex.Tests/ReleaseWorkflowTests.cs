@@ -147,6 +147,119 @@ public class ReleaseWorkflowTests
     }
 
     [Fact]
+    public void PackageNormalizer_RejectsPackageThatExceedsEntryCountLimit()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizer_RejectsPackageThatExceedsEntryCountLimit));
+        try
+        {
+            var packagePath = Path.Combine(projectRoot, "too-many-entries.nupkg");
+            CreatePackageWithEntries(
+                packagePath,
+                ("package/services/metadata/core-properties/random.psmdcp", ""),
+                ("payload.txt", "ok"));
+
+            var limits = PackageNormalizeLimits.Default with { MaxEntryCount = 1 };
+
+            var exception = Assert.Throws<InvalidOperationException>(() => PackageCorePropertiesNormalizer.NormalizePackage(packagePath, limits));
+            Assert.Contains("2 ZIP entries", exception.Message);
+            Assert.Contains("limit of 1", exception.Message);
+            Assert.False(File.Exists(packagePath + ".normalize-tmp"));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PackageNormalizer_RejectsEntryThatExceedsPerEntryLimit()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizer_RejectsEntryThatExceedsPerEntryLimit));
+        try
+        {
+            var packagePath = Path.Combine(projectRoot, "large-entry.nupkg");
+            CreatePackageWithEntries(
+                packagePath,
+                ("package/services/metadata/core-properties/random.psmdcp", ""),
+                ("payload.bin", "123456"));
+
+            var limits = PackageNormalizeLimits.Default with
+            {
+                MaxEntryUncompressedBytes = 5,
+                MaxTotalUncompressedBytes = 100,
+            };
+
+            var exception = Assert.Throws<InvalidOperationException>(() => PackageCorePropertiesNormalizer.NormalizePackage(packagePath, limits));
+            Assert.Contains("payload.bin", exception.Message);
+            Assert.Contains("per-entry limit of 5 bytes", exception.Message);
+            Assert.False(File.Exists(packagePath + ".normalize-tmp"));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PackageNormalizer_RejectsPackageThatExceedsTotalUncompressedLimit()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizer_RejectsPackageThatExceedsTotalUncompressedLimit));
+        try
+        {
+            var packagePath = Path.Combine(projectRoot, "large-total.nupkg");
+            CreatePackageWithEntries(
+                packagePath,
+                ("package/services/metadata/core-properties/random.psmdcp", ""),
+                ("a.txt", "1234"),
+                ("b.txt", "5678"));
+
+            var limits = PackageNormalizeLimits.Default with
+            {
+                MaxEntryUncompressedBytes = 10,
+                MaxTotalUncompressedBytes = 6,
+            };
+
+            var exception = Assert.Throws<InvalidOperationException>(() => PackageCorePropertiesNormalizer.NormalizePackage(packagePath, limits));
+            Assert.Contains("b.txt", exception.Message);
+            Assert.Contains("uncompressed size exceed the limit of 6 bytes", exception.Message);
+            Assert.False(File.Exists(packagePath + ".normalize-tmp"));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PackageNormalizer_RejectsXmlEntryThatExceedsTextLimit()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizer_RejectsXmlEntryThatExceedsTextLimit));
+        try
+        {
+            var packagePath = Path.Combine(projectRoot, "large-xml.nupkg");
+            CreatePackageWithEntries(
+                packagePath,
+                ("package/services/metadata/core-properties/random.psmdcp", ""),
+                ("[Content_Types].xml", "123456"));
+
+            var limits = PackageNormalizeLimits.Default with
+            {
+                MaxEntryUncompressedBytes = 100,
+                MaxTotalUncompressedBytes = 100,
+                MaxXmlTextChars = 5,
+            };
+
+            var exception = Assert.Throws<InvalidOperationException>(() => PackageCorePropertiesNormalizer.NormalizePackage(packagePath, limits));
+            Assert.Contains("[Content_Types].xml", exception.Message);
+            Assert.Contains("text limit of 5 characters", exception.Message);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void ReleaseWorkflow_PublishesOfficialContainerImage()
     {
         var root = GetRepositoryRoot();
@@ -210,6 +323,13 @@ public class ReleaseWorkflowTests
             <?xml version="1.0" encoding="utf-8"?>
             <coreProperties xmlns="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" />
             """);
+    }
+
+    private static void CreatePackageWithEntries(string packagePath, params (string EntryName, string Content)[] entries)
+    {
+        using var archive = ZipFile.Open(packagePath, ZipArchiveMode.Create);
+        foreach (var entry in entries)
+            WriteZipEntry(archive, entry.EntryName, entry.Content);
     }
 
     private static void WriteZipEntry(ZipArchive archive, string entryName, string content)

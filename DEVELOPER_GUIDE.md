@@ -160,6 +160,10 @@ part name on each pack run; the normalizer rewrites that part to
 matching content-type and relationship references, and gives ZIP entries stable
 timestamps. This is the package reproducibility boundary for `.nupkg` and
 `.snupkg` archives (#2756).
+Before rewriting, the normalizer rejects packages with more than 4096 ZIP
+entries, any entry above 128 MiB uncompressed, total uncompressed content above
+512 MiB, or XML reference text above 16 MiB so crafted packages cannot force
+unbounded normalization work (#2892).
 
 When you intentionally update a dependency (or add a new direct `PackageReference`), regenerate the lock files locally and commit the diff in the same change:
 
@@ -2048,6 +2052,10 @@ release の `dotnet publish`（RID ごと）と `dotnet pack`（NuGet パッケ�
 `package/services/metadata/core-properties/core-properties.psmdcp` に書き換え、
 対応する content-type / relationship 参照も更新し、ZIP entry timestamp を固定します。
 これが `.nupkg` / `.snupkg` archive の package 再現性境界です (#2756)。
+書き換え前に、normalizer は 4096 を超える ZIP entry、128 MiB を超える
+uncompressed entry、512 MiB を超える合計 uncompressed content、または
+16 MiB を超える XML 参照テキストを持つ package を拒否し、細工された
+package が無制限の normalize 作業を強制できないようにします (#2892)。
 
 依存を意図的に更新する（あるいは直接 `PackageReference` を追加する）場合は、ローカルで lock ファイルを再生成し、同じ変更でコミットしてください:
 
