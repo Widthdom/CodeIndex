@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Collections;
 using System.Reflection;
+using System.Text.RegularExpressions;
 using System.Text.Json;
 using CodeIndex.Indexer;
 using CodeIndex.Indexer.Extensibility;
@@ -22,6 +23,45 @@ public class SymbolExtractorTests
 
         Assert.Throws<OperationCanceledException>(() =>
             SymbolExtractor.Extract(1, "csharp", "public class App { }", cancellationToken: cancellation.Token));
+    }
+
+    [Fact]
+    public void BuiltInSymbolRegexes_HaveBoundedMatchTimeouts()
+    {
+        var regexes = EnumerateStaticRegexValues(
+            typeof(SymbolExtractor).Assembly.GetTypes().Where(IsSymbolRegexOwnerType))
+            .ToList();
+
+        Assert.NotEmpty(regexes);
+
+        var infiniteTimeouts = regexes
+            .Where(item => item.Regex.MatchTimeout == Regex.InfiniteMatchTimeout)
+            .Select(item => item.Path)
+            .ToList();
+
+        Assert.True(
+            infiniteTimeouts.Count == 0,
+            "Built-in symbol regexes must have explicit match timeouts: " + string.Join(", ", infiniteTimeouts));
+    }
+
+    [Fact]
+    public void Extract_BuiltInSymbolRegexes_AdversarialLongLinesDoNotThrow()
+    {
+        var typeScriptLine = "export const Component = React.memo<" + new string('A', 20000) + new string('<', 2000) + new string('>', 2000) + ">(value);";
+        var cssLine = ":root { --" + new string('a', 50000) + ": " + new string('(', 2000) + "; }";
+
+        var stopwatch = Stopwatch.StartNew();
+        var exception = Record.Exception(() =>
+        {
+            SymbolExtractor.Extract(1, "typescript", typeScriptLine);
+            SymbolExtractor.Extract(2, "css", cssLine);
+        });
+        stopwatch.Stop();
+
+        Assert.Null(exception);
+        Assert.True(
+            stopwatch.Elapsed < TimeSpan.FromSeconds(10),
+            $"Adversarial symbol extraction took {stopwatch.Elapsed}.");
     }
 
     [Fact]
@@ -25747,6 +25787,102 @@ public class SymbolExtractorTests
         finally
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    private static bool IsSymbolRegexOwnerType(Type type) =>
+        type.Namespace == "CodeIndex.Indexer"
+        && (type.Name == "SymbolExtractor" || type.Name.EndsWith("SymbolNameNormalizer", StringComparison.Ordinal));
+
+    private static IEnumerable<(string Path, Regex Regex)> EnumerateStaticRegexValues(IEnumerable<Type> types)
+    {
+        foreach (var type in types)
+        {
+            foreach (var field in type.GetFields(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic))
+            {
+                object? value;
+                try
+                {
+                    value = field.GetValue(null);
+                }
+                catch (TargetInvocationException)
+                {
+                    throw;
+                }
+
+                foreach (var item in EnumerateRegexValues(value, $"{type.Name}.{field.Name}", new HashSet<object>(ReferenceEqualityComparer.Instance)))
+                    yield return item;
+            }
+        }
+    }
+
+    private static IEnumerable<(string Path, Regex Regex)> EnumerateRegexValues(object? value, string path, HashSet<object> seen)
+    {
+        if (value is null)
+            yield break;
+
+        if (value is Regex regex)
+        {
+            yield return (path, regex);
+            yield break;
+        }
+
+        if (value is string or Type or MemberInfo or Delegate)
+            yield break;
+
+        var valueType = value.GetType();
+        if (valueType.IsPrimitive || valueType.IsEnum)
+            yield break;
+
+        if (!valueType.IsValueType && !seen.Add(value))
+            yield break;
+
+        if (value is IEnumerable enumerable)
+        {
+            var index = 0;
+            foreach (var item in enumerable)
+            {
+                foreach (var nested in EnumerateRegexValues(item, $"{path}[{index}]", seen))
+                    yield return nested;
+                index++;
+            }
+
+            yield break;
+        }
+
+        foreach (var field in valueType.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+        {
+            object? child;
+            try
+            {
+                child = field.GetValue(value);
+            }
+            catch (TargetInvocationException)
+            {
+                continue;
+            }
+
+            foreach (var nested in EnumerateRegexValues(child, $"{path}.{field.Name}", seen))
+                yield return nested;
+        }
+
+        foreach (var property in valueType.GetProperties(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+        {
+            if (property.GetIndexParameters().Length != 0)
+                continue;
+
+            object? child;
+            try
+            {
+                child = property.GetValue(value);
+            }
+            catch (TargetInvocationException)
+            {
+                continue;
+            }
+
+            foreach (var nested in EnumerateRegexValues(child, $"{path}.{property.Name}", seen))
+                yield return nested;
         }
     }
 

@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.RegularExpressions;
+using Regex = CodeIndex.Indexer.BoundedRegex;
 using CodeIndex.Database;
 
 namespace CodeIndex.Indexer;
