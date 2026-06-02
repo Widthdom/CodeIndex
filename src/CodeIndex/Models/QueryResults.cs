@@ -114,6 +114,14 @@ public class SymbolHotspotResult
     public double ReferenceScore { get; set; }
 }
 
+public class FileHotspotResult
+{
+    public string Path { get; set; } = string.Empty;
+    public string? Lang { get; set; }
+    public int ReferenceCount { get; set; }
+    public int SymbolCount { get; set; }
+}
+
 public class FileResult
 {
     [JsonPropertyName("api_version")]

@@ -1861,6 +1861,88 @@ public partial class DbReader
     public List<SymbolHotspotResult> GetSymbolHotspots(int limit, string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)
     {
         if (!_hasReferencesTable) return [];
+        var query = BuildSymbolHotspotRowsQuery(kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters);
+        var sql = query.Sql + @"
+            SELECT gr.name, rc.ref_count, rc.ref_score,
+                   gr.kind, gr.path, gr.lang, gr.line,
+                   gr.visibility, gr.container_name
+            FROM grouped_rows gr
+            JOIN reference_counts rc ON rc.symbol_id = gr.symbol_id
+            WHERE rc.ref_count > 0
+            ORDER BY rc.ref_score DESC,
+                     rc.ref_count DESC,
+                     gr.path COLLATE BINARY ASC,
+                     gr.line ASC,
+                     gr.name COLLATE BINARY ASC,
+                     gr.kind COLLATE BINARY ASC,
+                     gr.symbol_id ASC
+            LIMIT @limit";
+
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = sql;
+        AddSymbolHotspotParameters(cmd, query, limit, kind, lang, pathPatterns, excludePathPatterns, visibilityFilters, excludeVisibilityFilters);
+
+        var results = new List<SymbolHotspotResult>();
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+        {
+            results.Add(new SymbolHotspotResult
+            {
+                Symbol = new SymbolResult
+                {
+                    Name = reader.GetString(0),
+                    Kind = reader.GetString(3),
+                    Path = reader.GetString(4),
+                    Lang = GetNullableString(reader, 5),
+                    Line = reader.GetInt32(6),
+                    Visibility = GetNullableString(reader, 7),
+                    ContainerName = GetNullableString(reader, 8),
+                },
+                ReferenceCount = reader.GetInt32(1),
+                ReferenceScore = reader.GetDouble(2),
+            });
+        }
+        return results;
+    }
+
+    public List<FileHotspotResult> GetFileSymbolHotspots(int limit, string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)
+    {
+        if (!_hasReferencesTable) return [];
+        var query = BuildSymbolHotspotRowsQuery(kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters);
+        var sql = query.Sql + @"
+            SELECT gr.path,
+                   gr.lang,
+                   SUM(rc.ref_count) AS ref_count,
+                   COUNT(*) AS symbol_count
+            FROM grouped_rows gr
+            JOIN reference_counts rc ON rc.symbol_id = gr.symbol_id
+            WHERE rc.ref_count > 0
+            GROUP BY gr.path, gr.lang
+            ORDER BY ref_count DESC,
+                     gr.path COLLATE BINARY ASC
+            LIMIT @limit";
+
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = sql;
+        AddSymbolHotspotParameters(cmd, query, limit, kind, lang, pathPatterns, excludePathPatterns, visibilityFilters, excludeVisibilityFilters);
+
+        var results = new List<FileHotspotResult>();
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+        {
+            results.Add(new FileHotspotResult
+            {
+                Path = reader.GetString(0),
+                Lang = GetNullableString(reader, 1),
+                ReferenceCount = reader.GetInt32(2),
+                SymbolCount = reader.GetInt32(3),
+            });
+        }
+        return results;
+    }
+
+    private SymbolHotspotRowsQuery BuildSymbolHotspotRowsQuery(string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<string>? visibilityFilters, IReadOnlyList<string>? excludeVisibilityFilters)
+    {
         var containerNameSql = GetSymbolColumnSql("container_name");
         var containerQualifiedNameSql = GetSymbolColumnSql("container_qualified_name");
         var familyKeySql = GetSymbolColumnSql("family_key");
@@ -1927,8 +2009,7 @@ public partial class DbReader
                 JOIN files f ON s.file_id = f.id
                 WHERE s.kind NOT IN ('import', 'namespace')" + csharpFunctionDefinitionGateSql;
 
-        // Restrict to graph-supported languages only / グラフ対応言語のみに制限
-        var graphLangs = ReferenceExtractor.GetSupportedLanguages();
+        var graphLangs = ReferenceExtractor.GetSupportedLanguages().ToList();
         if (lang != null)
             sql += SymbolLanguageFileIdFilter;
         else
@@ -2186,61 +2267,29 @@ public partial class DbReader
                   ON crc.logical_target_key = gr.logical_target_key
                  AND crc.name = gr.name
                  AND crc.kind = gr.kind
-            )
-            SELECT gr.name, rc.ref_count, rc.ref_score,
-                   gr.kind, gr.path, gr.lang, gr.line,
-                   gr.visibility, gr.container_name
-            FROM grouped_rows gr
-            JOIN reference_counts rc ON rc.symbol_id = gr.symbol_id
-            WHERE rc.ref_count > 0
-            ORDER BY rc.ref_score DESC,
-                     rc.ref_count DESC,
-                     gr.path COLLATE BINARY ASC,
-                     gr.line ASC,
-                     gr.name COLLATE BINARY ASC,
-                     gr.kind COLLATE BINARY ASC,
-                     gr.symbol_id ASC
-            LIMIT @limit";
+            )";
+        return new SymbolHotspotRowsQuery(sql, graphLangs, hotspotFamilyLangs);
+    }
 
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = sql;
-        cmd.Parameters.AddWithValue("@limit", limit);
+    private static void AddSymbolHotspotParameters(SqliteCommand command, SymbolHotspotRowsQuery query, int limit, string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, IReadOnlyList<string>? visibilityFilters, IReadOnlyList<string>? excludeVisibilityFilters)
+    {
+        command.Parameters.AddWithValue("@limit", limit);
         if (lang != null)
-            cmd.Parameters.AddWithValue("@lang", lang);
+            command.Parameters.AddWithValue("@lang", lang);
         else
         {
-            var langList = graphLangs.ToList();
-            for (int i = 0; i < langList.Count; i++)
-                cmd.Parameters.AddWithValue($"@gl{i}", langList[i]);
+            for (int i = 0; i < query.GraphLanguages.Count; i++)
+                command.Parameters.AddWithValue($"@gl{i}", query.GraphLanguages[i]);
         }
-        if (kind != null) cmd.Parameters.AddWithValue("@kind", kind);
-        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
-        AddVisibilityFilterParameters(cmd, visibilityFilters, excludeVisibilityFilters);
-        for (int i = 0; i < hotspotFamilyLangs.Count; i++)
-            cmd.Parameters.AddWithValue($"@hotspotFamilyLang{i}", hotspotFamilyLangs[i]);
-
-        var results = new List<SymbolHotspotResult>();
-        using var reader = cmd.ExecuteTrackedReader();
-        while (reader.TrackedRead())
-        {
-            results.Add(new SymbolHotspotResult
-            {
-                Symbol = new SymbolResult
-                {
-                    Name = reader.GetString(0),
-                    Kind = reader.GetString(3),
-                    Path = reader.GetString(4),
-                    Lang = GetNullableString(reader, 5),
-                    Line = reader.GetInt32(6),
-                    Visibility = GetNullableString(reader, 7),
-                    ContainerName = GetNullableString(reader, 8),
-                },
-                ReferenceCount = reader.GetInt32(1),
-                ReferenceScore = reader.GetDouble(2),
-            });
-        }
-        return results;
+        if (kind != null)
+            command.Parameters.AddWithValue("@kind", kind);
+        AddPathFilterParameters(command, pathPatterns, excludePathPatterns);
+        AddVisibilityFilterParameters(command, visibilityFilters, excludeVisibilityFilters);
+        for (int i = 0; i < query.HotspotFamilyLanguages.Count; i++)
+            command.Parameters.AddWithValue($"@hotspotFamilyLang{i}", query.HotspotFamilyLanguages[i]);
     }
+
+    private sealed record SymbolHotspotRowsQuery(string Sql, List<string> GraphLanguages, List<string> HotspotFamilyLanguages);
 
     /// <summary>
     /// Return grouped hotspot rows collapsed by (name, kind) after the full filtered site set

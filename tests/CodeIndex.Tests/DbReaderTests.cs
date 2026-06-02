@@ -3684,6 +3684,45 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetFileSymbolHotspots_GroupsByPathAndAppliesLimit()
+    {
+        InsertIndexedFile("src/file_hotspot_one.py", "python",
+            "def AlphaFileHotspot():\n    return True\n\n" +
+            "def BetaFileHotspot():\n    return True\n\n" +
+            "def use_one():\n    AlphaFileHotspot()\n    AlphaFileHotspot()\n    BetaFileHotspot()\n");
+        InsertIndexedFile("src/file_hotspot_two.py", "python",
+            "def GammaFileHotspot():\n    return True\n\n" +
+            "def use_two():\n    GammaFileHotspot()\n    GammaFileHotspot()\n");
+        InsertIndexedFile("src/file_hotspot_three.py", "python",
+            "def DeltaFileHotspot():\n    return True\n\n" +
+            "def use_three():\n    DeltaFileHotspot()\n");
+
+        var results = _reader.GetFileSymbolHotspots(
+            limit: 2,
+            kind: "function",
+            lang: "python",
+            pathPatterns: ["src/file_hotspot_"],
+            excludePathPatterns: null,
+            excludeTests: false);
+
+        Assert.Collection(results,
+            first =>
+            {
+                Assert.Equal("src/file_hotspot_one.py", first.Path);
+                Assert.Equal("python", first.Lang);
+                Assert.Equal(3, first.ReferenceCount);
+                Assert.Equal(2, first.SymbolCount);
+            },
+            second =>
+            {
+                Assert.Equal("src/file_hotspot_two.py", second.Path);
+                Assert.Equal("python", second.Lang);
+                Assert.Equal(2, second.ReferenceCount);
+                Assert.Equal(1, second.SymbolCount);
+            });
+    }
+
+    [Fact]
     public void GetSymbolHotspots_KeepsCrossFileCountsForSameContainerOverloadFamily()
     {
         InsertIndexedFile("src/api.cs", "csharp",

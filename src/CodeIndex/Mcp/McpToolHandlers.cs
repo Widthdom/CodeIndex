@@ -3188,33 +3188,19 @@ public partial class McpServer
 
         return WithDbReader(id, args, reader =>
         {
-            var results = reader.GetSymbolHotspots(groupBy == "file" ? int.MaxValue : limit, kind, lang, pathPatterns, excludePaths, excludeTests);
+            var fileResults = groupBy == "file"
+                ? reader.GetFileSymbolHotspots(limit, kind, lang, pathPatterns, excludePaths, excludeTests)
+                : null;
+            var results = fileResults == null
+                ? reader.GetSymbolHotspots(limit, kind, lang, pathPatterns, excludePaths, excludeTests)
+                : [];
             var hotspotSignal = reader.GetHotspotFamilySignal(lang);
             var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests);
             var zeroResultSqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignal(
                 baseSqlGraphSignal,
                 reader.ScopeMayIncludeSqlSymbols(kind, lang, pathPatterns, excludePaths, excludeTests));
-            var fileResults = groupBy == "file"
-                ? results
-                    .GroupBy(row => row.Symbol.Path, StringComparer.Ordinal)
-                    .Select(group =>
-                    {
-                        var first = group.First();
-                        return new
-                        {
-                            path = first.Symbol.Path,
-                            lang = first.Symbol.Lang,
-                            reference_count = group.Sum(row => row.ReferenceCount),
-                            symbol_count = group.Count(),
-                        };
-                    })
-                    .OrderByDescending(row => row.reference_count)
-                    .ThenBy(row => row.path, StringComparer.Ordinal)
-                    .Take(limit)
-                    .ToList()
-                : null;
             var resultLangs = fileResults != null
-                ? fileResults.Select(result => result.lang)
+                ? fileResults.Select(result => result.Lang)
                 : results.Select(result => result.Symbol.Lang);
             var visibleCount = fileResults?.Count ?? results.Count;
             var sqlGraphSignal = visibleCount == 0
@@ -3231,10 +3217,10 @@ public partial class McpServer
                 {
                     hotspots.Add(new JsonObject
                     {
-                        ["path"] = result.path,
-                        ["lang"] = result.lang,
-                        ["reference_count"] = result.reference_count,
-                        ["symbol_count"] = result.symbol_count,
+                        ["path"] = result.Path,
+                        ["lang"] = result.Lang,
+                        ["reference_count"] = result.ReferenceCount,
+                        ["symbol_count"] = result.SymbolCount,
                     });
                 }
                 hotspotsNode = hotspots;

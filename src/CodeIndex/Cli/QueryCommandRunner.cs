@@ -4241,24 +4241,7 @@ public static class QueryCommandRunner
 
             if (groupBy == HotspotsGroupedByFile)
             {
-                var symbolRows = reader.GetSymbolHotspots(int.MaxValue, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters);
-                var fileResults = symbolRows
-                    .GroupBy(row => row.Symbol.Path, StringComparer.Ordinal)
-                    .Select(group =>
-                    {
-                        var first = group.First();
-                        return new
-                        {
-                            Path = first.Symbol.Path,
-                            Lang = first.Symbol.Lang,
-                            ReferenceCount = group.Sum(row => row.ReferenceCount),
-                            SymbolCount = group.Count(),
-                        };
-                    })
-                    .OrderByDescending(row => row.ReferenceCount)
-                    .ThenBy(row => row.Path, StringComparer.Ordinal)
-                    .Take(options.Limit)
-                    .ToList();
+                var fileResults = reader.GetFileSymbolHotspots(options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters);
                 var effectiveSqlGraphSignal = fileResults.Count == 0
                     ? zeroResultSqlGraphSignal
                     : NarrowSqlGraphContractSignalByLanguages(baseSqlGraphSignal, fileResults.Select(result => result.Lang), options.Lang);
