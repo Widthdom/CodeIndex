@@ -4829,6 +4829,42 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GraphReaders_QualifiedMemberLeafFallbackRequiresUniqueLeaf_Issue2819()
+    {
+        InsertIndexedFile("src/issue2819/AmbiguousLeaf.cs", "csharp",
+            """
+            namespace Issue2819;
+
+            public sealed class TargetTransport
+            {
+                public void RunEventStreamAsync() { }
+            }
+
+            public sealed class OtherTransport
+            {
+                public void RunEventStreamAsync() { }
+
+                public void HandleOther()
+                {
+                    RunEventStreamAsync();
+                }
+            }
+            """);
+
+        Assert.Empty(_reader.SearchReferences(
+            "TargetTransport.RunEventStreamAsync",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["issue2819/AmbiguousLeaf"]));
+
+        Assert.Empty(_reader.GetCallers(
+            "TargetTransport.RunEventStreamAsync",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["issue2819/AmbiguousLeaf"]));
+    }
+
+    [Fact]
     public void GraphReaders_ExactPrefersExactCaseOverFoldSibling()
     {
         InsertIndexedFile("src/a_case.py", "python",

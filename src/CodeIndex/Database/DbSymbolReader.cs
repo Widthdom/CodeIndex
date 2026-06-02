@@ -310,7 +310,11 @@ public partial class DbReader
             return false;
 
         var matches = SearchSymbols(query, 2, kind: null, lang, pathPatterns: null, excludePathPatterns: null, excludeTests, since: null, exact: false);
-        return matches.Count == 1;
+        if (matches.Count != 1)
+            return false;
+
+        var leafMatches = SearchSymbols(SqlNameResolver.GetLeafName(query), 2, kind: null, lang, pathPatterns: null, excludePathPatterns: null, excludeTests, since: null, exact: true);
+        return leafMatches.Count == 1;
     }
 
     private static string BuildQualifiedContextMatchSql(string contextSql, string columnSql, bool folded, bool like)
