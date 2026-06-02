@@ -52,6 +52,7 @@ public static class PackageCorePropertiesNormalizer
 
             using var destinationStream = File.Open(tempPath, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None);
             using var destinationArchive = new ZipArchive(destinationStream, ZipArchiveMode.Create, leaveOpen: false);
+            var readBudget = new PackageNormalizeReadBudget(limits);
             var usedNames = new HashSet<string>(StringComparer.Ordinal);
 
             foreach (var sourceEntry in sourceArchive.Entries)
@@ -67,7 +68,8 @@ public static class PackageCorePropertiesNormalizer
                 destinationEntry.LastWriteTime = StableZipTimestamp;
                 destinationEntry.ExternalAttributes = sourceEntry.ExternalAttributes;
 
-                using var sourceEntryStream = sourceEntry.Open();
+                using var rawSourceEntryStream = sourceEntry.Open();
+                using var sourceEntryStream = new BudgetedEntryReadStream(rawSourceEntryStream, sourceEntry, readBudget);
                 using var destinationEntryStream = destinationEntry.Open();
 
                 if (NeedsXmlReferenceRewrite(sourceEntry.FullName))
@@ -77,7 +79,7 @@ public static class PackageCorePropertiesNormalizer
                 }
                 else
                 {
-                    CopyEntryWithLimit(sourceEntry, sourceEntryStream, destinationEntryStream, limits);
+                    CopyEntry(sourceEntryStream, destinationEntryStream);
                 }
             }
         }
@@ -214,14 +216,9 @@ public static class PackageCorePropertiesNormalizer
         }
     }
 
-    private static void CopyEntryWithLimit(
-        ZipArchiveEntry sourceEntry,
-        Stream sourceEntryStream,
-        Stream destinationEntryStream,
-        PackageNormalizeLimits limits)
+    private static void CopyEntry(Stream sourceEntryStream, Stream destinationEntryStream)
     {
         var buffer = new byte[81920];
-        long bytesCopied = 0;
 
         while (true)
         {
@@ -229,14 +226,115 @@ public static class PackageCorePropertiesNormalizer
             if (bytesRead == 0)
                 return;
 
-            if (bytesCopied > limits.MaxEntryUncompressedBytes - bytesRead)
+            destinationEntryStream.Write(buffer, 0, bytesRead);
+        }
+    }
+
+    private sealed class PackageNormalizeReadBudget
+    {
+        private readonly PackageNormalizeLimits _limits;
+        private long _totalBytesRead;
+
+        internal PackageNormalizeReadBudget(PackageNormalizeLimits limits)
+        {
+            _limits = limits;
+        }
+
+        internal void AddBytes(ZipArchiveEntry sourceEntry, long entryBytesRead, int bytesRead)
+        {
+            if (bytesRead <= 0)
+                return;
+
+            if (entryBytesRead > _limits.MaxEntryUncompressedBytes - bytesRead)
             {
                 throw new InvalidOperationException(
-                    $"ZIP entry {sourceEntry.FullName} exceeds the per-entry copy limit of {limits.MaxEntryUncompressedBytes} bytes.");
+                    $"ZIP entry {sourceEntry.FullName} exceeds the per-entry inflated size limit of {_limits.MaxEntryUncompressedBytes} bytes.");
             }
 
-            bytesCopied += bytesRead;
-            destinationEntryStream.Write(buffer, 0, bytesRead);
+            if (_totalBytesRead > _limits.MaxTotalUncompressedBytes - bytesRead)
+            {
+                throw new InvalidOperationException(
+                    $"ZIP entry {sourceEntry.FullName} makes actual inflated package size exceed the limit of {_limits.MaxTotalUncompressedBytes} bytes.");
+            }
+
+            _totalBytesRead += bytesRead;
+        }
+    }
+
+    private sealed class BudgetedEntryReadStream : Stream
+    {
+        private readonly Stream _inner;
+        private readonly ZipArchiveEntry _sourceEntry;
+        private readonly PackageNormalizeReadBudget _readBudget;
+        private long _entryBytesRead;
+
+        internal BudgetedEntryReadStream(Stream inner, ZipArchiveEntry sourceEntry, PackageNormalizeReadBudget readBudget)
+        {
+            _inner = inner;
+            _sourceEntry = sourceEntry;
+            _readBudget = readBudget;
+        }
+
+        public override bool CanRead => _inner.CanRead;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => false;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            var bytesRead = _inner.Read(buffer, offset, count);
+            TrackBytesRead(bytesRead);
+            return bytesRead;
+        }
+
+        public override int Read(Span<byte> buffer)
+        {
+            var bytesRead = _inner.Read(buffer);
+            TrackBytesRead(bytesRead);
+            return bytesRead;
+        }
+
+        public override void Flush()
+        {
+            throw new NotSupportedException();
+        }
+
+        public override long Seek(long offset, SeekOrigin origin)
+        {
+            throw new NotSupportedException();
+        }
+
+        public override void SetLength(long value)
+        {
+            throw new NotSupportedException();
+        }
+
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            throw new NotSupportedException();
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+                _inner.Dispose();
+
+            base.Dispose(disposing);
+        }
+
+        private void TrackBytesRead(int bytesRead)
+        {
+            _readBudget.AddBytes(_sourceEntry, _entryBytesRead, bytesRead);
+            _entryBytesRead += bytesRead;
         }
     }
 
