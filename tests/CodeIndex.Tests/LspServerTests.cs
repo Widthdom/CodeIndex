@@ -116,6 +116,37 @@ public class LspServerTests
     }
 
     [Fact]
+    public void Run_ShutdownThenExit_StopsBeforeLaterFrames()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_shutdown_exit");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            const string shutdownRequest = "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"shutdown\"}";
+            const string exitNotification = "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}";
+            const string initializeRequest = "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"initialize\",\"params\":{}}";
+            using var input = new MemoryStream(Encoding.UTF8.GetBytes(
+                Frame(shutdownRequest) + Frame(exitNotification) + Frame(initializeRequest)));
+            using var output = new MemoryStream();
+
+            server.Run(input, output);
+
+            output.Position = 0;
+            Assert.True(LspServer.TryReadMessage(output, out var shutdownPayload));
+            using var shutdown = JsonDocument.Parse(shutdownPayload);
+            Assert.Equal(2, shutdown.RootElement.GetProperty("id").GetInt32());
+            Assert.Equal(JsonValueKind.Null, shutdown.RootElement.GetProperty("result").ValueKind);
+            Assert.False(LspServer.TryReadMessage(output, out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void HandleMessage_DocumentSymbol_ReturnsIndexedSymbols()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_document_symbol");

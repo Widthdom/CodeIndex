@@ -21,6 +21,7 @@ internal sealed class LspServer : IDisposable
     private readonly string? _projectRoot;
     private readonly StringComparison _pathStringComparison;
     private bool _shutdownRequested;
+    private bool _exitRequested;
 
     public LspServer(DbReader reader, string version, JsonSerializerOptions jsonOptions, string? projectRoot = null)
     {
@@ -38,6 +39,8 @@ internal sealed class LspServer : IDisposable
             var response = HandleMessage(payload);
             if (response != null)
                 WriteMessage(output, response.ToJsonString(_jsonOptions));
+            if (_exitRequested)
+                break;
         }
     }
 
@@ -76,7 +79,7 @@ internal sealed class LspServer : IDisposable
                     "initialize" => Result(id, BuildInitializeResult()),
                     "initialized" => null,
                     "shutdown" => HandleShutdown(id),
-                    "exit" => null,
+                    "exit" => HandleExit(),
                     "workspace/symbol" => Result(id, WorkspaceSymbol(root)),
                     "textDocument/documentSymbol" => Result(id, DocumentSymbol(root)),
                     "textDocument/definition" => Result(id, Definition(root)),
@@ -95,6 +98,12 @@ internal sealed class LspServer : IDisposable
     {
         _shutdownRequested = true;
         return Result(id, null);
+    }
+
+    private JsonObject? HandleExit()
+    {
+        _exitRequested = true;
+        return null;
     }
 
     private JsonObject BuildInitializeResult() => new()
