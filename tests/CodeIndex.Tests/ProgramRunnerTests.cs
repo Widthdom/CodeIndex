@@ -739,6 +739,35 @@ sleep 5
         }
     }
 
+    [Theory]
+    [InlineData("--log-max-size-mb=50")]
+    [InlineData("--log-format=json")]
+    public void Run_SearchInlineQueryThatLooksLikeGlobalLogFlag_IsNotConsumed_Issue2955(string query)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue2955_search_inline_log_flag_query");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "README.md",
+                "markdown",
+                $"{query} appears here\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["search", query, "--path", "README.md", "--db", dbPath, "--count", "--exact-substring"],
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("1", stdout.Trim());
+            Assert.Equal(string.Empty, stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Fact]
     public void Run_SearchStillConsumesValidGlobalLogFlagBeforeQuery_Issue2955()
     {

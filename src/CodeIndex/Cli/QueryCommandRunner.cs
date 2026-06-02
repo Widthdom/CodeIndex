@@ -232,7 +232,9 @@ public static class QueryCommandRunner
     private const string OutputFormatJsonGraph = "json-graph";
     private const string OutputFormatEdgeList = "edgelist";
     private static readonly HashSet<string> InlineValueOptions =
-        new(ValueTakingOptions.Concat(["--json"]), StringComparer.Ordinal);
+        new(
+            ValueTakingOptions.Concat(["--json", "--log-format", "--log-retain-count", "--log-max-size-mb"]),
+            StringComparer.Ordinal);
     private const string FindUsage = "Usage: cdidx find <query> --path <glob> [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--before <n>] [--after <n>] [--snippet-lines <n>] [--focus-line <line>] [--focus-column <n>] [--max-line-width <n>] [--exact] [--regex] [--count]\n       cdidx find --query <query> --path <glob> [...]\n       cdidx find [options] -- <query>";
 
     public static int RunBatch(string[] cmdArgs, JsonSerializerOptions jsonOptions)
