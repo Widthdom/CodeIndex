@@ -164,6 +164,11 @@ Before rewriting, the normalizer rejects packages with more than 4096 ZIP
 entries, any entry above 128 MiB uncompressed, total uncompressed content above
 512 MiB, or XML reference text above 16 MiB so crafted packages cannot force
 unbounded normalization work (#2892).
+It also rejects unsafe ZIP entry names before creating the destination archive:
+absolute paths, Windows drive roots, backslash separators, empty path segments,
+parent-directory segments, empty normalized names, and destination names that
+collide after path normalization are not preserved into normalized packages
+(#2894).
 
 When you intentionally update a dependency (or add a new direct `PackageReference`), regenerate the lock files locally and commit the diff in the same change:
 
@@ -2056,6 +2061,10 @@ release の `dotnet publish`（RID ごと）と `dotnet pack`（NuGet パッケ�
 uncompressed entry、512 MiB を超える合計 uncompressed content、または
 16 MiB を超える XML 参照テキストを持つ package を拒否し、細工された
 package が無制限の normalize 作業を強制できないようにします (#2892)。
+また destination archive を作る前に unsafe な ZIP entry 名も拒否します。
+absolute path、Windows drive root、backslash separator、空の path segment、
+parent-directory segment、空に正規化される名前、path 正規化後に衝突する
+destination 名は、normalized package に保持されません (#2894)。
 
 依存を意図的に更新する（あるいは直接 `PackageReference` を追加する）場合は、ローカルで lock ファイルを再生成し、同じ変更でコミットしてください:
 

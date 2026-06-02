@@ -48,6 +48,7 @@ public static class PackageCorePropertiesNormalizer
         using (var sourceArchive = new ZipArchive(sourceStream, ZipArchiveMode.Read, leaveOpen: false))
         {
             var originalCorePropertiesPath = ValidateSourceArchive(sourceArchive, packagePath, limits);
+            ValidateEntryNamesBeforeRewrite(sourceArchive, originalCorePropertiesPath);
 
             using var destinationStream = File.Open(tempPath, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None);
             using var destinationArchive = new ZipArchive(destinationStream, ZipArchiveMode.Create, leaveOpen: false);
@@ -116,6 +117,70 @@ public static class PackageCorePropertiesNormalizer
             throw new InvalidOperationException($"Expected exactly one NuGet core-properties part in {packagePath}, found {corePropertiesEntryCount}.");
 
         return originalCorePropertiesPath!;
+    }
+
+    private static void ValidateEntryNamesBeforeRewrite(ZipArchive sourceArchive, string originalCorePropertiesPath)
+    {
+        var normalizedDestinationNames = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var sourceEntry in sourceArchive.Entries)
+        {
+            ValidateZipEntryName(sourceEntry.FullName, "source");
+
+            var destinationName = sourceEntry.FullName == originalCorePropertiesPath
+                ? CanonicalCorePropertiesPath
+                : sourceEntry.FullName;
+            var normalizedDestinationName = ValidateZipEntryName(destinationName, "destination");
+
+            if (!normalizedDestinationNames.Add(normalizedDestinationName))
+            {
+                throw new InvalidOperationException(
+                    $"ZIP entry {destinationName} normalizes to duplicate destination name {normalizedDestinationName}.");
+            }
+        }
+    }
+
+    private static string ValidateZipEntryName(string entryName, string role)
+    {
+        if (entryName.Length == 0)
+            throw new InvalidOperationException($"ZIP {role} entry name must not be empty.");
+
+        if (entryName.Contains('\\'))
+            throw new InvalidOperationException($"ZIP {role} entry {entryName} must use '/' separators, not backslashes.");
+
+        if (entryName.Contains('\0'))
+            throw new InvalidOperationException($"ZIP {role} entry {entryName} must not contain NUL characters.");
+
+        if (entryName[0] == '/' || StartsWithWindowsDrivePrefix(entryName))
+            throw new InvalidOperationException($"ZIP {role} entry {entryName} must be a relative path.");
+
+        var segments = entryName.Split('/');
+        var normalizedSegments = new List<string>(segments.Length);
+        foreach (var segment in segments)
+        {
+            if (segment.Length == 0)
+                throw new InvalidOperationException($"ZIP {role} entry {entryName} must not contain empty path segments.");
+
+            if (segment == "..")
+                throw new InvalidOperationException($"ZIP {role} entry {entryName} must not contain parent-directory segments.");
+
+            if (segment == ".")
+                continue;
+
+            normalizedSegments.Add(segment);
+        }
+
+        if (normalizedSegments.Count == 0)
+            throw new InvalidOperationException($"ZIP {role} entry {entryName} must not normalize to an empty path.");
+
+        return string.Join('/', normalizedSegments);
+    }
+
+    private static bool StartsWithWindowsDrivePrefix(string entryName)
+    {
+        return entryName.Length >= 2
+            && entryName[1] == ':'
+            && ((entryName[0] >= 'A' && entryName[0] <= 'Z') || (entryName[0] >= 'a' && entryName[0] <= 'z'));
     }
 
     private static void ValidateEntrySize(ZipArchiveEntry sourceEntry, PackageNormalizeLimits limits)

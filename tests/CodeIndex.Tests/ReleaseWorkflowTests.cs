@@ -259,6 +259,58 @@ public class ReleaseWorkflowTests
         }
     }
 
+    [Theory]
+    [InlineData("/payload.txt", "must be a relative path")]
+    [InlineData("C:/payload.txt", "must be a relative path")]
+    [InlineData("../payload.txt", "must not contain parent-directory segments")]
+    [InlineData("folder\\payload.txt", "must use '/' separators")]
+    [InlineData("folder//payload.txt", "must not contain empty path segments")]
+    public void PackageNormalizer_RejectsUnsafeZipEntryNames(string unsafeEntryName, string expectedMessage)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizer_RejectsUnsafeZipEntryNames));
+        try
+        {
+            var packagePath = Path.Combine(projectRoot, "unsafe-name.nupkg");
+            CreatePackageWithEntries(
+                packagePath,
+                ("package/services/metadata/core-properties/random.psmdcp", ""),
+                (unsafeEntryName, "payload"));
+
+            var exception = Assert.Throws<InvalidOperationException>(() => PackageCorePropertiesNormalizer.NormalizePackage(packagePath));
+            Assert.Contains(unsafeEntryName, exception.Message);
+            Assert.Contains(expectedMessage, exception.Message);
+            Assert.False(File.Exists(packagePath + ".normalize-tmp"));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PackageNormalizer_RejectsDestinationNamesThatNormalizeToDuplicates()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizer_RejectsDestinationNamesThatNormalizeToDuplicates));
+        try
+        {
+            var packagePath = Path.Combine(projectRoot, "duplicate-normalized-name.nupkg");
+            CreatePackageWithEntries(
+                packagePath,
+                ("package/services/metadata/core-properties/random.psmdcp", ""),
+                ("docs/readme.txt", "one"),
+                ("docs/./readme.txt", "two"));
+
+            var exception = Assert.Throws<InvalidOperationException>(() => PackageCorePropertiesNormalizer.NormalizePackage(packagePath));
+            Assert.Contains("docs/./readme.txt", exception.Message);
+            Assert.Contains("duplicate destination name docs/readme.txt", exception.Message);
+            Assert.False(File.Exists(packagePath + ".normalize-tmp"));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Fact]
     public void ReleaseWorkflow_PublishesOfficialContainerImage()
     {
