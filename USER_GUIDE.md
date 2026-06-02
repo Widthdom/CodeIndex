@@ -389,6 +389,7 @@ be audited whenever the matching help text changes.
 | Color mode | `auto`, overridden by `--color`, `CLICOLOR_FORCE`, `NO_COLOR`, or `CLICOLOR=0` | `ConsoleUi` |
 | ANSI palette | `basic` fallback, auto-upgraded from terminal hints unless overridden | `ConsoleUi` |
 | Report log tail | `200` lines (`--log-lines`) | report runner help |
+| JSON envelope capture | `10,485,760` characters | `JsonEnvelopeWrapper` |
 
 When a default changes, update the help text, this table, affected examples, and
 the changelog fragment in the same PR so users are not asked to reconcile
@@ -896,7 +897,7 @@ Use `--json` for machine-readable output (AI agents):
 {"path":"src/Auth/TokenService.cs","lang":"csharp","chunk_start_line":1,"chunk_end_line":80,"snippet_start_line":40,"snippet_end_line":47,"snippet":"if (claims.Count == 0)\\n    throw new InvalidOperationException();\\nreturn GenerateToken(claims);","match_lines":[42,47],"highlights":[{"line":47,"text":"return GenerateToken(claims);","terms":["GenerateToken"]}],"context_before":2,"context_after":3,"score":9.8}
 ```
 
-Add `--json-envelope` to wrap the per-line stream into a single document with a `metadata` block (command, `cdidx_version`, `elapsed_ms`, `db_path`, `result_count`, `exit_code`, optional `query_normalized` / `indexed_at_head_sha`) and a `results` array. The flag implies `--json` and works on every query command (`search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `excerpt`, `map`, `inspect`, `outline`, `status`, `validate`, `languages`, `impact`, `deps`, `unused`, `hotspots`). The flat NDJSON / array output stays the default for one release; the envelope will become the default in the next major release, at which point the flat form will be opt-in via `--json-flat`.
+Add `--json-envelope` to wrap the per-line stream into a single document with a `metadata` block (command, `cdidx_version`, `elapsed_ms`, `db_path`, `result_count`, `exit_code`, optional `query_normalized` / `indexed_at_head_sha`) and a `results` array. The flag implies `--json` and works on every query command (`search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `excerpt`, `map`, `inspect`, `outline`, `status`, `validate`, `languages`, `impact`, `deps`, `unused`, `hotspots`). Wrapped commands can capture up to 10,485,760 output characters; if the budget is exceeded, cdidx returns a JSON envelope with empty `results`, non-zero `metadata.exit_code`, and `metadata.error`, and suggests using `--limit` / `--top` or streaming `--json`. The flat NDJSON / array output stays the default for one release; the envelope will become the default in the next major release, at which point the flat form will be opt-in via `--json-flat`.
 
 Add `--profile` to any read command when debugging slow queries. It appends one JSON object after the normal result with `profile.phases` (`name`, `elapsed_ms`, `rows_scanned`), `profile.query_plan` (`EXPLAIN QUERY PLAN` rows), and `profile.queries` (the SQL text). Add `--slow-query-ms <n>` to log profiled SQL statements that meet the threshold to the persistent tool log.
 
@@ -2516,6 +2517,7 @@ render できます。
 | Color mode | `auto`。`--color` / `CLICOLOR_FORCE` / `NO_COLOR` / `CLICOLOR=0` で上書き | `ConsoleUi` |
 | ANSI palette | `basic` fallback。terminal hints で自動昇格、または明示上書き | `ConsoleUi` |
 | Report log tail | `200` lines（`--log-lines`） | report runner help |
+| JSON envelope capture | `10,485,760` 文字 | `JsonEnvelopeWrapper` |
 
 既定値を変更するときは、help text、この表、影響する examples、changelog fragment を
 同じ PR で更新してください。
@@ -3033,6 +3035,8 @@ src/Auth/TokenService.cs:42-58
 {"path":"src/Auth/Login.cs","start_line":15,"end_line":30,"content":"public bool Authenticate(...)...","lang":"csharp","score":12.5}
 {"path":"src/Auth/TokenService.cs","start_line":42,"end_line":58,"content":"public string GenerateToken(...)...","lang":"csharp","score":9.8}
 ```
+
+`--json-envelope` を追加すると、1 行ごとの stream を `metadata`（command、`cdidx_version`、`elapsed_ms`、`db_path`、`result_count`、`exit_code`、任意の `query_normalized` / `indexed_at_head_sha`）と `results` 配列を持つ 1 つの JSON document に包みます。この flag は `--json` を暗黙に有効化し、各 query command で使えます。wrapped command の捕捉出力は最大 10,485,760 文字です。超過した場合は、空の `results`、非 0 の `metadata.exit_code`、`metadata.error` を持つ JSON envelope を返し、`--limit` / `--top` または streaming `--json` の利用を促します。
 
 ### シンボル検索（関数、クラスなど）
 
