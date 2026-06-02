@@ -226,11 +226,14 @@ For MCP `status`, `mcp_session` is session-scoped diagnostic data rather than pe
 | `hotspot_family_support_not_indexed` | Legacy DB without hotspot-family support. |
 | `hotspot_family_metadata_stale` | Hotspot-family metadata is stale. |
 | `hotspot_family_disabled_at_index_time` | The index was written while marker fingerprints were unavailable. |
+| `hotspot_family_marker_fingerprint_incomplete` | Marker fingerprint traversal hit safety caps during the last index run, so hotspot-family metadata is intentionally incomplete. |
 
 Hotspot-family readiness is tracked by per-language
 `hotspot_family_version_<lang>` metadata introduced with hotspot-family contract
 version 2. When this readiness is degraded, use
-`cdidx index <projectPath> --rebuild` so unchanged rows are restamped too.
+`cdidx index <projectPath> --rebuild` so unchanged rows are restamped too. For
+`hotspot_family_marker_fingerprint_incomplete`, first narrow or ignore generated
+or vendor trees that contain excessive project markers, then run the rebuild.
 
 ## Documentation
 
@@ -493,10 +496,13 @@ MCP `status` の `mcp_session` は永続化された index 状態ではなく、
 | `hotspot_family_support_not_indexed` | hotspot-family 未対応の legacy DB。 |
 | `hotspot_family_metadata_stale` | hotspot-family metadata が古い状態。 |
 | `hotspot_family_disabled_at_index_time` | marker fingerprint が利用できない状態で書かれた index。 |
+| `hotspot_family_marker_fingerprint_incomplete` | 前回の index で marker fingerprint traversal が安全上限に到達したため、hotspot-family metadata が意図的に incomplete として扱われています。 |
 
 hotspot-family readiness は、hotspot-family contract version 2 で導入された
 言語別 `hotspot_family_version_<lang>` metadata で追跡されます。degraded の場合は
 unchanged row も restamp するため `cdidx index <projectPath> --rebuild` を使います。
+`hotspot_family_marker_fingerprint_incomplete` の場合は、過剰な project marker を含む
+generated/vendor tree を先に絞り込むか ignore してから rebuild してください。
 
 ## ドキュメント
 
