@@ -8662,7 +8662,7 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void RunStatusCheck_AfterChangedBetweenRefreshAtHead_DotCommandRestampsFullScanHead()
+    public void RunStatusCheck_AfterChangedBetweenRefreshAtHead_TreatsCurrentIndexedHeadShaAsFresh_2808()
     {
         var projectRoot = CreateTempProject();
         try
@@ -8697,10 +8697,13 @@ public class IndexCommandRunnerTests
 
             var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--check", "--json"]);
             Assert.Equal(CommandExitCodes.Success, statusExitCode);
+            Assert.Equal(currentHead, statusJson.GetProperty("indexed_head_sha").GetString());
             var check = statusJson.GetProperty("workspace_check");
             Assert.False(check.GetProperty("head_changed").GetBoolean());
             Assert.True(check.GetProperty("matches_workspace").GetBoolean());
             Assert.Equal("matched", check.GetProperty("reason").GetString());
+            Assert.Equal(initialHead, check.GetProperty("indexed_head_commit").GetString());
+            Assert.Equal(currentHead, check.GetProperty("workspace_head_commit").GetString());
 
             var (dotExitCode, dotJson) = RunProgramAndCaptureJson([projectRoot, "--json"]);
             Assert.Equal(CommandExitCodes.Success, dotExitCode);
