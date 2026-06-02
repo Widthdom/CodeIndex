@@ -125,7 +125,17 @@ internal static class UpdateChecker
 
     private static async Task<string?> FetchLatestReleaseTagAsync(CancellationToken cancellationToken)
     {
-        using var client = new HttpClient { Timeout = RequestTimeout };
+        using var client = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
+        return await FetchLatestReleaseTagAsync(client, RequestTimeout, cancellationToken).ConfigureAwait(false);
+    }
+
+    internal static async Task<string?> FetchLatestReleaseTagAsync(
+        HttpClient client,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
+        using var requestCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        requestCts.CancelAfter(timeout);
         using var request = new HttpRequestMessage(HttpMethod.Get, LatestReleaseUrl);
         request.Headers.UserAgent.Add(new ProductInfoHeaderValue("cdidx", ConsoleUi.LoadVersion()));
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
@@ -133,11 +143,11 @@ internal static class UpdateChecker
         using var response = await client.SendAsync(
             request,
             HttpCompletionOption.ResponseHeadersRead,
-            cancellationToken).ConfigureAwait(false);
+            requestCts.Token).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
             return null;
 
-        return await ReadLatestReleaseTagAsync(response.Content, cancellationToken).ConfigureAwait(false);
+        return await ReadLatestReleaseTagAsync(response.Content, requestCts.Token).ConfigureAwait(false);
     }
 
     internal static async Task<string?> ReadLatestReleaseTagAsync(HttpContent content, CancellationToken cancellationToken)

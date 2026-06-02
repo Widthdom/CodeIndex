@@ -371,6 +371,21 @@ public class ProgramRunnerTests
             UpdateChecker.ReadLatestReleaseTagAsync(content, CancellationToken.None));
     }
 
+    [Fact]
+    public async Task UpdateChecker_FetchLatestReleaseTagAsync_CancelsStalledBody()
+    {
+        using var client = new HttpClient(new StaticResponseHandler(new StalledContent()))
+        {
+            Timeout = Timeout.InfiniteTimeSpan,
+        };
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            UpdateChecker.FetchLatestReleaseTagAsync(
+                client,
+                TimeSpan.FromMilliseconds(25),
+                CancellationToken.None));
+    }
+
     [Theory]
     [InlineData("~/cdidx-logs", "cdidx-logs")]
     [InlineData("$HOME/cdidx-logs", "cdidx-logs")]
