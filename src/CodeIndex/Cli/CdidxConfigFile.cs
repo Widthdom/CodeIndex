@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using CodeIndex.Indexer;
 
@@ -173,6 +174,9 @@ internal static class CdidxConfigFile
             {
                 if (!TryReadPositiveIntegerAsString(suggestionMaxAgeDays, "suggestion_max_age_days", path, out var value, out var err))
                     return new LoadResult(Path: path, Error: err);
+                var parsedMaxAgeDays = int.Parse(value!, CultureInfo.InvariantCulture);
+                if (parsedMaxAgeDays > SuggestionStore.MaximumMaxAgeDays)
+                    return new LoadResult(Path: path, Error: $"[cdidx] {path}: `suggestion_max_age_days` must be <= {SuggestionStore.MaximumMaxAgeDays}.");
                 pending.Add((SuggestionStore.MaxAgeDaysEnvironmentVariable, value!));
             }
 
@@ -180,6 +184,9 @@ internal static class CdidxConfigFile
             {
                 if (!TryReadPositiveIntegerAsString(suggestionMaxCount, "suggestion_max_count", path, out var value, out var err))
                     return new LoadResult(Path: path, Error: err);
+                var parsedMaxCount = int.Parse(value!, CultureInfo.InvariantCulture);
+                if (parsedMaxCount > SuggestionStore.MaximumMaxCount)
+                    return new LoadResult(Path: path, Error: $"[cdidx] {path}: `suggestion_max_count` must be <= {SuggestionStore.MaximumMaxCount}.");
                 pending.Add((SuggestionStore.MaxCountEnvironmentVariable, value!));
             }
 

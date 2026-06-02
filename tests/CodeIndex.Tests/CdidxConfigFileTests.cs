@@ -326,6 +326,46 @@ public class CdidxConfigFileTests
     }
 
     [Fact]
+    public void LoadAndApply_SuggestionMaxAgeAboveMaximum_ReturnsError()
+    {
+        var dir = CreateTempDir();
+        try
+        {
+            var tooLarge = SuggestionStore.MaximumMaxAgeDays + 1;
+            File.WriteAllText(Path.Combine(dir, ".cdidxrc.json"),
+                $$"""{ "suggestion_max_age_days": {{tooLarge}} }""");
+
+            var env = new TestEnvironment();
+            var result = CdidxConfigFile.LoadAndApply(dir, env.Read, env.Write);
+
+            Assert.True(result.Failed);
+            Assert.Contains("suggestion_max_age_days", result.Error);
+            Assert.Empty(env.Writes);
+        }
+        finally { TestProjectHelper.DeleteDirectory(dir); }
+    }
+
+    [Fact]
+    public void LoadAndApply_SuggestionMaxCountAboveMaximum_ReturnsError()
+    {
+        var dir = CreateTempDir();
+        try
+        {
+            var tooLarge = SuggestionStore.MaximumMaxCount + 1;
+            File.WriteAllText(Path.Combine(dir, ".cdidxrc.json"),
+                $$"""{ "suggestion_max_count": {{tooLarge}} }""");
+
+            var env = new TestEnvironment();
+            var result = CdidxConfigFile.LoadAndApply(dir, env.Read, env.Write);
+
+            Assert.True(result.Failed);
+            Assert.Contains("suggestion_max_count", result.Error);
+            Assert.Empty(env.Writes);
+        }
+        finally { TestProjectHelper.DeleteDirectory(dir); }
+    }
+
+    [Fact]
     public void LoadAndApply_AllowsSchemaKeyAndComments()
     {
         var dir = CreateTempDir();

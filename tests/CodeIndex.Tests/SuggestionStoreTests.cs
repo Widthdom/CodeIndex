@@ -1,3 +1,4 @@
+using System.Globalization;
 using CodeIndex.Cli;
 using CodeIndex.Models;
 
@@ -849,6 +850,44 @@ public class SuggestionStoreTests : IDisposable
         var all = _store.LoadAll();
         Assert.Equal(new[] { "Second suggestion", "Third suggestion" }, all.Select(record => record.Description));
         Assert.Contains("First suggestion", File.ReadAllText(Path.Combine(_tempDir, "suggestions-codeindex.archive.jsonl")));
+    }
+
+    [Fact]
+    public void ResolveMaxAge_AcceptsMaximumConfiguredValue()
+    {
+        using var env = EnvironmentVariableScope.Capture(SuggestionStore.MaxAgeDaysEnvironmentVariable);
+        env.Set(SuggestionStore.MaxAgeDaysEnvironmentVariable, SuggestionStore.MaximumMaxAgeDays.ToString(CultureInfo.InvariantCulture));
+
+        Assert.Equal(TimeSpan.FromDays(SuggestionStore.MaximumMaxAgeDays), SuggestionStore.ResolveMaxAge());
+    }
+
+    [Fact]
+    public void ResolveMaxAge_AboveMaximumUsesDefault()
+    {
+        using var env = EnvironmentVariableScope.Capture(SuggestionStore.MaxAgeDaysEnvironmentVariable);
+        var tooLarge = SuggestionStore.MaximumMaxAgeDays + 1;
+        env.Set(SuggestionStore.MaxAgeDaysEnvironmentVariable, tooLarge.ToString(CultureInfo.InvariantCulture));
+
+        Assert.Equal(TimeSpan.FromDays(SuggestionStore.DefaultMaxAgeDays), SuggestionStore.ResolveMaxAge());
+    }
+
+    [Fact]
+    public void ResolveMaxCount_AcceptsMaximumConfiguredValue()
+    {
+        using var env = EnvironmentVariableScope.Capture(SuggestionStore.MaxCountEnvironmentVariable);
+        env.Set(SuggestionStore.MaxCountEnvironmentVariable, SuggestionStore.MaximumMaxCount.ToString(CultureInfo.InvariantCulture));
+
+        Assert.Equal(SuggestionStore.MaximumMaxCount, SuggestionStore.ResolveMaxCount());
+    }
+
+    [Fact]
+    public void ResolveMaxCount_AboveMaximumUsesDefault()
+    {
+        using var env = EnvironmentVariableScope.Capture(SuggestionStore.MaxCountEnvironmentVariable);
+        var tooLarge = SuggestionStore.MaximumMaxCount + 1;
+        env.Set(SuggestionStore.MaxCountEnvironmentVariable, tooLarge.ToString(CultureInfo.InvariantCulture));
+
+        Assert.Equal(SuggestionStore.DefaultMaxCount, SuggestionStore.ResolveMaxCount());
     }
 
     [Fact]

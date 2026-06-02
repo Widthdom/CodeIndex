@@ -33,6 +33,8 @@ public class SuggestionStore
     internal const int DefaultMaxAgeDays = 365;
     internal const int DefaultMaxCount = 5000;
     internal const int MaxSuggestionStoreBytes = 8 * 1024 * 1024;
+    internal const int MaximumMaxAgeDays = 3650;
+    internal const int MaximumMaxCount = 100_000;
     private const int FuzzyDedupRecentLimit = 100;
     private const string RedactedAwsAccessKey = "[REDACTED:aws_access_key]";
     private const string RedactedBearerToken = "[REDACTED:bearer_token]";
@@ -828,7 +830,7 @@ public class SuggestionStore
     internal static TimeSpan ResolveMaxAge()
     {
         var raw = Environment.GetEnvironmentVariable(MaxAgeDaysEnvironmentVariable);
-        return int.TryParse(raw, out var days) && days > 0
+        return int.TryParse(raw, out var days) && days is > 0 and <= MaximumMaxAgeDays
             ? TimeSpan.FromDays(days)
             : TimeSpan.FromDays(DefaultMaxAgeDays);
     }
@@ -836,7 +838,7 @@ public class SuggestionStore
     internal static int ResolveMaxCount()
     {
         var raw = Environment.GetEnvironmentVariable(MaxCountEnvironmentVariable);
-        return int.TryParse(raw, out var count) && count > 0
+        return int.TryParse(raw, out var count) && count is > 0 and <= MaximumMaxCount
             ? count
             : DefaultMaxCount;
     }

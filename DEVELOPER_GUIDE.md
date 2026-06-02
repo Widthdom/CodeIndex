@@ -1115,6 +1115,8 @@ The `suggest_improvement` MCP tool allows AI agents to report gaps or errors.
 
 `SuggestionStore` first checks the SHA256 hash, then compares the candidate against the most recent suggestions in the same category and language using normalized-token Jaccard similarity. The default fuzzy threshold is `0.85`; `cdidx mcp --suggestion-dedup-threshold`, `CDIDX_SUGGESTION_DEDUP_THRESHOLD`, or `.cdidxrc.json` `suggestion_dedup_threshold` can override it with a value from `0` to `1`. Fuzzy matches are returned as duplicates before GitHub submission and log the matched hash plus score to stderr for auditability.
 
+Local suggestion retention is bounded by `CDIDX_SUGGESTION_MAX_AGE_DAYS` and `CDIDX_SUGGESTION_MAX_COUNT`, also available as `.cdidxrc.json` `suggestion_max_age_days` and `suggestion_max_count`. The built-in defaults are 365 days and 5000 records; accepted values are capped at 3650 days and 100000 records. Non-positive, non-numeric, overflowing, or larger environment values fall back to the defaults, while larger config-file values are rejected during config validation.
+
 ### Local lifecycle fields
 
 Local suggestion records use the `status` lifecycle field instead of a binary submitted flag. New records start as `draft`; successful GitHub submission moves them to `submitted_pending_triage` and stamps `upstream_url`, `upstream_issue_number`, and `last_synced_at` when known. Every GitHub submission attempt also stamps `last_submit_attempt`, increments `submit_attempt_count`, and records `last_submit_error` on failure; success clears the last error. GitHub rate-limit responses also stamp `next_retry_at`, and duplicate unsubmitted suggestions are not retried until that timestamp has passed. The remaining additive states are reserved for follow-up sync/listing flows: `open_in_upstream`, `resolved_in_upstream`, `wont_fix`, `duplicate`, and `superseded`. Older records containing `submitted_to_github` / `github_issue_url` are normalized on read to the new lifecycle fields.
@@ -2739,6 +2741,12 @@ Unlist しても exact version restore は不可能になりません。これ�
 - cdidx バージョン文字列
 - attribution メタデータ: `created_by_agent`、`session_id`、`client_version`、`mcp_client_name`、`mcp_client_version`、および任意の `tool_invocation_context`
 - SHA256 提案ハッシュ（重複排除用）
+
+### 重複排除とローカル保持
+
+`SuggestionStore` はまず SHA256 ハッシュを確認し、その後、同じ category / language の直近提案と正規化 token の Jaccard 類似度で比較する。fuzzy しきい値の既定は `0.85` で、`cdidx mcp --suggestion-dedup-threshold`、`CDIDX_SUGGESTION_DEDUP_THRESHOLD`、または `.cdidxrc.json` の `suggestion_dedup_threshold` で `0` から `1` の値へ上書きできる。fuzzy match は GitHub 送信前に重複として返され、監査用に一致先 hash と score を stderr に記録する。
+
+ローカル提案の保持は `CDIDX_SUGGESTION_MAX_AGE_DAYS` と `CDIDX_SUGGESTION_MAX_COUNT` で制限され、`.cdidxrc.json` では `suggestion_max_age_days` と `suggestion_max_count` として設定できる。組み込み既定値は 365 日と 5000 件で、受け付ける値の上限は 3650 日と 100000 件。0 以下、数値以外、overflow、または上限を超える環境変数値は既定値へ戻り、上限を超える config-file 値は config validation 時に拒否される。
 
 ### ローカルライフサイクルフィールド
 
