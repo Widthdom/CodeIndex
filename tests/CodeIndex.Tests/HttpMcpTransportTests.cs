@@ -269,7 +269,7 @@ public class HttpMcpTransportTests : IDisposable
     public async Task HttpTransport_EventsStream_EmitsOptInKeepAliveNotifications()
     {
         using var env = EnvironmentVariableScope.Capture("CDIDX_MCP_KEEP_ALIVE_INTERVAL_S");
-        env.Set("CDIDX_MCP_KEEP_ALIVE_INTERVAL_S", "0.05");
+        env.Set("CDIDX_MCP_KEEP_ALIVE_INTERVAL_S", "1");
         await using var harness = await McpHttpHarness.StartAsync(_dbPath);
 
         using var client = new HttpClient();

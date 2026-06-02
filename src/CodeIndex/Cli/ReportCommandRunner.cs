@@ -309,41 +309,38 @@ public static class ReportCommandRunner
         return line[..(idx + key.Length)] + RedactedPlaceholder;
     }
 
-    private static void WriteBundle(string outputPath, ReportBundle bundle)
+    internal static void WriteBundle(string outputPath, ReportBundle bundle, Action? beforeWriteEntries = null)
     {
         var dir = Path.GetDirectoryName(outputPath);
         if (!string.IsNullOrEmpty(dir))
             Directory.CreateDirectory(dir);
 
-        if (!OperatingSystem.IsWindows() && File.Exists(outputPath))
-            File.SetUnixFileMode(outputPath, BundleFileMode);
-
-        var streamOptions = new FileStreamOptions
-        {
-            Mode = FileMode.Create,
-            Access = FileAccess.Write,
-            Share = FileShare.None,
-        };
-        if (!OperatingSystem.IsWindows())
-            streamOptions.UnixCreateMode = BundleFileMode;
-
-        using var fileStream = new FileStream(outputPath, streamOptions);
-        if (!OperatingSystem.IsWindows())
-            File.SetUnixFileMode(outputPath, BundleFileMode);
-
-        using var gz = new GZipStream(fileStream, CompressionLevel.Optimal);
-        using var tar = new TarWriter(gz, TarEntryFormat.Pax, leaveOpen: true);
-
-        foreach (var (name, bytes) in bundle.Files)
-        {
-            var entry = new PaxTarEntry(TarEntryType.RegularFile, name)
+        AtomicFileWriter.Write(
+            outputPath,
+            stream =>
             {
-                DataStream = new MemoryStream(bytes, writable: false),
-                Mode = BundleFileMode,
-                ModificationTime = DateTimeOffset.UtcNow,
-            };
-            tar.WriteEntry(entry);
-        }
+                using var gz = new GZipStream(stream, CompressionLevel.Optimal, leaveOpen: true);
+                using var tar = new TarWriter(gz, TarEntryFormat.Pax, leaveOpen: true);
+                beforeWriteEntries?.Invoke();
+
+                foreach (var (name, bytes) in bundle.Files)
+                {
+                    var entry = new PaxTarEntry(TarEntryType.RegularFile, name)
+                    {
+                        DataStream = new MemoryStream(bytes, writable: false),
+                        Mode = BundleFileMode,
+                        ModificationTime = DateTimeOffset.UtcNow,
+                    };
+                    tar.WriteEntry(entry);
+                }
+            },
+            ApplyBundleFileMode);
+    }
+
+    private static void ApplyBundleFileMode(string path)
+    {
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(path, BundleFileMode);
     }
 
     internal static ReportCommandOptions ParseArgs(string[] args)

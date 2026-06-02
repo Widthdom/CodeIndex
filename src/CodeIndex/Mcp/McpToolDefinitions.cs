@@ -652,6 +652,10 @@ public partial class McpServer
                 obj.TryAdd("minimum", 1);
                 obj.TryAdd("maximum", MaxLimit);
                 break;
+            case "offset":
+                obj.TryAdd("minimum", 0);
+                obj.TryAdd("maximum", MaxMcpPaginationOffset);
+                break;
             case "startLine":
             case "endLine":
                 obj.TryAdd("minimum", 1);
