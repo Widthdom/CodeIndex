@@ -2792,7 +2792,7 @@ public partial class McpServer
             }
 
             summary = BuildSummary();
-            estimatedResponseBytes = EstimateJsonUtf8Bytes(CreateToolResult(id, summary, payload.DeepClone()));
+            estimatedResponseBytes = EstimateJsonUtf8Bytes(CreateToolResult(id, summary, payload.DeepClone()), responseByteLimit);
             if (estimatedResponseBytes <= responseByteLimit)
                 break;
             if (resultsArray.Count > 0)
@@ -2827,8 +2827,11 @@ public partial class McpServer
             MaxBatchQueryResponseByteLimit,
             "MCP batch_query response byte limit");
 
-    private int EstimateJsonUtf8Bytes(JsonNode node) =>
-        Encoding.UTF8.GetByteCount(node.ToJsonString(_jsonOptions));
+    private int EstimateJsonUtf8Bytes(JsonNode node, int maxBytes = int.MaxValue)
+    {
+        _ = TryMeasureJsonUtf8BytesWithinLimit(node, _jsonOptions, maxBytes, out var bytesWritten);
+        return bytesWritten;
+    }
 
     private int EstimateBatchResponseBytes(JsonNode? id, string summary, int submittedCount, int successCount, int failureCount,
         string failureScope, int? cascadeStartedAtIndex, int responseByteLimit, JsonArray resultsArray, bool truncated, JsonArray truncatedQueries)
@@ -2861,7 +2864,7 @@ public partial class McpServer
             payload["truncated_queries"] = truncatedQueries.DeepClone();
         }
 
-        return EstimateJsonUtf8Bytes(CreateToolResult(id, summary, payload));
+        return EstimateJsonUtf8Bytes(CreateToolResult(id, summary, payload), responseByteLimit);
     }
 
     private static string GetBatchFailureScope(int submittedCount, int successCount, int failureCount, int? cascadeStartedAtIndex)

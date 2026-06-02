@@ -81,15 +81,22 @@ public class DbPathResolverTests
     public void ResolveDataDirForQuery_WithXdgPrefersAncestorWorkspaceDataDir()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_xdg_root_db");
+        var configHome = TestProjectHelper.CreateTempProject("cdidx_query_xdg_config");
         var xdgDir = Path.Combine(Path.GetTempPath(), $"cdidx_xdg_dir_{Guid.NewGuid():N}");
         try
         {
+            using var env = IsolateActiveWorkspace(configHome);
             var child = Path.Combine(projectRoot, "src", "App");
             Directory.CreateDirectory(child);
             var indexedRootResolution = DbPathResolver.ResolveDataDir(projectRoot, explicitDataDir: null, environmentDataDir: null, xdgDataHome: xdgDir);
             Directory.CreateDirectory(indexedRootResolution.DataDir!);
 
-            var resolved = DbPathResolver.ResolveDataDirForQuery(child, explicitDataDir: null, environmentDataDir: null, xdgDataHome: xdgDir);
+            var resolved = DbPathResolver.ResolveDataDirForQuery(
+                child,
+                explicitDataDir: null,
+                environmentDataDir: null,
+                xdgDataHome: xdgDir,
+                activeWorkspaceLoader: () => null);
 
             Assert.Equal(indexedRootResolution.DbPath, resolved.DbPath);
             Assert.Equal(indexedRootResolution.DataDir, resolved.DataDir);
@@ -98,6 +105,7 @@ public class DbPathResolverTests
         finally
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
+            TestProjectHelper.DeleteDirectory(configHome);
             TestProjectHelper.DeleteDirectory(xdgDir);
         }
     }
@@ -106,14 +114,21 @@ public class DbPathResolverTests
     public void ResolveDataDirForQuery_PrefersOutermostAncestorCdidx()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_root_db");
+        var configHome = TestProjectHelper.CreateTempProject("cdidx_query_root_config");
         try
         {
+            using var env = IsolateActiveWorkspace(configHome);
             var child = Path.Combine(projectRoot, "src", "App");
             Directory.CreateDirectory(child);
             Directory.CreateDirectory(Path.Combine(projectRoot, ".cdidx"));
             Directory.CreateDirectory(Path.Combine(projectRoot, "src", ".cdidx"));
 
-            var resolved = DbPathResolver.ResolveDataDirForQuery(child, explicitDataDir: null, environmentDataDir: null, xdgDataHome: null);
+            var resolved = DbPathResolver.ResolveDataDirForQuery(
+                child,
+                explicitDataDir: null,
+                environmentDataDir: null,
+                xdgDataHome: null,
+                activeWorkspaceLoader: () => null);
 
             Assert.Equal(Path.Combine(projectRoot, ".cdidx", "codeindex.db"), resolved.DbPath);
             Assert.Equal(DbPathResolver.DataDirSourceWorkspace, resolved.DataDirSource);
@@ -121,6 +136,37 @@ public class DbPathResolverTests
         finally
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
+            TestProjectHelper.DeleteDirectory(configHome);
+        }
+    }
+
+    [Fact]
+    public void ResolveDataDirForQuery_UsesInjectedActiveWorkspaceBeforeAncestorCdidx()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_active_workspace_project");
+        var activeRoot = TestProjectHelper.CreateTempProject("cdidx_query_active_workspace_state");
+        var activeDb = Path.Combine(activeRoot, ".cdidx", "codeindex.db");
+        try
+        {
+            var child = Path.Combine(projectRoot, "src", "App");
+            Directory.CreateDirectory(child);
+            Directory.CreateDirectory(Path.Combine(projectRoot, ".cdidx"));
+
+            var resolved = DbPathResolver.ResolveDataDirForQuery(
+                child,
+                explicitDataDir: null,
+                environmentDataDir: null,
+                xdgDataHome: null,
+                activeWorkspaceLoader: () => new ActiveWorkspaceState("test", activeRoot, activeDb));
+
+            Assert.Equal(Path.GetFullPath(activeDb), resolved.DbPath);
+            Assert.Equal(Path.GetDirectoryName(Path.GetFullPath(activeDb)), resolved.DataDir);
+            Assert.Equal(DbPathResolver.DataDirSourceActiveWorkspace, resolved.DataDirSource);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            TestProjectHelper.DeleteDirectory(activeRoot);
         }
     }
 
@@ -128,12 +174,19 @@ public class DbPathResolverTests
     public void ResolveDataDirForQuery_FallsBackToCurrentDirectoryWhenNoAncestorCdidxExists()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_no_root_db");
+        var configHome = TestProjectHelper.CreateTempProject("cdidx_query_no_root_config");
         try
         {
+            using var env = IsolateActiveWorkspace(configHome);
             var child = Path.Combine(projectRoot, "src", "App");
             Directory.CreateDirectory(child);
 
-            var resolved = DbPathResolver.ResolveDataDirForQuery(child, explicitDataDir: null, environmentDataDir: null, xdgDataHome: null);
+            var resolved = DbPathResolver.ResolveDataDirForQuery(
+                child,
+                explicitDataDir: null,
+                environmentDataDir: null,
+                xdgDataHome: null,
+                activeWorkspaceLoader: () => null);
 
             Assert.Equal(Path.Combine(child, ".cdidx", "codeindex.db"), resolved.DbPath);
             Assert.Equal(DbPathResolver.DataDirSourceWorkspace, resolved.DataDirSource);
@@ -141,6 +194,7 @@ public class DbPathResolverTests
         finally
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
+            TestProjectHelper.DeleteDirectory(configHome);
         }
     }
 
@@ -699,5 +753,13 @@ public class DbPathResolverTests
         {
             TestProjectHelper.DeleteFile(dbPath);
         }
+    }
+
+    private static EnvironmentVariableScope IsolateActiveWorkspace(string configHome)
+    {
+        var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME");
+        env.Set(ActiveWorkspace.EnvironmentVariable, null);
+        env.Set("XDG_CONFIG_HOME", configHome);
+        return env;
     }
 }

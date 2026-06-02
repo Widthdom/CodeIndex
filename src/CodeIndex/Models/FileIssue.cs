@@ -6,8 +6,15 @@ namespace CodeIndex.Models;
 /// </summary>
 public class FileIssue
 {
+    public const string OriginSourceLiteral = "source_literal";
+    public const string OriginDecodeReplacement = "decode_replacement";
+    public const string SeverityInfo = "info";
+    public const string SeverityWarning = "warning";
+
     public string Path { get; set; } = string.Empty;
     public string Kind { get; set; } = string.Empty;
     public int Line { get; set; }
     public string Message { get; set; } = string.Empty;
+    public string? Origin { get; set; }
+    public string? Severity { get; set; }
 }

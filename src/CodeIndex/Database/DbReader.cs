@@ -81,6 +81,7 @@ public partial class DbReader : IDisposable
     internal readonly bool _hasChunksTable;
     internal readonly bool _hasReferenceLinesTable;
     internal readonly bool _canUseReferenceLines;
+    private readonly HashSet<string> _issueColumns;
     public bool IncludeGenerated { get; set; }
     private static readonly AsyncLocal<bool> IncludeGeneratedScope = new();
     private static readonly AsyncLocal<bool> GeneratedColumnAvailableScope = new();
@@ -514,6 +515,9 @@ public partial class DbReader : IDisposable
         _hasChunksTable = HasTable("chunks");
         _hasReferencesTable = HasTable("symbol_references") && (userVersion & DbContext.GraphReadyFlag) != 0;
         _hasIssuesPhysicalTable = HasTable("file_issues");
+        _issueColumns = _hasIssuesPhysicalTable
+            ? LoadColumns("file_issues")
+            : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         _hasIssuesTable = _hasIssuesPhysicalTable && (userVersion & DbContext.IssuesReadyFlag) != 0;
         _hasReferenceLinesTable = HasTable("reference_lines");
         _canUseReferenceLines = _hasReferencesTable && _hasReferenceLinesTable && _referenceColumns.Contains("reference_line_id");
@@ -1734,8 +1738,10 @@ public partial class DbReader : IDisposable
     {
         if (!_hasIssuesTable) return new List<Models.FileIssue>();
         using var cmd = _conn.CreateCommand();
+        var originColumn = _issueColumns.Contains("origin") ? "i.origin" : "NULL";
+        var severityColumn = _issueColumns.Contains("severity") ? "i.severity" : "NULL";
         var sql = @"
-            SELECT f.path, i.kind, i.line, i.message
+            SELECT f.path, i.kind, i.line, i.message, " + originColumn + @" AS origin, " + severityColumn + @" AS severity
             FROM file_issues i
             JOIN files f ON i.file_id = f.id
             WHERE 1=1";
@@ -1770,6 +1776,8 @@ public partial class DbReader : IDisposable
                 Kind = reader.GetString(1),
                 Line = reader.GetInt32(2),
                 Message = reader.GetString(3),
+                Origin = reader.IsDBNull(4) ? null : reader.GetString(4),
+                Severity = reader.IsDBNull(5) ? null : reader.GetString(5),
             });
         }
         return results;

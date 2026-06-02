@@ -34,14 +34,16 @@ The test project mirrors the production areas closely.
 
 - `ChunkSplitterTests.cs`, `SymbolExtractorTests.cs`, `ReferenceExtractorTests.cs`, `SearchSnippetFormatterTests.cs`, `DbPathResolverTests.cs`, `ConsoleUiTests.cs`
   Pure or mostly pure behavior tests with in-memory inputs.
+- `SymbolExtractor*Tests.cs` and `ReferenceExtractor*Tests.cs`
+  Extractor coverage is split by language or feature area with partial test classes, while shared helpers remain on the root `SymbolExtractorTests` / `ReferenceExtractorTests` parts.
 - `FileIndexerTests.cs`
   File scanning, language detection, and record-building behavior, including extensionless shebang detection's 256-byte first-line cap, binary/NUL-byte rejection, and Windows-only >=260-character path walker/purge coverage.
 - `DatabaseTests.cs`, `DbReaderTests.cs`
   SQLite schema, write paths, migrations, and query behavior.
 - `LegacySchemaMigrationTests.cs`
   End-to-end upgrade path: seeds a pre-column legacy DB, opens it through `TryMigrateForRead`, and exercises the read paths that touch nullable symbol ordinals (outline, symbol search, nearby, unused, analyze bundle) to lock in the real-world failure mode behind #58 / #49.
-- `IndexCommandRunnerTests.cs`, `QueryCommandRunnerTests.cs`, `ProgramCliTests.cs`, `InstallScriptTests.cs`
-  CLI parsing, command execution, and installer behavior. `ProgramCliTests.cs` covers top-level entrypoint behavior that must be exercised through a subprocess, while `InstallScriptTests.cs` runs focused bash snippets against `install.sh` in library mode to lock in release-installer regressions without performing real network installs.
+- `IndexCommandRunnerTests.cs`, `QueryCommandRunner*Tests.cs`, `ProgramCliTests.cs`, `InstallScriptTests.cs`
+  CLI parsing, command execution, and installer behavior. Query command coverage is split by command family with partial `QueryCommandRunnerTests` classes so shared console and fixture helpers stay centralized. `ProgramCliTests.cs` covers top-level entrypoint behavior that must be exercised through a subprocess, while `InstallScriptTests.cs` runs focused bash snippets against `install.sh` in library mode to lock in release-installer regressions without performing real network installs.
 - `IndexCommandRunnerTests.Run_CancelDuringFreshIndex_ReturnsInterruptedJson`, `Run_CancelDuringDryRunScan_ReturnsInterruptedJson`, and `Run_CancelBeforeFreshScan_ReturnsInterruptedJson`
   exercise the same in-process cancellation paths used after Ctrl-C/SIGINT wiring, including scan-time cancellation, so interrupted index runs keep returning the canonical JSON error contract.
 - `SymbolExtractorTests.Extract_CSharp_InstallScriptFixture_CompletesWithinPracticalBudget`
@@ -50,7 +52,6 @@ The test project mirrors the production areas closely.
   publishes a trimmed RID-specific CLI and runs whichever entry point the SDK emits (`cdidx.dll` through `dotnet` or the native `cdidx`/`cdidx.exe` apphost). It is reported as skipped on macOS arm64 while SDK/ILLink can crash before exercising `cdidx` (#2586). Do not assume every SDK/runtime pair writes a `cdidx.dll` into self-contained publish output.
 - `QueryCommandRunnerTests.RunPublishedTrimmedCli_SearchSupportsCSharpRazorAliases`
   uses the same trimmed RID-specific publish path to verify C# Razor language aliases. It is also reported as skipped on macOS arm64 because the SDK/ILLink crash happens before the test reaches `cdidx`.
-  RID-specific publish helpers must route `NuGetLockFilePath` into the temporary publish output so local test runs do not add runtime sections to source `packages.lock.json` files (#2918).
 - `McpServerTests.cs`
   MCP JSON-RPC behavior and tool outputs.
 - `HttpMcpTransportTests.cs`
@@ -235,14 +236,16 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 
 - `ChunkSplitterTests.cs`、`SymbolExtractorTests.cs`、`ReferenceExtractorTests.cs`、`SearchSnippetFormatterTests.cs`、`DbPathResolverTests.cs`、`ConsoleUiTests.cs`
   インメモリ入力中心の、純粋またはほぼ純粋な振る舞いのテスト。
+- `SymbolExtractor*Tests.cs` と `ReferenceExtractor*Tests.cs`
+  extractor のカバレッジは言語または機能領域ごとの partial test class に分割し、共有 helper は root 側の `SymbolExtractorTests` / `ReferenceExtractorTests` に残します。
 - `FileIndexerTests.cs`
   ファイル走査、言語判定、レコード構築のテスト。拡張子なし shebang 判定の「先頭物理行 256 byte 上限」、binary/NUL byte 除外、Windows 専用の 260 文字以上 path walker/purge カバレッジも含みます。
 - `DatabaseTests.cs`、`DbReaderTests.cs`
   SQLite スキーマ、書き込み経路、マイグレーション、クエリ挙動のテスト。
 - `LegacySchemaMigrationTests.cs`
   エンドツーエンドのアップグレード経路: カラム追加前のレガシー DB を用意し、`TryMigrateForRead` 経由で開いてから NULL になりうるシンボル列を触る read path（outline、シンボル検索、近傍、unused、analyze バンドル）を一通り叩き、#58 / #49 の実機失敗モードを固定する。
-- `IndexCommandRunnerTests.cs`、`QueryCommandRunnerTests.cs`、`ProgramCliTests.cs`、`InstallScriptTests.cs`
-  CLI の引数解析、コマンド実行、installer 挙動のテスト。`ProgramCliTests.cs` はグローバル引数の解釈や完全な CLI 起動フローのように subprocess 経由で確認すべき Program エントリポイント挙動を扱い、`InstallScriptTests.cs` は `install.sh` を library mode で source した bash snippet を実行して、実ネットワーク install を行わずに release installer の回帰を固定する。
+- `IndexCommandRunnerTests.cs`、`QueryCommandRunner*Tests.cs`、`ProgramCliTests.cs`、`InstallScriptTests.cs`
+  CLI の引数解析、コマンド実行、installer 挙動のテスト。Query command coverage は command family ごとの partial `QueryCommandRunnerTests` class に分割し、共有 console / fixture helper は一箇所に保ちます。`ProgramCliTests.cs` はグローバル引数の解釈や完全な CLI 起動フローのように subprocess 経由で確認すべき Program エントリポイント挙動を扱い、`InstallScriptTests.cs` は `install.sh` を library mode で source した bash snippet を実行して、実ネットワーク install を行わずに release installer の回帰を固定する。
 - `IndexCommandRunnerTests.Run_CancelDuringFreshIndex_ReturnsInterruptedJson`、`Run_CancelDuringDryRunScan_ReturnsInterruptedJson`、`Run_CancelBeforeFreshScan_ReturnsInterruptedJson`
   Ctrl-C/SIGINT 配線後に使われる in-process cancellation 経路を、scan 中のキャンセルも含めて検証し、interrupted index run が標準の JSON error contract を返し続けることを固定する。
 - `SymbolExtractorTests.Extract_CSharp_InstallScriptFixture_CompletesWithinPracticalBudget`
@@ -251,7 +254,6 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   は trimmed な RID 固有 CLI を publish し、SDK が生成した entry point（`dotnet` 経由の `cdidx.dll`、または native の `cdidx`/`cdidx.exe` apphost）を実行します。self-contained publish output に常に `cdidx.dll` が出るとは仮定しないでください。
 - `QueryCommandRunnerTests.RunPublishedTrimmedCli_SearchSupportsCSharpRazorAliases`
   は同じ trimmed RID 固有 publish 経路で C# Razor の言語 alias を検証します。このテストも macOS arm64 では、`cdidx` に到達する前に SDK/ILLink がクラッシュし得るため skipped として報告されます。
-  RID 固有 publish helper は `NuGetLockFilePath` を一時 publish 出力へ向け、ローカル test run が source の `packages.lock.json` に runtime section を追加しないようにしてください (#2918)。
 - `McpServerTests.cs`
   MCP の JSON-RPC 挙動とツール出力のテスト。
 - `GitHelperTests.cs`

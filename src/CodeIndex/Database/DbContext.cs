@@ -1599,7 +1599,9 @@ public class DbContext : IDisposable
                 file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
                 kind            TEXT NOT NULL,
                 line            INTEGER NOT NULL DEFAULT 0,
-                message         TEXT NOT NULL
+                message         TEXT NOT NULL,
+                origin          TEXT,
+                severity        TEXT
             )");
 
                 // Key-value metadata: fold algorithm version, future per-subsystem schema markers
@@ -1631,6 +1633,8 @@ public class DbContext : IDisposable
                 EnsureColumn("symbols", "family_key", "TEXT");
                 EnsureColumn("symbols", "visibility", "TEXT");
                 EnsureColumn("symbols", "return_type", "TEXT");
+                EnsureColumn("file_issues", "origin", "TEXT");
+                EnsureColumn("file_issues", "severity", "TEXT");
                 EnsureColumn("symbols", "is_metadata_target", "INTEGER");
                 var rebuildsSymbolReferences = !ColumnIsNotNull("symbol_references", "file_id");
                 EnsureColumn(
@@ -1804,10 +1808,12 @@ public class DbContext : IDisposable
                     file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
                     kind            TEXT NOT NULL,
                     line            INTEGER NOT NULL DEFAULT 0,
-                    message         TEXT NOT NULL
+                    message         TEXT NOT NULL,
+                    origin          TEXT,
+                    severity        TEXT
                 )
                 """,
-                "id, file_id, kind, line, message");
+                "id, file_id, kind, line, message, origin, severity");
         }
         finally
         {
