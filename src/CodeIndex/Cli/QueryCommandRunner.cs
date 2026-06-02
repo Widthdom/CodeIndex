@@ -494,6 +494,33 @@ public static class QueryCommandRunner
             }
 
             var displayRows = BuildSearchDisplayRows(results, options, exact);
+            if (displayRows.Count == 0)
+            {
+                if (options.Json && TryWriteEmptyFormattedResult(options, jsonOptions))
+                    return ZeroResultExitCode(options);
+                if (options.Json)
+                {
+                    if (options.JsonOutputFormat == JsonOutputFormatArray)
+                    {
+                        Console.WriteLine(JsonSerializer.Serialize(
+                            Array.Empty<CompactSearchResult>(),
+                            CliJsonSerializerContextFactory.Create(jsonOptions).CompactSearchResultArray));
+                    }
+                    else
+                    {
+                        Console.WriteLine(BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "results", query: options.Query, ftsQueryDiagnostics: ftsQueryDiagnostics, queryOptions: options, exactSubstringHint: exactSubstringHint).ToJsonString(jsonOptions));
+                        jsonDoneCount = 0;
+                    }
+                }
+                else
+                {
+                    Console.Error.WriteLine(BuildZeroResultLine("No results found", options));
+                    WriteLangHint(options.Lang, reader);
+                    WriteExactSubstringHintIfNeeded(exactSubstringHint);
+                    WriteZeroResultHints(options, reader);
+                }
+                return ZeroResultExitCode(options);
+            }
 
             if (options.Json)
             {
@@ -576,6 +603,9 @@ public static class QueryCommandRunner
                 result.Lang,
                 options.SnippetFocus,
                 exposeLiteralHighlights: exact);
+
+            if (!options.RawFts && compact.MatchLines.Count == 0 && compact.Highlights.Count == 0)
+                continue;
 
             if (seenMatchLocations != null && compact.MatchLines.Count > 0)
             {
