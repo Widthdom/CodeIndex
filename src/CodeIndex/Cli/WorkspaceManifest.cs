@@ -26,6 +26,7 @@ internal static class WorkspaceManifestLoader
 {
     internal const string FileName = "cdidx.workspace.json";
     internal const string DotFileName = ".cdidx-workspace.json";
+    internal const int MaxManifestBytes = 64 * 1024;
 
     internal static WorkspaceManifest? Find(string startingDirectory)
     {
@@ -58,7 +59,9 @@ internal static class WorkspaceManifestLoader
     {
         var fullPath = Path.GetFullPath(path);
         var root = Path.GetDirectoryName(fullPath) ?? Environment.CurrentDirectory;
-        using var document = JsonDocument.Parse(File.ReadAllText(fullPath), new JsonDocumentOptions
+        var text = DataDirectorySecurity.ReadTextWithinLimit(fullPath, MaxManifestBytes)
+                   ?? throw new InvalidDataException($"{fullPath} exceeds the {MaxManifestBytes} byte limit.");
+        using var document = JsonDocument.Parse(text, new JsonDocumentOptions
         {
             CommentHandling = JsonCommentHandling.Skip,
             AllowTrailingCommas = true,

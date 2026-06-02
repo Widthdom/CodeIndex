@@ -26,6 +26,7 @@ internal static class CdidxConfigFile
     internal static readonly string ProjectConfigRelativePath = Path.Combine(".cdidx", "config.json");
     internal const string DisableEnvVar = "CDIDX_DISABLE_CONFIG_FILE";
     internal const string ConfigSourceEnvironmentVariablePrefix = "CDIDX_CONFIG_SOURCE__";
+    internal const int MaxConfigFileBytes = 64 * 1024;
 
     private static readonly IReadOnlyList<string> KnownTopLevelKeys = new[]
     {
@@ -85,7 +86,8 @@ internal static class CdidxConfigFile
         string text;
         try
         {
-            text = File.ReadAllText(path);
+            text = DataDirectorySecurity.ReadTextWithinLimit(path, MaxConfigFileBytes)
+                   ?? throw new InvalidDataException($"{FileName} exceeds the {MaxConfigFileBytes} byte limit.");
         }
         catch (Exception ex)
         {

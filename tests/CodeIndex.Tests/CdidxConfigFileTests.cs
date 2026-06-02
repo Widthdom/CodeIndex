@@ -371,6 +371,26 @@ public class CdidxConfigFileTests
         finally { TestProjectHelper.DeleteDirectory(dir); }
     }
 
+    [Fact]
+    public void LoadAndApply_OversizedConfigFile_FailsBeforeParsing()
+    {
+        var dir = CreateTempDir();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(dir, ".cdidxrc.json"),
+                new string('x', CdidxConfigFile.MaxConfigFileBytes + 1));
+
+            var env = new TestEnvironment();
+            var result = CdidxConfigFile.LoadAndApply(dir, env.Read, env.Write);
+
+            Assert.True(result.Failed);
+            Assert.Contains($"{CdidxConfigFile.MaxConfigFileBytes} byte limit", result.Error);
+            Assert.Empty(env.Writes);
+        }
+        finally { TestProjectHelper.DeleteDirectory(dir); }
+    }
+
     private static string CreateTempDir()
     {
         var path = Path.Combine(Path.GetTempPath(), $"cdidx_config_{Guid.NewGuid():N}");
