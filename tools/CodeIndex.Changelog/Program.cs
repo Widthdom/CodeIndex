@@ -626,11 +626,29 @@ public sealed class ChangelogTool
     private static string WriteStagedText(string targetPath, string contents)
     {
         var tempPath = BuildTempPath(targetPath);
-        using var stream = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
-        using var writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), bufferSize: 1024, leaveOpen: true);
-        writer.Write(contents);
-        writer.Flush();
-        stream.Flush(flushToDisk: true);
+        var tempCreated = false;
+        var writeCompleted = false;
+        try
+        {
+            using (var stream = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                tempCreated = true;
+                NotifyPrepareWritePhase(PrepareWritePhase.StagedTempCreated);
+
+                using var writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), bufferSize: 1024, leaveOpen: true);
+                writer.Write(contents);
+                writer.Flush();
+                stream.Flush(flushToDisk: true);
+            }
+
+            writeCompleted = true;
+        }
+        finally
+        {
+            if (tempCreated && !writeCompleted)
+                TryDelete(tempPath);
+        }
+
         return tempPath;
     }
 
@@ -1045,6 +1063,7 @@ public sealed class ChangelogTool
 
 internal enum PrepareWritePhase
 {
+    StagedTempCreated,
     StagedFilesWritten,
     ChangelogReplaced,
     VersionReplaced,

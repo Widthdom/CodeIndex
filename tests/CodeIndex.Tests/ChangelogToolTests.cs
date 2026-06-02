@@ -168,6 +168,46 @@ public sealed class ChangelogToolTests
     }
 
     [Fact]
+    public void PrepareFailureDuringStagedWriteDeletesPartialTempFile()
+    {
+        using var scope = new TestRepositoryScope();
+        scope.WriteFile("CHANGELOG.md", SampleChangelog);
+        scope.WriteFile("version.json", """
+            {
+              "version": "1.16.0"
+            }
+            """);
+        scope.WriteFile("changelog.d/unreleased/195.fixed.md", SampleFragment);
+
+        var tool = new ChangelogTool(scope.Root);
+        ChangelogException? ex = null;
+        ChangelogTool.PrepareWritePhaseForTesting = phase =>
+        {
+            if (phase == PrepareWritePhase.StagedTempCreated)
+                throw new ChangelogException("injected staged write failure");
+        };
+        try
+        {
+            ex = Assert.Throws<ChangelogException>(() => tool.Prepare(new Version(1, 17, 0), new DateOnly(2026, 5, 1), writeChanges: true));
+        }
+        finally
+        {
+            ChangelogTool.PrepareWritePhaseForTesting = null;
+        }
+
+        Assert.NotNull(ex);
+        Assert.Contains("injected staged write failure", ex.Message);
+        Assert.DoesNotContain("English release note", scope.ReadFile("CHANGELOG.md"));
+        Assert.Equal("""
+            {
+              "version": "1.16.0"
+            }
+            """.Replace("\r\n", "\n"), scope.ReadFile("version.json").Replace("\r\n", "\n"));
+        Assert.True(scope.Exists("changelog.d/unreleased/195.fixed.md"));
+        Assert.DoesNotContain(scope.ListFiles("."), path => Path.GetFileName(path).EndsWith(".tmp", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void PrepareFailureBeforeFragmentDeletionRollsBackReleaseFiles()
     {
         using var scope = new TestRepositoryScope();
