@@ -3215,7 +3215,10 @@ Downstream users can add lightweight language support without rebuilding
   workspace ancestor `.cdidx-langmap.yaml`; workspace entries override user
   entries;
 - regex-backed symbol patterns are read from `.cdidx/patterns/*.yaml` and
-  `~/.config/cdidx/patterns/*.yaml`;
+  `~/.config/cdidx/patterns/*.yaml`; sidecars must be regular files under
+  non-symlink pattern directories, each file is capped at 64 KiB / 128 rules,
+  the process loads at most 128 configured rules total, and regex matches use a
+  100 ms timeout;
 - `cdidx test-extractor --language <lang> --file <path> --json` runs symbol
   extraction without building an index, and `--expect-symbols <json>` compares
   the extracted JSON to a fixture.
@@ -3240,8 +3243,9 @@ patterns:
 ```
 
 Each configured regex should expose a named `name` capture. If it does not,
-`cdidx` uses the full match text as the symbol name. Invalid sidecar files are
-ignored so a broken local experiment does not prevent indexing.
+`cdidx` uses the full match text as the symbol name. Invalid, symlinked,
+oversized, or over-budget sidecar files are skipped with a stderr diagnostic so
+a broken local experiment does not prevent indexing.
 
 ## カスタム言語抽出
 
@@ -3250,9 +3254,15 @@ ignored so a broken local experiment does not prevent indexing.
 - 拡張子 alias は `~/.config/cdidx/langmap.yaml` と、最初に見つかった workspace
   祖先の `.cdidx-langmap.yaml` から読み込まれ、workspace 側が user 側を上書きします。
 - regex ベースのシンボルパターンは `.cdidx/patterns/*.yaml` と
-  `~/.config/cdidx/patterns/*.yaml` から読み込まれます。
+  `~/.config/cdidx/patterns/*.yaml` から読み込まれます。sidecar は symlink ではない
+  pattern directory 配下の通常ファイルのみが対象で、各ファイルは 64 KiB / 128 ルール、
+  プロセス全体では configured rule 128 件に制限され、regex match には 100 ms の timeout が付きます。
 - `cdidx test-extractor --language <lang> --file <path> --json` は index を作らずに
   symbol extraction だけを実行し、`--expect-symbols <json>` で fixture JSON と比較できます。
+
+各 regex は `name` という名前付き capture を公開することを推奨します。存在しない場合、
+`cdidx` は match 全体の文字列を symbol 名として使います。無効、symlink、過大、または
+上限超過の sidecar は stderr の診断付きで skip されるため、壊れたローカル実験が indexing を止めません。
 
 ## SQLite reader のデバッグ
 
