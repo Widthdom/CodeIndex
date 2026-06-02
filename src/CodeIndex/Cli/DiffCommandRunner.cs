@@ -228,6 +228,9 @@ public static class DiffCommandRunner
                     OR key LIKE 'metadata_target_version_%'
                     OR key = 'workspace_path_case_sensitive'
                     OR key = 'unknown_extension_file_count'
+                    OR key = 'unknown_extension_file_paths_json'
+                    OR key = 'unknown_extension_files_truncated'
+                    OR key = 'unknown_extension_file_path_limit'
                     OR key = 'cdidx_writer_version'
                 ORDER BY
                     key,
