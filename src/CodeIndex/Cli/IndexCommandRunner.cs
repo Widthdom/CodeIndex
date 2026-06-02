@@ -385,13 +385,13 @@ public static partial class IndexCommandRunner
         return total;
     }
 
-    private static Dictionary<string, string?> GetHotspotFamilyMarkerFingerprints(
+    private static Dictionary<string, FileIndexer.ProjectMarkerFingerprintResult> GetHotspotFamilyMarkerFingerprints(
         FileIndexer indexer,
         CancellationToken cancellationToken = default)
     {
-        var values = new Dictionary<string, string?>(StringComparer.Ordinal);
+        var values = new Dictionary<string, FileIndexer.ProjectMarkerFingerprintResult>(StringComparer.Ordinal);
         foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
-            values[lang] = indexer.GetProjectMarkerFingerprint(lang, cancellationToken);
+            values[lang] = indexer.GetProjectMarkerFingerprintResult(lang, cancellationToken);
         return values;
     }
 
@@ -399,7 +399,7 @@ public static partial class IndexCommandRunner
         DbWriter writer,
         IReadOnlyDictionary<string, string?> priorVersions,
         IReadOnlyDictionary<string, string?> priorFingerprints,
-        IReadOnlyDictionary<string, string?> currentFingerprints)
+        IReadOnlyDictionary<string, FileIndexer.ProjectMarkerFingerprintResult> currentFingerprints)
     {
         var currentVersion = DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
         foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
@@ -407,10 +407,11 @@ public static partial class IndexCommandRunner
             if (priorVersions.TryGetValue(lang, out var priorVersion)
                 && priorFingerprints.TryGetValue(lang, out var priorFingerprint)
                 && currentFingerprints.TryGetValue(lang, out var currentFingerprint)
+                && currentFingerprint.IsComplete
                 && priorVersion == currentVersion
-                && priorFingerprint == currentFingerprint)
+                && priorFingerprint == currentFingerprint.Fingerprint)
             {
-                writer.MarkHotspotFamilyReady(lang, currentFingerprint);
+                writer.MarkHotspotFamilyReady(lang, currentFingerprint.Fingerprint);
             }
         }
     }
@@ -420,23 +421,25 @@ public static partial class IndexCommandRunner
         IReadOnlySet<string> reusedLanguages,
         IReadOnlyDictionary<string, string?> priorVersions,
         IReadOnlyDictionary<string, string?> priorFingerprints,
-        IReadOnlyDictionary<string, string?> currentFingerprints)
+        IReadOnlyDictionary<string, FileIndexer.ProjectMarkerFingerprintResult> currentFingerprints)
     {
         var currentVersion = DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
         foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
         {
-            currentFingerprints.TryGetValue(lang, out var currentFingerprint);
+            if (!currentFingerprints.TryGetValue(lang, out var currentFingerprint) || !currentFingerprint.IsComplete)
+                continue;
+
             priorVersions.TryGetValue(lang, out var priorVersion);
             priorFingerprints.TryGetValue(lang, out var priorFingerprint);
-            if (!reusedLanguages.Contains(lang) || (priorVersion == currentVersion && priorFingerprint == currentFingerprint))
-                writer.MarkHotspotFamilyReady(lang, currentFingerprint);
+            if (!reusedLanguages.Contains(lang) || (priorVersion == currentVersion && priorFingerprint == currentFingerprint.Fingerprint))
+                writer.MarkHotspotFamilyReady(lang, currentFingerprint.Fingerprint);
         }
     }
 
     private static Dictionary<string, bool> GetHotspotFamilyTrustMatchesCurrent(
         IReadOnlyDictionary<string, string?> priorVersions,
         IReadOnlyDictionary<string, string?> priorFingerprints,
-        IReadOnlyDictionary<string, string?> currentFingerprints)
+        IReadOnlyDictionary<string, FileIndexer.ProjectMarkerFingerprintResult> currentFingerprints)
     {
         var currentVersion = DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var values = new Dictionary<string, bool>(StringComparer.Ordinal);
@@ -445,7 +448,9 @@ public static partial class IndexCommandRunner
             currentFingerprints.TryGetValue(lang, out var currentFingerprint);
             priorVersions.TryGetValue(lang, out var priorVersion);
             priorFingerprints.TryGetValue(lang, out var priorFingerprint);
-            values[lang] = priorVersion == currentVersion && priorFingerprint == currentFingerprint;
+            values[lang] = currentFingerprint.IsComplete
+                && priorVersion == currentVersion
+                && priorFingerprint == currentFingerprint.Fingerprint;
         }
 
         return values;

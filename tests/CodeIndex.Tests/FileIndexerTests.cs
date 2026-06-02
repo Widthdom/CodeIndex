@@ -617,6 +617,30 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void GetProjectMarkerFingerprint_DirectoryCapReportsIncompleteTraversal()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_msbuild_marker_incomplete_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            for (var i = 0; i < 4; i++)
+                Directory.CreateDirectory(Path.Combine(tempDir, $"project-{i}"));
+
+            var indexer = new FileIndexer(tempDir);
+
+            var result = indexer.GetProjectMarkerFingerprintResultForTesting("msbuild", maxDirectories: 1, maxMarkerFiles: 100);
+
+            Assert.False(result.IsComplete);
+            Assert.False(string.IsNullOrWhiteSpace(result.Fingerprint));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
     public void GetProjectMarkerFingerprint_FileCapTruncatesMarkerCollection()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_msbuild_marker_file_cap_{Guid.NewGuid():N}");

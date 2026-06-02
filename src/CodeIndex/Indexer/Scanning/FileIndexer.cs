@@ -91,6 +91,8 @@ public class FileIndexer
         public bool Truncated { get; set; }
     }
 
+    internal readonly record struct ProjectMarkerFingerprintResult(string? Fingerprint, bool IsComplete);
+
     private static readonly string[] HotspotFamilyMarkerLanguages = ["csharp", "vb", "fsharp", "msbuild"];
     private const int ConflictMarkerScanLimitBytes = 50 * 1024;
     private const int MaxDirectoryTraversalDepth = 128;
@@ -1539,16 +1541,28 @@ public class FileIndexer
         GetProjectMarkerPatterns(lang) != null;
 
     public string? GetProjectMarkerFingerprint(string? lang, CancellationToken cancellationToken = default) =>
-        GetProjectMarkerFingerprint(lang, MaxProjectMarkerFingerprintDirectories, MaxProjectMarkerFingerprintFiles, cancellationToken);
+        GetProjectMarkerFingerprintResult(lang, cancellationToken).Fingerprint;
+
+    internal ProjectMarkerFingerprintResult GetProjectMarkerFingerprintResult(
+        string? lang,
+        CancellationToken cancellationToken = default) =>
+        GetProjectMarkerFingerprintResult(lang, MaxProjectMarkerFingerprintDirectories, MaxProjectMarkerFingerprintFiles, cancellationToken);
 
     internal string? GetProjectMarkerFingerprintForTesting(
         string? lang,
         int maxDirectories,
         int maxMarkerFiles,
         CancellationToken cancellationToken = default) =>
-        GetProjectMarkerFingerprint(lang, maxDirectories, maxMarkerFiles, cancellationToken);
+        GetProjectMarkerFingerprintResult(lang, maxDirectories, maxMarkerFiles, cancellationToken).Fingerprint;
 
-    private string? GetProjectMarkerFingerprint(
+    internal ProjectMarkerFingerprintResult GetProjectMarkerFingerprintResultForTesting(
+        string? lang,
+        int maxDirectories,
+        int maxMarkerFiles,
+        CancellationToken cancellationToken = default) =>
+        GetProjectMarkerFingerprintResult(lang, maxDirectories, maxMarkerFiles, cancellationToken);
+
+    private ProjectMarkerFingerprintResult GetProjectMarkerFingerprintResult(
         string? lang,
         int maxDirectories,
         int maxMarkerFiles,
@@ -1557,7 +1571,7 @@ public class FileIndexer
         cancellationToken.ThrowIfCancellationRequested();
         var projectMarkerPatterns = GetProjectMarkerPatterns(lang);
         if (projectMarkerPatterns == null)
-            return null;
+            return new ProjectMarkerFingerprintResult(null, IsComplete: true);
 
         var projectMarkers = new List<string>();
         var traversalState = new ProjectMarkerFingerprintTraversalState();
@@ -1578,7 +1592,9 @@ public class FileIndexer
         projectMarkers.Sort(StringComparer.Ordinal);
 
         var payload = string.Join('\n', projectMarkers);
-        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payload))).ToLowerInvariant();
+        return new ProjectMarkerFingerprintResult(
+            Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payload))).ToLowerInvariant(),
+            !traversalState.Truncated);
     }
 
     public static string DeriveFallbackFamilyScopeKey(string relativePath)
@@ -1695,6 +1711,12 @@ public class FileIndexer
                     var subDir = LongPath.RemoveWindowsPrefix(enumeratedSubDir);
                     if (SkipDirs.Contains(Path.GetFileName(subDir)) || HasSkippedAttributes(subDir))
                         continue;
+
+                    if (traversalState.DirectoriesVisited + pendingDirectories.Count >= maxDirectories)
+                    {
+                        traversalState.Truncated = true;
+                        return;
+                    }
 
                     pendingDirectories.Push(subDir);
                 }

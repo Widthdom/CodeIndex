@@ -382,7 +382,7 @@ public static partial class IndexCommandRunner
         string? priorSqlGraphContractVersion,
         IReadOnlyDictionary<string, string?> priorHotspotFamilyVersions,
         IReadOnlyDictionary<string, string?> priorHotspotFamilyMarkerFingerprints,
-        IReadOnlyDictionary<string, string?> currentHotspotFamilyMarkerFingerprints,
+        IReadOnlyDictionary<string, FileIndexer.ProjectMarkerFingerprintResult> currentHotspotFamilyMarkerFingerprints,
         string? priorIndexedProjectRoot,
         string? priorIndexedHeadCommit,
         string? currentHeadCommit,
