@@ -44,6 +44,95 @@ public class DiffCommandRunnerTests
     }
 
     [Fact]
+    public void Run_LimitZeroStillDetectsDatabaseDrift_Issue2885()
+    {
+        var leftRoot = TestProjectHelper.CreateTempProject("cdidx_diff_limit_zero_left");
+        var rightRoot = TestProjectHelper.CreateTempProject("cdidx_diff_limit_zero_right");
+        try
+        {
+            var leftDb = SeedDb(leftRoot, includeExtraFile: false);
+            var rightDb = SeedDb(rightRoot, includeExtraFile: true);
+
+            var (exitCode, output) = RunWithCapturedOut([leftDb, rightDb, "--json", "--limit", "0"]);
+
+            Assert.Equal(1, exitCode);
+            using var document = JsonDocument.Parse(output);
+            var root = document.RootElement;
+            Assert.Equal("different", root.GetProperty("status").GetString());
+            Assert.False(root.GetProperty("identical").GetBoolean());
+            Assert.Equal(0, root.GetProperty("files_only_in_left").GetArrayLength());
+            Assert.Equal(0, root.GetProperty("files_only_in_right").GetArrayLength());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(leftRoot);
+            TestProjectHelper.DeleteDirectory(rightRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DetailedJsonReportsLimitedSymbolRows_Issue2885()
+    {
+        var leftRoot = TestProjectHelper.CreateTempProject("cdidx_diff_detailed_left");
+        var rightRoot = TestProjectHelper.CreateTempProject("cdidx_diff_detailed_right");
+        try
+        {
+            var leftDb = TestProjectHelper.CreateProjectDb(leftRoot);
+            var rightDb = TestProjectHelper.CreateProjectDb(rightRoot);
+            TestProjectHelper.InsertIndexedFile(leftDb, "src/Same.cs", "csharp", "public class LeftOnly { public void Run() { } }");
+            TestProjectHelper.InsertIndexedFile(rightDb, "src/Same.cs", "csharp", "public class RightOnly { public void Run() { } }");
+
+            var (exitCode, output) = RunWithCapturedOut([leftDb, rightDb, "--json", "--detailed", "--limit", "1"]);
+
+            Assert.Equal(1, exitCode);
+            using var document = JsonDocument.Parse(output);
+            var root = document.RootElement;
+            var symbolsOnlyInLeft = root.GetProperty("symbols_only_in_left").EnumerateArray().ToList();
+            var symbolsOnlyInRight = root.GetProperty("symbols_only_in_right").EnumerateArray().ToList();
+            Assert.Single(symbolsOnlyInLeft);
+            Assert.Single(symbolsOnlyInRight);
+            Assert.Contains("LeftOnly", symbolsOnlyInLeft[0].GetString(), StringComparison.Ordinal);
+            Assert.Contains("RightOnly", symbolsOnlyInRight[0].GetString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(leftRoot);
+            TestProjectHelper.DeleteDirectory(rightRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DetailedJsonUsesSqlOrderForStreamingSymbolDiff_Issue2885()
+    {
+        var leftRoot = TestProjectHelper.CreateTempProject("cdidx_diff_order_left");
+        var rightRoot = TestProjectHelper.CreateTempProject("cdidx_diff_order_right");
+        try
+        {
+            var leftDb = TestProjectHelper.CreateProjectDb(leftRoot);
+            var rightDb = TestProjectHelper.CreateProjectDb(rightRoot);
+            TestProjectHelper.InsertIndexedFile(leftDb, "src/aa.cs", "csharp", "public class aa { }");
+            TestProjectHelper.InsertIndexedFile(leftDb, "src/b.cs", "csharp", "public class b { }");
+            TestProjectHelper.InsertIndexedFile(rightDb, "src/b.cs", "csharp", "public class b { }");
+
+            var (exitCode, output) = RunWithCapturedOut([leftDb, rightDb, "--json", "--detailed", "--limit", "5"]);
+
+            Assert.Equal(1, exitCode);
+            using var document = JsonDocument.Parse(output);
+            var root = document.RootElement;
+            var symbolsOnlyInLeft = root.GetProperty("symbols_only_in_left").EnumerateArray().ToList();
+            var symbolsOnlyInRight = root.GetProperty("symbols_only_in_right").EnumerateArray().ToList();
+            Assert.Contains(symbolsOnlyInLeft, item => item.GetString()?.Contains("src/aa.cs", StringComparison.Ordinal) == true);
+            Assert.DoesNotContain(symbolsOnlyInLeft, item => item.GetString()?.Contains("src/b.cs", StringComparison.Ordinal) == true);
+            Assert.Empty(symbolsOnlyInRight);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(leftRoot);
+            TestProjectHelper.DeleteDirectory(rightRoot);
+        }
+    }
+
+    [Fact]
     public void Run_ReturnsSuccessForSeparatelyBuiltIdenticalDatabases_Issue1724()
     {
         var leftRoot = TestProjectHelper.CreateTempProject("cdidx_diff_identical_left");

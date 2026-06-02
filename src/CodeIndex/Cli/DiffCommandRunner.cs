@@ -40,9 +40,7 @@ public static class DiffCommandRunner
                 return SchemaMismatchExitCode;
             }
 
-            var left = ReadSnapshot(options.LeftDb!);
-            var right = ReadSnapshot(options.RightDb!);
-            var result = BuildDiff(left, right, options);
+            var result = BuildDiff(leftHeader, rightHeader, options);
 
             WriteResult(result, options, jsonOptions);
 
@@ -121,206 +119,170 @@ public static class DiffCommandRunner
         };
     }
 
-    private static DiffDbSnapshot ReadSnapshot(string dbPath)
+    private const string FilePathRowsSql = "SELECT path FROM files ORDER BY path";
+
+    private const string FileRowsSql = """
+        SELECT
+            path,
+            lang,
+            size,
+            lines,
+            checksum
+        FROM files
+        ORDER BY
+            path,
+            lang,
+            size,
+            lines,
+            checksum
+        """;
+
+    private const string ChunkRowsSql = """
+        SELECT
+            COALESCE(files.path, ''),
+            chunks.chunk_index,
+            chunks.start_line,
+            chunks.end_line,
+            chunks.content
+        FROM chunks
+        LEFT JOIN files ON files.id = chunks.file_id
+        ORDER BY
+            COALESCE(files.path, ''),
+            chunks.chunk_index,
+            chunks.start_line,
+            chunks.end_line,
+            chunks.content
+        """;
+
+    private const string ReferenceLineRowsSql = """
+        SELECT
+            COALESCE(files.path, ''),
+            reference_lines.line,
+            reference_lines.context
+        FROM reference_lines
+        LEFT JOIN files ON files.id = reference_lines.file_id
+        ORDER BY
+            COALESCE(files.path, ''),
+            reference_lines.line,
+            reference_lines.context
+        """;
+
+    private const string FileIssueRowsSql = """
+        SELECT
+            COALESCE(files.path, ''),
+            file_issues.kind,
+            file_issues.line,
+            file_issues.message
+        FROM file_issues
+        LEFT JOIN files ON files.id = file_issues.file_id
+        ORDER BY
+            COALESCE(files.path, ''),
+            file_issues.kind,
+            file_issues.line,
+            file_issues.message
+        """;
+
+    private const string MetaRowsSql = """
+        SELECT
+            key,
+            value
+        FROM codeindex_meta
+        WHERE
+            key = 'hotspot_family_version'
+            OR key = 'hotspot_family_marker_fingerprint'
+            OR key LIKE 'hotspot_family_version_%'
+            OR key LIKE 'hotspot_family_marker_fingerprint_%'
+            OR key = 'csharp_symbol_name_contract_version'
+            OR key = 'sql_graph_contract_version'
+            OR key LIKE 'symbol_extractor_version_%'
+            OR key LIKE 'metadata_target_version_%'
+            OR key = 'workspace_path_case_sensitive'
+            OR key = 'unknown_extension_file_count'
+            OR key = 'unknown_extension_file_paths_json'
+            OR key = 'unknown_extension_files_truncated'
+            OR key = 'unknown_extension_file_path_limit'
+            OR key = 'cdidx_writer_version'
+        ORDER BY
+            key,
+            value
+        """;
+
+    private const string SymbolRowsSql = """
+        SELECT
+            COALESCE(files.path, ''),
+            symbols.kind,
+            symbols.sub_kind,
+            symbols.name,
+            symbols.name_folded,
+            symbols.line,
+            symbols.start_line,
+            symbols.start_column,
+            symbols.end_line,
+            symbols.body_start_line,
+            symbols.body_end_line,
+            symbols.signature,
+            symbols.container_kind,
+            symbols.container_name,
+            symbols.container_qualified_name,
+            symbols.family_key,
+            symbols.visibility,
+            symbols.return_type,
+            symbols.is_metadata_target
+        FROM symbols
+        LEFT JOIN files ON files.id = symbols.file_id
+        ORDER BY
+            COALESCE(files.path, ''),
+            symbols.kind,
+            symbols.sub_kind,
+            symbols.name,
+            symbols.name_folded,
+            symbols.line,
+            symbols.start_line,
+            symbols.start_column,
+            symbols.end_line,
+            symbols.body_start_line,
+            symbols.body_end_line,
+            symbols.signature,
+            symbols.container_kind,
+            symbols.container_name,
+            symbols.container_qualified_name,
+            symbols.family_key,
+            symbols.visibility,
+            symbols.return_type,
+            symbols.is_metadata_target
+        """;
+
+    private const string ReferenceRowsSql = """
+        SELECT
+            COALESCE(files.path, ''),
+            symbol_references.symbol_name,
+            symbol_references.symbol_name_folded,
+            symbol_references.reference_kind,
+            symbol_references.line,
+            symbol_references.column_number,
+            symbol_references.context,
+            symbol_references.reference_line_id,
+            symbol_references.container_kind,
+            symbol_references.container_name,
+            symbol_references.container_name_folded
+        FROM symbol_references
+        LEFT JOIN files ON files.id = symbol_references.file_id
+        ORDER BY
+            COALESCE(files.path, ''),
+            symbol_references.symbol_name,
+            symbol_references.symbol_name_folded,
+            symbol_references.reference_kind,
+            symbol_references.line,
+            symbol_references.column_number,
+            symbol_references.context,
+            symbol_references.reference_line_id,
+            symbol_references.container_kind,
+            symbol_references.container_name,
+            symbol_references.container_name_folded
+        """;
+
+    private static DiffJsonResult BuildDiff(DiffDbHeader left, DiffDbHeader right, DiffCommandOptions options)
     {
-        var isUri = dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase);
-        if (!isUri && !File.Exists(LongPath.EnsureWindowsPrefix(dbPath)))
-            throw new IOException($"database not found: {dbPath}");
-
-        var connectionString = isUri
-            ? $"Data Source={dbPath}"
-            : new SqliteConnectionStringBuilder
-            {
-                DataSource = dbPath,
-                Mode = SqliteOpenMode.ReadOnly,
-            }.ConnectionString;
-
-        using var connection = new SqliteConnection(connectionString);
-        connection.Open();
-
-        return new DiffDbSnapshot(
-            Path.GetFullPath(isUri ? dbPath : dbPath),
-            ExecuteLong(connection, "PRAGMA user_version"),
-            ExecuteLong(connection, "SELECT COUNT(*) FROM files"),
-            ExecuteLong(connection, "SELECT COUNT(*) FROM symbols"),
-            ExecuteLong(connection, "SELECT COUNT(*) FROM symbol_references"),
-            ReadStrings(connection, "SELECT path FROM files ORDER BY path"),
-            ReadRows(
-                connection,
-                """
-                SELECT
-                    path,
-                    lang,
-                    size,
-                    lines,
-                    checksum
-                FROM files
-                ORDER BY
-                    path,
-                    lang,
-                    size,
-                    lines,
-                    checksum
-                """),
-            ReadRows(
-                connection,
-                """
-                SELECT
-                    COALESCE(files.path, ''),
-                    chunks.chunk_index,
-                    chunks.start_line,
-                    chunks.end_line,
-                    chunks.content
-                FROM chunks
-                LEFT JOIN files ON files.id = chunks.file_id
-                ORDER BY
-                    COALESCE(files.path, ''),
-                    chunks.chunk_index,
-                    chunks.start_line,
-                    chunks.end_line,
-                    chunks.content
-                """),
-            ReadRows(
-                connection,
-                """
-                SELECT
-                    COALESCE(files.path, ''),
-                    reference_lines.line,
-                    reference_lines.context
-                FROM reference_lines
-                LEFT JOIN files ON files.id = reference_lines.file_id
-                ORDER BY
-                    COALESCE(files.path, ''),
-                    reference_lines.line,
-                    reference_lines.context
-                """),
-            ReadRows(
-                connection,
-                """
-                SELECT
-                    COALESCE(files.path, ''),
-                    file_issues.kind,
-                    file_issues.line,
-                    file_issues.message
-                FROM file_issues
-                LEFT JOIN files ON files.id = file_issues.file_id
-                ORDER BY
-                    COALESCE(files.path, ''),
-                    file_issues.kind,
-                    file_issues.line,
-                    file_issues.message
-                """),
-            ReadRows(
-                connection,
-                """
-                SELECT
-                    key,
-                    value
-                FROM codeindex_meta
-                WHERE
-                    key = 'hotspot_family_version'
-                    OR key = 'hotspot_family_marker_fingerprint'
-                    OR key LIKE 'hotspot_family_version_%'
-                    OR key LIKE 'hotspot_family_marker_fingerprint_%'
-                    OR key = 'csharp_symbol_name_contract_version'
-                    OR key = 'sql_graph_contract_version'
-                    OR key LIKE 'symbol_extractor_version_%'
-                    OR key LIKE 'metadata_target_version_%'
-                    OR key = 'workspace_path_case_sensitive'
-                    OR key = 'unknown_extension_file_count'
-                    OR key = 'unknown_extension_file_paths_json'
-                    OR key = 'unknown_extension_files_truncated'
-                    OR key = 'unknown_extension_file_path_limit'
-                    OR key = 'cdidx_writer_version'
-                ORDER BY
-                    key,
-                    value
-                """),
-            ReadRows(
-                connection,
-                """
-                SELECT
-                    COALESCE(files.path, ''),
-                    symbols.kind,
-                    symbols.sub_kind,
-                    symbols.name,
-                    symbols.name_folded,
-                    symbols.line,
-                    symbols.start_line,
-                    symbols.start_column,
-                    symbols.end_line,
-                    symbols.body_start_line,
-                    symbols.body_end_line,
-                    symbols.signature,
-                    symbols.container_kind,
-                    symbols.container_name,
-                    symbols.container_qualified_name,
-                    symbols.family_key,
-                    symbols.visibility,
-                    symbols.return_type,
-                    symbols.is_metadata_target
-                FROM symbols
-                LEFT JOIN files ON files.id = symbols.file_id
-                ORDER BY
-                    COALESCE(files.path, ''),
-                    symbols.kind,
-                    symbols.sub_kind,
-                    symbols.name,
-                    symbols.name_folded,
-                    symbols.line,
-                    symbols.start_line,
-                    symbols.start_column,
-                    symbols.end_line,
-                    symbols.body_start_line,
-                    symbols.body_end_line,
-                    symbols.signature,
-                    symbols.container_kind,
-                    symbols.container_name,
-                    symbols.container_qualified_name,
-                    symbols.family_key,
-                    symbols.visibility,
-                    symbols.return_type,
-                    symbols.is_metadata_target
-                """),
-            ReadRows(
-                connection,
-                """
-                SELECT
-                    COALESCE(files.path, ''),
-                    symbol_references.symbol_name,
-                    symbol_references.symbol_name_folded,
-                    symbol_references.reference_kind,
-                    symbol_references.line,
-                    symbol_references.column_number,
-                    symbol_references.context,
-                    symbol_references.reference_line_id,
-                    symbol_references.container_kind,
-                    symbol_references.container_name,
-                    symbol_references.container_name_folded
-                FROM symbol_references
-                LEFT JOIN files ON files.id = symbol_references.file_id
-                ORDER BY
-                    COALESCE(files.path, ''),
-                    symbol_references.symbol_name,
-                    symbol_references.symbol_name_folded,
-                    symbol_references.reference_kind,
-                    symbol_references.line,
-                    symbol_references.column_number,
-                    symbol_references.context,
-                    symbol_references.reference_line_id,
-                    symbol_references.container_kind,
-                    symbol_references.container_name,
-                    symbol_references.container_name_folded
-                """));
-    }
-
-    private static DiffJsonResult BuildDiff(DiffDbSnapshot left, DiffDbSnapshot right, DiffCommandOptions options)
-    {
-        var filesOnlyInLeft = TakeDiff(left.Files, right.Files, options.Limit);
-        var filesOnlyInRight = TakeDiff(right.Files, left.Files, options.Limit);
-        var symbolsOnlyInLeft = options.Detailed ? TakeDiff(left.SymbolRows, right.SymbolRows, options.Limit) : [];
-        var symbolsOnlyInRight = options.Detailed ? TakeDiff(right.SymbolRows, left.SymbolRows, options.Limit) : [];
-
         var summary = new DiffSummaryJsonResult(
             left.FileCount,
             right.FileCount,
@@ -335,19 +297,46 @@ public static class DiffCommandRunner
             right.SchemaVersion,
             left.SchemaVersion == right.SchemaVersion);
 
+        var filesOnlyInLeft = new List<string>();
+        var filesOnlyInRight = new List<string>();
+        var symbolsOnlyInLeft = new List<string>();
+        var symbolsOnlyInRight = new List<string>();
         var identical =
             summary.SchemaVersionsEqual &&
             summary.FileCountDelta == 0 &&
             summary.SymbolCountDelta == 0 &&
-            summary.ReferenceCountDelta == 0 &&
-            left.Files.SetEquals(right.Files) &&
-            left.FileRows.SequenceEqual(right.FileRows, StringComparer.Ordinal) &&
-            left.ChunkRows.SequenceEqual(right.ChunkRows, StringComparer.Ordinal) &&
-            left.ReferenceLineRows.SequenceEqual(right.ReferenceLineRows, StringComparer.Ordinal) &&
-            left.FileIssueRows.SequenceEqual(right.FileIssueRows, StringComparer.Ordinal) &&
-            left.MetaRows.SequenceEqual(right.MetaRows, StringComparer.Ordinal) &&
-            left.SymbolRows.SequenceEqual(right.SymbolRows, StringComparer.Ordinal) &&
-            left.ReferenceRows.SequenceEqual(right.ReferenceRows, StringComparer.Ordinal);
+            summary.ReferenceCountDelta == 0;
+
+        using var leftConnection = OpenReadOnlyConnection(options.LeftDb!);
+        using var rightConnection = OpenReadOnlyConnection(options.RightDb!);
+
+        if (!options.SummaryOnly)
+        {
+            var fileDiff = DiffOrderedStrings(leftConnection, rightConnection, FilePathRowsSql, options.Limit);
+            filesOnlyInLeft = fileDiff.OnlyInLeft;
+            filesOnlyInRight = fileDiff.OnlyInRight;
+            identical = identical && fileDiff.Equal;
+        }
+
+        if (options.Detailed)
+        {
+            var symbolDiff = DiffOrderedRows(leftConnection, rightConnection, SymbolRowsSql, options.Limit);
+            symbolsOnlyInLeft = symbolDiff.OnlyInLeft;
+            symbolsOnlyInRight = symbolDiff.OnlyInRight;
+            identical = identical && symbolDiff.Equal;
+        }
+
+        if (identical)
+        {
+            identical =
+                RowsEqual(leftConnection, rightConnection, FileRowsSql) &&
+                RowsEqual(leftConnection, rightConnection, ChunkRowsSql) &&
+                RowsEqual(leftConnection, rightConnection, ReferenceLineRowsSql) &&
+                RowsEqual(leftConnection, rightConnection, FileIssueRowsSql) &&
+                RowsEqual(leftConnection, rightConnection, MetaRowsSql) &&
+                (options.Detailed || RowsEqual(leftConnection, rightConnection, SymbolRowsSql)) &&
+                RowsEqual(leftConnection, rightConnection, ReferenceRowsSql);
+        }
 
         return new DiffJsonResult(
             identical ? "identical" : "different",
@@ -393,58 +382,245 @@ public static class DiffCommandRunner
             options.Detailed);
     }
 
-    private static List<string> TakeDiff(HashSet<string> source, HashSet<string> other, int limit)
+    private static OrderedRowsDiff DiffOrderedRows(SqliteConnection leftConnection, SqliteConnection rightConnection, string sql, int limit)
     {
         if (limit == 0)
-            return [];
+            return new OrderedRowsDiff(RowsEqual(leftConnection, rightConnection, sql), [], []);
 
-        var result = new List<string>(Math.Min(source.Count, limit));
-        foreach (var item in source.Order(StringComparer.Ordinal))
+        using var leftCommand = leftConnection.CreateCommand();
+        leftCommand.CommandText = sql;
+        using var rightCommand = rightConnection.CreateCommand();
+        rightCommand.CommandText = sql;
+        using var leftReader = leftCommand.ExecuteReader();
+        using var rightReader = rightCommand.ExecuteReader();
+
+        var onlyInLeft = new List<string>(limit);
+        var onlyInRight = new List<string>(limit);
+        var leftHasValue = TryReadEncodedRow(leftReader, out var leftValue);
+        var rightHasValue = TryReadEncodedRow(rightReader, out var rightValue);
+        var equal = true;
+
+        while (leftHasValue || rightHasValue)
         {
-            if (other.Contains(item))
-                continue;
-            result.Add(item);
-            if (result.Count >= limit)
-                break;
-        }
-        return result;
-    }
+            var comparison = leftHasValue && rightHasValue
+                ? CompareRows(leftValue, rightValue)
+                : leftHasValue ? -1 : 1;
 
-    private static List<string> TakeDiff(List<string> source, List<string> other, int limit)
-    {
-        if (limit == 0)
-            return [];
-
-        var remaining = new Dictionary<string, int>(StringComparer.Ordinal);
-        foreach (var item in other)
-            remaining[item] = remaining.GetValueOrDefault(item) + 1;
-
-        var result = new List<string>(Math.Min(source.Count, limit));
-        foreach (var item in source)
-        {
-            if (remaining.TryGetValue(item, out var count) && count > 0)
+            if (comparison == 0)
             {
-                remaining[item] = count - 1;
+                leftHasValue = TryReadEncodedRow(leftReader, out leftValue);
+                rightHasValue = TryReadEncodedRow(rightReader, out rightValue);
                 continue;
             }
 
-            result.Add(item);
-            if (result.Count >= limit)
+            equal = false;
+            if (comparison < 0)
+            {
+                if (onlyInLeft.Count < limit)
+                    onlyInLeft.Add(leftValue.Encoded);
+                leftHasValue = TryReadEncodedRow(leftReader, out leftValue);
+            }
+            else
+            {
+                if (onlyInRight.Count < limit)
+                    onlyInRight.Add(rightValue.Encoded);
+                rightHasValue = TryReadEncodedRow(rightReader, out rightValue);
+            }
+
+            if (onlyInLeft.Count >= limit && onlyInRight.Count >= limit)
                 break;
         }
 
-        return result;
+        return new OrderedRowsDiff(equal, onlyInLeft, onlyInRight);
     }
 
-    private static long ExecuteLong(SqliteConnection connection, string sql)
+    private static OrderedRowsDiff DiffOrderedStrings(SqliteConnection leftConnection, SqliteConnection rightConnection, string sql, int limit)
     {
-        using var command = connection.CreateCommand();
-        command.CommandText = sql;
-        var value = command.ExecuteScalar();
-        return Convert.ToInt64(value, System.Globalization.CultureInfo.InvariantCulture);
+        if (limit == 0)
+            return new OrderedRowsDiff(StringRowsEqual(leftConnection, rightConnection, sql), [], []);
+
+        using var leftCommand = leftConnection.CreateCommand();
+        leftCommand.CommandText = sql;
+        using var rightCommand = rightConnection.CreateCommand();
+        rightCommand.CommandText = sql;
+        using var leftReader = leftCommand.ExecuteReader();
+        using var rightReader = rightCommand.ExecuteReader();
+
+        var onlyInLeft = new List<string>(limit);
+        var onlyInRight = new List<string>(limit);
+        var leftHasValue = TryReadString(leftReader, out var leftValue);
+        var rightHasValue = TryReadString(rightReader, out var rightValue);
+        var equal = true;
+
+        while (leftHasValue || rightHasValue)
+        {
+            var comparison = leftHasValue && rightHasValue
+                ? string.CompareOrdinal(leftValue, rightValue)
+                : leftHasValue ? -1 : 1;
+
+            if (comparison == 0)
+            {
+                leftHasValue = TryReadString(leftReader, out leftValue);
+                rightHasValue = TryReadString(rightReader, out rightValue);
+                continue;
+            }
+
+            equal = false;
+            if (comparison < 0)
+            {
+                if (onlyInLeft.Count < limit)
+                    onlyInLeft.Add(leftValue);
+                leftHasValue = TryReadString(leftReader, out leftValue);
+            }
+            else
+            {
+                if (onlyInRight.Count < limit)
+                    onlyInRight.Add(rightValue);
+                rightHasValue = TryReadString(rightReader, out rightValue);
+            }
+
+            if (onlyInLeft.Count >= limit && onlyInRight.Count >= limit)
+                break;
+        }
+
+        return new OrderedRowsDiff(equal, onlyInLeft, onlyInRight);
     }
 
-    private static DiffDbHeader ReadHeader(string dbPath)
+    private static bool RowsEqual(SqliteConnection leftConnection, SqliteConnection rightConnection, string sql)
+    {
+        using var leftCommand = leftConnection.CreateCommand();
+        leftCommand.CommandText = sql;
+        using var rightCommand = rightConnection.CreateCommand();
+        rightCommand.CommandText = sql;
+        using var leftReader = leftCommand.ExecuteReader();
+        using var rightReader = rightCommand.ExecuteReader();
+
+        var leftHasValue = TryReadEncodedRow(leftReader, out var leftValue);
+        var rightHasValue = TryReadEncodedRow(rightReader, out var rightValue);
+        while (leftHasValue && rightHasValue)
+        {
+            if (!string.Equals(leftValue.Encoded, rightValue.Encoded, StringComparison.Ordinal))
+                return false;
+            leftHasValue = TryReadEncodedRow(leftReader, out leftValue);
+            rightHasValue = TryReadEncodedRow(rightReader, out rightValue);
+        }
+
+        return leftHasValue == rightHasValue;
+    }
+
+    private static bool StringRowsEqual(SqliteConnection leftConnection, SqliteConnection rightConnection, string sql)
+    {
+        using var leftCommand = leftConnection.CreateCommand();
+        leftCommand.CommandText = sql;
+        using var rightCommand = rightConnection.CreateCommand();
+        rightCommand.CommandText = sql;
+        using var leftReader = leftCommand.ExecuteReader();
+        using var rightReader = rightCommand.ExecuteReader();
+
+        var leftHasValue = TryReadString(leftReader, out var leftValue);
+        var rightHasValue = TryReadString(rightReader, out var rightValue);
+        while (leftHasValue && rightHasValue)
+        {
+            if (!string.Equals(leftValue, rightValue, StringComparison.Ordinal))
+                return false;
+            leftHasValue = TryReadString(leftReader, out leftValue);
+            rightHasValue = TryReadString(rightReader, out rightValue);
+        }
+
+        return leftHasValue == rightHasValue;
+    }
+
+    private static bool TryReadEncodedRow(SqliteDataReader reader, out EncodedDiffRow value)
+    {
+        if (!reader.Read())
+        {
+            value = EncodedDiffRow.Empty;
+            return false;
+        }
+
+        var sortValues = new object?[reader.FieldCount];
+        for (var i = 0; i < reader.FieldCount; i++)
+            sortValues[i] = reader.IsDBNull(i) ? null : reader.GetValue(i);
+
+        value = new EncodedDiffRow(EncodeRow(reader), sortValues);
+        return true;
+    }
+
+    private static int CompareRows(EncodedDiffRow left, EncodedDiffRow right)
+    {
+        var count = Math.Min(left.SortValues.Length, right.SortValues.Length);
+        for (var i = 0; i < count; i++)
+        {
+            var comparison = CompareSqlSortValue(left.SortValues[i], right.SortValues[i]);
+            if (comparison != 0)
+                return comparison;
+        }
+
+        return left.SortValues.Length.CompareTo(right.SortValues.Length);
+    }
+
+    private static int CompareSqlSortValue(object? left, object? right)
+    {
+        var leftRank = GetSqlSortRank(left);
+        var rightRank = GetSqlSortRank(right);
+        if (leftRank != rightRank)
+            return leftRank.CompareTo(rightRank);
+
+        if (leftRank == 0)
+            return 0;
+
+        if (leftRank == 1)
+        {
+            var leftNumber = Convert.ToDecimal(left, System.Globalization.CultureInfo.InvariantCulture);
+            var rightNumber = Convert.ToDecimal(right, System.Globalization.CultureInfo.InvariantCulture);
+            return leftNumber.CompareTo(rightNumber);
+        }
+
+        if (left is byte[] leftBytes && right is byte[] rightBytes)
+            return CompareBytes(leftBytes, rightBytes);
+
+        var leftText = Convert.ToString(left, System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty;
+        var rightText = Convert.ToString(right, System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty;
+        return string.CompareOrdinal(leftText, rightText);
+    }
+
+    private static int GetSqlSortRank(object? value)
+    {
+        if (value is null or DBNull)
+            return 0;
+        if (value is byte or sbyte or short or ushort or int or uint or long or ulong or float or double or decimal)
+            return 1;
+        if (value is byte[])
+            return 3;
+        return 2;
+    }
+
+    private static int CompareBytes(byte[] left, byte[] right)
+    {
+        var count = Math.Min(left.Length, right.Length);
+        for (var i = 0; i < count; i++)
+        {
+            var comparison = left[i].CompareTo(right[i]);
+            if (comparison != 0)
+                return comparison;
+        }
+
+        return left.Length.CompareTo(right.Length);
+    }
+
+    private static bool TryReadString(SqliteDataReader reader, out string value)
+    {
+        if (!reader.Read())
+        {
+            value = string.Empty;
+            return false;
+        }
+
+        value = reader.IsDBNull(0) ? string.Empty : reader.GetString(0);
+        return true;
+    }
+
+    private static SqliteConnection OpenReadOnlyConnection(string dbPath)
     {
         var isUri = dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase);
         if (!isUri && !File.Exists(LongPath.EnsureWindowsPrefix(dbPath)))
@@ -458,8 +634,23 @@ public static class DiffCommandRunner
                 Mode = SqliteOpenMode.ReadOnly,
             }.ConnectionString;
 
-        using var connection = new SqliteConnection(connectionString);
+        var connection = new SqliteConnection(connectionString);
         connection.Open();
+        return connection;
+    }
+
+    private static long ExecuteLong(SqliteConnection connection, string sql)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        var value = command.ExecuteScalar();
+        return Convert.ToInt64(value, System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    private static DiffDbHeader ReadHeader(string dbPath)
+    {
+        var isUri = dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase);
+        using var connection = OpenReadOnlyConnection(dbPath);
 
         return new DiffDbHeader(
             Path.GetFullPath(isUri ? dbPath : dbPath),
@@ -482,28 +673,6 @@ public static class DiffCommandRunner
         using var command = connection.CreateCommand();
         command.CommandText = $"SELECT COUNT(*) FROM {table}";
         return Convert.ToInt64(command.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
-    }
-
-    private static HashSet<string> ReadStrings(SqliteConnection connection, string sql)
-    {
-        using var command = connection.CreateCommand();
-        command.CommandText = sql;
-        using var reader = command.ExecuteReader();
-        var values = new HashSet<string>(StringComparer.Ordinal);
-        while (reader.Read())
-            values.Add(reader.IsDBNull(0) ? string.Empty : reader.GetString(0));
-        return values;
-    }
-
-    private static List<string> ReadRows(SqliteConnection connection, string sql)
-    {
-        using var command = connection.CreateCommand();
-        command.CommandText = sql;
-        using var reader = command.ExecuteReader();
-        var values = new List<string>();
-        while (reader.Read())
-            values.Add(EncodeRow(reader));
-        return values;
     }
 
     private static string EncodeRow(SqliteDataReader reader)
@@ -594,20 +763,17 @@ public static class DiffCommandRunner
         return exitCode;
     }
 
-    private sealed record DiffDbSnapshot(
-        string Path,
-        long SchemaVersion,
-        long FileCount,
-        long SymbolCount,
-        long ReferenceCount,
-        HashSet<string> Files,
-        List<string> FileRows,
-        List<string> ChunkRows,
-        List<string> ReferenceLineRows,
-        List<string> FileIssueRows,
-        List<string> MetaRows,
-        List<string> SymbolRows,
-        List<string> ReferenceRows);
+    private sealed record OrderedRowsDiff(
+        bool Equal,
+        List<string> OnlyInLeft,
+        List<string> OnlyInRight);
+
+    private sealed record EncodedDiffRow(
+        string Encoded,
+        object?[] SortValues)
+    {
+        public static readonly EncodedDiffRow Empty = new(string.Empty, []);
+    }
 
     private sealed record DiffDbHeader(
         string Path,
