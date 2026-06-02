@@ -542,9 +542,7 @@ public static class DbPathResolver
         try
         {
             var normalizedRoot = Path.GetFullPath(candidateRoot);
-            var relativePath = sampleRelativePath
-                .Replace('/', Path.DirectorySeparatorChar)
-                .Replace('\\', Path.DirectorySeparatorChar);
+            var relativePath = NormalizeSampleRelativePath(sampleRelativePath);
             var absolutePath = Path.GetFullPath(Path.Combine(normalizedRoot, relativePath));
             if (!IsUnderDirectory(normalizedRoot, absolutePath))
                 return false;
@@ -559,20 +557,12 @@ public static class DbPathResolver
     }
 
     private static bool IsRootedOrAbsoluteLikeSamplePath(string samplePath)
-    {
-        if (Path.IsPathRooted(samplePath))
-            return true;
+        => Path.IsPathRooted(samplePath);
 
-        if (samplePath.StartsWith("/", StringComparison.Ordinal) || samplePath.StartsWith("\\", StringComparison.Ordinal))
-            return true;
-
-        return samplePath.Length >= 2
-            && IsAsciiLetter(samplePath[0])
-            && samplePath[1] == ':';
-    }
-
-    private static bool IsAsciiLetter(char value)
-        => value is >= 'a' and <= 'z' or >= 'A' and <= 'Z';
+    private static string NormalizeSampleRelativePath(string sampleRelativePath)
+        => Path.DirectorySeparatorChar == '\\'
+            ? sampleRelativePath.Replace('/', Path.DirectorySeparatorChar)
+            : sampleRelativePath;
 
     private readonly record struct SampleMatchResult(int ChecksumMatches, int PathExistsMatches);
     private sealed record IndexedFileSample(string RelativePath, string Checksum);

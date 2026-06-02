@@ -416,19 +416,59 @@ public class DbPathResolverTests
 
     [Theory]
     [InlineData("/outside.cs")]
-    [InlineData("\\outside.cs")]
-    [InlineData("C:/outside.cs")]
-    [InlineData(@"C:\outside.cs")]
-    [InlineData(@"\\server\share\outside.cs")]
-    public void TryResolveIndexedFileSampleIoPath_RejectsAbsoluteLikeSamples(string samplePath)
+    public void TryResolveIndexedFileSampleIoPath_RejectsRootedSamples(string samplePath)
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_absolute_sample");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_rooted_sample");
         try
         {
             var resolved = DbPathResolver.TryResolveIndexedFileSampleIoPath(projectRoot, samplePath, out var ioPath);
 
             Assert.False(resolved);
             Assert.Equal(string.Empty, ioPath);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void TryResolveIndexedFileSampleIoPath_OnWindowsRejectsDriveAndUncSamples()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_windows_absolute_sample");
+        try
+        {
+            foreach (var samplePath in new[] { "\\outside.cs", "C:/outside.cs", @"C:\outside.cs", @"\\server\share\outside.cs" })
+            {
+                var resolved = DbPathResolver.TryResolveIndexedFileSampleIoPath(projectRoot, samplePath, out var ioPath);
+
+                Assert.False(resolved);
+                Assert.Equal(string.Empty, ioPath);
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void TryResolveIndexedFileSampleIoPath_OnPosixPreservesBackslashInFilename()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_posix_backslash_sample");
+        try
+        {
+            const string samplePath = "back\\slash.py";
+            var resolved = DbPathResolver.TryResolveIndexedFileSampleIoPath(projectRoot, samplePath, out var ioPath);
+
+            Assert.True(resolved);
+            Assert.Equal(Path.GetFullPath(Path.Combine(projectRoot, samplePath)), ioPath);
         }
         finally
         {
