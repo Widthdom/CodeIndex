@@ -2,6 +2,7 @@ using CodeIndex.Indexer;
 using Microsoft.Data.Sqlite;
 using System.Globalization;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 
 namespace CodeIndex.Database;
@@ -541,6 +542,15 @@ public partial class DbReader
         var indexedHeadBranch = TryGetMetaStringInternal(DbContext.IndexedHeadBranchMetaKey);
         var indexedHeadTimestamp = ParseMetaDateTime(TryGetMetaStringInternal(DbContext.IndexedHeadTimestampMetaKey));
         var unknownExtensionFileCount = ParseMetaLong(TryGetMetaStringInternal(DbContext.UnknownExtensionFileCountMetaKey));
+        var unknownExtensionFiles = ParseMetaStringList(TryGetMetaStringInternal(DbContext.UnknownExtensionFilePathsMetaKey));
+        var unknownExtensionFilesTruncated = ParseMetaBool(TryGetMetaStringInternal(DbContext.UnknownExtensionFilesTruncatedMetaKey));
+        var unknownExtensionFilePathLimit = ParseMetaLong(TryGetMetaStringInternal(DbContext.UnknownExtensionFilePathLimitMetaKey));
+        if (unknownExtensionFiles != null)
+        {
+            unknownExtensionFilesTruncated ??= unknownExtensionFileCount.HasValue
+                && unknownExtensionFileCount.Value > unknownExtensionFiles.Count;
+            unknownExtensionFilePathLimit ??= unknownExtensionFiles.Count;
+        }
         // #1546: workspace case-sensitivity stamp. Read inside the SHARED snapshot for
         // consistency with the other freshness signals; missing on legacy DBs.
         // #1546: case-sensitivity stamp も同 snapshot で読む。stamp 無し旧 DB は null。
@@ -561,6 +571,9 @@ public partial class DbReader
             Symbols = symbols,
             References = references,
             UnknownExtensionFileCount = unknownExtensionFileCount,
+            UnknownExtensionFiles = unknownExtensionFiles,
+            UnknownExtensionFilesTruncated = unknownExtensionFilesTruncated,
+            UnknownExtensionFilePathLimit = unknownExtensionFilePathLimit,
             IndexedAt = freshness.IndexedAt,
             LatestModified = freshness.LatestModified,
             IndexedHeadSha = indexedHeadSha,
@@ -811,6 +824,26 @@ public partial class DbReader
         => string.IsNullOrWhiteSpace(raw) || !bool.TryParse(raw, out var value)
             ? null
             : value;
+
+    private static List<string>? ParseMetaStringList(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            return null;
+
+        try
+        {
+            var values = JsonSerializer.Deserialize<List<string>>(raw);
+            return values == null
+                ? null
+                : values
+                    .Where(static value => !string.IsNullOrWhiteSpace(value))
+                    .ToList();
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
 
     private static long? ParseMetaLong(string? raw)
         => string.IsNullOrWhiteSpace(raw)
