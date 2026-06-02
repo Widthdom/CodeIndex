@@ -154,9 +154,78 @@ public class WorkspaceCommandRunnerTests
             Directory.CreateDirectory(Path.GetDirectoryName(ActiveWorkspace.StatePath)!);
             File.WriteAllText(ActiveWorkspace.StatePath, "{");
 
-            var query = DbPathResolver.ResolveForQuery(projectRoot, explicitDbPath: null, explicitDataDir: null);
+            DbPathResolution? query = null;
+            var (_, _, stderr) = ConsoleCapture.Capture(() =>
+            {
+                query = DbPathResolver.ResolveForQuery(projectRoot, explicitDbPath: null, explicitDataDir: null);
+                return 0;
+            });
 
-            Assert.Equal(Path.Combine(projectRoot, ".cdidx", "codeindex.db"), query.DbPath);
+            Assert.NotNull(query);
+            Assert.Contains("Ignoring active workspace state", stderr);
+            Assert.Equal(Path.Combine(projectRoot, ".cdidx", "codeindex.db"), query!.DbPath);
+            Assert.Equal(DbPathResolver.DataDirSourceWorkspace, query.DataDirSource);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            TestProjectHelper.DeleteDirectory(configHome);
+        }
+    }
+
+    [Fact]
+    public void ActiveWorkspaceSave_OnPosix_WritesPrivateStateFile()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var configHome = TestProjectHelper.CreateTempProject("cdidx_active_workspace_private_config");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_active_workspace_private_project");
+        try
+        {
+            using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME");
+            Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
+            Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
+
+            ActiveWorkspace.Save(new ActiveWorkspaceState("default", projectRoot, Path.Combine(projectRoot, ".cdidx", "codeindex.db")));
+
+            Assert.Equal(
+                DataDirectorySecurity.PrivateDirectoryMode,
+                File.GetUnixFileMode(Path.GetDirectoryName(ActiveWorkspace.StatePath)!) & DataDirectorySecurity.PermissionBits);
+            Assert.Equal(
+                DataDirectorySecurity.PrivateFileMode,
+                File.GetUnixFileMode(ActiveWorkspace.StatePath) & DataDirectorySecurity.PermissionBits);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            TestProjectHelper.DeleteDirectory(configHome);
+        }
+    }
+
+    [Fact]
+    public void OversizedActiveWorkspaceState_DoesNotOverrideQueryResolution()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_active_workspace_large_project");
+        var configHome = TestProjectHelper.CreateTempProject("cdidx_active_workspace_large_config");
+        try
+        {
+            using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME");
+            Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
+            Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
+            Directory.CreateDirectory(Path.GetDirectoryName(ActiveWorkspace.StatePath)!);
+            File.WriteAllText(ActiveWorkspace.StatePath, new string('x', 65 * 1024));
+
+            DbPathResolution? query = null;
+            var (_, _, stderr) = ConsoleCapture.Capture(() =>
+            {
+                query = DbPathResolver.ResolveForQuery(projectRoot, explicitDbPath: null, explicitDataDir: null);
+                return 0;
+            });
+
+            Assert.NotNull(query);
+            Assert.Contains("file exceeds", stderr);
+            Assert.Equal(Path.Combine(projectRoot, ".cdidx", "codeindex.db"), query!.DbPath);
             Assert.Equal(DbPathResolver.DataDirSourceWorkspace, query.DataDirSource);
         }
         finally

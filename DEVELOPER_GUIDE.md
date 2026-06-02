@@ -122,10 +122,11 @@ long backfills.
 
 On POSIX filesystems, cdidx creates `.cdidx/` with mode `0700` and applies mode
 `0600` to `codeindex.db` plus WAL/SHM sidecars when they exist. Index lock
-metadata sidecars are also written as owner-only files and read through a small
-bounded buffer so stale or corrupted diagnostics cannot expose local paths more
-broadly or force unbounded allocation. `status --json` reports `data_dir_mode`
-and `db_file_mode` when the platform exposes Unix file modes.
+metadata sidecars and the active workspace `active.json` state file are also
+written as owner-only files and read through small bounded buffers so stale or
+corrupted diagnostics cannot expose local paths more broadly or force unbounded
+allocation. `status --json` reports `data_dir_mode` and `db_file_mode` when the
+platform exposes Unix file modes.
 
 ## Release Distribution Checklist
 
