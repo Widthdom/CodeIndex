@@ -7,6 +7,35 @@ namespace CodeIndex.Database;
 
 public partial class DbReader
 {
+    private static string BuildCSharpBareMemberGraphReferenceFilter(
+        string query,
+        string? lang,
+        bool exact,
+        string contextSql,
+        string fileAlias,
+        string referenceAlias)
+    {
+        if (!ShouldFilterCSharpReceiverQualifiedBareMemberQuery(query, lang, exact))
+            return string.Empty;
+
+        return $" AND NOT ({fileAlias}.lang = 'csharp' AND (instr({contextSql}, '.' || {referenceAlias}.symbol_name) > 0 OR ({referenceAlias}.column_number > 1 AND substr({contextSql}, {referenceAlias}.column_number - 1, 1) = '.')))";
+    }
+
+    private static bool ShouldFilterCSharpReceiverQualifiedBareMemberQuery(string query, string? lang, bool exact)
+    {
+        if (!exact || lang is not null and not "csharp" || SqlNameResolver.HasQualifier(query))
+            return false;
+
+        if (string.IsNullOrWhiteSpace(query))
+            return false;
+
+        var value = query[0] == '@' ? query[1..] : query;
+        if (value.Length == 0 || !(char.IsLetter(value[0]) || value[0] == '_'))
+            return false;
+
+        return value.All(c => char.IsLetterOrDigit(c) || c == '_');
+    }
+
     /// <summary>
     /// Find callers for a referenced symbol.
     /// 指定シンボルを呼び出している呼び出し元を探す。
@@ -100,6 +129,7 @@ public partial class DbReader
                 : " AND (r.symbol_name LIKE @query ESCAPE '\\' OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))";
         if (lang != null)
             sql += " AND f.lang = @lang";
+        sql += BuildCSharpBareMemberGraphReferenceFilter(query, lang, exact, contextSql, "f", "r");
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
         if (referenceKind == null)
         {
@@ -239,6 +269,7 @@ public partial class DbReader
                 : " AND (r.symbol_name LIKE @query ESCAPE '\\' OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))";
         if (lang != null)
             groupedSql += " AND f.lang = @lang";
+        groupedSql += BuildCSharpBareMemberGraphReferenceFilter(query, lang, exact, contextSql, "f", "r");
         AppendPathFilters(ref groupedSql, pathPatterns, excludePathPatterns, excludeTests);
         if (referenceKind == null)
             groupedSql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, {(rawKinds ? GetRawReferenceKindSql("r.reference_kind") : GetLogicalReferenceKindSql("r.reference_kind"))}";
@@ -325,6 +356,7 @@ public partial class DbReader
                 : " AND (r.symbol_name LIKE @query ESCAPE '\\' OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))";
         if (lang != null)
             groupedSql += " AND f.lang = @lang";
+        groupedSql += BuildCSharpBareMemberGraphReferenceFilter(query, lang, exact, contextSql, "f", "r");
         AppendPathFilters(ref groupedSql, pathPatterns, excludePathPatterns, excludeTests);
         if (referenceKind == null)
             groupedSql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, {(rawKinds ? GetRawReferenceKindSql("r.reference_kind") : GetLogicalReferenceKindSql("r.reference_kind"))}";
@@ -851,6 +883,7 @@ public partial class DbReader
                   {nameCondition}";
         if (lang != null)
             sql += " AND f.lang = @lang";
+        sql += BuildCSharpBareMemberGraphReferenceFilter(symbolName, lang, exact: true, contextSql, "f", "r");
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
         sql += @"
                 GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.reference_kind, r.file_id, r.line, r.column_number

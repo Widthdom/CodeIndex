@@ -187,6 +187,32 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpExpressionArgumentMemberCalls_AreNotDefinitions()
+    {
+        const string content = """
+            using System;
+
+            public class Scanner
+            {
+                public object Build()
+                {
+                    return new ScanFilesResult(
+                        files,
+                        errors,
+                        nonIndexablePaths.ToList(),
+                        unknownExtensionFiles.OrderBy(path => path, StringComparer.Ordinal).ToList(),
+                        Guid.NewGuid().ToString("N"));
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "Build");
+        Assert.DoesNotContain(symbols, symbol => symbol.Kind == "function" && symbol.Name is "ToList" or "NewGuid" or "ToString");
+    }
+
+    [Fact]
     public void Extract_PythonDataclassField_IndexesFieldAndMetadataKeys()
     {
         const string content = """

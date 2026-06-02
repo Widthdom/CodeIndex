@@ -5072,6 +5072,42 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GraphQueries_CsharpBareMemberCallersSkipReceiverQualifiedCalls()
+    {
+        InsertIndexedFile("src/common_member_graph_fixture.cs", "csharp",
+            """
+            using System.Text.Json;
+
+            public class Caller
+            {
+                private string GetString() => "";
+
+                public void Run(LocalApi api, JsonElement json)
+                {
+                    api.GetString();
+                    json.GetString();
+                    GetString();
+                }
+            }
+
+            public class LocalApi
+            {
+                public string GetString() => "";
+            }
+            """);
+
+        var callers = _reader.GetCallers("GetString", lang: "csharp", exact: true, pathPatterns: ["common_member_graph_fixture"]);
+
+        var caller = Assert.Single(callers);
+        Assert.Equal("Run", caller.CallerName);
+        Assert.Equal(1, caller.ReferenceCount);
+        Assert.Equal(1, _reader.CountCallers("GetString", lang: "csharp", exact: true, pathPatterns: ["common_member_graph_fixture"]));
+        var total = _reader.CountCallersTotal("GetString", lang: "csharp", exact: true, pathPatterns: ["common_member_graph_fixture"]);
+        Assert.Equal(1, total.Count);
+        Assert.Equal(1, total.FileCount);
+    }
+
+    [Fact]
     public void SqlQualifiedNames_AlignGraphReadersHotspotsAndUnused()
     {
         InsertIndexedFile("src/sql_name_mismatch_fixture.sql", "sql",
