@@ -1,20 +1,22 @@
+using System.Text.RegularExpressions;
+using Regex = CodeIndex.Indexer.BoundedRegex;
 using CodeIndex.Models;
 
 namespace CodeIndex.Indexer;
 
 internal static class GoReferenceExtractor
 {
-    private static readonly System.Text.RegularExpressions.Regex GoroutineCallRegex = new(
+    private static readonly Regex GoroutineCallRegex = new(
         @"\bgo\s+(?<name>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s*\(",
-        System.Text.RegularExpressions.RegexOptions.Compiled | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
-    private static readonly System.Text.RegularExpressions.Regex ChannelSendRegex = new(
+    private static readonly Regex ChannelSendRegex = new(
         @"(?<!<)(?<name>[A-Za-z_]\w*)\s*<-",
-        System.Text.RegularExpressions.RegexOptions.Compiled | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
-    private static readonly System.Text.RegularExpressions.Regex ChannelReceiveRegex = new(
+    private static readonly Regex ChannelReceiveRegex = new(
         @"(?<!<)<-\s*(?<name>[A-Za-z_]\w*)",
-        System.Text.RegularExpressions.RegexOptions.Compiled | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     public static bool[] BuildImportBlockLineMap(IReadOnlyList<string> originalLines)
         => LanguageReferenceExtractionSupport.BuildGoImportBlockLineMap(originalLines);
@@ -28,7 +30,7 @@ internal static class GoReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
-        foreach (System.Text.RegularExpressions.Match match in GoroutineCallRegex.Matches(preparedLine))
+        foreach (Match match in GoroutineCallRegex.Matches(preparedLine))
         {
             var group = match.Groups["name"];
             var rawName = group.Value;
@@ -47,7 +49,7 @@ internal static class GoReferenceExtractor
                 resolveContainerForColumn(nameIndex));
         }
 
-        foreach (System.Text.RegularExpressions.Match match in ChannelSendRegex.Matches(preparedLine))
+        foreach (Match match in ChannelSendRegex.Matches(preparedLine))
         {
             ReferenceExtractor.AddReference(
                 references,
@@ -61,7 +63,7 @@ internal static class GoReferenceExtractor
                 resolveContainerForColumn(match.Groups["name"].Index));
         }
 
-        foreach (System.Text.RegularExpressions.Match match in ChannelReceiveRegex.Matches(preparedLine))
+        foreach (Match match in ChannelReceiveRegex.Matches(preparedLine))
         {
             if (!IsGoChannelReceiveArrow(preparedLine, match.Index))
                 continue;

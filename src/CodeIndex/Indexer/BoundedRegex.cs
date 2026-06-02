@@ -49,7 +49,9 @@ internal sealed class BoundedRegex : BclRegex
     {
         try
         {
-            return BclRegex.Matches(input, pattern, options, DefaultMatchTimeout);
+            var matches = BclRegex.Matches(input, pattern, options, DefaultMatchTimeout);
+            _ = matches.Count;
+            return matches;
         }
         catch (RegexMatchTimeoutException)
         {
@@ -142,7 +144,9 @@ internal sealed class BoundedRegex : BclRegex
     {
         try
         {
-            return base.Matches(input);
+            var matches = base.Matches(input);
+            _ = matches.Count;
+            return matches;
         }
         catch (RegexMatchTimeoutException)
         {
@@ -154,7 +158,9 @@ internal sealed class BoundedRegex : BclRegex
     {
         try
         {
-            return base.Matches(input, startat);
+            var matches = base.Matches(input, startat);
+            _ = matches.Count;
+            return matches;
         }
         catch (RegexMatchTimeoutException)
         {
