@@ -254,6 +254,14 @@ internal sealed class LspServer : IDisposable
 
     private string? ResolveIndexedPath(string documentPath, string resolvedPath, string? projectRelativePath)
     {
+        if (projectRelativePath != null)
+        {
+            var exactPath = projectRelativePath.Replace('\\', '/');
+            var exactFile = _reader.GetFileByPath(exactPath);
+            if (exactFile != null)
+                return exactFile.Path;
+        }
+
         var fileName = Path.GetFileName(documentPath);
         if (string.IsNullOrEmpty(fileName))
             fileName = Path.GetFileName(resolvedPath);

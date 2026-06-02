@@ -300,6 +300,47 @@ public class LspServerTests
         }
     }
 
+    [Fact]
+    public void HandleMessage_Definition_ResolvesIndexedDocumentBeyondBasenameCandidateCap()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_definition_many_basenames");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            for (var i = 0; i < 1001; i++)
+            {
+                TestProjectHelper.InsertIndexedFile(
+                    dbPath,
+                    $"src/{i:D4}/index.cs",
+                    "csharp",
+                    $"class Filler{i} {{ }}\n");
+            }
+
+            var targetRelativePath = "src/zzzz/index.cs";
+            var sourcePath = Path.Combine(projectRoot, "src", "zzzz", "index.cs");
+            Directory.CreateDirectory(Path.GetDirectoryName(sourcePath)!);
+            var source = "class Target { void Needle() { } void Call() { Needle(); } }\n";
+            File.WriteAllText(sourcePath, source);
+            TestProjectHelper.InsertIndexedFile(dbPath, targetRelativePath, "csharp", source);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var request = CreateDefinitionRequest(
+                sourcePath,
+                7,
+                0,
+                source.IndexOf("Needle();", StringComparison.Ordinal));
+
+            var response = server.HandleMessage(request);
+
+            Assert.NotNull(response);
+            Assert.NotEmpty(response!["result"]!.AsArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     private static string CreateDefinitionRequest(string sourcePath, int id, int line, int character) =>
         JsonSerializer.Serialize(new
         {
