@@ -79,6 +79,18 @@ public class ReportCommandRunnerTests
     }
 
     [Fact]
+    public void ParseArgs_LogLinesAboveMaximumClamps_Issue2837()
+    {
+        var options = ReportCommandRunner.ParseArgs([
+            "--output", "x.tgz",
+            "--log-lines", (ReportCommandRunner.MaxLogLines + 1).ToString(),
+        ]);
+
+        Assert.Equal(ReportCommandRunner.MaxLogLines, options.LogLines);
+        Assert.Null(options.ParseError);
+    }
+
+    [Fact]
     public void ParseArgs_LogLinesNegativeReportsError()
     {
         var options = ReportCommandRunner.ParseArgs(["--output", "x.tgz", "--log-lines", "-3"]);
@@ -306,6 +318,35 @@ public class ReportCommandRunnerTests
             Assert.DoesNotContain("/Users/widthdom/secret/.cdidx/config.json", logText);
             Assert.DoesNotContain("SELECT * FROM secret", logText);
             Assert.Contains("session_start", logText);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR", previousLogDir);
+            TryDeleteDirectory(workDir);
+        }
+    }
+
+    [Fact]
+    public void BuildRecentLogTail_LargeLogReadsBoundedTail_Issue2837()
+    {
+        var workDir = CreateWorkDir();
+        var logDir = Path.Combine(workDir, "logs");
+        Directory.CreateDirectory(logDir);
+        File.WriteAllText(
+            Path.Combine(logDir, "stderr-20260517.log"),
+            new string('x', ReportCommandRunner.MaxLogFileTailBytes + 512)
+            + "\noldest-tail\nnewest-tail\n");
+
+        var previousLogDir = Environment.GetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR");
+        Environment.SetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR", logDir);
+        try
+        {
+            var logText = ReportCommandRunner.BuildRecentLogTail(2, includeArgs: false, out var linesIncluded);
+
+            Assert.Equal(2, linesIncluded);
+            Assert.Contains("oldest-tail", logText);
+            Assert.Contains("newest-tail", logText);
+            Assert.DoesNotContain(new string('x', 128), logText);
         }
         finally
         {

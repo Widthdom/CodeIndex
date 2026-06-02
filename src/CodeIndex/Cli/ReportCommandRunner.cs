@@ -21,6 +21,8 @@ namespace CodeIndex.Cli;
 public static class ReportCommandRunner
 {
     internal const int DefaultLogLines = 200;
+    internal const int MaxLogLines = 2000;
+    internal const int MaxLogFileTailBytes = 1024 * 1024;
     internal const string RedactedPlaceholder = "[redacted]";
     internal const UnixFileMode BundleFileMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
 
@@ -260,16 +262,16 @@ public static class ReportCommandRunner
         {
             if (collected.Count >= maxLines)
                 break;
-            string[] lines;
+            IReadOnlyList<string> lines;
             try
             {
-                lines = File.ReadAllLines(file.FullName);
+                lines = ReadLogFileTailLines(file.FullName, maxLines - collected.Count);
             }
             catch (IOException)
             {
                 continue;
             }
-            for (var i = lines.Length - 1; i >= 0 && collected.Count < maxLines; i--)
+            for (var i = lines.Count - 1; i >= 0 && collected.Count < maxLines; i--)
                 collected.AddFirst(lines[i]);
         }
 
@@ -283,6 +285,55 @@ public static class ReportCommandRunner
         }
         linesIncluded = collected.Count;
         return sb.ToString();
+    }
+
+    internal static IReadOnlyList<string> ReadLogFileTailLines(string path, int maxLines)
+    {
+        if (maxLines <= 0)
+            return [];
+
+        using var stream = File.OpenRead(path);
+        var startOffset = Math.Max(0, stream.Length - MaxLogFileTailBytes);
+        stream.Seek(startOffset, SeekOrigin.Begin);
+        using var reader = new StreamReader(
+            stream,
+            Encoding.UTF8,
+            detectEncodingFromByteOrderMarks: startOffset == 0,
+            bufferSize: 8192,
+            leaveOpen: false);
+        var text = reader.ReadToEnd();
+        if (startOffset > 0)
+        {
+            var firstNewline = text.IndexOf('\n', StringComparison.Ordinal);
+            if (firstNewline < 0)
+                return [];
+            text = text[(firstNewline + 1)..];
+        }
+
+        return TakeLastLines(text, maxLines);
+    }
+
+    private static IReadOnlyList<string> TakeLastLines(string text, int maxLines)
+    {
+        var lines = new List<string>();
+        var end = text.Length;
+        if (end > 0 && text[end - 1] == '\n')
+            end--;
+        while (end > 0 && lines.Count < maxLines)
+        {
+            var start = text.LastIndexOf('\n', end - 1);
+            var lineStart = start + 1;
+            var line = text[lineStart..end];
+            if (line.EndsWith('\r'))
+                line = line[..^1];
+            lines.Add(line);
+            if (start < 0)
+                break;
+            end = start;
+        }
+
+        lines.Reverse();
+        return lines;
     }
 
     internal static string RedactSensitiveFields(string line)
@@ -382,7 +433,7 @@ public static class ReportCommandRunner
                     if (!int.TryParse(args[++i], out var parsedLines) || parsedLines < 0)
                         options.ParseError = $"--log-lines requires a non-negative integer, got '{args[i]}'";
                     else
-                        options.LogLines = parsedLines;
+                        options.LogLines = Math.Min(parsedLines, MaxLogLines);
                     break;
                 case "--log-lines":
                     options.ParseError = "--log-lines requires a value";

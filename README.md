@@ -71,7 +71,8 @@ cdidx lsp --db .cdidx/codeindex.db
 Custom language loops can stay out of tree: put extension aliases in
 `.cdidx-langmap.yaml`, put regex symbol patterns in `.cdidx/patterns/*.yaml`,
 and run `cdidx test-extractor --language <lang> --file <path> --json` to test
-an extractor fixture without building a full index. Pattern sidecars are
+an extractor fixture without building a full index. `test-extractor` source and
+`--expect-symbols` files are capped at 4 MiB each. Pattern sidecars are
 limited to regular files under non-symlink pattern directories, size/count
 bounded per file and per process, and regex matches are time-limited. See
 [Custom Language Extraction](DEVELOPER_GUIDE.md#custom-language-extraction).
@@ -364,7 +365,8 @@ cdidx lsp --db .cdidx/codeindex.db
 カスタム言語の開発ループは out-of-tree で回せます。拡張子 alias は
 `.cdidx-langmap.yaml`、regex シンボルパターンは `.cdidx/patterns/*.yaml` に置き、
 `cdidx test-extractor --language <lang> --file <path> --json` で full index を作らずに
-extractor fixture を確認できます。pattern sidecar は symlink ではない pattern directory
+extractor fixture を確認できます。`test-extractor` の source と `--expect-symbols`
+ファイルはそれぞれ 4 MiB に制限されます。pattern sidecar は symlink ではない pattern directory
 配下の通常ファイルだけが対象で、size / count は file 単位と process 単位で制限され、
 regex match には timeout が付きます。詳細は
 [Custom Language Extraction](DEVELOPER_GUIDE.md#custom-language-extraction) を参照してください。

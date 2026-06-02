@@ -388,7 +388,11 @@ be audited whenever the matching help text changes.
 | Status stale-after hint | `24h`, overridden by `--stale-after`, `CDIDX_STALE_AFTER`, or `.cdidxrc.json` | status runner |
 | Color mode | `auto`, overridden by `--color`, `CLICOLOR_FORCE`, `NO_COLOR`, or `CLICOLOR=0` | `ConsoleUi` |
 | ANSI palette | `basic` fallback, auto-upgraded from terminal hints unless overridden | `ConsoleUi` |
-| Report log tail | `200` lines (`--log-lines`) | report runner help |
+| Report log tail | `200` lines (`--log-lines`), clamped to `2000` | report runner help |
+| Report per-log tail read | `1,048,576` bytes | `ReportCommandRunner` |
+| JSON envelope capture | `10,485,760` characters | `JsonEnvelopeWrapper` |
+| CLI batch line | `1,048,576` characters | `QueryCommandRunner` |
+| CLI batch arguments | `256` arguments after command name | `QueryCommandRunner` |
 
 When a default changes, update the help text, this table, affected examples, and
 the changelog fragment in the same PR so users are not asked to reconcile
@@ -858,7 +862,9 @@ cdidx search "authenticate" --json --verbose
 For scripts or editor integrations that need several queries against the same
 index, `cdidx batch --db <path>` keeps one SQLite connection open and reads one
 JSON string array per stdin line. Each array starts with a query command name,
-followed by that command's normal arguments:
+followed by that command's normal arguments. Each stdin line is capped at
+1,048,576 characters, and each command can carry at most 256 arguments after
+the command name:
 
 ```bash
 printf '%s\n' \
@@ -896,7 +902,7 @@ Use `--json` for machine-readable output (AI agents):
 {"path":"src/Auth/TokenService.cs","lang":"csharp","chunk_start_line":1,"chunk_end_line":80,"snippet_start_line":40,"snippet_end_line":47,"snippet":"if (claims.Count == 0)\\n    throw new InvalidOperationException();\\nreturn GenerateToken(claims);","match_lines":[42,47],"highlights":[{"line":47,"text":"return GenerateToken(claims);","terms":["GenerateToken"]}],"context_before":2,"context_after":3,"score":9.8}
 ```
 
-Add `--json-envelope` to wrap the per-line stream into a single document with a `metadata` block (command, `cdidx_version`, `elapsed_ms`, `db_path`, `result_count`, `exit_code`, optional `query_normalized` / `indexed_at_head_sha`) and a `results` array. The flag implies `--json` and works on every query command (`search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `excerpt`, `map`, `inspect`, `outline`, `status`, `validate`, `languages`, `impact`, `deps`, `unused`, `hotspots`). The flat NDJSON / array output stays the default for one release; the envelope will become the default in the next major release, at which point the flat form will be opt-in via `--json-flat`.
+Add `--json-envelope` to wrap the per-line stream into a single document with a `metadata` block (command, `cdidx_version`, `elapsed_ms`, `db_path`, `result_count`, `exit_code`, optional `query_normalized` / `indexed_at_head_sha`) and a `results` array. The flag implies `--json` and works on every query command (`search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `excerpt`, `map`, `inspect`, `outline`, `status`, `validate`, `languages`, `impact`, `deps`, `unused`, `hotspots`). Wrapped commands can capture up to 10,485,760 output characters; if the budget is exceeded, cdidx returns a JSON envelope with empty `results`, non-zero `metadata.exit_code`, and `metadata.error`, and suggests using `--limit` / `--top` or streaming `--json`. The flat NDJSON / array output stays the default for one release; the envelope will become the default in the next major release, at which point the flat form will be opt-in via `--json-flat`.
 
 Add `--profile` to any read command when debugging slow queries. It appends one JSON object after the normal result with `profile.phases` (`name`, `elapsed_ms`, `rows_scanned`), `profile.query_plan` (`EXPLAIN QUERY PLAN` rows), and `profile.queries` (the SQL text). Add `--slow-query-ms <n>` to log profiled SQL statements that meet the threshold to the persistent tool log.
 
@@ -1094,7 +1100,7 @@ cdidx report --output report.tgz --json
 |---|---|---|
 | `--output <path>` / `-o <path>` | (required) | Destination `.tar.gz`. The directory is created if missing; on POSIX, the archive and tar entries are owner-readable/writable only. |
 | `--db <path>` | `.cdidx/codeindex.db` | Override the database whose schema is summarized. If absent, `schema.txt` records that no DB was found. |
-| `--log-lines <n>` | `200` | How many trailing lifecycle-log lines to include (`0` disables the tail). |
+| `--log-lines <n>` | `200` | How many trailing lifecycle-log lines to include (`0` disables the tail; values above `2000` are clamped). Each log file contributes from a bounded 1,048,576-byte tail window instead of being loaded fully. |
 | `--no-log` | | Skip the lifecycle log entirely. |
 | `--include-args` | | Keep literal `cwd=` and `args=` values in the log tail (opt-in; share only with trusted recipients). |
 | `--json` | | Print a stable summary envelope (`output_path`, `version`, `files`, `schema_tables`, `log_lines_included`, `log_included`, `db_included`, `db_path`) instead of the human-friendly output. |
@@ -2515,7 +2521,11 @@ render できます。
 | Status stale-after hint | `24h`。`--stale-after` / `CDIDX_STALE_AFTER` / `.cdidxrc.json` で上書き | status runner |
 | Color mode | `auto`。`--color` / `CLICOLOR_FORCE` / `NO_COLOR` / `CLICOLOR=0` で上書き | `ConsoleUi` |
 | ANSI palette | `basic` fallback。terminal hints で自動昇格、または明示上書き | `ConsoleUi` |
-| Report log tail | `200` lines（`--log-lines`） | report runner help |
+| Report log tail | `200` lines（`--log-lines`）、最大 `2000` に clamp | report runner help |
+| Report per-log tail read | `1,048,576` bytes | `ReportCommandRunner` |
+| JSON envelope capture | `10,485,760` 文字 | `JsonEnvelopeWrapper` |
+| CLI batch line | `1,048,576` 文字 | `QueryCommandRunner` |
+| CLI batch arguments | command 名の後ろに `256` 引数 | `QueryCommandRunner` |
 
 既定値を変更するときは、help text、この表、影響する examples、changelog fragment を
 同じ PR で更新してください。
@@ -2996,7 +3006,8 @@ cdidx search "authenticate" --json --verbose
 
 同じインデックスに対して複数の query を投げる script や editor integration では、
 `cdidx batch --db <path>` を使うと 1 つの SQLite connection を開いたまま処理できます。
-stdin の各行は JSON 文字列配列で、先頭に query command 名、その後ろに通常の引数を並べます:
+stdin の各行は JSON 文字列配列で、先頭に query command 名、その後ろに通常の引数を並べます。
+各 stdin 行は 1,048,576 文字まで、各 command は command 名の後ろに最大 256 引数までです:
 
 ```bash
 printf '%s\n' \
@@ -3033,6 +3044,8 @@ src/Auth/TokenService.cs:42-58
 {"path":"src/Auth/Login.cs","start_line":15,"end_line":30,"content":"public bool Authenticate(...)...","lang":"csharp","score":12.5}
 {"path":"src/Auth/TokenService.cs","start_line":42,"end_line":58,"content":"public string GenerateToken(...)...","lang":"csharp","score":9.8}
 ```
+
+`--json-envelope` を追加すると、1 行ごとの stream を `metadata`（command、`cdidx_version`、`elapsed_ms`、`db_path`、`result_count`、`exit_code`、任意の `query_normalized` / `indexed_at_head_sha`）と `results` 配列を持つ 1 つの JSON document に包みます。この flag は `--json` を暗黙に有効化し、各 query command で使えます。wrapped command の捕捉出力は最大 10,485,760 文字です。超過した場合は、空の `results`、非 0 の `metadata.exit_code`、`metadata.error` を持つ JSON envelope を返し、`--limit` / `--top` または streaming `--json` の利用を促します。
 
 ### シンボル検索（関数、クラスなど）
 
@@ -3230,7 +3243,7 @@ cdidx report --output report.tgz --json
 |---|---|---|
 | `--output <path>` / `-o <path>` | （必須） | 出力先 `.tar.gz`。親ディレクトリが無ければ作成します。POSIX では archive と tar entry は owner の読み書きのみになります。 |
 | `--db <path>` | `.cdidx/codeindex.db` | スキーマ要約対象の DB を上書きします。存在しなければ `schema.txt` に「DB が見つからなかった」旨が記録されます。 |
-| `--log-lines <n>` | `200` | ライフサイクルログ末尾を何行含めるか（`0` で末尾を含めません）。 |
+| `--log-lines <n>` | `200` | ライフサイクルログ末尾を何行含めるか（`0` で末尾を含めません。`2000` を超える値は clamp されます）。各ログファイルは全体を読み込まず、末尾 1,048,576 byte の範囲から収集します。 |
 | `--no-log` | | ライフサイクルログを完全に省略します。 |
 | `--include-args` | | ログ末尾の `cwd=` / `args=` 値を伏字化せずそのまま含めます（信頼できる相手にだけ使用してください）。 |
 | `--json` | | 人間向け出力の代わりに、安定したサマリ JSON（`output_path` / `version` / `files` / `schema_tables` / `log_lines_included` / `log_included` / `db_included` / `db_path`）を出力します。 |

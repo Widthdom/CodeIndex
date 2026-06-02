@@ -302,7 +302,7 @@ internal static class CliFlagSchema
             new() { Name = "--output", ShortName = "-o", ValuePlaceholder = "<path>", Description = "Output bundle path", Commands = Set("report") },
             new() { Name = "--no-log", Description = "Exclude global tool log from bundle", Commands = Set("report") },
             new() { Name = "--include-args", Description = "Include args in bundle log", Commands = Set("report") },
-            new() { Name = "--log-lines", ValuePlaceholder = "<n>", Description = "Number of log lines to include in bundle", Commands = Set("report") },
+            new() { Name = "--log-lines", ValuePlaceholder = "<n>", Description = "Number of log lines to include in bundle (clamped to 2000)", Commands = Set("report") },
             new() { Name = "--transport", ValuePlaceholder = "<stdio|http>", Description = "MCP transport", Commands = Set("mcp") },
             new() { Name = "--http-listen", ValuePlaceholder = "<host:port>", Description = "MCP HTTP listen address", Commands = Set("mcp") },
         };

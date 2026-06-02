@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -21,6 +22,8 @@ public static class QueryCommandRunner
     internal const int DefaultQueryLimit = 20;
     internal const int DefaultMapLimit = 10;
     internal const int DefaultImpactLimit = 50;
+    internal const int BatchMaxLineChars = 1024 * 1024;
+    internal const int BatchMaxArgumentCount = 256;
     internal const string DefaultLimitEnvironmentVariable = "CDIDX_DEFAULT_LIMIT";
     internal const string DefaultSnippetLinesEnvironmentVariable = "CDIDX_DEFAULT_SNIPPET_LINES";
     internal const string DefaultMaxLineWidthEnvironmentVariable = "CDIDX_DEFAULT_MAX_LINE_WIDTH";
@@ -232,7 +235,9 @@ public static class QueryCommandRunner
     private const string OutputFormatJsonGraph = "json-graph";
     private const string OutputFormatEdgeList = "edgelist";
     private static readonly HashSet<string> InlineValueOptions =
-        new(ValueTakingOptions.Concat(["--json"]), StringComparer.Ordinal);
+        new(
+            ValueTakingOptions.Concat(["--json", "--log-format", "--log-retain-count", "--log-max-size-mb"]),
+            StringComparer.Ordinal);
     private const string FindUsage = "Usage: cdidx find <query> --path <glob> [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--before <n>] [--after <n>] [--snippet-lines <n>] [--focus-line <line>] [--focus-column <n>] [--max-line-width <n>] [--exact] [--regex] [--count]\n       cdidx find --query <query> --path <glob> [...]\n       cdidx find [options] -- <query>";
 
     public static int RunBatch(string[] cmdArgs, JsonSerializerOptions jsonOptions)
@@ -285,11 +290,18 @@ public static class QueryCommandRunner
             db.TryMigrateForRead();
             s_batchReader = new DbReader(db);
             var firstFailure = CommandExitCodes.Success;
-            string? line;
             var lineNumber = 0;
-            while ((line = Console.In.ReadLine()) != null)
+            while (TryReadBatchLine(Console.In, out var line, out var lineExceededLimit))
             {
                 lineNumber++;
+                if (lineExceededLimit)
+                {
+                    Console.Error.WriteLine($"Error: batch line {lineNumber} exceeds the {BatchMaxLineChars} character limit.");
+                    if (firstFailure == CommandExitCodes.Success)
+                        firstFailure = CommandExitCodes.UsageError;
+                    continue;
+                }
+
                 if (string.IsNullOrWhiteSpace(line))
                     continue;
 
@@ -313,6 +325,41 @@ public static class QueryCommandRunner
         }
     }
 
+    private static bool TryReadBatchLine(TextReader reader, out string? line, out bool exceededLimit)
+    {
+        line = null;
+        exceededLimit = false;
+        var builder = new StringBuilder();
+        while (true)
+        {
+            var next = reader.Read();
+            if (next < 0)
+            {
+                if (builder.Length == 0 && !exceededLimit)
+                    return false;
+                line = exceededLimit ? string.Empty : builder.ToString();
+                return true;
+            }
+
+            var ch = (char)next;
+            if (ch == '\n')
+            {
+                line = exceededLimit ? string.Empty : builder.ToString();
+                return true;
+            }
+
+            if (exceededLimit)
+                continue;
+            if (builder.Length >= BatchMaxLineChars)
+            {
+                exceededLimit = true;
+                continue;
+            }
+
+            builder.Append(ch);
+        }
+    }
+
     private static bool TryParseBatchLine(string line, int lineNumber, out string commandName, out string[] subArgs, out int exitCode)
     {
         commandName = string.Empty;
@@ -325,6 +372,11 @@ public static class QueryCommandRunner
             if (document.RootElement.ValueKind != JsonValueKind.Array || document.RootElement.GetArrayLength() == 0)
             {
                 Console.Error.WriteLine($"Error: batch line {lineNumber} must be a non-empty JSON string array.");
+                return false;
+            }
+            if (document.RootElement.GetArrayLength() > BatchMaxArgumentCount + 1)
+            {
+                Console.Error.WriteLine($"Error: batch line {lineNumber} must contain at most {BatchMaxArgumentCount} command arguments.");
                 return false;
             }
 
@@ -5593,6 +5645,18 @@ public static class QueryCommandRunner
                     else
                     {
                         AddParseError("Error: --config is only supported by status.");
+                    }
+                    break;
+                case "--log-format":
+                case "--log-retain-count":
+                case "--log-max-size-mb":
+                    if (allowNamedQuery && query == null)
+                    {
+                        query = currentArg;
+                    }
+                    else
+                    {
+                        AddParseError($"Error: unsupported option: {currentArg}. Use `--` before a query literal that starts with `-`.");
                     }
                     break;
                 case "--path":
