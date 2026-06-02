@@ -1977,6 +1977,8 @@ public partial class McpServer
                     ["max_pagination_offset"] = MaxMcpPaginationOffset,
                     ["max_json_depth"] = MaxJsonDepth,
                     ["max_batch_requests"] = MaxBatchRequestCount,
+                    ["keep_alive_min_interval_s"] = MinKeepAliveIntervalSeconds,
+                    ["keep_alive_max_interval_s"] = MaxKeepAliveIntervalSeconds,
                 }
             };
             return CreateToolResult(id, "Database stats returned.", structured);

@@ -161,6 +161,8 @@ public partial class McpServer : IDisposable
     internal const int DefaultMaxResponseBytes = 10 * 1024 * 1024;
     internal const int MaxConfiguredResponseBytes = 64 * 1024 * 1024;
     internal const int MaxMcpPaginationOffset = 10_000;
+    internal const double MinKeepAliveIntervalSeconds = 1.0;
+    internal const double MaxKeepAliveIntervalSeconds = 300.0;
     private const string MaxResponseBytesEnvVar = "CDIDX_MCP_RESPONSE_MAX_BYTES";
     private const string KeepAliveIntervalEnvironmentVariable = "CDIDX_MCP_KEEP_ALIVE_INTERVAL_S";
     internal const string DebugEnvironmentVariable = "CDIDX_DEBUG";
@@ -1338,8 +1340,14 @@ public partial class McpServer : IDisposable
         if (string.IsNullOrWhiteSpace(raw))
             return null;
         if (!double.TryParse(raw, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var seconds)
-            || seconds <= 0)
+            || !double.IsFinite(seconds)
+            || seconds < MinKeepAliveIntervalSeconds
+            || seconds > MaxKeepAliveIntervalSeconds)
+        {
+            Console.Error.WriteLine(
+                $"[cdidx-mcp] Ignoring invalid {KeepAliveIntervalEnvironmentVariable}='{raw}'. Expected a finite value between {MinKeepAliveIntervalSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} and {MaxKeepAliveIntervalSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} seconds. Keep-alive notifications stay disabled.");
             return null;
+        }
         return TimeSpan.FromSeconds(seconds);
     }
 

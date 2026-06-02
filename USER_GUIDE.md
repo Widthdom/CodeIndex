@@ -1991,7 +1991,7 @@ CDIDX_MCP_HTTP_TOKEN=s3cret cdidx mcp \
   --transport http --http-listen 0.0.0.0:9000          # LAN bind; bearer token is mandatory
 ```
 
-Each HTTP `POST /` carries one JSON-RPC frame in the request body, the matching response is returned in the same HTTP body (`200 OK`, `application/json`), and notifications return `204 No Content`. `GET /events` opens a `text/event-stream` channel for server-to-client frames; the current server does not emit unsolicited frames, but the stream is independent and does not block normal POST requests. Non-POST verbs on `/` return `405 Method Not Allowed` with `Allow: POST`. When the persistent lifecycle log is enabled, HTTP mode also writes one `mcp_http_request` record per request with method, path, status, duration, auth outcome, remote peer, correlation id, and JSON-RPC request id when available. Request and response bodies are not logged.
+Each HTTP `POST /` carries one JSON-RPC frame in the request body, the matching response is returned in the same HTTP body (`200 OK`, `application/json`), and notifications return `204 No Content`. `GET /events` opens a `text/event-stream` channel for server-to-client frames; the server emits no unsolicited frames unless keep-alive notifications are opted in with `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S`. Accepted keep-alive values are finite seconds from `1` to `300`; invalid or out-of-range values leave keep-alive disabled with a `stderr` warning. The stream is independent and does not block normal POST requests. Non-POST verbs on `/` return `405 Method Not Allowed` with `Allow: POST`. When the persistent lifecycle log is enabled, HTTP mode also writes one `mcp_http_request` record per request with method, path, status, duration, auth outcome, remote peer, correlation id, and JSON-RPC request id when available. Request and response bodies are not logged.
 
 Security defaults:
 
@@ -4095,7 +4095,7 @@ CDIDX_MCP_HTTP_TOKEN=s3cret cdidx mcp \
   --transport http --http-listen 0.0.0.0:9000          # LAN 公開時は bearer token が必須
 ```
 
-HTTP の `POST /` 1 件が JSON-RPC フレーム 1 件に対応し、応答は同じ HTTP レスポンスのボディに `200 OK` / `application/json` で返ります。通知は `204 No Content` です。`GET /events` はサーバー→クライアントフレーム用の `text/event-stream` channel を開きます。現サーバーは自発的な frame をまだ送信しませんが、この stream は独立しており通常の POST リクエストを塞ぎません。`/` への POST 以外は `405 Method Not Allowed`（`Allow: POST` 付き）です。永続 lifecycle log が有効な場合、HTTP mode はリクエストごとに `mcp_http_request` レコードも出力し、method、path、status、duration、auth outcome、remote peer、correlation id、利用可能な JSON-RPC request id を記録します。リクエスト/レスポンス本文は記録しません。
+HTTP の `POST /` 1 件が JSON-RPC フレーム 1 件に対応し、応答は同じ HTTP レスポンスのボディに `200 OK` / `application/json` で返ります。通知は `204 No Content` です。`GET /events` はサーバー→クライアントフレーム用の `text/event-stream` channel を開きます。server-initiated frame は `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S` で keep-alive notification を opt-in した場合だけ送信されます。受理される値は有限な `1`〜`300` 秒で、不正値や範囲外の値では `stderr` に警告を出して keep-alive を無効のままにします。この stream は独立しており通常の POST リクエストを塞ぎません。`/` への POST 以外は `405 Method Not Allowed`（`Allow: POST` 付き）です。永続 lifecycle log が有効な場合、HTTP mode はリクエストごとに `mcp_http_request` レコードも出力し、method、path、status、duration、auth outcome、remote peer、correlation id、利用可能な JSON-RPC request id を記録します。リクエスト/レスポンス本文は記録しません。
 
 セキュリティ既定:
 

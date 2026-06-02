@@ -5275,6 +5275,30 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void Constructor_InvalidKeepAliveEnvironment_DoesNotThrow()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_MCP_KEEP_ALIVE_INTERVAL_S");
+        env.Set("CDIDX_MCP_KEEP_ALIVE_INTERVAL_S", "Infinity");
+
+        using var server = new McpServer(_dbPath, "1.0", dbPathExplicit: true);
+        var response = server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"ping"}""")!)!;
+
+        Assert.Equal("ok", response["result"]!["status"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Status_ReportsKeepAliveIntervalBounds()
+    {
+        var response = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status"}}""")!)!;
+
+        var limits = response["result"]!["structuredContent"]!["mcp"]!["limits"]!;
+        Assert.Equal(McpServer.MinKeepAliveIntervalSeconds, limits["keep_alive_min_interval_s"]!.GetValue<double>());
+        Assert.Equal(McpServer.MaxKeepAliveIntervalSeconds, limits["keep_alive_max_interval_s"]!.GetValue<double>());
+    }
+
+    [Fact]
     public async Task ProcessFrameAsync_BatchResponseOverByteLimit_ReturnsStructuredError()
     {
         using var env = EnvironmentVariableScope.Capture("CDIDX_MCP_RESPONSE_MAX_BYTES");
