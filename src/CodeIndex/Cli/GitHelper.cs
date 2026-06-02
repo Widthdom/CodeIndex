@@ -52,7 +52,14 @@ public static class GitHelper
     };
 
     internal const int MaxCapturedGitOutputChars = 1024 * 1024;
-    internal static TimeSpan GitCommandTimeout { get; set; } = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan DefaultGitCommandTimeout = TimeSpan.FromSeconds(60);
+    private static readonly AsyncLocal<TimeSpan?> GitCommandTimeoutOverride = new();
+    internal static TimeSpan GitCommandTimeout
+    {
+        get => GitCommandTimeoutOverride.Value ?? DefaultGitCommandTimeout;
+        set => GitCommandTimeoutOverride.Value = value;
+    }
+
     private static readonly TimeSpan GitKillWaitTimeout = TimeSpan.FromSeconds(5);
     private const int GitProcessFailureExitCode = -1;
 
