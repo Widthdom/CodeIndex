@@ -691,6 +691,31 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FullScan_SkipsOversizedGitExclude()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            RunGit(projectRoot, "init");
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { }\n");
+            var excludePath = Path.Combine(projectRoot, ".git", "info", "exclude");
+            File.WriteAllText(excludePath, new string('x', IndexCommandRunner.MaxGitExcludeBytes + 1));
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(IndexCommandRunner.MaxGitExcludeBytes + 1, File.ReadAllText(excludePath).Length);
+            Assert.DoesNotContain("cdidx (CodeIndex)", File.ReadAllText(excludePath));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_UpdateMode_RejectsNewSymbolKindFilterPolicy()
     {
         var projectRoot = CreateTempProject();
