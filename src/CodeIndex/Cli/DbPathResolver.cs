@@ -60,7 +60,12 @@ public static class DbPathResolver
         return BuildDataDirResolution(Path.Combine(fullWorkspacePath, ".cdidx"), DataDirSourceWorkspace);
     }
 
-    internal static DbPathResolution ResolveDataDirForQuery(string workspacePath, string? explicitDataDir, string? environmentDataDir, string? xdgDataHome)
+    internal static DbPathResolution ResolveDataDirForQuery(
+        string workspacePath,
+        string? explicitDataDir,
+        string? environmentDataDir,
+        string? xdgDataHome,
+        Func<ActiveWorkspaceState?>? activeWorkspaceLoader = null)
     {
         var fullWorkspacePath = Path.GetFullPath(workspacePath);
         if (!string.IsNullOrWhiteSpace(explicitDataDir))
@@ -69,7 +74,7 @@ public static class DbPathResolver
         if (!string.IsNullOrWhiteSpace(environmentDataDir))
             return BuildDataDirResolution(environmentDataDir, DataDirSourceEnv);
 
-        var active = ActiveWorkspace.Load();
+        var active = (activeWorkspaceLoader ?? ActiveWorkspace.Load)();
         if (active != null)
             return new DbPathResolution(active.DbPath, Path.GetDirectoryName(active.DbPath), DataDirSourceActiveWorkspace);
 
