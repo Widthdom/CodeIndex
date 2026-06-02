@@ -257,6 +257,41 @@ public class GitHubIssueReporterTests : IDisposable
     }
 
     [Fact]
+    public void ScrubInlineCode_BoundsLargePlainTextInput()
+    {
+        var input = new string('a', GitHubIssueReporter.MaxScrubInputLength + 1024);
+
+        var result = GitHubIssueReporter.ScrubInlineCode(input);
+
+        Assert.Equal(GitHubIssueReporter.MaxScrubInputLength + "\n[truncated]".Length, result.Length);
+        Assert.EndsWith("\n[truncated]", result);
+    }
+
+    [Fact]
+    public void ScrubInlineCode_BoundsLargeUnclosedFenceAndDoesNotLeakCode()
+    {
+        var input = "Before\n```csharp\nsecret();\n" + new string('x', GitHubIssueReporter.MaxScrubInputLength + 1024);
+
+        var result = GitHubIssueReporter.ScrubInlineCode(input);
+
+        Assert.Equal("Before\n[code example removed]\n[truncated]", result);
+        Assert.DoesNotContain("secret", result);
+        Assert.DoesNotContain("```", result);
+    }
+
+    [Fact]
+    public void ScrubInlineCode_BoundsLargeUnclosedInlineSpanAndDoesNotLeakCode()
+    {
+        var input = "Before `secret()" + new string('x', GitHubIssueReporter.MaxScrubInputLength + 1024);
+
+        var result = GitHubIssueReporter.ScrubInlineCode(input);
+
+        Assert.Equal("Before [code example removed]\n[truncated]", result);
+        Assert.DoesNotContain("secret", result);
+        Assert.DoesNotContain("`", result);
+    }
+
+    [Fact]
     public void BuildSubmissionFailureMessage_IsActionable()
     {
         var message = GitHubIssueReporter.BuildSubmissionFailureMessage("network timeout");

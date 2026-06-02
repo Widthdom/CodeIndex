@@ -49,6 +49,9 @@ internal static class GitHubIssueReporter
     private static readonly TimeSpan DefaultRateLimitRetryDelay = TimeSpan.FromMinutes(1);
     private const string TimeoutEnvironmentVariable = "CDIDX_GITHUB_SUBMIT_TIMEOUT_SECONDS";
     internal const int MaxGitHubIssueTitleLength = 255;
+    internal const int MaxScrubInputLength = 16 * 1024;
+    private const string CodeExampleRemovedText = "[code example removed]";
+    private const string ScrubInputTruncatedText = "\n[truncated]";
 
     // Static HttpClient singleton — .NET best practice for reuse.
     // 静的 HttpClient シングルトン — .NET の再利用ベストプラクティス。
@@ -456,12 +459,55 @@ internal static class GitHubIssueReporter
         if (string.IsNullOrEmpty(text))
             return text;
 
-        var scrubbed = Regex.Replace(
-            text,
-            @"(?s)```.*?```",
-            "[code example removed]");
+        var (boundedText, wasTruncated) = BoundScrubInput(text);
+        var scrubbed = ScrubFencedCodeBlocks(boundedText);
+        scrubbed = ScrubSingleBacktickSpans(scrubbed);
 
-        return ScrubSingleBacktickSpans(scrubbed);
+        return wasTruncated
+            ? scrubbed + ScrubInputTruncatedText
+            : scrubbed;
+    }
+
+    private static (string Text, bool WasTruncated) BoundScrubInput(string text) =>
+        text.Length <= MaxScrubInputLength
+            ? (text, false)
+            : (text[..MaxScrubInputLength], true);
+
+    private static string ScrubFencedCodeBlocks(string text)
+    {
+        var builder = new StringBuilder(text.Length);
+        var index = 0;
+        while (index < text.Length)
+        {
+            var open = FindTripleBacktickFence(text, index);
+            if (open < 0)
+            {
+                builder.Append(text, index, text.Length - index);
+                break;
+            }
+
+            builder.Append(text, index, open - index);
+            builder.Append(CodeExampleRemovedText);
+
+            var close = FindTripleBacktickFence(text, open + 3);
+            if (close < 0)
+                break;
+
+            index = close + 3;
+        }
+
+        return builder.ToString();
+    }
+
+    private static int FindTripleBacktickFence(string text, int start)
+    {
+        for (var i = start; i + 2 < text.Length; i++)
+        {
+            if (text[i] == '`' && text[i + 1] == '`' && text[i + 2] == '`')
+                return i;
+        }
+
+        return -1;
     }
 
     internal static string BuildIssueTitle(string category, string description)
@@ -534,12 +580,11 @@ internal static class GitHubIssueReporter
             var close = FindInlineCodeClose(text, index + 1);
             if (close < 0)
             {
-                builder.Append(text[index]);
-                index++;
-                continue;
+                builder.Append(CodeExampleRemovedText);
+                break;
             }
 
-            builder.Append("[code example removed]");
+            builder.Append(CodeExampleRemovedText);
             index = close + 1;
         }
 
