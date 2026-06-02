@@ -181,6 +181,7 @@ internal sealed class IndexWatchEventJsonResult
     public int? DebounceMs { get; init; }
     public int? BatchSize { get; init; }
     public long? ElapsedMs { get; init; }
+    public int? ExitCode { get; init; }
     public string? Reason { get; init; }
 }
 
