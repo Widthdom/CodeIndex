@@ -78,6 +78,43 @@ public sealed class ChangelogToolTests
     }
 
     [Fact]
+    public void PrepareWritesThroughSymlinkedReleaseFiles()
+    {
+        using var scope = new TestRepositoryScope();
+        scope.WriteFile("actual-changelog.md", SampleChangelog);
+        scope.WriteFile("actual-version.json", """
+            {
+              "version": "1.16.0"
+            }
+            """);
+        scope.WriteFile("changelog.d/unreleased/195.fixed.md", SampleFragment);
+
+        var changelogLinkPath = Path.Combine(scope.Root, "CHANGELOG.md");
+        var versionLinkPath = Path.Combine(scope.Root, "version.json");
+        try
+        {
+            File.CreateSymbolicLink(changelogLinkPath, "actual-changelog.md");
+            File.CreateSymbolicLink(versionLinkPath, "actual-version.json");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+        {
+            return;
+        }
+
+        var tool = new ChangelogTool(scope.Root);
+        tool.Prepare(new Version(1, 17, 0), new DateOnly(2026, 5, 1), writeChanges: true);
+
+        Assert.NotNull(new FileInfo(changelogLinkPath).LinkTarget);
+        Assert.NotNull(new FileInfo(versionLinkPath).LinkTarget);
+        Assert.Contains("English release note", scope.ReadFile("actual-changelog.md"));
+        Assert.Contains("Japanese release note", scope.ReadFile("actual-changelog.md"));
+        Assert.Equal(scope.ReadFile("actual-changelog.md"), scope.ReadFile("CHANGELOG.md"));
+        Assert.Contains("\"version\": \"1.17.0\"", scope.ReadFile("actual-version.json"));
+        Assert.Equal(scope.ReadFile("actual-version.json"), scope.ReadFile("version.json"));
+        Assert.False(scope.Exists("changelog.d/unreleased/195.fixed.md"));
+    }
+
+    [Fact]
     public void PrepareRerunPreservesExistingReleaseAndAppendsNewFragments()
     {
         using var scope = new TestRepositoryScope();

@@ -609,20 +609,22 @@ public sealed class ChangelogTool
         var changelogReplaced = false;
         var versionReplaced = false;
         var fragmentDeletionStarted = false;
+        var changelogWritePath = ResolveWriteTargetPath(changelogPath);
+        var versionWritePath = ResolveWriteTargetPath(versionPath);
 
         try
         {
-            changelogTempPath = WriteStagedText(changelogPath, updatedChangelog);
-            versionTempPath = WriteStagedText(versionPath, updatedVersionJson);
+            changelogTempPath = WriteStagedText(changelogWritePath, updatedChangelog);
+            versionTempPath = WriteStagedText(versionWritePath, updatedVersionJson);
 
             NotifyPrepareWritePhase(PrepareWritePhase.StagedFilesWritten);
 
-            ReplaceWithStagedFile(changelogTempPath, changelogPath);
+            ReplaceWithStagedFile(changelogTempPath, changelogWritePath);
             changelogTempPath = string.Empty;
             changelogReplaced = true;
             NotifyPrepareWritePhase(PrepareWritePhase.ChangelogReplaced);
 
-            ReplaceWithStagedFile(versionTempPath, versionPath);
+            ReplaceWithStagedFile(versionTempPath, versionWritePath);
             versionTempPath = string.Empty;
             versionReplaced = true;
             NotifyPrepareWritePhase(PrepareWritePhase.VersionReplaced);
@@ -635,10 +637,10 @@ public sealed class ChangelogTool
         catch (Exception) when (!fragmentDeletionStarted)
         {
             RollBackPreparedFiles(
-                changelogPath,
+                changelogWritePath,
                 originalChangelog,
                 changelogReplaced,
-                versionPath,
+                versionWritePath,
                 originalVersionJson,
                 versionReplaced);
             throw;
@@ -677,6 +679,29 @@ public sealed class ChangelogTool
         }
 
         return tempPath;
+    }
+
+    private static string ResolveWriteTargetPath(string targetPath)
+    {
+        var fileInfo = new FileInfo(targetPath);
+        if (fileInfo.LinkTarget is null)
+            return targetPath;
+
+        var finalTarget = fileInfo.ResolveLinkTarget(returnFinalTarget: true);
+        if (finalTarget is not null)
+            return finalTarget.FullName;
+
+        var linkTarget = fileInfo.LinkTarget;
+        if (string.IsNullOrEmpty(linkTarget))
+            return targetPath;
+
+        if (Path.IsPathFullyQualified(linkTarget))
+            return linkTarget;
+
+        var directory = fileInfo.DirectoryName;
+        return Path.GetFullPath(Path.Combine(
+            string.IsNullOrEmpty(directory) ? Directory.GetCurrentDirectory() : directory,
+            linkTarget));
     }
 
     private static void ReplaceWithStagedFile(string stagedPath, string targetPath)
