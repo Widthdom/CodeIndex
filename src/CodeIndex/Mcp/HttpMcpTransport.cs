@@ -26,14 +26,20 @@ namespace CodeIndex.Mcp;
 /// </summary>
 internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
 {
+    internal const int DefaultMaxRequestBodyBytes = 1_000_000;
+    internal const int DefaultMaxQueuedRequests = 64;
+    internal const string MaxRequestBodyBytesEnvVar = "CDIDX_MCP_HTTP_MAX_REQUEST_BYTES";
+    internal const string MaxQueueDepthEnvVar = "CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH";
+
     private readonly HttpListener _listener;
     private readonly string _endpoint;
     private readonly Action<HttpRequestLogRecord>? _requestLogger;
     private readonly object _requestLoggerGate = new();
     private readonly ConcurrentDictionary<Guid, EventStream> _eventStreams = new();
-    private readonly ConcurrentBag<Task> _sseStreams = new();
     private readonly CancellationTokenSource _acceptCts = new();
-    private readonly Channel<PendingRequest> _requestQueue = Channel.CreateUnbounded<PendingRequest>();
+    private readonly Channel<PendingRequest> _requestQueue;
+    private readonly int _maxRequestBodyBytes;
+    private readonly int _maxQueuedRequests;
     private readonly Task _acceptLoop;
     // The configured bearer token's SHA-256 digest, precomputed once at construction so the
     // per-request auth path never hashes the secret. Storing the digest (not the token) keeps the
@@ -43,6 +49,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     // 攻撃者入力のみハッシュ計算する。これにより設定トークン長による timing 漏洩を排除する。
     private readonly byte[]? _bearerTokenHash;
     private PendingRequest? _pendingRequest;
+    private int _queuedRequestCount;
     private bool _disposed;
 
     /// <summary>
@@ -54,8 +61,24 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     /// が空でない場合、すべてのリクエストに `Authorization: Bearer ...` ヘッダーが必要。トークン未指定で
     /// loopback 以外に bind しようとした場合は明示的に拒否し、秘密情報なしの LAN 露出を防ぐ。
     /// </summary>
-    internal HttpMcpTransport(string prefix, string host, int boundPort, string? bearerToken, Action<HttpRequestLogRecord>? requestLogger = null)
+    internal HttpMcpTransport(
+        string prefix,
+        string host,
+        int boundPort,
+        string? bearerToken,
+        Action<HttpRequestLogRecord>? requestLogger = null,
+        int? maxRequestBodyBytes = null,
+        int? maxQueuedRequests = null)
     {
+        _maxRequestBodyBytes = ResolvePositiveIntOption(maxRequestBodyBytes, MaxRequestBodyBytesEnvVar, DefaultMaxRequestBodyBytes);
+        _maxQueuedRequests = ResolvePositiveIntOption(maxQueuedRequests, MaxQueueDepthEnvVar, DefaultMaxQueuedRequests);
+        _requestQueue = Channel.CreateBounded<PendingRequest>(new BoundedChannelOptions(_maxQueuedRequests)
+        {
+            SingleReader = true,
+            SingleWriter = false,
+            FullMode = BoundedChannelFullMode.Wait,
+            AllowSynchronousContinuations = false,
+        });
         _listener = new HttpListener();
         _listener.Prefixes.Add(prefix);
         _listener.Start();
@@ -82,6 +105,12 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     internal Func<string>? KeepAliveFrameProvider { get; set; }
 
     internal bool HasEventStreams => !_eventStreams.IsEmpty;
+
+    internal int MaxRequestBodyBytes => _maxRequestBodyBytes;
+
+    internal int MaxQueuedRequests => _maxQueuedRequests;
+
+    internal int QueuedRequestCount => Volatile.Read(ref _queuedRequestCount);
 
     /// <summary>
     /// Resolve a `host:port` listen spec into the corresponding HTTP prefix. Ephemeral ports
@@ -175,6 +204,22 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         }
     }
 
+    private static int ResolvePositiveIntOption(int? explicitValue, string envVar, int defaultValue)
+    {
+        if (explicitValue is { } configured)
+        {
+            if (configured <= 0)
+                throw new ArgumentOutOfRangeException(nameof(explicitValue), configured, "HTTP MCP limits must be positive integers.");
+            return configured;
+        }
+
+        var raw = Environment.GetEnvironmentVariable(envVar);
+        if (int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) && parsed > 0)
+            return parsed;
+
+        return defaultValue;
+    }
+
     public async Task<string?> ReadFrameAsync(CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -184,6 +229,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         try
         {
             var request = await _requestQueue.Reader.ReadAsync(cancellationToken).ConfigureAwait(false);
+            Interlocked.Decrement(ref _queuedRequestCount);
             _pendingRequest = request;
             return request.Body;
         }
@@ -255,7 +301,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
                 return;
             }
 
-            _sseStreams.Add(Task.Run(() => RunEventStreamAsync(request, cancellationToken), CancellationToken.None));
+            _ = Task.Run(() => RunEventStreamAsync(request, cancellationToken), CancellationToken.None);
             return;
         }
 
@@ -267,11 +313,9 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             return;
         }
 
-        string body;
-        using (var reader = new StreamReader(context.Request.InputStream, context.Request.ContentEncoding ?? Encoding.UTF8))
-        {
-            body = await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
-        }
+        var body = await TryReadRequestBodyAsync(request, cancellationToken).ConfigureAwait(false);
+        if (body is null)
+            return;
 
         if (string.IsNullOrWhiteSpace(body))
         {
@@ -286,7 +330,53 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         if (TryHandleOutOfBandFrame(request, body))
             return;
 
-        await _requestQueue.Writer.WriteAsync(request, cancellationToken).ConfigureAwait(false);
+        if (!TryQueueRequest(request))
+        {
+            context.Response.AddHeader("Retry-After", "1");
+            await RespondAsync(context, (int)HttpStatusCode.TooManyRequests, "MCP HTTP request queue is full.\n").ConfigureAwait(false);
+            LogRequest(request, (int)HttpStatusCode.TooManyRequests);
+        }
+    }
+
+    private async Task<string?> TryReadRequestBodyAsync(PendingRequest request, CancellationToken cancellationToken)
+    {
+        var context = request.Context;
+        if (context.Request.ContentLength64 > _maxRequestBodyBytes)
+        {
+            await RespondAsync(context, (int)HttpStatusCode.RequestEntityTooLarge, $"MCP HTTP request body exceeds the configured {_maxRequestBodyBytes.ToString(CultureInfo.InvariantCulture)} byte limit.\n").ConfigureAwait(false);
+            LogRequest(request, (int)HttpStatusCode.RequestEntityTooLarge);
+            return null;
+        }
+
+        using var buffer = new MemoryStream();
+        var scratch = new byte[Math.Min(8192, _maxRequestBodyBytes)];
+        while (true)
+        {
+            var read = await context.Request.InputStream.ReadAsync(scratch.AsMemory(), cancellationToken).ConfigureAwait(false);
+            if (read == 0)
+                break;
+
+            if (buffer.Length + read > _maxRequestBodyBytes)
+            {
+                await RespondAsync(context, (int)HttpStatusCode.RequestEntityTooLarge, $"MCP HTTP request body exceeds the configured {_maxRequestBodyBytes.ToString(CultureInfo.InvariantCulture)} byte limit.\n").ConfigureAwait(false);
+                LogRequest(request, (int)HttpStatusCode.RequestEntityTooLarge);
+                return null;
+            }
+
+            buffer.Write(scratch, 0, read);
+        }
+
+        return (context.Request.ContentEncoding ?? Encoding.UTF8).GetString(buffer.ToArray());
+    }
+
+    private bool TryQueueRequest(PendingRequest request)
+    {
+        Interlocked.Increment(ref _queuedRequestCount);
+        if (_requestQueue.Writer.TryWrite(request))
+            return true;
+
+        Interlocked.Decrement(ref _queuedRequestCount);
+        return false;
     }
 
     private bool TryHandleOutOfBandFrame(PendingRequest request, string body)

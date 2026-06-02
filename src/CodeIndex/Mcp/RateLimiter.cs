@@ -15,6 +15,7 @@ internal sealed class RateLimiter
     private readonly Dictionary<string, TokenBucket> _buckets = new(StringComparer.Ordinal);
     private readonly RateLimiterOptions _options;
     private readonly Func<DateTimeOffset> _clock;
+    private DateTimeOffset _nextPruneAt = DateTimeOffset.MinValue;
 
     public RateLimiter(RateLimiterOptions options, Func<DateTimeOffset>? clock = null)
     {
@@ -23,6 +24,17 @@ internal sealed class RateLimiter
     }
 
     public RateLimiterOptions Options => _options;
+
+    internal int BucketCount
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _buckets.Count;
+            }
+        }
+    }
 
     /// <summary>
     /// Try to take one token from the (tool, caller) bucket. When rate limiting is disabled
@@ -43,6 +55,7 @@ internal sealed class RateLimiter
         var now = _clock();
         lock (_gate)
         {
+            PruneIdleBuckets(now);
             if (!_buckets.TryGetValue(key, out var bucket))
             {
                 bucket = new TokenBucket(_options.BurstCapacity, now);
@@ -54,16 +67,73 @@ internal sealed class RateLimiter
 
     internal static string BuildKey(string tool, string caller) => $"{tool}|{caller}";
 
+    private void PruneIdleBuckets(DateTimeOffset now)
+    {
+        var idleTtl = _options.BucketIdleTtl;
+        if (idleTtl <= TimeSpan.Zero || now < _nextPruneAt)
+            return;
+
+        var cutoff = ComputeIdleCutoff(now, idleTtl);
+        List<string>? expiredKeys = null;
+        foreach (var (key, bucket) in _buckets)
+        {
+            if (bucket.LastTouched <= cutoff)
+                (expiredKeys ??= new List<string>()).Add(key);
+        }
+
+        if (expiredKeys is not null)
+        {
+            foreach (var key in expiredKeys)
+                _buckets.Remove(key);
+        }
+
+        _nextPruneAt = ComputeNextPruneAt(now, idleTtl);
+    }
+
+    private static TimeSpan ComputePruneInterval(TimeSpan idleTtl)
+    {
+        var interval = TimeSpan.FromTicks(Math.Max(TimeSpan.TicksPerMillisecond, idleTtl.Ticks / 4));
+        return interval <= TimeSpan.FromMinutes(1) ? interval : TimeSpan.FromMinutes(1);
+    }
+
+    private static DateTimeOffset ComputeIdleCutoff(DateTimeOffset now, TimeSpan idleTtl)
+    {
+        try
+        {
+            return now - idleTtl;
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return DateTimeOffset.MinValue;
+        }
+    }
+
+    private static DateTimeOffset ComputeNextPruneAt(DateTimeOffset now, TimeSpan idleTtl)
+    {
+        try
+        {
+            return now + ComputePruneInterval(idleTtl);
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return DateTimeOffset.MaxValue;
+        }
+    }
+
     private sealed class TokenBucket
     {
         private double _tokens;
         private DateTimeOffset _lastUpdate;
+        private DateTimeOffset _lastTouched;
 
         public TokenBucket(double initialTokens, DateTimeOffset createdAt)
         {
             _tokens = initialTokens;
             _lastUpdate = createdAt;
+            _lastTouched = createdAt;
         }
+
+        public DateTimeOffset LastTouched => _lastTouched;
 
         public RateLimiterDecision TryAcquire(DateTimeOffset now, double refillRate, double capacity)
         {
@@ -83,6 +153,8 @@ internal sealed class RateLimiter
                 _tokens = Math.Min(capacity, _tokens + elapsedSeconds * refillRate);
                 _lastUpdate = now;
             }
+            if (now > _lastTouched)
+                _lastTouched = now;
             // When elapsedSeconds <= 0 (clock drift / repeated tick / backwards step) we
             // intentionally do NOT touch _lastUpdate. The bucket stays anchored to its
             // previous base, so the next forward tick computes elapsed against the older
@@ -125,16 +197,19 @@ internal readonly record struct RateLimiterDecision(bool Allowed, long RetryAfte
 /// </summary>
 internal sealed class RateLimiterOptions
 {
+    internal static readonly TimeSpan DefaultBucketIdleTtl = TimeSpan.FromMinutes(15);
     internal const string RpsEnvVar = "CDIDX_MCP_RATE_LIMIT_RPS";
     internal const string BurstEnvVar = "CDIDX_MCP_RATE_LIMIT_BURST";
+    internal const string BucketIdleSecondsEnvVar = "CDIDX_MCP_RATE_LIMIT_BUCKET_IDLE_SECONDS";
     internal const double MaxRefillTokensPerSecond = 100.0;
     internal const double MaxBurstCapacity = 1000.0;
 
     public double RefillTokensPerSecond { get; init; }
     public double BurstCapacity { get; init; }
+    public TimeSpan BucketIdleTtl { get; init; } = DefaultBucketIdleTtl;
     public bool IsEnabled => RefillTokensPerSecond > 0 && BurstCapacity > 0;
 
-    public static RateLimiterOptions Disabled { get; } = new() { RefillTokensPerSecond = 0, BurstCapacity = 0 };
+    public static RateLimiterOptions Disabled { get; } = new() { RefillTokensPerSecond = 0, BurstCapacity = 0, BucketIdleTtl = DefaultBucketIdleTtl };
 
     public static RateLimiterOptions FromEnvironment(Func<string, string?>? envReader = null, Action<string>? warningSink = null)
     {
@@ -177,7 +252,12 @@ internal sealed class RateLimiterOptions
             burst = MaxBurstCapacity;
         }
 
-        return new RateLimiterOptions { RefillTokensPerSecond = rps, BurstCapacity = burst };
+        var bucketIdleTtl = DefaultBucketIdleTtl;
+        var bucketIdleRaw = envReader(BucketIdleSecondsEnvVar);
+        if (!string.IsNullOrWhiteSpace(bucketIdleRaw) && !TryParsePositiveTimeSpanSeconds(bucketIdleRaw, out bucketIdleTtl))
+            warningSink($"[cdidx-mcp] Ignoring invalid {BucketIdleSecondsEnvVar}='{bucketIdleRaw}'. Expected a positive finite number of seconds. Falling back to the default bucket idle TTL.");
+
+        return new RateLimiterOptions { RefillTokensPerSecond = rps, BurstCapacity = burst, BucketIdleTtl = bucketIdleTtl };
     }
 
     private static bool TryParsePositiveDouble(string raw, out double value)
@@ -188,6 +268,18 @@ internal sealed class RateLimiterOptions
             return true;
         }
         value = 0;
+        return false;
+    }
+
+    private static bool TryParsePositiveTimeSpanSeconds(string raw, out TimeSpan value)
+    {
+        if (TryParsePositiveDouble(raw, out var seconds) && seconds <= TimeSpan.MaxValue.TotalSeconds)
+        {
+            value = TimeSpan.FromSeconds(seconds);
+            return true;
+        }
+
+        value = DefaultBucketIdleTtl;
         return false;
     }
 }
