@@ -362,6 +362,56 @@ public class ProgramRunnerTests
     }
 
     [Fact]
+    public void CreateInstallerProcessStartInfo_UsesArgumentList()
+    {
+        var startInfo = ProgramRunner.CreateInstallerProcessStartInfo(
+            "/tmp/install script's path.sh",
+            "v1.27.0",
+            "/opt/cdidx install");
+
+        Assert.Equal("bash", startInfo.FileName);
+        Assert.False(startInfo.UseShellExecute);
+        Assert.Equal(string.Empty, startInfo.Arguments);
+        Assert.Equal(["/tmp/install script's path.sh", "v1.27.0"], startInfo.ArgumentList.ToArray());
+        Assert.Equal("/opt/cdidx install", startInfo.Environment["CDIDX_INSTALL_DIR"]);
+    }
+
+    [Fact]
+    public void RunInstallerProcess_TimesOutHungInstaller()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        lock (TestConsoleLock.Gate)
+        {
+            var root = Path.Combine(Path.GetTempPath(), $"cdidx_installer_timeout_{Guid.NewGuid():N}");
+            Directory.CreateDirectory(root);
+            var script = Path.Combine(root, "install.sh");
+            try
+            {
+                File.WriteAllText(script, """
+#!/bin/sh
+sleep 5
+""");
+                File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+                var startInfo = ProgramRunner.CreateInstallerProcessStartInfo(script, "v1.27.0", root);
+
+                var (exitCode, stdout, stderr) = CaptureConsole(() =>
+                    ProgramRunner.RunInstallerProcess(startInfo, TimeSpan.FromMilliseconds(100)));
+
+                Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+                Assert.Empty(stdout);
+                Assert.Contains("install.sh timed out", stderr);
+                Assert.Contains("rerun `install.sh` manually", stderr);
+            }
+            finally
+            {
+                TestProjectHelper.DeleteDirectory(root);
+            }
+        }
+    }
+
+    [Fact]
     public async Task DownloadInstallerScriptAsync_CancelsStalledBody()
     {
         var path = Path.Combine(Path.GetTempPath(), $"cdidx-install-timeout-{Guid.NewGuid():N}.sh");
