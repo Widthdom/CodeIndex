@@ -156,9 +156,7 @@ public partial class DbReader
         sql += $" ORDER BY {GetSearchOrderSql(coverageTokens.Count)}";
         if (!hasGuardFilters)
             sql += " LIMIT @limit";
-        else if (cursor is { })
-            sql += " LIMIT -1";
-        if (cursor is { })
+        if (cursor is { } && !hasGuardFilters)
             sql += " OFFSET @cursorOffset";
 
         cmd.CommandText = sql;
@@ -174,14 +172,14 @@ public partial class DbReader
             cmd.Parameters.AddWithValue("@lang", lang);
         if (since != null && _fileColumns.Contains("modified"))
             cmd.Parameters.AddWithValue("@since", since.Value);
-        if (cursor is { } searchCursorParameter)
+        if (cursor is { } searchCursorParameter && !hasGuardFilters)
         {
             cmd.Parameters.AddWithValue("@cursorOffset", searchCursorParameter.Offset);
         }
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
 
         var raw = new List<SearchResult>();
-        var nextOffset = cursor?.Offset ?? 0;
+        var nextOffset = hasGuardFilters ? 0 : cursor?.Offset ?? 0;
         try
         {
             using var reader = cmd.ExecuteTrackedReader();
@@ -211,7 +209,7 @@ public partial class DbReader
             raw = FilterBySearchGuards(raw, query, normalizedQuery, rawQuery, exact, lang, guardFilters!, guardWindow);
 
         var results = deduplicate ? DeduplicateOverlappingResults(raw) : raw;
-        return hasGuardFilters ? results.Take(limit).ToList() : results;
+        return hasGuardFilters ? PageGuardedSearchResults(results, limit, cursor) : results;
     }
 
     public QueryCountResult CountSearchResults(string query, string? lang = null, bool rawQuery = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool deduplicate = true, DateTime? since = null, bool exact = false, bool prefix = false, bool visibilityRank = true, IReadOnlyList<SearchGuardFilter>? guardFilters = null, int guardWindow = DefaultSearchGuardWindow)
@@ -490,6 +488,15 @@ public partial class DbReader
         }
 
         return linesByNumber;
+    }
+
+    private static List<SearchResult> PageGuardedSearchResults(List<SearchResult> results, int limit, SearchCursor? cursor)
+    {
+        var offset = Math.Max(0, cursor?.Offset ?? 0);
+        var page = results.Skip(offset).Take(Math.Max(0, limit)).ToList();
+        for (var i = 0; i < page.Count; i++)
+            page[i].NextOffset = offset + i + 1;
+        return page;
     }
 
     private static string NormalizeGuardQuery(string query, string? lang)

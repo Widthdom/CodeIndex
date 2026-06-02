@@ -3118,6 +3118,44 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_Search_GuardPaginationResumesWithinSplitChunk_Issue2852()
+    {
+        InsertIndexedFile(
+            "src/guard-paged.cs",
+            "csharp",
+            """
+            using System.IO;
+
+            public class GuardPaged
+            {
+                public void First(string path)
+                {
+                    var one = File.ReadAllText(path);
+                }
+
+                public void Second(string path)
+                {
+                    var two = File.ReadAllText(path);
+                }
+            }
+            """);
+
+        var firstRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"File.ReadAllText","exactSubstring":true,"rejectBefore":"Length","guardWindow":1,"limit":1}}}""")!;
+        var firstResponse = _server.HandleMessage(firstRequest)!;
+        var firstStructured = firstResponse["result"]!["structuredContent"]!;
+        var firstSnippet = firstStructured["results"]![0]!["snippet"]!.GetValue<string>();
+        var cursor = firstStructured["next_cursor"]!.GetValue<string>();
+
+        var secondRequest = JsonNode.Parse("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"search\",\"arguments\":{\"query\":\"File.ReadAllText\",\"exactSubstring\":true,\"rejectBefore\":\"Length\",\"guardWindow\":1,\"limit\":1,\"cursor\":\"" + cursor + "\"}}}")!;
+        var secondResponse = _server.HandleMessage(secondRequest)!;
+        var secondStructured = secondResponse["result"]!["structuredContent"]!;
+        var secondSnippet = secondStructured["results"]![0]!["snippet"]!.GetValue<string>();
+
+        Assert.Contains("one", firstSnippet);
+        Assert.Contains("two", secondSnippet);
+    }
+
+    [Fact]
     public void ToolsCall_Search_ExcludesGeneratedFilesByDefault()
     {
         InsertIndexedFile("src/generated.g.cs", "csharp", "class Generated { void Needle() {} }\n", generated: true);
