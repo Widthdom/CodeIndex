@@ -84,6 +84,97 @@ public class LspServerTests
     }
 
     [Fact]
+    public void Run_MalformedJsonFrame_WritesParseErrorAndContinues()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_malformed_json");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            const string initializeRequest = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}";
+            using var input = new MemoryStream(Encoding.UTF8.GetBytes(Frame("{") + Frame(initializeRequest)));
+            using var output = new MemoryStream();
+
+            var exitCode = server.Run(input, output);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            output.Position = 0;
+            Assert.True(LspServer.TryReadMessage(output, out var parseErrorPayload));
+            using var parseError = JsonDocument.Parse(parseErrorPayload);
+            Assert.Equal(-32700, parseError.RootElement.GetProperty("error").GetProperty("code").GetInt32());
+            Assert.Equal(JsonValueKind.Null, parseError.RootElement.GetProperty("id").ValueKind);
+
+            Assert.True(LspServer.TryReadMessage(output, out var initializePayload));
+            using var initialize = JsonDocument.Parse(initializePayload);
+            Assert.True(initialize.RootElement.GetProperty("result").GetProperty("capabilities").GetProperty("definitionProvider").GetBoolean());
+            Assert.False(LspServer.TryReadMessage(output, out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_ShutdownThenExit_StopsBeforeLaterFrames()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_shutdown_exit");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            const string shutdownRequest = "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"shutdown\"}";
+            const string exitNotification = "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}";
+            const string initializeRequest = "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"initialize\",\"params\":{}}";
+            using var input = new MemoryStream(Encoding.UTF8.GetBytes(
+                Frame(shutdownRequest) + Frame(exitNotification) + Frame(initializeRequest)));
+            using var output = new MemoryStream();
+
+            var exitCode = server.Run(input, output);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            output.Position = 0;
+            Assert.True(LspServer.TryReadMessage(output, out var shutdownPayload));
+            using var shutdown = JsonDocument.Parse(shutdownPayload);
+            Assert.Equal(2, shutdown.RootElement.GetProperty("id").GetInt32());
+            Assert.Equal(JsonValueKind.Null, shutdown.RootElement.GetProperty("result").ValueKind);
+            Assert.False(LspServer.TryReadMessage(output, out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_ExitBeforeShutdown_ReturnsUsageError()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_exit_without_shutdown");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            const string exitNotification = "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}";
+            const string initializeRequest = "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"initialize\",\"params\":{}}";
+            using var input = new MemoryStream(Encoding.UTF8.GetBytes(Frame(exitNotification) + Frame(initializeRequest)));
+            using var output = new MemoryStream();
+
+            var exitCode = server.Run(input, output);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            output.Position = 0;
+            Assert.False(LspServer.TryReadMessage(output, out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void HandleMessage_DocumentSymbol_ReturnsIndexedSymbols()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_document_symbol");
@@ -419,4 +510,7 @@ public class LspServerTests
                 position = new { line, character },
             },
         });
+
+    private static string Frame(string payload) =>
+        $"Content-Length: {Encoding.UTF8.GetByteCount(payload)}\r\n\r\n{payload}";
 }

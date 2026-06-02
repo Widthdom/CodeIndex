@@ -1594,8 +1594,7 @@ internal static class ProgramRunner
             }
 
             using var server = new LspServer(new DbReader(db), appVersion, jsonOptions, indexedProjectRoot);
-            server.Run(Console.OpenStandardInput(), Console.OpenStandardOutput());
-            return CommandExitCodes.Success;
+            return server.Run(Console.OpenStandardInput(), Console.OpenStandardOutput());
         }
         catch (OperationCanceledException)
         {
