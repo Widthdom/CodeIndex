@@ -5716,6 +5716,50 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FullScan_IgnoresOversizedCheckpoint()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            RunGit(projectRoot, "init");
+            RunGit(projectRoot, "config", "user.email", "test@example.com");
+            RunGit(projectRoot, "config", "user.name", "Test");
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(projectRoot, "src", "a.cs"), "public class A { }\n");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "initial");
+            var head = RunGitCaptureStdOut(projectRoot, "rev-parse", "HEAD").Trim();
+
+            var checkpointPath = Path.Combine(projectRoot, ".cdidx", "scan-checkpoint.json");
+            Directory.CreateDirectory(Path.GetDirectoryName(checkpointPath)!);
+            var checkpoint = $$"""
+                {
+                  "Version": 1,
+                  "GitHead": "{{head}}",
+                  "Directories": [
+                    "src"
+                  ]
+                }
+                """;
+            var padding = new System.Text.StringBuilder(IndexCommandRunner.MaxScanCheckpointBytes + 2048);
+            while (checkpoint.Length + padding.Length <= IndexCommandRunner.MaxScanCheckpointBytes)
+                padding.Append(' ', 1024).Append('\n');
+            File.WriteAllText(checkpointPath, checkpoint + padding);
+
+            var (exitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.Contains("src/a.cs", indexedPaths);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_FullScan_PurgesStaleRowsWithinListedDirectoriesEvenWhenAnotherDirectoryIsUnreadable()
     {
         if (OperatingSystem.IsWindows())
