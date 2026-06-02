@@ -252,26 +252,28 @@ internal static class ExportImportCommandRunner
             if (!string.IsNullOrWhiteSpace(outputDirectory))
                 Directory.CreateDirectory(outputDirectory);
 
-            using var writer = new StreamWriter(outputPath, append: false, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
-            writer.WriteLine("!_TAG_FILE_FORMAT\t2\t/extended format/");
-            writer.WriteLine("!_TAG_FILE_SORTED\t1\t/0=unsorted, 1=sorted, 2=foldcase/");
-
-            using var cmd = db.Connection.CreateCommand();
-            cmd.CommandText = @"
-                SELECT s.name, f.path, COALESCE(s.start_line, s.line, 1), s.kind
-                FROM symbols s
-                JOIN files f ON s.file_id = f.id
-                WHERE s.name IS NOT NULL AND s.name != ''
-                ORDER BY s.name COLLATE NOCASE, f.path, COALESCE(s.start_line, s.line, 1)";
-            using var reader = cmd.ExecuteReader();
-            while (reader.Read())
+            WriteCtagsFile(outputPath, writer =>
             {
-                var name = SanitizeCtagsField(reader.GetString(0));
-                var path = SanitizeCtagsField(reader.GetString(1));
-                var line = Math.Max(1, reader.GetInt32(2));
-                var kind = SanitizeCtagsField(reader.GetString(3));
-                writer.WriteLine($"{name}\t{path}\t{line};\"\tkind:{kind}\tline:{line}");
-            }
+                writer.WriteLine("!_TAG_FILE_FORMAT\t2\t/extended format/");
+                writer.WriteLine("!_TAG_FILE_SORTED\t1\t/0=unsorted, 1=sorted, 2=foldcase/");
+
+                using var cmd = db.Connection.CreateCommand();
+                cmd.CommandText = @"
+                    SELECT s.name, f.path, COALESCE(s.start_line, s.line, 1), s.kind
+                    FROM symbols s
+                    JOIN files f ON s.file_id = f.id
+                    WHERE s.name IS NOT NULL AND s.name != ''
+                    ORDER BY s.name COLLATE NOCASE, f.path, COALESCE(s.start_line, s.line, 1)";
+                using var reader = cmd.ExecuteReader();
+                while (reader.Read())
+                {
+                    var name = SanitizeCtagsField(reader.GetString(0));
+                    var path = SanitizeCtagsField(reader.GetString(1));
+                    var line = Math.Max(1, reader.GetInt32(2));
+                    var kind = SanitizeCtagsField(reader.GetString(3));
+                    writer.WriteLine($"{name}\t{path}\t{line};\"\tkind:{kind}\tline:{line}");
+                }
+            });
 
             Console.WriteLine($"Exported ctags to {outputPath}");
             return CommandExitCodes.Success;
@@ -315,6 +317,23 @@ internal static class ExportImportCommandRunner
                 using var source = File.OpenRead(snapshotPath);
                 using var target = dbEntry.Open();
                 source.CopyTo(target);
+            });
+    }
+
+    internal static void WriteCtagsFile(string outputPath, Action<TextWriter> writeContents)
+    {
+        ArgumentNullException.ThrowIfNull(writeContents);
+
+        AtomicFileWriter.Write(
+            outputPath,
+            stream =>
+            {
+                using var writer = new StreamWriter(
+                    stream,
+                    new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+                    bufferSize: 1024,
+                    leaveOpen: true);
+                writeContents(writer);
             });
     }
 

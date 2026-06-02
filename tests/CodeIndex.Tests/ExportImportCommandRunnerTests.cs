@@ -40,6 +40,34 @@ public class ExportImportCommandRunnerTests
     }
 
     [Fact]
+    public void WriteCtagsFile_FailurePreservesExistingTagfile()
+    {
+        var workDir = Path.Combine(Path.GetTempPath(), $"cdidx_ctags_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(workDir);
+        try
+        {
+            var outputPath = Path.Combine(workDir, "tags");
+            File.WriteAllText(outputPath, "existing tags");
+
+            Assert.Throws<IOException>(() =>
+                ExportImportCommandRunner.WriteCtagsFile(
+                    outputPath,
+                    writer =>
+                    {
+                        writer.WriteLine("partial");
+                        throw new IOException("simulated ctags failure");
+                    }));
+
+            Assert.Equal("existing tags", File.ReadAllText(outputPath));
+            Assert.Single(Directory.GetFiles(workDir));
+        }
+        finally
+        {
+            Directory.Delete(workDir, recursive: true);
+        }
+    }
+
+    [Fact]
     public void TryValidateDatabaseEntrySize_RejectsOversizedUncompressedLength()
     {
         var ok = ExportImportCommandRunner.TryValidateDatabaseEntrySize(
