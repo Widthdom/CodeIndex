@@ -80,6 +80,43 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void EnumeratePluginAssemblyPaths_SkipsWorkspacePluginsUnlessTrusted()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable);
+            var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_workspace_plugins_{Guid.NewGuid():N}");
+            var originalDirectory = Environment.CurrentDirectory;
+            try
+            {
+                var pluginDir = Path.Combine(tempDir, ".cdidx", "plugins");
+                Directory.CreateDirectory(pluginDir);
+                var pluginFileName = $"demo_{Guid.NewGuid():N}.dll";
+                var pluginPath = Path.Combine(pluginDir, pluginFileName);
+                File.WriteAllText(pluginPath, "not a real dll");
+                Environment.CurrentDirectory = tempDir;
+                env.Set(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable, null);
+
+                var untrustedPaths = ExtractorPluginRegistry.EnumeratePluginAssemblyPathsForTests();
+
+                Assert.DoesNotContain(untrustedPaths, path => Path.GetFileName(path) == pluginFileName);
+
+                env.Set(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable, "1");
+
+                var trustedPaths = ExtractorPluginRegistry.EnumeratePluginAssemblyPathsForTests();
+
+                Assert.Contains(trustedPaths, path => Path.GetFileName(path) == pluginFileName);
+            }
+            finally
+            {
+                Environment.CurrentDirectory = originalDirectory;
+                if (Directory.Exists(tempDir))
+                    Directory.Delete(tempDir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public void Extract_CsharpFileScopedNamespace_DoesNotEnterMemberHeaderMerge()
     {
         const string content = """

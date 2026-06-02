@@ -7,6 +7,7 @@ namespace CodeIndex.Indexer.Extensibility;
 public static class ExtractorPluginRegistry
 {
     public const int CurrentApiVersion = 1;
+    internal const string TrustWorkspacePluginsEnvironmentVariable = "CDIDX_TRUST_WORKSPACE_PLUGINS";
 
     private static readonly object Gate = new();
     private static readonly Dictionary<string, ISymbolExtractor> SymbolExtractors = new(StringComparer.Ordinal);
@@ -101,6 +102,9 @@ public static class ExtractorPluginRegistry
         }
     }
 
+    internal static IReadOnlyList<string> EnumeratePluginAssemblyPathsForTests()
+        => EnumeratePluginAssemblyPaths().ToArray();
+
     internal static void LoadPatternConfigsForProjectRoot(string? projectRoot)
     {
         EnsurePluginsLoaded();
@@ -162,7 +166,8 @@ public static class ExtractorPluginRegistry
 
     private static IEnumerable<string> EnumeratePluginDirectories()
     {
-        yield return Path.Combine(Environment.CurrentDirectory, ".cdidx", "plugins");
+        if (WorkspacePluginsTrusted())
+            yield return Path.Combine(Environment.CurrentDirectory, ".cdidx", "plugins");
 
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         if (!string.IsNullOrWhiteSpace(home))
@@ -301,6 +306,16 @@ public static class ExtractorPluginRegistry
         {
             // Ignore broken plugin types and continue loading the rest of the assembly.
         }
+    }
+
+    private static bool WorkspacePluginsTrusted()
+    {
+        var value = Environment.GetEnvironmentVariable(TrustWorkspacePluginsEnvironmentVariable);
+        return value != null
+               && (value.Equals("1", StringComparison.OrdinalIgnoreCase)
+                   || value.Equals("true", StringComparison.OrdinalIgnoreCase)
+                   || value.Equals("yes", StringComparison.OrdinalIgnoreCase)
+                   || value.Equals("on", StringComparison.OrdinalIgnoreCase));
     }
 
     private static void AddLanguageExtensions(
