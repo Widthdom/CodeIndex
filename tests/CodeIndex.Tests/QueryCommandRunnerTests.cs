@@ -365,6 +365,36 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void ParseArgs_StatusCheckScopesRejectsOverlongCsv_Issue2913()
+    {
+        var tooLong = new string('w', QueryCommandRunner.MaxStatusCheckScopesCsvLength + 1);
+
+        var options = QueryCommandRunner.ParseArgs(
+            [$"--check={tooLong}"],
+            jsonDefault: false,
+            allowStatusCheck: true);
+
+        Assert.True(options.CheckWorkspace);
+        Assert.Contains("--check value is too long", options.ParseError);
+        Assert.Null(options.StatusCheckScopes);
+    }
+
+    [Fact]
+    public void ParseArgs_StatusCheckScopesRejectsTooManyCsvEntries_Issue2913()
+    {
+        var tooMany = string.Join(',', Enumerable.Repeat("workspace", QueryCommandRunner.MaxStatusCheckScopesCsvEntries + 1));
+
+        var options = QueryCommandRunner.ParseArgs(
+            [$"--check={tooMany}"],
+            jsonDefault: false,
+            allowStatusCheck: true);
+
+        Assert.True(options.CheckWorkspace);
+        Assert.Contains("--check accepts at most", options.ParseError);
+        Assert.Null(options.StatusCheckScopes);
+    }
+
+    [Fact]
     public void RunStatusConfig_PrintsEffectiveConfigWithoutOpeningDb()
     {
         using var env = EnvironmentVariableScope.Capture(

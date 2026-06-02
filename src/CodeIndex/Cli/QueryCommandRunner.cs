@@ -38,6 +38,8 @@ public static class QueryCommandRunner
     internal const int MaxSymbolQueryNames = 256;
     internal const int MaxMapSectionsCsvLength = 256;
     internal const int MaxMapSectionsCsvEntries = 16;
+    internal const int MaxStatusCheckScopesCsvLength = 256;
+    internal const int MaxStatusCheckScopesCsvEntries = 16;
     internal const int ExactZeroHintProbeLimit = 1;
     internal const int ExactZeroHintSampleLimit = 5;
     private const string HotspotsGroupedByNameKind = "name_kind";
@@ -4976,6 +4978,8 @@ public static class QueryCommandRunner
                 AddParseError("Error: --check scope list cannot be empty. Use --check or --check=workspace,fold,graph,issues,hotspot,csharp,sql,newer.");
                 return;
             }
+            if (!ValidateCsvBounds("--check", rawScopes, MaxStatusCheckScopesCsvLength, MaxStatusCheckScopesCsvEntries, AddParseError))
+                return;
 
             statusCheckScopes ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var rawScope in rawScopes.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
