@@ -4711,6 +4711,97 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GraphReaders_QualifiedMemberQueriesUseContextAndDefinitionFallback_Issue2819()
+    {
+        InsertIndexedFile("src/issue2819/HttpMcpTransport.cs", "csharp",
+            """
+            namespace Issue2819;
+
+            public sealed class HttpMcpTransport
+            {
+                public void HandleContext()
+                {
+                    RunEventStreamAsync();
+                    System.Guid.NewGuid();
+                }
+
+                private void RunEventStreamAsync()
+                {
+                    Guid.NewGuid();
+                }
+            }
+            """);
+
+        var definition = Assert.Single(_reader.GetDefinitions(
+            "HttpMcpTransport.RunEventStreamAsync",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["issue2819"]));
+        Assert.Equal("RunEventStreamAsync", definition.Name);
+        Assert.Equal("HttpMcpTransport", definition.ContainerName);
+
+        var reference = Assert.Single(_reader.SearchReferences(
+            "HttpMcpTransport.RunEventStreamAsync",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["issue2819"]));
+        Assert.Equal("RunEventStreamAsync", reference.SymbolName);
+        Assert.Equal("HandleContext", reference.ContainerName);
+        Assert.Equal(1, _reader.CountSearchReferences(
+            "HttpMcpTransport.RunEventStreamAsync",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["issue2819"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: false), _reader.CountSearchReferencesTotal(
+            "HttpMcpTransport.RunEventStreamAsync",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["issue2819"]));
+
+        var caller = Assert.Single(_reader.GetCallers(
+            "HttpMcpTransport.RunEventStreamAsync",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["issue2819"]));
+        Assert.Equal("HandleContext", caller.CallerName);
+        Assert.Equal(1, _reader.CountCallers(
+            "HttpMcpTransport.RunEventStreamAsync",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["issue2819"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: false), _reader.CountCallersTotal(
+            "HttpMcpTransport.RunEventStreamAsync",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["issue2819"]));
+
+        var callees = _reader.GetCallees(
+            "HttpMcpTransport.RunEventStreamAsync",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["issue2819"]);
+        Assert.Contains(callees, result => result.CallerName == "RunEventStreamAsync" && result.CalleeName == "NewGuid");
+        Assert.Equal(callees.Count, _reader.CountCallees(
+            "HttpMcpTransport.RunEventStreamAsync",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["issue2819"]));
+        Assert.Equal(new QueryCountResult(callees.Count, 1, IncludesSql: false), _reader.CountCalleesTotal(
+            "HttpMcpTransport.RunEventStreamAsync",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["issue2819"]));
+
+        var frameworkCallers = _reader.GetCallers(
+            "System.Guid.NewGuid",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["issue2819"]);
+        Assert.Contains(frameworkCallers, result => result.CallerName == "HandleContext");
+        Assert.Contains(frameworkCallers, result => result.CallerName == "RunEventStreamAsync");
+    }
+
+    [Fact]
     public void GraphReaders_ExactPrefersExactCaseOverFoldSibling()
     {
         InsertIndexedFile("src/a_case.py", "python",
