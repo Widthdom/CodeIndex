@@ -193,18 +193,7 @@ internal static class ExportImportCommandRunner
             }
             SqliteConnection.ClearAllPools();
             manifest = manifest with { DatabaseSha256 = ComputeSha256(snapshotPath) };
-            if (File.Exists(outputPath))
-                File.Delete(outputPath);
-
-            using (var archive = ZipFile.Open(outputPath, ZipArchiveMode.Create))
-            {
-                AddTextEntry(archive, ManifestEntryName, JsonSerializer.Serialize(manifest, jsonOptions));
-                var dbEntry = archive.CreateEntry(DatabaseEntryName, CompressionLevel.SmallestSize);
-                dbEntry.LastWriteTime = DeterministicZipTimestamp;
-                using var source = File.OpenRead(snapshotPath);
-                using var target = dbEntry.Open();
-                source.CopyTo(target);
-            }
+            WriteExportArchiveFile(outputPath, snapshotPath, manifest, jsonOptions);
 
             if (wantsJson)
                 Console.WriteLine(JsonSerializer.Serialize(new ExportArchiveResult("1", Path.GetFullPath(outputPath), fullSourceDbPath), jsonOptions));
@@ -311,6 +300,22 @@ internal static class ExportImportCommandRunner
         entry.LastWriteTime = DeterministicZipTimestamp;
         using var writer = new StreamWriter(entry.Open(), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
         writer.Write(content);
+    }
+
+    internal static void WriteExportArchiveFile(string outputPath, string snapshotPath, ExportManifest manifest, JsonSerializerOptions jsonOptions)
+    {
+        AtomicFileWriter.Write(
+            outputPath,
+            stream =>
+            {
+                using var archive = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true);
+                AddTextEntry(archive, ManifestEntryName, JsonSerializer.Serialize(manifest, jsonOptions));
+                var dbEntry = archive.CreateEntry(DatabaseEntryName, CompressionLevel.SmallestSize);
+                dbEntry.LastWriteTime = DeterministicZipTimestamp;
+                using var source = File.OpenRead(snapshotPath);
+                using var target = dbEntry.Open();
+                source.CopyTo(target);
+            });
     }
 
     private static string ComputeSha256(string path)

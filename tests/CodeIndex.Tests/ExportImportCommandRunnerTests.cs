@@ -1,9 +1,44 @@
+using System.Text.Json;
 using CodeIndex.Cli;
 
 namespace CodeIndex.Tests;
 
 public class ExportImportCommandRunnerTests
 {
+    [Fact]
+    public void WriteExportArchiveFile_FailurePreservesExistingArchive()
+    {
+        var workDir = Path.Combine(Path.GetTempPath(), $"cdidx_export_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(workDir);
+        try
+        {
+            var outputPath = Path.Combine(workDir, "codeindex.cdidx.zip");
+            File.WriteAllText(outputPath, "existing archive");
+            var missingSnapshotPath = Path.Combine(workDir, "missing.db");
+            var manifest = new ExportImportCommandRunner.ExportManifest(
+                "1",
+                "test",
+                0,
+                null,
+                null,
+                new string('0', 64));
+
+            Assert.Throws<FileNotFoundException>(() =>
+                ExportImportCommandRunner.WriteExportArchiveFile(
+                    outputPath,
+                    missingSnapshotPath,
+                    manifest,
+                    new JsonSerializerOptions()));
+
+            Assert.Equal("existing archive", File.ReadAllText(outputPath));
+            Assert.Single(Directory.GetFiles(workDir));
+        }
+        finally
+        {
+            Directory.Delete(workDir, recursive: true);
+        }
+    }
+
     [Fact]
     public void TryValidateDatabaseEntrySize_RejectsOversizedUncompressedLength()
     {
