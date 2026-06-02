@@ -197,6 +197,53 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_GuardFiltersRequireAllNonExactTokensOnFocusLine_Issue2852()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_guard_non_exact_terms");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                """
+                using System.IO;
+
+                public class App
+                {
+                    public void Guarded(string path)
+                    {
+                        var length = new FileInfo(path).Length;
+                        var text = File.ReadAllText(path);
+                    }
+
+                    public void Unguarded(string path)
+                    {
+                        var text = File.ReadAllText(path);
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["File ReadAllText", "--db", dbPath, "--reject-before", "Length", "--guard-window", "2", "--json=array"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var row = Assert.Single(document.RootElement.EnumerateArray());
+            Assert.Equal("src/app.cs", row.GetProperty("path").GetString());
+            Assert.Equal(13, row.GetProperty("chunk_start_line").GetInt32());
+            Assert.Equal("        var text = File.ReadAllText(path);", row.GetProperty("snippet").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_GuardRequireEvidenceAppearsInJson_Issue2852()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_guard_require_json");
@@ -287,6 +334,19 @@ public class QueryCommandRunnerTests
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
+    }
+
+    [Fact]
+    public void SearchUsageLineListsGuardFlags_Issue2852()
+    {
+        var usage = ConsoleUi.GetUsageLine("search");
+
+        Assert.NotNull(usage);
+        Assert.Contains("--require-before <query>", usage);
+        Assert.Contains("--require-after <query>", usage);
+        Assert.Contains("--reject-before <query>", usage);
+        Assert.Contains("--reject-after <query>", usage);
+        Assert.Contains("--guard-window <n>", usage);
     }
 
     [Fact]

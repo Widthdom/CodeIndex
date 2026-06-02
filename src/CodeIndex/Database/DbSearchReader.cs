@@ -388,25 +388,28 @@ public partial class DbReader
 
         var normalizeCSharp = string.Equals(lang ?? result.Lang, "csharp", StringComparison.OrdinalIgnoreCase);
         var comparison = exact ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+        var requireAllTermsOnLine = !rawQuery && !exact && terms.Length > 1;
         var matches = new List<(int LineNumber, string Text)>();
         for (var i = 0; i < lines.Length; i++)
         {
             var line = normalizeCSharp ? CSharpVerbatimNameNormalizer.Normalize(lines[i]) : lines[i];
-            if (terms.Any(term => line.Contains(term, comparison)))
+            var lineMatches = requireAllTermsOnLine
+                ? terms.All(term => line.Contains(term, comparison))
+                : terms.Any(term => line.Contains(term, comparison));
+            if (lineMatches)
                 matches.Add((result.StartLine + i, lines[i]));
         }
 
-        return matches.Count == 0 ? [(result.StartLine, lines.FirstOrDefault() ?? string.Empty)] : matches;
+        return matches;
     }
 
     private static string[] BuildPrimarySearchMatchTerms(string query, string normalizedQuery, bool rawQuery, bool exact)
     {
-        var terms = new List<string>();
-        var fullQuery = rawQuery ? query.Trim() : normalizedQuery.Trim();
-        if (!string.IsNullOrWhiteSpace(fullQuery))
-            terms.Add(NormalizeGuardSearchTerm(fullQuery));
-
-        if (!exact)
+        IEnumerable<string> rawTerms = !exact && !rawQuery
+            ? normalizedQuery.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
+            : [rawQuery ? query.Trim() : normalizedQuery.Trim()];
+        var terms = rawTerms.Select(NormalizeGuardSearchTerm).ToList();
+        if (!exact && rawQuery)
             terms.AddRange(GetSearchCoverageTokens(normalizedQuery, rawQuery));
 
         return terms
