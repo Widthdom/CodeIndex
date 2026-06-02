@@ -155,9 +155,55 @@ public class ProgramRunnerTests
             Assert.DoesNotContain('{', stderr);
             var tracePath = Path.Combine(logRoot, $"query-trace-{DateTime.UtcNow:yyyyMMdd}.jsonl");
             Assert.True(File.Exists(tracePath));
+            if (!OperatingSystem.IsWindows())
+                Assert.Equal(PrivateLogFile.PrivateFileMode, File.GetUnixFileMode(tracePath));
             var line = File.ReadAllLines(tracePath).Single();
             using var document = JsonDocument.Parse(line);
             Assert.Equal("search", document.RootElement.GetProperty("tool").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            if (Directory.Exists(logRoot))
+                Directory.Delete(logRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Run_QueryTraceFile_PrunesToThirtyTraceFiles()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("query-trace-prune");
+        var logRoot = Path.Combine(Path.GetTempPath(), $"cdidx_query_trace_prune_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(logRoot);
+            for (var i = 0; i < 35; i++)
+            {
+                var date = new DateTime(2024, 1, 1).AddDays(i);
+                var path = Path.Combine(logRoot, $"query-trace-{date:yyyyMMdd}.jsonl");
+                File.WriteAllText(path, $"old {i}");
+                File.SetLastWriteTimeUtc(path, date);
+            }
+
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "public class App { public void Needle() { } }");
+            using var env = EnvironmentVariableScope.Capture("CDIDX_GLOBAL_TOOL_LOG_DIR");
+            env.Set("CDIDX_GLOBAL_TOOL_LOG_DIR", logRoot);
+
+            var (exitCode, _, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["search", "Needle", "--db", dbPath, "--trace=file"],
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.DoesNotContain('{', stderr);
+
+            var traces = Directory.GetFiles(logRoot, "query-trace-*.jsonl", SearchOption.TopDirectoryOnly)
+                .Select(Path.GetFileName)
+                .OrderBy(name => name, StringComparer.Ordinal)
+                .ToArray();
+            Assert.Equal(30, traces.Length);
+            Assert.DoesNotContain("query-trace-20240101.jsonl", traces);
+            Assert.Contains($"query-trace-{DateTime.UtcNow:yyyyMMdd}.jsonl", traces);
         }
         finally
         {

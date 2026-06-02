@@ -16,6 +16,7 @@ namespace CodeIndex.Cli;
 
 internal static class ProgramRunner
 {
+    private const int RetainedQueryTraceFileCount = 30;
     internal const string QuietEnvironmentVariable = "CDIDX_QUIET";
     internal static TimeProvider TimeProvider { get; set; } = TimeProvider.System;
 
@@ -1271,13 +1272,27 @@ internal static class ProgramRunner
 
             var directory = GlobalToolLog.ResolveLogDirectoryForStatus();
             Directory.CreateDirectory(directory);
-            var path = Path.Combine(directory, $"query-trace-{TimeProvider.GetUtcNow().UtcDateTime:yyyyMMdd}.jsonl");
-            File.AppendAllText(path, payload + Environment.NewLine);
+            PrivateLogFile.HardenExisting(directory, "query-trace-*.jsonl");
+            var path = ResolveQueryTracePath(directory);
+            var encoded = Encoding.UTF8.GetBytes(payload + Environment.NewLine);
+            using (var stream = PrivateLogFile.OpenAppend(path, FileShare.ReadWrite))
+            {
+                stream.Write(encoded, 0, encoded.Length);
+                stream.Flush();
+            }
+            PrivateLogFile.TrySetPrivatePermissions(path);
+            PrivateLogFile.PruneOldFiles(directory, "query-trace-*.jsonl", RetainedQueryTraceFileCount);
         }
         catch
         {
             // Best-effort only: trace output must never change query command behavior.
         }
+    }
+
+    private static string ResolveQueryTracePath(string directory)
+    {
+        var date = TimeProvider.GetUtcNow().UtcDateTime.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
+        return Path.Combine(directory, $"query-trace-{date}.jsonl");
     }
 
     private static string BuildQueryTraceJson(string commandName, string[] subArgs, DateTimeOffset timestamp, double elapsedMs, int exitCode, int? resultCount)
