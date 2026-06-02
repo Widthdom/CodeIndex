@@ -725,7 +725,11 @@ internal static class ProgramRunner
     private static readonly HashSet<string> SearchValueTakingOptions =
     [
         "--db",
+        "--color",
         "--data-dir",
+        "--metrics",
+        "--palette",
+        "--trace",
         "--limit",
         "--top",
         "--lang",

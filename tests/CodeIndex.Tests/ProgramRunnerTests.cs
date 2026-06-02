@@ -826,6 +826,66 @@ sleep 5
         }
     }
 
+    [Theory]
+    [InlineData("--color", "never")]
+    [InlineData("--palette", "basic")]
+    [InlineData("--trace", "none")]
+    public void Run_SearchSeparatedGlobalValueFlagBeforeLogFlagQuery_IsNotMistakenForQuery_Issue2955(string optionName, string optionValue)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue2955_search_global_value_before_log_flag_query");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "USER_GUIDE.md",
+                "markdown",
+                "--log-max-size-mb appears here\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["search", optionName, optionValue, "--log-max-size-mb", "--path", "USER_GUIDE.md", "--db", dbPath, "--count", "--exact-substring"],
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("1", stdout.Trim());
+            Assert.Equal(string.Empty, stderr);
+        }
+        finally
+        {
+            ConsoleUi.SetColorMode(ColorMode.Auto);
+            ConsoleUi.SetColorPalette(null);
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_SearchSeparatedMetricsFlagBeforeLogFlagQuery_IsNotMistakenForQuery_Issue2955()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue2955_search_metrics_before_log_flag_query");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var metricsPath = Path.Combine(projectRoot, "metrics.jsonl");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "USER_GUIDE.md",
+                "markdown",
+                "--log-max-size-mb appears here\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["search", "--metrics", metricsPath, "--log-max-size-mb", "--path", "USER_GUIDE.md", "--db", dbPath, "--count", "--exact-substring"],
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("1", stdout.Trim());
+            Assert.Equal(string.Empty, stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Fact]
     public void Run_ForcedGlobalToolLogging_OnUnix_HardensExistingAndCurrentLogFiles()
     {
