@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using System.Text;
 using System.Text.Json.Nodes;
@@ -94,6 +95,15 @@ public class GitHubIssueReporterTests : IDisposable
     public void ResolveSubmitTimeout_InvalidOverride_UsesDefault()
     {
         _env.Set("CDIDX_GITHUB_SUBMIT_TIMEOUT_SECONDS", "not-a-number");
+
+        Assert.Equal(GitHubIssueReporter.DefaultTimeout, GitHubIssueReporter.ResolveSubmitTimeout());
+    }
+
+    [Fact]
+    public void ResolveSubmitTimeout_AboveMaximum_UsesDefault()
+    {
+        var tooLarge = GitHubIssueReporter.MaxSubmitTimeoutSeconds + 1;
+        _env.Set("CDIDX_GITHUB_SUBMIT_TIMEOUT_SECONDS", tooLarge.ToString(CultureInfo.InvariantCulture));
 
         Assert.Equal(GitHubIssueReporter.DefaultTimeout, GitHubIssueReporter.ResolveSubmitTimeout());
     }

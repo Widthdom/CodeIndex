@@ -48,6 +48,7 @@ internal static class GitHubIssueReporter
     internal static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan DefaultRateLimitRetryDelay = TimeSpan.FromMinutes(1);
     private const string TimeoutEnvironmentVariable = "CDIDX_GITHUB_SUBMIT_TIMEOUT_SECONDS";
+    internal const int MaxSubmitTimeoutSeconds = 300;
     internal const int MaxGitHubIssueTitleLength = 255;
     internal const int MaxScrubInputLength = 16 * 1024;
     internal const int MaxGitHubApiErrorBodyBytes = 4 * 1024;
@@ -189,7 +190,7 @@ internal static class GitHubIssueReporter
         if (string.IsNullOrWhiteSpace(raw))
             return DefaultTimeout;
 
-        return int.TryParse(raw, out var seconds) && seconds > 0
+        return int.TryParse(raw, out var seconds) && seconds is > 0 and <= MaxSubmitTimeoutSeconds
             ? TimeSpan.FromSeconds(seconds)
             : DefaultTimeout;
     }

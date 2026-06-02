@@ -1125,7 +1125,7 @@ Local suggestion records use the `status` lifecycle field instead of a binary su
 
 Before creating an upstream Issue, `GitHubIssueReporter` checks whether an Issue with the same SHA256 suggestion hash already exists. It first queries GitHub Search for the hash in issue bodies, then falls back to listing Issues with the existing repository labels cdidx applies (`enhancement` for ordinary suggestions, `bug` for crash/error reports) and matching the hash in each body. The fallback avoids GitHub Search indexing latency, so a retry immediately after a lost create response can still find the just-created Issue and avoid a duplicate POST. Lookup failures remain best-effort: if both checks fail because GitHub is unavailable, the reporter proceeds to the normal create path instead of blocking a legitimate first submission.
 
-The shared GitHub HTTP client uses an explicit 10-second submission timeout by default, configurable with `CDIDX_GITHUB_SUBMIT_TIMEOUT_SECONDS`, and the platform default proxy (`HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`, and `NO_PROXY` through .NET default proxy handling). Create failures mention proxy environment variables in their diagnostic hint. `429` responses and `403` responses with `x-ratelimit-remaining: 0` are treated as rate limits; `Retry-After` wins, then `x-ratelimit-reset`, then a one-minute fallback retry window.
+The shared GitHub HTTP client uses an explicit 10-second submission timeout by default, configurable up to 300 seconds with `CDIDX_GITHUB_SUBMIT_TIMEOUT_SECONDS`, and the platform default proxy (`HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`, and `NO_PROXY` through .NET default proxy handling). Non-positive, non-numeric, and larger timeout values fall back to the 10-second default. Create failures mention proxy environment variables in their diagnostic hint. `429` responses and `403` responses with `x-ratelimit-remaining: 0` are treated as rate limits; `Retry-After` wins, then `x-ratelimit-reset`, then a one-minute fallback retry window.
 
 ### What is NOT included in the payload by design
 
@@ -2748,7 +2748,7 @@ Unlist しても exact version restore は不可能になりません。これ�
 
 upstream Issue を作成する前に、`GitHubIssueReporter` は同じ SHA256 提案ハッシュを持つ Issue が既に存在するか確認する。まず GitHub Search で Issue 本文内のハッシュを検索し、その後 backstop として `ai-suggestion` Issue を直接一覧取得して各本文内のハッシュを照合する。この fallback により GitHub Search の indexing 遅延を回避できるため、作成レスポンスが失われた直後の再試行でも、作成済み Issue を検出して重複 POST を防げる。lookup 失敗時の扱いは引き続きベストエフォートであり、GitHub 側の障害などで両方の確認に失敗した場合は、正規の初回送信をブロックせず通常の作成経路へ進む。
 
-共有 GitHub HTTP クライアントは 15 秒 timeout と platform default proxy（.NET の既定 proxy 処理を通じた `HTTPS_PROXY`、`HTTP_PROXY`、`ALL_PROXY`、`NO_PROXY`）を使う。作成失敗の診断には proxy 環境変数の確認ヒントを含める。`429` 応答と `x-ratelimit-remaining: 0` 付きの `403` 応答は rate limit として扱い、`Retry-After`、`x-ratelimit-reset`、1 分の fallback retry window の順で再試行時刻を決める。
+共有 GitHub HTTP クライアントは既定で 10 秒 timeout と platform default proxy（.NET の既定 proxy 処理を通じた `HTTPS_PROXY`、`HTTP_PROXY`、`ALL_PROXY`、`NO_PROXY`）を使う。`CDIDX_GITHUB_SUBMIT_TIMEOUT_SECONDS` で最大 300 秒まで設定でき、0 以下、数値以外、または上限を超える値は 10 秒の既定値へ戻る。作成失敗の診断には proxy 環境変数の確認ヒントを含める。`429` 応答と `x-ratelimit-remaining: 0` 付きの `403` 応答は rate limit として扱い、`Retry-After`、`x-ratelimit-reset`、1 分の fallback retry window の順で再試行時刻を決める。
 
 ### ペイロードに設計上含まれないもの
 
