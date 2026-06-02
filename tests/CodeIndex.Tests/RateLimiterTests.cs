@@ -157,6 +157,66 @@ public class RateLimiterTests
     }
 
     [Fact]
+    public void IdleBuckets_ArePrunedAfterConfiguredTtl()
+    {
+        var clock = new TestClock();
+        var options = new RateLimiterOptions
+        {
+            RefillTokensPerSecond = 1.0,
+            BurstCapacity = 1.0,
+            BucketIdleTtl = TimeSpan.FromSeconds(1),
+        };
+        var limiter = new RateLimiter(options, clock.Read);
+
+        Assert.True(limiter.TryAcquire("search", "client-a").Allowed);
+        Assert.Equal(1, limiter.BucketCount);
+
+        clock.Now = clock.Now.AddMilliseconds(500);
+        Assert.True(limiter.TryAcquire("search", "client-b").Allowed);
+        Assert.Equal(2, limiter.BucketCount);
+
+        clock.Now = clock.Now.AddSeconds(2);
+        Assert.True(limiter.TryAcquire("search", "client-c").Allowed);
+        Assert.Equal(1, limiter.BucketCount);
+    }
+
+    [Fact]
+    public void IdleBuckets_LargeTtl_DoesNotUnderflowCutoff()
+    {
+        var clock = new TestClock();
+        var options = new RateLimiterOptions
+        {
+            RefillTokensPerSecond = 1.0,
+            BurstCapacity = 10.0,
+            BucketIdleTtl = TimeSpan.MaxValue,
+        };
+        var limiter = new RateLimiter(options, clock.Read);
+
+        Assert.True(limiter.TryAcquire("search", "client-a").Allowed);
+        Assert.Equal(1, limiter.BucketCount);
+
+        clock.Now = clock.Now.AddDays(1);
+        Assert.True(limiter.TryAcquire("search", "client-b").Allowed);
+        Assert.Equal(2, limiter.BucketCount);
+    }
+
+    [Fact]
+    public void IdleBuckets_NearMaxClock_DoesNotOverflowNextPrune()
+    {
+        var clock = new TestClock { Now = DateTimeOffset.MaxValue.AddMilliseconds(-10) };
+        var options = new RateLimiterOptions
+        {
+            RefillTokensPerSecond = 1.0,
+            BurstCapacity = 10.0,
+            BucketIdleTtl = TimeSpan.FromSeconds(1),
+        };
+        var limiter = new RateLimiter(options, clock.Read);
+
+        Assert.True(limiter.TryAcquire("search", "client-a").Allowed);
+        Assert.Equal(1, limiter.BucketCount);
+    }
+
+    [Fact]
     public void FromEnvironment_NoVars_ReturnsDisabled()
     {
         var opts = RateLimiterOptions.FromEnvironment(_ => null, _ => { });
@@ -199,6 +259,40 @@ public class RateLimiterTests
         Assert.True(opts.IsEnabled);
         Assert.Equal(2.0, opts.RefillTokensPerSecond);
         Assert.Equal(20.0, opts.BurstCapacity);
+    }
+
+    [Fact]
+    public void FromEnvironment_BucketIdleSeconds_IsHonored()
+    {
+        var opts = RateLimiterOptions.FromEnvironment(
+            key => key switch
+            {
+                RateLimiterOptions.RpsEnvVar => "2",
+                RateLimiterOptions.BurstEnvVar => "4",
+                RateLimiterOptions.BucketIdleSecondsEnvVar => "30",
+                _ => null,
+            },
+            _ => { });
+        Assert.True(opts.IsEnabled);
+        Assert.Equal(TimeSpan.FromSeconds(30), opts.BucketIdleTtl);
+    }
+
+    [Fact]
+    public void FromEnvironment_InvalidBucketIdleSeconds_WarnsAndFallsBack()
+    {
+        var warnings = new List<string>();
+        var opts = RateLimiterOptions.FromEnvironment(
+            key => key switch
+            {
+                RateLimiterOptions.RpsEnvVar => "2",
+                RateLimiterOptions.BucketIdleSecondsEnvVar => "NaN",
+                _ => null,
+            },
+            warnings.Add);
+        Assert.True(opts.IsEnabled);
+        Assert.Equal(RateLimiterOptions.DefaultBucketIdleTtl, opts.BucketIdleTtl);
+        Assert.Single(warnings);
+        Assert.Contains("CDIDX_MCP_RATE_LIMIT_BUCKET_IDLE_SECONDS", warnings[0]);
     }
 
     [Fact]

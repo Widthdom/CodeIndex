@@ -1364,6 +1364,7 @@ Example output:
 |---|---|
 | `CDIDX_MCP_RATE_LIMIT_RPS` | Refill rate in tokens per second. Required to enable rate limiting; values that are missing, non-numeric, zero, negative, or non-finite (`Infinity`, `NaN`) leave the limiter disabled and emit a one-line warning on `stderr`. Values above `100` are clamped to `100` with a warning. |
 | `CDIDX_MCP_RATE_LIMIT_BURST` | Bucket capacity (maximum burst). Optional. Defaults to `max(rps, 1)`. Invalid or non-finite values fall back to the default and emit a warning while leaving `rps` honored. Values above `1000` are clamped to `1000` with a warning. |
+| `CDIDX_MCP_RATE_LIMIT_BUCKET_IDLE_SECONDS` | Idle bucket TTL. Optional. Defaults to 900 seconds. Stale `(tool, caller)` buckets are pruned on later calls so long-lived servers do not retain historical caller identities forever. Invalid or non-finite values fall back to the default and emit a warning. |
 
 MCP response-size limits are bounded so environment overrides cannot disable the response guards:
 
@@ -2001,7 +2002,7 @@ CDIDX_MCP_HTTP_TOKEN=s3cret cdidx mcp \
   --transport http --http-listen 0.0.0.0:9000          # LAN bind; bearer token is mandatory
 ```
 
-Each HTTP `POST /` carries one JSON-RPC frame in the request body, the matching response is returned in the same HTTP body (`200 OK`, `application/json`), and notifications return `204 No Content`. `GET /events` opens a `text/event-stream` channel for server-to-client frames; the server emits no unsolicited frames unless keep-alive notifications are opted in with `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S`. Accepted keep-alive values are finite seconds from `1` to `300`; invalid or out-of-range values leave keep-alive disabled with a `stderr` warning. The stream is independent and does not block normal POST requests. Non-POST verbs on `/` return `405 Method Not Allowed` with `Allow: POST`. When the persistent lifecycle log is enabled, HTTP mode also writes one `mcp_http_request` record per request with method, path, status, duration, auth outcome, remote peer, correlation id, and JSON-RPC request id when available. Request and response bodies are not logged.
+Each HTTP `POST /` carries one JSON-RPC frame in the request body, the matching response is returned in the same HTTP body (`200 OK`, `application/json`), and notifications return `204 No Content`. `GET /events` opens a `text/event-stream` channel for server-to-client frames; the server emits no unsolicited frames unless keep-alive notifications are opted in with `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S`. Accepted keep-alive values are finite seconds from `1` to `300`; invalid or out-of-range values leave keep-alive disabled with a `stderr` warning. The stream is independent and does not block normal POST requests. Non-POST verbs on `/` return `405 Method Not Allowed` with `Allow: POST`. Request bodies are capped at 1,000,000 bytes by default and oversized requests return `413 Payload Too Large`; the pending POST queue is capped at 64 requests by default and full queues return `429 Too Many Requests` with `Retry-After: 1`. Tune those positive-integer limits with `CDIDX_MCP_HTTP_MAX_REQUEST_BYTES` and `CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH`; invalid values fall back to the defaults. When the persistent lifecycle log is enabled, HTTP mode also writes one `mcp_http_request` record per request with method, path, status, duration, auth outcome, remote peer, correlation id, and JSON-RPC request id when available. Request and response bodies are not logged.
 
 Security defaults:
 
@@ -3495,6 +3496,7 @@ MCP ツールで catch-all まで突き抜けた例外（想定外の SQLite 例
 |---|---|
 | `CDIDX_MCP_RATE_LIMIT_RPS` | 1 秒あたりのトークン補充レート。レート制限を有効化するために必須。未設定・非数値・0 以下・非有限値（`Infinity`/`NaN`）の場合は無効のまま、1 行の警告を `stderr` に出力します。`100` を超える値は警告付きで `100` にクランプされます。 |
 | `CDIDX_MCP_RATE_LIMIT_BURST` | バケット容量（最大バースト）。任意。既定は `max(rps, 1)`。不正値・非有限値は既定にフォールバックし警告を出力。`rps` はそのまま尊重されます。`1000` を超える値は警告付きで `1000` にクランプされます。 |
+| `CDIDX_MCP_RATE_LIMIT_BUCKET_IDLE_SECONDS` | 未使用バケットの TTL。任意。既定は 900 秒です。古い `(tool, caller)` バケットは後続呼び出し時に pruning され、長時間稼働するサーバーが過去の caller ID を永続保持しません。不正値・非有限値は既定にフォールバックし警告を出力します。 |
 
 MCP のレスポンスサイズ上限は、環境変数 override で guard が実質無効化されないよう上限付きです:
 
@@ -4113,7 +4115,7 @@ CDIDX_MCP_HTTP_TOKEN=s3cret cdidx mcp \
   --transport http --http-listen 0.0.0.0:9000          # LAN 公開時は bearer token が必須
 ```
 
-HTTP の `POST /` 1 件が JSON-RPC フレーム 1 件に対応し、応答は同じ HTTP レスポンスのボディに `200 OK` / `application/json` で返ります。通知は `204 No Content` です。`GET /events` はサーバー→クライアントフレーム用の `text/event-stream` channel を開きます。server-initiated frame は `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S` で keep-alive notification を opt-in した場合だけ送信されます。受理される値は有限な `1`〜`300` 秒で、不正値や範囲外の値では `stderr` に警告を出して keep-alive を無効のままにします。この stream は独立しており通常の POST リクエストを塞ぎません。`/` への POST 以外は `405 Method Not Allowed`（`Allow: POST` 付き）です。永続 lifecycle log が有効な場合、HTTP mode はリクエストごとに `mcp_http_request` レコードも出力し、method、path、status、duration、auth outcome、remote peer、correlation id、利用可能な JSON-RPC request id を記録します。リクエスト/レスポンス本文は記録しません。
+HTTP の `POST /` 1 件が JSON-RPC フレーム 1 件に対応し、応答は同じ HTTP レスポンスのボディに `200 OK` / `application/json` で返ります。通知は `204 No Content` です。`GET /events` はサーバー→クライアントフレーム用の `text/event-stream` channel を開きます。server-initiated frame は `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S` で keep-alive notification を opt-in した場合だけ送信されます。受理される値は有限な `1`〜`300` 秒で、不正値や範囲外の値では `stderr` に警告を出して keep-alive を無効のままにします。この stream は独立しており通常の POST リクエストを塞ぎません。`/` への POST 以外は `405 Method Not Allowed`（`Allow: POST` 付き）です。リクエスト本文は既定で 1,000,000 bytes までに制限され、超過時は `413 Payload Too Large` を返します。保留中 POST queue は既定で 64 件までに制限され、満杯時は `Retry-After: 1` 付きの `429 Too Many Requests` を返します。正の整数の `CDIDX_MCP_HTTP_MAX_REQUEST_BYTES` と `CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH` で調整でき、不正値は既定にフォールバックします。永続 lifecycle log が有効な場合、HTTP mode はリクエストごとに `mcp_http_request` レコードも出力し、method、path、status、duration、auth outcome、remote peer、correlation id、利用可能な JSON-RPC request id を記録します。リクエスト/レスポンス本文は記録しません。
 
 セキュリティ既定:
 
