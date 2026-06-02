@@ -870,6 +870,8 @@ public class PostExtractionHookStatus
     public string Name { get; set; } = string.Empty;
     public string AssemblyPath { get; set; } = string.Empty;
     public string TypeName { get; set; } = string.Empty;
+    [JsonPropertyName("callback_budget_ms")]
+    public long CallbackBudgetMs { get; set; }
 }
 
 public class RepoMapResult

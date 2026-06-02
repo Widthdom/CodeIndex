@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.Loader;
 using CodeIndex.Models;
@@ -16,17 +17,29 @@ public sealed record FileContext(string ProjectRoot, string Path, string FullPat
 
 public sealed record PostExtractionHookInfo(string Name, string AssemblyPath, string TypeName);
 
-public sealed record PostExtractionHookDiagnostic(string AssemblyPath, string? TypeName, string Message);
+public sealed record PostExtractionHookDiagnostic(
+    string AssemblyPath,
+    string? TypeName,
+    string Message,
+    string? Callback = null,
+    long? DurationMs = null);
 
 public sealed class PostExtractionHookRunner : IDisposable
 {
+    public const string CallbackBudgetEnvironmentVariable = "CDIDX_HOOK_CALLBACK_BUDGET_MS";
+    public static readonly TimeSpan DefaultCallbackBudget = TimeSpan.FromSeconds(5);
+
     private readonly List<LoadedPostExtractionHook> hooks;
     private readonly ConcurrentQueue<PostExtractionHookDiagnostic> diagnostics = new();
+    private readonly ConcurrentDictionary<string, byte> disabledHooks = new(StringComparer.Ordinal);
+    private readonly TimeSpan callbackBudget;
     private bool disposed;
+    internal static Func<TimeSpan>? CallbackBudgetForTesting { get; set; }
 
-    private PostExtractionHookRunner(List<LoadedPostExtractionHook> hooks)
+    private PostExtractionHookRunner(List<LoadedPostExtractionHook> hooks, TimeSpan callbackBudget)
     {
         this.hooks = hooks;
+        this.callbackBudget = callbackBudget;
     }
 
     public static PostExtractionHookRunner DiscoverDefault()
@@ -35,7 +48,7 @@ public sealed class PostExtractionHookRunner : IDisposable
     public static PostExtractionHookRunner Discover(string? hooksDirectory)
     {
         var loaded = new List<LoadedPostExtractionHook>();
-        var runner = new PostExtractionHookRunner(loaded);
+        var runner = new PostExtractionHookRunner(loaded, ResolveCallbackBudget());
 
         if (string.IsNullOrWhiteSpace(hooksDirectory) || !Directory.Exists(hooksDirectory))
             return runner;
@@ -94,20 +107,21 @@ public sealed class PostExtractionHookRunner : IDisposable
 
     public IReadOnlyList<PostExtractionHookDiagnostic> Diagnostics => diagnostics.ToList();
 
+    public TimeSpan CallbackBudget => callbackBudget;
+
     public void OnSymbolsExtracted(FileContext context, IList<SymbolRecord> symbols)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
 
         foreach (var hook in hooks)
         {
-            try
+            var workingSymbols = CloneSymbols(symbols);
+            if (InvokeHookWithBudget(
+                    hook,
+                    nameof(IPostExtractionHook.OnSymbolsExtracted),
+                    () => hook.Instance.OnSymbolsExtracted(context, workingSymbols)))
             {
-                lock (hook.Instance)
-                    hook.Instance.OnSymbolsExtracted(context, symbols);
-            }
-            catch (Exception ex)
-            {
-                diagnostics.Enqueue(new PostExtractionHookDiagnostic(hook.Info.AssemblyPath, hook.Info.TypeName, $"OnSymbolsExtracted failed: {ex.Message}"));
+                ReplaceList(symbols, workingSymbols);
             }
         }
     }
@@ -118,16 +132,131 @@ public sealed class PostExtractionHookRunner : IDisposable
 
         foreach (var hook in hooks)
         {
+            var workingReferences = CloneReferences(references);
+            if (InvokeHookWithBudget(
+                    hook,
+                    nameof(IPostExtractionHook.OnReferencesExtracted),
+                    () => hook.Instance.OnReferencesExtracted(context, workingReferences)))
+            {
+                ReplaceList(references, workingReferences);
+            }
+        }
+    }
+
+    private bool InvokeHookWithBudget(LoadedPostExtractionHook hook, string callback, Action invoke)
+    {
+        if (disabledHooks.ContainsKey(hook.Info.TypeName))
+            return false;
+
+        var stopwatch = Stopwatch.StartNew();
+        Exception? failure = null;
+        var task = Task.Run(() =>
+        {
             try
             {
                 lock (hook.Instance)
-                    hook.Instance.OnReferencesExtracted(context, references);
+                    invoke();
             }
             catch (Exception ex)
             {
-                diagnostics.Enqueue(new PostExtractionHookDiagnostic(hook.Info.AssemblyPath, hook.Info.TypeName, $"OnReferencesExtracted failed: {ex.Message}"));
+                failure = ex;
             }
+        });
+
+        if (!task.Wait(callbackBudget))
+        {
+            stopwatch.Stop();
+            disabledHooks.TryAdd(hook.Info.TypeName, 0);
+            diagnostics.Enqueue(new PostExtractionHookDiagnostic(
+                hook.Info.AssemblyPath,
+                hook.Info.TypeName,
+                $"{callback} exceeded the {callbackBudget.TotalMilliseconds:0} ms callback budget; hook disabled for this index run.",
+                callback,
+                stopwatch.ElapsedMilliseconds));
+            return false;
         }
+
+        stopwatch.Stop();
+        if (failure != null)
+        {
+            diagnostics.Enqueue(new PostExtractionHookDiagnostic(
+                hook.Info.AssemblyPath,
+                hook.Info.TypeName,
+                $"{callback} failed: {failure.Message}",
+                callback,
+                stopwatch.ElapsedMilliseconds));
+        }
+
+        return true;
+    }
+
+    private static TimeSpan ResolveCallbackBudget()
+    {
+        if (CallbackBudgetForTesting != null)
+            return NormalizeCallbackBudget(CallbackBudgetForTesting());
+
+        var raw = Environment.GetEnvironmentVariable(CallbackBudgetEnvironmentVariable);
+        return long.TryParse(raw, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var milliseconds)
+            ? NormalizeCallbackBudgetMilliseconds(milliseconds)
+            : DefaultCallbackBudget;
+    }
+
+    private static TimeSpan NormalizeCallbackBudgetMilliseconds(long milliseconds)
+        => milliseconds <= 0
+            ? DefaultCallbackBudget
+            : TimeSpan.FromMilliseconds(Math.Min(milliseconds, int.MaxValue));
+
+    private static TimeSpan NormalizeCallbackBudget(TimeSpan value)
+        => value <= TimeSpan.Zero
+            ? DefaultCallbackBudget
+            : TimeSpan.FromMilliseconds(Math.Min(value.TotalMilliseconds, int.MaxValue));
+
+    private static List<SymbolRecord> CloneSymbols(IEnumerable<SymbolRecord> symbols)
+        => symbols.Select(symbol => new SymbolRecord
+        {
+            Id = symbol.Id,
+            FileId = symbol.FileId,
+            Kind = symbol.Kind,
+            SubKind = symbol.SubKind,
+            Name = symbol.Name,
+            Line = symbol.Line,
+            StartLine = symbol.StartLine,
+            StartColumn = symbol.StartColumn,
+            EndLine = symbol.EndLine,
+            BodyStartLine = symbol.BodyStartLine,
+            BodyEndLine = symbol.BodyEndLine,
+            Signature = symbol.Signature,
+            ContainerKind = symbol.ContainerKind,
+            ContainerName = symbol.ContainerName,
+            ContainerQualifiedName = symbol.ContainerQualifiedName,
+            FamilyKey = symbol.FamilyKey,
+            Visibility = symbol.Visibility,
+            ReturnType = symbol.ReturnType,
+            IsMetadataTarget = symbol.IsMetadataTarget,
+            SameLineSignatureOccurrenceIndex = symbol.SameLineSignatureOccurrenceIndex,
+        }).ToList();
+
+    private static List<ReferenceRecord> CloneReferences(IEnumerable<ReferenceRecord> references)
+        => references.Select(reference => new ReferenceRecord
+        {
+            Id = reference.Id,
+            FileId = reference.FileId,
+            SymbolName = reference.SymbolName,
+            ReferenceKind = reference.ReferenceKind,
+            Line = reference.Line,
+            Column = reference.Column,
+            Context = reference.Context,
+            ContainerKind = reference.ContainerKind,
+            ContainerName = reference.ContainerName,
+            IsSelfReference = reference.IsSelfReference,
+            IsMutualRecursion = reference.IsMutualRecursion,
+        }).ToList();
+
+    private static void ReplaceList<T>(IList<T> target, IReadOnlyList<T> replacement)
+    {
+        target.Clear();
+        foreach (var item in replacement)
+            target.Add(item);
     }
 
     private static string? GetDefaultHooksDirectory()

@@ -2913,7 +2913,8 @@ public static class QueryCommandRunner
             status.GraphSupportedLanguages = ReferenceExtractor.GetSupportedLanguages().OrderBy(l => l).ToList();
             ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(status.ProjectRoot);
             status.Extractors = ExtractorPluginRegistry.GetStatusSnapshot();
-            var postExtractionHooks = PostExtractionHookRunner.DiscoverDefault().Hooks;
+            using var postExtractionHookRunner = PostExtractionHookRunner.DiscoverDefault();
+            var postExtractionHooks = postExtractionHookRunner.Hooks;
             if (postExtractionHooks.Count > 0)
             {
                 status.Hooks = postExtractionHooks
@@ -2922,6 +2923,7 @@ public static class QueryCommandRunner
                         Name = hook.Name,
                         AssemblyPath = hook.AssemblyPath,
                         TypeName = hook.TypeName,
+                        CallbackBudgetMs = (long)Math.Round(postExtractionHookRunner.CallbackBudget.TotalMilliseconds, MidpointRounding.AwayFromZero),
                     })
                     .ToList();
             }
