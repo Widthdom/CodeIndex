@@ -24,9 +24,8 @@ internal static class LanguageMapOverrides
         Action<string>? reportWarning)
     {
         var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        var entryCount = 0;
         foreach (var path in configPaths)
-            LoadInto(path, map, ref entryCount, reportWarning);
+            LoadInto(path, map, reportWarning);
         return map;
     }
 
@@ -64,7 +63,6 @@ internal static class LanguageMapOverrides
     private static void LoadInto(
         string path,
         Dictionary<string, string> target,
-        ref int entryCount,
         Action<string>? reportWarning)
     {
         if (!File.Exists(path))
@@ -77,6 +75,7 @@ internal static class LanguageMapOverrides
         }
 
         string? pendingExtension = null;
+        var entryCount = 0;
         foreach (var rawLine in lines)
         {
             var line = rawLine.Trim();
@@ -142,6 +141,9 @@ internal static class LanguageMapOverrides
             }
 
             var text = new UTF8Encoding(false, throwOnInvalidBytes: false).GetString(accumulator.ToArray());
+            if (text.Length > 0 && text[0] == '\uFEFF')
+                text = text[1..];
+
             var result = new List<string>();
             using var reader = new StringReader(text);
             string? line;

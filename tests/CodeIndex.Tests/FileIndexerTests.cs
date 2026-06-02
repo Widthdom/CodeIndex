@@ -543,6 +543,59 @@ public class FileIndexerTests
         }
     }
 
+    [Fact]
+    public void LanguageMapOverrides_EntryCountCapIsPerFileSoWorkspaceOverridesStillLoad()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_langmap_per_file_entries_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var userConfigPath = Path.Combine(tempDir, "user-langmap.yaml");
+            var workspaceConfigPath = Path.Combine(tempDir, LanguageMapOverrides.WorkspaceFileName);
+            var builder = new StringBuilder("entries:\n");
+            for (var i = 0; i <= 4096; i++)
+                builder.Append("- extension:x").Append(i).Append('\n').Append("language:u\n");
+            File.WriteAllText(userConfigPath, builder.ToString());
+            File.WriteAllText(
+                workspaceConfigPath,
+                "entries:\n- extension:x0\n  language:workspace\n- extension:workspace\n  language:ruby\n");
+
+            var warnings = new List<string>();
+            var map = LanguageMapOverrides.LoadEffectiveMapFromPathsForTesting(
+                new[] { userConfigPath, workspaceConfigPath },
+                warnings.Add);
+
+            Assert.Equal("workspace", map[".x0"]);
+            Assert.Equal("ruby", map[".workspace"]);
+            Assert.False(map.ContainsKey(".x4096"));
+            Assert.Contains(warnings, warning => warning.Contains("4096", StringComparison.Ordinal));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
+    public void LanguageMapOverrides_BomPrefixedFileLoadsOverrides()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_langmap_bom_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var configPath = Path.Combine(tempDir, LanguageMapOverrides.WorkspaceFileName);
+            File.WriteAllText(configPath, "\uFEFFentries:\n- extension:bom\n  language:ruby\n");
+
+            var map = LanguageMapOverrides.LoadEffectiveMapFromPathsForTesting(new[] { configPath });
+
+            Assert.Equal("ruby", map[".bom"]);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
     [Theory]
     [InlineData("App.csproj")]
     [InlineData("Directory.Build.props")]
