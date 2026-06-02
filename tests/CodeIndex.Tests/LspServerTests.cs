@@ -84,6 +84,38 @@ public class LspServerTests
     }
 
     [Fact]
+    public void Run_MalformedJsonFrame_WritesParseErrorAndContinues()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_malformed_json");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            const string initializeRequest = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}";
+            using var input = new MemoryStream(Encoding.UTF8.GetBytes(Frame("{") + Frame(initializeRequest)));
+            using var output = new MemoryStream();
+
+            server.Run(input, output);
+
+            output.Position = 0;
+            Assert.True(LspServer.TryReadMessage(output, out var parseErrorPayload));
+            using var parseError = JsonDocument.Parse(parseErrorPayload);
+            Assert.Equal(-32700, parseError.RootElement.GetProperty("error").GetProperty("code").GetInt32());
+            Assert.Equal(JsonValueKind.Null, parseError.RootElement.GetProperty("id").ValueKind);
+
+            Assert.True(LspServer.TryReadMessage(output, out var initializePayload));
+            using var initialize = JsonDocument.Parse(initializePayload);
+            Assert.True(initialize.RootElement.GetProperty("result").GetProperty("capabilities").GetProperty("definitionProvider").GetBoolean());
+            Assert.False(LspServer.TryReadMessage(output, out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void HandleMessage_DocumentSymbol_ReturnsIndexedSymbols()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_document_symbol");
@@ -419,4 +451,7 @@ public class LspServerTests
                 position = new { line, character },
             },
         });
+
+    private static string Frame(string payload) =>
+        $"Content-Length: {Encoding.UTF8.GetByteCount(payload)}\r\n\r\n{payload}";
 }

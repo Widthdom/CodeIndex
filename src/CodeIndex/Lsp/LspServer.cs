@@ -43,33 +43,51 @@ internal sealed class LspServer : IDisposable
 
     internal JsonObject? HandleMessage(string payload)
     {
-        using var document = JsonDocument.Parse(payload);
-        var root = document.RootElement;
-        var method = root.TryGetProperty("method", out var methodElement) ? methodElement.GetString() : null;
-        var hasId = root.TryGetProperty("id", out var idElement);
-        JsonNode? id = hasId ? JsonNode.Parse(idElement.GetRawText()) : null;
-
-        if (method == null)
-            return hasId ? Error(id, -32600, "Invalid Request") : null;
-
+        JsonDocument document;
         try
         {
-            return method switch
-            {
-                "initialize" => Result(id, BuildInitializeResult()),
-                "initialized" => null,
-                "shutdown" => HandleShutdown(id),
-                "exit" => null,
-                "workspace/symbol" => Result(id, WorkspaceSymbol(root)),
-                "textDocument/documentSymbol" => Result(id, DocumentSymbol(root)),
-                "textDocument/definition" => Result(id, Definition(root)),
-                "textDocument/references" => Result(id, References(root)),
-                _ => hasId ? Error(id, -32601, $"Method not found: {method}") : null,
-            };
+            document = JsonDocument.Parse(payload);
         }
-        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or JsonException or IOException)
+        catch (JsonException)
         {
-            return hasId ? Error(id, -32602, ex.Message) : null;
+            return Error(null, -32700, "Parse error");
+        }
+
+        using (document)
+        {
+            JsonNode? id = null;
+            var hasId = false;
+
+            try
+            {
+                var root = document.RootElement;
+                if (root.ValueKind != JsonValueKind.Object)
+                    return Error(null, -32600, "Invalid Request");
+
+                var method = root.TryGetProperty("method", out var methodElement) ? methodElement.GetString() : null;
+                hasId = root.TryGetProperty("id", out var idElement);
+                id = hasId ? JsonNode.Parse(idElement.GetRawText()) : null;
+
+                if (method == null)
+                    return hasId ? Error(id, -32600, "Invalid Request") : null;
+
+                return method switch
+                {
+                    "initialize" => Result(id, BuildInitializeResult()),
+                    "initialized" => null,
+                    "shutdown" => HandleShutdown(id),
+                    "exit" => null,
+                    "workspace/symbol" => Result(id, WorkspaceSymbol(root)),
+                    "textDocument/documentSymbol" => Result(id, DocumentSymbol(root)),
+                    "textDocument/definition" => Result(id, Definition(root)),
+                    "textDocument/references" => Result(id, References(root)),
+                    _ => hasId ? Error(id, -32601, $"Method not found: {method}") : null,
+                };
+            }
+            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or JsonException or IOException)
+            {
+                return hasId ? Error(id, -32602, ex.Message) : null;
+            }
         }
     }
 
