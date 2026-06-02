@@ -600,6 +600,43 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void ParseArgs_SymbolKindFilterRejectsOverlongCsv_Issue2906()
+    {
+        var tooLong = new string('c', IndexCommandRunner.MaxSymbolKindFilterCsvLength + 1);
+
+        var options = IndexCommandRunner.ParseArgs([".", "--include-symbol-kind", tooLong]);
+
+        Assert.Contains("--include-symbol-kind value is too long", options.SymbolKindFilter.ParseError);
+        Assert.Empty(options.SymbolKindFilter.Include);
+    }
+
+    [Fact]
+    public void ParseArgs_SymbolKindFilterRejectsTooManyCsvEntries_Issue2906()
+    {
+        var tooMany = string.Join(',', Enumerable.Repeat("class", IndexCommandRunner.MaxSymbolKindFilterCsvEntries + 1));
+
+        var options = IndexCommandRunner.ParseArgs([".", "--exclude-symbol-kind", tooMany]);
+
+        Assert.Contains("--exclude-symbol-kind accepts at most", options.SymbolKindFilter.ParseError);
+        Assert.Empty(options.SymbolKindFilter.Exclude);
+    }
+
+    [Fact]
+    public void ParseArgs_SymbolKindEnvironmentFilterRejectsTooManyCsvEntries_Issue2906()
+    {
+        using var env = EnvironmentVariableScope.Capture(IndexCommandRunner.IncludeSymbolKindsEnvironmentVariable);
+        Environment.SetEnvironmentVariable(
+            IndexCommandRunner.IncludeSymbolKindsEnvironmentVariable,
+            string.Join(',', Enumerable.Repeat("function", IndexCommandRunner.MaxSymbolKindFilterCsvEntries + 1)));
+
+        var options = IndexCommandRunner.ParseArgs(["."]);
+
+        Assert.Contains(IndexCommandRunner.IncludeSymbolKindsEnvironmentVariable, options.SymbolKindFilter.ParseError);
+        Assert.Contains("accepts at most", options.SymbolKindFilter.ParseError);
+        Assert.Empty(options.SymbolKindFilter.Include);
+    }
+
+    [Fact]
     public void ParseArgs_SymbolKindCliFilters_ReplaceEnvironmentDefaults()
     {
         lock (TestConsoleLock.Gate)
@@ -683,6 +720,31 @@ public class IndexCommandRunnerTests
             var counts = ReadSymbolKindCounts(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
             Assert.True(counts.GetValueOrDefault("class") > 0);
             Assert.DoesNotContain(counts.Keys, kind => !string.Equals(kind, "class", StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_SkipsOversizedGitExclude()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            RunGit(projectRoot, "init");
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { }\n");
+            var excludePath = Path.Combine(projectRoot, ".git", "info", "exclude");
+            File.WriteAllText(excludePath, new string('x', IndexCommandRunner.MaxGitExcludeBytes + 1));
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(IndexCommandRunner.MaxGitExcludeBytes + 1, File.ReadAllText(excludePath).Length);
+            Assert.DoesNotContain("cdidx (CodeIndex)", File.ReadAllText(excludePath));
         }
         finally
         {
@@ -1262,6 +1324,30 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void ParseArgs_ParallelismFlagClampsOversizedValue_Issue2904()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalError = Console.Error;
+            using var stderr = new StringWriter();
+            try
+            {
+                Console.SetError(stderr);
+
+                var options = IndexCommandRunner.ParseArgs([".", "--parallelism", "999"]);
+
+                Assert.Equal(IndexCommandRunner.MaxIndexParallelism, options.Parallelism);
+                Assert.Contains("--parallelism", stderr.ToString());
+                Assert.Contains($"maximum {IndexCommandRunner.MaxIndexParallelism}", stderr.ToString());
+            }
+            finally
+            {
+                Console.SetError(originalError);
+            }
+        }
+    }
+
+    [Fact]
     public void ParseArgs_IndexParallelismEnvironment_ProvidesDefault()
     {
         var original = Environment.GetEnvironmentVariable(IndexCommandRunner.IndexParallelismEnvironmentVariable);
@@ -1276,6 +1362,32 @@ public class IndexCommandRunnerTests
         finally
         {
             Environment.SetEnvironmentVariable(IndexCommandRunner.IndexParallelismEnvironmentVariable, original);
+        }
+    }
+
+    [Fact]
+    public void ParseArgs_IndexParallelismEnvironmentClampsOversizedValue_Issue2904()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalError = Console.Error;
+            using var stderr = new StringWriter();
+            using var env = EnvironmentVariableScope.Capture(IndexCommandRunner.IndexParallelismEnvironmentVariable);
+            try
+            {
+                Console.SetError(stderr);
+                Environment.SetEnvironmentVariable(IndexCommandRunner.IndexParallelismEnvironmentVariable, "999");
+
+                var options = IndexCommandRunner.ParseArgs(["."]);
+
+                Assert.Equal(IndexCommandRunner.MaxIndexParallelism, options.Parallelism);
+                Assert.Contains(IndexCommandRunner.IndexParallelismEnvironmentVariable, stderr.ToString());
+                Assert.Contains($"maximum {IndexCommandRunner.MaxIndexParallelism}", stderr.ToString());
+            }
+            finally
+            {
+                Console.SetError(originalError);
+            }
         }
     }
 
@@ -5799,6 +5911,50 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FullScan_IgnoresOversizedCheckpoint()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            RunGit(projectRoot, "init");
+            RunGit(projectRoot, "config", "user.email", "test@example.com");
+            RunGit(projectRoot, "config", "user.name", "Test");
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(projectRoot, "src", "a.cs"), "public class A { }\n");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "initial");
+            var head = RunGitCaptureStdOut(projectRoot, "rev-parse", "HEAD").Trim();
+
+            var checkpointPath = Path.Combine(projectRoot, ".cdidx", "scan-checkpoint.json");
+            Directory.CreateDirectory(Path.GetDirectoryName(checkpointPath)!);
+            var checkpoint = $$"""
+                {
+                  "Version": 1,
+                  "GitHead": "{{head}}",
+                  "Directories": [
+                    "src"
+                  ]
+                }
+                """;
+            var padding = new System.Text.StringBuilder(IndexCommandRunner.MaxScanCheckpointBytes + 2048);
+            while (checkpoint.Length + padding.Length <= IndexCommandRunner.MaxScanCheckpointBytes)
+                padding.Append(' ', 1024).Append('\n');
+            File.WriteAllText(checkpointPath, checkpoint + padding);
+
+            var (exitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.Contains("src/a.cs", indexedPaths);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_FullScan_PurgesStaleRowsWithinListedDirectoriesEvenWhenAnotherDirectoryIsUnreadable()
     {
         if (OperatingSystem.IsWindows())
@@ -8662,7 +8818,7 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void RunStatusCheck_AfterChangedBetweenRefreshAtHead_DotCommandRestampsFullScanHead()
+    public void RunStatusCheck_AfterChangedBetweenRefreshAtHead_TreatsCurrentIndexedHeadShaAsFresh_2808()
     {
         var projectRoot = CreateTempProject();
         try
@@ -8697,10 +8853,13 @@ public class IndexCommandRunnerTests
 
             var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--check", "--json"]);
             Assert.Equal(CommandExitCodes.Success, statusExitCode);
+            Assert.Equal(currentHead, statusJson.GetProperty("indexed_head_sha").GetString());
             var check = statusJson.GetProperty("workspace_check");
             Assert.False(check.GetProperty("head_changed").GetBoolean());
             Assert.True(check.GetProperty("matches_workspace").GetBoolean());
             Assert.Equal("matched", check.GetProperty("reason").GetString());
+            Assert.Equal(initialHead, check.GetProperty("indexed_head_commit").GetString());
+            Assert.Equal(currentHead, check.GetProperty("workspace_head_commit").GetString());
 
             var (dotExitCode, dotJson) = RunProgramAndCaptureJson([projectRoot, "--json"]);
             Assert.Equal(CommandExitCodes.Success, dotExitCode);

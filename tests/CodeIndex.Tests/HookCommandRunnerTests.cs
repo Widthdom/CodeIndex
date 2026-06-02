@@ -93,6 +93,38 @@ public class HookCommandRunnerTests
     }
 
     [Fact]
+    public void Hooks_TreatsOversizedPreCommitHookAsCustom()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("hook_oversized");
+        try
+        {
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+            var hooksDir = Path.Combine(projectRoot, ".git", "hooks");
+            Directory.CreateDirectory(hooksDir);
+            var hookPath = Path.Combine(hooksDir, "pre-commit");
+            var chainedHookPath = Path.Combine(hooksDir, "pre-commit.cdidx-chain");
+            File.WriteAllText(hookPath, new string('x', HookCommandRunner.MaxHookMarkerBytes + 1));
+
+            var (statusExit, statusStdout, _) = RunHooksAndCaptureStreams(["status", "--project", projectRoot, "--json"]);
+            var uninstallExit = RunHooksAndCaptureStreams(["uninstall", "--project", projectRoot]).ExitCode;
+            var installExit = RunHooksAndCaptureStreams(["install", "--project", projectRoot]).ExitCode;
+
+            Assert.Equal(CommandExitCodes.Success, statusExit);
+            using (var document = JsonDocument.Parse(statusStdout))
+                Assert.Equal("custom", document.RootElement.GetProperty("status").GetString());
+            Assert.Equal(CommandExitCodes.UsageError, uninstallExit);
+            Assert.Equal(CommandExitCodes.Success, installExit);
+            Assert.True(File.Exists(chainedHookPath));
+            Assert.Equal(HookCommandRunner.MaxHookMarkerBytes + 1, File.ReadAllText(chainedHookPath).Length);
+            Assert.Contains("BEGIN CDIDX MANAGED PRE-COMMIT", File.ReadAllText(hookPath));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Index_QuietSuppressesSuccessfulHumanOutput()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("quiet_index");

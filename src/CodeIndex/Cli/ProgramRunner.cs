@@ -20,6 +20,8 @@ internal static class ProgramRunner
     internal const string QuietEnvironmentVariable = "CDIDX_QUIET";
     private const string InstallerScriptUrlTemplate = "https://raw.githubusercontent.com/Widthdom/CodeIndex/{0}/install.sh";
     private const long MaxInstallerScriptBytes = 1024 * 1024;
+    private static readonly TimeSpan InstallerRunTimeout = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan InstallerKillWaitTimeout = TimeSpan.FromSeconds(5);
     internal static TimeProvider TimeProvider { get; set; } = TimeProvider.System;
 
     internal static int Run(
@@ -2209,19 +2211,8 @@ internal static class ProgramRunner
                     .GetResult();
             }
 
-            var startInfo = new ProcessStartInfo("bash", $"{QuoteShellArg(scriptPath)} {QuoteShellArg(result.LatestVersion)}")
-            {
-                UseShellExecute = false,
-            };
-            startInfo.Environment["CDIDX_INSTALL_DIR"] = installDir;
-            var process = Process.Start(startInfo);
-            if (process == null)
-            {
-                Console.Error.WriteLine("Error: failed to start install.sh for upgrade.");
-                return CommandExitCodes.DatabaseError;
-            }
-            process.WaitForExit();
-            return process.ExitCode;
+            var startInfo = CreateInstallerProcessStartInfo(scriptPath, result.LatestVersion, installDir);
+            return RunInstallerProcess(startInfo, InstallerRunTimeout);
         }
         catch (Exception ex)
         {
@@ -2233,6 +2224,40 @@ internal static class ProgramRunner
         {
             try { File.Delete(scriptPath); } catch { }
         }
+    }
+
+    internal static ProcessStartInfo CreateInstallerProcessStartInfo(string scriptPath, string releaseTag, string installDir)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "bash",
+            UseShellExecute = false,
+        };
+        startInfo.ArgumentList.Add(scriptPath);
+        startInfo.ArgumentList.Add(releaseTag);
+        startInfo.Environment["CDIDX_INSTALL_DIR"] = installDir;
+        return startInfo;
+    }
+
+    internal static int RunInstallerProcess(ProcessStartInfo startInfo, TimeSpan timeout)
+    {
+        using var process = Process.Start(startInfo);
+        if (process == null)
+        {
+            Console.Error.WriteLine("Error: failed to start install.sh for upgrade.");
+            return CommandExitCodes.DatabaseError;
+        }
+
+        if (process.WaitForExit(ToWaitMilliseconds(timeout)))
+            return process.ExitCode;
+
+        TryKillProcessTree(process);
+        if (!process.WaitForExit(ToWaitMilliseconds(InstallerKillWaitTimeout)))
+            Console.Error.WriteLine("Error: install.sh timed out and did not exit after cancellation.");
+        else
+            Console.Error.WriteLine($"Error: install.sh timed out after {FormatDuration(timeout)}.");
+        Console.Error.WriteLine("Hint: rerun `install.sh` manually for the desired release.");
+        return CommandExitCodes.DatabaseError;
     }
 
     internal static string BuildInstallerScriptUrl(string releaseTag)
@@ -2279,8 +2304,30 @@ internal static class ProgramRunner
         }
     }
 
-    private static string QuoteShellArg(string value)
-        => "'" + value.Replace("'", "'\\''", StringComparison.Ordinal) + "'";
+    private static int ToWaitMilliseconds(TimeSpan timeout)
+    {
+        if (timeout <= TimeSpan.Zero)
+            return 1;
+        if (timeout.TotalMilliseconds >= int.MaxValue)
+            return int.MaxValue;
+        return Math.Max(1, (int)Math.Ceiling(timeout.TotalMilliseconds));
+    }
+
+    private static string FormatDuration(TimeSpan timeout)
+        => timeout.TotalSeconds.ToString("0.###", CultureInfo.InvariantCulture) + "s";
+
+    private static void TryKillProcessTree(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+                process.Kill(entireProcessTree: true);
+        }
+        catch
+        {
+            // Best-effort cleanup only; callers receive the timeout diagnostic.
+        }
+    }
 
     // `--version` is now build-aware so dev builds from main are not
     // indistinguishable from tagged releases in bug reports (#1550). Human

@@ -1,5 +1,6 @@
 using CodeIndex.Cli;
 using CodeIndex.Database;
+using CodeIndex.Indexer;
 using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
@@ -635,6 +636,42 @@ public class DbPathResolverTests
             var resolved = DbPathResolver.ResolveProjectRootForQuery(dbPath, dbPathExplicit: true);
 
             Assert.Null(resolved);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            TestProjectHelper.DeleteDirectory(dbContainerRoot);
+        }
+    }
+
+    [Fact]
+    public void ResolveProjectRootForQuery_ExplicitExternalCodeIndexDbSkipsOversizedSiblingChecksumSample()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_oversized_root");
+        var dbContainerRoot = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_oversized_container");
+        var dbPath = Path.Combine(dbContainerRoot, ".cdidx", "codeindex.db");
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            Directory.CreateDirectory(Path.Combine(dbContainerRoot, "src"));
+
+            const string indexedContent = "class App {}\n";
+            File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), indexedContent);
+            using (var stream = File.Create(Path.Combine(dbContainerRoot, "src", "app.cs")))
+                stream.SetLength(FileIndexer.DefaultMaxFileSizeBytes + 1);
+
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db.Connection);
+                writer.SetMeta(DbContext.IndexedProjectRootMetaKey, projectRoot);
+            }
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", indexedContent);
+
+            var resolved = DbPathResolver.ResolveProjectRootForQuery(dbPath, dbPathExplicit: true);
+
+            Assert.Equal(projectRoot, resolved);
         }
         finally
         {

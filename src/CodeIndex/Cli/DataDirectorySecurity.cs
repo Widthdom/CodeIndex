@@ -56,7 +56,7 @@ internal static class DataDirectorySecurity
         AtomicFileWriter.WriteText(path, contents, outputEncoding, ApplyPrivateFileMode);
     }
 
-    public static string? ReadTextWithinLimit(string path, int maxBytes, FileShare share = FileShare.Read)
+    public static byte[]? ReadBytesWithinLimit(string path, int maxBytes, FileShare share = FileShare.Read)
     {
         if (maxBytes <= 0)
             throw new ArgumentOutOfRangeException(nameof(maxBytes), maxBytes, "Maximum byte count must be positive.");
@@ -64,12 +64,11 @@ internal static class DataDirectorySecurity
         var ioPath = LongPath.EnsureWindowsPrefix(path);
         using var stream = File.Open(ioPath, FileMode.Open, FileAccess.Read, share);
         using var output = new MemoryStream(capacity: Math.Min(maxBytes, 8192));
-        var buffer = new byte[Math.Min(maxBytes + 1, 8192)];
+        var buffer = new byte[Math.Min(maxBytes, 8192)];
         var total = 0;
         while (true)
         {
-            var remaining = maxBytes + 1 - total;
-            var read = stream.Read(buffer, 0, Math.Min(buffer.Length, remaining));
+            var read = stream.Read(buffer, 0, buffer.Length);
             if (read == 0)
                 break;
 
@@ -80,7 +79,20 @@ internal static class DataDirectorySecurity
             output.Write(buffer, 0, read);
         }
 
-        return Encoding.UTF8.GetString(output.ToArray());
+        return output.ToArray();
+    }
+
+    public static string? ReadTextWithinLimit(string path, int maxBytes, FileShare share = FileShare.Read)
+    {
+        var bytes = ReadBytesWithinLimit(path, maxBytes, share);
+        return bytes is null ? null : DecodeText(bytes);
+    }
+
+    private static string DecodeText(byte[] bytes)
+    {
+        using var stream = new MemoryStream(bytes);
+        using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        return reader.ReadToEnd();
     }
 
     public static string? GetUnixModeString(string? path)

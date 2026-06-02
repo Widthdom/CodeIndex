@@ -353,12 +353,87 @@ public class ProgramRunnerTests
         }
     }
 
+    [Fact]
+    public void UpdateChecker_Check_IgnoresOversizedCache()
+    {
+        var cachePath = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json");
+        try
+        {
+            File.WriteAllText(cachePath, new string('x', UpdateChecker.MaxUpdateCheckCacheBytes + 1));
+
+            var result = UpdateChecker.Check(
+                "1.10.0",
+                cachePath,
+                DateTimeOffset.Parse("2026-01-01T00:00:00Z"),
+                _ => Task.FromResult<string?>("v1.11.0"));
+
+            Assert.False(result.FromCache);
+            Assert.Equal("v1.11.0", result.LatestVersion);
+            Assert.True(result.UpdateAvailable);
+        }
+        finally
+        {
+            if (File.Exists(cachePath))
+                File.Delete(cachePath);
+        }
+    }
+
     [Theory]
     [InlineData("v1.26.0", "https://raw.githubusercontent.com/Widthdom/CodeIndex/v1.26.0/install.sh")]
     [InlineData(" release/test ", "https://raw.githubusercontent.com/Widthdom/CodeIndex/release%2Ftest/install.sh")]
     public void BuildInstallerScriptUrl_UsesResolvedReleaseTag(string releaseTag, string expected)
     {
         Assert.Equal(expected, ProgramRunner.BuildInstallerScriptUrl(releaseTag));
+    }
+
+    [Fact]
+    public void CreateInstallerProcessStartInfo_UsesArgumentList()
+    {
+        var startInfo = ProgramRunner.CreateInstallerProcessStartInfo(
+            "/tmp/install script's path.sh",
+            "v1.27.0",
+            "/opt/cdidx install");
+
+        Assert.Equal("bash", startInfo.FileName);
+        Assert.False(startInfo.UseShellExecute);
+        Assert.Equal(string.Empty, startInfo.Arguments);
+        Assert.Equal(["/tmp/install script's path.sh", "v1.27.0"], startInfo.ArgumentList.ToArray());
+        Assert.Equal("/opt/cdidx install", startInfo.Environment["CDIDX_INSTALL_DIR"]);
+    }
+
+    [Fact]
+    public void RunInstallerProcess_TimesOutHungInstaller()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        lock (TestConsoleLock.Gate)
+        {
+            var root = Path.Combine(Path.GetTempPath(), $"cdidx_installer_timeout_{Guid.NewGuid():N}");
+            Directory.CreateDirectory(root);
+            var script = Path.Combine(root, "install.sh");
+            try
+            {
+                File.WriteAllText(script, """
+#!/bin/sh
+sleep 5
+""");
+                File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+                var startInfo = ProgramRunner.CreateInstallerProcessStartInfo(script, "v1.27.0", root);
+
+                var (exitCode, stdout, stderr) = CaptureConsole(() =>
+                    ProgramRunner.RunInstallerProcess(startInfo, TimeSpan.FromMilliseconds(100)));
+
+                Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+                Assert.Empty(stdout);
+                Assert.Contains("install.sh timed out", stderr);
+                Assert.Contains("rerun `install.sh` manually", stderr);
+            }
+            finally
+            {
+                TestProjectHelper.DeleteDirectory(root);
+            }
+        }
     }
 
     [Fact]

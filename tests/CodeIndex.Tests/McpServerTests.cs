@@ -2883,6 +2883,55 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void McpToolFilter_Parse_OverlongAllowListFailsClosed_Issue2905()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalError = Console.Error;
+            using var stderr = new StringWriter();
+            try
+            {
+                Console.SetError(stderr);
+                var filter = McpToolFilter.Parse(new string('s', McpToolFilter.MaxToolFilterCsvLength + 1), null);
+
+                foreach (var name in McpToolFilter.KnownToolNames)
+                    Assert.False(filter.IsEnabled(name), $"{name} should be disabled when an invalid allowlist is supplied");
+                Assert.Contains(McpToolFilter.AllowEnvVarName, stderr.ToString());
+                Assert.Contains("was rejected", stderr.ToString());
+            }
+            finally
+            {
+                Console.SetError(originalError);
+            }
+        }
+    }
+
+    [Fact]
+    public void McpToolFilter_Parse_TooManyDenyEntriesAreRejected_Issue2905()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalError = Console.Error;
+            using var stderr = new StringWriter();
+            try
+            {
+                Console.SetError(stderr);
+                var tooMany = string.Join(',', Enumerable.Repeat("index", McpToolFilter.MaxToolFilterCsvEntries + 1));
+                var filter = McpToolFilter.Parse(null, tooMany);
+
+                Assert.True(filter.IsEnabled("index"));
+                Assert.Contains(McpToolFilter.DenyEnvVarName, stderr.ToString());
+                Assert.Contains("accepts at most", stderr.ToString());
+                Assert.Contains("was rejected", stderr.ToString());
+            }
+            finally
+            {
+                Console.SetError(originalError);
+            }
+        }
+    }
+
+    [Fact]
     public void McpToolFilter_Parse_AllowWinsOverDeny()
     {
         var filter = McpToolFilter.Parse("search,index", "index");

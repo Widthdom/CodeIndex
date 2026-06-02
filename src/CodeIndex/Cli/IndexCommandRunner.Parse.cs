@@ -22,6 +22,9 @@ public static partial class IndexCommandRunner
     ];
 
     internal const string IndexParallelismEnvironmentVariable = "CDIDX_INDEX_PARALLELISM";
+    internal const int MaxIndexParallelism = 16;
+    internal const int MaxSymbolKindFilterCsvLength = 2048;
+    internal const int MaxSymbolKindFilterCsvEntries = 128;
 
     public static IndexCommandOptions ParseArgs(string[] args)
     {
@@ -356,6 +359,8 @@ public static partial class IndexCommandRunner
     {
         if (value == null)
             return;
+        if (!ValidateCsvBounds(source, value, MaxSymbolKindFilterCsvLength, MaxSymbolKindFilterCsvEntries, ref parseError))
+            return;
 
         foreach (var raw in value.Split(',', StringSplitOptions.TrimEntries))
         {
@@ -369,8 +374,46 @@ public static partial class IndexCommandRunner
         }
     }
 
+    private static bool ValidateCsvBounds(
+        string source,
+        string value,
+        int maxLength,
+        int maxEntries,
+        ref string? parseError)
+    {
+        if (value.Length > maxLength)
+        {
+            parseError ??= $"{source} value is too long ({value.Length} characters; max {maxLength})";
+            return false;
+        }
+
+        var entries = CountCsvEntries(value);
+        if (entries > maxEntries)
+        {
+            parseError ??= $"{source} accepts at most {maxEntries} comma-separated entries";
+            return false;
+        }
+
+        return true;
+    }
+
+    private static int CountCsvEntries(string value)
+    {
+        if (value.Length == 0)
+            return 0;
+
+        var count = 1;
+        foreach (var ch in value)
+        {
+            if (ch == ',')
+                count++;
+        }
+
+        return count;
+    }
+
     internal static int DefaultIndexParallelism()
-        => Math.Clamp(Environment.ProcessorCount, 1, 16);
+        => Math.Clamp(Environment.ProcessorCount, 1, MaxIndexParallelism);
 
     private static int ReadIndexParallelismFromEnvironment()
     {
@@ -385,7 +428,13 @@ public static partial class IndexCommandRunner
     private static int ParseIndexParallelism(string value, int fallback, string source)
     {
         if (int.TryParse(value, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsed) && parsed > 0)
-            return parsed;
+        {
+            if (parsed <= MaxIndexParallelism)
+                return parsed;
+
+            Console.Error.WriteLine($"Warning: {source} value '{value}' exceeds the maximum {MaxIndexParallelism}; using {MaxIndexParallelism} / {source} 値 '{value}' は最大 {MaxIndexParallelism} を超えています。{MaxIndexParallelism} を使用します");
+            return MaxIndexParallelism;
+        }
 
         Console.Error.WriteLine($"Warning: invalid {source} value '{value}' (ignored; use a positive integer) / 不正な {source} 値 '{value}'（無視。正の整数を指定）");
         return fallback;

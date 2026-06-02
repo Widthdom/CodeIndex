@@ -54,6 +54,7 @@ internal static class IndexWatchRunner
 
         var ignoreRuleRoot = GitHelper.TryGetRepositoryRoot(projectRoot) ?? Path.GetFullPath(projectRoot);
         var fileIndexer = new FileIndexer(projectRoot, ignoreCase, ignoreRuleRoot);
+        var watchExitCode = CommandExitCodes.Success;
 
         FileSystemWatcher? watcher = null;
         try
@@ -133,14 +134,14 @@ internal static class IndexWatchRunner
                 if (fullRescan)
                 {
                     EmitWatchOverflow(baseOptions, overflowReason);
-                    RunFullRescan(baseOptions, jsonOptions);
+                    RecordSubRunExitCode(ref watchExitCode, RunFullRescan(baseOptions, jsonOptions));
                     continue;
                 }
 
                 if (batch.Count == 0)
                     continue;
 
-                RunPartialUpdate(baseOptions, jsonOptions, batch);
+                RecordSubRunExitCode(ref watchExitCode, RunPartialUpdate(baseOptions, jsonOptions, batch));
             }
         }
         finally
@@ -153,10 +154,10 @@ internal static class IndexWatchRunner
         }
 
         EmitWatchStopped(baseOptions);
-        return CommandExitCodes.Success;
+        return watchExitCode;
     }
 
-    private static void RunPartialUpdate(
+    private static int RunPartialUpdate(
         IndexCommandOptions baseOptions,
         JsonSerializerOptions jsonOptions,
         IReadOnlyList<string> changedPaths)
@@ -167,10 +168,10 @@ internal static class IndexWatchRunner
         foreach (var path in changedPaths)
             args.Add(path);
 
-        InvokeSubRunAndEmit(baseOptions, jsonOptions, args, stopwatch, "updated", changedPaths.Count);
+        return InvokeSubRunAndEmit(baseOptions, jsonOptions, args, stopwatch, "updated", changedPaths.Count);
     }
 
-    private static void RunFullRescan(
+    private static int RunFullRescan(
         IndexCommandOptions baseOptions,
         JsonSerializerOptions jsonOptions)
     {
@@ -178,7 +179,13 @@ internal static class IndexWatchRunner
         var args = BuildSubRunArgs(baseOptions);
         // No --files: this is a default incremental full scan.
         // --files を付けない: 通常のインクリメンタル全件スキャン。
-        InvokeSubRunAndEmit(baseOptions, jsonOptions, args, stopwatch, "rescanned", batchSize: null);
+        return InvokeSubRunAndEmit(baseOptions, jsonOptions, args, stopwatch, "rescanned", batchSize: null);
+    }
+
+    private static void RecordSubRunExitCode(ref int watchExitCode, int subRunExitCode)
+    {
+        if (subRunExitCode != CommandExitCodes.Success)
+            watchExitCode = subRunExitCode;
     }
 
     private static List<string> BuildSubRunArgs(IndexCommandOptions baseOptions)
@@ -214,7 +221,7 @@ internal static class IndexWatchRunner
         return args;
     }
 
-    private static void InvokeSubRunAndEmit(
+    private static int InvokeSubRunAndEmit(
         IndexCommandOptions baseOptions,
         JsonSerializerOptions jsonOptions,
         List<string> args,
@@ -223,12 +230,13 @@ internal static class IndexWatchRunner
         int? batchSize)
     {
         string capturedJson;
+        int subRunExitCode;
         var previousOut = Console.Out;
         using var captureWriter = new StringWriter();
         Console.SetOut(captureWriter);
         try
         {
-            IndexCommandRunner.Run(args.ToArray(), jsonOptions);
+            subRunExitCode = IndexCommandRunner.Run(args.ToArray(), jsonOptions);
         }
         finally
         {
@@ -236,6 +244,10 @@ internal static class IndexWatchRunner
         }
         stopwatch.Stop();
         capturedJson = captureWriter.ToString();
+        var eventStatus = subRunExitCode == CommandExitCodes.Success ? status : "failed";
+        var failureReason = subRunExitCode == CommandExitCodes.Success
+            ? null
+            : $"{status} sub-run exited with code {subRunExitCode.ToString(CultureInfo.InvariantCulture)}";
 
         if (baseOptions.Json)
         {
@@ -244,9 +256,11 @@ internal static class IndexWatchRunner
             // watch バッチであることを示すヘッダ行を先頭に流し、その後にサブ実行 JSON を出す。
             Console.Out.WriteLine(JsonSerializer.Serialize(new IndexWatchEventJsonResult
             {
-                Status = status,
+                Status = eventStatus,
                 BatchSize = batchSize,
                 ElapsedMs = stopwatch.ElapsedMilliseconds,
+                ExitCode = subRunExitCode,
+                Reason = failureReason,
             }, CliJsonSerializerContextFactory.Create(jsonOptions).IndexWatchEventJsonResult));
 
             var trimmed = capturedJson.TrimEnd('\r', '\n');
@@ -255,14 +269,21 @@ internal static class IndexWatchRunner
         }
         else
         {
-            var human = FormatHumanSummary(status, batchSize, stopwatch.ElapsedMilliseconds, capturedJson);
+            var human = FormatHumanSummary(eventStatus, batchSize, stopwatch.ElapsedMilliseconds, capturedJson, subRunExitCode);
             Console.Error.WriteLine(human);
         }
+
+        return subRunExitCode;
     }
 
-    private static string FormatHumanSummary(string status, int? batchSize, long elapsedMs, string subRunJson)
+    private static string FormatHumanSummary(string status, int? batchSize, long elapsedMs, string subRunJson, int exitCode)
     {
-        var prefix = status == "rescanned" ? "[watch] rescanned" : "[watch] updated";
+        var prefix = status switch
+        {
+            "rescanned" => "[watch] rescanned",
+            "failed" => "[watch] failed",
+            _ => "[watch] updated",
+        };
         var batchLabel = batchSize is int n
             ? $" {ConsoleUi.Counted(n, "path", format: "N0")}"
             : string.Empty;
@@ -270,7 +291,10 @@ internal static class IndexWatchRunner
         // Best-effort parse of the sub-run JSON to surface updated/removed/errors counts.
         // The summary is informational; a parse failure must not break the watch loop.
         // サブ実行 JSON から件数を best-effort で抽出。失敗してもループは続行する。
-        string detail = string.Empty;
+        var details = new List<string>
+        {
+            $"exit code {exitCode.ToString(CultureInfo.InvariantCulture)}",
+        };
         try
         {
             var trimmed = subRunJson.TrimEnd('\r', '\n');
@@ -284,15 +308,17 @@ internal static class IndexWatchRunner
                     int updated = summary.TryGetProperty("updated", out var u) && u.TryGetInt32(out var uv) ? uv : 0;
                     int removed = summary.TryGetProperty("removed", out var r) && r.TryGetInt32(out var rv) ? rv : 0;
                     int errors = summary.TryGetProperty("errors", out var er) && er.TryGetInt32(out var erv) ? erv : 0;
-                    detail = $" (updated {updated}, removed {removed}, errors {errors})";
+                    details.Add($"updated {updated}");
+                    details.Add($"removed {removed}");
+                    details.Add($"errors {errors}");
                 }
             }
         }
         catch (JsonException)
         {
-            detail = string.Empty;
         }
 
+        var detail = details.Count > 0 ? $" ({string.Join(", ", details)})" : string.Empty;
         return $"{prefix}{batchLabel}{detail} in {elapsedMs.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)} ms";
     }
 
@@ -373,6 +399,8 @@ internal static class IndexWatchRunner
 /// </summary>
 internal sealed class FileChangeBatcher
 {
+    internal const int DefaultMaxPendingPaths = 4096;
+
     private readonly object _gate = new();
     private readonly HashSet<string> _pending;
     private DateTime _lastEventUtc = DateTime.MinValue;
@@ -380,11 +408,20 @@ internal sealed class FileChangeBatcher
     private string? _overflowReason;
     private readonly TimeSpan _debounce;
     private readonly Func<DateTime> _clock;
+    private readonly int _maxPendingPaths;
 
-    public FileChangeBatcher(TimeSpan debounce, Func<DateTime>? clock = null, bool ignoreCase = true)
+    public FileChangeBatcher(
+        TimeSpan debounce,
+        Func<DateTime>? clock = null,
+        bool ignoreCase = true,
+        int maxPendingPaths = DefaultMaxPendingPaths)
     {
+        if (maxPendingPaths <= 0)
+            throw new ArgumentOutOfRangeException(nameof(maxPendingPaths), "Maximum pending path count must be positive.");
+
         _debounce = debounce;
         _clock = clock ?? (() => DateTime.UtcNow);
+        _maxPendingPaths = maxPendingPaths;
         // On case-sensitive filesystems (Linux ext4), `foo.py` and `Foo.py` are distinct files,
         // so coalescing them via OrdinalIgnoreCase would drop one rename leg and leave the
         // renamed-to file unindexed. The watch loop passes the filesystem's case sensitivity in.
@@ -397,7 +434,24 @@ internal sealed class FileChangeBatcher
     {
         lock (_gate)
         {
-            _pending.Add(path);
+            if (_overflowRequested)
+            {
+                _lastEventUtc = _clock();
+                return;
+            }
+
+            if (!_pending.Contains(path))
+            {
+                if (_pending.Count >= _maxPendingPaths)
+                {
+                    RequestFullRescanLocked(
+                        $"pending path limit exceeded ({_maxPendingPaths.ToString("N0", CultureInfo.InvariantCulture)} paths)");
+                    return;
+                }
+
+                _pending.Add(path);
+            }
+
             _lastEventUtc = _clock();
         }
     }
@@ -406,10 +460,7 @@ internal sealed class FileChangeBatcher
     {
         lock (_gate)
         {
-            _overflowRequested = true;
-            if (!string.IsNullOrEmpty(reason))
-                _overflowReason = reason;
-            _lastEventUtc = _clock();
+            RequestFullRescanLocked(reason);
         }
     }
 
@@ -444,5 +495,14 @@ internal sealed class FileChangeBatcher
             _overflowReason = null;
             return true;
         }
+    }
+
+    private void RequestFullRescanLocked(string? reason)
+    {
+        _pending.Clear();
+        _overflowRequested = true;
+        if (!string.IsNullOrEmpty(reason))
+            _overflowReason = reason;
+        _lastEventUtc = _clock();
     }
 }

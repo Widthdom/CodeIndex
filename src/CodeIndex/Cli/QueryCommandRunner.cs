@@ -37,6 +37,14 @@ public static class QueryCommandRunner
     // OR 結合の `symbols` 名は SQLite の式木深さ上限 1000 を十分下回る値で頭打ちにし、
     // 大量バッチを SQLite 例外ではなく明確な usage error で早期に弾く。
     internal const int MaxSymbolQueryNames = 256;
+    internal const int MaxMapSectionsCsvLength = 256;
+    internal const int MaxMapSectionsCsvEntries = 16;
+    internal const int MaxStatusCheckScopesCsvLength = 256;
+    internal const int MaxStatusCheckScopesCsvEntries = 16;
+    internal const int MaxVisibilityFilterCsvLength = 256;
+    internal const int MaxVisibilityFilterCsvEntries = 16;
+    internal const int MaxQueryPathFilterCount = 128;
+    internal const int MaxQueryPathFilterLength = 1024;
     internal const int ExactZeroHintProbeLimit = 1;
     internal const int ExactZeroHintSampleLimit = 5;
     private const string HotspotsGroupedByNameKind = "name_kind";
@@ -149,7 +157,7 @@ public static class QueryCommandRunner
             "Hotspot family contract",
             "cross-file hotspot family grouping is stamped for all supported languages in this index.",
             "cross-file hotspot grouping may be degraded for one or more languages.",
-            "Run `cdidx index <projectPath>` to restamp authoritative hotspot families."),
+            "Run `cdidx index <projectPath> --rebuild` to restamp authoritative hotspot families for every indexed row."),
         new(
             "csharp_symbol_name_ready",
             "C# symbol-name contract",
@@ -5002,6 +5010,8 @@ public static class QueryCommandRunner
                 AddParseError("Error: --check scope list cannot be empty. Use --check or --check=workspace,fold,graph,issues,hotspot,csharp,sql,newer.");
                 return;
             }
+            if (!ValidateCsvBounds("--check", rawScopes, MaxStatusCheckScopesCsvLength, MaxStatusCheckScopesCsvEntries, AddParseError))
+                return;
 
             statusCheckScopes ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var rawScope in rawScopes.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
@@ -5753,6 +5763,9 @@ public static class QueryCommandRunner
     private static List<string> ParseMapSections(string rawValue, Action<string> addParseError)
     {
         var sections = new List<string>();
+        if (!ValidateCsvBounds("--sections", rawValue, MaxMapSectionsCsvLength, MaxMapSectionsCsvEntries, addParseError))
+            return sections;
+
         foreach (var rawSection in rawValue.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
             var section = rawSection.ToLowerInvariant();
@@ -5778,15 +5791,71 @@ public static class QueryCommandRunner
         return sections.Distinct(StringComparer.Ordinal).ToList();
     }
 
+    private static bool ValidateCsvBounds(
+        string optionName,
+        string rawValue,
+        int maxLength,
+        int maxEntries,
+        Action<string> addParseError)
+    {
+        if (rawValue.Length > maxLength)
+        {
+            addParseError($"Error: {optionName} value is too long ({rawValue.Length} characters; max {maxLength}).");
+            return false;
+        }
+
+        var entries = CountCsvEntries(rawValue);
+        if (entries > maxEntries)
+        {
+            addParseError($"Error: {optionName} accepts at most {maxEntries} comma-separated entries.");
+            return false;
+        }
+
+        return true;
+    }
+
+    private static int CountCsvEntries(string rawValue)
+    {
+        if (rawValue.Length == 0)
+            return 0;
+
+        var count = 1;
+        foreach (var ch in rawValue)
+        {
+            if (ch == ',')
+                count++;
+        }
+
+        return count;
+    }
+
     private static void ValidateQueryPathOptionValues(
         IReadOnlyList<string> pathPatterns,
         IReadOnlyList<string> excludePaths,
         Action<string> addParseError)
     {
-        foreach (var pattern in pathPatterns)
-            ValidatePathGlobPattern("--path", pattern, addParseError);
-        foreach (var pattern in excludePaths)
-            ValidatePathGlobPattern("--exclude-path", pattern, addParseError);
+        ValidatePathOptionValues("--path", pathPatterns, addParseError);
+        ValidatePathOptionValues("--exclude-path", excludePaths, addParseError);
+    }
+
+    private static void ValidatePathOptionValues(
+        string optionName,
+        IReadOnlyList<string> patterns,
+        Action<string> addParseError)
+    {
+        if (patterns.Count > MaxQueryPathFilterCount)
+            addParseError($"Error: {optionName} accepts at most {MaxQueryPathFilterCount} values.");
+
+        foreach (var pattern in patterns)
+        {
+            if (pattern.Length > MaxQueryPathFilterLength)
+            {
+                addParseError($"Error: {optionName} value is too long ({pattern.Length} characters; max {MaxQueryPathFilterLength}).");
+                continue;
+            }
+
+            ValidatePathGlobPattern(optionName, pattern, addParseError);
+        }
     }
 
     private static bool TryParseJsonOutputFormat(string rawValue, out string format)
@@ -6511,6 +6580,9 @@ public static class QueryCommandRunner
 
     private static void AddVisibilityFilterValues(string optionName, string rawValue, List<string> target, Action<string> addParseError)
     {
+        if (!ValidateCsvBounds(optionName, rawValue, MaxVisibilityFilterCsvLength, MaxVisibilityFilterCsvEntries, addParseError))
+            return;
+
         var values = rawValue
             .Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
             .Select(value => value.ToLowerInvariant())
@@ -7150,6 +7222,7 @@ public static class QueryCommandRunner
         => fieldName switch
         {
             "sql_graph_contract_ready" => $"Run `{BuildSqlGraphContractRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit)}` before trusting SQL references/callers/deps/unused/hotspots.",
+            "hotspot_family_ready" => $"Run `{BuildHotspotFamilyRebuildRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit)}` to restamp authoritative hotspot families for every indexed row.",
             "csharp_symbol_name_ready" => $"Run `{BuildCSharpCanonicalNameRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit)}` to upgrade canonical C# symbol names in place.",
             "fold_ready" => $"Run `{BuildFoldBackfillCommand(options.DbPath, options.DbPathExplicit)}` to restamp folded-name columns in place, or `{BuildFoldRebuildRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit)}` for a full rebuild.",
             "csharp_metadata_target_ready" => DegradationReasonCodes.GetMetadata(status.CSharpMetadataTargetDegradedReason ?? DegradationReasonCodes.CSharpMetadataTargetNotReady).RecommendedAction,
@@ -7211,6 +7284,7 @@ public static class QueryCommandRunner
             {
                 "fold_ready" => BuildFoldBackfillCommand(options.DbPath, options.DbPathExplicit),
                 "sql_graph_contract_ready" => BuildSqlGraphContractRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit),
+                "hotspot_family_ready" => BuildHotspotFamilyRebuildRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit),
                 "csharp_symbol_name_ready" => BuildCSharpCanonicalNameRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit),
                 _ => metadata.RecommendedAction,
             },
@@ -7439,6 +7513,9 @@ public static class QueryCommandRunner
 
     private static string BuildSqlGraphContractRepairCommand(string? projectRoot, string dbPath, bool dbPathExplicit)
         => BuildReindexRepairCommand(projectRoot, dbPath, dbPathExplicit);
+
+    private static string BuildHotspotFamilyRebuildRepairCommand(string? projectRoot, string dbPath, bool dbPathExplicit)
+        => BuildReindexRepairCommand(projectRoot, dbPath, dbPathExplicit, rebuild: true);
 
     private static string BuildFoldRebuildRepairCommand(string? projectRoot, string dbPath, bool dbPathExplicit)
         => BuildReindexRepairCommand(projectRoot, dbPath, dbPathExplicit, rebuild: true);

@@ -3747,29 +3747,108 @@ public class FileIndexer
     internal static string ComputeChecksum(byte[] bytes)
     {
         using var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        Span<byte> buffer = stackalloc byte[4096];
-        int n = 0;
-        for (int i = 0; i < bytes.Length; i++)
+        var pendingCarriageReturn = false;
+        AppendNormalizedChecksumBytes(hasher, bytes, ref pendingCarriageReturn);
+        FlushPendingChecksumCarriageReturn(hasher, ref pendingCarriageReturn);
+        return FinishChecksum(hasher);
+    }
+
+    internal static bool TryComputeChecksum(string filePath, long maxBytes, out string checksum)
+    {
+        if (maxBytes < 0)
+            throw new ArgumentOutOfRangeException(nameof(maxBytes), maxBytes, "Maximum byte count must be non-negative.");
+
+        checksum = string.Empty;
+        using var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        using var stream = new FileStream(
+            filePath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            bufferSize: 81920,
+            options: FileOptions.SequentialScan);
+
+        var buffer = new byte[81920];
+        var pendingCarriageReturn = false;
+        long total = 0;
+        while (true)
         {
-            byte b = bytes[i];
+            var read = stream.Read(buffer, 0, buffer.Length);
+            if (read == 0)
+                break;
+
+            total += read;
+            if (total > maxBytes)
+                return false;
+
+            AppendNormalizedChecksumBytes(hasher, buffer.AsSpan(0, read), ref pendingCarriageReturn);
+        }
+
+        FlushPendingChecksumCarriageReturn(hasher, ref pendingCarriageReturn);
+        checksum = FinishChecksum(hasher);
+        return true;
+    }
+
+    private static void AppendNormalizedChecksumBytes(
+        IncrementalHash hasher,
+        ReadOnlySpan<byte> bytes,
+        ref bool pendingCarriageReturn)
+    {
+        Span<byte> normalized = stackalloc byte[4096];
+        var n = 0;
+
+        if (pendingCarriageReturn)
+        {
+            if (bytes.Length > 0 && bytes[0] == 0x0A)
+                bytes = bytes[1..];
+            normalized[n++] = 0x0A;
+            pendingCarriageReturn = false;
+        }
+
+        for (var i = 0; i < bytes.Length; i++)
+        {
+            var b = bytes[i];
             if (b == 0x0D)
             {
-                buffer[n++] = 0x0A;
+                if (i + 1 == bytes.Length)
+                {
+                    pendingCarriageReturn = true;
+                    continue;
+                }
+
+                normalized[n++] = 0x0A;
                 if (i + 1 < bytes.Length && bytes[i + 1] == 0x0A)
                     i++;
             }
             else
             {
-                buffer[n++] = b;
+                normalized[n++] = b;
             }
-            if (n == buffer.Length)
+
+            if (n == normalized.Length)
             {
-                hasher.AppendData(buffer);
+                hasher.AppendData(normalized);
                 n = 0;
             }
         }
+
         if (n > 0)
-            hasher.AppendData(buffer[..n]);
+            hasher.AppendData(normalized[..n]);
+    }
+
+    private static void FlushPendingChecksumCarriageReturn(IncrementalHash hasher, ref bool pendingCarriageReturn)
+    {
+        if (!pendingCarriageReturn)
+            return;
+
+        Span<byte> lineFeed = stackalloc byte[1];
+        lineFeed[0] = 0x0A;
+        hasher.AppendData(lineFeed);
+        pendingCarriageReturn = false;
+    }
+
+    private static string FinishChecksum(IncrementalHash hasher)
+    {
         Span<byte> hash = stackalloc byte[32];
         if (!hasher.TryGetHashAndReset(hash, out var written) || written != hash.Length)
             throw new InvalidOperationException("SHA256 produced an unexpected hash length");

@@ -285,6 +285,8 @@ public static partial class IndexCommandRunner
         || ex is IOException
         || ex is SqliteException { SqliteErrorCode: 5 or 6 or 8 or 10 or 14 };
 
+    internal const int MaxScanCheckpointBytes = 1024 * 1024;
+
     private static IReadOnlySet<string> LoadScanCheckpoint(string path, string? currentHead)
     {
         try
@@ -292,7 +294,11 @@ public static partial class IndexCommandRunner
             if (string.IsNullOrWhiteSpace(currentHead) || !File.Exists(path))
                 return new HashSet<string>(StringComparer.Ordinal);
 
-            var checkpoint = JsonSerializer.Deserialize<ScanCheckpoint>(File.ReadAllText(path));
+            var text = DataDirectorySecurity.ReadTextWithinLimit(path, MaxScanCheckpointBytes, FileShare.ReadWrite);
+            if (text is null)
+                return new HashSet<string>(StringComparer.Ordinal);
+
+            var checkpoint = JsonSerializer.Deserialize<ScanCheckpoint>(text);
             if (checkpoint is not { Version: ScanCheckpointVersion }
                 || !string.Equals(checkpoint.GitHead, currentHead, StringComparison.Ordinal)
                 || checkpoint.Directories is not { Count: > 0 })

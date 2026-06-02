@@ -20,6 +20,7 @@ public static partial class IndexCommandRunner
     internal const string IncludeSymbolKindsEnvironmentVariable = "CDIDX_INDEX_INCLUDE_SYMBOL_KINDS";
     internal const string ExcludeSymbolKindsEnvironmentVariable = "CDIDX_INDEX_EXCLUDE_SYMBOL_KINDS";
     internal const int DefaultMaxSymbolsPerFile = 5000;
+    internal const int MaxGitExcludeBytes = 256 * 1024;
     private const string SymbolKindFilterMetaKey = "index_symbol_kind_filter";
     private const int ScanCheckpointVersion = 1;
     private const string ScanCheckpointFileName = "scan-checkpoint.json";
@@ -731,7 +732,12 @@ public static partial class IndexCommandRunner
             }
 
             var ioExcludeFile = LongPath.EnsureWindowsPrefix(excludeFile);
-            var existingContent = File.Exists(ioExcludeFile) ? File.ReadAllText(ioExcludeFile) : "";
+            var existingContent = File.Exists(ioExcludeFile)
+                ? DataDirectorySecurity.ReadTextWithinLimit(ioExcludeFile, MaxGitExcludeBytes, FileShare.ReadWrite)
+                : "";
+            if (existingContent is null)
+                return;
+
             var existingLines = existingContent.Split('\n').Select(l => l.TrimEnd('\r')).ToHashSet();
 
             var missing = patterns.Where(p => !existingLines.Contains(p)).ToList();

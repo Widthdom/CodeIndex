@@ -92,12 +92,12 @@
   "file_issues_data_current": false,
   "migration_in_progress": false,
   "hotspot_family_ready": false,
-  "hotspot_family_degraded_reason": "cross-file hotspot family grouping is degraded (hotspot_family_support_not_indexed=csharp); Run \u0060cdidx index \u003CprojectPath\u003E\u0060 to rebuild and stamp authoritative hotspot families.",
+  "hotspot_family_degraded_reason": "cross-file hotspot family grouping is degraded (hotspot_family_support_not_indexed=csharp); Run \u0060cdidx index \u003CprojectPath\u003E --rebuild\u0060 to rebuild and stamp authoritative hotspot families for every indexed row.",
   "language_readiness": {
     "csharp": {
       "hotspot_family": {
         "ready": false,
-        "degraded_reason": "cross-file hotspot family grouping is degraded (hotspot_family_support_not_indexed=csharp); Run \u0060cdidx index \u003CprojectPath\u003E\u0060 to rebuild and stamp authoritative hotspot families."
+        "degraded_reason": "cross-file hotspot family grouping is degraded (hotspot_family_support_not_indexed=csharp); Run \u0060cdidx index \u003CprojectPath\u003E --rebuild\u0060 to rebuild and stamp authoritative hotspot families for every indexed row."
       },
       "symbol_name": {
         "ready": false,
@@ -138,8 +138,8 @@
       "field": "hotspot_family_ready",
       "root_cause": "hotspot_family_ready=false",
       "degraded_reason": "Cross-file hotspot grouping may be degraded for one or more languages.",
-      "recommended_action": "Run \u0060cdidx index \u003CprojectPath\u003E\u0060 to restamp authoritative hotspot families.",
-      "alternative_action": "Run \u0060cdidx index \u003CprojectPath\u003E --rebuild\u0060 for a full rebuild."
+      "recommended_action": "cdidx index <PROJECT_ROOT> --db <PROJECT_ROOT>/.cdidx/codeindex.db --rebuild",
+      "alternative_action": "Run \u0060cdidx index \u003CprojectPath\u003E --files \u003CchangedFiles\u003E\u0060 only when you can enumerate every file whose hotspot-family rows need restamping."
     },
     {
       "field": "csharp_symbol_name_ready",
