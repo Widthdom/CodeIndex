@@ -22,6 +22,8 @@ public static partial class IndexCommandRunner
     ];
 
     internal const string IndexParallelismEnvironmentVariable = "CDIDX_INDEX_PARALLELISM";
+    internal const int MaxSymbolKindFilterCsvLength = 2048;
+    internal const int MaxSymbolKindFilterCsvEntries = 128;
 
     public static IndexCommandOptions ParseArgs(string[] args)
     {
@@ -356,6 +358,8 @@ public static partial class IndexCommandRunner
     {
         if (value == null)
             return;
+        if (!ValidateCsvBounds(source, value, MaxSymbolKindFilterCsvLength, MaxSymbolKindFilterCsvEntries, ref parseError))
+            return;
 
         foreach (var raw in value.Split(',', StringSplitOptions.TrimEntries))
         {
@@ -367,6 +371,44 @@ public static partial class IndexCommandRunner
 
             target.Add(raw);
         }
+    }
+
+    private static bool ValidateCsvBounds(
+        string source,
+        string value,
+        int maxLength,
+        int maxEntries,
+        ref string? parseError)
+    {
+        if (value.Length > maxLength)
+        {
+            parseError ??= $"{source} value is too long ({value.Length} characters; max {maxLength})";
+            return false;
+        }
+
+        var entries = CountCsvEntries(value);
+        if (entries > maxEntries)
+        {
+            parseError ??= $"{source} accepts at most {maxEntries} comma-separated entries";
+            return false;
+        }
+
+        return true;
+    }
+
+    private static int CountCsvEntries(string value)
+    {
+        if (value.Length == 0)
+            return 0;
+
+        var count = 1;
+        foreach (var ch in value)
+        {
+            if (ch == ',')
+                count++;
+        }
+
+        return count;
     }
 
     internal static int DefaultIndexParallelism()

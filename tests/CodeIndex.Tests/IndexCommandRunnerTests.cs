@@ -599,6 +599,43 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void ParseArgs_SymbolKindFilterRejectsOverlongCsv_Issue2906()
+    {
+        var tooLong = new string('c', IndexCommandRunner.MaxSymbolKindFilterCsvLength + 1);
+
+        var options = IndexCommandRunner.ParseArgs([".", "--include-symbol-kind", tooLong]);
+
+        Assert.Contains("--include-symbol-kind value is too long", options.SymbolKindFilter.ParseError);
+        Assert.Empty(options.SymbolKindFilter.Include);
+    }
+
+    [Fact]
+    public void ParseArgs_SymbolKindFilterRejectsTooManyCsvEntries_Issue2906()
+    {
+        var tooMany = string.Join(',', Enumerable.Repeat("class", IndexCommandRunner.MaxSymbolKindFilterCsvEntries + 1));
+
+        var options = IndexCommandRunner.ParseArgs([".", "--exclude-symbol-kind", tooMany]);
+
+        Assert.Contains("--exclude-symbol-kind accepts at most", options.SymbolKindFilter.ParseError);
+        Assert.Empty(options.SymbolKindFilter.Exclude);
+    }
+
+    [Fact]
+    public void ParseArgs_SymbolKindEnvironmentFilterRejectsTooManyCsvEntries_Issue2906()
+    {
+        using var env = EnvironmentVariableScope.Capture(IndexCommandRunner.IncludeSymbolKindsEnvironmentVariable);
+        Environment.SetEnvironmentVariable(
+            IndexCommandRunner.IncludeSymbolKindsEnvironmentVariable,
+            string.Join(',', Enumerable.Repeat("function", IndexCommandRunner.MaxSymbolKindFilterCsvEntries + 1)));
+
+        var options = IndexCommandRunner.ParseArgs(["."]);
+
+        Assert.Contains(IndexCommandRunner.IncludeSymbolKindsEnvironmentVariable, options.SymbolKindFilter.ParseError);
+        Assert.Contains("accepts at most", options.SymbolKindFilter.ParseError);
+        Assert.Empty(options.SymbolKindFilter.Include);
+    }
+
+    [Fact]
     public void ParseArgs_SymbolKindCliFilters_ReplaceEnvironmentDefaults()
     {
         lock (TestConsoleLock.Gate)
