@@ -907,7 +907,7 @@ public class DbContext : IDisposable
                 SqlNameResolver.AllowLeafFallbackAtColumn(symbolName, context, containerName, ToNullableInt(columnNumber)) ? 1 : 0);
     }
 
-    private static int CountCSharpIdentifierOccurrences(string? text, string? identifier)
+    internal static int CountCSharpIdentifierOccurrences(string? text, string? identifier)
     {
         if (string.IsNullOrEmpty(text) || string.IsNullOrEmpty(identifier))
             return 0;

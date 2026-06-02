@@ -37,6 +37,14 @@ public static class QueryCommandRunner
     // OR 結合の `symbols` 名は SQLite の式木深さ上限 1000 を十分下回る値で頭打ちにし、
     // 大量バッチを SQLite 例外ではなく明確な usage error で早期に弾く。
     internal const int MaxSymbolQueryNames = 256;
+    internal const int MaxMapSectionsCsvLength = 256;
+    internal const int MaxMapSectionsCsvEntries = 16;
+    internal const int MaxStatusCheckScopesCsvLength = 256;
+    internal const int MaxStatusCheckScopesCsvEntries = 16;
+    internal const int MaxVisibilityFilterCsvLength = 256;
+    internal const int MaxVisibilityFilterCsvEntries = 16;
+    internal const int MaxQueryPathFilterCount = 128;
+    internal const int MaxQueryPathFilterLength = 1024;
     internal const int ExactZeroHintProbeLimit = 1;
     internal const int ExactZeroHintSampleLimit = 5;
     private const string HotspotsGroupedByNameKind = "name_kind";
@@ -5002,6 +5010,8 @@ public static class QueryCommandRunner
                 AddParseError("Error: --check scope list cannot be empty. Use --check or --check=workspace,fold,graph,issues,hotspot,csharp,sql,newer.");
                 return;
             }
+            if (!ValidateCsvBounds("--check", rawScopes, MaxStatusCheckScopesCsvLength, MaxStatusCheckScopesCsvEntries, AddParseError))
+                return;
 
             statusCheckScopes ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var rawScope in rawScopes.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
@@ -5753,6 +5763,9 @@ public static class QueryCommandRunner
     private static List<string> ParseMapSections(string rawValue, Action<string> addParseError)
     {
         var sections = new List<string>();
+        if (!ValidateCsvBounds("--sections", rawValue, MaxMapSectionsCsvLength, MaxMapSectionsCsvEntries, addParseError))
+            return sections;
+
         foreach (var rawSection in rawValue.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
             var section = rawSection.ToLowerInvariant();
@@ -5778,15 +5791,71 @@ public static class QueryCommandRunner
         return sections.Distinct(StringComparer.Ordinal).ToList();
     }
 
+    private static bool ValidateCsvBounds(
+        string optionName,
+        string rawValue,
+        int maxLength,
+        int maxEntries,
+        Action<string> addParseError)
+    {
+        if (rawValue.Length > maxLength)
+        {
+            addParseError($"Error: {optionName} value is too long ({rawValue.Length} characters; max {maxLength}).");
+            return false;
+        }
+
+        var entries = CountCsvEntries(rawValue);
+        if (entries > maxEntries)
+        {
+            addParseError($"Error: {optionName} accepts at most {maxEntries} comma-separated entries.");
+            return false;
+        }
+
+        return true;
+    }
+
+    private static int CountCsvEntries(string rawValue)
+    {
+        if (rawValue.Length == 0)
+            return 0;
+
+        var count = 1;
+        foreach (var ch in rawValue)
+        {
+            if (ch == ',')
+                count++;
+        }
+
+        return count;
+    }
+
     private static void ValidateQueryPathOptionValues(
         IReadOnlyList<string> pathPatterns,
         IReadOnlyList<string> excludePaths,
         Action<string> addParseError)
     {
-        foreach (var pattern in pathPatterns)
-            ValidatePathGlobPattern("--path", pattern, addParseError);
-        foreach (var pattern in excludePaths)
-            ValidatePathGlobPattern("--exclude-path", pattern, addParseError);
+        ValidatePathOptionValues("--path", pathPatterns, addParseError);
+        ValidatePathOptionValues("--exclude-path", excludePaths, addParseError);
+    }
+
+    private static void ValidatePathOptionValues(
+        string optionName,
+        IReadOnlyList<string> patterns,
+        Action<string> addParseError)
+    {
+        if (patterns.Count > MaxQueryPathFilterCount)
+            addParseError($"Error: {optionName} accepts at most {MaxQueryPathFilterCount} values.");
+
+        foreach (var pattern in patterns)
+        {
+            if (pattern.Length > MaxQueryPathFilterLength)
+            {
+                addParseError($"Error: {optionName} value is too long ({pattern.Length} characters; max {MaxQueryPathFilterLength}).");
+                continue;
+            }
+
+            ValidatePathGlobPattern(optionName, pattern, addParseError);
+        }
     }
 
     private static bool TryParseJsonOutputFormat(string rawValue, out string format)
@@ -6511,6 +6580,9 @@ public static class QueryCommandRunner
 
     private static void AddVisibilityFilterValues(string optionName, string rawValue, List<string> target, Action<string> addParseError)
     {
+        if (!ValidateCsvBounds(optionName, rawValue, MaxVisibilityFilterCsvLength, MaxVisibilityFilterCsvEntries, addParseError))
+            return;
+
         var values = rawValue
             .Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
             .Select(value => value.ToLowerInvariant())

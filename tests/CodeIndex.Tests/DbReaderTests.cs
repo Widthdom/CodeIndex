@@ -13854,6 +13854,93 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetUnusedSymbols_NonSqlScope_FiltersReferencedPrivateSymbolsBeforeLimit()
+    {
+        const string path = "src/fast_unused_limit_fixture.cs";
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = path,
+            Lang = "csharp",
+            Size = 4096,
+            Lines = 80,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+
+        var content = new StringBuilder();
+        var symbols = new List<SymbolRecord>();
+        var references = new List<ReferenceRecord>();
+        for (var i = 0; i < 64; i++)
+        {
+            var name = $"UsedBeforeLimit{i:D2}";
+            var line = i + 1;
+            content.AppendLine($"    private void {name}() {{ }}");
+            symbols.Add(new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = name,
+                Line = line,
+                StartLine = line,
+                EndLine = line,
+                Signature = $"private void {name}() {{ }}",
+                Visibility = "private",
+                ContainerKind = "class",
+                ContainerName = "FastUnusedLimitFixture",
+            });
+            references.Add(new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = name,
+                ReferenceKind = "call",
+                Line = line,
+                Column = 17,
+                Context = $"{name}();",
+                ContainerKind = "class",
+                ContainerName = "FastUnusedLimitFixture",
+            });
+        }
+
+        content.AppendLine("    private void HiddenUnusedAfterReferencedPrefix() { }");
+        symbols.Add(new SymbolRecord
+        {
+            FileId = fileId,
+            Kind = "function",
+            Name = "HiddenUnusedAfterReferencedPrefix",
+            Line = 65,
+            StartLine = 65,
+            EndLine = 65,
+            Signature = "private void HiddenUnusedAfterReferencedPrefix() { }",
+            Visibility = "private",
+            ContainerKind = "class",
+            ContainerName = "FastUnusedLimitFixture",
+        });
+
+        _writer.InsertChunks([
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 65,
+                Content = content.ToString(),
+            }
+        ]);
+        _writer.InsertSymbols(symbols);
+        _writer.InsertReferences(references);
+
+        var unused = _reader.GetUnusedSymbols(limit: 1, kind: null, lang: "csharp",
+            pathPatterns: ["fast_unused_limit_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+        var count = _reader.CountUnusedSymbols(kind: null, lang: "csharp",
+            pathPatterns: ["fast_unused_limit_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+
+        var result = Assert.Single(unused);
+        Assert.Equal("HiddenUnusedAfterReferencedPrefix", result.Name);
+        Assert.Equal("likely_unused_private", result.UnusedBucket);
+        Assert.Equal(1, count.Count);
+        Assert.Equal(1, count.FileCount);
+    }
+
+    [Fact]
     public void GetUnusedSymbols_PlainCliOptionsProperties_StayInPublicBucket()
     {
         var fileId = _writer.UpsertFile(new FileRecord

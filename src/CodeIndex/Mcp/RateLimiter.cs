@@ -201,6 +201,8 @@ internal sealed class RateLimiterOptions
     internal const string RpsEnvVar = "CDIDX_MCP_RATE_LIMIT_RPS";
     internal const string BurstEnvVar = "CDIDX_MCP_RATE_LIMIT_BURST";
     internal const string BucketIdleSecondsEnvVar = "CDIDX_MCP_RATE_LIMIT_BUCKET_IDLE_SECONDS";
+    internal const double MaxRefillTokensPerSecond = 100.0;
+    internal const double MaxBurstCapacity = 1000.0;
 
     public double RefillTokensPerSecond { get; init; }
     public double BurstCapacity { get; init; }
@@ -223,6 +225,11 @@ internal sealed class RateLimiterOptions
             warningSink($"[cdidx-mcp] Ignoring invalid {RpsEnvVar}='{rpsRaw}'. Expected a positive number (tokens per second). Rate limiting stays disabled.");
             return Disabled;
         }
+        if (rps > MaxRefillTokensPerSecond)
+        {
+            warningSink($"[cdidx-mcp] Clamping {RpsEnvVar}='{rpsRaw}' to maximum {MaxRefillTokensPerSecond.ToString(CultureInfo.InvariantCulture)} tokens per second.");
+            rps = MaxRefillTokensPerSecond;
+        }
 
         var burstRaw = envReader(BurstEnvVar);
         double burst;
@@ -238,6 +245,11 @@ internal sealed class RateLimiterOptions
         {
             warningSink($"[cdidx-mcp] Ignoring invalid {BurstEnvVar}='{burstRaw}'. Expected a positive number (bucket capacity). Falling back to default burst.");
             burst = Math.Max(rps, 1.0);
+        }
+        else if (burst > MaxBurstCapacity)
+        {
+            warningSink($"[cdidx-mcp] Clamping {BurstEnvVar}='{burstRaw}' to maximum {MaxBurstCapacity.ToString(CultureInfo.InvariantCulture)} tokens.");
+            burst = MaxBurstCapacity;
         }
 
         var bucketIdleTtl = DefaultBucketIdleTtl;
