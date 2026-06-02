@@ -27,6 +27,60 @@ public class DbContext : IDisposable
         "chunks",
         "symbols",
     ];
+    private static readonly string[] ReadMigrationRequiredTables =
+    [
+        "reference_lines",
+        "symbol_references",
+        "file_issues",
+        "codeindex_meta",
+    ];
+    private static readonly (string Table, string Column)[] ReadMigrationRequiredColumns =
+    [
+        ("symbol_references", "reference_line_id"),
+        ("symbol_references", "is_self_reference"),
+        ("symbol_references", "is_mutual_recursion"),
+        ("symbol_references", "symbol_name_folded"),
+        ("symbol_references", "container_name_folded"),
+        ("files", "checksum"),
+        ("files", "modified"),
+        ("files", "indexed_at"),
+        ("symbols", "start_line"),
+        ("symbols", "end_line"),
+        ("symbols", "body_start_line"),
+        ("symbols", "body_end_line"),
+        ("symbols", "signature"),
+        ("symbols", "container_kind"),
+        ("symbols", "container_name"),
+        ("symbols", "container_qualified_name"),
+        ("symbols", "family_key"),
+        ("symbols", "visibility"),
+        ("symbols", "return_type"),
+        ("symbols", "is_metadata_target"),
+        ("symbols", "name_folded"),
+    ];
+    private static readonly string[] ReadMigrationRequiredIndexes =
+    [
+        "idx_symbol_refs_name",
+        "idx_symbol_refs_file",
+        "idx_symbol_refs_container",
+        "idx_symbol_refs_container_kind",
+        "idx_symbol_refs_name_kind",
+        "idx_symbol_refs_name_file",
+        "idx_reference_lines_file_line",
+        "idx_symbol_refs_reference_line",
+        "idx_symbol_refs_name_nocase",
+        "idx_symbol_refs_container_nocase",
+        "idx_symbol_refs_name_nocase_kind",
+        "idx_symbol_refs_name_nocase_file",
+        "idx_symbol_refs_container_nocase_kind",
+        "idx_symbols_name_nocase",
+        "idx_symbols_name_folded",
+        "idx_symbol_refs_symbol_name_folded",
+        "idx_symbol_refs_container_name_folded",
+        "idx_symbol_refs_symbol_name_folded_kind",
+        "idx_symbol_refs_symbol_name_folded_file",
+        "idx_symbol_refs_container_name_folded_kind",
+    ];
 
     private SqliteConnection _connection = null!;
     private bool _isReadOnly;
@@ -2183,6 +2237,8 @@ public class DbContext : IDisposable
         if (_isReadOnly) return;
 
         LastMigrationFailure = null;
+        if (ReadMigrationSchemaIsCurrent())
+            return;
 
         try
         {
@@ -2412,6 +2468,29 @@ public class DbContext : IDisposable
             )"));
     }
 
+    private bool ReadMigrationSchemaIsCurrent()
+    {
+        foreach (var table in ReadMigrationRequiredTables)
+        {
+            if (!TableExists(table))
+                return false;
+        }
+
+        foreach (var (table, column) in ReadMigrationRequiredColumns)
+        {
+            if (!ColumnExists(table, column))
+                return false;
+        }
+
+        foreach (var index in ReadMigrationRequiredIndexes)
+        {
+            if (!IndexExists(index))
+                return false;
+        }
+
+        return true;
+    }
+
     private string BuildMigrationSuggestedAction(int sqliteErrorCode)
     {
         // 8 = SQLITE_READONLY, 10 = SQLITE_IOERR, 14 = SQLITE_CANTOPEN: classic restricted-
@@ -2490,6 +2569,16 @@ public class DbContext : IDisposable
                 return true;
         }
         return false;
+    }
+
+    private bool IndexExists(string name)
+    {
+        using var cmd = _connection.CreateCommand();
+        if (_activeMigrationTransaction != null)
+            cmd.Transaction = _activeMigrationTransaction;
+        cmd.CommandText = "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = @name";
+        cmd.Parameters.AddWithValue("@name", name);
+        return cmd.ExecuteScalar() != null;
     }
 
     private string ExecuteScalar(string sql)
