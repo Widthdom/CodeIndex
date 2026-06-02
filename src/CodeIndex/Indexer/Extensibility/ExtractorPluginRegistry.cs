@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Runtime.Loader;
 using System.Text;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Microsoft.Win32.SafeHandles;
 
@@ -21,6 +22,12 @@ public static class ExtractorPluginRegistry
     private static readonly Dictionary<string, ISymbolExtractor> SymbolExtractors = new(StringComparer.Ordinal);
     private static readonly Dictionary<string, IReferenceExtractor> ReferenceExtractors = new(StringComparer.Ordinal);
     private static readonly HashSet<string> LoadedPatternConfigPaths = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly List<ExtractorRegistryDiagnostic> Diagnostics = [];
+    private const int DiagnosticLimit = 20;
+    private static int pluginAssemblyCount;
+    private static int patternConfigCount;
+    private static int skippedFileCount;
+    private static int diagnosticTotalCount;
     private static int loadedPatternRuleCount;
     private static bool pluginsLoaded;
 
@@ -73,6 +80,26 @@ public static class ExtractorPluginRegistry
             return ReferenceExtractors.TryGetValue(language, out extractor!);
     }
 
+    internal static ExtractorRegistryStatus GetStatusSnapshot()
+    {
+        EnsurePluginsLoaded();
+        lock (Gate)
+        {
+            return new ExtractorRegistryStatus
+            {
+                PluginAssemblyCount = pluginAssemblyCount,
+                PatternConfigCount = patternConfigCount,
+                SymbolExtractorCount = SymbolExtractors.Count,
+                ReferenceExtractorCount = ReferenceExtractors.Count,
+                SkippedFileCount = skippedFileCount,
+                DiagnosticCount = diagnosticTotalCount,
+                DiagnosticLimit = DiagnosticLimit,
+                DiagnosticsTruncated = diagnosticTotalCount > Diagnostics.Count,
+                Diagnostics = Diagnostics.Count == 0 ? null : Diagnostics.ToList(),
+            };
+        }
+    }
+
     public static void Register(ISymbolExtractor extractor)
     {
         ArgumentNullException.ThrowIfNull(extractor);
@@ -96,6 +123,11 @@ public static class ExtractorPluginRegistry
             SymbolExtractors.Clear();
             ReferenceExtractors.Clear();
             LoadedPatternConfigPaths.Clear();
+            Diagnostics.Clear();
+            pluginAssemblyCount = 0;
+            patternConfigCount = 0;
+            skippedFileCount = 0;
+            diagnosticTotalCount = 0;
             loadedPatternRuleCount = 0;
             pluginsLoaded = true;
         }
@@ -108,6 +140,11 @@ public static class ExtractorPluginRegistry
             SymbolExtractors.Clear();
             ReferenceExtractors.Clear();
             LoadedPatternConfigPaths.Clear();
+            Diagnostics.Clear();
+            pluginAssemblyCount = 0;
+            patternConfigCount = 0;
+            skippedFileCount = 0;
+            diagnosticTotalCount = 0;
             loadedPatternRuleCount = 0;
             pluginsLoaded = false;
         }
@@ -349,7 +386,15 @@ public static class ExtractorPluginRegistry
             }
 
             if (language.Length > 0 && patterns.Count > 0)
+            {
                 Register(new ConfiguredSymbolExtractor(language, extensions, patterns));
+                lock (Gate)
+                    patternConfigCount++;
+            }
+            else
+            {
+                ReportPatternConfigSkipped(path, "missing language or regex patterns");
+            }
         }
         catch (Exception ex)
         {
@@ -358,10 +403,40 @@ public static class ExtractorPluginRegistry
     }
 
     private static void ReportPatternConfigRejected(string path, string reason)
-        => Console.Error.WriteLine($"[cdidx] Skipped pattern config '{path}': {reason}.");
+    {
+        Console.Error.WriteLine($"[cdidx] Skipped pattern config '{path}': {reason}.");
+        RecordDiagnostic(
+            "pattern",
+            path,
+            typeName: null,
+            severity: "error",
+            $"Pattern config skipped: {reason}",
+            countsAsSkippedFile: true);
+    }
+
+    private static void ReportPatternConfigSkipped(string path, string reason)
+    {
+        Console.Error.WriteLine($"[cdidx] Skipped pattern config '{path}': {reason}.");
+        RecordDiagnostic(
+            "pattern",
+            path,
+            typeName: null,
+            severity: "skipped",
+            $"Pattern config skipped: {reason}",
+            countsAsSkippedFile: true);
+    }
 
     private static void ReportPatternDirectoryRejected(string path, string reason)
-        => Console.Error.WriteLine($"[cdidx] Skipped pattern directory '{path}': {reason}.");
+    {
+        Console.Error.WriteLine($"[cdidx] Skipped pattern directory '{path}': {reason}.");
+        RecordDiagnostic(
+            "pattern_directory",
+            path,
+            typeName: null,
+            severity: "error",
+            $"Pattern directory skipped: {reason}",
+            countsAsSkippedFile: false);
+    }
 
     private static bool TryReservePatternRuleBudget(string path)
     {
@@ -648,30 +723,59 @@ public static class ExtractorPluginRegistry
 
     private static void TryLoadPlugin(string pluginPath)
     {
+        var fullPath = pluginPath;
         try
         {
-            var assembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(Path.GetFullPath(pluginPath));
+            fullPath = Path.GetFullPath(pluginPath);
+            var assembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(fullPath);
             var attribute = assembly.GetCustomAttribute<CdidxPluginAttribute>();
-            if (attribute == null
-                || attribute.MinApiVersion > CurrentApiVersion
-                || attribute.MaxApiVersion < CurrentApiVersion)
+            if (attribute == null)
             {
+                RecordDiagnostic(
+                    "plugin",
+                    fullPath,
+                    typeName: null,
+                    severity: "skipped",
+                    "Plugin assembly skipped: missing CdidxPluginAttribute.",
+                    countsAsSkippedFile: true);
                 return;
             }
+
+            if (attribute.MinApiVersion > CurrentApiVersion
+                || attribute.MaxApiVersion < CurrentApiVersion)
+            {
+                RecordDiagnostic(
+                    "plugin",
+                    fullPath,
+                    typeName: null,
+                    severity: "skipped",
+                    $"Plugin assembly skipped: API range {attribute.MinApiVersion}-{attribute.MaxApiVersion} does not include {CurrentApiVersion}.",
+                    countsAsSkippedFile: true);
+                return;
+            }
+
+            lock (Gate)
+                pluginAssemblyCount++;
 
             foreach (var type in assembly.GetTypes())
             {
                 if (type is { IsAbstract: false, IsInterface: false } && type.GetConstructor(Type.EmptyTypes) != null)
-                    TryRegisterPluginType(type);
+                    TryRegisterPluginType(type, fullPath);
             }
         }
-        catch
+        catch (Exception ex)
         {
-            // Plugin loading is best-effort so an incompatible DLL cannot prevent indexing.
+            RecordDiagnostic(
+                "plugin",
+                fullPath,
+                typeName: null,
+                severity: "error",
+                $"Failed to load plugin assembly: {ex.Message}",
+                countsAsSkippedFile: true);
         }
     }
 
-    private static void TryRegisterPluginType(Type type)
+    private static void TryRegisterPluginType(Type type, string pluginPath)
     {
         try
         {
@@ -687,9 +791,33 @@ public static class ExtractorPluginRegistry
                 Register(referenceExtractor);
             }
         }
-        catch
+        catch (Exception ex)
         {
-            // Ignore broken plugin types and continue loading the rest of the assembly.
+            RecordDiagnostic(
+                "plugin_type",
+                pluginPath,
+                type.FullName,
+                severity: "error",
+                $"Failed to instantiate plugin type: {ex.Message}",
+                countsAsSkippedFile: false);
+        }
+    }
+
+    private static void RecordDiagnostic(
+        string kind,
+        string path,
+        string? typeName,
+        string severity,
+        string message,
+        bool countsAsSkippedFile)
+    {
+        lock (Gate)
+        {
+            diagnosticTotalCount++;
+            if (countsAsSkippedFile)
+                skippedFileCount++;
+            if (Diagnostics.Count < DiagnosticLimit)
+                Diagnostics.Add(new ExtractorRegistryDiagnostic(kind, path, typeName, severity, message));
         }
     }
 
@@ -736,3 +864,32 @@ public static class ExtractorPluginRegistry
         return extension.StartsWith(".", StringComparison.Ordinal) ? extension : "." + extension;
     }
 }
+
+public sealed class ExtractorRegistryStatus
+{
+    [JsonPropertyName("plugin_assembly_count")]
+    public int PluginAssemblyCount { get; init; }
+    [JsonPropertyName("pattern_config_count")]
+    public int PatternConfigCount { get; init; }
+    [JsonPropertyName("symbol_extractor_count")]
+    public int SymbolExtractorCount { get; init; }
+    [JsonPropertyName("reference_extractor_count")]
+    public int ReferenceExtractorCount { get; init; }
+    [JsonPropertyName("skipped_file_count")]
+    public int SkippedFileCount { get; init; }
+    [JsonPropertyName("diagnostic_count")]
+    public int DiagnosticCount { get; init; }
+    [JsonPropertyName("diagnostic_limit")]
+    public int DiagnosticLimit { get; init; }
+    [JsonPropertyName("diagnostics_truncated")]
+    public bool DiagnosticsTruncated { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<ExtractorRegistryDiagnostic>? Diagnostics { get; init; }
+}
+
+public sealed record ExtractorRegistryDiagnostic(
+    [property: JsonPropertyName("kind")] string Kind,
+    [property: JsonPropertyName("path")] string Path,
+    [property: JsonPropertyName("type_name")] string? TypeName,
+    [property: JsonPropertyName("severity")] string Severity,
+    [property: JsonPropertyName("message")] string Message);
