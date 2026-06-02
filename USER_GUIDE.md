@@ -388,7 +388,8 @@ be audited whenever the matching help text changes.
 | Status stale-after hint | `24h`, overridden by `--stale-after`, `CDIDX_STALE_AFTER`, or `.cdidxrc.json` | status runner |
 | Color mode | `auto`, overridden by `--color`, `CLICOLOR_FORCE`, `NO_COLOR`, or `CLICOLOR=0` | `ConsoleUi` |
 | ANSI palette | `basic` fallback, auto-upgraded from terminal hints unless overridden | `ConsoleUi` |
-| Report log tail | `200` lines (`--log-lines`) | report runner help |
+| Report log tail | `200` lines (`--log-lines`), clamped to `2000` | report runner help |
+| Report per-log tail read | `1,048,576` bytes | `ReportCommandRunner` |
 | JSON envelope capture | `10,485,760` characters | `JsonEnvelopeWrapper` |
 | CLI batch line | `1,048,576` characters | `QueryCommandRunner` |
 | CLI batch arguments | `256` arguments after command name | `QueryCommandRunner` |
@@ -1099,7 +1100,7 @@ cdidx report --output report.tgz --json
 |---|---|---|
 | `--output <path>` / `-o <path>` | (required) | Destination `.tar.gz`. The directory is created if missing; on POSIX, the archive and tar entries are owner-readable/writable only. |
 | `--db <path>` | `.cdidx/codeindex.db` | Override the database whose schema is summarized. If absent, `schema.txt` records that no DB was found. |
-| `--log-lines <n>` | `200` | How many trailing lifecycle-log lines to include (`0` disables the tail). |
+| `--log-lines <n>` | `200` | How many trailing lifecycle-log lines to include (`0` disables the tail; values above `2000` are clamped). Each log file contributes from a bounded 1,048,576-byte tail window instead of being loaded fully. |
 | `--no-log` | | Skip the lifecycle log entirely. |
 | `--include-args` | | Keep literal `cwd=` and `args=` values in the log tail (opt-in; share only with trusted recipients). |
 | `--json` | | Print a stable summary envelope (`output_path`, `version`, `files`, `schema_tables`, `log_lines_included`, `log_included`, `db_included`, `db_path`) instead of the human-friendly output. |
@@ -2520,7 +2521,8 @@ render できます。
 | Status stale-after hint | `24h`。`--stale-after` / `CDIDX_STALE_AFTER` / `.cdidxrc.json` で上書き | status runner |
 | Color mode | `auto`。`--color` / `CLICOLOR_FORCE` / `NO_COLOR` / `CLICOLOR=0` で上書き | `ConsoleUi` |
 | ANSI palette | `basic` fallback。terminal hints で自動昇格、または明示上書き | `ConsoleUi` |
-| Report log tail | `200` lines（`--log-lines`） | report runner help |
+| Report log tail | `200` lines（`--log-lines`）、最大 `2000` に clamp | report runner help |
+| Report per-log tail read | `1,048,576` bytes | `ReportCommandRunner` |
 | JSON envelope capture | `10,485,760` 文字 | `JsonEnvelopeWrapper` |
 | CLI batch line | `1,048,576` 文字 | `QueryCommandRunner` |
 | CLI batch arguments | command 名の後ろに `256` 引数 | `QueryCommandRunner` |
@@ -3241,7 +3243,7 @@ cdidx report --output report.tgz --json
 |---|---|---|
 | `--output <path>` / `-o <path>` | （必須） | 出力先 `.tar.gz`。親ディレクトリが無ければ作成します。POSIX では archive と tar entry は owner の読み書きのみになります。 |
 | `--db <path>` | `.cdidx/codeindex.db` | スキーマ要約対象の DB を上書きします。存在しなければ `schema.txt` に「DB が見つからなかった」旨が記録されます。 |
-| `--log-lines <n>` | `200` | ライフサイクルログ末尾を何行含めるか（`0` で末尾を含めません）。 |
+| `--log-lines <n>` | `200` | ライフサイクルログ末尾を何行含めるか（`0` で末尾を含めません。`2000` を超える値は clamp されます）。各ログファイルは全体を読み込まず、末尾 1,048,576 byte の範囲から収集します。 |
 | `--no-log` | | ライフサイクルログを完全に省略します。 |
 | `--include-args` | | ログ末尾の `cwd=` / `args=` 値を伏字化せずそのまま含めます（信頼できる相手にだけ使用してください）。 |
 | `--json` | | 人間向け出力の代わりに、安定したサマリ JSON（`output_path` / `version` / `files` / `schema_tables` / `log_lines_included` / `log_included` / `db_included` / `db_path`）を出力します。 |
