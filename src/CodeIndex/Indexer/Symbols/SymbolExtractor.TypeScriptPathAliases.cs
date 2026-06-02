@@ -242,6 +242,8 @@ public static partial class SymbolExtractor
             }
 
             text = Encoding.UTF8.GetString(accumulator.ToArray());
+            if (text.Length > 0 && text[0] == '\uFEFF')
+                text = text[1..];
             return true;
         }
         catch (IOException)

@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using System.Collections;
 using System.Reflection;
+using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Text.Json;
 using CodeIndex.Indexer;
@@ -17783,6 +17785,40 @@ public partial class SymbolExtractorTests
                   }
                 }
                 """);
+            WriteFile(projectRoot, "src/components/Button.tsx", "export const Button = () => null;\n");
+            var sourcePath = WriteFile(projectRoot, "src/app/page.tsx", "import { Button } from \"@/components/Button\";\n");
+
+            var symbols = SymbolExtractor.Extract(1, "typescript", File.ReadAllText(sourcePath), sourcePath);
+
+            Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "src/components/Button.tsx");
+            Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "@/components/Button");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Extract_TypeScript_BomPrefixedTsconfigResolvesPathAliasImports()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("tsconfig_alias_bom_symbols");
+        try
+        {
+            var tsconfigPath = Path.Combine(projectRoot, "tsconfig.json");
+            File.WriteAllText(
+                tsconfigPath,
+                """
+                {
+                  "compilerOptions": {
+                    "baseUrl": ".",
+                    "paths": {
+                      "@/*": ["src/*"]
+                    }
+                  }
+                }
+                """,
+                new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
             WriteFile(projectRoot, "src/components/Button.tsx", "export const Button = () => null;\n");
             var sourcePath = WriteFile(projectRoot, "src/app/page.tsx", "import { Button } from \"@/components/Button\";\n");
 
