@@ -508,8 +508,9 @@ public static class DbPathResolver
         {
             try
             {
-                var absolutePath = Path.Combine(candidateRoot, sample.RelativePath.Replace('/', Path.DirectorySeparatorChar));
-                var ioPath = LongPath.EnsureWindowsPrefix(absolutePath);
+                if (!TryResolveIndexedFileSampleIoPath(candidateRoot, sample.RelativePath, out var ioPath))
+                    continue;
+
                 if (!File.Exists(ioPath))
                     continue;
 
@@ -531,6 +532,47 @@ public static class DbPathResolver
 
         return new SampleMatchResult(checksumMatches, pathExistsMatches);
     }
+
+    internal static bool TryResolveIndexedFileSampleIoPath(string candidateRoot, string sampleRelativePath, out string ioPath)
+    {
+        ioPath = string.Empty;
+        if (string.IsNullOrWhiteSpace(sampleRelativePath) || IsRootedOrAbsoluteLikeSamplePath(sampleRelativePath))
+            return false;
+
+        try
+        {
+            var normalizedRoot = Path.GetFullPath(candidateRoot);
+            var relativePath = sampleRelativePath
+                .Replace('/', Path.DirectorySeparatorChar)
+                .Replace('\\', Path.DirectorySeparatorChar);
+            var absolutePath = Path.GetFullPath(Path.Combine(normalizedRoot, relativePath));
+            if (!IsUnderDirectory(normalizedRoot, absolutePath))
+                return false;
+
+            ioPath = LongPath.EnsureWindowsPrefix(absolutePath);
+            return true;
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsRootedOrAbsoluteLikeSamplePath(string samplePath)
+    {
+        if (Path.IsPathRooted(samplePath))
+            return true;
+
+        if (samplePath.StartsWith("/", StringComparison.Ordinal) || samplePath.StartsWith("\\", StringComparison.Ordinal))
+            return true;
+
+        return samplePath.Length >= 2
+            && IsAsciiLetter(samplePath[0])
+            && samplePath[1] == ':';
+    }
+
+    private static bool IsAsciiLetter(char value)
+        => value is >= 'a' and <= 'z' or >= 'A' and <= 'Z';
 
     private readonly record struct SampleMatchResult(int ChecksumMatches, int PathExistsMatches);
     private sealed record IndexedFileSample(string RelativePath, string Checksum);
