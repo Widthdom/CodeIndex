@@ -6962,6 +6962,52 @@ public class McpServerTests : IDisposable
         Assert.True(response["result"]!["isError"]!.GetValue<bool>());
     }
 
+    [Theory]
+    [InlineData("db")]
+    [InlineData("parallelism")]
+    [InlineData("files")]
+    [InlineData("commits")]
+    [InlineData("changedBetween")]
+    [InlineData("dryRun")]
+    [InlineData("optimize")]
+    public void ToolsCall_Index_RejectsUnsupportedArguments_Issue2848(string argumentName)
+    {
+        var arguments = new JsonObject
+        {
+            ["path"] = ".",
+            [argumentName] = argumentName switch
+            {
+                "db" => JsonValue.Create("alternate.db"),
+                "parallelism" => JsonValue.Create(2),
+                "files" => new JsonArray(JsonValue.Create("src/app.cs")),
+                "commits" => new JsonArray(JsonValue.Create("HEAD")),
+                "changedBetween" => new JsonArray(JsonValue.Create("HEAD~1"), JsonValue.Create("HEAD")),
+                "dryRun" => JsonValue.Create(true),
+                "optimize" => JsonValue.Create(true),
+                _ => throw new ArgumentOutOfRangeException(nameof(argumentName), argumentName, null),
+            },
+        };
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "index",
+                ["arguments"] = arguments,
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+        var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains($"Unknown argument '{argumentName}' for tool 'index'.", text);
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(argumentName, structured["unknown_argument"]!.GetValue<string>());
+    }
+
     [Fact]
     public void ToolsCall_Index_WhenDbLockHeld_ReturnsBusyError()
     {

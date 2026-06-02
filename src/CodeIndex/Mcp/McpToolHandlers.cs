@@ -632,7 +632,7 @@ public partial class McpServer
         "validate" => new HashSet<string>(StringComparer.Ordinal) { "path", "lang", "limit", "excludePaths", "excludeTests", "project", "solution" },
         "unused_symbols" => new HashSet<string>(StringComparer.Ordinal) { "kind", "lang", "limit", "path", "excludePaths", "excludeTests", "project", "solution" },
         "symbol_hotspots" => new HashSet<string>(StringComparer.Ordinal) { "kind", "lang", "limit", "groupBy", "path", "excludePaths", "excludeTests", "project", "solution" },
-        "index" => new HashSet<string>(StringComparer.Ordinal) { "path", "db", "rebuild", "parallelism", "maxFileBytes", "files", "commits", "changedBetween", "dryRun", "optimize" },
+        "index" => new HashSet<string>(StringComparer.Ordinal) { "path", "rebuild", "maxFileBytes" },
         "backfill_fold" => new HashSet<string>(StringComparer.Ordinal) { "dry_run", "dryRun", "force" },
         "suggest_improvement" => new HashSet<string>(StringComparer.Ordinal) { "category", "language", "description", "context", "toolInvocationContext", "evidencePaths", "evidence_paths" },
         _ => new HashSet<string>(StringComparer.Ordinal),
