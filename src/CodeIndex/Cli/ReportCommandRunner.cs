@@ -169,8 +169,8 @@ public static class ReportCommandRunner
         {
             sb.AppendLine("- `log/stderr-recent.log` — last N lines of the cdidx lifecycle log");
             sb.AppendLine(includeArgs
-                ? "  (includes literal `args=` lines; rerun without `--include-args` to redact them)."
-                : "  (`args=` lines are redacted; rerun with `--include-args` to keep them literal).");
+                ? "  (includes literal `args=` lines; path-bearing lifecycle fields stay redacted)."
+                : "  (`args=` and path-bearing lifecycle fields are redacted; rerun with `--include-args` to keep arguments literal).");
         }
         else
         {
@@ -180,6 +180,7 @@ public static class ReportCommandRunner
         sb.AppendLine("## Redactions");
         sb.AppendLine();
         sb.AppendLine("- Indexed source content, file paths, query strings, and `args=` lines are not included by default.");
+        sb.AppendLine("- Path-bearing lifecycle fields such as `process_path=`, `base_dir=`, `cwd=`, `db=`, and `path=` are redacted by default.");
         sb.AppendLine("- Schema reporting only emits table names and integer row counts.");
         return sb.ToString();
     }
@@ -277,7 +278,7 @@ public static class ReportCommandRunner
         sb.AppendLine();
         foreach (var line in collected)
         {
-            sb.AppendLine(includeArgs ? line : RedactSensitiveFields(line));
+            sb.AppendLine(includeArgs ? RedactPathFields(line) : RedactSensitiveFields(line));
         }
         linesIncluded = collected.Count;
         return sb.ToString();
@@ -286,7 +287,16 @@ public static class ReportCommandRunner
     internal static string RedactSensitiveFields(string line)
     {
         var redacted = RedactKeyValue(line, "args=");
-        redacted = RedactKeyValue(redacted, "cwd=");
+        return RedactPathFields(redacted);
+    }
+
+    private static string RedactPathFields(string line)
+    {
+        var redacted = RedactKeyValue(line, "cwd=");
+        redacted = RedactKeyValue(redacted, "process_path=");
+        redacted = RedactKeyValue(redacted, "base_dir=");
+        redacted = RedactKeyValue(redacted, "db=");
+        redacted = RedactKeyValue(redacted, "path=");
         return redacted;
     }
 
