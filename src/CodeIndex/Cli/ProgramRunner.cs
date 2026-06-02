@@ -17,6 +17,7 @@ namespace CodeIndex.Cli;
 internal static class ProgramRunner
 {
     internal const string QuietEnvironmentVariable = "CDIDX_QUIET";
+    private const string InstallerScriptUrlTemplate = "https://raw.githubusercontent.com/Widthdom/CodeIndex/{0}/install.sh";
     internal static TimeProvider TimeProvider { get; set; } = TimeProvider.System;
 
     internal static int Run(
@@ -2176,7 +2177,7 @@ internal static class ProgramRunner
         {
             using (var client = new HttpClient { Timeout = TimeSpan.FromSeconds(20) })
             {
-                var script = client.GetStringAsync("https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh")
+                var script = client.GetStringAsync(BuildInstallerScriptUrl(result.LatestVersion))
                     .GetAwaiter()
                     .GetResult();
                 File.WriteAllText(scriptPath, script);
@@ -2207,6 +2208,12 @@ internal static class ProgramRunner
             try { File.Delete(scriptPath); } catch { }
         }
     }
+
+    internal static string BuildInstallerScriptUrl(string releaseTag)
+        => string.Format(
+            CultureInfo.InvariantCulture,
+            InstallerScriptUrlTemplate,
+            Uri.EscapeDataString(releaseTag.Trim()));
 
     private static bool CanWriteDirectory(string directory)
     {

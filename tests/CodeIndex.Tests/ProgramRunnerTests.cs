@@ -306,6 +306,14 @@ public class ProgramRunnerTests
     }
 
     [Theory]
+    [InlineData("v1.26.0", "https://raw.githubusercontent.com/Widthdom/CodeIndex/v1.26.0/install.sh")]
+    [InlineData(" release/test ", "https://raw.githubusercontent.com/Widthdom/CodeIndex/release%2Ftest/install.sh")]
+    public void BuildInstallerScriptUrl_UsesResolvedReleaseTag(string releaseTag, string expected)
+    {
+        Assert.Equal(expected, ProgramRunner.BuildInstallerScriptUrl(releaseTag));
+    }
+
+    [Theory]
     [InlineData("~/cdidx-logs", "cdidx-logs")]
     [InlineData("$HOME/cdidx-logs", "cdidx-logs")]
     [InlineData("${HOME}/cdidx-logs", "cdidx-logs")]

@@ -172,7 +172,7 @@ downgrading `cdidx`.
 
 ### Upgrade and uninstall
 
-`cdidx upgrade --check-only` reports whether a newer GitHub release is available. `cdidx upgrade` downloads the current `install.sh`, refuses unwritable install directories, and reruns the installer with `CDIDX_INSTALL_DIR` pointed at the current binary directory.
+`cdidx upgrade --check-only` reports whether a newer GitHub release is available. `cdidx upgrade` downloads `install.sh` from the resolved release tag, refuses unwritable install directories, and reruns the installer with `CDIDX_INSTALL_DIR` pointed at the current binary directory.
 
 Direct `install.sh` installs can be removed with:
 
