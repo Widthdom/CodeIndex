@@ -154,7 +154,7 @@ public sealed class ChangelogTool
 {
     public const int MaxFragmentCount = 512;
     public const long MaxFragmentBytes = 128 * 1024;
-    public const long MaxChangelogBytes = 2 * 1024 * 1024;
+    public const long MaxChangelogBytes = 8 * 1024 * 1024;
     public const long MaxVersionJsonBytes = 16 * 1024;
     internal static Action<PrepareWritePhase>? PrepareWritePhaseForTesting { get; set; }
 

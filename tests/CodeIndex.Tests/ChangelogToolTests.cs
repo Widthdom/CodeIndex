@@ -376,6 +376,17 @@ public sealed class ChangelogToolTests
     }
 
     [Fact]
+    public void ConfiguredChangelogLimitFitsRepositoryChangelog()
+    {
+        var repositoryRoot = FindRepositoryRootForTest();
+        var changelogLength = new FileInfo(Path.Combine(repositoryRoot, "CHANGELOG.md")).Length;
+
+        Assert.True(
+            changelogLength <= ChangelogTool.MaxChangelogBytes,
+            $"CHANGELOG.md is {changelogLength} bytes, but MaxChangelogBytes is {ChangelogTool.MaxChangelogBytes}.");
+    }
+
+    [Fact]
     public void PrepareRejectsOversizedVersionBeforeParsing()
     {
         using var scope = new TestRepositoryScope();
@@ -402,6 +413,23 @@ public sealed class ChangelogToolTests
     }
 
     private static string OversizedContent(long maxBytes) => new('x', checked((int)maxBytes + 1));
+
+    private static string FindRepositoryRootForTest()
+    {
+        var current = new DirectoryInfo(AppContext.BaseDirectory);
+        while (current is not null)
+        {
+            if (File.Exists(Path.Combine(current.FullName, "CHANGELOG.md")) &&
+                File.Exists(Path.Combine(current.FullName, "CodeIndex.sln")))
+            {
+                return current.FullName;
+            }
+
+            current = current.Parent;
+        }
+
+        throw new InvalidOperationException("Could not locate repository root.");
+    }
 
     private sealed class TestRepositoryScope : IDisposable
     {

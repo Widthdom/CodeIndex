@@ -44,7 +44,7 @@ field entirely instead.
 
 The validator and release preparation tool reject oversized inputs before
 parsing: at most 512 unreleased fragments, each fragment at most 131072 bytes,
-`CHANGELOG.md` at most 2097152 bytes, and `version.json` at most 16384 bytes.
+`CHANGELOG.md` at most 8388608 bytes, and `version.json` at most 16384 bytes.
 
 ## Template
 
