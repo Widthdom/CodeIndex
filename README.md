@@ -227,7 +227,8 @@ For MCP `status`, `mcp_session` is session-scoped diagnostic data rather than pe
 
 Hotspot-family readiness is tracked by per-language
 `hotspot_family_version_<lang>` metadata introduced with hotspot-family contract
-version 2.
+version 2. When this readiness is degraded, use
+`cdidx index <projectPath> --rebuild` so unchanged rows are restamped too.
 
 ## Documentation
 
@@ -490,7 +491,8 @@ MCP `status` の `mcp_session` は永続化された index 状態ではなく、
 | `hotspot_family_disabled_at_index_time` | marker fingerprint が利用できない状態で書かれた index。 |
 
 hotspot-family readiness は、hotspot-family contract version 2 で導入された
-言語別 `hotspot_family_version_<lang>` metadata で追跡されます。
+言語別 `hotspot_family_version_<lang>` metadata で追跡されます。degraded の場合は
+unchanged row も restamp するため `cdidx index <projectPath> --rebuild` を使います。
 
 ## ドキュメント
 

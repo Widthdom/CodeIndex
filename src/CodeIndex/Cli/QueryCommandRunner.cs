@@ -149,7 +149,7 @@ public static class QueryCommandRunner
             "Hotspot family contract",
             "cross-file hotspot family grouping is stamped for all supported languages in this index.",
             "cross-file hotspot grouping may be degraded for one or more languages.",
-            "Run `cdidx index <projectPath>` to restamp authoritative hotspot families."),
+            "Run `cdidx index <projectPath> --rebuild` to restamp authoritative hotspot families for every indexed row."),
         new(
             "csharp_symbol_name_ready",
             "C# symbol-name contract",
@@ -7150,6 +7150,7 @@ public static class QueryCommandRunner
         => fieldName switch
         {
             "sql_graph_contract_ready" => $"Run `{BuildSqlGraphContractRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit)}` before trusting SQL references/callers/deps/unused/hotspots.",
+            "hotspot_family_ready" => $"Run `{BuildHotspotFamilyRebuildRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit)}` to restamp authoritative hotspot families for every indexed row.",
             "csharp_symbol_name_ready" => $"Run `{BuildCSharpCanonicalNameRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit)}` to upgrade canonical C# symbol names in place.",
             "fold_ready" => $"Run `{BuildFoldBackfillCommand(options.DbPath, options.DbPathExplicit)}` to restamp folded-name columns in place, or `{BuildFoldRebuildRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit)}` for a full rebuild.",
             "csharp_metadata_target_ready" => DegradationReasonCodes.GetMetadata(status.CSharpMetadataTargetDegradedReason ?? DegradationReasonCodes.CSharpMetadataTargetNotReady).RecommendedAction,
@@ -7211,6 +7212,7 @@ public static class QueryCommandRunner
             {
                 "fold_ready" => BuildFoldBackfillCommand(options.DbPath, options.DbPathExplicit),
                 "sql_graph_contract_ready" => BuildSqlGraphContractRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit),
+                "hotspot_family_ready" => BuildHotspotFamilyRebuildRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit),
                 "csharp_symbol_name_ready" => BuildCSharpCanonicalNameRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit),
                 _ => metadata.RecommendedAction,
             },
@@ -7439,6 +7441,9 @@ public static class QueryCommandRunner
 
     private static string BuildSqlGraphContractRepairCommand(string? projectRoot, string dbPath, bool dbPathExplicit)
         => BuildReindexRepairCommand(projectRoot, dbPath, dbPathExplicit);
+
+    private static string BuildHotspotFamilyRebuildRepairCommand(string? projectRoot, string dbPath, bool dbPathExplicit)
+        => BuildReindexRepairCommand(projectRoot, dbPath, dbPathExplicit, rebuild: true);
 
     private static string BuildFoldRebuildRepairCommand(string? projectRoot, string dbPath, bool dbPathExplicit)
         => BuildReindexRepairCommand(projectRoot, dbPath, dbPathExplicit, rebuild: true);

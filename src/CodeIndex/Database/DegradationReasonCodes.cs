@@ -74,10 +74,10 @@ public static class DegradationReasonCodes
         => $"{SqlGraphContractNotReady} ({GetMetadata(SqlGraphContractNotReady).HumanText})";
 
     public static string BuildHotspotFamilyLanguageDegradedReason(string language)
-        => $"cross-file hotspot family grouping for '{language}' is degraded; run `cdidx index <projectPath>` to restamp authoritative hotspot families.";
+        => $"cross-file hotspot family grouping for '{language}' is degraded; run `cdidx index <projectPath> --rebuild` to restamp authoritative hotspot families for every indexed row.";
 
     public static string BuildHotspotFamilyLanguagesDegradedReason(IEnumerable<string> languages)
-        => $"cross-file hotspot family grouping is degraded for: {string.Join(", ", languages)}; run `cdidx index <projectPath>` to restamp authoritative hotspot families.";
+        => $"cross-file hotspot family grouping is degraded for: {string.Join(", ", languages)}; run `cdidx index <projectPath> --rebuild` to restamp authoritative hotspot families for every indexed row.";
 
     public static string NormalizeFoldReason(string? foldReadyReason)
         => foldReadyReason switch
@@ -131,28 +131,28 @@ public static class DegradationReasonCodes
             HotspotFamilyNotReady => new(
                 code,
                 "Cross-file hotspot grouping may be degraded for one or more languages.",
-                "Run `cdidx index <projectPath>` to restamp authoritative hotspot families.",
-                "Run `cdidx index <projectPath> --rebuild` for a full rebuild."),
+                "Run `cdidx index <projectPath> --rebuild` to restamp authoritative hotspot families for every indexed row.",
+                "Run `cdidx index <projectPath> --files <changedFiles>` only when you can enumerate every file whose hotspot-family rows need restamping."),
             HotspotFamilySupportNotIndexed => new(
                 code,
                 "Cross-file hotspot grouping is unavailable because this DB predates hotspot-family metadata or lacks the required symbol columns.",
-                "Run `cdidx index <projectPath>` to rebuild and stamp authoritative hotspot families.",
-                "Run `cdidx index <projectPath> --rebuild` for a full rebuild."),
+                "Run `cdidx index <projectPath> --rebuild` to rebuild and stamp authoritative hotspot families for every indexed row.",
+                "Create a fresh DB with the current cdidx binary if the existing DB cannot be rebuilt in place."),
             HotspotFamilyMetadataStale => new(
                 code,
                 "Cross-file hotspot grouping metadata was written by an older hotspot-family contract.",
-                "Run `cdidx index <projectPath> --files <changedFiles>` or `cdidx index <projectPath>` to restamp authoritative hotspot families.",
-                "Run `cdidx index <projectPath> --rebuild` for a full rebuild."),
+                "Run `cdidx index <projectPath> --rebuild` to restamp authoritative hotspot families for every indexed row.",
+                "Run `cdidx index <projectPath> --files <changedFiles>` only when you can enumerate every stale file."),
             HotspotFamilyDisabledAtIndexTime => new(
                 code,
                 "Cross-file hotspot grouping metadata was stamped without marker fingerprints, so authoritative family grouping cannot be trusted.",
-                "Run `cdidx index <projectPath>` to rebuild and stamp authoritative hotspot families.",
-                "Run `cdidx index <projectPath> --rebuild` for a full rebuild."),
+                "Run `cdidx index <projectPath> --rebuild` to rebuild and stamp authoritative hotspot families for every indexed row.",
+                "Run `cdidx index <projectPath> --files <changedFiles>` only when you can enumerate every affected file."),
             HotspotFamilyRowsIncomplete => new(
                 code,
                 "Cross-file hotspot grouping metadata is stamped, but some indexed symbols still lack family keys.",
-                "Run `cdidx index <projectPath>` to restamp authoritative hotspot families.",
-                "Run `cdidx index <projectPath> --rebuild` for a full rebuild."),
+                "Run `cdidx index <projectPath> --rebuild` to restamp authoritative hotspot families for every indexed row.",
+                "Run `cdidx index <projectPath> --files <changedFiles>` only when you can enumerate every file with incomplete family keys."),
             GraphTableMissing => new(
                 code,
                 "Reference / caller / callee / unused counts are degraded to 0 because the symbol_references table is missing.",
