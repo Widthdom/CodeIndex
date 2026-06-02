@@ -2714,16 +2714,11 @@ public partial class McpServer
             }
             catch (Exception ex)
             {
-                // #1581: classify the exception so the slot carries the same `category`
-                // envelope as a standalone tools/call would. The wire message stays the raw
-                // ex.Message — batch_query slot errors did not pass through the #1530
-                // sanitizer, so keeping it is unchanged behavior; the classification is purely
-                // additive metadata that lets clients branch on retry-safe failures.
-                // #1581: 例外をカテゴリに分類して、独立した tools/call 呼び出しと同じ
-                // envelope を batch_query スロットでも提供する。`ex.Message` の取り扱いは
-                // #1530 サニタイザを通っていない既存挙動を維持し、追加メタデータのみを載せる。
+                // #2849: classify and sanitize slot exceptions the same way standalone
+                // tools/call does, so bound values, paths, and SQL/content snippets stay
+                // in stderr instead of the batch_query response.
                 var classification = McpErrorEnvelope.ClassifyException(ex);
-                AppendSlotError(requestIndex, toolName, toolArgs, slotStopwatch, ex.Message,
+                AppendSlotError(requestIndex, toolName, toolArgs, slotStopwatch, BuildSanitizedToolErrorMessage(toolName, ex),
                     category: classification.Category,
                     suggestion: classification.Suggestion,
                     retrySafe: classification.RetrySafe);

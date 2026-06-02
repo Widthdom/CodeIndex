@@ -6719,6 +6719,37 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_BatchQuery_SanitizesSlotExceptionMessage_Issue2849()
+    {
+        const string secret = "SECRET_BATCH_SLOT_2849";
+        var corruptDbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_corrupt_{Guid.NewGuid():N}.db");
+        File.WriteAllText(corruptDbPath, $"not a sqlite database {secret}");
+        var previous = Environment.GetEnvironmentVariable(McpServer.DebugEnvironmentVariable);
+        try
+        {
+            Environment.SetEnvironmentVariable(McpServer.DebugEnvironmentVariable, null);
+            using var server = new McpServer(corruptDbPath, ConsoleUi.LoadVersion(), dbPathExplicit: true);
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[{"tool":"status"}]}}}""")!;
+
+            var response = server.HandleMessage(request)!;
+
+            var structured = response["result"]!["structuredContent"]!;
+            Assert.Equal(1, structured["failure_count"]!.GetValue<int>());
+            var slot = structured["results"]!.AsArray().Single()!;
+            var error = slot["error"]!.GetValue<string>();
+            Assert.Equal("Tool 'status' failed. See cdidx server stderr for details.", error);
+            Assert.DoesNotContain(secret, error);
+            Assert.DoesNotContain("file is not a database", error, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(McpErrorEnvelope.CategoryIndexCorrupted, slot["category"]!.GetValue<string>());
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(McpServer.DebugEnvironmentVariable, previous);
+            DeleteFileRobust(corruptDbPath);
+        }
+    }
+
+    [Fact]
     public void ToolsCall_BatchQuery_RejectsTypeMismatchedInnerArguments_Issue1615()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[{"tool":"search","arguments":{"query":"App","limit":"twenty"}},{"tool":"search","arguments":{"query":"App","format":false}},{"tool":"ping"}]}}}""")!;
