@@ -3081,6 +3081,23 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_Search_ExactSubstringReturnsLiteralHighlightMetadata()
+    {
+        InsertIndexedFile("src/sql.cs", "csharp", "var CommandText = $\"SELECT 1\";\nvar CommandText = other;\n");
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"CommandText = $","exactSubstring":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var highlight = response["result"]!["structuredContent"]!["results"]![0]!["highlights"]![0]!;
+        var literalOccurrence = highlight["literalTermOccurrences"]![0]!;
+        Assert.Equal("CommandText = $", highlight["literalTerms"]![0]!.GetValue<string>());
+        Assert.Equal("CommandText = $", literalOccurrence["term"]!.GetValue<string>());
+        Assert.Equal(1, literalOccurrence["line"]!.GetValue<int>());
+        Assert.Equal(5, literalOccurrence["column"]!.GetValue<int>());
+        Assert.Equal("CommandText = $".Length, literalOccurrence["length"]!.GetValue<int>());
+    }
+
+    [Fact]
     public void ToolsCall_Search_ExcludesGeneratedFilesByDefault()
     {
         InsertIndexedFile("src/generated.g.cs", "csharp", "class Generated { void Needle() {} }\n", generated: true);

@@ -488,7 +488,7 @@ public static class QueryCommandRunner
                     return CommandExitCodes.Success;
                 }
                 var compactResults = results
-                    .Select(r => SearchSnippetFormatter.ToCompactResult(r, options.Query, options.SnippetLines, exact, options.MaxLineWidth, r.Lang, options.SnippetFocus))
+                    .Select(r => SearchSnippetFormatter.ToCompactResult(r, options.Query, options.SnippetLines, exact, options.MaxLineWidth, r.Lang, options.SnippetFocus, exposeLiteralHighlights: exact))
                     .ToArray();
                 if (options.JsonOutputFormat == JsonOutputFormatArray)
                 {

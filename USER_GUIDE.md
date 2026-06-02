@@ -358,6 +358,10 @@ not scheduled for removal before the next major release. If removal is planned,
 the release notes will announce the timeline before the alias stops working.
 MCP mirrors the same split: use `exactSubstring` on `search`, `exactName` on
 name-based tools, and keep `exact` only for backward-compatible clients.
+In `search --json` and MCP `search` responses, exact substring highlights add
+`literal_terms` / `literal_term_occurrences` (camelCase in MCP) so clients can
+render only the requested literal phrase while keeping the broader diagnostic
+`terms` / `term_occurrences` fields.
 
 For single-value CLI flags, repeated occurrences keep the long-standing
 rightmost-wins behavior. `cdidx` prints a warning that names the winning value:
@@ -2452,6 +2456,10 @@ name に対する NFKC + Unicode CaseFold の等価比較です。
 削除する予定はありません。削除する場合は、alias が使えなくなる前に release notes で
 timeline を告知します。MCP も同じ分割を反映します。`search` では `exactSubstring`、
 name-based tools では `exactName` を使い、`exact` は後方互換 client 向けに残します。
+`search --json` と MCP `search` の exact substring highlight には
+`literal_terms` / `literal_term_occurrences`（MCP では camelCase）も追加されるため、
+広めの診断用 `terms` / `term_occurrences` を残したまま、要求した literal phrase だけを
+render できます。
 
 単一値の CLI フラグを複数回指定した場合は、従来どおり右端の指定が採用されます。
 `cdidx` は採用される値を含む警告を出し、最後の CLI 指定がそれ以前の CLI 指定や
