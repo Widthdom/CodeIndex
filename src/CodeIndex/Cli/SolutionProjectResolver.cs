@@ -1,4 +1,6 @@
 using System.Text.RegularExpressions;
+using CodeIndex.Indexer;
+
 namespace CodeIndex.Cli;
 
 internal sealed record DotNetProjectInfo(string Name, string ProjectPath, string DirectoryPath);
@@ -8,11 +10,12 @@ internal static partial class SolutionProjectResolver
     public static IReadOnlyList<DotNetProjectInfo> ResolveProjects(string workspaceRoot, string? solutionPath = null)
     {
         var root = Path.GetFullPath(workspaceRoot);
+        var indexer = new FileIndexer(root);
         var solution = ResolveSolutionPath(root, solutionPath);
         if (solution != null)
-            return ParseSolution(solution, root);
+            return ParseSolution(solution, root, indexer);
 
-        return Directory.EnumerateFiles(root, "*.*proj", SearchOption.AllDirectories)
+        return EnumerateFilesUsingIndexerPolicy(root, root, indexer)
             .Where(IsDotNetProjectFile)
             .Select(path => BuildProjectInfo(path, root))
             .OrderBy(project => project.Name, StringComparer.OrdinalIgnoreCase)
@@ -55,6 +58,7 @@ internal static partial class SolutionProjectResolver
 
         var root = Path.GetFullPath(workspaceRoot);
         var projects = ResolveProjects(root, solutionPath);
+        var indexer = new FileIndexer(root);
         var files = new SortedSet<string>(StringComparer.Ordinal);
         foreach (var requested in requestedProjects)
         {
@@ -62,7 +66,7 @@ internal static partial class SolutionProjectResolver
             if (match == null)
                 throw new InvalidOperationException($"project not found in solution/workspace: {requested}");
 
-            foreach (var file in Directory.EnumerateFiles(match.DirectoryPath, "*", SearchOption.AllDirectories))
+            foreach (var file in EnumerateFilesUsingIndexerPolicy(root, match.DirectoryPath, indexer))
             {
                 var relative = Path.GetRelativePath(root, file)
                     .Replace(Path.DirectorySeparatorChar, '/')
@@ -90,7 +94,10 @@ internal static partial class SolutionProjectResolver
         return solutions.Count == 1 ? solutions[0] : null;
     }
 
-    private static IReadOnlyList<DotNetProjectInfo> ParseSolution(string solutionPath, string workspaceRoot)
+    private static IReadOnlyList<DotNetProjectInfo> ParseSolution(
+        string solutionPath,
+        string workspaceRoot,
+        FileIndexer indexer)
     {
         var solutionDir = Path.GetDirectoryName(solutionPath) ?? workspaceRoot;
         var projects = new List<DotNetProjectInfo>();
@@ -105,7 +112,7 @@ internal static partial class SolutionProjectResolver
                 continue;
 
             var fullPath = Path.GetFullPath(Path.Combine(solutionDir, projectPath));
-            if (File.Exists(fullPath))
+            if (File.Exists(fullPath) && !indexer.EvaluatePathFilter(fullPath).ShouldSkip)
                 projects.Add(BuildProjectInfo(fullPath, workspaceRoot, match.Groups["name"].Value));
         }
 
@@ -133,6 +140,45 @@ internal static partial class SolutionProjectResolver
             string.Equals(project.Name, trimmed, StringComparison.OrdinalIgnoreCase)
             || string.Equals(project.ProjectPath, trimmed.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase)
             || string.Equals(Path.GetFileName(project.ProjectPath), trimmed, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static IEnumerable<string> EnumerateFilesUsingIndexerPolicy(
+        string workspaceRoot,
+        string startDirectory,
+        FileIndexer indexer)
+    {
+        var root = Path.GetFullPath(workspaceRoot);
+        var start = Path.GetFullPath(startDirectory);
+        if (!IsPathEqualOrParent(root, start) || indexer.EvaluatePathFilter(start, isDirectory: true).ShouldSkip)
+            yield break;
+
+        var pending = new Stack<string>();
+        pending.Push(start);
+        while (pending.Count > 0)
+        {
+            var directory = pending.Pop();
+            foreach (var childDirectory in Directory.EnumerateDirectories(directory))
+            {
+                if (!indexer.EvaluatePathFilter(childDirectory, isDirectory: true).ShouldSkip)
+                    pending.Push(childDirectory);
+            }
+
+            foreach (var file in Directory.EnumerateFiles(directory))
+            {
+                if (!indexer.EvaluatePathFilter(file).ShouldSkip)
+                    yield return file;
+            }
+        }
+    }
+
+    private static bool IsPathEqualOrParent(string parentPath, string childPath)
+    {
+        var parent = Path.GetFullPath(parentPath)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var child = Path.GetFullPath(childPath)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+        return PathCasing.IsPathEqualOrParent(parent, child);
     }
 
     private static bool IsDotNetProjectFile(string path)
