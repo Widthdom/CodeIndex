@@ -12,6 +12,8 @@ internal static class ExportImportCommandRunner
 {
     private const string ManifestEntryName = "manifest.json";
     private const string DatabaseEntryName = "codeindex.db";
+    internal const long MaxImportDatabaseBytes = 8L * 1024 * 1024 * 1024;
+    private const int ImportCopyBufferSize = 81920;
     private static readonly DateTimeOffset DeterministicZipTimestamp = new(1980, 1, 1, 0, 0, 0, TimeSpan.Zero);
 
     public static int RunExport(string[] args, JsonSerializerOptions jsonOptions, string appVersion)
@@ -85,8 +87,10 @@ internal static class ExportImportCommandRunner
                 var dbEntry = archive.GetEntry(DatabaseEntryName);
                 if (dbEntry == null)
                     return WriteError("archive is missing codeindex.db.", "use an archive produced by `cdidx export <archive>`.", "cdidx import <archive> [--db <path>] [--json]");
+                if (!TryValidateDatabaseEntrySize(dbEntry.Length, dbEntry.CompressedLength, out var sizeValidationMessage))
+                    return WriteError(sizeValidationMessage, "re-export a smaller CodeIndex database or rebuild a smaller index.", "cdidx import <archive> [--db <path>] [--prune-paths] [--json]");
 
-                dbEntry.ExtractToFile(tempPath, overwrite: true);
+                ExtractDatabaseEntryToFile(dbEntry, tempPath);
 
                 if (!TryValidateImportedManifest(manifest, tempPath, out var manifestValidationMessage))
                     return WriteError($"archive manifest mismatch: {manifestValidationMessage}.", "re-export from a compatible CodeIndex database.", "cdidx import <archive> [--db <path>] [--prune-paths] [--json]");
@@ -398,6 +402,54 @@ internal static class ExportImportCommandRunner
         }
 
         return true;
+    }
+
+    internal static bool TryValidateDatabaseEntrySize(long uncompressedLength, long compressedLength, out string message)
+    {
+        if (uncompressedLength < 0 || compressedLength < 0)
+        {
+            message = "archive codeindex.db size metadata is invalid";
+            return false;
+        }
+
+        if (uncompressedLength > MaxImportDatabaseBytes)
+        {
+            message = $"archive codeindex.db is too large: {ConsoleUi.FormatBytes(uncompressedLength)} uncompressed exceeds the import limit of {ConsoleUi.FormatBytes(MaxImportDatabaseBytes)}";
+            return false;
+        }
+
+        if (compressedLength > MaxImportDatabaseBytes)
+        {
+            message = $"archive codeindex.db is too large: {ConsoleUi.FormatBytes(compressedLength)} compressed exceeds the import limit of {ConsoleUi.FormatBytes(MaxImportDatabaseBytes)}";
+            return false;
+        }
+
+        message = string.Empty;
+        return true;
+    }
+
+    private static void ExtractDatabaseEntryToFile(ZipArchiveEntry dbEntry, string destinationPath)
+    {
+        using var source = dbEntry.Open();
+        using var target = File.Open(destinationPath, FileMode.Create, FileAccess.Write, FileShare.None);
+        CopyToWithLimit(source, target, MaxImportDatabaseBytes);
+    }
+
+    internal static long CopyToWithLimit(Stream source, Stream target, long maxBytes)
+    {
+        var buffer = new byte[ImportCopyBufferSize];
+        long totalBytes = 0;
+        int bytesRead;
+        while ((bytesRead = source.Read(buffer, 0, buffer.Length)) > 0)
+        {
+            if (totalBytes > maxBytes - bytesRead)
+                throw new InvalidDataException($"archive codeindex.db exceeds the import limit of {ConsoleUi.FormatBytes(maxBytes)}.");
+
+            target.Write(buffer, 0, bytesRead);
+            totalBytes += bytesRead;
+        }
+
+        return totalBytes;
     }
 
     private static void RewriteImportedProjectRoot(string dbPath, string projectRoot)
