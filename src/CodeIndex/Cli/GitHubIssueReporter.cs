@@ -49,6 +49,16 @@ internal static class GitHubIssueReporter
     private static readonly TimeSpan DefaultRateLimitRetryDelay = TimeSpan.FromMinutes(1);
     private const string TimeoutEnvironmentVariable = "CDIDX_GITHUB_SUBMIT_TIMEOUT_SECONDS";
     internal const int MaxGitHubIssueTitleLength = 255;
+    internal const int MaxScrubInputLength = 16 * 1024;
+    internal const int MaxGitHubApiErrorBodyBytes = 4 * 1024;
+    private const int MaxGitHubApiErrorDetailLength = 500;
+    private const string CodeExampleRemovedText = "[code example removed]";
+    private const string ScrubInputTruncatedText = "\n[truncated]";
+    private const string ApiErrorBodyTruncatedText = " [response body truncated]";
+    private static readonly Regex SensitiveJsonFieldPattern = new(
+        "(\"(?:token|access_token|authorization|password|secret|client_secret|private_key|api_key)\"\\s*:\\s*)(\"(?:\\\\.|[^\"])*\"|[^,}\\]\\s]+)",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
+        TimeSpan.FromMilliseconds(100));
 
     // Static HttpClient singleton — .NET best practice for reuse.
     // 静的 HttpClient シングルトン — .NET の再利用ベストプラクティス。
@@ -88,6 +98,7 @@ internal static class GitHubIssueReporter
     private const string RepoOwner = "widthdom";
     private const string RepoName = "CodeIndex";
     private const string ApiBase = "https://api.github.com";
+    private static readonly string[] ExistingSuggestionLookupLabels = ["enhancement", "bug"];
 
     /// <summary>
     /// Try to create a GitHub Issue for the given suggestion.
@@ -132,7 +143,7 @@ internal static class GitHubIssueReporter
             // レスポンスが消失した場合、ローカルレコードでは SubmittedToGitHub=false の
             // ままになる。再試行で重複 Issue を作らないよう、新規 POST 前に
             // 当該提案ハッシュを含む既存 Issue を探す。
-            var existingUrl = await FindExistingIssueByHashAsync(record.Hash, token, linkedCts.Token);
+            var existingUrl = await FindExistingIssueByHashAsync(record.Hash, token, BuildIssueLabels(record), linkedCts.Token);
             if (existingUrl != null)
                 return SuggestionStore.SubmitAttemptResult.Success(existingUrl);
 
@@ -197,20 +208,27 @@ internal static class GitHubIssueReporter
     /// <summary>
     /// Search the target GitHub repository for an existing Issue whose body
     /// contains the suggestion hash. The primary check uses GitHub Search;
-    /// the backstop lists ai-suggestion issues directly so same-second retries
+    /// the backstop lists issues by the labels cdidx would apply so same-second retries
     /// are not exposed to Search indexing latency. Returns the html_url of the
     /// first match, or null if no match is found or the hash looks unsafe to
     /// search with. On API failure this returns null — the caller falls through
     /// to the normal create path so a GitHub-side lookup outage never blocks a
     /// legitimate first submission.
     /// 当該提案ハッシュを含む既存 Issue を対象リポジトリから検索する。
-    /// 主経路は GitHub Search を使い、backstop として ai-suggestion Issue を
+    /// 主経路は GitHub Search を使い、backstop として cdidx が付ける label の Issue を
     /// 直接一覧取得することで、同秒の再試行が Search の index 遅延に影響されない
     /// ようにする。一致した最初の Issue の html_url を返す。一致なし、またはハッシュが
     /// 検索に使えない形の場合は null。API 失敗時も null を返し、GitHub 側 lookup の
     /// 障害によって新規送信がブロックされないようにする。
     /// </summary>
     internal static async Task<string?> FindExistingIssueByHashAsync(string hash, string token, CancellationToken cancellationToken = default)
+        => await FindExistingIssueByHashAsync(hash, token, ExistingSuggestionLookupLabels, cancellationToken);
+
+    private static async Task<string?> FindExistingIssueByHashAsync(
+        string hash,
+        string token,
+        IReadOnlyList<string> lookupLabels,
+        CancellationToken cancellationToken)
     {
         // Defensive: only search with hex-shaped hashes to avoid accidentally
         // injecting search operators if the field ever held arbitrary text.
@@ -222,7 +240,7 @@ internal static class GitHubIssueReporter
         if (searchUrl != null)
             return searchUrl;
 
-        return await ListExistingSuggestionIssueByHashAsync(hash, token, cancellationToken);
+        return await ListExistingSuggestionIssueByHashAsync(hash, token, lookupLabels, cancellationToken);
     }
 
     private static async Task<string?> SearchExistingIssueByHashAsync(string hash, string token, CancellationToken cancellationToken)
@@ -246,35 +264,44 @@ internal static class GitHubIssueReporter
         return items[0]?["html_url"]?.GetValue<string>();
     }
 
-    private static async Task<string?> ListExistingSuggestionIssueByHashAsync(string hash, string token, CancellationToken cancellationToken)
+    private static async Task<string?> ListExistingSuggestionIssueByHashAsync(
+        string hash,
+        string token,
+        IReadOnlyList<string> lookupLabels,
+        CancellationToken cancellationToken)
     {
-        for (var page = 1; ; page++)
+        foreach (var label in lookupLabels.Distinct(StringComparer.OrdinalIgnoreCase))
         {
-            var labels = Uri.EscapeDataString("ai-suggestion");
-            var url = $"{ApiBase}/repos/{RepoOwner}/{RepoName}/issues?labels={labels}&state=all&per_page=100&page={page}";
-
-            using var requestMessage = new HttpRequestMessage(HttpMethod.Get, url);
-            requestMessage.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-
-            var response = await HttpClient.SendAsync(requestMessage, cancellationToken);
-            if (!response.IsSuccessStatusCode)
-                return null;
-
-            var responseJson = await response.Content.ReadAsStringAsync(cancellationToken);
-            var items = JsonNode.Parse(responseJson) as JsonArray;
-            if (items == null || items.Count == 0)
-                return null;
-
-            foreach (var item in items)
+            for (var page = 1; ; page++)
             {
-                var body = item?["body"]?.GetValue<string>();
-                if (body != null && body.Contains(hash, StringComparison.Ordinal))
-                    return item?["html_url"]?.GetValue<string>();
-            }
+                var labels = Uri.EscapeDataString(label);
+                var url = $"{ApiBase}/repos/{RepoOwner}/{RepoName}/issues?labels={labels}&state=all&per_page=100&page={page}";
 
-            if (items.Count < 100)
-                return null;
+                using var requestMessage = new HttpRequestMessage(HttpMethod.Get, url);
+                requestMessage.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+                var response = await HttpClient.SendAsync(requestMessage, cancellationToken);
+                if (!response.IsSuccessStatusCode)
+                    return null;
+
+                var responseJson = await response.Content.ReadAsStringAsync(cancellationToken);
+                var items = JsonNode.Parse(responseJson) as JsonArray;
+                if (items == null || items.Count == 0)
+                    break;
+
+                foreach (var item in items)
+                {
+                    var body = item?["body"]?.GetValue<string>();
+                    if (body != null && body.Contains(hash, StringComparison.Ordinal))
+                        return item?["html_url"]?.GetValue<string>();
+                }
+
+                if (items.Count < 100)
+                    break;
+            }
         }
+
+        return null;
     }
 
     private static bool IsHexHash(string value)
@@ -346,6 +373,18 @@ internal static class GitHubIssueReporter
         body.AppendLine("## Language");
         body.AppendLine(record.Language ?? "N/A");
         body.AppendLine();
+        body.AppendLine("## Evidence paths");
+        var evidencePaths = NormalizeEvidencePaths(record.EvidencePaths);
+        if (evidencePaths.Count == 0)
+        {
+            body.AppendLine("N/A");
+        }
+        else
+        {
+            foreach (var path in evidencePaths)
+                body.AppendLine($"- {path}");
+        }
+        body.AppendLine();
         body.AppendLine("## Description");
         body.AppendLine(scrubbedDescription);
         body.AppendLine();
@@ -367,7 +406,7 @@ internal static class GitHubIssueReporter
         {
             ["title"] = title,
             ["body"] = body.ToString(),
-            ["labels"] = new JsonArray { "ai-suggestion" },
+            ["labels"] = new JsonArray(BuildIssueLabels(record).Select(label => JsonValue.Create(label)).ToArray<JsonNode?>()),
         };
 
         var content = new StringContent(
@@ -387,7 +426,7 @@ internal static class GitHubIssueReporter
 
         if (!response.IsSuccessStatusCode)
         {
-            var errorBody = await response.Content.ReadAsStringAsync(cancellationToken);
+            var errorBody = await ReadBoundedApiErrorBodyAsync(response.Content, cancellationToken);
             var rateLimitRetryAt = GetRateLimitRetryAt(response, DateTime.UtcNow);
             if (rateLimitRetryAt != null)
             {
@@ -427,12 +466,55 @@ internal static class GitHubIssueReporter
         if (string.IsNullOrEmpty(text))
             return text;
 
-        var scrubbed = Regex.Replace(
-            text,
-            @"(?s)```.*?```",
-            "[code example removed]");
+        var (boundedText, wasTruncated) = BoundScrubInput(text);
+        var scrubbed = ScrubFencedCodeBlocks(boundedText);
+        scrubbed = ScrubSingleBacktickSpans(scrubbed);
 
-        return ScrubSingleBacktickSpans(scrubbed);
+        return wasTruncated
+            ? scrubbed + ScrubInputTruncatedText
+            : scrubbed;
+    }
+
+    private static (string Text, bool WasTruncated) BoundScrubInput(string text) =>
+        text.Length <= MaxScrubInputLength
+            ? (text, false)
+            : (text[..MaxScrubInputLength], true);
+
+    private static string ScrubFencedCodeBlocks(string text)
+    {
+        var builder = new StringBuilder(text.Length);
+        var index = 0;
+        while (index < text.Length)
+        {
+            var open = FindTripleBacktickFence(text, index);
+            if (open < 0)
+            {
+                builder.Append(text, index, text.Length - index);
+                break;
+            }
+
+            builder.Append(text, index, open - index);
+            builder.Append(CodeExampleRemovedText);
+
+            var close = FindTripleBacktickFence(text, open + 3);
+            if (close < 0)
+                break;
+
+            index = close + 3;
+        }
+
+        return builder.ToString();
+    }
+
+    private static int FindTripleBacktickFence(string text, int start)
+    {
+        for (var i = start; i + 2 < text.Length; i++)
+        {
+            if (text[i] == '`' && text[i + 1] == '`' && text[i + 2] == '`')
+                return i;
+        }
+
+        return -1;
     }
 
     internal static string BuildIssueTitle(string category, string description)
@@ -453,6 +535,16 @@ internal static class GitHubIssueReporter
             ? title
             : title[..MaxGitHubIssueTitleLength];
     }
+
+    internal static string[] BuildIssueLabels(SuggestionRecord record)
+    {
+        return record.Category is "crash_report" or "unexpected_error"
+            ? ["bug"]
+            : ["enhancement"];
+    }
+
+    private static List<string> NormalizeEvidencePaths(string[]? paths)
+        => SuggestionEvidencePaths.Normalize(paths);
 
     internal static string SanitizeIssueTitleText(string value)
     {
@@ -495,12 +587,11 @@ internal static class GitHubIssueReporter
             var close = FindInlineCodeClose(text, index + 1);
             if (close < 0)
             {
-                builder.Append(text[index]);
-                index++;
-                continue;
+                builder.Append(CodeExampleRemovedText);
+                break;
             }
 
-            builder.Append("[code example removed]");
+            builder.Append(CodeExampleRemovedText);
             index = close + 1;
         }
 
@@ -559,17 +650,132 @@ internal static class GitHubIssueReporter
         $"[cdidx] GitHub issue creation failed: {detail}. The suggestion stays recorded locally; check `CDIDX_GITHUB_TOKEN`, network access, and proxy environment variables (`HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`, `NO_PROXY`), then retry `suggest_improvement` when ready.";
 
     internal static string BuildApiFailureMessage(int statusCode, string errorBody) =>
-        $"[cdidx] GitHub API responded {statusCode}: {errorBody}. GitHub submission was skipped; the suggestion stays local. Check `CDIDX_GITHUB_TOKEN`, repository permissions, or network access, then retry `suggest_improvement`.";
+        $"[cdidx] GitHub API responded {BuildApiErrorDetail(statusCode, errorBody)}. GitHub submission was skipped; the suggestion stays local. Check `CDIDX_GITHUB_TOKEN`, repository permissions, or network access, then retry `suggest_improvement`.";
 
     internal static string BuildRateLimitFailureMessage(int statusCode, string errorBody, DateTime nextRetryAt) =>
-        $"[cdidx] GitHub API rate limit response {statusCode}: {errorBody}. GitHub submission was paused until {nextRetryAt:O}; the suggestion stays local and will not be retried before then.";
+        $"[cdidx] GitHub API rate limit response {BuildApiErrorDetail(statusCode, errorBody)}. GitHub submission was paused until {nextRetryAt:O}; the suggestion stays local and will not be retried before then.";
 
     internal static string BuildApiErrorDetail(int statusCode, string errorBody)
     {
-        var normalized = errorBody.Replace("\r", " ").Replace("\n", " ").Trim();
-        if (normalized.Length > 500)
-            normalized = normalized[..500] + "...";
+        var normalized = SanitizeApiErrorBody(errorBody);
+        if (normalized.Length > MaxGitHubApiErrorDetailLength)
+            normalized = TruncateWithEllipsis(normalized, MaxGitHubApiErrorDetailLength);
         return $"{statusCode}: {normalized}";
+    }
+
+    private static async Task<string> ReadBoundedApiErrorBodyAsync(HttpContent content, CancellationToken cancellationToken)
+    {
+        await using var stream = await content.ReadAsStreamAsync(cancellationToken);
+        return await ReadBoundedApiErrorBodyAsync(stream, cancellationToken);
+    }
+
+    internal static async Task<string> ReadBoundedApiErrorBodyAsync(Stream stream, CancellationToken cancellationToken)
+    {
+        var buffer = new byte[MaxGitHubApiErrorBodyBytes + 1];
+        var total = 0;
+        while (total < buffer.Length)
+        {
+            var read = await stream.ReadAsync(buffer.AsMemory(total, buffer.Length - total), cancellationToken);
+            if (read == 0)
+                break;
+            total += read;
+        }
+
+        var bodyLength = Math.Min(total, MaxGitHubApiErrorBodyBytes);
+        var body = Encoding.UTF8.GetString(buffer, 0, bodyLength);
+        return total > MaxGitHubApiErrorBodyBytes
+            ? body + ApiErrorBodyTruncatedText
+            : body;
+    }
+
+    private static string SanitizeApiErrorBody(string errorBody)
+    {
+        var bounded = BoundApiErrorBodyForFormatting(errorBody);
+        var sanitized = TryRedactSensitiveJsonFields(bounded, out var redactedJson)
+            ? redactedJson
+            : RedactSensitiveJsonLikeFields(bounded);
+        var normalized = sanitized.Replace("\r", " ").Replace("\n", " ").Trim();
+        return normalized.Length == 0 ? "<empty response body>" : normalized;
+    }
+
+    private static string BoundApiErrorBodyForFormatting(string errorBody)
+    {
+        if (string.IsNullOrEmpty(errorBody))
+            return string.Empty;
+
+        return errorBody.Length <= MaxGitHubApiErrorBodyBytes
+            ? errorBody
+            : errorBody[..MaxGitHubApiErrorBodyBytes] + ApiErrorBodyTruncatedText;
+    }
+
+    private static bool TryRedactSensitiveJsonFields(string errorBody, out string redactedJson)
+    {
+        redactedJson = errorBody;
+        try
+        {
+            var node = JsonNode.Parse(errorBody);
+            if (node == null || !RedactSensitiveJsonFields(node))
+                return false;
+
+            redactedJson = node.ToJsonString();
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static bool RedactSensitiveJsonFields(JsonNode node)
+    {
+        var changed = false;
+        if (node is JsonObject obj)
+        {
+            foreach (var property in obj.ToArray())
+            {
+                if (IsSensitiveApiErrorField(property.Key))
+                {
+                    obj[property.Key] = "[redacted]";
+                    changed = true;
+                    continue;
+                }
+
+                if (property.Value != null)
+                    changed |= RedactSensitiveJsonFields(property.Value);
+            }
+        }
+        else if (node is JsonArray array)
+        {
+            foreach (var item in array)
+            {
+                if (item != null)
+                    changed |= RedactSensitiveJsonFields(item);
+            }
+        }
+
+        return changed;
+    }
+
+    private static bool IsSensitiveApiErrorField(string fieldName) =>
+        fieldName.Contains("token", StringComparison.OrdinalIgnoreCase)
+        || fieldName.Contains("secret", StringComparison.OrdinalIgnoreCase)
+        || fieldName.Contains("password", StringComparison.OrdinalIgnoreCase)
+        || fieldName.Equals("authorization", StringComparison.OrdinalIgnoreCase)
+        || fieldName.Equals("api_key", StringComparison.OrdinalIgnoreCase)
+        || fieldName.Equals("private_key", StringComparison.OrdinalIgnoreCase);
+
+    private static string RedactSensitiveJsonLikeFields(string errorBody)
+    {
+        try
+        {
+            return SensitiveJsonFieldPattern.Replace(
+                errorBody,
+                match => match.Groups[1].Value + "\"[redacted]\"");
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            return "[response body omitted after redaction timeout]";
+        }
     }
 
     internal static string BuildRateLimitErrorDetail(int statusCode, string errorBody, DateTime nextRetryAt) =>

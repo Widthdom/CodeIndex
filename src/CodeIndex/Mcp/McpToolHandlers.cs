@@ -7,6 +7,7 @@ using System.Text.RegularExpressions;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
+using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Indexer.Hooks;
 using CodeIndex.Models;
 
@@ -230,6 +231,19 @@ public partial class McpServer
             hint["args"] = args;
         payload["recovery_hint"] = hint;
     }
+
+    private static void AddExactSubstringRecoveryHint(JsonObject payload, string query)
+        => AddRecoveryHint(
+            payload,
+            SearchQueryAdvisor.ExactSubstringHintReason,
+            SearchQueryAdvisor.McpExactSubstringSuggestedAction,
+            "search",
+            new JsonObject
+            {
+                ["query"] = query,
+                ["exactSubstring"] = true,
+                ["limit"] = 5,
+            });
 
     private static void AddSymbolRecoveryHint(JsonObject payload, string query, string toolName, string? lang, string? kind, JsonNode? path)
     {
@@ -487,7 +501,7 @@ public partial class McpServer
             "query" or "lang" or "kind" or "format" or "rankBy" or "since" or "path" or "project" or
                 "solution" or "symbol" or "direction" or "groupBy" or "category" or "language" or
                 "description" or "context" or "toolInvocationContext" or "db" => "string",
-            "queries" => "array",
+            "queries" or "evidencePaths" or "evidence_paths" => "array",
             _ => string.Empty,
         };
 
@@ -553,7 +567,7 @@ public partial class McpServer
         "symbol_hotspots" => new HashSet<string>(StringComparer.Ordinal) { "kind", "lang", "limit", "groupBy", "path", "excludePaths", "excludeTests", "project", "solution" },
         "index" => new HashSet<string>(StringComparer.Ordinal) { "path", "db", "rebuild", "parallelism", "maxFileBytes", "files", "commits", "changedBetween", "dryRun", "optimize" },
         "backfill_fold" => new HashSet<string>(StringComparer.Ordinal) { "dry_run", "dryRun", "force" },
-        "suggest_improvement" => new HashSet<string>(StringComparer.Ordinal) { "category", "language", "description", "context", "toolInvocationContext" },
+        "suggest_improvement" => new HashSet<string>(StringComparer.Ordinal) { "category", "language", "description", "context", "toolInvocationContext", "evidencePaths", "evidence_paths" },
         _ => new HashSet<string>(StringComparer.Ordinal),
     };
 
@@ -984,6 +998,7 @@ public partial class McpServer
         var prefix = args?["prefix"]?.GetValue<bool>() ?? false;
         if (prefix && exact)
             return CreateToolErrorResponse(id, "'prefix' cannot be combined with 'exact' / 'exactSubstring' (exact uses instr(), not FTS5 prefix phrases).");
+        var suggestExactSubstring = SearchQueryAdvisor.ShouldSuggestExactSubstring(query, rawQuery, exact, prefix);
 
         return WithDbReader(id, args, reader =>
         {
@@ -997,6 +1012,8 @@ public partial class McpServer
                 payload["path"] = PathEcho(pathPatterns);
                 payload["excludeTests"] = excludeTests;
                 AddSearchStabilityMetadata(payload, reader, cursor, []);
+                if (suggestExactSubstring)
+                    AddExactSubstringRecoveryHint(payload, query);
                 if (countResults.Count == 0)
                     AddFtsQueryDiagnostics(payload, DbReader.AnalyzeFtsQuery(query, rawQuery, prefix, lang));
                 return CreateToolResult(id, $"Counted {countResults.Count} search result(s).", payload);
@@ -1020,12 +1037,19 @@ public partial class McpServer
                 AddSearchStabilityMetadata(payload, reader, cursor, results);
                 AddFtsQueryDiagnostics(payload, ftsDiagnostics);
                 AddResultEnvelope(payload, 0, 0, truncated: false);
-                AddRecoveryHint(
-                    payload,
-                    "no_results",
-                    "search returned no rows; try removing lang/path filters, using prefix for token-prefix matches, or using exactSubstring for literal punctuation or emoji.",
-                    "search",
-                    new JsonObject { ["query"] = query, ["limit"] = 5 });
+                if (suggestExactSubstring)
+                {
+                    AddExactSubstringRecoveryHint(payload, query);
+                }
+                else
+                {
+                    AddRecoveryHint(
+                        payload,
+                        "no_results",
+                        "search returned no rows; try removing lang/path filters, using prefix for token-prefix matches, or using exactSubstring for literal punctuation or emoji.",
+                        "search",
+                        new JsonObject { ["query"] = query, ["limit"] = 5 });
+                }
                 AddFreshnessHint(payload, reader);
                 return CreateToolResult(id, "No results found.", payload);
             }
@@ -1039,7 +1063,7 @@ public partial class McpServer
                 ["maxLineWidth"] = maxLineWidth,
                 ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
-                ["results"] = ToJsonArray(SearchSnippetFormatter.ToCompactResults(results, query, snippetLines, exact, maxLineWidth))
+                ["results"] = ToJsonArray(SearchSnippetFormatter.ToCompactResults(results, query, snippetLines, exact, maxLineWidth, exposeLiteralHighlights: exact))
             };
             AddSearchStabilityMetadata(structured, reader, cursor, results);
             AddResultEnvelope(structured, results.Count, truncated ? null : results.Count, truncated);
@@ -1050,6 +1074,8 @@ public partial class McpServer
                 structured,
                 "excerpt",
                 BuildExcerptArgs(topResult.Path, topResult.StartLine, topResult.EndLine));
+            if (suggestExactSubstring)
+                AddExactSubstringRecoveryHint(structured, query);
             // Include top file paths in summary for quick AI orientation
             // AIが素早く位置把握できるよう、サマリにトップファイルパスを含める
             var topPaths = results.Select(r => r.Path).Distinct().Take(3);
@@ -1909,7 +1935,10 @@ public partial class McpServer
             WorkspaceMetadataEnricher.Enrich(status, _dbPath, _dbPathExplicit);
             status.MacProfile = MacProfileDetector.DetectCurrent();
             status.GraphSupportedLanguages = ReferenceExtractor.GetSupportedLanguages().OrderBy(l => l).ToList();
-            var postExtractionHooks = PostExtractionHookRunner.DiscoverDefault().Hooks;
+            ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(status.ProjectRoot);
+            status.Extractors = ExtractorPluginRegistry.GetStatusSnapshot();
+            using var postExtractionHookRunner = PostExtractionHookRunner.DiscoverDefault();
+            var postExtractionHooks = postExtractionHookRunner.Hooks;
             if (postExtractionHooks.Count > 0)
             {
                 status.Hooks = postExtractionHooks
@@ -1918,6 +1947,7 @@ public partial class McpServer
                         Name = hook.Name,
                         AssemblyPath = hook.AssemblyPath,
                         TypeName = hook.TypeName,
+                        CallbackBudgetMs = (long)Math.Round(postExtractionHookRunner.CallbackBudget.TotalMilliseconds, MidpointRounding.AwayFromZero),
                     })
                     .ToList();
             }
@@ -3707,9 +3737,7 @@ public partial class McpServer
             // readiness is stamped, preserving the failure-path safety contract.
             // MCP の no-op full-scan root backfill も readiness stamp 後に限定する。
             WriteProjectRootOnce();
-            writer.SetMeta(
-                DbContext.UnknownExtensionFileCountMetaKey,
-                scanResult.UnknownExtensionFiles.Count.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            writer.WriteUnknownExtensionFileMetadata(scanResult.UnknownExtensionFiles);
             writer.SetMeta(DbContext.LastIndexRunModeMetaKey, rebuild ? "rebuild" : "mcp");
             writer.SetMeta(DbContext.LastIndexRunStartedAtMetaKey, runStartedAtUtc.ToString("o", System.Globalization.CultureInfo.InvariantCulture));
             writer.SetMeta(DbContext.LastIndexRunDurationMsMetaKey, runStopwatch.ElapsedMilliseconds.ToString(System.Globalization.CultureInfo.InvariantCulture));
@@ -4010,6 +4038,9 @@ public partial class McpServer
         var language = args?["language"]?.GetValue<string>();
         var context = args?["context"]?.GetValue<string>();
         var toolInvocationContext = args?["toolInvocationContext"]?.GetValue<string>();
+        var evidencePaths = ReadEvidencePaths(args?["evidencePaths"] ?? args?["evidence_paths"], out var evidencePathsError);
+        if (evidencePathsError != null)
+            return CreateToolErrorResponse(id, evidencePathsError);
 
         if (context != null && context.Length > MaxContextLength)
             return CreateToolErrorResponse(id, $"Context too long ({context.Length} chars, max {MaxContextLength})");
@@ -4068,6 +4099,7 @@ public partial class McpServer
             ToolInvocationContext = toolInvocationContext,
             SampledTitle = sampling?.Title,
             SampledTags = sampling?.Tags,
+            EvidencePaths = evidencePaths,
         };
 
         // Build GitHub submission callback (null if no token configured).
@@ -4137,7 +4169,53 @@ public partial class McpServer
             payload["sampled_title"] = sampling.Title;
         if (sampling?.Tags is { Length: > 0 })
             payload["sampled_tags"] = new JsonArray(sampling.Tags.Select(tag => JsonValue.Create(tag)).ToArray<JsonNode?>());
+        if (evidencePaths is { Length: > 0 })
+            payload["evidence_paths"] = new JsonArray(evidencePaths.Select(path => JsonValue.Create(path)).ToArray<JsonNode?>());
         return CreateToolResult(id, "Suggestion recorded. Thank you for the feedback.", payload);
+    }
+
+    private static string[]? ReadEvidencePaths(JsonNode? node, out string? error)
+    {
+        error = null;
+        if (node == null)
+            return null;
+        if (node is not JsonArray array)
+        {
+            error = "evidencePaths must be an array of path strings.";
+            return null;
+        }
+        if (array.Count > SuggestionEvidencePaths.MaxCount)
+        {
+            error = $"evidencePaths has too many entries ({array.Count}, max {SuggestionEvidencePaths.MaxCount}).";
+            return null;
+        }
+
+        var paths = new List<string>();
+        foreach (var item in array)
+        {
+            string? path;
+            try
+            {
+                path = item?.GetValue<string>();
+            }
+            catch (InvalidOperationException)
+            {
+                error = "evidencePaths must contain only path strings.";
+                return null;
+            }
+
+            if (string.IsNullOrWhiteSpace(path))
+                continue;
+            if (!SuggestionEvidencePaths.TryNormalize(path, out var normalizedPath, out var pathError))
+            {
+                error = pathError;
+                return null;
+            }
+            if (normalizedPath.Length > 0 && !paths.Contains(normalizedPath, StringComparer.Ordinal))
+                paths.Add(normalizedPath);
+        }
+
+        return paths.Count == 0 ? null : paths.ToArray();
     }
 
     private static string ResolveGitHubSubmissionReason(SuggestionStore.AddAndSubmitResult result, bool githubTokenConfigured)

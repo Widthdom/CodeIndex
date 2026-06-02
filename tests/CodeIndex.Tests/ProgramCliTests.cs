@@ -2,6 +2,7 @@ using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
+using System.IO.Compression;
 using System.Text.Json;
 
 namespace CodeIndex.Tests;
@@ -374,6 +375,62 @@ public class ProgramCliTests
     }
 
     [Fact]
+    public void ImportArchive_RejectsDatabaseHashMismatch()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_import_hash_mismatch");
+        var replacementRoot = TestProjectHelper.CreateTempProject("cdidx_import_hash_replacement");
+        try
+        {
+            var sourceDbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(sourceDbPath, "src/app.cs", "csharp", "class App { void Run() {} }\n");
+            var replacementDbPath = TestProjectHelper.CreateProjectDb(replacementRoot);
+            TestProjectHelper.InsertIndexedFile(replacementDbPath, "src/other.cs", "csharp", "class Other { void Run() {} }\n");
+            var archivePath = Path.Combine(projectRoot, "codeindex.cdidx.zip");
+            var importedDbPath = Path.Combine(projectRoot, "imported", "codeindex.db");
+
+            var (exportExit, _, exportStderr) = RunCliInSubprocess(["export", archivePath, "--db", sourceDbPath]);
+            ReplaceZipEntryWithFile(archivePath, "codeindex.db", replacementDbPath);
+            var (importExit, _, importStderr) = RunCliInSubprocess(["import", archivePath, "--db", importedDbPath]);
+
+            Assert.True(exportExit == 0, exportStderr);
+            Assert.Equal(CommandExitCodes.UsageError, importExit);
+            Assert.Contains("database_sha256 does not match codeindex.db", importStderr);
+            Assert.False(File.Exists(importedDbPath));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            TestProjectHelper.DeleteDirectory(replacementRoot);
+        }
+    }
+
+    [Fact]
+    public void ImportArchive_RejectsManifestUserVersionMismatch()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_import_user_version_mismatch");
+        try
+        {
+            var sourceDbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(sourceDbPath, "src/app.cs", "csharp", "class App { void Run() {} }\n");
+            var archivePath = Path.Combine(projectRoot, "codeindex.cdidx.zip");
+            var importedDbPath = Path.Combine(projectRoot, "imported", "codeindex.db");
+
+            var (exportExit, _, exportStderr) = RunCliInSubprocess(["export", archivePath, "--db", sourceDbPath]);
+            ReplaceManifestUserVersion(archivePath, newUserVersion: 1);
+            var (importExit, _, importStderr) = RunCliInSubprocess(["import", archivePath, "--db", importedDbPath]);
+
+            Assert.True(exportExit == 0, exportStderr);
+            Assert.Equal(CommandExitCodes.UsageError, importExit);
+            Assert.Contains("user_version", importStderr);
+            Assert.False(File.Exists(importedDbPath));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void ExportArchive_RejectsSourceDatabaseAsOutput()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_export_same_db");
@@ -467,7 +524,7 @@ public class ProgramCliTests
         Assert.Equal(0, fullExit);
         Assert.Equal(string.Empty, fullStderr);
         Assert.Contains("Index and update options:", fullStdout);
-        Assert.Contains("cdidx index <projectPath> --commits <id>", fullStdout);
+        Assert.Contains("cdidx index <projectPath> --commits <commit-ref>", fullStdout);
         Assert.Contains("--limit <n>, --top <n>", fullStdout);
     }
 
@@ -628,6 +685,49 @@ public class ProgramCliTests
         Assert.DoesNotContain("Add parser support", stdout);
     }
 
+    [Fact]
+    public void Suggestions_ExportIssueDraftsIncludesEvidenceAndDuplicatePreflight()
+    {
+        using var fixture = SuggestionFixture.Create();
+        var record = fixture.Add(
+            "output_format",
+            "csharp",
+            "Issue draft export should preserve structured triage evidence",
+            submitted: false,
+            sampledTitle: "Add issue draft export",
+            evidencePaths: ["src/CodeIndex/Cli/SuggestionsCommandRunner.cs", "tests/CodeIndex.Tests/ProgramCliTests.cs"]);
+        var openIssuesPath = fixture.WriteOpenIssuesJson($$"""
+        [
+          {
+            "number": 2878,
+            "title": "[AI Suggestion] output_format: Add issue draft export",
+            "url": "https://github.com/Widthdom/CodeIndex/issues/2878",
+            "labels": [{ "name": "enhancement" }]
+          }
+        ]
+        """);
+
+        var (exitCode, stdout, stderr) = RunCliInSubprocess([
+            "suggestions", "export", "--db", fixture.DbPath, "--format", "issue-drafts", "--open-issues", openIssuesPath
+        ]);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var doc = JsonDocument.Parse(stdout);
+        var root = doc.RootElement;
+        Assert.True(root.GetProperty("duplicate_preflight").GetProperty("checked").GetBoolean());
+        Assert.Equal(1, root.GetProperty("duplicate_preflight").GetProperty("open_issue_count").GetInt32());
+        var draft = root.GetProperty("drafts")[0];
+        Assert.Equal(record.Hash, draft.GetProperty("suggestion_id").GetString());
+        Assert.Equal("enhancement", draft.GetProperty("labels")[0].GetString());
+        Assert.Equal("src/CodeIndex/Cli/SuggestionsCommandRunner.cs", draft.GetProperty("evidence_paths")[0].GetString());
+        Assert.Contains("## Evidence paths", draft.GetProperty("body").GetString());
+        var preflight = draft.GetProperty("duplicate_preflight");
+        Assert.Equal(1, preflight.GetProperty("match_count").GetInt32());
+        Assert.Equal(2878, preflight.GetProperty("matches")[0].GetProperty("number").GetInt32());
+        Assert.Equal("title_exact", preflight.GetProperty("matches")[0].GetProperty("reason").GetString());
+    }
+
     private static (int ExitCode, string StdOut, string StdErr) RunCliInSubprocess(string[] args, IReadOnlyDictionary<string, string?>? environment = null)
     {
         var psi = new System.Diagnostics.ProcessStartInfo
@@ -703,6 +803,44 @@ public class ProgramCliTests
         throw new InvalidOperationException("Could not locate repository root / リポジトリルートを特定できませんでした");
     }
 
+    private static void ReplaceZipEntryWithFile(string archivePath, string entryName, string sourcePath)
+    {
+        using var archive = ZipFile.Open(archivePath, ZipArchiveMode.Update);
+        archive.GetEntry(entryName)?.Delete();
+        var entry = archive.CreateEntry(entryName, CompressionLevel.SmallestSize);
+        using var source = File.OpenRead(sourcePath);
+        using var target = entry.Open();
+        source.CopyTo(target);
+    }
+
+    private static void ReplaceManifestUserVersion(string archivePath, int newUserVersion)
+    {
+        using var archive = ZipFile.Open(archivePath, ZipArchiveMode.Update);
+        var entry = archive.GetEntry("manifest.json")
+            ?? throw new InvalidOperationException("manifest.json entry was not found");
+
+        string manifestJson;
+        using (var reader = new StreamReader(entry.Open()))
+        {
+            manifestJson = reader.ReadToEnd();
+        }
+
+        using var document = JsonDocument.Parse(manifestJson);
+        var oldUserVersion = document.RootElement.GetProperty("user_version").GetInt32();
+        var replacementUserVersion = newUserVersion == oldUserVersion
+            ? (oldUserVersion == 0 ? 1 : 0)
+            : newUserVersion;
+        var updatedManifestJson = manifestJson.Replace(
+            $"\"user_version\":{oldUserVersion}",
+            $"\"user_version\":{replacementUserVersion}",
+            StringComparison.Ordinal);
+
+        entry.Delete();
+        var replacementEntry = archive.CreateEntry("manifest.json", CompressionLevel.SmallestSize);
+        using var writer = new StreamWriter(replacementEntry.Open());
+        writer.Write(updatedManifestJson);
+    }
+
     private sealed class SuggestionFixture : IDisposable
     {
         private readonly string _root;
@@ -731,7 +869,9 @@ public class ProgramCliTests
             bool submitted,
             DateTime? lastSubmitAttempt = null,
             int submitAttemptCount = 0,
-            string? lastSubmitError = null)
+            string? lastSubmitError = null,
+            string? sampledTitle = null,
+            string[]? evidencePaths = null)
         {
             var record = new SuggestionRecord
             {
@@ -746,10 +886,19 @@ public class ProgramCliTests
                 LastSubmitAttempt = lastSubmitAttempt,
                 SubmitAttemptCount = submitAttemptCount,
                 LastSubmitError = lastSubmitError,
+                SampledTitle = sampledTitle,
+                EvidencePaths = evidencePaths,
             };
             _records.Add(record);
             Write();
             return record;
+        }
+
+        public string WriteOpenIssuesJson(string json)
+        {
+            var path = Path.Combine(_root, "open-issues.json");
+            File.WriteAllText(path, json);
+            return path;
         }
 
         private void Write()

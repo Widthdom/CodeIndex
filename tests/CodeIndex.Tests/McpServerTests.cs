@@ -3081,6 +3081,38 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_Search_ExactSubstringReturnsLiteralHighlightMetadata()
+    {
+        InsertIndexedFile("src/sql.cs", "csharp", "var CommandText = $\"SELECT 1\";\nvar CommandText = other;\n");
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"CommandText = $","exactSubstring":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var highlight = response["result"]!["structuredContent"]!["results"]![0]!["highlights"]![0]!;
+        var literalOccurrence = highlight["literalTermOccurrences"]![0]!;
+        Assert.Equal("CommandText = $", highlight["literalTerms"]![0]!.GetValue<string>());
+        Assert.Equal("CommandText = $", literalOccurrence["term"]!.GetValue<string>());
+        Assert.Equal(1, literalOccurrence["line"]!.GetValue<int>());
+        Assert.Equal(5, literalOccurrence["column"]!.GetValue<int>());
+        Assert.Equal("CommandText = $".Length, literalOccurrence["length"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsCall_Search_PunctuationHeavyQueryAddsExactSubstringRecoveryHint()
+    {
+        InsertIndexedFile("src/sql.cs", "csharp", "var CommandText = $\"SELECT 1\";\nvar CommandText = other;\n");
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"CommandText = $","limit":1}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var recoveryHint = response["result"]!["structuredContent"]!["recovery_hint"]!;
+        Assert.Equal("punctuation_heavy_query", recoveryHint["reason"]!.GetValue<string>());
+        Assert.Equal("search", recoveryHint["tool"]!.GetValue<string>());
+        Assert.Equal("CommandText = $", recoveryHint["args"]!["query"]!.GetValue<string>());
+        Assert.True(recoveryHint["args"]!["exactSubstring"]!.GetValue<bool>());
+    }
+
+    [Fact]
     public void ToolsCall_Search_ExcludesGeneratedFilesByDefault()
     {
         InsertIndexedFile("src/generated.g.cs", "csharp", "class Generated { void Needle() {} }\n", generated: true);
@@ -9456,7 +9488,8 @@ public class McpServerTests : IDisposable
                 {
                     ["category"] = "other",
                     ["description"] = uniqueDesc,
-                    ["toolInvocationContext"] = "Investigating suggestion triage"
+                    ["toolInvocationContext"] = "Investigating suggestion triage",
+                    ["evidencePaths"] = new JsonArray { "src/CodeIndex/Mcp/McpToolHandlers.cs" }
                 }
             }
         };
@@ -9473,6 +9506,35 @@ public class McpServerTests : IDisposable
         Assert.Equal("codex", stored.McpClientName);
         Assert.Equal("5.0", stored.McpClientVersion);
         Assert.Equal("Investigating suggestion triage", stored.ToolInvocationContext);
+        Assert.Equal(["src/CodeIndex/Mcp/McpToolHandlers.cs"], stored.EvidencePaths);
+    }
+
+    [Fact]
+    public void SuggestImprovement_RejectsNonRelativeEvidencePath()
+    {
+        var uniqueDesc = $"Evidence path validation regression {Guid.NewGuid():N}";
+        var json = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "suggest_improvement",
+                ["arguments"] = new JsonObject
+                {
+                    ["category"] = "other",
+                    ["description"] = uniqueDesc,
+                    ["evidencePaths"] = new JsonArray { "/Users/example/project/src/File.cs" }
+                }
+            }
+        };
+
+        var response = _server.HandleMessage((JsonNode)json)!;
+
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+        var message = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("repository-relative", message);
     }
 
     [Fact]

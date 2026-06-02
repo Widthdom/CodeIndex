@@ -359,6 +359,124 @@ public class DbPathResolverTests
     }
 
     [Fact]
+    public void ResolveProjectRootForQuery_ExplicitProjectLocalDbIgnoresEscapingSampleMatches()
+    {
+        var projectParent = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_escape_parent");
+        var staleParent = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_escape_stale_parent");
+        var projectRoot = Path.Combine(projectParent, "project");
+        var staleRoot = Path.Combine(staleParent, "stale");
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        try
+        {
+            Directory.CreateDirectory(projectRoot);
+            Directory.CreateDirectory(staleRoot);
+            Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+            Directory.CreateDirectory(Path.Combine(projectParent, "outside"));
+
+            const string outsideContent = "class Outside {}\n";
+            File.WriteAllText(Path.Combine(projectParent, "outside", "outside.cs"), outsideContent);
+
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db.Connection);
+                writer.SetMeta(DbContext.IndexedProjectRootMetaKey, staleRoot);
+            }
+            TestProjectHelper.InsertIndexedFile(dbPath, "../outside/outside.cs", "csharp", outsideContent);
+
+            var resolved = DbPathResolver.ResolveProjectRootForQuery(dbPath, dbPathExplicit: true);
+
+            Assert.Equal(staleRoot, resolved);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectParent);
+            TestProjectHelper.DeleteDirectory(staleParent);
+        }
+    }
+
+    [Theory]
+    [InlineData("../outside.cs")]
+    [InlineData("src/../../outside.cs")]
+    public void TryResolveIndexedFileSampleIoPath_RejectsEscapingRelativeSamples(string samplePath)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_escape_sample");
+        try
+        {
+            var resolved = DbPathResolver.TryResolveIndexedFileSampleIoPath(projectRoot, samplePath, out var ioPath);
+
+            Assert.False(resolved);
+            Assert.Equal(string.Empty, ioPath);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("/outside.cs")]
+    public void TryResolveIndexedFileSampleIoPath_RejectsRootedSamples(string samplePath)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_rooted_sample");
+        try
+        {
+            var resolved = DbPathResolver.TryResolveIndexedFileSampleIoPath(projectRoot, samplePath, out var ioPath);
+
+            Assert.False(resolved);
+            Assert.Equal(string.Empty, ioPath);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void TryResolveIndexedFileSampleIoPath_OnWindowsRejectsDriveAndUncSamples()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_windows_absolute_sample");
+        try
+        {
+            foreach (var samplePath in new[] { "\\outside.cs", "C:/outside.cs", @"C:\outside.cs", @"\\server\share\outside.cs" })
+            {
+                var resolved = DbPathResolver.TryResolveIndexedFileSampleIoPath(projectRoot, samplePath, out var ioPath);
+
+                Assert.False(resolved);
+                Assert.Equal(string.Empty, ioPath);
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void TryResolveIndexedFileSampleIoPath_OnPosixPreservesBackslashInFilename()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_posix_backslash_sample");
+        try
+        {
+            const string samplePath = "back\\slash.py";
+            var resolved = DbPathResolver.TryResolveIndexedFileSampleIoPath(projectRoot, samplePath, out var ioPath);
+
+            Assert.True(resolved);
+            Assert.Equal(Path.GetFullPath(Path.Combine(projectRoot, samplePath)), ioPath);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void ResolveProjectRootForQuery_ExplicitProjectLocalReadOnlyUriWithoutMetadataReturnsNull()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_local_uri");

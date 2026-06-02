@@ -506,7 +506,8 @@ public partial class McpServer
                         ["language"] = new JsonObject { ["type"] = "string", ["description"] = "Programming language this applies to (optional)" },
                         ["description"] = new JsonObject { ["type"] = "string", ["description"] = "What gap or improvement you observed, or what error occurred (NOT source code)" },
                         ["context"] = new JsonObject { ["type"] = "string", ["description"] = "What you were trying to do when you noticed the gap (NOT source code)" },
-                        ["toolInvocationContext"] = new JsonObject { ["type"] = "string", ["description"] = "Natural-language context for the current tool invocation or workflow (optional, NOT source code)" }
+                        ["toolInvocationContext"] = new JsonObject { ["type"] = "string", ["description"] = "Natural-language context for the current tool invocation or workflow (optional, NOT source code)" },
+                        ["evidencePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Repository-relative paths that support the suggestion (optional, no source code)" }
                     },
                     ["required"] = new JsonArray { "category", "description" }
                 },

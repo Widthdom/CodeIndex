@@ -508,8 +508,9 @@ public static class DbPathResolver
         {
             try
             {
-                var absolutePath = Path.Combine(candidateRoot, sample.RelativePath.Replace('/', Path.DirectorySeparatorChar));
-                var ioPath = LongPath.EnsureWindowsPrefix(absolutePath);
+                if (!TryResolveIndexedFileSampleIoPath(candidateRoot, sample.RelativePath, out var ioPath))
+                    continue;
+
                 if (!File.Exists(ioPath))
                     continue;
 
@@ -531,6 +532,37 @@ public static class DbPathResolver
 
         return new SampleMatchResult(checksumMatches, pathExistsMatches);
     }
+
+    internal static bool TryResolveIndexedFileSampleIoPath(string candidateRoot, string sampleRelativePath, out string ioPath)
+    {
+        ioPath = string.Empty;
+        if (string.IsNullOrWhiteSpace(sampleRelativePath) || IsRootedOrAbsoluteLikeSamplePath(sampleRelativePath))
+            return false;
+
+        try
+        {
+            var normalizedRoot = Path.GetFullPath(candidateRoot);
+            var relativePath = NormalizeSampleRelativePath(sampleRelativePath);
+            var absolutePath = Path.GetFullPath(Path.Combine(normalizedRoot, relativePath));
+            if (!IsUnderDirectory(normalizedRoot, absolutePath))
+                return false;
+
+            ioPath = LongPath.EnsureWindowsPrefix(absolutePath);
+            return true;
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsRootedOrAbsoluteLikeSamplePath(string samplePath)
+        => Path.IsPathRooted(samplePath);
+
+    private static string NormalizeSampleRelativePath(string sampleRelativePath)
+        => Path.DirectorySeparatorChar == '\\'
+            ? sampleRelativePath.Replace('/', Path.DirectorySeparatorChar)
+            : sampleRelativePath;
 
     private readonly record struct SampleMatchResult(int ChecksumMatches, int PathExistsMatches);
     private sealed record IndexedFileSample(string RelativePath, string Checksum);

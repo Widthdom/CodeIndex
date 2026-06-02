@@ -240,6 +240,7 @@ jobs:
         with:
           name: TestResults-${{ matrix.os }}-${{ matrix.test-framework }}
           if-no-files-found: warn
+          overwrite: true
           path: |
             TestResults/**/*.trx
             TestResults/**/*.txt
@@ -255,6 +256,7 @@ jobs:
         with:
           name: Coverage-${{ matrix.os }}-${{ matrix.test-framework }}
           if-no-files-found: warn
+          overwrite: true
           path: TestResults/**/coverage.cobertura.xml
 
       - name: Publish
@@ -266,4 +268,5 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: CodeIndex
+          overwrite: true
           path: publish/**

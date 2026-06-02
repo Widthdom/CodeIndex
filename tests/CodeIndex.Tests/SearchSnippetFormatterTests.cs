@@ -64,6 +64,29 @@ public class SearchSnippetFormatterTests
     }
 
     [Fact]
+    public void BuildExcerpt_ExactSubstringExposesLiteralOnlyHighlights()
+    {
+        const string content = "CommandText = $\"SELECT\";\nCommandText only";
+
+        var excerpt = SearchSnippetFormatter.BuildExcerpt(
+            content,
+            "CommandText = $",
+            absoluteStartLine: 1,
+            maxLines: 1,
+            caseSensitive: true,
+            exposeLiteralHighlights: true);
+
+        var highlight = Assert.Single(excerpt.Highlights);
+        Assert.Equal(["CommandText = $", "CommandText", "=", "$"], highlight.Terms);
+        Assert.Equal(["CommandText = $"], highlight.LiteralTerms);
+        var literalOccurrence = Assert.Single(highlight.LiteralTermOccurrences!);
+        Assert.Equal("CommandText = $", literalOccurrence.Term);
+        Assert.Equal(1, literalOccurrence.Line);
+        Assert.Equal(1, literalOccurrence.Column);
+        Assert.Equal("CommandText = $".Length, literalOccurrence.Length);
+    }
+
+    [Fact]
     public void ToCompactResult_UsesSnippetInsteadOfFullChunkContent()
     {
         var result = new SearchResult

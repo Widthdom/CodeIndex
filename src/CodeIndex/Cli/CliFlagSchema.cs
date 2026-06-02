@@ -289,7 +289,7 @@ internal static class CliFlagSchema
             new() { Name = "--max-symbols-per-file", ValuePlaceholder = "<n>", Description = "Skip file content, symbols, and references when one file emits too many symbols", Commands = Set("index") },
             new() { Name = "--parallelism", ValuePlaceholder = "<n>", Description = "Full-scan extraction worker count (default: CPU count capped at 16; also honors CDIDX_INDEX_PARALLELISM)", Commands = Set("index") },
             new() { Name = "--memory-trace", Description = "Include phase memory samples in index JSON output", Commands = Set("index") },
-            new() { Name = "--commits", ValuePlaceholder = "<id>", Description = "Update files changed in given git commits", Commands = Set("index") },
+            new() { Name = "--commits", ValuePlaceholder = "<commit-ref>", Description = "Update files changed in given git commits", Commands = Set("index") },
             new() { Name = "--changed-between", ValuePlaceholder = "<old-ref> <new-ref>", Description = "Update files changed between two git refs", Commands = Set("index") },
             new() { Name = "--files", ValuePlaceholder = "<path>", Description = "Update only the specified files", Commands = Set("index") },
             new() { Name = "--watch", Description = "Continuous reindex on file changes (rejects --commits / --changed-between / --files / --dry-run)", Commands = Set("index") },

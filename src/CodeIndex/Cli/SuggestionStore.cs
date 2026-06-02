@@ -728,27 +728,7 @@ public class SuggestionStore
             Directory.CreateDirectory(dir);
 
         NormalizeRecordDefaults(records);
-
-        var tempPath = _filePath + ".tmp";
-        try
-        {
-            using (var stream = new FileStream(
-                       tempPath,
-                       FileMode.Create,
-                       FileAccess.Write,
-                       FileShare.None))
-            {
-                JsonSerializer.Serialize(stream, records, s_jsonOptions);
-                stream.Flush(flushToDisk: true);
-            }
-
-            File.Move(tempPath, _filePath, overwrite: true);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            try { File.Delete(tempPath); } catch (Exception deleteEx) when (deleteEx is IOException or UnauthorizedAccessException) { /* best-effort cleanup / ベストエフォートのクリーンアップ */ }
-            throw;
-        }
+        AtomicFileWriter.WriteJson(_filePath, records, s_jsonOptions);
     }
 
     private static bool HasUpstreamSubmission(SuggestionRecord record) =>

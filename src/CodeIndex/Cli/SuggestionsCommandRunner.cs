@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using CodeIndex.Database;
 using CodeIndex.Models;
@@ -9,7 +10,7 @@ namespace CodeIndex.Cli;
 
 internal static class SuggestionsCommandRunner
 {
-    private const string Usage = "Usage: cdidx suggestions <list|show|export> [id] [--db <path>] [--json] [--status <all|draft|submitted_pending_triage|open_in_upstream|resolved_in_upstream|wont_fix|duplicate|superseded|submitted|unsubmitted>] [--language <lang>] [--category <category>] [--since <datetime>] [--agent <name>] [--format <json|markdown>]";
+    private const string Usage = "Usage: cdidx suggestions <list|show|export> [id] [--db <path>] [--json] [--status <all|draft|submitted_pending_triage|open_in_upstream|resolved_in_upstream|wont_fix|duplicate|superseded|submitted|unsubmitted>] [--language <lang>] [--category <category>] [--since <datetime>] [--agent <name>] [--format <json|markdown|issue-drafts>] [--open-issues <path>]";
 
     public static int Run(string[] args, JsonSerializerOptions jsonOptions)
     {
@@ -27,6 +28,8 @@ internal static class SuggestionsCommandRunner
             Console.Error.WriteLine(Usage);
             return CommandExitCodes.UsageError;
         }
+        if (options.OpenIssuesPath != null && (verb != "export" || options.ExportFormat != "issue-drafts"))
+            return WriteUsageError("--open-issues can only be used with `suggestions export --format issue-drafts`.");
 
         var store = CreateStore(options.DbPath);
         var records = ApplyFilters(store.LoadAll(), options)
@@ -112,6 +115,13 @@ internal static class SuggestionsCommandRunner
             Console.WriteLine($"upstream_url: {record.UpstreamUrl}");
         if (record.UpstreamIssueNumber != null)
             Console.WriteLine($"upstream_issue_number: {record.UpstreamIssueNumber}");
+        var evidencePaths = NormalizeEvidencePaths(record);
+        if (evidencePaths.Count > 0)
+        {
+            Console.WriteLine("evidence_paths:");
+            foreach (var path in evidencePaths)
+                Console.WriteLine($"- {path}");
+        }
         Console.WriteLine();
         Console.WriteLine(record.Description);
         if (!string.IsNullOrWhiteSpace(record.Context))
@@ -131,6 +141,8 @@ internal static class SuggestionsCommandRunner
             Console.WriteLine(FormatMarkdown(records));
             return CommandExitCodes.Success;
         }
+        if (options.ExportFormat == "issue-drafts")
+            return RunIssueDraftExport(records, options, jsonOptions);
 
         var payload = new SuggestionExportJsonResult(
             JsonOutputContract.ApiVersion,
@@ -139,6 +151,26 @@ internal static class SuggestionsCommandRunner
         Console.WriteLine(JsonSerializer.Serialize(
             payload,
             CliJsonSerializerContextFactory.Create(jsonOptions).SuggestionExportJsonResult));
+        return CommandExitCodes.Success;
+    }
+
+    private static int RunIssueDraftExport(List<SuggestionRecord> records, Options options, JsonSerializerOptions jsonOptions)
+    {
+        if (!IssueDuplicatePreflight.TryLoad(options.OpenIssuesPath, out var preflight, out var error))
+            return WriteUsageError(error!);
+
+        var drafts = records.Select(record => ToIssueDraft(record, preflight)).ToList();
+        var payload = new SuggestionIssueDraftExportJsonResult(
+            JsonOutputContract.ApiVersion,
+            drafts.Count,
+            new SuggestionIssueDraftPreflightSummaryJsonResult(
+                preflight.Checked,
+                preflight.Source,
+                preflight.OpenIssueCount),
+            drafts);
+        Console.WriteLine(JsonSerializer.Serialize(
+            payload,
+            CliJsonSerializerContextFactory.Create(jsonOptions).SuggestionIssueDraftExportJsonResult));
         return CommandExitCodes.Success;
     }
 
@@ -271,6 +303,9 @@ internal static class SuggestionsCommandRunner
         record.McpClientName,
         record.McpClientVersion,
         record.ToolInvocationContext,
+        record.SampledTitle,
+        NormalizeNullableArray(record.SampledTags),
+        NormalizeEvidencePaths(record),
         record.Description,
         record.Context,
         IsSubmitted(record),
@@ -283,6 +318,99 @@ internal static class SuggestionsCommandRunner
         record.LastSubmitAttempt,
         record.SubmitAttemptCount,
         record.LastSubmitError);
+
+    private static SuggestionIssueDraftJsonResult ToIssueDraft(SuggestionRecord record, IssueDuplicatePreflight preflight)
+    {
+        var title = BuildIssueDraftTitle(record);
+        var labels = GitHubIssueReporter.BuildIssueLabels(record).ToList();
+        var evidencePaths = NormalizeEvidencePaths(record);
+        var duplicateMatches = preflight.FindMatches(title, labels);
+        return new SuggestionIssueDraftJsonResult(
+            record.Hash,
+            ShortId(record.Hash),
+            title,
+            labels,
+            evidencePaths,
+            BuildIssueDraftBody(record, evidencePaths),
+            new SuggestionIssueDraftSourceJsonResult(
+                record.Category,
+                record.Language,
+                GetStatus(record),
+                GetAgent(record),
+                record.CreatedAt),
+            new SuggestionIssueDraftDuplicatePreflightJsonResult(
+                preflight.Checked,
+                duplicateMatches.Count,
+                duplicateMatches));
+    }
+
+    private static string BuildIssueDraftTitle(SuggestionRecord record)
+    {
+        var titleSource = !string.IsNullOrWhiteSpace(record.SampledTitle)
+            ? record.SampledTitle
+            : record.Description;
+        return GitHubIssueReporter.BuildIssueTitle(record.Category, titleSource);
+    }
+
+    private static string BuildIssueDraftBody(SuggestionRecord record, IReadOnlyList<string> evidencePaths)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("## Summary");
+        sb.AppendLine(GitHubIssueReporter.ScrubInlineCode(record.Description));
+        sb.AppendLine();
+        sb.AppendLine("## Category");
+        sb.AppendLine(record.Category);
+        sb.AppendLine();
+        sb.AppendLine("## Language");
+        sb.AppendLine(record.Language ?? "N/A");
+        sb.AppendLine();
+        sb.AppendLine("## Evidence paths");
+        if (evidencePaths.Count == 0)
+        {
+            sb.AppendLine("N/A");
+        }
+        else
+        {
+            foreach (var path in evidencePaths)
+                sb.AppendLine($"- {path}");
+        }
+        sb.AppendLine();
+        sb.AppendLine("## Context");
+        sb.AppendLine(record.Context != null ? GitHubIssueReporter.ScrubInlineCode(record.Context) : "N/A");
+        if (!string.IsNullOrWhiteSpace(record.ToolInvocationContext))
+        {
+            sb.AppendLine();
+            sb.AppendLine("## Tool invocation context");
+            sb.AppendLine(GitHubIssueReporter.ScrubInlineCode(record.ToolInvocationContext));
+        }
+        sb.AppendLine();
+        sb.AppendLine("## Suggestion metadata");
+        sb.AppendLine($"- suggestion_id: `{record.Hash}`");
+        sb.AppendLine($"- status: `{GetStatus(record)}`");
+        sb.AppendLine($"- created_at: `{record.CreatedAt:O}`");
+        var agent = GetAgent(record);
+        if (!string.IsNullOrWhiteSpace(agent))
+            sb.AppendLine($"- agent: `{agent}`");
+        if (!string.IsNullOrWhiteSpace(record.ClientVersion) && record.ClientVersion != "unknown")
+            sb.AppendLine($"- cdidx_version: `{record.ClientVersion}`");
+        return sb.ToString().TrimEnd();
+    }
+
+    private static List<string> NormalizeEvidencePaths(SuggestionRecord record)
+        => SuggestionEvidencePaths.Normalize(record.EvidencePaths);
+
+    private static List<string> NormalizeNullableArray(string[]? values)
+    {
+        if (values == null || values.Length == 0)
+            return [];
+
+        return values
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => value.Trim())
+            .Where(value => value.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+    }
 
     private static string FormatMarkdown(List<SuggestionRecord> records)
     {
@@ -309,6 +437,13 @@ internal static class SuggestionsCommandRunner
                 sb.AppendLine($"- mcp_client: `{record.McpClientName}{(string.IsNullOrWhiteSpace(record.McpClientVersion) ? string.Empty : " " + record.McpClientVersion)}`");
             if (!string.IsNullOrWhiteSpace(record.SessionId) && record.SessionId != "unknown")
                 sb.AppendLine($"- session_id: `{record.SessionId}`");
+            var evidencePaths = NormalizeEvidencePaths(record);
+            if (evidencePaths.Count > 0)
+            {
+                sb.AppendLine("- evidence_paths:");
+                foreach (var path in evidencePaths)
+                    sb.AppendLine($"  - `{path}`");
+            }
             if (!string.IsNullOrWhiteSpace(record.UpstreamUrl))
                 sb.AppendLine($"- upstream_url: {record.UpstreamUrl}");
             if (record.UpstreamIssueNumber != null)
@@ -418,8 +553,16 @@ internal static class SuggestionsCommandRunner
                         return options;
                     }
                     options.ExportFormat = format;
-                    if (options.ExportFormat is not ("json" or "markdown"))
-                        options.Error = "Error: --format must be one of json, markdown.";
+                    if (!IsValidExportFormat(options.ExportFormat))
+                        options.Error = "Error: --format must be one of json, markdown, issue-drafts.";
+                    break;
+                case "--open-issues":
+                    if (!TryReadValue(args, ref i, "--open-issues", out var openIssuesPath, out var openIssuesError))
+                    {
+                        options.Error = openIssuesError;
+                        return options;
+                    }
+                    options.OpenIssuesPath = openIssuesPath;
                     break;
                 default:
                     if (arg.StartsWith("--db=", StringComparison.Ordinal))
@@ -436,6 +579,8 @@ internal static class SuggestionsCommandRunner
                         options.Agent = arg["--agent=".Length..];
                     else if (arg.StartsWith("--format=", StringComparison.Ordinal))
                         options.ExportFormat = arg["--format=".Length..];
+                    else if (arg.StartsWith("--open-issues=", StringComparison.Ordinal))
+                        options.OpenIssuesPath = arg["--open-issues=".Length..];
                     else if (arg.StartsWith("--since=", StringComparison.Ordinal))
                     {
                         var inlineSince = arg["--since=".Length..];
@@ -461,10 +606,12 @@ internal static class SuggestionsCommandRunner
         options.ExportFormat = options.ExportFormat.ToLowerInvariant();
         if (!IsValidStatusFilter(options.Status))
             options.Error = "Error: --status must be one of all, draft, submitted_pending_triage, open_in_upstream, resolved_in_upstream, wont_fix, duplicate, superseded, submitted, unsubmitted.";
-        if (options.ExportFormat is not ("json" or "markdown"))
-            options.Error = "Error: --format must be one of json, markdown.";
+        if (!IsValidExportFormat(options.ExportFormat))
+            options.Error = "Error: --format must be one of json, markdown, issue-drafts.";
         return options;
     }
+
+    private static bool IsValidExportFormat(string format) => format is "json" or "markdown" or "issue-drafts";
 
     private static bool TryReadValue(string[] args, ref int i, string option, out string value, out string? error)
     {
@@ -480,6 +627,261 @@ internal static class SuggestionsCommandRunner
         return true;
     }
 
+    private sealed class IssueDuplicatePreflight
+    {
+        private static readonly HashSet<string> StopTitleTokens = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "ai",
+            "suggestion",
+            "suggestions",
+            "cdidx",
+            "the",
+            "and",
+            "or",
+            "for",
+            "with",
+            "from",
+            "into",
+            "that",
+            "this",
+        };
+
+        private readonly List<OpenIssue> _issues;
+
+        private IssueDuplicatePreflight(bool isChecked, string? source, List<OpenIssue> issues)
+        {
+            Checked = isChecked;
+            Source = source;
+            _issues = issues;
+        }
+
+        public bool Checked { get; }
+        public string? Source { get; }
+        public int OpenIssueCount => _issues.Count;
+
+        public static bool TryLoad(string? path, out IssueDuplicatePreflight preflight, out string? error)
+        {
+            error = null;
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                preflight = new IssueDuplicatePreflight(false, null, []);
+                return true;
+            }
+
+            try
+            {
+                var fullPath = Path.GetFullPath(path);
+                var root = JsonNode.Parse(File.ReadAllText(fullPath));
+                preflight = new IssueDuplicatePreflight(true, fullPath, ParseOpenIssues(root));
+                return true;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+            {
+                preflight = new IssueDuplicatePreflight(false, null, []);
+                error = $"could not read --open-issues file '{path}': {ex.Message}";
+                return false;
+            }
+        }
+
+        public List<SuggestionIssueDraftDuplicateMatchJsonResult> FindMatches(string draftTitle, IReadOnlyList<string> draftLabels)
+        {
+            if (!Checked || _issues.Count == 0)
+                return [];
+
+            var draftLabelSet = draftLabels.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var normalizedDraftTitle = NormalizeTitleText(draftTitle);
+            var draftTokens = TokenizeTitle(draftTitle);
+            var matches = new List<SuggestionIssueDraftDuplicateMatchJsonResult>();
+            foreach (var issue in _issues)
+            {
+                var issueLabels = issue.Labels
+                    .Where(label => !string.IsNullOrWhiteSpace(label))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                var overlappingLabels = issueLabels
+                    .Where(draftLabelSet.Contains)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                var normalizedIssueTitle = NormalizeTitleText(issue.Title);
+                var score = 0.0;
+                string? reason = null;
+                if (normalizedIssueTitle.Length > 0 && normalizedIssueTitle == normalizedDraftTitle)
+                {
+                    reason = "title_exact";
+                    score = 1.0;
+                }
+                else if (overlappingLabels.Count > 0)
+                {
+                    score = ScoreTitleSimilarity(draftTokens, TokenizeTitle(issue.Title));
+                    if (score >= 0.45)
+                    {
+                        reason = "title_label_similarity";
+                    }
+                    else if (normalizedIssueTitle.Length > 16
+                        && normalizedDraftTitle.Length > 16
+                        && (normalizedIssueTitle.Contains(normalizedDraftTitle, StringComparison.Ordinal)
+                            || normalizedDraftTitle.Contains(normalizedIssueTitle, StringComparison.Ordinal)))
+                    {
+                        reason = "title_label_contains";
+                        score = Math.Max(score, 0.45);
+                    }
+                }
+
+                if (reason == null)
+                    continue;
+
+                matches.Add(new SuggestionIssueDraftDuplicateMatchJsonResult(
+                    issue.Number,
+                    issue.Title,
+                    issue.Url,
+                    issueLabels,
+                    overlappingLabels,
+                    reason,
+                    Math.Round(score, 3)));
+            }
+
+            return matches
+                .OrderByDescending(match => match.Score)
+                .ThenBy(match => match.Number ?? int.MaxValue)
+                .Take(5)
+                .ToList();
+        }
+
+        private static List<OpenIssue> ParseOpenIssues(JsonNode? root)
+        {
+            var array = root as JsonArray
+                ?? root?["issues"] as JsonArray
+                ?? root?["items"] as JsonArray;
+            if (array == null)
+                return [];
+
+            var issues = new List<OpenIssue>();
+            foreach (var item in array)
+            {
+                var title = TryReadString(item?["title"]);
+                if (string.IsNullOrWhiteSpace(title))
+                    continue;
+                issues.Add(new OpenIssue(
+                    TryReadInt(item?["number"]),
+                    title,
+                    TryReadString(item?["url"]) ?? TryReadString(item?["html_url"]),
+                    ReadLabels(item?["labels"])));
+            }
+
+            return issues;
+        }
+
+        private static List<string> ReadLabels(JsonNode? labelsNode)
+        {
+            if (labelsNode is not JsonArray labels)
+                return [];
+
+            var result = new List<string>();
+            foreach (var labelNode in labels)
+            {
+                var label = TryReadString(labelNode) ?? TryReadString(labelNode?["name"]);
+                if (!string.IsNullOrWhiteSpace(label))
+                    result.Add(label.Trim());
+            }
+
+            return result.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        }
+
+        private static string? TryReadString(JsonNode? node)
+        {
+            if (node == null)
+                return null;
+            try
+            {
+                return node.GetValue<string>();
+            }
+            catch (InvalidOperationException)
+            {
+                return null;
+            }
+        }
+
+        private static int? TryReadInt(JsonNode? node)
+        {
+            if (node == null)
+                return null;
+            try
+            {
+                return node.GetValue<int>();
+            }
+            catch (InvalidOperationException)
+            {
+                var value = TryReadString(node);
+                return int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed)
+                    ? parsed
+                    : null;
+            }
+        }
+
+        private static string NormalizeTitleText(string title)
+        {
+            var builder = new StringBuilder(title.Length);
+            var previousWasSpace = true;
+            foreach (var c in title)
+            {
+                if (char.IsLetterOrDigit(c))
+                {
+                    builder.Append(char.ToLowerInvariant(c));
+                    previousWasSpace = false;
+                }
+                else if (!previousWasSpace)
+                {
+                    builder.Append(' ');
+                    previousWasSpace = true;
+                }
+            }
+
+            return builder.ToString().Trim();
+        }
+
+        private static HashSet<string> TokenizeTitle(string title)
+        {
+            var tokens = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var current = new StringBuilder();
+            foreach (var c in title)
+            {
+                if (char.IsLetterOrDigit(c))
+                {
+                    current.Append(char.ToLowerInvariant(c));
+                    continue;
+                }
+
+                AddToken(tokens, current);
+            }
+
+            AddToken(tokens, current);
+            return tokens;
+        }
+
+        private static void AddToken(HashSet<string> tokens, StringBuilder current)
+        {
+            if (current.Length == 0)
+                return;
+            var token = current.ToString();
+            current.Clear();
+            if (token.Length < 3 || StopTitleTokens.Contains(token))
+                return;
+            tokens.Add(token);
+        }
+
+        private static double ScoreTitleSimilarity(HashSet<string> left, HashSet<string> right)
+        {
+            if (left.Count == 0 || right.Count == 0)
+                return 0.0;
+
+            var intersection = left.Count(right.Contains);
+            var union = left.Count + right.Count - intersection;
+            return union == 0 ? 0.0 : intersection / (double)union;
+        }
+
+        private sealed record OpenIssue(int? Number, string Title, string? Url, List<string> Labels);
+    }
+
     private sealed class Options
     {
         public string? Id { get; set; }
@@ -490,6 +892,7 @@ internal static class SuggestionsCommandRunner
         public string? Language { get; set; }
         public string? Category { get; set; }
         public string? Agent { get; set; }
+        public string? OpenIssuesPath { get; set; }
         public DateTimeOffset? Since { get; set; }
         public string? Error { get; set; }
     }
@@ -530,6 +933,9 @@ internal sealed record SuggestionDetailJsonResult(
     [property: JsonPropertyName("mcp_client_name")] string? McpClientName,
     [property: JsonPropertyName("mcp_client_version")] string? McpClientVersion,
     [property: JsonPropertyName("tool_invocation_context")] string? ToolInvocationContext,
+    [property: JsonPropertyName("sampled_title")] string? SampledTitle,
+    [property: JsonPropertyName("sampled_tags")] List<string> SampledTags,
+    [property: JsonPropertyName("evidence_paths")] List<string> EvidencePaths,
     [property: JsonPropertyName("description")] string Description,
     [property: JsonPropertyName("context")] string? Context,
     [property: JsonPropertyName("submitted_to_github")] bool SubmittedToGitHub,
@@ -547,3 +953,45 @@ internal sealed record SuggestionExportJsonResult(
     [property: JsonPropertyName("api_version")] string ApiVersion,
     [property: JsonPropertyName("count")] int Count,
     [property: JsonPropertyName("suggestions")] List<SuggestionDetailJsonResult> Suggestions);
+
+internal sealed record SuggestionIssueDraftExportJsonResult(
+    [property: JsonPropertyName("api_version")] string ApiVersion,
+    [property: JsonPropertyName("count")] int Count,
+    [property: JsonPropertyName("duplicate_preflight")] SuggestionIssueDraftPreflightSummaryJsonResult DuplicatePreflight,
+    [property: JsonPropertyName("drafts")] List<SuggestionIssueDraftJsonResult> Drafts);
+
+internal sealed record SuggestionIssueDraftPreflightSummaryJsonResult(
+    [property: JsonPropertyName("checked")] bool Checked,
+    [property: JsonPropertyName("source")] string? Source,
+    [property: JsonPropertyName("open_issue_count")] int OpenIssueCount);
+
+internal sealed record SuggestionIssueDraftJsonResult(
+    [property: JsonPropertyName("suggestion_id")] string SuggestionId,
+    [property: JsonPropertyName("short_id")] string ShortId,
+    [property: JsonPropertyName("title")] string Title,
+    [property: JsonPropertyName("labels")] List<string> Labels,
+    [property: JsonPropertyName("evidence_paths")] List<string> EvidencePaths,
+    [property: JsonPropertyName("body")] string Body,
+    [property: JsonPropertyName("source")] SuggestionIssueDraftSourceJsonResult Source,
+    [property: JsonPropertyName("duplicate_preflight")] SuggestionIssueDraftDuplicatePreflightJsonResult DuplicatePreflight);
+
+internal sealed record SuggestionIssueDraftSourceJsonResult(
+    [property: JsonPropertyName("category")] string Category,
+    [property: JsonPropertyName("language")] string? Language,
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("agent")] string? Agent,
+    [property: JsonPropertyName("created_at")] DateTime CreatedAt);
+
+internal sealed record SuggestionIssueDraftDuplicatePreflightJsonResult(
+    [property: JsonPropertyName("checked")] bool Checked,
+    [property: JsonPropertyName("match_count")] int MatchCount,
+    [property: JsonPropertyName("matches")] List<SuggestionIssueDraftDuplicateMatchJsonResult> Matches);
+
+internal sealed record SuggestionIssueDraftDuplicateMatchJsonResult(
+    [property: JsonPropertyName("number")] int? Number,
+    [property: JsonPropertyName("title")] string Title,
+    [property: JsonPropertyName("url")] string? Url,
+    [property: JsonPropertyName("labels")] List<string> Labels,
+    [property: JsonPropertyName("overlapping_labels")] List<string> OverlappingLabels,
+    [property: JsonPropertyName("reason")] string Reason,
+    [property: JsonPropertyName("score")] double Score);

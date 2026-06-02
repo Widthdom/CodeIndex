@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -11,6 +12,8 @@ internal static class ExportImportCommandRunner
 {
     private const string ManifestEntryName = "manifest.json";
     private const string DatabaseEntryName = "codeindex.db";
+    internal const long MaxImportDatabaseBytes = 8L * 1024 * 1024 * 1024;
+    private const int ImportCopyBufferSize = 81920;
     private static readonly DateTimeOffset DeterministicZipTimestamp = new(1980, 1, 1, 0, 0, 0, TimeSpan.Zero);
 
     public static int RunExport(string[] args, JsonSerializerOptions jsonOptions, string appVersion)
@@ -73,14 +76,24 @@ internal static class ExportImportCommandRunner
             Directory.CreateDirectory(dbDirectory);
             using (var archive = ZipFile.OpenRead(archivePath))
             {
-                if (archive.GetEntry(ManifestEntryName) == null)
+                var manifestEntry = archive.GetEntry(ManifestEntryName);
+                if (manifestEntry == null)
                     return WriteError("archive is missing manifest.json.", "use an archive produced by `cdidx export <archive>`.", "cdidx import <archive> [--db <path>] [--json]");
+                if (!TryReadManifest(manifestEntry, jsonOptions, out var manifest, out var manifestError))
+                    return WriteError($"archive manifest is invalid: {manifestError}.", "use an archive produced by `cdidx export <archive>`.", "cdidx import <archive> [--db <path>] [--json]");
+                if (!TryValidateManifestHeader(manifest, out var manifestHeaderError))
+                    return WriteError($"archive manifest is invalid: {manifestHeaderError}.", "re-export from a compatible CodeIndex database.", "cdidx import <archive> [--db <path>] [--json]");
 
                 var dbEntry = archive.GetEntry(DatabaseEntryName);
                 if (dbEntry == null)
                     return WriteError("archive is missing codeindex.db.", "use an archive produced by `cdidx export <archive>`.", "cdidx import <archive> [--db <path>] [--json]");
+                if (!TryValidateDatabaseEntrySize(dbEntry.Length, dbEntry.CompressedLength, out var sizeValidationMessage))
+                    return WriteError(sizeValidationMessage, "re-export a smaller CodeIndex database or rebuild a smaller index.", "cdidx import <archive> [--db <path>] [--prune-paths] [--json]");
 
-                dbEntry.ExtractToFile(tempPath, overwrite: true);
+                ExtractDatabaseEntryToFile(dbEntry, tempPath);
+
+                if (!TryValidateImportedManifest(manifest, tempPath, out var manifestValidationMessage))
+                    return WriteError($"archive manifest mismatch: {manifestValidationMessage}.", "re-export from a compatible CodeIndex database.", "cdidx import <archive> [--db <path>] [--prune-paths] [--json]");
             }
 
             if (!DbContext.TryValidateExistingCodeIndexDb(tempPath, out var validationMessage, out _))
@@ -304,6 +317,139 @@ internal static class ExportImportCommandRunner
     {
         using var stream = File.OpenRead(path);
         return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+    }
+
+    private static bool TryReadManifest(ZipArchiveEntry manifestEntry, JsonSerializerOptions jsonOptions, out ExportManifest manifest, out string message)
+    {
+        try
+        {
+            using var stream = manifestEntry.Open();
+            manifest = JsonSerializer.Deserialize<ExportManifest>(stream, jsonOptions)
+                ?? throw new JsonException("manifest.json did not contain an object");
+            message = string.Empty;
+            return true;
+        }
+        catch (Exception ex) when (ex is JsonException or NotSupportedException)
+        {
+            manifest = null!;
+            message = ex.Message;
+            return false;
+        }
+    }
+
+    private static bool TryValidateManifestHeader(ExportManifest manifest, out string message)
+    {
+        if (!string.Equals(manifest.FormatVersion, "1", StringComparison.Ordinal))
+        {
+            message = $"unsupported format_version `{manifest.FormatVersion}`";
+            return false;
+        }
+
+        if (manifest.UserVersion < 0 || (manifest.UserVersion & ~DbContext.CurrentSchemaVersion) != 0)
+        {
+            message = $"unsupported user_version `{manifest.UserVersion}`";
+            return false;
+        }
+
+        if (!IsSha256Hex(manifest.DatabaseSha256))
+        {
+            message = "database_sha256 is missing or invalid";
+            return false;
+        }
+
+        message = string.Empty;
+        return true;
+    }
+
+    private static bool TryValidateImportedManifest(ExportManifest manifest, string dbPath, out string message)
+    {
+        var actualSha256 = ComputeSha256(dbPath);
+        if (!string.Equals(manifest.DatabaseSha256, actualSha256, StringComparison.OrdinalIgnoreCase))
+        {
+            message = "database_sha256 does not match codeindex.db";
+            return false;
+        }
+
+        var actualUserVersion = ReadSqliteUserVersion(dbPath);
+        if (actualUserVersion != manifest.UserVersion)
+        {
+            message = $"manifest user_version `{manifest.UserVersion}` does not match codeindex.db user_version `{actualUserVersion}`";
+            return false;
+        }
+
+        message = string.Empty;
+        return true;
+    }
+
+    private static int ReadSqliteUserVersion(string dbPath)
+    {
+        using var connection = new SqliteConnection(CreateUnpooledConnectionString(dbPath));
+        connection.Open();
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "PRAGMA user_version";
+        return Convert.ToInt32(cmd.ExecuteScalar(), CultureInfo.InvariantCulture);
+    }
+
+    private static bool IsSha256Hex(string? value)
+    {
+        if (value == null || value.Length != 64)
+            return false;
+
+        foreach (var ch in value)
+        {
+            if (!char.IsAsciiHexDigit(ch))
+                return false;
+        }
+
+        return true;
+    }
+
+    internal static bool TryValidateDatabaseEntrySize(long uncompressedLength, long compressedLength, out string message)
+    {
+        if (uncompressedLength < 0 || compressedLength < 0)
+        {
+            message = "archive codeindex.db size metadata is invalid";
+            return false;
+        }
+
+        if (uncompressedLength > MaxImportDatabaseBytes)
+        {
+            message = $"archive codeindex.db is too large: {ConsoleUi.FormatBytes(uncompressedLength)} uncompressed exceeds the import limit of {ConsoleUi.FormatBytes(MaxImportDatabaseBytes)}";
+            return false;
+        }
+
+        if (compressedLength > MaxImportDatabaseBytes)
+        {
+            message = $"archive codeindex.db is too large: {ConsoleUi.FormatBytes(compressedLength)} compressed exceeds the import limit of {ConsoleUi.FormatBytes(MaxImportDatabaseBytes)}";
+            return false;
+        }
+
+        message = string.Empty;
+        return true;
+    }
+
+    private static void ExtractDatabaseEntryToFile(ZipArchiveEntry dbEntry, string destinationPath)
+    {
+        using var source = dbEntry.Open();
+        using var target = File.Open(destinationPath, FileMode.Create, FileAccess.Write, FileShare.None);
+        CopyToWithLimit(source, target, MaxImportDatabaseBytes);
+    }
+
+    internal static long CopyToWithLimit(Stream source, Stream target, long maxBytes)
+    {
+        var buffer = new byte[ImportCopyBufferSize];
+        long totalBytes = 0;
+        int bytesRead;
+        while ((bytesRead = source.Read(buffer, 0, buffer.Length)) > 0)
+        {
+            if (totalBytes > maxBytes - bytesRead)
+                throw new InvalidDataException($"archive codeindex.db exceeds the import limit of {ConsoleUi.FormatBytes(maxBytes)}.");
+
+            target.Write(buffer, 0, bytesRead);
+            totalBytes += bytesRead;
+        }
+
+        return totalBytes;
     }
 
     private static void RewriteImportedProjectRoot(string dbPath, string projectRoot)

@@ -168,7 +168,7 @@ downgrading `cdidx`.
 | Diagnostics | `doctor` prints a redacted environment summary for bug reports. `status --config` prints effective configuration with source attribution, and `status --explain <field>` describes readiness fields and remediation. Read commands support `--profile`, `--slow-query-ms <n>`, and <code>--trace=stderr&#124;file&#124;none</code>; file traces write daily `query-trace-YYYYMMDD.jsonl` files next to the lifecycle log and retain the newest 30 trace files. |
 | Query exit codes | Valid zero-result query commands exit `0` by default. Pass `--strict-not-found` when scripts should treat zero rows as exit code `2`. |
 | Drift checks | `cdidx diff <db1> <db2>` compares schema, file, symbol, and reference deltas with stable exit codes: `0` identical, `1` drift, `2` schema mismatch, `3` unreadable DB. |
-| Extensibility and feedback | Post-extraction hooks from `~/.config/cdidx/hooks/*.dll` or `CDIDX_HOOKS_DIR` can enrich symbols and references. `cdidx suggestions` lists, inspects, and exports local suggestion history, with fuzzy MCP suggestion deduplication controlled by CLI, env, or `.cdidxrc.json`. |
+| Extensibility and feedback | Post-extraction hooks from `~/.config/cdidx/hooks/*.dll` or `CDIDX_HOOKS_DIR` can enrich symbols and references. `cdidx suggestions` lists, inspects, and exports local suggestion history, including issue-draft JSON with optional open-issue duplicate preflight, with fuzzy MCP suggestion deduplication controlled by CLI, env, or `.cdidxrc.json`. |
 | Language coverage | 78 detected languages, with symbol and graph support where available. |
 | Updates | `cdidx --version` checks GitHub releases at most once per day and appends a newer-release hint when one is available. Use `cdidx --check-updates` or `cdidx status --check-updates` for an explicit freshness check, and `cdidx upgrade` to reinstall the latest GitHub release via `install.sh`. Set `CDIDX_DISABLE_UPDATE_CHECK=1` to suppress checks. |
 
@@ -195,15 +195,22 @@ The documented `status --json` trust contract covers these fields:
 <tr><td><code>language_readiness</code></td><td><code>csharp_symbol_name_ready</code></td><td><code>csharp_metadata_target_ready</code></td><td><code>csharp_metadata_target_degraded_reason</code></td></tr>
 <tr><td><code>indexed_head_commit</code></td><td><code>worktree_head_changed</code></td><td><code>indexed_head_sha</code></td><td><code>indexed_head_branch</code></td></tr>
 <tr><td><code>indexed_head_timestamp</code></td><td><code>commits_ahead_of_indexed_head</code></td><td><code>index_writer_version</code></td><td><code>index_newer_than_reader</code></td></tr>
-<tr><td><code>index_newer_than_reader_reason</code></td><td><code>unknown_extension_file_count</code></td><td><code>path_case_sensitive</code></td><td><code>data_dir</code></td></tr>
-<tr><td><code>data_dir_source</code></td><td><code>data_dir_mode</code></td><td><code>mac_profile</code></td><td><code>db_size_bytes</code></td></tr>
-<tr><td><code>wal_size_bytes</code></td><td><code>db_pragma_settings</code></td><td><code>symbols_by_language</code></td><td><code>process</code></td></tr>
-<tr><td><code>last_index_run</code></td><td><code>hooks</code></td><td><code>stale_after_seconds</code></td><td><code>index_age_seconds</code></td></tr>
-<tr><td><code>degraded_reason</code></td><td><code>recommended_action</code></td><td><code>alternative_action</code></td><td><code>mcp_session</code></td></tr>
+<tr><td><code>index_newer_than_reader_reason</code></td><td><code>unknown_extension_file_count</code></td><td><code>unknown_extension_files</code></td><td><code>unknown_extension_files_truncated</code></td></tr>
+<tr><td><code>unknown_extension_file_path_limit</code></td><td><code>path_case_sensitive</code></td><td><code>data_dir</code></td><td><code>data_dir_source</code></td></tr>
+<tr><td><code>data_dir_mode</code></td><td><code>mac_profile</code></td><td><code>db_size_bytes</code></td><td><code>wal_size_bytes</code></td></tr>
+<tr><td><code>db_pragma_settings</code></td><td><code>symbols_by_language</code></td><td><code>process</code></td><td><code>last_index_run</code></td></tr>
+<tr><td><code>hooks</code></td><td><code>stale_after_seconds</code></td><td><code>index_age_seconds</code></td><td><code>degraded_reason</code></td></tr>
+<tr><td><code>recommended_action</code></td><td><code>alternative_action</code></td><td><code>mcp_session</code></td><td><code>extractors</code></td></tr>
 </tbody>
 </table>
 
 When any readiness field is degraded, `degraded_root_cause` identifies the primary stable code and `readiness_degradations[]` lists every degraded field with `root_cause`, human `degraded_reason`, `recommended_action`, and `alternative_action`. `issues_table_available` reports physical table presence; use `file_issues_data_current` to decide whether `file_issues` rows are current for the index generation.
+
+After a current full-repository scan, `unknown_extension_file_count` reports how many skipped files had unmapped non-empty extensions, while `unknown_extension_files` lists up to `unknown_extension_file_path_limit` paths and `unknown_extension_files_truncated` marks when more paths exist.
+
+`extractors` reports runtime extractor plugin and pattern-config diagnostics, including loaded counts, skipped file counts, and a bounded diagnostics list for load failures.
+
+`hooks[]` includes `callback_budget_ms`. `CDIDX_HOOK_CALLBACK_BUDGET_MS` bounds each post-extraction hook callback in milliseconds (default: 5000); callbacks that exceed the budget emit index warnings, drop timed-out mutations, and disable that hook for the current index run.
 
 For MCP `status`, `mcp_session` is session-scoped diagnostic data rather than persisted index state. It includes `log_level`, `roots`, optional `client_info`, and optional `client_capabilities`.
 
@@ -437,7 +444,7 @@ upgrade / downgrade 後はインストール済み補完 script を再生成し�
 | security defaults | POSIX では `.cdidx` を `0700` 権限で作成し、lifecycle log、metrics log、MCP audit log、query trace log は作成時点から owner read/write のみで作成します。metrics log と audit log は bounded slot へ rotation し、query trace log は bounded な保持件数へ pruning します。`status --json` は利用可能な場合に実効 POSIX mode を `data_dir_mode` として報告します。 |
 | diagnostics | `status --config` は source attribution 付きの effective configuration を出力し、`status --explain <field>` は readiness field の意味と対処を説明します。read 系コマンドは `--profile`、`--slow-query-ms <n>`、<code>--trace=stderr&#124;file&#124;none</code> に対応し、file trace は lifecycle log と同じ場所に日次 `query-trace-YYYYMMDD.jsonl` を書き、最新30件の trace file を保持します。 |
 | drift checks | `cdidx diff <db1> <db2>` は schema、file、symbol、reference の差分を比較します。exit code は `0` identical、`1` drift、`2` schema mismatch、`3` unreadable DB です。 |
-| extensibility / feedback | `~/.config/cdidx/hooks/*.dll` または `CDIDX_HOOKS_DIR` の post-extraction hook で永続化前のシンボルと参照を拡張できます。`cdidx suggestions` はローカル提案履歴の一覧表示、詳細表示、エクスポートに対応し、MCP 提案の近似重複排除しきい値は CLI、env、`.cdidxrc.json` で調整できます。 |
+| extensibility / feedback | `~/.config/cdidx/hooks/*.dll` または `CDIDX_HOOKS_DIR` の post-extraction hook で永続化前のシンボルと参照を拡張できます。`cdidx suggestions` はローカル提案履歴の一覧表示、詳細表示、open issue 重複 preflight 付き issue draft JSON エクスポートに対応し、MCP 提案の近似重複排除しきい値は CLI、env、`.cdidxrc.json` で調整できます。 |
 | language coverage | 78 言語を検出し、対応言語ではシンボルとグラフも利用可能です。 |
 | updates | `cdidx --version` は GitHub releases を 1 日 1 回まで確認し、新しいリリースがある場合にヒントを追記します。確認を抑止するには `CDIDX_DISABLE_UPDATE_CHECK=1` を設定します。 |
 
@@ -451,15 +458,22 @@ upgrade / downgrade 後はインストール済み補完 script を再生成し�
 <tr><td><code>language_readiness</code></td><td><code>csharp_symbol_name_ready</code></td><td><code>csharp_metadata_target_ready</code></td><td><code>csharp_metadata_target_degraded_reason</code></td></tr>
 <tr><td><code>indexed_head_commit</code></td><td><code>worktree_head_changed</code></td><td><code>indexed_head_sha</code></td><td><code>indexed_head_branch</code></td></tr>
 <tr><td><code>indexed_head_timestamp</code></td><td><code>commits_ahead_of_indexed_head</code></td><td><code>index_writer_version</code></td><td><code>index_newer_than_reader</code></td></tr>
-<tr><td><code>index_newer_than_reader_reason</code></td><td><code>unknown_extension_file_count</code></td><td><code>path_case_sensitive</code></td><td><code>data_dir</code></td></tr>
-<tr><td><code>data_dir_source</code></td><td><code>data_dir_mode</code></td><td><code>mac_profile</code></td><td><code>db_size_bytes</code></td></tr>
-<tr><td><code>wal_size_bytes</code></td><td><code>db_pragma_settings</code></td><td><code>symbols_by_language</code></td><td><code>process</code></td></tr>
-<tr><td><code>last_index_run</code></td><td><code>hooks</code></td><td><code>stale_after_seconds</code></td><td><code>index_age_seconds</code></td></tr>
-<tr><td><code>degraded_reason</code></td><td><code>recommended_action</code></td><td><code>alternative_action</code></td><td><code>mcp_session</code></td></tr>
+<tr><td><code>index_newer_than_reader_reason</code></td><td><code>unknown_extension_file_count</code></td><td><code>unknown_extension_files</code></td><td><code>unknown_extension_files_truncated</code></td></tr>
+<tr><td><code>unknown_extension_file_path_limit</code></td><td><code>path_case_sensitive</code></td><td><code>data_dir</code></td><td><code>data_dir_source</code></td></tr>
+<tr><td><code>data_dir_mode</code></td><td><code>mac_profile</code></td><td><code>db_size_bytes</code></td><td><code>wal_size_bytes</code></td></tr>
+<tr><td><code>db_pragma_settings</code></td><td><code>symbols_by_language</code></td><td><code>process</code></td><td><code>last_index_run</code></td></tr>
+<tr><td><code>hooks</code></td><td><code>stale_after_seconds</code></td><td><code>index_age_seconds</code></td><td><code>degraded_reason</code></td></tr>
+<tr><td><code>recommended_action</code></td><td><code>alternative_action</code></td><td><code>mcp_session</code></td><td><code>extractors</code></td></tr>
 </tbody>
 </table>
 
 readiness field のいずれかが degraded の場合、`degraded_root_cause` は primary の安定コードを示し、`readiness_degradations[]` は degraded な各 field と `root_cause`、人間向け `degraded_reason`、`recommended_action`、`alternative_action` を列挙します。`issues_table_available` は物理 table の有無を表し、`file_issues` 行が現在の index generation に対して current かどうかは `file_issues_data_current` を使って判定します。
+
+現行の全体 scan 後、`unknown_extension_file_count` は未知の非空拡張子で skip された件数を返し、`unknown_extension_files` は `unknown_extension_file_path_limit` 件までの path sample、`unknown_extension_files_truncated` は sample より多くの path があることを示します。
+
+`extractors` は extractor plugin と pattern config の runtime 診断で、読み込み済み件数、skip されたファイル数、読み込み失敗の上限付き diagnostics list を含みます。
+
+`hooks[]` は `callback_budget_ms` を含みます。`CDIDX_HOOK_CALLBACK_BUDGET_MS` は post-extraction hook callback ごとの上限ミリ秒を指定します（既定値: 5000）。上限を超えた callback は index warning を出し、timeout した変更を捨て、その index run 中は該当 hook を無効化します。
 
 MCP `status` の `mcp_session` は永続化された index 状態ではなく、セッション単位の診断情報です。`log_level`、`roots`、任意の `client_info`、任意の `client_capabilities` を含みます。
 

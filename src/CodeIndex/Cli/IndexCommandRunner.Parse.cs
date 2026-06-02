@@ -175,11 +175,9 @@ public static partial class IndexCommandRunner
                     {
                         var commit = args[++i];
                         commits.Add(commit);
-                        if (!GitHelper.IsCommitObjectId(commit))
-                            parseError ??= $"invalid --commits value '{commit}': expected a 7-40 character hex commit ID; ranges and tag refs are not accepted";
                     }
                     if (commits.Count == 0)
-                        Console.Error.WriteLine("Warning: --commits specified but no commit IDs provided / --commits が指定されましたがコミットIDがありません");
+                        Console.Error.WriteLine("Warning: --commits specified but no commit refs provided / --commits が指定されましたがコミットrefがありません");
                     break;
                 case "--changed-between":
                     changedBetweenSpecified = true;

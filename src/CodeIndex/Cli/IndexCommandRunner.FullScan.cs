@@ -333,7 +333,7 @@ public static partial class IndexCommandRunner
                     .Where(directory => directory.Length > 0)
                     .OrderBy(directory => directory, StringComparer.Ordinal)
                     .ToList());
-            File.WriteAllText(path, JsonSerializer.Serialize(checkpoint, new JsonSerializerOptions { WriteIndented = true }));
+            AtomicFileWriter.WriteJson(path, checkpoint, new JsonSerializerOptions { WriteIndented = true });
         }
         catch (IOException)
         {
@@ -1321,9 +1321,7 @@ public static partial class IndexCommandRunner
             // metadata ahead of the success markers.
             // no-op full-scan の explicit DB root backfill は readiness stamp 後に限定する。
             WriteProjectRootOnce();
-            writer.SetMeta(
-                DbContext.UnknownExtensionFileCountMetaKey,
-                scanResult.UnknownExtensionFiles.Count.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            writer.WriteUnknownExtensionFileMetadata(scanResult.UnknownExtensionFiles);
             // Persist the current HEAD only after the run is fully successful (errors == 0).
             // We deliberately only stamp on full scans (rebuild or default incremental). Update
             // mode (`--commits` / `--files`) leaves the captured HEAD untouched so the next

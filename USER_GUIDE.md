@@ -358,6 +358,14 @@ not scheduled for removal before the next major release. If removal is planned,
 the release notes will announce the timeline before the alias stops working.
 MCP mirrors the same split: use `exactSubstring` on `search`, `exactName` on
 name-based tools, and keep `exact` only for backward-compatible clients.
+In `search --json` and MCP `search` responses, exact substring highlights add
+`literal_terms` / `literal_term_occurrences` (camelCase in MCP) so clients can
+render only the requested literal phrase while keeping the broader diagnostic
+`terms` / `term_occurrences` fields.
+When a normal `search` query looks like a punctuation-heavy code phrase,
+text output suggests `--exact-substring`, JSON results include
+`exact_substring_hint`, and MCP `search` includes a `recovery_hint` with
+`exactSubstring: true` arguments.
 
 For single-value CLI flags, repeated occurrences keep the long-standing
 rightmost-wins behavior. `cdidx` prints a warning that names the winning value:
@@ -1122,7 +1130,8 @@ same source location.
 | `--language <lang>` / `--lang <lang>` | `suggestions` | Filter local suggestion history by recorded target language. |
 | `--category <category>` | `suggestions` | Filter local suggestion history by suggestion category. |
 | `--agent <name>` | `suggestions` | Filter local suggestion history by recorded agent/tool name when present. |
-| `--format <json\|markdown>` | `suggestions export` | Choose export format. JSON is the default; markdown is intended for human triage. |
+| `--format <json\|markdown\|issue-drafts>` | `suggestions export` | Choose export format. JSON is the default, markdown is intended for human triage, and issue-drafts emits issue-ready draft objects. |
+| `--open-issues <path>` | `suggestions export --format issue-drafts` | Preflight drafts against an open-issues JSON file such as `gh issue list --state open --json number,title,labels,url`. |
 | `--check` | `status` | Verify that `.cdidx/codeindex.db` exactly matches the current indexable workspace by comparing DB file paths/checksums against a fresh filesystem scan. Matching indexes exit `0`; stale indexes exit `5`. |
 | `--dry-run` | `index` | Scan files and report what would change without writing to the database |
 | `--limit <n>` | Query commands | Max results (default: 20, max: 10000; `map` uses it per section) |
@@ -2016,9 +2025,9 @@ When both are set, the allowlist wins. `tools/list` only advertises enabled tool
 
 ### AI Feedback
 
-cdidx includes a `suggest_improvement` MCP tool for AI agents that hit gaps or bugs. Suggestions are saved locally beside the selected DB (`.cdidx/suggestions-codeindex.json` by default), and are sent to GitHub only when the user explicitly provides `CDIDX_GITHUB_TOKEN`. GitHub submission runs outside the suggestion-store file lock and uses a 10-second timeout by default; set `CDIDX_GITHUB_SUBMIT_TIMEOUT_SECONDS=<seconds>` to tune that deadline. Local records include lifecycle metadata: `draft`, `submitted_pending_triage`, `open_in_upstream`, `resolved_in_upstream`, `wont_fix`, `duplicate`, or `superseded`, plus upstream issue URL/number fields when known. They also persist GitHub submission diagnostics (`last_submit_attempt`, `submit_attempt_count`, `last_submit_error`, and rate-limit `next_retry_at`) so operators can tell whether a suggestion was never attempted, failed transiently, is waiting for a rate-limit window, or was rejected by the API. New records also store attribution metadata: the MCP `initialize.clientInfo` name/version when available, an opaque cdidx session id, the cdidx version that recorded the suggestion, and optional natural-language `toolInvocationContext` supplied by the caller. Payload details and source-code leak guardrails are documented in the [Developer Guide](DEVELOPER_GUIDE.md#ai-feedback-implementation).
+cdidx includes a `suggest_improvement` MCP tool for AI agents that hit gaps or bugs. Suggestions are saved locally beside the selected DB (`.cdidx/suggestions-codeindex.json` by default), and are sent to GitHub only when the user explicitly provides `CDIDX_GITHUB_TOKEN`. GitHub submission runs outside the suggestion-store file lock and uses a 10-second timeout by default; set `CDIDX_GITHUB_SUBMIT_TIMEOUT_SECONDS=<seconds>` to tune that deadline. Local records include lifecycle metadata: `draft`, `submitted_pending_triage`, `open_in_upstream`, `resolved_in_upstream`, `wont_fix`, `duplicate`, or `superseded`, plus upstream issue URL/number fields when known. They also persist GitHub submission diagnostics (`last_submit_attempt`, `submit_attempt_count`, `last_submit_error`, and rate-limit `next_retry_at`) so operators can tell whether a suggestion was never attempted, failed transiently, is waiting for a rate-limit window, or was rejected by the API. New records also store attribution metadata: the MCP `initialize.clientInfo` name/version when available, an opaque cdidx session id, the cdidx version that recorded the suggestion, optional natural-language `toolInvocationContext`, and optional repository-relative `evidencePaths` supplied by the caller. Payload details and source-code leak guardrails are documented in the [Developer Guide](DEVELOPER_GUIDE.md#ai-feedback-implementation).
 
-Use `cdidx suggestions list` to review recorded suggestions, `cdidx suggestions show <id>` to inspect one entry, and `cdidx suggestions export --format markdown` to share a filtered triage bundle with a team. The command reads the suggestion store beside the selected DB (`.cdidx/suggestions-codeindex.json` by default), supports filters such as `--status`, `--language`, `--category`, `--since`, and `--agent`, and prints JSON with `--json` for scripts.
+Use `cdidx suggestions list` to review recorded suggestions, `cdidx suggestions show <id>` to inspect one entry, and `cdidx suggestions export --format markdown` to share a filtered triage bundle with a team. Use `cdidx suggestions export --format issue-drafts --open-issues open-issues.json` to emit issue-ready drafts with title, labels, evidence paths, body text, and duplicate matches from an open-issues JSON preflight. The command reads the suggestion store beside the selected DB (`.cdidx/suggestions-codeindex.json` by default), supports filters such as `--status`, `--language`, `--category`, `--since`, and `--agent`, and prints JSON with `--json` for scripts.
 
 Suggestion history readers can query the local store by lifecycle status, created-at threshold, category, language, or stored-order pages. These query APIs stream records from disk so tools that only need a narrow slice do not have to deserialize the whole suggestions file first.
 
@@ -2452,6 +2461,13 @@ name に対する NFKC + Unicode CaseFold の等価比較です。
 削除する予定はありません。削除する場合は、alias が使えなくなる前に release notes で
 timeline を告知します。MCP も同じ分割を反映します。`search` では `exactSubstring`、
 name-based tools では `exactName` を使い、`exact` は後方互換 client 向けに残します。
+`search --json` と MCP `search` の exact substring highlight には
+`literal_terms` / `literal_term_occurrences`（MCP では camelCase）も追加されるため、
+広めの診断用 `terms` / `term_occurrences` を残したまま、要求した literal phrase だけを
+render できます。
+通常の `search` query が記号の多い code phrase に見える場合、text output は
+`--exact-substring` を提案し、JSON 結果は `exact_substring_hint`、MCP `search` は
+`exactSubstring: true` arguments 付きの `recovery_hint` を返します。
 
 単一値の CLI フラグを複数回指定した場合は、従来どおり右端の指定が採用されます。
 `cdidx` は採用される値を含む警告を出し、最後の CLI 指定がそれ以前の CLI 指定や
@@ -3228,7 +3244,8 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--language <lang>` / `--lang <lang>` | `suggestions` | ローカル提案履歴を記録済み対象言語で絞り込みます。 |
 | `--category <category>` | `suggestions` | ローカル提案履歴を提案カテゴリで絞り込みます。 |
 | `--agent <name>` | `suggestions` | 記録されている場合、ローカル提案履歴をエージェント / ツール名で絞り込みます。 |
-| `--format <json\|markdown>` | `suggestions export` | エクスポート形式を選びます。既定は JSON、markdown は人間の triage 共有向けです。 |
+| `--format <json\|markdown\|issue-drafts>` | `suggestions export` | エクスポート形式を選びます。既定は JSON、markdown は人間の triage 共有向け、issue-drafts は Issue 作成用の draft object を出力します。 |
+| `--open-issues <path>` | `suggestions export --format issue-drafts` | `gh issue list --state open --json number,title,labels,url` などの open issue JSON と照合して draft を事前重複確認します。 |
 | `--check` | `status` | DB のファイル path/checksum と現在の index 対象 workspace を比較し、`.cdidx/codeindex.db` が完全一致するか確認。完全一致なら終了コード `0`、stale なら `5` |
 | `--dry-run` | `index` | DB に書き込まず、どの変更が発生するかだけを走査して報告 |
 | `--limit <n>` | クエリ系 | 最大結果数（デフォルト: 20、最大: 10000。`map` では各セクションごとの件数） |
@@ -4101,9 +4118,9 @@ stdio トランスポートはバイト単位で挙動が変わらないため�
 
 ### AIフィードバック
 
-cdidx には、AI エージェントがギャップや不具合に気づいたときに使える `suggest_improvement` MCP ツールがあります。提案は選択した DB の隣（既定は `.cdidx/suggestions-codeindex.json`）にローカル保存され、`CDIDX_GITHUB_TOKEN` を明示設定した場合に限って GitHub へ送信されます。GitHub 送信は suggestion-store のファイルロック外で実行され、既定では 10 秒で timeout します。この deadline は `CDIDX_GITHUB_SUBMIT_TIMEOUT_SECONDS=<秒>` で調整できます。ローカルレコードには lifecycle metadata として `draft`、`submitted_pending_triage`、`open_in_upstream`、`resolved_in_upstream`、`wont_fix`、`duplicate`、`superseded` と、判明している upstream issue URL/番号が保存されます。さらに GitHub 送信診断として `last_submit_attempt`、`submit_attempt_count`、`last_submit_error`、rate-limit 時の `next_retry_at` も永続化されるため、提案が未試行なのか、一時的に失敗したのか、rate-limit window 待ちなのか、API に拒否されたのかを運用者が判断できます。新規レコードには attribution metadata も保存されます。取得可能な場合は MCP `initialize.clientInfo` の name/version、不透明な cdidx セッション ID、提案を記録した cdidx バージョン、呼び出し元が任意で渡す自然言語の `toolInvocationContext` が含まれます。ペイロード詳細とソースコード漏えいガードは [DEVELOPER_GUIDE.md#aiフィードバックの実装](DEVELOPER_GUIDE.md#aiフィードバックの実装) にまとめています。
+cdidx には、AI エージェントがギャップや不具合に気づいたときに使える `suggest_improvement` MCP ツールがあります。提案は選択した DB の隣（既定は `.cdidx/suggestions-codeindex.json`）にローカル保存され、`CDIDX_GITHUB_TOKEN` を明示設定した場合に限って GitHub へ送信されます。GitHub 送信は suggestion-store のファイルロック外で実行され、既定では 10 秒で timeout します。この deadline は `CDIDX_GITHUB_SUBMIT_TIMEOUT_SECONDS=<秒>` で調整できます。ローカルレコードには lifecycle metadata として `draft`、`submitted_pending_triage`、`open_in_upstream`、`resolved_in_upstream`、`wont_fix`、`duplicate`、`superseded` と、判明している upstream issue URL/番号が保存されます。さらに GitHub 送信診断として `last_submit_attempt`、`submit_attempt_count`、`last_submit_error`、rate-limit 時の `next_retry_at` も永続化されるため、提案が未試行なのか、一時的に失敗したのか、rate-limit window 待ちなのか、API に拒否されたのかを運用者が判断できます。新規レコードには attribution metadata も保存されます。取得可能な場合は MCP `initialize.clientInfo` の name/version、不透明な cdidx セッション ID、提案を記録した cdidx バージョン、呼び出し元が任意で渡す自然言語の `toolInvocationContext`、任意のリポジトリ相対 `evidencePaths` が含まれます。ペイロード詳細とソースコード漏えいガードは [DEVELOPER_GUIDE.md#aiフィードバックの実装](DEVELOPER_GUIDE.md#aiフィードバックの実装) にまとめています。
 
-記録済みの提案は `cdidx suggestions list` で確認し、`cdidx suggestions show <id>` で1件を詳細表示し、`cdidx suggestions export --format markdown` でチーム triage 用に共有できます。このコマンドは選択した DB の隣にある提案ストア（既定は `.cdidx/suggestions-codeindex.json`）を読み、`--status`、`--language`、`--category`、`--since`、`--agent` で絞り込めます。スクリプト向けには `--json` を使います。
+記録済みの提案は `cdidx suggestions list` で確認し、`cdidx suggestions show <id>` で1件を詳細表示し、`cdidx suggestions export --format markdown` でチーム triage 用に共有できます。`cdidx suggestions export --format issue-drafts --open-issues open-issues.json` は、title、labels、evidence paths、body text、open issue JSON との重複候補を含む Issue 作成用 draft を出力します。このコマンドは選択した DB の隣にある提案ストア（既定は `.cdidx/suggestions-codeindex.json`）を読み、`--status`、`--language`、`--category`、`--since`、`--agent` で絞り込めます。スクリプト向けには `--json` を使います。
 
 提案履歴を読む側は、ライフサイクル状態、作成日時のしきい値、カテゴリ、言語、保存順ページでローカルストアを絞り込めます。これらのクエリ API はディスクからレコードをストリーミングするため、必要な範囲が小さいツールでも suggestions ファイル全体を先にデシリアライズする必要がありません。
 

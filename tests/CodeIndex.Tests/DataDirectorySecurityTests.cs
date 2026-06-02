@@ -87,6 +87,29 @@ public class DataDirectorySecurityTests
     }
 
     [Fact]
+    public void WritePrivateText_MoveFailure_DoesNotLeaveTempFile()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"cdidx_sensitive_file_atomic_{Guid.NewGuid():N}");
+        var path = Path.Combine(root, "metadata.info");
+        try
+        {
+            Directory.CreateDirectory(path);
+
+            var ex = Record.Exception(() => DataDirectorySecurity.WritePrivateText(path, "secret"));
+
+            Assert.NotNull(ex);
+            Assert.DoesNotContain(
+                Directory.EnumerateFiles(root),
+                file => Path.GetFileName(file).EndsWith(".tmp", StringComparison.Ordinal));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void ReadTextWithinLimit_WhenFileExceedsLimit_ReturnsNull()
     {
         var root = Path.Combine(Path.GetTempPath(), $"cdidx_bounded_read_{Guid.NewGuid():N}");

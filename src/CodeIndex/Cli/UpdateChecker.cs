@@ -219,7 +219,7 @@ internal static class UpdateChecker
                 checked_at = cache.CheckedAt.UtcDateTime.ToString("O", CultureInfo.InvariantCulture),
                 latest_tag = cache.LatestTag,
             };
-            File.WriteAllText(cachePath, JsonSerializer.Serialize(payload));
+            AtomicFileWriter.WriteJson(cachePath, payload);
         }
         catch
         {

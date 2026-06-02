@@ -30,9 +30,9 @@ public static class SearchSnippetFormatter
         return snippet;
     }
 
-    public static CompactSearchResult ToCompactResult(SearchResult result, string query, int maxLines = DefaultSnippetLines, bool caseSensitive = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, string? lang = null, SearchSnippetFocusMode focusMode = SearchSnippetFocusMode.Quality)
+    public static CompactSearchResult ToCompactResult(SearchResult result, string query, int maxLines = DefaultSnippetLines, bool caseSensitive = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, string? lang = null, SearchSnippetFocusMode focusMode = SearchSnippetFocusMode.Quality, bool exposeLiteralHighlights = false)
     {
-        var excerpt = BuildExcerpt(result.Content, query, result.StartLine, maxLines, caseSensitive, maxLineWidth, lang ?? result.Lang, focusMode);
+        var excerpt = BuildExcerpt(result.Content, query, result.StartLine, maxLines, caseSensitive, maxLineWidth, lang ?? result.Lang, focusMode, exposeLiteralHighlights);
         return new CompactSearchResult
         {
             Query = query,
@@ -55,13 +55,13 @@ public static class SearchSnippetFormatter
         };
     }
 
-    public static IEnumerable<CompactSearchResult> ToCompactResults(IEnumerable<SearchResult> results, string query, int maxLines = DefaultSnippetLines, bool caseSensitive = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, string? lang = null, SearchSnippetFocusMode focusMode = SearchSnippetFocusMode.Quality)
+    public static IEnumerable<CompactSearchResult> ToCompactResults(IEnumerable<SearchResult> results, string query, int maxLines = DefaultSnippetLines, bool caseSensitive = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, string? lang = null, SearchSnippetFocusMode focusMode = SearchSnippetFocusMode.Quality, bool exposeLiteralHighlights = false)
     {
         foreach (var result in results)
-            yield return ToCompactResult(result, query, maxLines, caseSensitive, maxLineWidth, lang ?? result.Lang, focusMode);
+            yield return ToCompactResult(result, query, maxLines, caseSensitive, maxLineWidth, lang ?? result.Lang, focusMode, exposeLiteralHighlights);
     }
 
-    public static SearchSnippetExcerpt BuildExcerpt(string content, string query, int absoluteStartLine, int maxLines = DefaultSnippetLines, bool caseSensitive = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, string? lang = null, SearchSnippetFocusMode focusMode = SearchSnippetFocusMode.Quality)
+    public static SearchSnippetExcerpt BuildExcerpt(string content, string query, int absoluteStartLine, int maxLines = DefaultSnippetLines, bool caseSensitive = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, string? lang = null, SearchSnippetFocusMode focusMode = SearchSnippetFocusMode.Quality, bool exposeLiteralHighlights = false)
     {
         maxLines = ClampSnippetLines(maxLines);
         maxLineWidth = LineWidthFormatter.ClampMaxLineWidth(maxLineWidth);
@@ -170,9 +170,15 @@ public static class SearchSnippetFormatter
 
             var absoluteLine = absoluteStartLine + i;
             matchLines.Add(absoluteLine);
+            var matchLineForTerms = normalizeCSharpVerbatimNames && normalizedLines != null ? normalizedLines[i] : originalLine;
             var termOccurrences = normalizeCSharpVerbatimNames && normalizedLines != null && rawIndexMaps != null
                 ? GetMatchedTermOccurrences(normalizedLines[i], absoluteLine, normalizedQuery, tokens, caseSensitive, originalLine, rawIndexMaps[i])
                 : GetMatchedTermOccurrences(originalLine, absoluteLine, normalizedQuery, tokens, caseSensitive);
+            var literalTermOccurrences = exposeLiteralHighlights
+                ? normalizeCSharpVerbatimNames && normalizedLines != null && rawIndexMaps != null
+                    ? GetMatchedTermOccurrences(normalizedLines[i], absoluteLine, normalizedQuery, [], caseSensitive, originalLine, rawIndexMaps[i])
+                    : GetMatchedTermOccurrences(originalLine, absoluteLine, normalizedQuery, [], caseSensitive)
+                : null;
             highlights.Add(new SearchHighlight
             {
                 Line = absoluteLine,
@@ -180,8 +186,10 @@ public static class SearchSnippetFormatter
                 OriginalLineLength = originalLine.Length,
                 Truncated = clamped.Truncated,
                 TruncatedCharCounts = clamped.Truncated ? [clamped.TruncatedCharCount] : [],
-                Terms = GetMatchedTerms(normalizeCSharpVerbatimNames && normalizedLines != null ? normalizedLines[i] : originalLine, normalizedQuery, tokens, caseSensitive),
+                Terms = GetMatchedTerms(matchLineForTerms, normalizedQuery, tokens, caseSensitive),
                 TermOccurrences = termOccurrences,
+                LiteralTerms = exposeLiteralHighlights ? GetMatchedTerms(matchLineForTerms, normalizedQuery, [], caseSensitive) : null,
+                LiteralTermOccurrences = literalTermOccurrences,
             });
         }
 
@@ -509,6 +517,8 @@ public sealed class CompactSearchResult
     public int TruncatedLineCount { get; set; }
     public int DroppedMatchLineCount { get; set; }
     public SearchTruncationContext TruncationContext { get; set; } = new();
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SearchQueryHint? ExactSubstringHint { get; set; }
     public double Score { get; set; }
 }
 
@@ -528,6 +538,10 @@ public sealed class SearchHighlight
     public List<int> TruncatedCharCounts { get; set; } = [];
     public List<string> Terms { get; set; } = [];
     public List<SearchTermOccurrence> TermOccurrences { get; set; } = [];
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? LiteralTerms { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<SearchTermOccurrence>? LiteralTermOccurrences { get; set; }
 }
 
 public sealed class SearchTermOccurrence

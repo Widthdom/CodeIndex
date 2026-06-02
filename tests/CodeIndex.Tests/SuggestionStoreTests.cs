@@ -855,14 +855,15 @@ public class SuggestionStoreTests : IDisposable
         // 一時ファイルへの書き込みは成功するが、ディレクトリに対する rename は失敗するため、
         // `.cdidx/` に孤児が蓄積しないよう一時ファイルがクリーンアップされる必要がある (#1574)。
         var filePath = Path.Combine(_tempDir, "suggestions-codeindex.json");
-        var tmpPath = filePath + ".tmp";
         Directory.CreateDirectory(filePath);
 
         var record = MakeRecord("other", null, "Move failure cleanup");
         var ex = Record.Exception(() => _store.TryAdd(record));
 
         Assert.NotNull(ex);
-        Assert.False(File.Exists(tmpPath), $"Orphan .tmp file should be cleaned up after Move failure: {tmpPath}");
+        Assert.DoesNotContain(
+            Directory.EnumerateFiles(_tempDir),
+            file => Path.GetFileName(file).EndsWith(".tmp", StringComparison.Ordinal));
     }
 
     // --- Helpers / ヘルパー ---
