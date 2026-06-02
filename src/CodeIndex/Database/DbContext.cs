@@ -14,7 +14,9 @@ public class DbContext : IDisposable
 {
     public const int ApplicationId = 0x43444958; // "CDIX"
     public const int DefaultCacheSizeKb = 65536;
+    public const int MaxCacheSizeKb = 1048576;
     public const long DefaultMmapSizeBytes = 268435456;
+    public const long MaxMmapSizeBytes = 1073741824;
     public const string CacheSizeEnvironmentVariable = "CDIDX_SQLITE_CACHE_KB";
     public const string MmapSizeEnvironmentVariable = "CDIDX_SQLITE_MMAP_BYTES";
     public const int DefaultWalAutocheckpointPages = 1000;
@@ -537,22 +539,30 @@ public class DbContext : IDisposable
 
     private void ApplyConnectionPerformancePragmas()
     {
-        Execute($"PRAGMA cache_size=-{ReadPositiveIntEnvironment(CacheSizeEnvironmentVariable, DefaultCacheSizeKb)}");
+        Execute($"PRAGMA cache_size=-{ReadPositiveIntEnvironment(CacheSizeEnvironmentVariable, DefaultCacheSizeKb, MaxCacheSizeKb)}");
         Execute("PRAGMA temp_store=MEMORY");
         if (Environment.Is64BitProcess)
-            Execute($"PRAGMA mmap_size={ReadNonNegativeLongEnvironment(MmapSizeEnvironmentVariable, DefaultMmapSizeBytes)}");
+            Execute($"PRAGMA mmap_size={ReadNonNegativeLongEnvironment(MmapSizeEnvironmentVariable, DefaultMmapSizeBytes, MaxMmapSizeBytes)}");
     }
 
-    private static int ReadPositiveIntEnvironment(string name, int fallback)
+    private static int ReadPositiveIntEnvironment(string name, int fallback, int maximum)
     {
         var value = Environment.GetEnvironmentVariable(name);
-        return int.TryParse(value, out var parsed) && parsed > 0 ? parsed : fallback;
+        return int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed)
+            && parsed > 0
+            && parsed <= maximum
+                ? parsed
+                : fallback;
     }
 
-    private static long ReadNonNegativeLongEnvironment(string name, long fallback)
+    private static long ReadNonNegativeLongEnvironment(string name, long fallback, long maximum)
     {
         var value = Environment.GetEnvironmentVariable(name);
-        return long.TryParse(value, out var parsed) && parsed >= 0 ? parsed : fallback;
+        return long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed)
+            && parsed >= 0
+            && parsed <= maximum
+                ? parsed
+                : fallback;
     }
 
     private void ConfigureAutoVacuumForEmptyDatabase()

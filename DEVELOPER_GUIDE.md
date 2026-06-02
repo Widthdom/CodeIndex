@@ -465,8 +465,8 @@ Operators can override the defaults with environment variables:
 
 | Variable | Default | Meaning |
 |---|---:|---|
-| `CDIDX_SQLITE_CACHE_KB` | `65536` | Positive cache size in KiB; cdidx applies it as a negative SQLite `cache_size` value so SQLite interprets it as KiB. |
-| `CDIDX_SQLITE_MMAP_BYTES` | `268435456` | Non-negative memory-map window in bytes on 64-bit processes. Use `0` to disable mmap. |
+| `CDIDX_SQLITE_CACHE_KB` | `65536` | Positive cache size in KiB, up to `1048576`; cdidx applies it as a negative SQLite `cache_size` value so SQLite interprets it as KiB. Invalid or oversized values fall back to the default. |
+| `CDIDX_SQLITE_MMAP_BYTES` | `268435456` | Non-negative memory-map window in bytes on 64-bit processes, up to `1073741824`. Use `0` to disable mmap. Invalid or oversized values fall back to the default. |
 
 After a successful `cdidx index` run, the writer refreshes SQLite planner statistics so large repositories do not rely on default selectivity estimates for `search`, `references`, `callers`, and related joins. A brand-new index database runs full `ANALYZE` once after the initial population; later successful index runs use SQLite's lighter `PRAGMA optimize`. This maintenance is best-effort and never changes the schema contract.
 

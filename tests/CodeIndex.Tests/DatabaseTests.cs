@@ -1,3 +1,4 @@
+using System.Globalization;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
@@ -1229,26 +1230,64 @@ public class DatabaseTests : IDisposable
     [Fact]
     public void Constructor_UsesSqlitePerformanceEnvironmentOverrides()
     {
+        AssertSqlitePerformancePragmas("4096", "1048576", 4096, 1048576);
+    }
+
+    [Fact]
+    public void Constructor_AcceptsMaximumSqlitePerformanceEnvironmentOverrides()
+    {
+        AssertSqlitePerformancePragmas(
+            DbContext.MaxCacheSizeKb.ToString(CultureInfo.InvariantCulture),
+            DbContext.MaxMmapSizeBytes.ToString(CultureInfo.InvariantCulture),
+            DbContext.MaxCacheSizeKb,
+            DbContext.MaxMmapSizeBytes);
+    }
+
+    [Fact]
+    public void Constructor_SqlitePerformanceEnvironmentAboveMaximumUsesDefaults()
+    {
+        AssertSqlitePerformancePragmas(
+            (DbContext.MaxCacheSizeKb + 1).ToString(CultureInfo.InvariantCulture),
+            (DbContext.MaxMmapSizeBytes + 1).ToString(CultureInfo.InvariantCulture),
+            DbContext.DefaultCacheSizeKb,
+            DbContext.DefaultMmapSizeBytes);
+    }
+
+    [Fact]
+    public void Constructor_SqlitePerformanceEnvironmentOverflowUsesDefaults()
+    {
+        AssertSqlitePerformancePragmas(
+            "2147483648",
+            "9223372036854775808",
+            DbContext.DefaultCacheSizeKb,
+            DbContext.DefaultMmapSizeBytes);
+    }
+
+    private static void AssertSqlitePerformancePragmas(
+        string cacheSizeValue,
+        string mmapSizeValue,
+        long expectedCacheSizeKb,
+        long expectedMmapSizeBytes)
+    {
         lock (TestConsoleLock.Gate)
         {
             var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_perf_pragmas_{Guid.NewGuid():N}.db");
-            var previousCacheSize = Environment.GetEnvironmentVariable(DbContext.CacheSizeEnvironmentVariable);
-            var previousMmapSize = Environment.GetEnvironmentVariable(DbContext.MmapSizeEnvironmentVariable);
+            using var env = EnvironmentVariableScope.Capture(
+                DbContext.CacheSizeEnvironmentVariable,
+                DbContext.MmapSizeEnvironmentVariable);
             try
             {
-                Environment.SetEnvironmentVariable(DbContext.CacheSizeEnvironmentVariable, "4096");
-                Environment.SetEnvironmentVariable(DbContext.MmapSizeEnvironmentVariable, "1048576");
+                env.Set(DbContext.CacheSizeEnvironmentVariable, cacheSizeValue);
+                env.Set(DbContext.MmapSizeEnvironmentVariable, mmapSizeValue);
 
                 using var db = new DbContext(dbPath);
 
-                Assert.Equal(-4096L, ExecuteScalarLong(db.Connection, "PRAGMA cache_size"));
+                Assert.Equal(-expectedCacheSizeKb, ExecuteScalarLong(db.Connection, "PRAGMA cache_size"));
                 if (Environment.Is64BitProcess)
-                    Assert.Equal(1048576L, ExecuteScalarLong(db.Connection, "PRAGMA mmap_size"));
+                    Assert.Equal(expectedMmapSizeBytes, ExecuteScalarLong(db.Connection, "PRAGMA mmap_size"));
             }
             finally
             {
-                Environment.SetEnvironmentVariable(DbContext.CacheSizeEnvironmentVariable, previousCacheSize);
-                Environment.SetEnvironmentVariable(DbContext.MmapSizeEnvironmentVariable, previousMmapSize);
                 SqliteConnection.ClearAllPools();
                 if (File.Exists(dbPath))
                     File.Delete(dbPath);
