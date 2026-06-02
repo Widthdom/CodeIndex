@@ -96,8 +96,9 @@ public class LspServerTests
             using var input = new MemoryStream(Encoding.UTF8.GetBytes(Frame("{") + Frame(initializeRequest)));
             using var output = new MemoryStream();
 
-            server.Run(input, output);
+            var exitCode = server.Run(input, output);
 
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             output.Position = 0;
             Assert.True(LspServer.TryReadMessage(output, out var parseErrorPayload));
             using var parseError = JsonDocument.Parse(parseErrorPayload);
@@ -131,13 +132,40 @@ public class LspServerTests
                 Frame(shutdownRequest) + Frame(exitNotification) + Frame(initializeRequest)));
             using var output = new MemoryStream();
 
-            server.Run(input, output);
+            var exitCode = server.Run(input, output);
 
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             output.Position = 0;
             Assert.True(LspServer.TryReadMessage(output, out var shutdownPayload));
             using var shutdown = JsonDocument.Parse(shutdownPayload);
             Assert.Equal(2, shutdown.RootElement.GetProperty("id").GetInt32());
             Assert.Equal(JsonValueKind.Null, shutdown.RootElement.GetProperty("result").ValueKind);
+            Assert.False(LspServer.TryReadMessage(output, out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_ExitBeforeShutdown_ReturnsUsageError()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_exit_without_shutdown");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            const string exitNotification = "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}";
+            const string initializeRequest = "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"initialize\",\"params\":{}}";
+            using var input = new MemoryStream(Encoding.UTF8.GetBytes(Frame(exitNotification) + Frame(initializeRequest)));
+            using var output = new MemoryStream();
+
+            var exitCode = server.Run(input, output);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            output.Position = 0;
             Assert.False(LspServer.TryReadMessage(output, out _));
         }
         finally

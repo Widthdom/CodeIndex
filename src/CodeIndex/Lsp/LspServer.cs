@@ -22,6 +22,7 @@ internal sealed class LspServer : IDisposable
     private readonly StringComparison _pathStringComparison;
     private bool _shutdownRequested;
     private bool _exitRequested;
+    private bool _exitRequestedBeforeShutdown;
 
     public LspServer(DbReader reader, string version, JsonSerializerOptions jsonOptions, string? projectRoot = null)
     {
@@ -32,7 +33,7 @@ internal sealed class LspServer : IDisposable
         _pathStringComparison = PathCasing.ComparisonFor(_projectRoot ?? Environment.CurrentDirectory);
     }
 
-    public void Run(Stream input, Stream output)
+    public int Run(Stream input, Stream output)
     {
         while (TryReadMessage(input, out var payload))
         {
@@ -42,6 +43,8 @@ internal sealed class LspServer : IDisposable
             if (_exitRequested)
                 break;
         }
+
+        return _exitRequestedBeforeShutdown ? CommandExitCodes.UsageError : CommandExitCodes.Success;
     }
 
     internal JsonObject? HandleMessage(string payload)
@@ -102,6 +105,7 @@ internal sealed class LspServer : IDisposable
 
     private JsonObject? HandleExit()
     {
+        _exitRequestedBeforeShutdown = !_shutdownRequested;
         _exitRequested = true;
         return null;
     }
