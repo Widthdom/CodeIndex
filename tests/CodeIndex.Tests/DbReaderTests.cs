@@ -680,6 +680,33 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void Search_ReturnsEnclosingSymbolMetadata_Issue2838()
+    {
+        const string token = "issue2838_unique_needle";
+        InsertIndexedFile("src/issue2838/SearchContainer.cs", "csharp",
+            $$"""
+            namespace Issue2838;
+
+            public sealed class SearchContainer
+            {
+                public void Run()
+                {
+                    var message = "{{token}}";
+                }
+            }
+            """);
+
+        var result = Assert.Single(_reader.Search(token, lang: "csharp")
+            .Where(result => result.Path == "src/issue2838/SearchContainer.cs"));
+
+        Assert.Equal("Run", result.EnclosingSymbolName);
+        Assert.Equal("function", result.EnclosingSymbolKind);
+        Assert.Equal("SearchContainer", result.EnclosingContainerName);
+        Assert.True(result.EnclosingSymbolStartLine > 0);
+        Assert.True(result.EnclosingSymbolEndLine >= result.EnclosingSymbolStartLine);
+    }
+
+    [Fact]
     public void GetSymbolHotspots_RanksRealCallsAboveManyLowerWeightSubscribeEdges()
     {
         var fileId = _writer.UpsertFile(new FileRecord

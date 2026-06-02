@@ -124,7 +124,12 @@ public partial class DbReader
                 SELECT f.path, f.lang, c.start_line, c.end_line, c.content,
                        0.0 AS rank,
                        {GetSearchVisibilitySql()} AS visibility,
-                       c.id AS chunk_id
+                       c.id AS chunk_id,
+                       {GetSearchEnclosingSymbolColumnSql("s_enclosing.name")} AS enclosing_symbol_name,
+                       {GetSearchEnclosingSymbolColumnSql("s_enclosing.kind")} AS enclosing_symbol_kind,
+                       {GetSearchEnclosingSymbolColumnSql(GetSymbolColumnSql("start_line", "s_enclosing.line", "s_enclosing"))} AS enclosing_symbol_start_line,
+                       {GetSearchEnclosingSymbolColumnSql(GetSymbolColumnSql("end_line", "s_enclosing.line", "s_enclosing"))} AS enclosing_symbol_end_line,
+                       {GetSearchEnclosingSymbolColumnSql(GetSymbolColumnSql("container_name", symbolAlias: "s_enclosing"))} AS enclosing_container_name
                 FROM chunks c
                 JOIN files f ON c.file_id = f.id{SearchSymbolMatchJoinsSql}
                 WHERE instr(
@@ -141,7 +146,12 @@ public partial class DbReader
                 SELECT f.path, f.lang, c.start_line, c.end_line, c.content,
                        rank,
                        {GetSearchVisibilitySql()} AS visibility,
-                       c.id AS chunk_id
+                       c.id AS chunk_id,
+                       {GetSearchEnclosingSymbolColumnSql("s_enclosing.name")} AS enclosing_symbol_name,
+                       {GetSearchEnclosingSymbolColumnSql("s_enclosing.kind")} AS enclosing_symbol_kind,
+                       {GetSearchEnclosingSymbolColumnSql(GetSymbolColumnSql("start_line", "s_enclosing.line", "s_enclosing"))} AS enclosing_symbol_start_line,
+                       {GetSearchEnclosingSymbolColumnSql(GetSymbolColumnSql("end_line", "s_enclosing.line", "s_enclosing"))} AS enclosing_symbol_end_line,
+                       {GetSearchEnclosingSymbolColumnSql(GetSymbolColumnSql("container_name", symbolAlias: "s_enclosing"))} AS enclosing_container_name
                 FROM fts_chunks
                 JOIN chunks c ON fts_chunks.rowid = c.id
                 JOIN files f ON c.file_id = f.id{SearchSymbolMatchJoinsSql}";
@@ -196,6 +206,11 @@ public partial class DbReader
                     Score = reader.GetDouble(5),
                     Visibility = GetNullableString(reader, 6),
                     ChunkId = reader.GetInt64(7),
+                    EnclosingSymbolName = GetNullableString(reader, 8),
+                    EnclosingSymbolKind = GetNullableString(reader, 9),
+                    EnclosingSymbolStartLine = GetNullableInt32(reader, 10),
+                    EnclosingSymbolEndLine = GetNullableInt32(reader, 11),
+                    EnclosingContainerName = GetNullableString(reader, 12),
                     NextOffset = nextOffset,
                 });
             }
@@ -210,6 +225,35 @@ public partial class DbReader
 
         var results = deduplicate ? DeduplicateOverlappingResults(raw) : raw;
         return hasGuardFilters ? PageGuardedSearchResults(results, limit, cursor) : results;
+    }
+
+    private string GetSearchEnclosingSymbolColumnSql(string columnSql)
+    {
+        var startLineSql = GetSymbolColumnSql("start_line", "s_enclosing.line", "s_enclosing");
+        var endLineSql = GetSymbolColumnSql("end_line", "s_enclosing.line", "s_enclosing");
+        return $@"
+            (
+                SELECT {columnSql}
+                FROM symbols s_enclosing
+                WHERE s_enclosing.file_id = f.id
+                  AND {startLineSql} <= c.end_line
+                  AND {endLineSql} >= c.start_line
+                ORDER BY CASE s_enclosing.kind
+                             WHEN 'function' THEN 0
+                             WHEN 'test.method' THEN 0
+                             WHEN 'property' THEN 1
+                             WHEN 'class' THEN 2
+                             WHEN 'interface' THEN 2
+                             WHEN 'struct' THEN 2
+                             WHEN 'enum' THEN 2
+                             ELSE 3
+                         END,
+                         ({endLineSql} - {startLineSql}) ASC,
+                         {startLineSql} DESC,
+                         s_enclosing.line DESC,
+                         s_enclosing.id ASC
+                LIMIT 1
+            )";
     }
 
     public QueryCountResult CountSearchResults(string query, string? lang = null, bool rawQuery = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool deduplicate = true, DateTime? since = null, bool exact = false, bool prefix = false, bool visibilityRank = true, IReadOnlyList<SearchGuardFilter>? guardFilters = null, int guardWindow = DefaultSearchGuardWindow)

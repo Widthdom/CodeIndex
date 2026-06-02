@@ -53,6 +53,11 @@ public static class SearchSnippetFormatter
             TruncationContext = excerpt.TruncationContext,
             GuardEvidence = result.GuardEvidence,
             Score = result.Score,
+            EnclosingSymbolName = result.EnclosingSymbolName,
+            EnclosingSymbolKind = result.EnclosingSymbolKind,
+            EnclosingSymbolStartLine = result.EnclosingSymbolStartLine,
+            EnclosingSymbolEndLine = result.EnclosingSymbolEndLine,
+            EnclosingContainerName = result.EnclosingContainerName,
         };
     }
 
@@ -523,6 +528,16 @@ public sealed class CompactSearchResult
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public SearchQueryHint? ExactSubstringHint { get; set; }
     public double Score { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? EnclosingSymbolName { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? EnclosingSymbolKind { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? EnclosingSymbolStartLine { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? EnclosingSymbolEndLine { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? EnclosingContainerName { get; set; }
 }
 
 public enum SearchSnippetFocusMode
