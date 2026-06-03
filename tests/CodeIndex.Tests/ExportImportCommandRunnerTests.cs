@@ -17,7 +17,9 @@ public class ExportImportCommandRunnerTests
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             var outputPath = dbPath + outputSuffix;
             var outputExisted = File.Exists(outputPath);
-            var outputBytes = outputExisted ? File.ReadAllBytes(outputPath) : null;
+            var outputInfo = outputExisted ? new FileInfo(outputPath) : null;
+            var outputLength = outputInfo?.Length;
+            var outputLastWriteUtc = outputInfo?.LastWriteTimeUtc;
 
             var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
                 ExportImportCommandRunner.RunExport(
@@ -29,8 +31,12 @@ public class ExportImportCommandRunnerTests
             Assert.Equal(string.Empty, stdout);
             Assert.Contains("ctags output path must not be the source database or a SQLite sidecar", stderr);
             Assert.Equal(outputExisted, File.Exists(outputPath));
-            if (outputBytes != null)
-                Assert.Equal(outputBytes, File.ReadAllBytes(outputPath));
+            if (outputInfo != null)
+            {
+                outputInfo.Refresh();
+                Assert.Equal(outputLength, outputInfo.Length);
+                Assert.Equal(outputLastWriteUtc, outputInfo.LastWriteTimeUtc);
+            }
         }
         finally
         {
