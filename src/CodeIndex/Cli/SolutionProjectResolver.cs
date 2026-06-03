@@ -10,14 +10,22 @@ internal static partial class SolutionProjectResolver
     public static IReadOnlyList<DotNetProjectInfo> ResolveProjects(string workspaceRoot, string? solutionPath = null)
     {
         var root = Path.GetFullPath(workspaceRoot);
-        var indexer = new FileIndexer(root);
-        var solution = ResolveSolutionPath(root, solutionPath);
-        if (solution != null)
-            return ParseSolution(solution, root, indexer);
+        var indexer = CreateIndexerWithWorkspacePolicy(root);
+        return ResolveProjects(root, solutionPath, indexer);
+    }
 
-        return EnumerateFilesUsingIndexerPolicy(root, root, indexer)
+    private static IReadOnlyList<DotNetProjectInfo> ResolveProjects(
+        string workspaceRoot,
+        string? solutionPath,
+        FileIndexer indexer)
+    {
+        var solution = ResolveSolutionPath(workspaceRoot, solutionPath);
+        if (solution != null)
+            return ParseSolution(solution, workspaceRoot, indexer);
+
+        return EnumerateFilesUsingIndexerPolicy(workspaceRoot, workspaceRoot, indexer)
             .Where(IsDotNetProjectFile)
-            .Select(path => BuildProjectInfo(path, root))
+            .Select(path => BuildProjectInfo(path, workspaceRoot))
             .OrderBy(project => project.Name, StringComparer.OrdinalIgnoreCase)
             .ThenBy(project => project.ProjectPath, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -57,8 +65,8 @@ internal static partial class SolutionProjectResolver
             return [];
 
         var root = Path.GetFullPath(workspaceRoot);
-        var projects = ResolveProjects(root, solutionPath);
-        var indexer = new FileIndexer(root);
+        var indexer = CreateIndexerWithWorkspacePolicy(root);
+        var projects = ResolveProjects(root, solutionPath, indexer);
         var files = new SortedSet<string>(StringComparer.Ordinal);
         foreach (var requested in requestedProjects)
         {
@@ -76,6 +84,14 @@ internal static partial class SolutionProjectResolver
         }
 
         return files.ToList();
+    }
+
+    private static FileIndexer CreateIndexerWithWorkspacePolicy(string workspaceRoot)
+    {
+        var root = Path.GetFullPath(workspaceRoot);
+        var ignoreCase = GitHelper.ResolveIgnoreCase(root);
+        var ignoreRuleRoot = GitHelper.TryGetRepositoryRoot(root) ?? root;
+        return new FileIndexer(root, ignoreCase, ignoreRuleRoot);
     }
 
     private static string? ResolveSolutionPath(string workspaceRoot, string? solutionPath)

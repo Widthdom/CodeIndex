@@ -1073,6 +1073,37 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void ResolveProjectFiles_HonorsGitRootIgnoreRulesForNestedWorkspace_Issue2862()
+    {
+        var repoRoot = TestProjectHelper.CreateTempProject("cdidx_index_project_filter_git_root");
+        try
+        {
+            RunGit(repoRoot, "init");
+            var projectRoot = Path.Combine(repoRoot, "Sub");
+            var libDir = Path.Combine(projectRoot, "src", "Lib");
+            Directory.CreateDirectory(Path.Combine(libDir, "Ignored"));
+            File.WriteAllText(Path.Combine(repoRoot, ".gitignore"), "Sub/src/Lib/Ignored/\n");
+            File.WriteAllText(Path.Combine(projectRoot, "Repo.sln"), """
+            Microsoft Visual Studio Solution File, Format Version 12.00
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Lib", "src\Lib\Lib.csproj", "{11111111-1111-1111-1111-111111111111}"
+            EndProject
+            """);
+            File.WriteAllText(Path.Combine(libDir, "Lib.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+            File.WriteAllText(Path.Combine(libDir, "Class1.cs"), "class Class1 {}");
+            File.WriteAllText(Path.Combine(libDir, "Ignored", "Ignored.cs"), "class Ignored {}");
+
+            var files = SolutionProjectResolver.ResolveProjectFiles(projectRoot, ["Lib"], "Repo.sln");
+
+            Assert.Contains("src/Lib/Class1.cs", files);
+            Assert.DoesNotContain("src/Lib/Ignored/Ignored.cs", files);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(repoRoot);
+        }
+    }
+
+    [Fact]
     public void ResolveProjectFiles_SkipsDirectorySymlinkLoops_Issue2862()
     {
         if (OperatingSystem.IsWindows())
