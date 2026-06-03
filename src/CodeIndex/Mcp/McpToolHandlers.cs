@@ -3637,8 +3637,13 @@ public partial class McpServer
         var csharpWorkspace = BuildMcpCSharpStaticInterfaceWorkspaceSymbols(writer, indexer, projectPath, files, requestToken);
         if (purged > 0 && hadCSharpStaticInterfaceContractsBeforePurge)
             csharpWorkspace = csharpWorkspace with { HasStaticInterfaceContracts = true };
-        int processed = 0, skipped = 0, errors = 0;
-        var failures = new List<IndexFileFailure>();
+        var fatalScanErrors = scanResult.Errors
+            .Where(error => error.IsFatal)
+            .ToList();
+        int processed = 0, skipped = 0, errors = fatalScanErrors.Count;
+        var failures = fatalScanErrors
+            .Select(BuildScanFailure)
+            .ToList();
         var reusedHotspotFamilyLanguages = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var filePath in files)
@@ -3767,7 +3772,7 @@ public partial class McpServer
         var foldReadyAfter = false;
         string? foldReadyReason = null;
         _ = priorMetadataTargetCsharp;
-        if (errors == 0)
+        if (!scanResult.HadErrors && errors == 0)
         {
             EmitProgressNotification(progressToken, processed, files.Count, "Finalizing index metadata.");
             writer.MarkBatchInProgress();
@@ -3963,6 +3968,13 @@ public partial class McpServer
         var relativePath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectPath, filePath));
         return new IndexFileFailure(relativePath, stage, ex.GetType().Name, ex.Message);
     }
+
+    private static IndexFileFailure BuildScanFailure(FileIndexer.ScanError error) =>
+        new(
+            FileIndexer.NormalizePathSeparators(error.Path),
+            "scan",
+            nameof(FileIndexer.ScanError),
+            error.Message);
 
     private sealed record IndexFileFailure(string Path, string Stage, string ExceptionType, string Message);
 

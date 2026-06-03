@@ -7444,6 +7444,69 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_Index_FatalScanErrorDoesNotRestampReadiness_Issue2874()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_scan_error_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(fixtureDir);
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_index_scan_error_{Guid.NewGuid():N}.db");
+        try
+        {
+            File.WriteAllText(Path.Combine(fixtureDir, "app.cs"), "public class App { }\n");
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var request = new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = 1,
+                ["method"] = "tools/call",
+                ["params"] = new JsonObject
+                {
+                    ["name"] = "index",
+                    ["arguments"] = new JsonObject
+                    {
+                        ["path"] = fixtureDir
+                    }
+                }
+            };
+
+            var firstResponse = server.HandleMessage(request)!;
+            Assert.False(firstResponse["result"]!["isError"]?.GetValue<bool>() ?? false);
+
+            using (var readyDb = new DbContext(dbPath))
+            {
+                var userVersion = readyDb.GetUserVersion();
+                Assert.NotEqual(0, userVersion & DbContext.GraphReadyFlag);
+                Assert.NotEqual(0, userVersion & DbContext.IssuesReadyFlag);
+            }
+
+            File.WriteAllText(Path.Combine(fixtureDir, ".gitignore"), new string('a', 256 * 1024 + 1));
+            request["id"] = 2;
+
+            var secondResponse = server.HandleMessage(request)!;
+            var structured = secondResponse["result"]!["structuredContent"]!;
+
+            Assert.False(secondResponse["result"]!["isError"]?.GetValue<bool>() ?? false);
+            Assert.Equal(1, structured["summary"]!["errors"]!.GetValue<int>());
+            Assert.Equal(1, structured["summary"]!["failed_count"]!.GetValue<int>());
+            var failure = Assert.Single(structured["failures"]!.AsArray());
+            Assert.Equal(".gitignore", failure!["path"]!.GetValue<string>());
+            Assert.Equal("scan", failure["stage"]!.GetValue<string>());
+            Assert.Equal(nameof(FileIndexer.ScanError), failure["exception_type"]!.GetValue<string>());
+
+            using var failedDb = new DbContext(dbPath);
+            var failedUserVersion = failedDb.GetUserVersion();
+            Assert.Equal(0, failedUserVersion & DbContext.GraphReadyFlag);
+            Assert.Equal(0, failedUserVersion & DbContext.IssuesReadyFlag);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(fixtureDir))
+                Directory.Delete(fixtureDir, recursive: true);
+            DeleteFileRobust(dbPath);
+        }
+    }
+
+    [Fact]
     public void ToolsCall_Index_FailedFirstMutation_DoesNotRewriteIndexedProjectRootMetadata()
     {
         var projectRootA = TestProjectHelper.CreateTempProject("cdidx_mcp_index_root_a");
