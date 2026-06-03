@@ -226,6 +226,7 @@ For MCP `status`, `mcp_session` is session-scoped diagnostic data rather than pe
 | `hotspot_family_support_not_indexed` | Legacy DB without hotspot-family support. |
 | `hotspot_family_metadata_stale` | Hotspot-family metadata is stale. |
 | `hotspot_family_disabled_at_index_time` | The index was written while marker fingerprints were unavailable. |
+| `partial_family_key_population` | Some indexed symbols still lack hotspot-family keys. |
 | `hotspot_family_marker_fingerprint_incomplete` | Marker fingerprint traversal hit safety caps during the last index run, so hotspot-family metadata is intentionally incomplete. |
 
 Hotspot-family readiness is tracked by per-language
@@ -496,6 +497,7 @@ MCP `status` の `mcp_session` は永続化された index 状態ではなく、
 | `hotspot_family_support_not_indexed` | hotspot-family 未対応の legacy DB。 |
 | `hotspot_family_metadata_stale` | hotspot-family metadata が古い状態。 |
 | `hotspot_family_disabled_at_index_time` | marker fingerprint が利用できない状態で書かれた index。 |
+| `partial_family_key_population` | 一部の indexed symbol に hotspot-family key が未設定の状態。 |
 | `hotspot_family_marker_fingerprint_incomplete` | 前回の index で marker fingerprint traversal が安全上限に到達したため、hotspot-family metadata が意図的に incomplete として扱われています。 |
 
 hotspot-family readiness は、hotspot-family contract version 2 で導入された
