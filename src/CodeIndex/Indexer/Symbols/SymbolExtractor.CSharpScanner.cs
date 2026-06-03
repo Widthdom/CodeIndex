@@ -1165,6 +1165,9 @@ public static partial class SymbolExtractor
             return true;
 
         var lastChar = trimmed[^1];
+        if (lastChar == ',' && !LooksLikeCSharpDeclaratorListReturnType(trimmed))
+            return true;
+
         if (lastChar is '<' or '=' or ':' or '+' or '-' or '/' or '%' or '!' or '&' or '|' or '^' or '~' or '.')
             return true;
 
@@ -1184,6 +1187,14 @@ public static partial class SymbolExtractor
 
         var lastToken = trimmed[tokenStart..];
         return lastToken is "as" or "is" or "return" or "throw" or "new";
+    }
+
+    private static bool LooksLikeCSharpDeclaratorListReturnType(string returnType)
+    {
+        var withoutTrailingComma = returnType[..^1].TrimEnd();
+        var firstSegmentEnd = withoutTrailingComma.IndexOf(',');
+        var firstSegment = (firstSegmentEnd >= 0 ? withoutTrailingComma[..firstSegmentEnd] : withoutTrailingComma).Trim();
+        return firstSegment.Any(char.IsWhiteSpace);
     }
 
     private static bool IsInsidePreviouslyEmittedCSharpMemberBody(

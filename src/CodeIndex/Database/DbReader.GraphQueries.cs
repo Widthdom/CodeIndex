@@ -18,7 +18,7 @@ public partial class DbReader
         if (!ShouldFilterCSharpReceiverQualifiedBareMemberQuery(query, lang, exact))
             return string.Empty;
 
-        return $" AND NOT ({fileAlias}.lang = 'csharp' AND {referenceAlias}.reference_kind = 'call' AND (instr({contextSql}, '.' || {referenceAlias}.symbol_name) > 0 OR ({referenceAlias}.column_number > 1 AND substr({contextSql}, {referenceAlias}.column_number - 1, 1) = '.')))";
+        return $" AND NOT ({fileAlias}.lang = 'csharp' AND {referenceAlias}.reference_kind = 'call' AND (instr({contextSql}, '.' || {referenceAlias}.symbol_name || '(') > 0 OR instr({contextSql}, '.' || {referenceAlias}.symbol_name || '<') > 0 OR ({referenceAlias}.column_number > 1 AND substr({contextSql}, {referenceAlias}.column_number - 1, 1) = '.' AND substr(ltrim(substr({contextSql}, {referenceAlias}.column_number + length({referenceAlias}.symbol_name))), 1, 1) IN ('(', '<'))))";
     }
 
     private static bool ShouldFilterCSharpReceiverQualifiedBareMemberQuery(string query, string? lang, bool exact)
