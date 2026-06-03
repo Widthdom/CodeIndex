@@ -3028,7 +3028,11 @@ public static class QueryCommandRunner
         return false;
     }
 
-    public static int RunStatus(string[] cmdArgs, JsonSerializerOptions jsonOptions, string? appVersion = null)
+    public static int RunStatus(
+        string[] cmdArgs,
+        JsonSerializerOptions jsonOptions,
+        string? appVersion = null,
+        CancellationToken cancellationToken = default)
     {
         var checkUpdates = cmdArgs.Contains("--check-updates", StringComparer.Ordinal);
         if (checkUpdates)
@@ -3141,7 +3145,7 @@ public static class QueryCommandRunner
             if (appVersion != null)
                 status.Version = appVersion;
             var updateResult = checkUpdates && appVersion != null
-                ? UpdateChecker.Check(appVersion)
+                ? UpdateChecker.Check(appVersion, cancellationToken)
                 : null;
             status.UpdateCheck = updateResult;
 

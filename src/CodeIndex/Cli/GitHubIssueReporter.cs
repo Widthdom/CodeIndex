@@ -206,7 +206,7 @@ internal static class GitHubIssueReporter
     }
 
     /// <summary>
-    /// Search the target GitHub repository for an existing Issue whose body
+    /// Search the target GitHub repository for an existing open Issue whose body
     /// contains the suggestion hash. The primary check uses GitHub Search;
     /// the backstop lists issues by the labels cdidx would apply so same-second retries
     /// are not exposed to Search indexing latency. Returns the html_url of the
@@ -214,7 +214,7 @@ internal static class GitHubIssueReporter
     /// search with. On API failure this returns null — the caller falls through
     /// to the normal create path so a GitHub-side lookup outage never blocks a
     /// legitimate first submission.
-    /// 当該提案ハッシュを含む既存 Issue を対象リポジトリから検索する。
+    /// 当該提案ハッシュを含む open 既存 Issue を対象リポジトリから検索する。
     /// 主経路は GitHub Search を使い、backstop として cdidx が付ける label の Issue を
     /// 直接一覧取得することで、同秒の再試行が Search の index 遅延に影響されない
     /// ようにする。一致した最初の Issue の html_url を返す。一致なし、またはハッシュが
@@ -245,7 +245,7 @@ internal static class GitHubIssueReporter
 
     private static async Task<string?> SearchExistingIssueByHashAsync(string hash, string token, CancellationToken cancellationToken)
     {
-        var query = Uri.EscapeDataString($"repo:{RepoOwner}/{RepoName} \"{hash}\" in:body");
+        var query = Uri.EscapeDataString($"repo:{RepoOwner}/{RepoName} is:issue is:open \"{hash}\" in:body");
         var url = $"{ApiBase}/search/issues?q={query}&per_page=1";
 
         using var requestMessage = new HttpRequestMessage(HttpMethod.Get, url);
@@ -261,7 +261,14 @@ internal static class GitHubIssueReporter
         if (items == null || items.Count == 0)
             return null;
 
-        return items[0]?["html_url"]?.GetValue<string>();
+        foreach (var item in items)
+        {
+            var itemUrl = TryGetOpenIssueUrl(item);
+            if (itemUrl != null)
+                return itemUrl;
+        }
+
+        return null;
     }
 
     private static async Task<string?> ListExistingSuggestionIssueByHashAsync(
@@ -275,7 +282,7 @@ internal static class GitHubIssueReporter
             for (var page = 1; ; page++)
             {
                 var labels = Uri.EscapeDataString(label);
-                var url = $"{ApiBase}/repos/{RepoOwner}/{RepoName}/issues?labels={labels}&state=all&per_page=100&page={page}";
+                var url = $"{ApiBase}/repos/{RepoOwner}/{RepoName}/issues?labels={labels}&state=open&per_page=100&page={page}";
 
                 using var requestMessage = new HttpRequestMessage(HttpMethod.Get, url);
                 requestMessage.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
@@ -292,8 +299,9 @@ internal static class GitHubIssueReporter
                 foreach (var item in items)
                 {
                     var body = item?["body"]?.GetValue<string>();
-                    if (body != null && body.Contains(hash, StringComparison.Ordinal))
-                        return item?["html_url"]?.GetValue<string>();
+                    var itemUrl = TryGetOpenIssueUrl(item);
+                    if (itemUrl != null && body != null && body.Contains(hash, StringComparison.Ordinal))
+                        return itemUrl;
                 }
 
                 if (items.Count < 100)
@@ -302,6 +310,18 @@ internal static class GitHubIssueReporter
         }
 
         return null;
+    }
+
+    private static string? TryGetOpenIssueUrl(JsonNode? item)
+    {
+        if (item == null || item["pull_request"] != null)
+            return null;
+
+        var state = item["state"]?.GetValue<string>();
+        if (state != null && !string.Equals(state, "open", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        return item["html_url"]?.GetValue<string>();
     }
 
     private static bool IsHexHash(string value)

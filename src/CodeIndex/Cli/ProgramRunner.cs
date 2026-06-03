@@ -23,6 +23,28 @@ internal static class ProgramRunner
     internal const long TestExtractorMaxInputBytes = 4 * 1024 * 1024;
     private static readonly TimeSpan InstallerRunTimeout = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan InstallerKillWaitTimeout = TimeSpan.FromSeconds(5);
+    private static readonly HashSet<string> NonLogGlobalOptionNames = new(StringComparer.Ordinal)
+    {
+        "--quiet",
+        "-q",
+        "--silent",
+        "--color",
+        "--palette",
+        "--ascii",
+        "--no-progress",
+        "--metrics",
+        "--debug-unsafe",
+        "--strict-version",
+    };
+    private static readonly HashSet<string> TopLevelValueOptionNames = new(StringComparer.Ordinal)
+    {
+        "--color",
+        "--palette",
+        "--metrics",
+        "--log-format",
+        "--log-retain-count",
+        "--log-max-size-mb",
+    };
     internal static TimeProvider TimeProvider { get; set; } = TimeProvider.System;
 
     internal static int Run(
@@ -30,7 +52,8 @@ internal static class ProgramRunner
         JsonSerializerOptions? jsonOptions = null,
         string? appVersion = null,
         string? configStartDirectory = null,
-        Action? beforeDispatchForTesting = null)
+        Action? beforeDispatchForTesting = null,
+        CancellationToken cancellationToken = default)
     {
         appVersion ??= ConsoleUi.LoadVersion();
 
@@ -130,7 +153,7 @@ internal static class ProgramRunner
 
         if (args[0] is "--version" or "-V")
         {
-            var versionExitCode = RunVersion(args[1..], jsonOptions, appVersion);
+            var versionExitCode = RunVersion(args[1..], jsonOptions, appVersion, cancellationToken);
             GlobalToolLog.Info($"command_complete exit_code={versionExitCode} version_only=true");
             EmitCommandMetric("version", args, commandStartTimestamp, commandStopwatch, versionExitCode);
             return versionExitCode;
@@ -138,7 +161,7 @@ internal static class ProgramRunner
 
         if (args[0] == "--check-updates")
         {
-            var updateExitCode = RunCheckUpdates(args[1..], jsonOptions, appVersion);
+            var updateExitCode = RunCheckUpdates(args[1..], jsonOptions, appVersion, cancellationToken);
             GlobalToolLog.Info($"command_complete exit_code={updateExitCode} check_updates=true");
             EmitCommandMetric("check-updates", args, commandStartTimestamp, commandStopwatch, updateExitCode);
             return updateExitCode;
@@ -239,7 +262,7 @@ internal static class ProgramRunner
                 "map" => a => QueryCommandRunner.RunMap(a, jsonOptions),
                 "inspect" => a => QueryCommandRunner.RunInspect(a, jsonOptions),
                 "outline" => a => QueryCommandRunner.RunOutline(a, jsonOptions),
-                "status" => a => QueryCommandRunner.RunStatus(a, jsonOptions, appVersion),
+                "status" => a => QueryCommandRunner.RunStatus(a, jsonOptions, appVersion, cancellationToken),
                 "validate" => a => QueryCommandRunner.RunValidate(a, jsonOptions),
                 "languages" => a => QueryCommandRunner.RunLanguages(a, jsonOptions),
                 "impact" => a => QueryCommandRunner.RunImpact(a, jsonOptions),
@@ -254,6 +277,8 @@ internal static class ProgramRunner
             int exitCode;
             if (queryRunner is not null)
             {
+                subArgs = InsertQueryLiteralSentinelForNonLogGlobalOption(commandName, subArgs);
+
                 if (!TryConsumeQueryTraceFlag(ref subArgs, out var traceMode, out var traceError))
                 {
                     CommandErrorWriter.Write(StripErrorPrefix(traceError), "use one of `none`, `stderr`, or `file`.");
@@ -272,7 +297,7 @@ internal static class ProgramRunner
             {
                 exitCode = commandName switch
                 {
-                    "upgrade" => RunUpgrade(subArgs, jsonOptions, appVersion),
+                    "upgrade" => RunUpgrade(subArgs, jsonOptions, appVersion, cancellationToken),
                     "index" => IndexCommandRunner.Run(subArgs, jsonOptions),
                     "export" => ExportImportCommandRunner.RunExport(subArgs, jsonOptions, appVersion),
                     "import" => ExportImportCommandRunner.RunImport(subArgs, jsonOptions),
@@ -581,6 +606,199 @@ internal static class ProgramRunner
         return false;
     }
 
+    private enum QueryCommandTokenRole
+    {
+        None,
+        CommandOptionValue,
+        FirstQueryLiteral,
+    }
+
+    private static string[] InsertQueryLiteralSentinelForNonLogGlobalOption(string commandName, string[] subArgs)
+    {
+        if (!CommandAcceptsQueryLiteral(commandName))
+            return subArgs;
+
+        for (var i = 0; i < subArgs.Length; i++)
+        {
+            if (subArgs[i] == "--")
+                return subArgs;
+            if (!IsNonLogGlobalOptionToken(subArgs[i]))
+                continue;
+            if (GetQueryCommandTokenRole(commandName, subArgs, i) != QueryCommandTokenRole.FirstQueryLiteral)
+                continue;
+
+            var rewritten = new List<string>(subArgs.Length + 1);
+            for (var j = 0; j < i; j++)
+                rewritten.Add(subArgs[j]);
+            rewritten.Add("--");
+            for (var j = i; j < subArgs.Length; j++)
+                rewritten.Add(subArgs[j]);
+            return rewritten.ToArray();
+        }
+
+        return subArgs;
+    }
+
+    private static bool ShouldPreserveQueryCommandToken(string[] args, int index)
+    {
+        var role = GetQueryCommandTokenRole(args, index);
+        if (role == QueryCommandTokenRole.CommandOptionValue)
+            return true;
+        if (role != QueryCommandTokenRole.FirstQueryLiteral)
+            return false;
+        return !IsSeparatedNonLogGlobalValueOptionWithConsumableValue(args, index);
+    }
+
+    private static bool IsSeparatedNonLogGlobalValueOptionWithConsumableValue(string[] args, int index)
+    {
+        if (index + 1 >= args.Length)
+            return false;
+
+        var value = args[index + 1];
+        return args[index] switch
+        {
+            "--color" => ConsoleUi.TryParseColorMode(value, out _),
+            "--palette" => ConsoleUi.TryParseColorPalette(value, out _),
+            "--metrics" => !string.IsNullOrWhiteSpace(value) && !value.StartsWith("-", StringComparison.Ordinal),
+            _ => false,
+        };
+    }
+
+    private static QueryCommandTokenRole GetQueryCommandTokenRole(string[] args, int index)
+    {
+        if (!TryFindQueryCommandBefore(args, index, out var commandIndex, out var commandName))
+            return QueryCommandTokenRole.None;
+
+        return GetQueryCommandTokenRole(commandName, args[(commandIndex + 1)..], index - commandIndex - 1);
+    }
+
+    private static bool TryFindQueryCommandBefore(string[] args, int index, out int commandIndex, out string commandName)
+    {
+        commandIndex = -1;
+        commandName = string.Empty;
+
+        for (var i = 0; i < index; i++)
+        {
+            var arg = args[i];
+            if (arg == "--")
+                return false;
+            if (TryGetInlineOptionName(arg, out var inlineName) && TopLevelValueOptionNames.Contains(inlineName))
+                continue;
+            if (TopLevelValueOptionNames.Contains(arg))
+            {
+                i++;
+                continue;
+            }
+            if (NonLogGlobalOptionNames.Contains(arg))
+                continue;
+            if (!CliFlagSchema.AllCommands.Contains(arg))
+                return false;
+            if (!CommandAcceptsQueryLiteral(arg))
+                return false;
+
+            commandIndex = i;
+            commandName = arg;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static QueryCommandTokenRole GetQueryCommandTokenRole(string commandName, string[] subArgs, int targetIndex)
+    {
+        if (!CommandAcceptsQueryLiteral(commandName))
+            return QueryCommandTokenRole.None;
+
+        var (withValues, flagOnly) = CliFlagSchema.GetParserFlagsPartitionedByValueBearing(commandName);
+        if (targetIndex > 0)
+        {
+            var previousArg = NormalizeCommandOptionToken(subArgs[targetIndex - 1], withValues, flagOnly, out var previousHasInlineValue);
+            if (!previousHasInlineValue && withValues.Contains(previousArg))
+                return QueryCommandTokenRole.CommandOptionValue;
+        }
+
+        for (var i = 0; i < targetIndex; i++)
+        {
+            var arg = subArgs[i];
+            if (arg == "--")
+                return i + 1 == targetIndex ? QueryCommandTokenRole.FirstQueryLiteral : QueryCommandTokenRole.None;
+
+            var normalizedArg = NormalizeCommandOptionToken(arg, withValues, flagOnly, out var hasInlineValue);
+            if (withValues.Contains(normalizedArg))
+            {
+                if (hasInlineValue)
+                {
+                    if (normalizedArg == "--query")
+                        return QueryCommandTokenRole.None;
+                    continue;
+                }
+                if (i + 1 == targetIndex)
+                    return QueryCommandTokenRole.CommandOptionValue;
+                if (normalizedArg == "--query")
+                    return QueryCommandTokenRole.None;
+                if (i + 1 < targetIndex)
+                {
+                    i++;
+                    continue;
+                }
+
+                return QueryCommandTokenRole.None;
+            }
+
+            if (flagOnly.Contains(normalizedArg))
+                continue;
+
+            return QueryCommandTokenRole.None;
+        }
+
+        return QueryCommandTokenRole.FirstQueryLiteral;
+    }
+
+    private static bool CommandAcceptsQueryLiteral(string commandName) =>
+        CliFlagSchema.GetAcceptedFlagNamesForCommand(commandName).Contains("--query");
+
+    private static bool IsNonLogGlobalOptionToken(string arg)
+    {
+        if (NonLogGlobalOptionNames.Contains(arg))
+            return true;
+        return TryGetInlineOptionName(arg, out var name) && NonLogGlobalOptionNames.Contains(name);
+    }
+
+    private static string NormalizeCommandOptionToken(
+        string arg,
+        IReadOnlySet<string> withValues,
+        IReadOnlySet<string> flagOnly,
+        out bool hasInlineValue)
+    {
+        hasInlineValue = false;
+        if (!TryGetInlineOptionName(arg, out var name))
+            return arg;
+
+        if (withValues.Contains(name))
+        {
+            hasInlineValue = true;
+            return name;
+        }
+
+        if (flagOnly.Contains(name) && string.Equals(name, "--json", StringComparison.Ordinal))
+            return name;
+
+        return arg;
+    }
+
+    private static bool TryGetInlineOptionName(string arg, out string name)
+    {
+        var equalsIndex = arg.IndexOf('=');
+        if (equalsIndex <= 0)
+        {
+            name = string.Empty;
+            return false;
+        }
+
+        name = arg[..equalsIndex];
+        return name.StartsWith("-", StringComparison.Ordinal);
+    }
+
     internal static bool TryConsumeQuietFlag(ref string[] args)
     {
         if (args.Length == 0)
@@ -600,6 +818,11 @@ internal static class ProgramRunner
             if (arg == "--")
             {
                 passthrough = true;
+                kept.Add(arg);
+                continue;
+            }
+            if (ShouldPreserveQueryCommandToken(args, i))
+            {
                 kept.Add(arg);
                 continue;
             }
@@ -991,6 +1214,11 @@ internal static class ProgramRunner
                 kept.Add(arg);
                 continue;
             }
+            if (ShouldPreserveQueryCommandToken(args, i))
+            {
+                kept.Add(arg);
+                continue;
+            }
 
             string? rawValue = null;
             if (arg == "--color")
@@ -1048,6 +1276,11 @@ internal static class ProgramRunner
                 kept.Add(arg);
                 continue;
             }
+            if (ShouldPreserveQueryCommandToken(args, i))
+            {
+                kept.Add(arg);
+                continue;
+            }
             if (arg == "--ascii")
             {
                 ConsoleUi.SetAsciiOutput(true);
@@ -1079,6 +1312,11 @@ internal static class ProgramRunner
             if (arg == "--")
             {
                 passthrough = true;
+                kept.Add(arg);
+                continue;
+            }
+            if (ShouldPreserveQueryCommandToken(args, i))
+            {
                 kept.Add(arg);
                 continue;
             }
@@ -1121,6 +1359,11 @@ internal static class ProgramRunner
             if (arg == "--")
             {
                 passthrough = true;
+                kept.Add(arg);
+                continue;
+            }
+            if (ShouldPreserveQueryCommandToken(args, i))
+            {
                 kept.Add(arg);
                 continue;
             }
@@ -1175,8 +1418,9 @@ internal static class ProgramRunner
         var kept = new List<string>(args.Length);
         var passthrough = false;
         var seen = false;
-        foreach (var arg in args)
+        for (var i = 0; i < args.Length; i++)
         {
+            var arg = args[i];
             if (passthrough)
             {
                 kept.Add(arg);
@@ -1185,6 +1429,11 @@ internal static class ProgramRunner
             if (arg == "--")
             {
                 passthrough = true;
+                kept.Add(arg);
+                continue;
+            }
+            if (ShouldPreserveQueryCommandToken(args, i))
+            {
                 kept.Add(arg);
                 continue;
             }
@@ -1213,8 +1462,9 @@ internal static class ProgramRunner
 
         var kept = new List<string>(args.Length);
         var passthrough = false;
-        foreach (var arg in args)
+        for (var i = 0; i < args.Length; i++)
         {
+            var arg = args[i];
             if (passthrough)
             {
                 kept.Add(arg);
@@ -1223,6 +1473,11 @@ internal static class ProgramRunner
             if (arg == "--")
             {
                 passthrough = true;
+                kept.Add(arg);
+                continue;
+            }
+            if (ShouldPreserveQueryCommandToken(args, i))
+            {
                 kept.Add(arg);
                 continue;
             }
@@ -1334,6 +1589,11 @@ internal static class ProgramRunner
             if (arg == "--")
             {
                 passthrough = true;
+                kept.Add(arg);
+                continue;
+            }
+            if (ShouldPreserveQueryCommandToken(args, i))
+            {
                 kept.Add(arg);
                 continue;
             }
@@ -2285,7 +2545,11 @@ internal static class ProgramRunner
 
     internal readonly record struct AuditLogOptions(string? Path, long MaxBytes, bool IncludeValues);
 
-    internal static int RunCheckUpdates(string[] cmdArgs, JsonSerializerOptions jsonOptions, string appVersion)
+    internal static int RunCheckUpdates(
+        string[] cmdArgs,
+        JsonSerializerOptions jsonOptions,
+        string appVersion,
+        CancellationToken cancellationToken = default)
     {
         var wantsJson = false;
         foreach (var arg in cmdArgs)
@@ -2300,7 +2564,7 @@ internal static class ProgramRunner
             return CommandExitCodes.UsageError;
         }
 
-        var result = UpdateChecker.Check(appVersion);
+        var result = UpdateChecker.Check(appVersion, cancellationToken);
         if (wantsJson)
         {
             Console.WriteLine(JsonSerializer.Serialize(result, jsonOptions));
@@ -2316,7 +2580,11 @@ internal static class ProgramRunner
         return CommandExitCodes.Success;
     }
 
-    internal static int RunUpgrade(string[] cmdArgs, JsonSerializerOptions jsonOptions, string appVersion)
+    internal static int RunUpgrade(
+        string[] cmdArgs,
+        JsonSerializerOptions jsonOptions,
+        string appVersion,
+        CancellationToken cancellationToken = default)
     {
         var checkOnly = false;
         var wantsJson = false;
@@ -2343,7 +2611,7 @@ internal static class ProgramRunner
             return CommandExitCodes.UsageError;
         }
 
-        var result = UpdateChecker.Check(appVersion);
+        var result = UpdateChecker.Check(appVersion, cancellationToken);
         if (checkOnly || !result.UpdateAvailable || result.LatestVersion == null)
         {
             if (wantsJson)
@@ -2512,7 +2780,11 @@ internal static class ProgramRunner
     // ビルド情報付きにする (#1550)。人間出力は 1 行に保ち、install.sh の
     // reinstall validator が末尾診断文を誤って許容しないよう、括弧で囲った
     // メタデータ以外を許さない形に揃える。
-    internal static int RunVersion(string[] cmdArgs, JsonSerializerOptions jsonOptions, string? appVersion = null)
+    internal static int RunVersion(
+        string[] cmdArgs,
+        JsonSerializerOptions jsonOptions,
+        string? appVersion = null,
+        CancellationToken cancellationToken = default)
     {
         var wantsJson = false;
         foreach (var arg in cmdArgs)
@@ -2550,7 +2822,7 @@ internal static class ProgramRunner
             return CommandExitCodes.Success;
         }
 
-        var updateHint = UpdateChecker.GetNewerReleaseHint(metadata.Version);
+        var updateHint = UpdateChecker.GetNewerReleaseHint(metadata.Version, cancellationToken);
         Console.WriteLine(FormatVersionLine(metadata, updateHint));
         return CommandExitCodes.Success;
     }

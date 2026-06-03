@@ -547,8 +547,84 @@ public class GitHubIssueReporterTests : IDisposable
             Assert.Equal("/search/issues", handler.Requests[0].RequestUri!.AbsolutePath);
             Assert.Equal("/repos/widthdom/CodeIndex/issues", handler.Requests[1].RequestUri!.AbsolutePath);
             Assert.Contains("labels=enhancement", handler.Requests[1].RequestUri!.Query);
-            Assert.Contains("state=all", handler.Requests[1].RequestUri!.Query);
+            Assert.Contains("state=open", handler.Requests[1].RequestUri!.Query);
+            Assert.DoesNotContain("state=all", handler.Requests[1].RequestUri!.Query);
             Assert.DoesNotContain(handler.Requests, r => r.Method == HttpMethod.Post);
+        }
+        finally
+        {
+            GitHubIssueReporter.s_httpClientOverride = null;
+        }
+    }
+
+    [Fact]
+    public async Task TryCreateIssueAsync_DuplicateLookupIgnoresClosedIssuesAndPullRequests()
+    {
+        // Closed history and PRs can mention the same suggestion hash, but only
+        // open Issues should suppress a new actionable submission.
+        // closed 済み履歴や PR が同じ提案ハッシュを含んでも、新規送信を抑止するのは
+        // open Issue のみであること。
+        _env.Set("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
+
+        var record = MakeRecordWithKnownHash();
+        var handler = new RecordingHandler();
+        handler.AddResponse(req => req.Method == HttpMethod.Get && req.RequestUri!.AbsolutePath == "/search/issues",
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = MakeJsonContent($$"""
+                {
+                    "total_count": 2,
+                    "items": [
+                        {
+                            "html_url": "https://github.com/widthdom/CodeIndex/issues/1357",
+                            "state": "closed",
+                            "body": "Submitted by cdidx. Hash: `{{record.Hash}}`"
+                        },
+                        {
+                            "html_url": "https://github.com/widthdom/CodeIndex/pull/2468",
+                            "state": "open",
+                            "pull_request": {},
+                            "body": "Submitted by cdidx. Hash: `{{record.Hash}}`"
+                        }
+                    ]
+                }
+                """),
+            });
+        handler.AddResponse(req => req.Method == HttpMethod.Get && req.RequestUri!.AbsolutePath == "/repos/widthdom/CodeIndex/issues",
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = MakeJsonContent($$"""
+                [
+                    {
+                        "html_url": "https://github.com/widthdom/CodeIndex/pull/9753",
+                        "state": "open",
+                        "pull_request": {},
+                        "body": "Submitted by cdidx. Hash: `{{record.Hash}}`"
+                    }
+                ]
+                """),
+            });
+        handler.AddResponse(req => req.Method == HttpMethod.Post && req.RequestUri!.AbsolutePath.Contains("/issues"),
+            new HttpResponseMessage(HttpStatusCode.Created)
+            {
+                Content = MakeJsonContent("""{ "html_url": "https://github.com/widthdom/CodeIndex/issues/12345" }"""),
+            });
+        using var mockClient = new HttpClient(handler);
+        GitHubIssueReporter.s_httpClientOverride = mockClient;
+        try
+        {
+            var url = await GitHubIssueReporter.TryCreateIssueAsync(record, "1.0.0-test");
+
+            Assert.Equal("https://github.com/widthdom/CodeIndex/issues/12345", url);
+            Assert.Equal(3, handler.RequestCount);
+
+            var searchQuery = Uri.UnescapeDataString(handler.Requests[0].RequestUri!.Query);
+            Assert.Contains("is:issue", searchQuery);
+            Assert.Contains("is:open", searchQuery);
+            Assert.Contains("in:body", searchQuery);
+            Assert.Contains("state=open", handler.Requests[1].RequestUri!.Query);
+            Assert.DoesNotContain("state=all", handler.Requests[1].RequestUri!.Query);
+            Assert.Equal(HttpMethod.Post, handler.Requests[2].Method);
         }
         finally
         {
