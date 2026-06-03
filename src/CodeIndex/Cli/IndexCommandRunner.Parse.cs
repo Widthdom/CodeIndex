@@ -552,6 +552,14 @@ public static partial class IndexCommandRunner
         }
     }
 
+    internal static bool IsUpdateMode(IndexCommandOptions options)
+    {
+        return options.Commits.Count > 0
+            || options.ChangedBetweenSpecified
+            || options.UpdateFiles.Count > 0
+            || options.ProjectFilters.Count > 0;
+    }
+
     /// <summary>
     /// Build a warning message when the process cwd at the final write step differs from
     /// the cwd captured at the option-parsing boundary. Returns null when the two cwds

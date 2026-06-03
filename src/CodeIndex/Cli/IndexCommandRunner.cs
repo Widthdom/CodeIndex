@@ -91,7 +91,7 @@ public static partial class IndexCommandRunner
         var dbPath = dbResolution.DbPath;
         var stopwatch = Stopwatch.StartNew();
         var runStartedAtUtc = DateTime.UtcNow;
-        var isUpdateMode = options.Commits.Count > 0 || options.ChangedBetweenSpecified || options.UpdateFiles.Count > 0;
+        var isUpdateMode = IsUpdateMode(options);
         var mode = options.Rebuild ? "rebuild" : isUpdateMode ? "update" : "incremental";
 
         if (!Directory.Exists(options.ProjectPath))

@@ -1111,6 +1111,14 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void IsUpdateMode_ProjectFilterWithoutResolvedFiles_ReturnsTrue_Issue2862()
+    {
+        var options = new IndexCommandOptions { ProjectFilters = ["Lib"] };
+
+        Assert.True(IndexCommandRunner.IsUpdateMode(options));
+    }
+
+    [Fact]
     public void Run_UpdateFiles_HardlinkedTargets_SkipsDuplicatePathWithWarning()
     {
         if (OperatingSystem.IsWindows())
