@@ -364,6 +364,146 @@ public static partial class IndexCommandRunner
         }
     }
 
+    private sealed record FullScanDiscoveryResult(
+        FileIndexer.ScanFilesResult ScanResult,
+        IReadOnlyList<string> Files,
+        List<CliJsonMessage> ErrorList,
+        List<CliJsonMessage> WarningList,
+        string? CurrentHeadForCheckpoint,
+        string ScanCheckpointPath,
+        IReadOnlySet<string> CheckpointedDirectories);
+
+    private static FullScanDiscoveryResult DiscoverFullScanFiles(
+        FileIndexer indexer,
+        string projectRoot,
+        IndexCommandOptions options,
+        string[] spinnerFrames,
+        CancellationToken cancellationToken)
+    {
+        CancellationTokenSource? spinnerCts = null;
+        if (!options.Json && !options.Quiet)
+            spinnerCts = ConsoleUi.StartSpinner("Scanning...", spinnerFrames);
+
+        void ThrowIfDiscoveryCancelled()
+        {
+            if (!cancellationToken.IsCancellationRequested)
+                return;
+
+            ConsoleUi.StopSpinner(spinnerCts);
+            throw new IndexInterruptedException(0, null);
+        }
+
+        var currentHeadForCheckpoint = GitHelper.TryGetHeadCommit(projectRoot);
+        var scanCheckpointPath = Path.Combine(projectRoot, ".cdidx", ScanCheckpointFileName);
+        var checkpointedDirectories = LoadScanCheckpoint(scanCheckpointPath, currentHeadForCheckpoint);
+        WriteFullScanJsonLiveness(options, "scanning files...");
+        var scanHeartbeat = StartFullScanJsonPhaseHeartbeat(options, "scanning files");
+        FileIndexer.ScanFilesResult scanResult;
+        try
+        {
+            ThrowIfDiscoveryCancelled();
+            scanResult = indexer.ScanFilesDetailed(checkpointedDirectories, continueOnError: true, cancellationToken: cancellationToken);
+            ThrowIfDiscoveryCancelled();
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw new IndexInterruptedException(0, null);
+        }
+        finally
+        {
+            StopFullScanJsonPhaseHeartbeat(scanHeartbeat);
+        }
+        var files = scanResult.Files;
+        ConsoleUi.StopSpinner(spinnerCts);
+        WriteFullScanJsonLiveness(options, $"found {ConsoleUi.Counted(files.Count, "file", format: "N0")}; preparing database...");
+        var fatalScanErrors = scanResult.Errors
+            .Where(error => error.IsFatal)
+            .ToList();
+        var warningScanErrors = scanResult.Errors
+            .Where(error => !error.IsFatal)
+            .ToList();
+        var errorList = fatalScanErrors
+            .Select(error => new CliJsonMessage(error.Path, error.Message))
+            .ToList();
+        var warningList = warningScanErrors
+            .Select(error => new CliJsonMessage(error.Path, error.Message))
+            .ToList();
+        if (!options.Json && !options.Quiet)
+        {
+            Console.WriteLine($"  Found {ConsoleUi.Counted(files.Count, "file", format: "N0")}");
+            foreach (var error in scanResult.Errors)
+                ConsoleUi.PrintWarning($"{error.Path}: {error.Message}");
+            Console.WriteLine();
+        }
+
+        return new FullScanDiscoveryResult(
+            scanResult,
+            files,
+            errorList,
+            warningList,
+            currentHeadForCheckpoint,
+            scanCheckpointPath,
+            checkpointedDirectories);
+    }
+
+    private static void WriteFullScanJsonLiveness(IndexCommandOptions options, string message)
+    {
+        if (!options.Json || options.Quiet)
+            return;
+
+        ConsoleUi.TryWriteErrorLine($"cdidx: {message}");
+    }
+
+    private static (CancellationTokenSource Cts, Task Task)? StartFullScanJsonPhaseHeartbeat(
+        IndexCommandOptions options,
+        string phase,
+        Func<string?>? detailProvider = null)
+    {
+        if (!options.Json || options.Quiet)
+            return null;
+
+        var cts = new CancellationTokenSource();
+        var token = cts.Token;
+        var task = Task.Run(async () =>
+        {
+            while (!token.IsCancellationRequested)
+            {
+                try
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(5), token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+
+                if (token.IsCancellationRequested)
+                    break;
+
+                var detail = detailProvider?.Invoke();
+                var suffix = string.IsNullOrWhiteSpace(detail) ? string.Empty : $": {detail}";
+                ConsoleUi.TryWriteErrorLine($"cdidx: still {phase}{suffix}...");
+            }
+        }, token);
+        return (cts, task);
+    }
+
+    private static void StopFullScanJsonPhaseHeartbeat((CancellationTokenSource Cts, Task Task)? heartbeat)
+    {
+        if (heartbeat == null)
+            return;
+
+        heartbeat.Value.Cts.Cancel();
+        try
+        {
+            heartbeat.Value.Task.Wait(TimeSpan.FromSeconds(1));
+        }
+        catch (AggregateException ex) when (ex.InnerExceptions.All(inner => inner is OperationCanceledException or TaskCanceledException))
+        {
+        }
+        heartbeat.Value.Cts.Dispose();
+    }
+
     private static int RunFullScan(
         DbWriter writer,
         FileIndexer indexer,
@@ -446,118 +586,24 @@ public static partial class IndexCommandRunner
             }
         }
 
-        void WriteJsonLiveness(string message)
-        {
-            if (!options.Json || options.Quiet)
-                return;
-
-            ConsoleUi.TryWriteErrorLine($"cdidx: {message}");
-        }
-
-        (CancellationTokenSource Cts, Task Task)? StartJsonPhaseHeartbeat(string phase, Func<string?>? detailProvider = null)
-        {
-            if (!options.Json || options.Quiet)
-                return null;
-
-            var cts = new CancellationTokenSource();
-            var token = cts.Token;
-            var task = Task.Run(async () =>
-            {
-                while (!token.IsCancellationRequested)
-                {
-                    try
-                    {
-                        await Task.Delay(TimeSpan.FromSeconds(5), token).ConfigureAwait(false);
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        break;
-                    }
-
-                    if (token.IsCancellationRequested)
-                        break;
-
-                    var detail = detailProvider?.Invoke();
-                    var suffix = string.IsNullOrWhiteSpace(detail) ? string.Empty : $": {detail}";
-                    ConsoleUi.TryWriteErrorLine($"cdidx: still {phase}{suffix}...");
-                }
-            }, token);
-            return (cts, task);
-        }
-
-        void StopJsonPhaseHeartbeat((CancellationTokenSource Cts, Task Task)? heartbeat)
-        {
-            if (heartbeat == null)
-                return;
-
-            heartbeat.Value.Cts.Cancel();
-            try
-            {
-                heartbeat.Value.Task.Wait(TimeSpan.FromSeconds(1));
-            }
-            catch (AggregateException ex) when (ex.InnerExceptions.All(inner => inner is OperationCanceledException or TaskCanceledException))
-            {
-            }
-            heartbeat.Value.Cts.Dispose();
-        }
-
-        CancellationTokenSource? spinnerCts = null;
-        if (!options.Json && !options.Quiet)
-            spinnerCts = ConsoleUi.StartSpinner("Scanning...", spinnerFrames);
-
         void ThrowIfFullScanCancelled(int filesProcessed, int? filesTotal)
         {
             if (!cancellationToken.IsCancellationRequested)
                 return;
 
-            ConsoleUi.StopSpinner(spinnerCts);
             throw new IndexInterruptedException(filesProcessed, filesTotal);
         }
 
-        var currentHeadForCheckpoint = GitHelper.TryGetHeadCommit(projectRoot);
-        var scanCheckpointPath = Path.Combine(projectRoot, ".cdidx", ScanCheckpointFileName);
-        var checkpointedDirectories = LoadScanCheckpoint(scanCheckpointPath, currentHeadForCheckpoint);
-        WriteJsonLiveness("scanning files...");
-        var scanHeartbeat = StartJsonPhaseHeartbeat("scanning files");
-        FileIndexer.ScanFilesResult scanResult;
-        try
-        {
-            ThrowIfFullScanCancelled(0, null);
-            scanResult = indexer.ScanFilesDetailed(checkpointedDirectories, continueOnError: true, cancellationToken: cancellationToken);
-            ThrowIfFullScanCancelled(0, null);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw new IndexInterruptedException(0, null);
-        }
-        finally
-        {
-            StopJsonPhaseHeartbeat(scanHeartbeat);
-        }
-        var files = scanResult.Files;
+        var discovery = DiscoverFullScanFiles(indexer, projectRoot, options, spinnerFrames, cancellationToken);
+        var scanResult = discovery.ScanResult;
+        var files = discovery.Files;
+        var errorList = discovery.ErrorList;
+        var warningList = discovery.WarningList;
+        var currentHeadForCheckpoint = discovery.CurrentHeadForCheckpoint;
+        var scanCheckpointPath = discovery.ScanCheckpointPath;
+        var checkpointedDirectories = discovery.CheckpointedDirectories;
         if (options.MemoryTrace)
             memorySamples.Add(CaptureMemorySample("scan", stopwatch));
-        ConsoleUi.StopSpinner(spinnerCts);
-        WriteJsonLiveness($"found {ConsoleUi.Counted(files.Count, "file", format: "N0")}; preparing database...");
-        var fatalScanErrors = scanResult.Errors
-            .Where(error => error.IsFatal)
-            .ToList();
-        var warningScanErrors = scanResult.Errors
-            .Where(error => !error.IsFatal)
-            .ToList();
-        var errorList = fatalScanErrors
-            .Select(error => new CliJsonMessage(error.Path, error.Message))
-            .ToList();
-        var warningList = warningScanErrors
-            .Select(error => new CliJsonMessage(error.Path, error.Message))
-            .ToList();
-        if (!options.Json && !options.Quiet)
-        {
-            Console.WriteLine($"  Found {ConsoleUi.Counted(files.Count, "file", format: "N0")}");
-            foreach (var error in scanResult.Errors)
-                ConsoleUi.PrintWarning($"{error.Path}: {error.Message}");
-            Console.WriteLine();
-        }
 
         // Full-scan commits to mutating the DB from here on. Keep the whole write phase in
         // one outer transaction so Ctrl-C/SIGTERM can roll back the batch marker,
@@ -629,7 +675,7 @@ public static partial class IndexCommandRunner
         if (options.MemoryTrace)
             memorySamples.Add(CaptureMemorySample("purge", stopwatch));
         ConsoleUi.StopSpinner(purgeCts);
-        WriteJsonLiveness(purged > 0
+        WriteFullScanJsonLiveness(options, purged > 0
             ? $"purged {purged:N0} stale file(s); preparing index writes..."
             : "preparing index writes...");
         if (!options.Json && !options.Quiet)
@@ -804,9 +850,10 @@ public static partial class IndexCommandRunner
             jsonHeartbeatTask = null;
         }
 
-        WriteJsonLiveness("preparing C# workspace symbols...");
+        WriteFullScanJsonLiveness(options, "preparing C# workspace symbols...");
         string? currentCSharpWorkspaceFile = null;
-        var csharpWorkspaceHeartbeat = StartJsonPhaseHeartbeat(
+        var csharpWorkspaceHeartbeat = StartFullScanJsonPhaseHeartbeat(
+            options,
             "preparing C# workspace symbols",
             () => currentCSharpWorkspaceFile);
         CSharpStaticInterfaceWorkspaceSymbols csharpWorkspace;
@@ -827,7 +874,7 @@ public static partial class IndexCommandRunner
         finally
         {
             currentCSharpWorkspaceFile = null;
-            StopJsonPhaseHeartbeat(csharpWorkspaceHeartbeat);
+            StopFullScanJsonPhaseHeartbeat(csharpWorkspaceHeartbeat);
         }
 
         EnsureIndexingActivityVisible();
@@ -1213,15 +1260,15 @@ public static partial class IndexCommandRunner
         PauseIndexSpinnerForConsoleWrite();
 
         ThrowIfFullScanCancelled(processed, files.Count);
-        WriteJsonLiveness("optimizing index...");
-        var optimizeHeartbeat = StartJsonPhaseHeartbeat("optimizing index");
+        WriteFullScanJsonLiveness(options, "optimizing index...");
+        var optimizeHeartbeat = StartFullScanJsonPhaseHeartbeat(options, "optimizing index");
         try
         {
             writer.OptimizeFts();
         }
         finally
         {
-            StopJsonPhaseHeartbeat(optimizeHeartbeat);
+            StopFullScanJsonPhaseHeartbeat(optimizeHeartbeat);
         }
         ThrowIfFullScanCancelled(processed, files.Count);
         // Only stamp readiness on a fully successful run (errors == 0). A partial / error

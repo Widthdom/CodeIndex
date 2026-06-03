@@ -3569,17 +3569,7 @@ public class FileIndexer
         var isUtf16 = TryDetectUtf16Encoding(rawBytes, allowHeuristic: true, out var utf16BigEndian, out var hasUtf16Bom);
 
         if (isUtf16 && hasUtf16Bom)
-        {
-            issues.Add(new FileIssue
-            {
-                Path = relativePath,
-                Kind = "utf16_bom",
-                Line = 1,
-                Message = utf16BigEndian
-                    ? "UTF-16 BE BOM detected (decoded as UTF-16)"
-                    : "UTF-16 LE BOM detected (decoded as UTF-16)",
-            });
-        }
+            AddUtf16BomIssue(issues, relativePath, utf16BigEndian);
 
         if (TryGetConflictMarkerLine(content, out var conflictMarkerLine))
         {
@@ -3592,6 +3582,44 @@ public class FileIndexer
             });
         }
 
+        AddReplacementCharacterIssues(issues, relativePath, rawBytes, content, isUtf16, utf16BigEndian, hasUtf16Bom);
+
+        // Raw-byte heuristics: skip for UTF-16-decoded files because every UTF-16 LE ASCII
+        // codepoint looks like a NUL byte and CRLF appears as 0D 00 0A 00, so `bom` /
+        // `null_byte` / `mixed_line_endings` / `cr_only_line_endings` would all misfire.
+        // UTF-16 デコード経路では生バイト列が NUL バイトと 0D 00 0A 00 で埋まり、`bom` /
+        // `null_byte` / `mixed_line_endings` / `cr_only_line_endings` がすべて誤検出する
+        // ためスキップする。
+        if (!isUtf16)
+            AddRawByteContentIssues(issues, relativePath, rawBytes);
+
+        AddOversizeContentIssues(issues, relativePath, content);
+
+        return issues;
+    }
+
+    private static void AddUtf16BomIssue(List<FileIssue> issues, string relativePath, bool utf16BigEndian)
+    {
+        issues.Add(new FileIssue
+        {
+            Path = relativePath,
+            Kind = "utf16_bom",
+            Line = 1,
+            Message = utf16BigEndian
+                ? "UTF-16 BE BOM detected (decoded as UTF-16)"
+                : "UTF-16 LE BOM detected (decoded as UTF-16)",
+        });
+    }
+
+    private static void AddReplacementCharacterIssues(
+        List<FileIssue> issues,
+        string relativePath,
+        byte[] rawBytes,
+        string content,
+        bool isUtf16,
+        bool utf16BigEndian,
+        bool hasUtf16Bom)
+    {
         // Aggregate signal: when a large fraction of the decoded content is U+FFFD, the file
         // most likely uses a non-UTF8 encoding without a BOM (SHIFT_JIS / GBK / ISO-8859-1).
         // Emit one `non_utf8_likely` issue and suppress the per-line `replacement_char`
@@ -3632,134 +3660,136 @@ public class FileIndexer
         // Skip the per-line emission when `non_utf8_likely` already fired so a mojibake file
         // does not produce hundreds of near-duplicate `replacement_char` issues.
         // `non_utf8_likely` が出た場合は重複を抑え 1 件のアグリゲートに集約する。
-        if (!nonUtf8Likely)
+        if (nonUtf8Likely)
+            return;
+
+        for (int i = 0; i < content.Length; i++)
         {
-            for (int i = 0; i < content.Length; i++)
+            if (content[i] != '\uFFFD')
+                continue;
+
+            // Find line number / 行番号を特定
+            var lineNum = content[..i].Count(c => c == '\n') + 1;
+            var isSourceLiteral = replacementCharOrigin == FileIssue.OriginSourceLiteral;
+            issues.Add(new FileIssue
             {
-                if (content[i] == '\uFFFD')
-                {
-                    // Find line number / 行番号を特定
-                    var lineNum = content[..i].Count(c => c == '\n') + 1;
-                    var isSourceLiteral = replacementCharOrigin == FileIssue.OriginSourceLiteral;
-                    issues.Add(new FileIssue
-                    {
-                        Path = relativePath,
-                        Kind = "replacement_char",
-                        Line = lineNum,
-                        Message = isSourceLiteral
-                            ? $"U+FFFD source literal at line {lineNum}"
-                            : $"U+FFFD decoder replacement character at line {lineNum}",
-                        Origin = replacementCharOrigin,
-                        Severity = isSourceLiteral ? FileIssue.SeverityInfo : FileIssue.SeverityWarning,
-                    });
-                    // Skip to next line to avoid reporting every char on the same line
-                    // 同じ行の連続報告を避けるため次の行までスキップ
-                    var nextNewline = content.IndexOf('\n', i);
-                    if (nextNewline >= 0) i = nextNewline;
-                }
-            }
+                Path = relativePath,
+                Kind = "replacement_char",
+                Line = lineNum,
+                Message = isSourceLiteral
+                    ? $"U+FFFD source literal at line {lineNum}"
+                    : $"U+FFFD decoder replacement character at line {lineNum}",
+                Origin = replacementCharOrigin,
+                Severity = isSourceLiteral ? FileIssue.SeverityInfo : FileIssue.SeverityWarning,
+            });
+            // Skip to next line to avoid reporting every char on the same line
+            // 同じ行の連続報告を避けるため次の行までスキップ
+            var nextNewline = content.IndexOf('\n', i);
+            if (nextNewline >= 0) i = nextNewline;
+        }
+    }
+
+    private static void AddRawByteContentIssues(List<FileIssue> issues, string relativePath, byte[] rawBytes)
+    {
+        // BOM marker / BOMマーカー
+        if (rawBytes.Length >= 3 && rawBytes[0] == 0xEF && rawBytes[1] == 0xBB && rawBytes[2] == 0xBF)
+        {
+            issues.Add(new FileIssue
+            {
+                Path = relativePath,
+                Kind = "bom",
+                Line = 1,
+                Message = "UTF-8 BOM marker detected",
+            });
         }
 
-        // Raw-byte heuristics: skip for UTF-16-decoded files because every UTF-16 LE ASCII
-        // codepoint looks like a NUL byte and CRLF appears as 0D 00 0A 00, so `bom` /
-        // `null_byte` / `mixed_line_endings` / `cr_only_line_endings` would all misfire.
-        // UTF-16 デコード経路では生バイト列が NUL バイトと 0D 00 0A 00 で埋まり、`bom` /
-        // `null_byte` / `mixed_line_endings` / `cr_only_line_endings` がすべて誤検出する
-        // ためスキップする。
-        if (!isUtf16)
+        // NULL bytes (likely binary content) / NULLバイト（バイナリ混入の可能性）
+        if (rawBytes.Any(b => b == 0))
         {
-            // BOM marker / BOMマーカー
-            if (rawBytes.Length >= 3 && rawBytes[0] == 0xEF && rawBytes[1] == 0xBB && rawBytes[2] == 0xBF)
+            issues.Add(new FileIssue
             {
-                issues.Add(new FileIssue
-                {
-                    Path = relativePath,
-                    Kind = "bom",
-                    Line = 1,
-                    Message = "UTF-8 BOM marker detected",
-                });
-            }
+                Path = relativePath,
+                Kind = "null_byte",
+                Line = 0,
+                Message = "File contains NULL bytes (possible binary content)",
+            });
+        }
 
-            // NULL bytes (likely binary content) / NULLバイト（バイナリ混入の可能性）
-            if (rawBytes.Any(b => b == 0))
-            {
-                issues.Add(new FileIssue
-                {
-                    Path = relativePath,
-                    Kind = "null_byte",
-                    Line = 0,
-                    Message = "File contains NULL bytes (possible binary content)",
-                });
-            }
+        AddLineEndingIssues(issues, relativePath, rawBytes);
+    }
 
-            // Line-ending classification — check raw bytes before LF normalization so
-            // bare CR (legacy Mac) and three-way mixes are not silently flattened by
-            // the `\r\n` → `\n` then `\r` → `\n` pass in BuildRecordWithRawBytes.
-            // 改行コードの判定 — LF 正規化前の rawBytes で確認。BuildRecordWithRawBytes が
-            // `\r\n`→`\n`、`\r`→`\n` の順で潰してしまうため、生バイトで CR-only (旧 Mac)
-            // と 3 種混在を見分ける。
-            var hasCrlf = false;
-            var hasLfOnly = false;
-            var hasCrOnly = false;
-            for (int i = 0; i < rawBytes.Length; i++)
+    private static void AddLineEndingIssues(List<FileIssue> issues, string relativePath, byte[] rawBytes)
+    {
+        // Line-ending classification — check raw bytes before LF normalization so
+        // bare CR (legacy Mac) and three-way mixes are not silently flattened by
+        // the `\r\n` → `\n` then `\r` → `\n` pass in BuildRecordWithRawBytes.
+        // 改行コードの判定 — LF 正規化前の rawBytes で確認。BuildRecordWithRawBytes が
+        // `\r\n`→`\n`、`\r`→`\n` の順で潰してしまうため、生バイトで CR-only (旧 Mac)
+        // と 3 種混在を見分ける。
+        var hasCrlf = false;
+        var hasLfOnly = false;
+        var hasCrOnly = false;
+        for (int i = 0; i < rawBytes.Length; i++)
+        {
+            if (rawBytes[i] == 0x0D)
             {
-                if (rawBytes[i] == 0x0D)
+                if (i + 1 < rawBytes.Length && rawBytes[i + 1] == 0x0A)
                 {
-                    if (i + 1 < rawBytes.Length && rawBytes[i + 1] == 0x0A)
-                    {
-                        hasCrlf = true;
-                        i++; // skip the LF after CR
-                    }
-                    else
-                    {
-                        hasCrOnly = true;
-                    }
+                    hasCrlf = true;
+                    i++; // skip the LF after CR
                 }
-                else if (rawBytes[i] == 0x0A)
-                {
-                    hasLfOnly = true;
-                }
-            }
-            var distinctEndingTypes = (hasCrlf ? 1 : 0) + (hasLfOnly ? 1 : 0) + (hasCrOnly ? 1 : 0);
-            if (distinctEndingTypes >= 3)
-            {
-                issues.Add(new FileIssue
-                {
-                    Path = relativePath,
-                    Kind = "mixed_line_endings_three_way",
-                    Line = 0,
-                    Message = "Mixed line endings (CRLF, LF, and CR)",
-                });
-            }
-            else if (distinctEndingTypes == 2)
-            {
-                string description;
-                if (hasCrlf && hasLfOnly)
-                    description = "CRLF and LF";
-                else if (hasCrlf && hasCrOnly)
-                    description = "CRLF and CR";
                 else
-                    description = "LF and CR";
-                issues.Add(new FileIssue
                 {
-                    Path = relativePath,
-                    Kind = "mixed_line_endings",
-                    Line = 0,
-                    Message = $"Mixed line endings ({description})",
-                });
+                    hasCrOnly = true;
+                }
             }
-            else if (hasCrOnly)
+            else if (rawBytes[i] == 0x0A)
             {
-                issues.Add(new FileIssue
-                {
-                    Path = relativePath,
-                    Kind = "cr_only_line_endings",
-                    Line = 0,
-                    Message = "CR-only line endings (legacy Mac)",
-                });
+                hasLfOnly = true;
             }
         }
+        var distinctEndingTypes = (hasCrlf ? 1 : 0) + (hasLfOnly ? 1 : 0) + (hasCrOnly ? 1 : 0);
+        if (distinctEndingTypes >= 3)
+        {
+            issues.Add(new FileIssue
+            {
+                Path = relativePath,
+                Kind = "mixed_line_endings_three_way",
+                Line = 0,
+                Message = "Mixed line endings (CRLF, LF, and CR)",
+            });
+        }
+        else if (distinctEndingTypes == 2)
+        {
+            string description;
+            if (hasCrlf && hasLfOnly)
+                description = "CRLF and LF";
+            else if (hasCrlf && hasCrOnly)
+                description = "CRLF and CR";
+            else
+                description = "LF and CR";
+            issues.Add(new FileIssue
+            {
+                Path = relativePath,
+                Kind = "mixed_line_endings",
+                Line = 0,
+                Message = $"Mixed line endings ({description})",
+            });
+        }
+        else if (hasCrOnly)
+        {
+            issues.Add(new FileIssue
+            {
+                Path = relativePath,
+                Kind = "cr_only_line_endings",
+                Line = 0,
+                Message = "CR-only line endings (legacy Mac)",
+            });
+        }
+    }
 
+    private static void AddOversizeContentIssues(List<FileIssue> issues, string relativePath, string content)
+    {
         // line_too_long — surface the chunk/symbol/reference skip path that
         // triggers when a single physical line exceeds ChunkSplitter.MaxLineLength
         // (e.g. 1 MB minified `.min.js`, base64-encoded asset). The matching
@@ -3795,8 +3825,6 @@ public class FileIndexer
                 Message = $"Line {longFtsTokenLine} contains an FTS5 unicode61 token longer than {CodeIndex.Database.DbReader.FtsUnicode61MaxTokenLength} characters; that token is not searchable through FTS",
             });
         }
-
-        return issues;
     }
 
     internal static bool ContainsIndexBlockingNullByte(byte[] rawBytes)
