@@ -1,9 +1,16 @@
+using System.Text;
 using System.Text.Json;
 
 namespace CodeIndex.Indexer;
 
 public static partial class SymbolExtractor
 {
+    private const int MaxTypeScriptPathAliasConfigBytes = 256 * 1024;
+    private const int MaxTypeScriptPathAliasTotalConfigBytes = 512 * 1024;
+    private const int MaxTypeScriptPathAliasExtendsDepth = 8;
+    private static readonly object TypeScriptPathAliasWarningLock = new();
+    private static readonly HashSet<string> TypeScriptPathAliasReportedWarnings = new(StringComparer.Ordinal);
+
     private sealed record TypeScriptPathAliasConfig(string ProjectDirectory, string BaseDirectory, bool HasBaseUrl, IReadOnlyList<TypeScriptPathAliasRule> Rules);
 
     private sealed record TypeScriptPathAliasRule(string Pattern, string BaseDirectory, IReadOnlyList<string> Targets);
@@ -66,7 +73,14 @@ public static partial class SymbolExtractor
             {
                 var configPath = Path.Combine(directory, configFileName);
                 if (File.Exists(configPath))
-                    return ParseTypeScriptPathAliasConfig(configPath, new HashSet<string>(StringComparer.Ordinal));
+                {
+                    var totalConfigBytesRead = 0L;
+                    return ParseTypeScriptPathAliasConfig(
+                        configPath,
+                        new HashSet<string>(StringComparer.Ordinal),
+                        depth: 0,
+                        ref totalConfigBytesRead);
+                }
             }
 
             var parent = Directory.GetParent(directory)?.FullName;
@@ -78,17 +92,39 @@ public static partial class SymbolExtractor
         return null;
     }
 
-    private static TypeScriptPathAliasConfig? ParseTypeScriptPathAliasConfig(string configPath, HashSet<string> seen)
+    private static TypeScriptPathAliasConfig? ParseTypeScriptPathAliasConfig(
+        string configPath,
+        HashSet<string> seen,
+        int depth,
+        ref long totalConfigBytesRead)
     {
         configPath = Path.GetFullPath(configPath);
         if (!seen.Add(configPath))
             return null;
 
+        if (depth > MaxTypeScriptPathAliasExtendsDepth)
+        {
+            ReportTypeScriptPathAliasWarningOnce(
+                $"Skipped TypeScript path alias config {configPath} because the extends depth exceeds {MaxTypeScriptPathAliasExtendsDepth}.");
+            return null;
+        }
+
         JsonDocument document;
         try
         {
+            if (!TryReadTypeScriptPathAliasConfigText(
+                    configPath,
+                    ref totalConfigBytesRead,
+                    out var configText,
+                    out var skippedReason))
+            {
+                ReportTypeScriptPathAliasWarningOnce(
+                    $"Skipped TypeScript path alias config {configPath} because {skippedReason}.");
+                return null;
+            }
+
             document = JsonDocument.Parse(
-                File.ReadAllText(configPath),
+                configText,
                 new JsonDocumentOptions { AllowTrailingCommas = true, CommentHandling = JsonCommentHandling.Skip });
         }
         catch
@@ -100,7 +136,7 @@ public static partial class SymbolExtractor
         {
             var configDirectory = Path.GetDirectoryName(configPath) ?? Directory.GetCurrentDirectory();
             var inherited = TryGetTypeScriptExtendsPath(document.RootElement, configDirectory, out var extendsPath)
-                ? ParseTypeScriptPathAliasConfig(extendsPath, seen)
+                ? ParseTypeScriptPathAliasConfig(extendsPath, seen, depth + 1, ref totalConfigBytesRead)
                 : null;
 
             var baseDirectory = inherited?.BaseDirectory ?? configDirectory;
@@ -149,6 +185,86 @@ public static partial class SymbolExtractor
                 ? null
                 : new TypeScriptPathAliasConfig(configDirectory, baseDirectory, hasBaseUrl, SortTypeScriptPathAliasRules(rules));
         }
+    }
+
+    private static bool TryReadTypeScriptPathAliasConfigText(
+        string configPath,
+        ref long totalConfigBytesRead,
+        out string text,
+        out string skippedReason)
+    {
+        text = string.Empty;
+        skippedReason = string.Empty;
+
+        try
+        {
+            using var stream = new FileStream(
+                configPath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete,
+                bufferSize: 8192,
+                useAsync: false);
+
+            if (stream.Length > MaxTypeScriptPathAliasConfigBytes)
+            {
+                skippedReason = $"it exceeds {MaxTypeScriptPathAliasConfigBytes} bytes";
+                return false;
+            }
+
+            if (totalConfigBytesRead + stream.Length > MaxTypeScriptPathAliasTotalConfigBytes)
+            {
+                skippedReason = $"the extends chain exceeds {MaxTypeScriptPathAliasTotalConfigBytes} bytes";
+                return false;
+            }
+
+            using var accumulator = new MemoryStream((int)Math.Min(stream.Length, MaxTypeScriptPathAliasConfigBytes));
+            var buffer = new byte[8192];
+            long fileBytesRead = 0;
+            int read;
+            while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
+            {
+                fileBytesRead += read;
+                if (fileBytesRead > MaxTypeScriptPathAliasConfigBytes)
+                {
+                    skippedReason = $"it exceeds {MaxTypeScriptPathAliasConfigBytes} bytes";
+                    return false;
+                }
+
+                totalConfigBytesRead += read;
+                if (totalConfigBytesRead > MaxTypeScriptPathAliasTotalConfigBytes)
+                {
+                    skippedReason = $"the extends chain exceeds {MaxTypeScriptPathAliasTotalConfigBytes} bytes";
+                    return false;
+                }
+
+                accumulator.Write(buffer, 0, read);
+            }
+
+            text = Encoding.UTF8.GetString(accumulator.ToArray());
+            return true;
+        }
+        catch (IOException)
+        {
+            skippedReason = "it could not be read";
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            skippedReason = "it could not be read";
+            return false;
+        }
+    }
+
+    private static void ReportTypeScriptPathAliasWarningOnce(string message)
+    {
+        lock (TypeScriptPathAliasWarningLock)
+        {
+            if (!TypeScriptPathAliasReportedWarnings.Add(message))
+                return;
+        }
+
+        Console.Error.WriteLine("cdidx: warning: " + message);
     }
 
     private static IReadOnlyList<TypeScriptPathAliasRule> SortTypeScriptPathAliasRules(IReadOnlyList<TypeScriptPathAliasRule> rules) =>

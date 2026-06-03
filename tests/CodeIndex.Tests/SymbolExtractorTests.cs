@@ -17991,6 +17991,97 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScript_OversizedTsconfigSkipsPathAliasesWithWarning()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("tsconfig_alias_oversized_symbols");
+        try
+        {
+            WriteFile(
+                projectRoot,
+                "tsconfig.json",
+                "{\"compilerOptions\":{\"baseUrl\":\".\",\"paths\":{\"@/*\":[\"src/*\"]}},\"pad\":\"" + new string('a', 260 * 1024) + "\"}");
+            WriteFile(projectRoot, "src/components/Button.tsx", "export const Button = 1;\n");
+            var sourcePath = WriteFile(projectRoot, "src/main.ts", "import { Button } from \"@/components/Button\";\n");
+
+            List<SymbolRecord> symbols = [];
+            var stderr = ConsoleCapture.CaptureError(() =>
+                symbols = SymbolExtractor.Extract(1, "typescript", File.ReadAllText(sourcePath), sourcePath));
+
+            Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "@/components/Button");
+            Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "src/components/Button.tsx");
+            Assert.Contains("Skipped TypeScript path alias config", stderr, StringComparison.Ordinal);
+            Assert.Contains("exceeds", stderr, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Extract_TypeScript_ExcessiveTsconfigExtendsDepthSkipsInheritedPathAliasesWithWarning()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("tsconfig_alias_deep_extends_symbols");
+        try
+        {
+            WriteFile(projectRoot, "tsconfig.json", "{\"extends\":\"./tsconfig.1.json\"}");
+            for (var i = 1; i <= 8; i++)
+                WriteFile(projectRoot, $"tsconfig.{i}.json", "{\"extends\":\"./tsconfig." + (i + 1) + ".json\"}");
+            WriteFile(projectRoot, "tsconfig.9.json", """
+                {
+                  "compilerOptions": {
+                    "baseUrl": ".",
+                    "paths": {
+                      "~lib/*": ["lib/*"]
+                    }
+                  }
+                }
+                """);
+            WriteFile(projectRoot, "lib/math.ts", "export const sum = 1;\n");
+            var sourcePath = WriteFile(projectRoot, "src/app.ts", "import { sum } from \"~lib/math\";\n");
+
+            List<SymbolRecord> symbols = [];
+            var stderr = ConsoleCapture.CaptureError(() =>
+                symbols = SymbolExtractor.Extract(1, "typescript", File.ReadAllText(sourcePath), sourcePath));
+
+            Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "~lib/math");
+            Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "lib/math.ts");
+            Assert.Contains("extends depth", stderr, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Extract_TypeScript_TsconfigExtendsTotalBytesCapSkipsInheritedPathAliasesWithWarning()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("tsconfig_alias_total_bytes_symbols");
+        try
+        {
+            var pad = new string('a', 210 * 1024);
+            WriteFile(projectRoot, "tsconfig.json", "{\"extends\":\"./tsconfig.1.json\",\"pad\":\"" + pad + "\"}");
+            WriteFile(projectRoot, "tsconfig.1.json", "{\"extends\":\"./tsconfig.2.json\",\"pad\":\"" + pad + "\"}");
+            WriteFile(projectRoot, "tsconfig.2.json", "{\"compilerOptions\":{\"baseUrl\":\".\",\"paths\":{\"~lib/*\":[\"lib/*\"]}},\"pad\":\"" + pad + "\"}");
+            WriteFile(projectRoot, "lib/math.ts", "export const sum = 1;\n");
+            var sourcePath = WriteFile(projectRoot, "src/app.ts", "import { sum } from \"~lib/math\";\n");
+
+            List<SymbolRecord> symbols = [];
+            var stderr = ConsoleCapture.CaptureError(() =>
+                symbols = SymbolExtractor.Extract(1, "typescript", File.ReadAllText(sourcePath), sourcePath));
+
+            Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "~lib/math");
+            Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "lib/math.ts");
+            Assert.Contains("extends chain exceeds", stderr, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Extract_JavaScript_ResolvesJsconfigPathAliasImportsAndKeepsMissesLiteral()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("jsconfig_alias_symbols");
