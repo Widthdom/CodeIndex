@@ -2581,108 +2581,155 @@ internal static class ProgramRunner
         if (args.Length == 0)
             return true;
 
-        var kept = new List<string>(args.Length);
-        string? path = null;
-        long maxBytes = AuditLogSink.DefaultMaxBytes;
-        var includeValues = false;
-        var passthrough = false;
+        var state = new AuditLogFlagParseState(args.Length);
         for (var i = 0; i < args.Length; i++)
         {
-            var arg = args[i];
-            if (passthrough)
-            {
-                kept.Add(arg);
-                continue;
-            }
-            if (arg == "--")
-            {
-                passthrough = true;
-                kept.Add(arg);
-                continue;
-            }
-
-            // Pass `--db` and its value through together so a dash-prefixed DB path
-            // (e.g. `cdidx mcp --db --some-uri`) is not mis-consumed as the start of
-            // an audit-log flag. The strict mcp parser downstream supports both
-            // `--db <value>` and `--db=value`; here we only need to guard the spaced form.
-            // `--db` とその値はまとめて通過させ、ダッシュ始まりの DB パス
-            // (例: `cdidx mcp --db --some-uri`) を audit-log フラグの先頭と
-            // 誤認しないようにする。`--db=value` 形式は値が同じトークンに含まれるため
-            // 既存ループでそのまま `kept` に流れる。
-            if (arg == "--db")
-            {
-                kept.Add(arg);
-                if (i + 1 < args.Length)
-                    kept.Add(args[++i]);
-                continue;
-            }
-
-            if (arg == "--audit-log")
-            {
-                if (i + 1 >= args.Length)
-                {
-                    error = "Error: --audit-log requires a path value (use `--audit-log <path>` or `--audit-log=<path>`).";
-                    return false;
-                }
-                path = args[++i];
-                if (string.IsNullOrWhiteSpace(path))
-                {
-                    error = "Error: --audit-log requires a non-empty path value.";
-                    return false;
-                }
-                continue;
-            }
-            if (arg.StartsWith("--audit-log=", StringComparison.Ordinal))
-            {
-                path = arg.Substring("--audit-log=".Length);
-                if (string.IsNullOrWhiteSpace(path))
-                {
-                    error = "Error: --audit-log requires a non-empty path value.";
-                    return false;
-                }
-                continue;
-            }
-            if (arg == "--audit-log-include-values")
-            {
-                includeValues = true;
-                continue;
-            }
-            if (arg == "--audit-log-max-bytes" || arg.StartsWith("--audit-log-max-bytes=", StringComparison.Ordinal))
-            {
-                string raw;
-                if (arg == "--audit-log-max-bytes")
-                {
-                    if (i + 1 >= args.Length)
-                    {
-                        error = "Error: --audit-log-max-bytes requires a byte count.";
-                        return false;
-                    }
-                    raw = args[++i];
-                }
-                else
-                {
-                    raw = arg.Substring("--audit-log-max-bytes=".Length);
-                }
-                if (!long.TryParse(raw, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsed)
-                    || parsed < AuditLogSink.MinMaxBytes)
-                {
-                    error = $"Error: --audit-log-max-bytes must be an integer >= {AuditLogSink.MinMaxBytes}.";
-                    return false;
-                }
-                maxBytes = parsed;
-                continue;
-            }
-            kept.Add(arg);
+            if (!TryConsumeAuditLogArgument(args, ref i, state, out error))
+                return false;
         }
 
-        if (includeValues && path == null)
+        if (state.IncludeValues && state.Path == null)
         {
             error = "Error: --audit-log-include-values requires --audit-log <path>.";
             return false;
         }
 
-        options = new AuditLogOptions(path, maxBytes, includeValues);
-        args = kept.ToArray();
+        options = state.ToOptions();
+        args = state.Kept.ToArray();
+        return true;
+    }
+
+    private sealed class AuditLogFlagParseState
+    {
+        internal AuditLogFlagParseState(int capacity)
+        {
+            Kept = new List<string>(capacity);
+        }
+
+        internal List<string> Kept { get; }
+        internal string? Path { get; set; }
+        internal long MaxBytes { get; set; } = AuditLogSink.DefaultMaxBytes;
+        internal bool IncludeValues { get; set; }
+        internal bool Passthrough { get; set; }
+
+        internal AuditLogOptions ToOptions() => new(Path, MaxBytes, IncludeValues);
+    }
+
+    private static bool TryConsumeAuditLogArgument(
+        string[] args,
+        ref int index,
+        AuditLogFlagParseState state,
+        out string error)
+    {
+        error = string.Empty;
+        var arg = args[index];
+        if (state.Passthrough)
+        {
+            state.Kept.Add(arg);
+            return true;
+        }
+
+        if (arg == "--")
+        {
+            state.Passthrough = true;
+            state.Kept.Add(arg);
+            return true;
+        }
+
+        // Pass `--db` and its value through together so a dash-prefixed DB path
+        // (e.g. `cdidx mcp --db --some-uri`) is not mis-consumed as the start of
+        // an audit-log flag. The strict mcp parser downstream supports both
+        // `--db <value>` and `--db=value`; here we only need to guard the spaced form.
+        // `--db` とその値はまとめて通過させ、ダッシュ始まりの DB パス
+        // (例: `cdidx mcp --db --some-uri`) を audit-log フラグの先頭と
+        // 誤認しないようにする。`--db=value` 形式は値が同じトークンに含まれるため
+        // 既存ループでそのまま `kept` に流れる。
+        if (arg == "--db")
+        {
+            state.Kept.Add(arg);
+            if (index + 1 < args.Length)
+                state.Kept.Add(args[++index]);
+            return true;
+        }
+
+        if (arg == "--audit-log")
+            return TryConsumeAuditLogPathValue(args, ref index, state, out error);
+
+        if (arg.StartsWith("--audit-log=", StringComparison.Ordinal))
+            return TrySetAuditLogPath(arg.Substring("--audit-log=".Length), state, out error);
+
+        if (arg == "--audit-log-include-values")
+        {
+            state.IncludeValues = true;
+            return true;
+        }
+
+        if (arg == "--audit-log-max-bytes" || arg.StartsWith("--audit-log-max-bytes=", StringComparison.Ordinal))
+            return TryConsumeAuditLogMaxBytes(args, ref index, state, out error);
+
+        state.Kept.Add(arg);
+        return true;
+    }
+
+    private static bool TryConsumeAuditLogPathValue(
+        string[] args,
+        ref int index,
+        AuditLogFlagParseState state,
+        out string error)
+    {
+        if (index + 1 >= args.Length)
+        {
+            error = "Error: --audit-log requires a path value (use `--audit-log <path>` or `--audit-log=<path>`).";
+            return false;
+        }
+
+        return TrySetAuditLogPath(args[++index], state, out error);
+    }
+
+    private static bool TrySetAuditLogPath(string path, AuditLogFlagParseState state, out string error)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            error = "Error: --audit-log requires a non-empty path value.";
+            return false;
+        }
+
+        state.Path = path;
+        error = string.Empty;
+        return true;
+    }
+
+    private static bool TryConsumeAuditLogMaxBytes(
+        string[] args,
+        ref int index,
+        AuditLogFlagParseState state,
+        out string error)
+    {
+        var arg = args[index];
+        string raw;
+        if (arg == "--audit-log-max-bytes")
+        {
+            if (index + 1 >= args.Length)
+            {
+                error = "Error: --audit-log-max-bytes requires a byte count.";
+                return false;
+            }
+            raw = args[++index];
+        }
+        else
+        {
+            raw = arg.Substring("--audit-log-max-bytes=".Length);
+        }
+
+        if (!long.TryParse(raw, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsed)
+            || parsed < AuditLogSink.MinMaxBytes)
+        {
+            error = $"Error: --audit-log-max-bytes must be an integer >= {AuditLogSink.MinMaxBytes}.";
+            return false;
+        }
+
+        state.MaxBytes = parsed;
+        error = string.Empty;
         return true;
     }
 
