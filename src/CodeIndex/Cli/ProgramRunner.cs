@@ -47,6 +47,13 @@ internal static class ProgramRunner
     };
     internal static TimeProvider TimeProvider { get; set; } = TimeProvider.System;
 
+    private sealed record CommandRunContext(
+        JsonSerializerOptions JsonOptions,
+        string AppVersion,
+        DateTimeOffset StartTimestamp,
+        Stopwatch Stopwatch,
+        CancellationToken CancellationToken);
+
     internal static int Run(
         string[] args,
         JsonSerializerOptions? jsonOptions = null,
@@ -126,207 +133,13 @@ internal static class ProgramRunner
         if (versionPinExit != CommandExitCodes.Success)
             return versionPinExit;
 
-        if (args.Length == 0 || args[0] is "--help" or "-h")
-        {
-            ConsoleUi.PrintUsageBrief(showBanner: args.Length > 0);
-            var helpExit = args.Length == 0 ? CommandExitCodes.UsageError : CommandExitCodes.Success;
-            GlobalToolLog.Info($"command_complete exit_code={helpExit} help_or_usage=true");
-            EmitCommandMetric("help", args, commandStartTimestamp, commandStopwatch, helpExit);
-            return helpExit;
-        }
-
-        if (args[0] is "--help-all" or "--help-extended")
-        {
-            ConsoleUi.PrintUsageFull(showBanner: true);
-            GlobalToolLog.Info($"command_complete exit_code={CommandExitCodes.Success} help_all=true");
-            EmitCommandMetric("help-all", args, commandStartTimestamp, commandStopwatch, CommandExitCodes.Success);
-            return CommandExitCodes.Success;
-        }
-
-        if (args[0] == "--help-flags")
-        {
-            ConsoleUi.PrintFlagUsage(showBanner: true);
-            GlobalToolLog.Info($"command_complete exit_code={CommandExitCodes.Success} help_flags=true");
-            EmitCommandMetric("help-flags", args, commandStartTimestamp, commandStopwatch, CommandExitCodes.Success);
-            return CommandExitCodes.Success;
-        }
-
-        if (args[0] is "--version" or "-V")
-        {
-            var versionExitCode = RunVersion(args[1..], jsonOptions, appVersion, cancellationToken);
-            GlobalToolLog.Info($"command_complete exit_code={versionExitCode} version_only=true");
-            EmitCommandMetric("version", args, commandStartTimestamp, commandStopwatch, versionExitCode);
-            return versionExitCode;
-        }
-
-        if (args[0] == "--check-updates")
-        {
-            var updateExitCode = RunCheckUpdates(args[1..], jsonOptions, appVersion, cancellationToken);
-            GlobalToolLog.Info($"command_complete exit_code={updateExitCode} check_updates=true");
-            EmitCommandMetric("check-updates", args, commandStartTimestamp, commandStopwatch, updateExitCode);
-            return updateExitCode;
-        }
-
-        if (args[0] is "--license" or "license")
-        {
-            if (args[0] == "license" && args.Length > 1 && ArgHelper.WantsHelp(args.AsSpan(1)))
-            {
-                ConsoleUi.PrintCommandUsage("license");
-                GlobalToolLog.Info($"command_complete exit_code={CommandExitCodes.Success} subcommand_help=true");
-                EmitCommandMetric("license", args, commandStartTimestamp, commandStopwatch, CommandExitCodes.Success);
-                return CommandExitCodes.Success;
-            }
-
-            ConsoleUi.PrintLicenseSummary();
-            GlobalToolLog.Info($"command_complete exit_code={CommandExitCodes.Success} license_only=true");
-            EmitCommandMetric("license", args, commandStartTimestamp, commandStopwatch, CommandExitCodes.Success);
-            return CommandExitCodes.Success;
-        }
-
-        if (args[0] is "--completions" or "completions")
-        {
-            if (args[0] == "completions" && args.Length > 1 && ArgHelper.WantsHelp(args.AsSpan(1)))
-            {
-                ConsoleUi.PrintCommandUsage("completions");
-                GlobalToolLog.Info($"command_complete exit_code={CommandExitCodes.Success} subcommand_help=true");
-                EmitCommandMetric("completions", args, commandStartTimestamp, commandStopwatch, CommandExitCodes.Success);
-                return CommandExitCodes.Success;
-            }
-
-            var exitCode = RunCompletions(args[1..], args[0] == "completions" ? "completions" : "--completions");
-            GlobalToolLog.Info($"command_complete exit_code={exitCode} command=completions");
-            EmitCommandMetric("completions", args, commandStartTimestamp, commandStopwatch, exitCode);
-            return exitCode;
-        }
-
-        if (args.Length > 1 && ArgHelper.WantsHelp(args.AsSpan(1)))
-        {
-            if (!ConsoleUi.PrintCommandUsage(args[0]))
-                ConsoleUi.PrintUsage(showBanner: true);
-            GlobalToolLog.Info($"command_complete exit_code={CommandExitCodes.Success} subcommand_help=true");
-            EmitCommandMetric(args[0], args, commandStartTimestamp, commandStopwatch, CommandExitCodes.Success);
-            return CommandExitCodes.Success;
-        }
-
-        if (args[0] == "doctor")
-        {
-            var doctorExitCode = RunDoctor(args[1..], appVersion);
-            GlobalToolLog.Info($"command_complete exit_code={doctorExitCode} command=doctor");
-            EmitCommandMetric("doctor", args, commandStartTimestamp, commandStopwatch, doctorExitCode);
-            return doctorExitCode;
-        }
-
-        var easterEgg = args.FirstOrDefault(a => a is "--sushi" or "--coffee" or "--ramen" or "--wine" or "--beer" or "--matcha" or "--whisky");
-        if (easterEgg != null && !args.Any(a => !a.StartsWith('-')))
-        {
-            ConsoleUi.PrintEasterEggMessage(easterEgg);
-            GlobalToolLog.Info($"command_complete exit_code={CommandExitCodes.Success} easter_egg={easterEgg}");
-            EmitCommandMetric("easter_egg", args, commandStartTimestamp, commandStopwatch, CommandExitCodes.Success);
-            return CommandExitCodes.Success;
-        }
+        var context = new CommandRunContext(jsonOptions, appVersion, commandStartTimestamp, commandStopwatch, cancellationToken);
+        if (TryRunImmediateCommand(args, context, out var immediateExitCode))
+            return immediateExitCode;
 
         try
         {
-            beforeDispatchForTesting?.Invoke();
-
-            if (args[0] is "mcp" or "mcp-server")
-            {
-                var mcpExitCode = RunMcp(args[1..], appVersion);
-                GlobalToolLog.Info($"command_complete exit_code={mcpExitCode} command=mcp");
-                EmitCommandMetric("mcp", args, commandStartTimestamp, commandStopwatch, mcpExitCode);
-                return mcpExitCode;
-            }
-
-            if (args[0] is "lsp" or "--lsp")
-            {
-                var lspExitCode = RunLsp(args[1..], appVersion, jsonOptions);
-                GlobalToolLog.Info($"command_complete exit_code={lspExitCode} command=lsp");
-                EmitCommandMetric("lsp", args, commandStartTimestamp, commandStopwatch, lspExitCode);
-                return lspExitCode;
-            }
-
-            var commandName = args[0];
-            var subArgs = args[1..];
-            Func<string[], int>? queryRunner = commandName switch
-            {
-                "search" => a => QueryCommandRunner.RunSearch(a, jsonOptions),
-                "definition" => a => QueryCommandRunner.RunDefinition(a, jsonOptions),
-                "goto" => a => QueryCommandRunner.RunGoto(a, jsonOptions),
-                "references" => a => QueryCommandRunner.RunReferences(a, jsonOptions),
-                "callers" => a => QueryCommandRunner.RunCallers(a, jsonOptions),
-                "callees" => a => QueryCommandRunner.RunCallees(a, jsonOptions),
-                "symbols" => a => QueryCommandRunner.RunSymbols(a, jsonOptions),
-                "files" => a => QueryCommandRunner.RunFiles(a, jsonOptions),
-                "find" => a => QueryCommandRunner.RunFind(a, jsonOptions),
-                "excerpt" => a => QueryCommandRunner.RunExcerpt(a, jsonOptions),
-                "map" => a => QueryCommandRunner.RunMap(a, jsonOptions),
-                "inspect" => a => QueryCommandRunner.RunInspect(a, jsonOptions),
-                "outline" => a => QueryCommandRunner.RunOutline(a, jsonOptions),
-                "status" => a => QueryCommandRunner.RunStatus(a, jsonOptions, appVersion, cancellationToken),
-                "validate" => a => QueryCommandRunner.RunValidate(a, jsonOptions),
-                "languages" => a => QueryCommandRunner.RunLanguages(a, jsonOptions),
-                "impact" => a => QueryCommandRunner.RunImpact(a, jsonOptions),
-                "deps" => a => QueryCommandRunner.RunDeps(a, jsonOptions),
-                "unused" => a => QueryCommandRunner.RunUnused(a, jsonOptions),
-                "hotspots" => a => QueryCommandRunner.RunHotspots(a, jsonOptions),
-                "batch" => a => QueryCommandRunner.RunBatch(a, jsonOptions),
-                "suggestions" => a => SuggestionsCommandRunner.Run(a, jsonOptions),
-                _ => null,
-            };
-
-            int exitCode;
-            if (queryRunner is not null)
-            {
-                subArgs = InsertQueryLiteralSentinelForNonLogGlobalOption(commandName, subArgs);
-
-                if (!TryConsumeQueryTraceFlag(ref subArgs, out var traceMode, out var traceError))
-                {
-                    CommandErrorWriter.Write(StripErrorPrefix(traceError), "use one of `none`, `stderr`, or `file`.");
-                    GlobalToolLog.Info($"command_complete exit_code={CommandExitCodes.InvalidArgument} command={commandName} trace_flag_invalid=true");
-                    EmitCommandMetric(commandName, args, commandStartTimestamp, commandStopwatch, CommandExitCodes.InvalidArgument);
-                    return CommandExitCodes.InvalidArgument;
-                }
-
-                using var traceCapture = QueryTraceOutputCapture.TryStart(traceMode, subArgs);
-                exitCode = JsonEnvelopeWrapper.ShouldWrap(commandName, subArgs)
-                    ? JsonEnvelopeWrapper.RunWrapped(commandName, subArgs, appVersion, jsonOptions, queryRunner)
-                    : queryRunner(subArgs);
-                EmitQueryTrace(traceMode, commandName, subArgs, commandStartTimestamp, commandStopwatch, exitCode, traceCapture?.ResultCount);
-            }
-            else
-            {
-                exitCode = commandName switch
-                {
-                    "upgrade" => RunUpgrade(subArgs, jsonOptions, appVersion, cancellationToken),
-                    "index" => IndexCommandRunner.Run(subArgs, jsonOptions),
-                    "export" => ExportImportCommandRunner.RunExport(subArgs, jsonOptions, appVersion),
-                    "import" => ExportImportCommandRunner.RunImport(subArgs, jsonOptions),
-                    "diff" => DiffCommandRunner.Run(subArgs, jsonOptions),
-                    "hooks" => HookCommandRunner.Run(subArgs, jsonOptions),
-                    "backfill-fold" => IndexCommandRunner.RunBackfillFold(subArgs, jsonOptions),
-                    "optimize" => IndexCommandRunner.RunOptimizeFts(subArgs, jsonOptions),
-                    "vacuum" => QueryCommandRunner.RunVacuum(subArgs, jsonOptions),
-                    "validate-config" => CdidxConfigFile.RunValidate(subArgs, jsonOptions),
-                    "config" => subArgs.Length > 0 && subArgs[0] == "show"
-                        ? CdidxConfigFile.RunShow(subArgs[1..], jsonOptions)
-                        : CommandErrorWriter.WriteJsonOrHuman(
-                            ContainsJsonOutputFlag(subArgs),
-                            jsonOptions,
-                            "Unknown config command: use `cdidx config show`.",
-                            CommandExitCodes.UsageError,
-                            "use `cdidx config show`."),
-                    "workspace" => WorkspaceCommandRunner.Run(subArgs, jsonOptions),
-                    "db" => DbCommandRunner.Run(subArgs, jsonOptions),
-                    "report" => ReportCommandRunner.Run(subArgs, jsonOptions, appVersion),
-                    "test-extractor" => RunTestExtractor(subArgs, jsonOptions),
-                    _ when IsProjectPathArg(commandName)
-                        => IndexCommandRunner.Run(args, jsonOptions),
-                    _ => ShowError(args, $"Unknown command: {commandName}")
-                };
-            }
-            GlobalToolLog.Info($"command_complete exit_code={exitCode} command={commandName}");
-            EmitCommandMetric(commandName, args, commandStartTimestamp, commandStopwatch, exitCode);
-            return exitCode;
+            return RunDispatchedCommand(args, context, beforeDispatchForTesting);
         }
         catch (CodeIndexException ex)
         {
@@ -335,16 +148,16 @@ internal static class ProgramRunner
             // signal to branch on instead of parsing free-form messages.
             // #1580: 失敗ファイル / 構造化フィールドを CLI で一律に表示する。
             var exitCode = MapCodeIndexExceptionExitCode(ex.Code);
-            CodeIndexExceptionFormatter.Write(ex, args, jsonOptions);
+            CodeIndexExceptionFormatter.Write(ex, args, context.JsonOptions);
             GlobalToolLog.Error($"command_complete exit_code={exitCode} code_index_exception code={ex.Code} category={ex.Category} path={ex.Path}", ex, includeStacks: false);
-            EmitCommandMetric(args[0], args, commandStartTimestamp, commandStopwatch, exitCode, ex.Code);
+            EmitCommandMetric(args[0], args, context.StartTimestamp, context.Stopwatch, exitCode, ex.Code);
             return exitCode;
         }
         catch (OperationCanceledException ex)
         {
             GlobalToolLog.Error($"command_complete exit_code={CommandExitCodes.CancelledBySignal} operation_cancelled", ex, includeStacks: false);
             Console.Error.WriteLine("Error: command cancelled before it could complete.");
-            EmitCommandMetric(args[0], args, commandStartTimestamp, commandStopwatch, CommandExitCodes.CancelledBySignal, ex.GetType().Name);
+            EmitCommandMetric(args[0], args, context.StartTimestamp, context.Stopwatch, CommandExitCodes.CancelledBySignal, ex.GetType().Name);
             return CommandExitCodes.CancelledBySignal;
         }
         catch (Exception ex)
@@ -352,17 +165,288 @@ internal static class ProgramRunner
             if (JsonOutputFailure.TryHandle(ex, out var exitCode))
             {
                 GlobalToolLog.Error($"command_complete exit_code={exitCode} handled_exception", ex, includeStacks: false);
-                EmitCommandMetric(args[0], args, commandStartTimestamp, commandStopwatch, exitCode, ex.GetType().Name);
+                EmitCommandMetric(args[0], args, context.StartTimestamp, context.Stopwatch, exitCode, ex.GetType().Name);
                 return exitCode;
             }
 
             var unhandledExitCode = MapUnhandledExceptionExitCode(ex);
             GlobalToolLog.Error($"command_complete exit_code={unhandledExitCode} unhandled_exception", ex);
             Console.Error.WriteLine("Error: command failed before it could complete. Run `cdidx report` for details.");
-            EmitCommandMetric(args[0], args, commandStartTimestamp, commandStopwatch, unhandledExitCode, ex.GetType().Name);
+            EmitCommandMetric(args[0], args, context.StartTimestamp, context.Stopwatch, unhandledExitCode, ex.GetType().Name);
             return unhandledExitCode;
         }
     }
+
+    private static bool TryRunImmediateCommand(string[] args, CommandRunContext context, out int exitCode)
+    {
+        if (TryRunHelpVersionOrUpdateCommand(args, context, out exitCode))
+            return true;
+        if (TryRunStandaloneUtilityCommand(args, context, out exitCode))
+            return true;
+        if (TryRunSubcommandHelp(args, context, out exitCode))
+            return true;
+        if (TryRunDoctorCommand(args, context, out exitCode))
+            return true;
+        if (TryRunEasterEggCommand(args, context, out exitCode))
+            return true;
+
+        exitCode = CommandExitCodes.Success;
+        return false;
+    }
+
+    private static bool TryRunHelpVersionOrUpdateCommand(string[] args, CommandRunContext context, out int exitCode)
+    {
+        if (args.Length == 0 || args[0] is "--help" or "-h")
+        {
+            ConsoleUi.PrintUsageBrief(showBanner: args.Length > 0);
+            exitCode = args.Length == 0 ? CommandExitCodes.UsageError : CommandExitCodes.Success;
+            GlobalToolLog.Info($"command_complete exit_code={exitCode} help_or_usage=true");
+            EmitCommandMetric("help", args, context.StartTimestamp, context.Stopwatch, exitCode);
+            return true;
+        }
+
+        if (args[0] is "--help-all" or "--help-extended")
+        {
+            ConsoleUi.PrintUsageFull(showBanner: true);
+            exitCode = CommandExitCodes.Success;
+            GlobalToolLog.Info($"command_complete exit_code={exitCode} help_all=true");
+            EmitCommandMetric("help-all", args, context.StartTimestamp, context.Stopwatch, exitCode);
+            return true;
+        }
+
+        if (args[0] == "--help-flags")
+        {
+            ConsoleUi.PrintFlagUsage(showBanner: true);
+            exitCode = CommandExitCodes.Success;
+            GlobalToolLog.Info($"command_complete exit_code={exitCode} help_flags=true");
+            EmitCommandMetric("help-flags", args, context.StartTimestamp, context.Stopwatch, exitCode);
+            return true;
+        }
+
+        if (args[0] is "--version" or "-V")
+        {
+            exitCode = RunVersion(args[1..], context.JsonOptions, context.AppVersion, context.CancellationToken);
+            GlobalToolLog.Info($"command_complete exit_code={exitCode} version_only=true");
+            EmitCommandMetric("version", args, context.StartTimestamp, context.Stopwatch, exitCode);
+            return true;
+        }
+
+        if (args[0] == "--check-updates")
+        {
+            exitCode = RunCheckUpdates(args[1..], context.JsonOptions, context.AppVersion, context.CancellationToken);
+            GlobalToolLog.Info($"command_complete exit_code={exitCode} check_updates=true");
+            EmitCommandMetric("check-updates", args, context.StartTimestamp, context.Stopwatch, exitCode);
+            return true;
+        }
+
+        exitCode = CommandExitCodes.Success;
+        return false;
+    }
+
+    private static bool TryRunStandaloneUtilityCommand(string[] args, CommandRunContext context, out int exitCode)
+    {
+        if (args[0] is "--license" or "license")
+        {
+            if (args[0] == "license" && args.Length > 1 && ArgHelper.WantsHelp(args.AsSpan(1)))
+            {
+                ConsoleUi.PrintCommandUsage("license");
+                exitCode = CommandExitCodes.Success;
+                GlobalToolLog.Info($"command_complete exit_code={exitCode} subcommand_help=true");
+                EmitCommandMetric("license", args, context.StartTimestamp, context.Stopwatch, exitCode);
+                return true;
+            }
+
+            ConsoleUi.PrintLicenseSummary();
+            exitCode = CommandExitCodes.Success;
+            GlobalToolLog.Info($"command_complete exit_code={exitCode} license_only=true");
+            EmitCommandMetric("license", args, context.StartTimestamp, context.Stopwatch, exitCode);
+            return true;
+        }
+
+        if (args[0] is "--completions" or "completions")
+        {
+            if (args[0] == "completions" && args.Length > 1 && ArgHelper.WantsHelp(args.AsSpan(1)))
+            {
+                ConsoleUi.PrintCommandUsage("completions");
+                exitCode = CommandExitCodes.Success;
+                GlobalToolLog.Info($"command_complete exit_code={exitCode} subcommand_help=true");
+                EmitCommandMetric("completions", args, context.StartTimestamp, context.Stopwatch, exitCode);
+                return true;
+            }
+
+            exitCode = RunCompletions(args[1..], args[0] == "completions" ? "completions" : "--completions");
+            GlobalToolLog.Info($"command_complete exit_code={exitCode} command=completions");
+            EmitCommandMetric("completions", args, context.StartTimestamp, context.Stopwatch, exitCode);
+            return true;
+        }
+
+        exitCode = CommandExitCodes.Success;
+        return false;
+    }
+
+    private static bool TryRunSubcommandHelp(string[] args, CommandRunContext context, out int exitCode)
+    {
+        if (args.Length > 1 && ArgHelper.WantsHelp(args.AsSpan(1)))
+        {
+            if (!ConsoleUi.PrintCommandUsage(args[0]))
+                ConsoleUi.PrintUsage(showBanner: true);
+            exitCode = CommandExitCodes.Success;
+            GlobalToolLog.Info($"command_complete exit_code={exitCode} subcommand_help=true");
+            EmitCommandMetric(args[0], args, context.StartTimestamp, context.Stopwatch, exitCode);
+            return true;
+        }
+
+        exitCode = CommandExitCodes.Success;
+        return false;
+    }
+
+    private static bool TryRunDoctorCommand(string[] args, CommandRunContext context, out int exitCode)
+    {
+        if (args[0] == "doctor")
+        {
+            exitCode = RunDoctor(args[1..], context.AppVersion);
+            GlobalToolLog.Info($"command_complete exit_code={exitCode} command=doctor");
+            EmitCommandMetric("doctor", args, context.StartTimestamp, context.Stopwatch, exitCode);
+            return true;
+        }
+
+        exitCode = CommandExitCodes.Success;
+        return false;
+    }
+
+    private static bool TryRunEasterEggCommand(string[] args, CommandRunContext context, out int exitCode)
+    {
+        var easterEgg = args.FirstOrDefault(a => a is "--sushi" or "--coffee" or "--ramen" or "--wine" or "--beer" or "--matcha" or "--whisky");
+        if (easterEgg != null && !args.Any(a => !a.StartsWith('-')))
+        {
+            ConsoleUi.PrintEasterEggMessage(easterEgg);
+            exitCode = CommandExitCodes.Success;
+            GlobalToolLog.Info($"command_complete exit_code={exitCode} easter_egg={easterEgg}");
+            EmitCommandMetric("easter_egg", args, context.StartTimestamp, context.Stopwatch, exitCode);
+            return true;
+        }
+
+        exitCode = CommandExitCodes.Success;
+        return false;
+    }
+
+    private static int RunDispatchedCommand(
+        string[] args,
+        CommandRunContext context,
+        Action? beforeDispatchForTesting)
+    {
+        beforeDispatchForTesting?.Invoke();
+
+        if (args[0] is "mcp" or "mcp-server")
+        {
+            var mcpExitCode = RunMcp(args[1..], context.AppVersion);
+            GlobalToolLog.Info($"command_complete exit_code={mcpExitCode} command=mcp");
+            EmitCommandMetric("mcp", args, context.StartTimestamp, context.Stopwatch, mcpExitCode);
+            return mcpExitCode;
+        }
+
+        if (args[0] is "lsp" or "--lsp")
+        {
+            var lspExitCode = RunLsp(args[1..], context.AppVersion, context.JsonOptions);
+            GlobalToolLog.Info($"command_complete exit_code={lspExitCode} command=lsp");
+            EmitCommandMetric("lsp", args, context.StartTimestamp, context.Stopwatch, lspExitCode);
+            return lspExitCode;
+        }
+
+        var commandName = args[0];
+        var subArgs = args[1..];
+        var queryRunner = ResolveQueryRunner(commandName, context);
+
+        int exitCode;
+        if (queryRunner is not null)
+        {
+            subArgs = InsertQueryLiteralSentinelForNonLogGlobalOption(commandName, subArgs);
+
+            if (!TryConsumeQueryTraceFlag(ref subArgs, out var traceMode, out var traceError))
+            {
+                CommandErrorWriter.Write(StripErrorPrefix(traceError), "use one of `none`, `stderr`, or `file`.");
+                GlobalToolLog.Info($"command_complete exit_code={CommandExitCodes.InvalidArgument} command={commandName} trace_flag_invalid=true");
+                EmitCommandMetric(commandName, args, context.StartTimestamp, context.Stopwatch, CommandExitCodes.InvalidArgument);
+                return CommandExitCodes.InvalidArgument;
+            }
+
+            using var traceCapture = QueryTraceOutputCapture.TryStart(traceMode, subArgs);
+            exitCode = JsonEnvelopeWrapper.ShouldWrap(commandName, subArgs)
+                ? JsonEnvelopeWrapper.RunWrapped(commandName, subArgs, context.AppVersion, context.JsonOptions, queryRunner)
+                : queryRunner(subArgs);
+            EmitQueryTrace(traceMode, commandName, subArgs, context.StartTimestamp, context.Stopwatch, exitCode, traceCapture?.ResultCount);
+        }
+        else
+        {
+            exitCode = RunNonQueryCommand(commandName, subArgs, args, context);
+        }
+
+        GlobalToolLog.Info($"command_complete exit_code={exitCode} command={commandName}");
+        EmitCommandMetric(commandName, args, context.StartTimestamp, context.Stopwatch, exitCode);
+        return exitCode;
+    }
+
+    private static Func<string[], int>? ResolveQueryRunner(string commandName, CommandRunContext context) =>
+        commandName switch
+        {
+            "search" => a => QueryCommandRunner.RunSearch(a, context.JsonOptions),
+            "definition" => a => QueryCommandRunner.RunDefinition(a, context.JsonOptions),
+            "goto" => a => QueryCommandRunner.RunGoto(a, context.JsonOptions),
+            "references" => a => QueryCommandRunner.RunReferences(a, context.JsonOptions),
+            "callers" => a => QueryCommandRunner.RunCallers(a, context.JsonOptions),
+            "callees" => a => QueryCommandRunner.RunCallees(a, context.JsonOptions),
+            "symbols" => a => QueryCommandRunner.RunSymbols(a, context.JsonOptions),
+            "files" => a => QueryCommandRunner.RunFiles(a, context.JsonOptions),
+            "find" => a => QueryCommandRunner.RunFind(a, context.JsonOptions),
+            "excerpt" => a => QueryCommandRunner.RunExcerpt(a, context.JsonOptions),
+            "map" => a => QueryCommandRunner.RunMap(a, context.JsonOptions),
+            "inspect" => a => QueryCommandRunner.RunInspect(a, context.JsonOptions),
+            "outline" => a => QueryCommandRunner.RunOutline(a, context.JsonOptions),
+            "status" => a => QueryCommandRunner.RunStatus(a, context.JsonOptions, context.AppVersion, context.CancellationToken),
+            "validate" => a => QueryCommandRunner.RunValidate(a, context.JsonOptions),
+            "languages" => a => QueryCommandRunner.RunLanguages(a, context.JsonOptions),
+            "impact" => a => QueryCommandRunner.RunImpact(a, context.JsonOptions),
+            "deps" => a => QueryCommandRunner.RunDeps(a, context.JsonOptions),
+            "unused" => a => QueryCommandRunner.RunUnused(a, context.JsonOptions),
+            "hotspots" => a => QueryCommandRunner.RunHotspots(a, context.JsonOptions),
+            "batch" => a => QueryCommandRunner.RunBatch(a, context.JsonOptions),
+            "suggestions" => a => SuggestionsCommandRunner.Run(a, context.JsonOptions),
+            _ => null,
+        };
+
+    private static int RunNonQueryCommand(
+        string commandName,
+        string[] subArgs,
+        string[] originalArgs,
+        CommandRunContext context) =>
+        commandName switch
+        {
+            "upgrade" => RunUpgrade(subArgs, context.JsonOptions, context.AppVersion, context.CancellationToken),
+            "index" => IndexCommandRunner.Run(subArgs, context.JsonOptions),
+            "export" => ExportImportCommandRunner.RunExport(subArgs, context.JsonOptions, context.AppVersion),
+            "import" => ExportImportCommandRunner.RunImport(subArgs, context.JsonOptions),
+            "diff" => DiffCommandRunner.Run(subArgs, context.JsonOptions),
+            "hooks" => HookCommandRunner.Run(subArgs, context.JsonOptions),
+            "backfill-fold" => IndexCommandRunner.RunBackfillFold(subArgs, context.JsonOptions),
+            "optimize" => IndexCommandRunner.RunOptimizeFts(subArgs, context.JsonOptions),
+            "vacuum" => QueryCommandRunner.RunVacuum(subArgs, context.JsonOptions),
+            "validate-config" => CdidxConfigFile.RunValidate(subArgs, context.JsonOptions),
+            "config" => subArgs.Length > 0 && subArgs[0] == "show"
+                ? CdidxConfigFile.RunShow(subArgs[1..], context.JsonOptions)
+                : CommandErrorWriter.WriteJsonOrHuman(
+                    ContainsJsonOutputFlag(subArgs),
+                    context.JsonOptions,
+                    "Unknown config command: use `cdidx config show`.",
+                    CommandExitCodes.UsageError,
+                    "use `cdidx config show`."),
+            "workspace" => WorkspaceCommandRunner.Run(subArgs, context.JsonOptions),
+            "db" => DbCommandRunner.Run(subArgs, context.JsonOptions),
+            "report" => ReportCommandRunner.Run(subArgs, context.JsonOptions, context.AppVersion),
+            "test-extractor" => RunTestExtractor(subArgs, context.JsonOptions),
+            _ when IsProjectPathArg(commandName)
+                => IndexCommandRunner.Run(originalArgs, context.JsonOptions),
+            _ => ShowError(originalArgs, $"Unknown command: {commandName}")
+        };
 
     internal static bool IsProjectPathArg(string arg)
     {
@@ -2054,30 +2138,71 @@ internal static class ProgramRunner
         Console.Error.WriteLine("Runs a read-only Language Server Protocol server over stdio using an existing CodeIndex database.");
     }
 
+    private sealed record McpRunOptions(
+        QueryCommandOptions QueryOptions,
+        string Transport,
+        string? ListenSpec,
+        AuditLogOptions AuditOptions);
+
     private static int RunMcp(string[] cmdArgs, string appVersion)
+    {
+        if (!TryPrepareMcpRun(cmdArgs, out var runOptions, out var exitCode))
+            return exitCode;
+
+        AuditLogSink? auditLog = null;
+        try
+        {
+            if (!TryOpenMcpAuditLog(runOptions.AuditOptions, out auditLog, out exitCode))
+                return exitCode;
+
+            // Pick the authenticator based on `CDIDX_MCP_AUTH_TOKEN` (#1559). When unset the
+            // permissive local-stdio default keeps the historical behaviour; when set every
+            // JSON-RPC request must include a matching `params.auth.token`. The tool-enablement
+            // gate (#1561) is wired automatically by the McpServer ctor via
+            // `McpToolFilter.FromEnvironment()`.
+            // `CDIDX_MCP_AUTH_TOKEN` の有無で authenticator を切り替える (#1559)。未設定なら
+            // permissive な stdio 既定で従来動作を維持し、設定済みなら全 JSON-RPC リクエストに
+            // `params.auth.token` の一致を要求する。ツール有効化ゲート (#1561) は McpServer の
+            // コンストラクタ内部で `McpToolFilter.FromEnvironment()` から自動取得される。
+            var authenticator = Mcp.McpAuthenticatorFactory.FromEnvironment();
+            using var server = new McpServer(runOptions.QueryOptions.DbPath, appVersion, runOptions.QueryOptions.DbPathExplicit, authenticator, auditLog);
+            return RunMcpServer(server, runOptions.Transport, runOptions.ListenSpec);
+        }
+        finally
+        {
+            auditLog?.Dispose();
+        }
+    }
+
+    private static bool TryPrepareMcpRun(string[] cmdArgs, out McpRunOptions runOptions, out int exitCode)
     {
         // Strip audit-log opt-in flags first so the strict mcp parser below does not see them
         // and raise an unknown-flag error. Keeps `--db` and `--` passthrough intact (#1562).
         // audit-log オプションフラグは厳格パーサに渡る前に除去し、未知フラグ扱いされるのを防ぐ (#1562)。
+        runOptions = null!;
+        exitCode = CommandExitCodes.Success;
         if (!TryConsumeAuditLogFlags(ref cmdArgs, out var auditOptions, out var auditError))
         {
             Console.Error.WriteLine(auditError);
             PrintMcpUsage();
-            return CommandExitCodes.UsageError;
+            exitCode = CommandExitCodes.UsageError;
+            return false;
         }
 
         if (!TryConsumeSuggestionDedupThresholdFlag(ref cmdArgs, out var thresholdError))
         {
             Console.Error.WriteLine(thresholdError);
             PrintMcpUsage();
-            return CommandExitCodes.UsageError;
+            exitCode = CommandExitCodes.UsageError;
+            return false;
         }
 
         if (!TryExtractMcpTransportFlags(cmdArgs, out var transportSpec, out var listenSpec, out var transportError))
         {
             Console.Error.WriteLine(transportError);
             PrintMcpUsage();
-            return CommandExitCodes.UsageError;
+            exitCode = CommandExitCodes.UsageError;
+            return false;
         }
 
         // Strip the transport flags from the args before delegating to QueryCommandRunner.ParseArgs
@@ -2090,9 +2215,22 @@ internal static class ProgramRunner
         {
             Console.Error.WriteLine(options.ParseError);
             PrintMcpUsage();
-            return CommandExitCodes.UsageError;
+            exitCode = CommandExitCodes.UsageError;
+            return false;
         }
 
+        if (!TryValidateMcpResidualArgs(residualArgs, out exitCode))
+            return false;
+
+        if (!TryResolveMcpTransport(transportSpec, listenSpec, out var transport, out exitCode))
+            return false;
+
+        runOptions = new McpRunOptions(options, transport, listenSpec, auditOptions);
+        return true;
+    }
+
+    private static bool TryValidateMcpResidualArgs(string[] residualArgs, out int exitCode)
+    {
         for (var i = 0; i < residualArgs.Length; i++)
         {
             if (residualArgs[i].StartsWith("--db=", StringComparison.Ordinal))
@@ -2110,81 +2248,85 @@ internal static class ProgramRunner
                 Console.Error.WriteLine($"Error: {residualArgs[i]} is not supported for mcp.");
             Console.Error.WriteLine("Hint: use `--db <path>` to point at a specific index, `--transport stdio|http` to pick a transport, `--http-listen host:port` for HTTP, or `--audit-log <path>` to enable per-call auditing.");
             PrintMcpUsage();
-            return CommandExitCodes.UsageError;
+            exitCode = CommandExitCodes.UsageError;
+            return false;
         }
 
-        var transport = transportSpec ?? "stdio";
+        exitCode = CommandExitCodes.Success;
+        return true;
+    }
+
+    private static bool TryResolveMcpTransport(string? transportSpec, string? listenSpec, out string transport, out int exitCode)
+    {
+        transport = transportSpec ?? "stdio";
         if (!string.Equals(transport, "stdio", StringComparison.OrdinalIgnoreCase)
             && !string.Equals(transport, "http", StringComparison.OrdinalIgnoreCase))
         {
             Console.Error.WriteLine($"Error: --transport '{transport}' is not supported. Use `stdio` (default) or `http`.");
             PrintMcpUsage();
-            return CommandExitCodes.UsageError;
+            exitCode = CommandExitCodes.UsageError;
+            return false;
         }
 
         if (listenSpec != null && !string.Equals(transport, "http", StringComparison.OrdinalIgnoreCase))
         {
             Console.Error.WriteLine("Error: --http-listen requires `--transport http`.");
             PrintMcpUsage();
-            return CommandExitCodes.UsageError;
+            exitCode = CommandExitCodes.UsageError;
+            return false;
         }
 
-        AuditLogSink? auditLog = null;
-        if (auditOptions.Path != null)
+        exitCode = CommandExitCodes.Success;
+        return true;
+    }
+
+    private static bool TryOpenMcpAuditLog(AuditLogOptions auditOptions, out AuditLogSink? auditLog, out int exitCode)
+    {
+        auditLog = null;
+        if (auditOptions.Path == null)
         {
-            try
-            {
-                auditLog = new AuditLogSink(auditOptions.Path, auditOptions.MaxBytes, auditOptions.IncludeValues);
-            }
-            catch (Exception ex)
-            {
-                Console.Error.WriteLine($"Error: failed to open audit log '{auditOptions.Path}' ({ex.GetType().Name}: {ex.Message}).");
-                Console.Error.WriteLine("Hint: pick a writable path or omit --audit-log to disable per-call auditing.");
-                return CommandExitCodes.UsageError;
-            }
+            exitCode = CommandExitCodes.Success;
+            return true;
         }
-
-        // Pick the authenticator based on `CDIDX_MCP_AUTH_TOKEN` (#1559). When unset the
-        // permissive local-stdio default keeps the historical behaviour; when set every
-        // JSON-RPC request must include a matching `params.auth.token`. The tool-enablement
-        // gate (#1561) is wired automatically by the McpServer ctor via
-        // `McpToolFilter.FromEnvironment()`.
-        // `CDIDX_MCP_AUTH_TOKEN` の有無で authenticator を切り替える (#1559)。未設定なら
-        // permissive な stdio 既定で従来動作を維持し、設定済みなら全 JSON-RPC リクエストに
-        // `params.auth.token` の一致を要求する。ツール有効化ゲート (#1561) は McpServer の
-        // コンストラクタ内部で `McpToolFilter.FromEnvironment()` から自動取得される。
-        var authenticator = Mcp.McpAuthenticatorFactory.FromEnvironment();
 
         try
         {
-            using var server = new McpServer(options.DbPath, appVersion, options.DbPathExplicit, authenticator, auditLog);
-
-            if (string.Equals(transport, "http", StringComparison.OrdinalIgnoreCase))
-                return RunMcpHttp(server, listenSpec ?? DefaultMcpHttpListen);
-
-            try
-            {
-                server.RunAsync().GetAwaiter().GetResult();
-                return CommandExitCodes.Success;
-            }
-            catch (OperationCanceledException)
-            {
-                Console.Out.Flush();
-                Console.Error.Flush();
-                return CommandExitCodes.CancelledBySignal;
-            }
-            catch (Exception ex)
-            {
-                GlobalToolLog.Error("mcp_server_failed " + GlobalToolLog.FormatExceptionChain(ex));
-                Console.Error.WriteLine($"Error: MCP server failed ({ex.GetType().Name}: {ex.Message}).");
-                Console.Out.Flush();
-                Console.Error.Flush();
-                return CommandExitCodes.DatabaseError;
-            }
+            auditLog = new AuditLogSink(auditOptions.Path, auditOptions.MaxBytes, auditOptions.IncludeValues);
+            exitCode = CommandExitCodes.Success;
+            return true;
         }
-        finally
+        catch (Exception ex)
         {
-            auditLog?.Dispose();
+            Console.Error.WriteLine($"Error: failed to open audit log '{auditOptions.Path}' ({ex.GetType().Name}: {ex.Message}).");
+            Console.Error.WriteLine("Hint: pick a writable path or omit --audit-log to disable per-call auditing.");
+            exitCode = CommandExitCodes.UsageError;
+            return false;
+        }
+    }
+
+    private static int RunMcpServer(McpServer server, string transport, string? listenSpec)
+    {
+        if (string.Equals(transport, "http", StringComparison.OrdinalIgnoreCase))
+            return RunMcpHttp(server, listenSpec ?? DefaultMcpHttpListen);
+
+        try
+        {
+            server.RunAsync().GetAwaiter().GetResult();
+            return CommandExitCodes.Success;
+        }
+        catch (OperationCanceledException)
+        {
+            Console.Out.Flush();
+            Console.Error.Flush();
+            return CommandExitCodes.CancelledBySignal;
+        }
+        catch (Exception ex)
+        {
+            GlobalToolLog.Error("mcp_server_failed " + GlobalToolLog.FormatExceptionChain(ex));
+            Console.Error.WriteLine($"Error: MCP server failed ({ex.GetType().Name}: {ex.Message}).");
+            Console.Out.Flush();
+            Console.Error.Flush();
+            return CommandExitCodes.DatabaseError;
         }
     }
 

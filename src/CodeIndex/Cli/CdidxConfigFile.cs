@@ -120,200 +120,261 @@ internal static class CdidxConfigFile
 
             var pending = new List<(string EnvName, string Value)>();
 
-            if (root.TryGetProperty("debug", out var debug))
-            {
-                if (!TryReadString(debug, "debug", path, out var value, out var err))
-                    return new LoadResult(Path: path, Error: err);
-                pending.Add(("CDIDX_DEBUG", value!));
-            }
-
-            if (root.TryGetProperty("metrics_path", out var metrics))
-            {
-                if (!TryReadString(metrics, "metrics_path", path, out var value, out var err))
-                    return new LoadResult(Path: path, Error: err);
-                pending.Add(("CDIDX_METRICS", value!));
-            }
-
-            if (root.TryGetProperty("disable_persistent_log", out var disableLog))
-            {
-                if (disableLog.ValueKind != JsonValueKind.True && disableLog.ValueKind != JsonValueKind.False)
-                    return new LoadResult(Path: path, Error: $"[cdidx] {path}: `disable_persistent_log` must be a boolean.");
-                if (disableLog.GetBoolean())
-                    pending.Add(("CDIDX_DISABLE_PERSISTENT_LOG", "1"));
-            }
-
-            if (root.TryGetProperty("global_tool_log_dir", out var logDir))
-            {
-                if (!TryReadString(logDir, "global_tool_log_dir", path, out var value, out var err))
-                    return new LoadResult(Path: path, Error: err);
-                pending.Add(("CDIDX_GLOBAL_TOOL_LOG_DIR", value!));
-            }
-
-            if (root.TryGetProperty("stale_after", out var staleAfter))
-            {
-                if (!TryReadString(staleAfter, "stale_after", path, out var value, out var err))
-                    return new LoadResult(Path: path, Error: err);
-                pending.Add((QueryCommandRunner.StaleAfterEnvironmentVariable, value!));
-            }
-
-            if (root.TryGetProperty("suggestion_dedup_threshold", out var suggestionDedupThreshold))
-            {
-                if (!TryReadNumberAsString(suggestionDedupThreshold, "suggestion_dedup_threshold", path, out var value, out var err))
-                    return new LoadResult(Path: path, Error: err);
-                if (!double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var threshold)
-                    || threshold < 0
-                    || threshold > 1)
-                {
-                    return new LoadResult(Path: path, Error: $"[cdidx] {path}: `suggestion_dedup_threshold` must be between 0 and 1.");
-                }
-
-                pending.Add((SuggestionStore.DedupThresholdEnvironmentVariable, value!));
-            }
-
-            if (root.TryGetProperty("suggestion_max_age_days", out var suggestionMaxAgeDays))
-            {
-                if (!TryReadPositiveIntegerAsString(suggestionMaxAgeDays, "suggestion_max_age_days", path, out var value, out var err))
-                    return new LoadResult(Path: path, Error: err);
-                var parsedMaxAgeDays = int.Parse(value!, CultureInfo.InvariantCulture);
-                if (parsedMaxAgeDays > SuggestionStore.MaximumMaxAgeDays)
-                    return new LoadResult(Path: path, Error: $"[cdidx] {path}: `suggestion_max_age_days` must be <= {SuggestionStore.MaximumMaxAgeDays}.");
-                pending.Add((SuggestionStore.MaxAgeDaysEnvironmentVariable, value!));
-            }
-
-            if (root.TryGetProperty("suggestion_max_count", out var suggestionMaxCount))
-            {
-                if (!TryReadPositiveIntegerAsString(suggestionMaxCount, "suggestion_max_count", path, out var value, out var err))
-                    return new LoadResult(Path: path, Error: err);
-                var parsedMaxCount = int.Parse(value!, CultureInfo.InvariantCulture);
-                if (parsedMaxCount > SuggestionStore.MaximumMaxCount)
-                    return new LoadResult(Path: path, Error: $"[cdidx] {path}: `suggestion_max_count` must be <= {SuggestionStore.MaximumMaxCount}.");
-                pending.Add((SuggestionStore.MaxCountEnvironmentVariable, value!));
-            }
-
-            if (root.TryGetProperty("indexing", out var indexing))
-            {
-                if (indexing.ValueKind != JsonValueKind.Object)
-                    return new LoadResult(Path: path, Error: $"[cdidx] {path}: `indexing` must be a JSON object.");
-                if (TryFindUnknownKey(indexing, KnownIndexingKeys, out var unknownIndexingKey))
-                    return new LoadResult(Path: path, Error: $"[cdidx] {path}: unknown key `indexing.{unknownIndexingKey}`. Supported keys: {string.Join(", ", KnownIndexingKeys)}.");
-
-                if (indexing.TryGetProperty("includeKinds", out var includeKinds))
-                {
-                    if (!TryReadStringArray(includeKinds, "indexing.includeKinds", path, out var value, out var err))
-                        return new LoadResult(Path: path, Error: err);
-                    if (value!.Length > 0)
-                        pending.Add((IndexCommandRunner.IncludeSymbolKindsEnvironmentVariable, string.Join(",", value)));
-                }
-
-                if (indexing.TryGetProperty("excludeKinds", out var excludeKinds))
-                {
-                    if (!TryReadStringArray(excludeKinds, "indexing.excludeKinds", path, out var value, out var err))
-                        return new LoadResult(Path: path, Error: err);
-                    if (value!.Length > 0)
-                        pending.Add((IndexCommandRunner.ExcludeSymbolKindsEnvironmentVariable, string.Join(",", value)));
-                }
-            }
-
-            if (root.TryGetProperty("search", out var search))
-            {
-                if (search.ValueKind != JsonValueKind.Object)
-                    return new LoadResult(Path: path, Error: $"[cdidx] {path}: `search` must be a JSON object.");
-                if (TryFindUnknownKey(search, KnownSearchKeys, out var unknownSearchKey))
-                    return new LoadResult(Path: path, Error: $"[cdidx] {path}: unknown key `search.{unknownSearchKey}`. Supported keys: {string.Join(", ", KnownSearchKeys)}.");
-                if (search.TryGetProperty("limit", out var limit))
-                {
-                    if (!TryReadSearchInteger(limit, "search.limit", "--limit", allowZero: false, path, out var value, out var err))
-                        return new LoadResult(Path: path, Error: err);
-                    pending.Add((QueryCommandRunner.DefaultLimitEnvironmentVariable, value!));
-                }
-                if (search.TryGetProperty("snippet_lines", out var snippetLines))
-                {
-                    if (!TryReadSearchInteger(snippetLines, "search.snippet_lines", "--snippet-lines", allowZero: false, path, out var value, out var err))
-                        return new LoadResult(Path: path, Error: err);
-                    pending.Add((QueryCommandRunner.DefaultSnippetLinesEnvironmentVariable, value!));
-                }
-                if (search.TryGetProperty("max_line_width", out var maxLineWidth))
-                {
-                    if (!TryReadSearchInteger(maxLineWidth, "search.max_line_width", "--max-line-width", allowZero: true, path, out var value, out var err))
-                        return new LoadResult(Path: path, Error: err);
-                    pending.Add((QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable, value!));
-                }
-            }
+            if (AddTopLevelEnvironmentSettings(root, path, pending) is { } topLevelError)
+                return topLevelError;
+            if (AddSuggestionEnvironmentSettings(root, path, pending) is { } suggestionError)
+                return suggestionError;
+            if (AddIndexingEnvironmentSettings(root, path, pending) is { } indexingError)
+                return indexingError;
+            if (AddSearchEnvironmentSettings(root, path, pending) is { } searchError)
+                return searchError;
 
             if (!ValidateOptionalObject(root, "output", KnownOutputKeys, path, out var optionalObjectError)
                 || !ValidateOptionalObject(root, "graph", KnownGraphKeys, path, out optionalObjectError)
                 || !ValidateOptionalObject(root, "folding", KnownFoldingKeys, path, out optionalObjectError))
                 return new LoadResult(Path: path, Error: optionalObjectError);
 
-            if (root.TryGetProperty("mcp", out var mcp))
-            {
-                if (mcp.ValueKind != JsonValueKind.Object)
-                    return new LoadResult(Path: path, Error: $"[cdidx] {path}: `mcp` must be a JSON object.");
-                if (TryFindUnknownKey(mcp, KnownMcpKeys, out var unknownMcpKey))
-                    return new LoadResult(Path: path, Error: $"[cdidx] {path}: unknown key `mcp.{unknownMcpKey}`. Supported keys: {string.Join(", ", KnownMcpKeys)}.");
-
-                if (mcp.TryGetProperty("tools", out var tools))
-                {
-                    if (tools.ValueKind != JsonValueKind.Object)
-                        return new LoadResult(Path: path, Error: $"[cdidx] {path}: `mcp.tools` must be a JSON object.");
-                    if (TryFindUnknownKey(tools, KnownMcpToolsKeys, out var unknownToolsKey))
-                        return new LoadResult(Path: path, Error: $"[cdidx] {path}: unknown key `mcp.tools.{unknownToolsKey}`. Supported keys: {string.Join(", ", KnownMcpToolsKeys)}.");
-
-                    if (tools.TryGetProperty("allow", out var allow))
-                    {
-                        if (!TryReadStringArray(allow, "mcp.tools.allow", path, out var value, out var err))
-                            return new LoadResult(Path: path, Error: err);
-                        if (value!.Length > 0)
-                            pending.Add(("CDIDX_MCP_TOOLS_ALLOW", string.Join(",", value)));
-                    }
-
-                    if (tools.TryGetProperty("deny", out var deny))
-                    {
-                        if (!TryReadStringArray(deny, "mcp.tools.deny", path, out var value, out var err))
-                            return new LoadResult(Path: path, Error: err);
-                        if (value!.Length > 0)
-                            pending.Add(("CDIDX_MCP_TOOLS_DENY", string.Join(",", value)));
-                    }
-                }
-
-                if (mcp.TryGetProperty("rate_limit", out var rateLimit))
-                {
-                    if (rateLimit.ValueKind != JsonValueKind.Object)
-                        return new LoadResult(Path: path, Error: $"[cdidx] {path}: `mcp.rate_limit` must be a JSON object.");
-                    if (TryFindUnknownKey(rateLimit, KnownMcpRateLimitKeys, out var unknownRlKey))
-                        return new LoadResult(Path: path, Error: $"[cdidx] {path}: unknown key `mcp.rate_limit.{unknownRlKey}`. Supported keys: {string.Join(", ", KnownMcpRateLimitKeys)}.");
-
-                    if (rateLimit.TryGetProperty("rps", out var rps))
-                    {
-                        if (!TryReadNumberAsString(rps, "mcp.rate_limit.rps", path, out var value, out var err))
-                            return new LoadResult(Path: path, Error: err);
-                        pending.Add(("CDIDX_MCP_RATE_LIMIT_RPS", value!));
-                    }
-
-                    if (rateLimit.TryGetProperty("burst", out var burst))
-                    {
-                        if (!TryReadNumberAsString(burst, "mcp.rate_limit.burst", path, out var value, out var err))
-                            return new LoadResult(Path: path, Error: err);
-                        pending.Add(("CDIDX_MCP_RATE_LIMIT_BURST", value!));
-                    }
-                }
-            }
+            if (AddMcpEnvironmentSettings(root, path, pending) is { } mcpError)
+                return mcpError;
 
             // Apply only when the matching env var is not present (null), preserving the
             // documented precedence (real env wins over config-file value). An explicit
             // empty string still counts as "set" because several existing consumers
             // (e.g. RateLimiterOptions.FromEnvironment) treat empty as "feature off",
             // so a user clearing a checked-in value must be able to override with `export FOO=`.
-            foreach (var (name, value) in pending)
-            {
-                if (envReader(name) is null)
-                {
-                    envWriter(name, value);
-                    envWriter(ConfigSourceEnvironmentVariablePrefix + name, path);
-                }
-            }
+            ApplyPendingEnvironmentSettings(pending, path, envReader, envWriter);
 
             return new LoadResult(Path: path, Error: null);
+        }
+    }
+
+    private static LoadResult? AddTopLevelEnvironmentSettings(JsonElement root, string path, List<(string EnvName, string Value)> pending)
+    {
+        if (root.TryGetProperty("debug", out var debug))
+        {
+            if (!TryReadString(debug, "debug", path, out var value, out var err))
+                return new LoadResult(Path: path, Error: err);
+            pending.Add(("CDIDX_DEBUG", value!));
+        }
+
+        if (root.TryGetProperty("metrics_path", out var metrics))
+        {
+            if (!TryReadString(metrics, "metrics_path", path, out var value, out var err))
+                return new LoadResult(Path: path, Error: err);
+            pending.Add(("CDIDX_METRICS", value!));
+        }
+
+        if (root.TryGetProperty("disable_persistent_log", out var disableLog))
+        {
+            if (disableLog.ValueKind != JsonValueKind.True && disableLog.ValueKind != JsonValueKind.False)
+                return new LoadResult(Path: path, Error: $"[cdidx] {path}: `disable_persistent_log` must be a boolean.");
+            if (disableLog.GetBoolean())
+                pending.Add(("CDIDX_DISABLE_PERSISTENT_LOG", "1"));
+        }
+
+        if (root.TryGetProperty("global_tool_log_dir", out var logDir))
+        {
+            if (!TryReadString(logDir, "global_tool_log_dir", path, out var value, out var err))
+                return new LoadResult(Path: path, Error: err);
+            pending.Add(("CDIDX_GLOBAL_TOOL_LOG_DIR", value!));
+        }
+
+        if (root.TryGetProperty("stale_after", out var staleAfter))
+        {
+            if (!TryReadString(staleAfter, "stale_after", path, out var value, out var err))
+                return new LoadResult(Path: path, Error: err);
+            pending.Add((QueryCommandRunner.StaleAfterEnvironmentVariable, value!));
+        }
+
+        return null;
+    }
+
+    private static LoadResult? AddSuggestionEnvironmentSettings(JsonElement root, string path, List<(string EnvName, string Value)> pending)
+    {
+        if (root.TryGetProperty("suggestion_dedup_threshold", out var suggestionDedupThreshold))
+        {
+            if (!TryReadNumberAsString(suggestionDedupThreshold, "suggestion_dedup_threshold", path, out var value, out var err))
+                return new LoadResult(Path: path, Error: err);
+            if (!double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var threshold)
+                || threshold < 0
+                || threshold > 1)
+            {
+                return new LoadResult(Path: path, Error: $"[cdidx] {path}: `suggestion_dedup_threshold` must be between 0 and 1.");
+            }
+
+            pending.Add((SuggestionStore.DedupThresholdEnvironmentVariable, value!));
+        }
+
+        if (root.TryGetProperty("suggestion_max_age_days", out var suggestionMaxAgeDays))
+        {
+            if (!TryReadPositiveIntegerAsString(suggestionMaxAgeDays, "suggestion_max_age_days", path, out var value, out var err))
+                return new LoadResult(Path: path, Error: err);
+            var parsedMaxAgeDays = int.Parse(value!, CultureInfo.InvariantCulture);
+            if (parsedMaxAgeDays > SuggestionStore.MaximumMaxAgeDays)
+                return new LoadResult(Path: path, Error: $"[cdidx] {path}: `suggestion_max_age_days` must be <= {SuggestionStore.MaximumMaxAgeDays}.");
+            pending.Add((SuggestionStore.MaxAgeDaysEnvironmentVariable, value!));
+        }
+
+        if (root.TryGetProperty("suggestion_max_count", out var suggestionMaxCount))
+        {
+            if (!TryReadPositiveIntegerAsString(suggestionMaxCount, "suggestion_max_count", path, out var value, out var err))
+                return new LoadResult(Path: path, Error: err);
+            var parsedMaxCount = int.Parse(value!, CultureInfo.InvariantCulture);
+            if (parsedMaxCount > SuggestionStore.MaximumMaxCount)
+                return new LoadResult(Path: path, Error: $"[cdidx] {path}: `suggestion_max_count` must be <= {SuggestionStore.MaximumMaxCount}.");
+            pending.Add((SuggestionStore.MaxCountEnvironmentVariable, value!));
+        }
+
+        return null;
+    }
+
+    private static LoadResult? AddIndexingEnvironmentSettings(JsonElement root, string path, List<(string EnvName, string Value)> pending)
+    {
+        if (!root.TryGetProperty("indexing", out var indexing))
+            return null;
+
+        if (indexing.ValueKind != JsonValueKind.Object)
+            return new LoadResult(Path: path, Error: $"[cdidx] {path}: `indexing` must be a JSON object.");
+        if (TryFindUnknownKey(indexing, KnownIndexingKeys, out var unknownIndexingKey))
+            return new LoadResult(Path: path, Error: $"[cdidx] {path}: unknown key `indexing.{unknownIndexingKey}`. Supported keys: {string.Join(", ", KnownIndexingKeys)}.");
+
+        if (indexing.TryGetProperty("includeKinds", out var includeKinds))
+        {
+            if (!TryReadStringArray(includeKinds, "indexing.includeKinds", path, out var value, out var err))
+                return new LoadResult(Path: path, Error: err);
+            if (value!.Length > 0)
+                pending.Add((IndexCommandRunner.IncludeSymbolKindsEnvironmentVariable, string.Join(",", value)));
+        }
+
+        if (indexing.TryGetProperty("excludeKinds", out var excludeKinds))
+        {
+            if (!TryReadStringArray(excludeKinds, "indexing.excludeKinds", path, out var value, out var err))
+                return new LoadResult(Path: path, Error: err);
+            if (value!.Length > 0)
+                pending.Add((IndexCommandRunner.ExcludeSymbolKindsEnvironmentVariable, string.Join(",", value)));
+        }
+
+        return null;
+    }
+
+    private static LoadResult? AddSearchEnvironmentSettings(JsonElement root, string path, List<(string EnvName, string Value)> pending)
+    {
+        if (!root.TryGetProperty("search", out var search))
+            return null;
+
+        if (search.ValueKind != JsonValueKind.Object)
+            return new LoadResult(Path: path, Error: $"[cdidx] {path}: `search` must be a JSON object.");
+        if (TryFindUnknownKey(search, KnownSearchKeys, out var unknownSearchKey))
+            return new LoadResult(Path: path, Error: $"[cdidx] {path}: unknown key `search.{unknownSearchKey}`. Supported keys: {string.Join(", ", KnownSearchKeys)}.");
+
+        if (search.TryGetProperty("limit", out var limit))
+        {
+            if (!TryReadSearchInteger(limit, "search.limit", "--limit", allowZero: false, path, out var value, out var err))
+                return new LoadResult(Path: path, Error: err);
+            pending.Add((QueryCommandRunner.DefaultLimitEnvironmentVariable, value!));
+        }
+
+        if (search.TryGetProperty("snippet_lines", out var snippetLines))
+        {
+            if (!TryReadSearchInteger(snippetLines, "search.snippet_lines", "--snippet-lines", allowZero: false, path, out var value, out var err))
+                return new LoadResult(Path: path, Error: err);
+            pending.Add((QueryCommandRunner.DefaultSnippetLinesEnvironmentVariable, value!));
+        }
+
+        if (search.TryGetProperty("max_line_width", out var maxLineWidth))
+        {
+            if (!TryReadSearchInteger(maxLineWidth, "search.max_line_width", "--max-line-width", allowZero: true, path, out var value, out var err))
+                return new LoadResult(Path: path, Error: err);
+            pending.Add((QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable, value!));
+        }
+
+        return null;
+    }
+
+    private static LoadResult? AddMcpEnvironmentSettings(JsonElement root, string path, List<(string EnvName, string Value)> pending)
+    {
+        if (!root.TryGetProperty("mcp", out var mcp))
+            return null;
+
+        if (mcp.ValueKind != JsonValueKind.Object)
+            return new LoadResult(Path: path, Error: $"[cdidx] {path}: `mcp` must be a JSON object.");
+        if (TryFindUnknownKey(mcp, KnownMcpKeys, out var unknownMcpKey))
+            return new LoadResult(Path: path, Error: $"[cdidx] {path}: unknown key `mcp.{unknownMcpKey}`. Supported keys: {string.Join(", ", KnownMcpKeys)}.");
+
+        if (AddMcpToolEnvironmentSettings(mcp, path, pending) is { } toolsError)
+            return toolsError;
+        return AddMcpRateLimitEnvironmentSettings(mcp, path, pending);
+    }
+
+    private static LoadResult? AddMcpToolEnvironmentSettings(JsonElement mcp, string path, List<(string EnvName, string Value)> pending)
+    {
+        if (!mcp.TryGetProperty("tools", out var tools))
+            return null;
+
+        if (tools.ValueKind != JsonValueKind.Object)
+            return new LoadResult(Path: path, Error: $"[cdidx] {path}: `mcp.tools` must be a JSON object.");
+        if (TryFindUnknownKey(tools, KnownMcpToolsKeys, out var unknownToolsKey))
+            return new LoadResult(Path: path, Error: $"[cdidx] {path}: unknown key `mcp.tools.{unknownToolsKey}`. Supported keys: {string.Join(", ", KnownMcpToolsKeys)}.");
+
+        if (tools.TryGetProperty("allow", out var allow))
+        {
+            if (!TryReadStringArray(allow, "mcp.tools.allow", path, out var value, out var err))
+                return new LoadResult(Path: path, Error: err);
+            if (value!.Length > 0)
+                pending.Add(("CDIDX_MCP_TOOLS_ALLOW", string.Join(",", value)));
+        }
+
+        if (tools.TryGetProperty("deny", out var deny))
+        {
+            if (!TryReadStringArray(deny, "mcp.tools.deny", path, out var value, out var err))
+                return new LoadResult(Path: path, Error: err);
+            if (value!.Length > 0)
+                pending.Add(("CDIDX_MCP_TOOLS_DENY", string.Join(",", value)));
+        }
+
+        return null;
+    }
+
+    private static LoadResult? AddMcpRateLimitEnvironmentSettings(JsonElement mcp, string path, List<(string EnvName, string Value)> pending)
+    {
+        if (!mcp.TryGetProperty("rate_limit", out var rateLimit))
+            return null;
+
+        if (rateLimit.ValueKind != JsonValueKind.Object)
+            return new LoadResult(Path: path, Error: $"[cdidx] {path}: `mcp.rate_limit` must be a JSON object.");
+        if (TryFindUnknownKey(rateLimit, KnownMcpRateLimitKeys, out var unknownRlKey))
+            return new LoadResult(Path: path, Error: $"[cdidx] {path}: unknown key `mcp.rate_limit.{unknownRlKey}`. Supported keys: {string.Join(", ", KnownMcpRateLimitKeys)}.");
+
+        if (rateLimit.TryGetProperty("rps", out var rps))
+        {
+            if (!TryReadNumberAsString(rps, "mcp.rate_limit.rps", path, out var value, out var err))
+                return new LoadResult(Path: path, Error: err);
+            pending.Add(("CDIDX_MCP_RATE_LIMIT_RPS", value!));
+        }
+
+        if (rateLimit.TryGetProperty("burst", out var burst))
+        {
+            if (!TryReadNumberAsString(burst, "mcp.rate_limit.burst", path, out var value, out var err))
+                return new LoadResult(Path: path, Error: err);
+            pending.Add(("CDIDX_MCP_RATE_LIMIT_BURST", value!));
+        }
+
+        return null;
+    }
+
+    private static void ApplyPendingEnvironmentSettings(
+        List<(string EnvName, string Value)> pending,
+        string path,
+        Func<string, string?> envReader,
+        Action<string, string?> envWriter)
+    {
+        foreach (var (name, value) in pending)
+        {
+            if (envReader(name) is not null)
+                continue;
+
+            envWriter(name, value);
+            envWriter(ConfigSourceEnvironmentVariablePrefix + name, path);
         }
     }
 

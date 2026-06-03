@@ -493,6 +493,21 @@ public class FileIndexer
         IgnoreRuleSet Rules,
         bool IgnoreRulesAvailable);
 
+    private sealed record DirectoryScanState(
+        List<string> Results,
+        List<ScanError> Errors,
+        HashSet<string> NonIndexablePaths,
+        HashSet<string> UnknownExtensionFiles,
+        HashSet<string> ProbeFailedFilePaths,
+        HashSet<string> ListedDirectories,
+        HashSet<string> FullyScannedDirectories,
+        HashSet<string> CheckpointedDirectories,
+        HashSet<string> AttributePrunedDirectories,
+        HashSet<string> NestedRepositories,
+        HashSet<string> DanglingSymlinks,
+        HashSet<FileIdentity> VisitedFileIdentities,
+        HashSet<string> VisitedDirectories);
+
     private sealed class IgnoreRule
     {
         private readonly record struct PatternToken(char Value, bool Escaped);
@@ -2004,43 +2019,45 @@ public class FileIndexer
         var danglingSymlinks = new HashSet<string>(StringComparer.Ordinal);
         var visitedFileIdentities = new HashSet<FileIdentity>();
         var visitedDirectories = new HashSet<string>(StringComparer.Ordinal) { NormalizePathForComparison(_projectRoot) };
+        var scanState = new DirectoryScanState(
+            files,
+            errors,
+            nonIndexablePaths,
+            unknownExtensionFiles,
+            probeFailedFilePaths,
+            listedDirectories,
+            fullyScannedDirectories,
+            activeCheckpointedDirectories,
+            attributePrunedDirectories,
+            nestedRepositories,
+            danglingSymlinks,
+            visitedFileIdentities,
+            visitedDirectories);
         errors.AddRange(_submoduleLoadWarnings);
         var fullyScanned = true;
         var preloadResult = LoadAncestorIgnoreRules(errors, ref fullyScanned);
         if (preloadResult.IgnoreRulesAvailable)
         {
-            ScanDirectory(_projectRoot, files, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, activeCheckpointedDirectories, attributePrunedDirectories, nestedRepositories, danglingSymlinks, visitedFileIdentities, visitedDirectories, preloadResult.Rules, isProjectRoot: true, continueOnError, cancellationToken, depth: 0);
+            ScanDirectory(_projectRoot, scanState, preloadResult.Rules, isProjectRoot: true, continueOnError, cancellationToken, depth: 0);
         }
         return new ScanFilesResult(
-            files,
-            errors,
-            nonIndexablePaths.ToList(),
-            unknownExtensionFiles.OrderBy(path => path, StringComparer.Ordinal).ToList(),
-            probeFailedFilePaths.ToList(),
-            listedDirectories.ToList(),
-            fullyScannedDirectories.ToList(),
-            activeCheckpointedDirectories.Concat(fullyScannedDirectories).ToHashSet(StringComparer.Ordinal),
+            scanState.Results,
+            scanState.Errors,
+            scanState.NonIndexablePaths.ToList(),
+            scanState.UnknownExtensionFiles.OrderBy(path => path, StringComparer.Ordinal).ToList(),
+            scanState.ProbeFailedFilePaths.ToList(),
+            scanState.ListedDirectories.ToList(),
+            scanState.FullyScannedDirectories.ToList(),
+            scanState.CheckpointedDirectories.Concat(scanState.FullyScannedDirectories).ToHashSet(StringComparer.Ordinal),
             _ancestorIgnoreDirectories.ToList(),
-            attributePrunedDirectories.ToList(),
-            nestedRepositories.OrderBy(path => path, StringComparer.Ordinal).ToList(),
-            danglingSymlinks.OrderBy(path => path, StringComparer.Ordinal).ToList());
+            scanState.AttributePrunedDirectories.ToList(),
+            scanState.NestedRepositories.OrderBy(path => path, StringComparer.Ordinal).ToList(),
+            scanState.DanglingSymlinks.OrderBy(path => path, StringComparer.Ordinal).ToList());
     }
 
     private bool ScanDirectory(
         string dir,
-        List<string> results,
-        List<ScanError> errors,
-        HashSet<string> nonIndexablePaths,
-        HashSet<string> unknownExtensionFiles,
-        HashSet<string> probeFailedFilePaths,
-        HashSet<string> listedDirectories,
-        HashSet<string> fullyScannedDirectories,
-        HashSet<string> checkpointedDirectories,
-        HashSet<string> attributePrunedDirectories,
-        HashSet<string> nestedRepositories,
-        HashSet<string> danglingSymlinks,
-        HashSet<FileIdentity> visitedFileIdentities,
-        HashSet<string> visitedDirectories,
+        DirectoryScanState scanState,
         IgnoreRuleSet activeIgnoreRules,
         bool isProjectRoot = false,
         bool continueOnError = true,
@@ -2052,25 +2069,25 @@ public class FileIndexer
 
         if (depth > MaxDirectoryTraversalDepth)
         {
-            errors.Add(new ScanError(
+            scanState.Errors.Add(new ScanError(
                 relativeDir,
                 $"Skipped directory because traversal depth exceeded {MaxDirectoryTraversalDepth}. Check for symlink loops or unexpectedly deep generated trees.",
                 ScanIssueSeverity.Warning));
             return true;
         }
 
-        if (checkpointedDirectories.Contains(relativeDir))
+        if (scanState.CheckpointedDirectories.Contains(relativeDir))
             return true;
 
         var filterKind = GetDirectoryFilterKind(dir, activeIgnoreRules, isProjectRoot);
         if (filterKind != PathFilterKind.None)
         {
-            listedDirectories.Add(relativeDir);
-            fullyScannedDirectories.Add(relativeDir);
+            scanState.ListedDirectories.Add(relativeDir);
+            scanState.FullyScannedDirectories.Add(relativeDir);
             return true;
         }
 
-        return EnumerateDirectory(dir, results, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, checkpointedDirectories, attributePrunedDirectories, nestedRepositories, danglingSymlinks, visitedFileIdentities, visitedDirectories, activeIgnoreRules, continueOnError, cancellationToken, depth);
+        return EnumerateDirectory(dir, scanState, activeIgnoreRules, continueOnError, cancellationToken, depth);
     }
 
     private bool IsNestedGitRepository(string dir)
@@ -2084,19 +2101,7 @@ public class FileIndexer
 
     private bool EnumerateDirectory(
         string dir,
-        List<string> results,
-        List<ScanError> errors,
-        HashSet<string> nonIndexablePaths,
-        HashSet<string> unknownExtensionFiles,
-        HashSet<string> probeFailedFilePaths,
-        HashSet<string> listedDirectories,
-        HashSet<string> fullyScannedDirectories,
-        HashSet<string> checkpointedDirectories,
-        HashSet<string> attributePrunedDirectories,
-        HashSet<string> nestedRepositories,
-        HashSet<string> danglingSymlinks,
-        HashSet<FileIdentity> visitedFileIdentities,
-        HashSet<string> visitedDirectories,
+        DirectoryScanState scanState,
         IgnoreRuleSet inheritedIgnoreRules,
         bool continueOnError,
         CancellationToken cancellationToken = default,
@@ -2106,7 +2111,7 @@ public class FileIndexer
         var fullyScanned = true;
         try
         {
-            var loadResult = LoadIgnoreRulesForDirectory(dir, inheritedIgnoreRules, errors, ref fullyScanned);
+            var loadResult = LoadIgnoreRulesForDirectory(dir, inheritedIgnoreRules, scanState.Errors, ref fullyScanned);
             var activeIgnoreRules = loadResult.Rules;
             if (!loadResult.IgnoreRulesAvailable)
                 return false;
@@ -2121,230 +2126,288 @@ public class FileIndexer
             var directoryIgnoreCase = DirectoryUsesIgnoreCase(dir);
             if (directoryIgnoreCase != _ignoreCase)
             {
-                errors.Add(new ScanError(
+                scanState.Errors.Add(new ScanError(
                     ToRelativePath(dir),
                     "Filesystem case-sensitivity differs from the project root; deduplicating file paths for this directory.",
                     ScanIssueSeverity.Warning));
             }
 
             if (!passthrough)
-            {
-                var seenFilePaths = directoryIgnoreCase
-                    ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-                    : null;
-                foreach (var enumeratedFile in _enumerateFiles(dir))
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    // Strip any \\?\ prefix returned by EnumerateFiles when we passed a long-path
-                    // directory, so downstream relative-path math (which compares against the
-                    // un-prefixed _projectRoot) still produces the canonical project-relative key.
-                    // \\?\ 接頭辞付きの long-path ディレクトリを渡したとき EnumerateFiles も接頭辞付きで
-                    // 返すため、_projectRoot（接頭辞なし）と突き合わせる相対パス計算が崩れないよう剥がす。
-                    var file = LongPath.RemoveWindowsPrefix(enumeratedFile);
-                    if (!IsFilePathSyntaxIndexable(file))
-                    {
-                        errors.Add(new ScanError(
-                            FormatPathForScanIssue(file),
-                            "Skipped file because its path contains NUL or control characters.",
-                            ScanIssueSeverity.Warning));
-                        nonIndexablePaths.Add(FormatPathForScanIssue(file));
-                        continue;
-                    }
-
-                    if (seenFilePaths is not null && !seenFilePaths.Add(Path.GetFullPath(file)))
-                    {
-                        var relativePath = ToRelativePath(file);
-                        errors.Add(new ScanError(
-                            relativePath,
-                            "Skipped duplicate file path that differs only by case on a case-insensitive directory.",
-                            ScanIssueSeverity.Warning));
-                        nonIndexablePaths.Add(relativePath);
-                        continue;
-                    }
-
-                    var fileName = Path.GetFileName(file);
-
-                    // Skip excluded file names / 除外ファイル名をスキップ
-                    if (IsDefaultExcludedFileName(fileName))
-                        continue;
-
-                    if (activeIgnoreRules.IsIgnored(file, isDirectory: false))
-                        continue;
-
-                    // GetFileIndexability also rejects file symlinks/reparse points so the update-mode
-                    // (--files / --commits) path gets the same skip behavior without a second probe here.
-                    // GetFileIndexability もファイル symlink / reparse point を拒否するため、
-                    // update モード (--files / --commits) でも同じ skip 挙動が二重プローブ無しで効く。
-                    var indexability = GetFileIndexability(file);
-                    if (indexability == FileProbeStatus.Missing)
-                    {
-                        var relativePath = ToRelativePath(file);
-                        errors.Add(new ScanError(
-                            relativePath,
-                            "Skipped file because it was deleted during scanning.",
-                            ScanIssueSeverity.Warning));
-                        nonIndexablePaths.Add(relativePath);
-                        continue;
-                    }
-
-                    if (indexability == FileProbeStatus.ProbeFailed)
-                    {
-                        var relativePath = ToRelativePath(file);
-                        errors.Add(new ScanError(relativePath, "Could not probe file for indexability/language."));
-                        probeFailedFilePaths.Add(relativePath);
-                        continue;
-                    }
-
-                    if (indexability != FileProbeStatus.Supported)
-                    {
-                        nonIndexablePaths.Add(ToRelativePath(file));
-                        continue;
-                    }
-
-                    var relativeFile = ToRelativePath(file);
-                    // Include files with a known extension/filename or an extensionless recognized shebang
-                    // 既知の拡張子・既知ファイル名、または拡張子なしで shebang を認識できるファイルを含める
-                    var language = TryDetectLanguage(file);
-                    if (language.Status == FileProbeStatus.Missing)
-                    {
-                        errors.Add(new ScanError(
-                            relativeFile,
-                            "Skipped file because it was deleted during scanning.",
-                            ScanIssueSeverity.Warning));
-                        nonIndexablePaths.Add(relativeFile);
-                        continue;
-                    }
-
-                    if (language.Status == FileProbeStatus.ProbeFailed)
-                    {
-                        errors.Add(new ScanError(relativeFile, "Could not probe file for indexability/language."));
-                        probeFailedFilePaths.Add(relativeFile);
-                        continue;
-                    }
-
-                    if (language.Status != FileProbeStatus.Supported)
-                    {
-                        nonIndexablePaths.Add(relativeFile);
-                        if (HasUnknownExtension(file) && !IsInternalIndexArtifactPath(relativeFile))
-                            unknownExtensionFiles.Add(relativeFile);
-                        continue;
-                    }
-
-                    if (TryGetFileIdentity(file, out var identity) && !visitedFileIdentities.Add(identity))
-                    {
-                        errors.Add(new ScanError(
-                            relativeFile,
-                            "Skipped hardlinked file because the same file content was already indexed from another path.",
-                            ScanIssueSeverity.Warning));
-                        nonIndexablePaths.Add(relativeFile);
-                        continue;
-                    }
-
-                    results.Add(file);
-                }
-            }
+                EnumerateIndexableFilesInDirectory(dir, scanState, activeIgnoreRules, directoryIgnoreCase, cancellationToken);
 
             // A successful file listing proves the direct children of this directory.
             // Child subtree failures must not revoke that authority for sibling-file purge.
             // ファイル列挙が成功した時点で、このディレクトリ直下の子要素については authoritative とみなせる。
             // 子サブツリー失敗が sibling file purge の authority を奪ってはいけない。
-            listedDirectories.Add(ToRelativePath(dir));
-
-            foreach (var enumeratedEntry in Directory.EnumerateFileSystemEntries(LongPath.EnsureWindowsPrefix(dir)))
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                var entry = LongPath.RemoveWindowsPrefix(enumeratedEntry);
-                if (!IsReparsePoint(entry) || Directory.Exists(LongPath.EnsureWindowsPrefix(entry)))
-                    continue;
-
-                var relativeEntry = ToRelativePath(entry);
-                danglingSymlinks.Add(relativeEntry);
-                errors.Add(new ScanError(relativeEntry, "Skipped dangling symlink because its target could not be resolved.", ScanIssueSeverity.Warning));
-                listedDirectories.Add(relativeEntry);
-                fullyScannedDirectories.Add(relativeEntry);
-                attributePrunedDirectories.Add(relativeEntry);
-            }
-
-            foreach (var enumeratedSubDir in Directory.EnumerateDirectories(LongPath.EnsureWindowsPrefix(dir)))
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                var subDir = LongPath.RemoveWindowsPrefix(enumeratedSubDir);
-                if (IsNestedGitRepository(subDir) && !IsSubmoduleOrAncestor(subDir))
-                {
-                    var subRelative = ToRelativePath(subDir);
-                    listedDirectories.Add(subRelative);
-                    fullyScannedDirectories.Add(subRelative);
-                    nestedRepositories.Add(subRelative);
-                    continue;
-                }
-
-                // In passthrough mode, only descend into subdirectories that are themselves
-                // submodules or submodule ancestors. Treat siblings the same way SkipDirs
-                // would have treated them at this point.
-                // passthrough 中は、submodule 自体または submodule の祖先に該当する
-                // サブディレクトリのみ降りる。その他は本来 SkipDirs で止まっていた扱いに戻す。
-                if (passthrough && !IsSubmoduleOrAncestor(subDir))
-                {
-                    var subRelative = ToRelativePath(subDir);
-                    listedDirectories.Add(subRelative);
-                    fullyScannedDirectories.Add(subRelative);
-                    continue;
-                }
-
-                // Skip directory symlinks/reparse points to prevent infinite recursion on ancestor loops
-                // and duplicate indexing when a symlink points inside the same tree. On Windows, also
-                // skip Hidden/System directories so drive-root scans do not descend into OS-owned caches.
-                // Record the skipped directory itself as listed (for the immediate-parent purge path) AND
-                // as a prune prefix so the purge walker can authoritatively drop deep descendants that
-                // earlier runs left behind.
-                // ディレクトリ symlink / reparse point は親方向ループでの無限再帰や、
-                // ツリー内を指す symlink での二重 index を防ぐためスキップする。Windows では
-                // drive root 走査で OS 管理 cache に降りないよう Hidden/System ディレクトリもスキップする。
-                // skip したディレクトリ自身を listed 扱い（immediate parent purge 用）かつ prune prefix として
-                // 記録することで、以前の実行でできた深い子孫エントリも purge walker が確実に削除できる。
-                if (ShouldSkipDirectoryLink(subDir, errors, danglingSymlinks))
-                {
-                    var subRelative = ToRelativePath(subDir);
-                    listedDirectories.Add(subRelative);
-                    fullyScannedDirectories.Add(subRelative);
-                    attributePrunedDirectories.Add(subRelative);
-                    continue;
-                }
-
-                var resolvedSubDir = NormalizePathForComparison(GetDirectoryTraversalIdentity(subDir));
-                if (!visitedDirectories.Add(resolvedSubDir))
-                {
-                    var subRelative = ToRelativePath(subDir);
-                    errors.Add(new ScanError(subRelative, "Skipped symlinked directory because its resolved target was already scanned.", ScanIssueSeverity.Warning));
-                    listedDirectories.Add(subRelative);
-                    fullyScannedDirectories.Add(subRelative);
-                    attributePrunedDirectories.Add(subRelative);
-                    continue;
-                }
-
-                var childFullyScanned = ScanDirectory(subDir, results, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, checkpointedDirectories, attributePrunedDirectories, nestedRepositories, danglingSymlinks, visitedFileIdentities, visitedDirectories, activeIgnoreRules, continueOnError: continueOnError, cancellationToken: cancellationToken, depth: depth + 1);
-                fullyScanned &= childFullyScanned;
-                if (!continueOnError && !childFullyScanned)
-                    break;
-            }
+            scanState.ListedDirectories.Add(ToRelativePath(dir));
+            RecordDanglingFileSystemEntries(dir, scanState, cancellationToken);
+            fullyScanned &= EnumerateSubdirectories(dir, scanState, activeIgnoreRules, passthrough, continueOnError, cancellationToken, depth);
         }
         catch (UnauthorizedAccessException)
         {
             // Skip inaccessible directories / アクセス不可ディレクトリはスキップ
-            errors.Add(new ScanError(ToRelativePath(dir), "Could not scan directory due to permissions."));
+            scanState.Errors.Add(new ScanError(ToRelativePath(dir), "Could not scan directory due to permissions."));
             fullyScanned = false;
         }
         catch (IOException)
         {
             // Skip on I/O errors / I/Oエラー時はスキップ
-            errors.Add(new ScanError(ToRelativePath(dir), "Could not scan directory due to an I/O error."));
+            scanState.Errors.Add(new ScanError(ToRelativePath(dir), "Could not scan directory due to an I/O error."));
             fullyScanned = false;
         }
 
         if (fullyScanned)
-            fullyScannedDirectories.Add(ToRelativePath(dir));
+            scanState.FullyScannedDirectories.Add(ToRelativePath(dir));
 
         return fullyScanned;
+    }
+
+    private void EnumerateIndexableFilesInDirectory(
+        string dir,
+        DirectoryScanState scanState,
+        IgnoreRuleSet activeIgnoreRules,
+        bool directoryIgnoreCase,
+        CancellationToken cancellationToken)
+    {
+        var seenFilePaths = directoryIgnoreCase
+            ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            : null;
+        foreach (var enumeratedFile in _enumerateFiles(dir))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            // Strip any \\?\ prefix returned by EnumerateFiles when we passed a long-path
+            // directory, so downstream relative-path math (which compares against the
+            // un-prefixed _projectRoot) still produces the canonical project-relative key.
+            // \\?\ 接頭辞付きの long-path ディレクトリを渡したとき EnumerateFiles も接頭辞付きで
+            // 返すため、_projectRoot（接頭辞なし）と突き合わせる相対パス計算が崩れないよう剥がす。
+            var file = LongPath.RemoveWindowsPrefix(enumeratedFile);
+            if (!TryAcceptScannedFile(file, scanState, activeIgnoreRules, seenFilePaths))
+                continue;
+
+            scanState.Results.Add(file);
+        }
+    }
+
+    private bool TryAcceptScannedFile(
+        string file,
+        DirectoryScanState scanState,
+        IgnoreRuleSet activeIgnoreRules,
+        HashSet<string>? seenFilePaths)
+    {
+        if (!IsFilePathSyntaxIndexable(file))
+        {
+            var issuePath = FormatPathForScanIssue(file);
+            scanState.Errors.Add(new ScanError(
+                issuePath,
+                "Skipped file because its path contains NUL or control characters.",
+                ScanIssueSeverity.Warning));
+            scanState.NonIndexablePaths.Add(issuePath);
+            return false;
+        }
+
+        if (seenFilePaths is not null && !seenFilePaths.Add(Path.GetFullPath(file)))
+        {
+            var relativePath = ToRelativePath(file);
+            scanState.Errors.Add(new ScanError(
+                relativePath,
+                "Skipped duplicate file path that differs only by case on a case-insensitive directory.",
+                ScanIssueSeverity.Warning));
+            scanState.NonIndexablePaths.Add(relativePath);
+            return false;
+        }
+
+        var fileName = Path.GetFileName(file);
+
+        // Skip excluded file names / 除外ファイル名をスキップ
+        if (IsDefaultExcludedFileName(fileName))
+            return false;
+
+        if (activeIgnoreRules.IsIgnored(file, isDirectory: false))
+            return false;
+
+        return TryAcceptSupportedScannedFile(file, scanState);
+    }
+
+    private bool TryAcceptSupportedScannedFile(string file, DirectoryScanState scanState)
+    {
+        // GetFileIndexability also rejects file symlinks/reparse points so the update-mode
+        // (--files / --commits) path gets the same skip behavior without a second probe here.
+        // GetFileIndexability もファイル symlink / reparse point を拒否するため、
+        // update モード (--files / --commits) でも同じ skip 挙動が二重プローブ無しで効く。
+        var indexability = GetFileIndexability(file);
+        if (indexability == FileProbeStatus.Missing)
+        {
+            var relativePath = ToRelativePath(file);
+            scanState.Errors.Add(new ScanError(
+                relativePath,
+                "Skipped file because it was deleted during scanning.",
+                ScanIssueSeverity.Warning));
+            scanState.NonIndexablePaths.Add(relativePath);
+            return false;
+        }
+
+        if (indexability == FileProbeStatus.ProbeFailed)
+        {
+            var relativePath = ToRelativePath(file);
+            scanState.Errors.Add(new ScanError(relativePath, "Could not probe file for indexability/language."));
+            scanState.ProbeFailedFilePaths.Add(relativePath);
+            return false;
+        }
+
+        if (indexability != FileProbeStatus.Supported)
+        {
+            scanState.NonIndexablePaths.Add(ToRelativePath(file));
+            return false;
+        }
+
+        var relativeFile = ToRelativePath(file);
+        // Include files with a known extension/filename or an extensionless recognized shebang
+        // 既知の拡張子・既知ファイル名、または拡張子なしで shebang を認識できるファイルを含める
+        var language = TryDetectLanguage(file);
+        if (language.Status == FileProbeStatus.Missing)
+        {
+            scanState.Errors.Add(new ScanError(
+                relativeFile,
+                "Skipped file because it was deleted during scanning.",
+                ScanIssueSeverity.Warning));
+            scanState.NonIndexablePaths.Add(relativeFile);
+            return false;
+        }
+
+        if (language.Status == FileProbeStatus.ProbeFailed)
+        {
+            scanState.Errors.Add(new ScanError(relativeFile, "Could not probe file for indexability/language."));
+            scanState.ProbeFailedFilePaths.Add(relativeFile);
+            return false;
+        }
+
+        if (language.Status != FileProbeStatus.Supported)
+        {
+            scanState.NonIndexablePaths.Add(relativeFile);
+            if (HasUnknownExtension(file) && !IsInternalIndexArtifactPath(relativeFile))
+                scanState.UnknownExtensionFiles.Add(relativeFile);
+            return false;
+        }
+
+        if (TryGetFileIdentity(file, out var identity) && !scanState.VisitedFileIdentities.Add(identity))
+        {
+            scanState.Errors.Add(new ScanError(
+                relativeFile,
+                "Skipped hardlinked file because the same file content was already indexed from another path.",
+                ScanIssueSeverity.Warning));
+            scanState.NonIndexablePaths.Add(relativeFile);
+            return false;
+        }
+
+        return true;
+    }
+
+    private void RecordDanglingFileSystemEntries(
+        string dir,
+        DirectoryScanState scanState,
+        CancellationToken cancellationToken)
+    {
+        foreach (var enumeratedEntry in Directory.EnumerateFileSystemEntries(LongPath.EnsureWindowsPrefix(dir)))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var entry = LongPath.RemoveWindowsPrefix(enumeratedEntry);
+            if (!IsReparsePoint(entry) || Directory.Exists(LongPath.EnsureWindowsPrefix(entry)))
+                continue;
+
+            var relativeEntry = ToRelativePath(entry);
+            scanState.DanglingSymlinks.Add(relativeEntry);
+            scanState.Errors.Add(new ScanError(relativeEntry, "Skipped dangling symlink because its target could not be resolved.", ScanIssueSeverity.Warning));
+            scanState.ListedDirectories.Add(relativeEntry);
+            scanState.FullyScannedDirectories.Add(relativeEntry);
+            scanState.AttributePrunedDirectories.Add(relativeEntry);
+        }
+    }
+
+    private bool EnumerateSubdirectories(
+        string dir,
+        DirectoryScanState scanState,
+        IgnoreRuleSet activeIgnoreRules,
+        bool passthrough,
+        bool continueOnError,
+        CancellationToken cancellationToken,
+        int depth)
+    {
+        var fullyScanned = true;
+        foreach (var enumeratedSubDir in Directory.EnumerateDirectories(LongPath.EnsureWindowsPrefix(dir)))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var subDir = LongPath.RemoveWindowsPrefix(enumeratedSubDir);
+            if (TryRecordNonRecursiveSubdirectory(subDir, scanState, passthrough))
+                continue;
+
+            // Skip directory symlinks/reparse points to prevent infinite recursion on ancestor loops
+            // and duplicate indexing when a symlink points inside the same tree. On Windows, also
+            // skip Hidden/System directories so drive-root scans do not descend into OS-owned caches.
+            // Record the skipped directory itself as listed (for the immediate-parent purge path) AND
+            // as a prune prefix so the purge walker can authoritatively drop deep descendants that
+            // earlier runs left behind.
+            // ディレクトリ symlink / reparse point は親方向ループでの無限再帰や、
+            // ツリー内を指す symlink での二重 index を防ぐためスキップする。Windows では
+            // drive root 走査で OS 管理 cache に降りないよう Hidden/System ディレクトリもスキップする。
+            // skip したディレクトリ自身を listed 扱い（immediate parent purge 用）かつ prune prefix として
+            // 記録することで、以前の実行でできた深い子孫エントリも purge walker が確実に削除できる。
+            if (ShouldSkipDirectoryLink(subDir, scanState.Errors, scanState.DanglingSymlinks))
+            {
+                RecordPrunedDirectory(subDir, scanState);
+                continue;
+            }
+
+            var resolvedSubDir = NormalizePathForComparison(GetDirectoryTraversalIdentity(subDir));
+            if (!scanState.VisitedDirectories.Add(resolvedSubDir))
+            {
+                var subRelative = ToRelativePath(subDir);
+                scanState.Errors.Add(new ScanError(subRelative, "Skipped symlinked directory because its resolved target was already scanned.", ScanIssueSeverity.Warning));
+                RecordPrunedDirectory(subDir, scanState);
+                continue;
+            }
+
+            var childFullyScanned = ScanDirectory(subDir, scanState, activeIgnoreRules, continueOnError: continueOnError, cancellationToken: cancellationToken, depth: depth + 1);
+            fullyScanned &= childFullyScanned;
+            if (!continueOnError && !childFullyScanned)
+                break;
+        }
+
+        return fullyScanned;
+    }
+
+    private bool TryRecordNonRecursiveSubdirectory(string subDir, DirectoryScanState scanState, bool passthrough)
+    {
+        if (IsNestedGitRepository(subDir) && !IsSubmoduleOrAncestor(subDir))
+        {
+            var subRelative = ToRelativePath(subDir);
+            scanState.ListedDirectories.Add(subRelative);
+            scanState.FullyScannedDirectories.Add(subRelative);
+            scanState.NestedRepositories.Add(subRelative);
+            return true;
+        }
+
+        // In passthrough mode, only descend into subdirectories that are themselves
+        // submodules or submodule ancestors. Treat siblings the same way SkipDirs
+        // would have treated them at this point.
+        // passthrough 中は、submodule 自体または submodule の祖先に該当する
+        // サブディレクトリのみ降りる。その他は本来 SkipDirs で止まっていた扱いに戻す。
+        if (passthrough && !IsSubmoduleOrAncestor(subDir))
+        {
+            var subRelative = ToRelativePath(subDir);
+            scanState.ListedDirectories.Add(subRelative);
+            scanState.FullyScannedDirectories.Add(subRelative);
+            return true;
+        }
+
+        return false;
+    }
+
+    private void RecordPrunedDirectory(string dir, DirectoryScanState scanState)
+    {
+        var relativeDir = ToRelativePath(dir);
+        scanState.ListedDirectories.Add(relativeDir);
+        scanState.FullyScannedDirectories.Add(relativeDir);
+        scanState.AttributePrunedDirectories.Add(relativeDir);
     }
 
     internal static bool TryGetFileIdentity(string path, out FileIdentity identity)
