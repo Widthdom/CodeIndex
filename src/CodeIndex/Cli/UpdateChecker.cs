@@ -11,6 +11,7 @@ internal static class UpdateChecker
     private const string LatestReleaseUrl = "https://api.github.com/repos/Widthdom/CodeIndex/releases/latest";
     internal const long MaxLatestReleaseResponseBytes = 64 * 1024;
     internal const int MaxLatestReleaseJsonDepth = 16;
+    internal const int MaxUpdateCheckCacheBytes = 8 * 1024;
     private static readonly TimeSpan CacheTtl = TimeSpan.FromHours(24);
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(2);
 
@@ -183,7 +184,11 @@ internal static class UpdateChecker
             if (!File.Exists(cachePath))
                 return null;
 
-            using var doc = JsonDocument.Parse(File.ReadAllText(cachePath));
+            var text = DataDirectorySecurity.ReadTextWithinLimit(cachePath, MaxUpdateCheckCacheBytes, FileShare.ReadWrite);
+            if (text is null)
+                return null;
+
+            using var doc = JsonDocument.Parse(text);
             var root = doc.RootElement;
             if (!root.TryGetProperty("checked_at", out var checkedAtElement)
                 || !DateTimeOffset.TryParse(

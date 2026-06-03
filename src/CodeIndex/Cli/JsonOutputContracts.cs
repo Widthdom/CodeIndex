@@ -181,6 +181,7 @@ internal sealed class IndexWatchEventJsonResult
     public int? DebounceMs { get; init; }
     public int? BatchSize { get; init; }
     public long? ElapsedMs { get; init; }
+    public int? ExitCode { get; init; }
     public string? Reason { get; init; }
 }
 
@@ -432,6 +433,8 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(RepoModuleResult))]
 [JsonSerializable(typeof(ReportBundleSummary))]
 [JsonSerializable(typeof(SearchHighlight))]
+[JsonSerializable(typeof(SearchGuardEvidence))]
+[JsonSerializable(typeof(List<SearchGuardEvidence>))]
 [JsonSerializable(typeof(SearchQueryHint))]
 [JsonSerializable(typeof(SearchResult))]
 [JsonSerializable(typeof(SearchTermOccurrence))]

@@ -62,6 +62,7 @@ cdidx status --check --json
 cdidx search "handleRequest"
 cdidx definition UserService
 cdidx search "Handle" --project MyApp
+cdidx search "File.ReadAllText" --exact-substring --reject-before "Length" --guard-window 8
 cdidx validate
 cdidx mcp
 cdidx lsp --db .cdidx/codeindex.db
@@ -70,7 +71,10 @@ cdidx lsp --db .cdidx/codeindex.db
 Custom language loops can stay out of tree: put extension aliases in
 `.cdidx-langmap.yaml`, put regex symbol patterns in `.cdidx/patterns/*.yaml`,
 and run `cdidx test-extractor --language <lang> --file <path> --json` to test
-an extractor fixture without building a full index. See
+an extractor fixture without building a full index. `test-extractor` source and
+`--expect-symbols` files are capped at 4 MiB each. Pattern sidecars are
+limited to regular files under non-symlink pattern directories, size/count
+bounded per file and per process, and regex matches are time-limited. See
 [Custom Language Extraction](DEVELOPER_GUIDE.md#custom-language-extraction).
 
 After the first command, use these cues and follow-up commands:
@@ -155,6 +159,7 @@ downgrading `cdidx`.
 | Area | What cdidx provides |
 |---|---|
 | Search surfaces | CLI-first output for humans and machines; full-text, symbol, reference, caller/callee, dependency, map, inspect, and excerpt commands. `search`, `definition`, `references`, `callers`, `callees`, `find`, and `validate` support `--format count|compact|csv|tsv|lsp|qf|sarif` for token-budgeted agents, scripts, editors, and CI reports. `cdidx lsp --db .cdidx/codeindex.db` starts a read-only stdio Language Server Protocol shim for LSP-native editors. |
+| Validation diagnostics | `validate --json` and MCP `validate` annotate `replacement_char` rows with `origin` (`source_literal` or `decode_replacement`) and `severity` so agents can separate intentional U+FFFD literals from likely encoding damage. |
 | Definition and impact diagnostics | `definition --json` includes C# `disambiguator` hints for overloads, partial types, and extension receivers when indexed metadata can distinguish them. `impact --json` and MCP `impact_analysis` include `impact_failure_chain` and `suggestion_type` for zero-result routing; `impact --strict` exits non-zero when resolution or graph preconditions are unmet. |
 | Ranking and filters | Public/exported symbol matches rank ahead of protected, internal, and private matches. Use `--no-visibility-rank` for legacy order, and `--visibility` / `--exclude-visibility` with `symbols`, `definition`, `unused`, and `hotspots`. Query defaults can be adjusted with `CDIDX_DEFAULT_LIMIT`, `CDIDX_DEFAULT_SNIPPET_LINES`, and `CDIDX_DEFAULT_MAX_LINE_WIDTH`; explicit CLI flags still win. |
 | Project scoping | `.sln` / `.csproj`-aware <code>--project &lt;name&#124;path&gt;</code> filters for indexing and queries, plus `--solution <path>` when a workspace has multiple solution files. |
@@ -224,7 +229,8 @@ For MCP `status`, `mcp_session` is session-scoped diagnostic data rather than pe
 
 Hotspot-family readiness is tracked by per-language
 `hotspot_family_version_<lang>` metadata introduced with hotspot-family contract
-version 2.
+version 2. When this readiness is degraded, use
+`cdidx index <projectPath> --rebuild` so unchanged rows are restamped too.
 
 ## Documentation
 
@@ -350,6 +356,7 @@ cdidx status --check --json
 cdidx search "handleRequest"
 cdidx definition UserService
 cdidx search "Handle" --project MyApp
+cdidx search "File.ReadAllText" --exact-substring --reject-before "Length" --guard-window 8
 cdidx validate
 cdidx mcp
 cdidx lsp --db .cdidx/codeindex.db
@@ -358,7 +365,10 @@ cdidx lsp --db .cdidx/codeindex.db
 カスタム言語の開発ループは out-of-tree で回せます。拡張子 alias は
 `.cdidx-langmap.yaml`、regex シンボルパターンは `.cdidx/patterns/*.yaml` に置き、
 `cdidx test-extractor --language <lang> --file <path> --json` で full index を作らずに
-extractor fixture を確認できます。詳細は
+extractor fixture を確認できます。`test-extractor` の source と `--expect-symbols`
+ファイルはそれぞれ 4 MiB に制限されます。pattern sidecar は symlink ではない pattern directory
+配下の通常ファイルだけが対象で、size / count は file 単位と process 単位で制限され、
+regex match には timeout が付きます。詳細は
 [Custom Language Extraction](DEVELOPER_GUIDE.md#custom-language-extraction) を参照してください。
 
 初回実行後は、次の見方と追加コマンドをよく使います。
@@ -430,6 +440,7 @@ upgrade / downgrade 後はインストール済み補完 script を再生成し�
 | 分野 | 内容 |
 |---|---|
 | 検索面 | CLI-first の人間向け / 機械処理向け出力。全文検索、シンボル、参照、caller/callee、依存関係、map、inspect、excerpt コマンドを提供します。`cdidx lsp --db .cdidx/codeindex.db` は LSP-native editor 向けの read-only stdio Language Server Protocol shim を起動します。 |
+| validation 診断 | `validate --json` と MCP `validate` は `replacement_char` 行に `origin` (`source_literal` / `decode_replacement`) と `severity` を付け、意図的な U+FFFD literal とエンコーディング破損の可能性を agent が分離できるようにします。 |
 | definition / impact 診断 | `definition --json` は C# overload、partial type、extension receiver を区別できる場合に `disambiguator` を返します。`impact --json` と MCP `impact_analysis` は 0 件時の経路判断用に `impact_failure_chain` と `suggestion_type` を返し、`impact --strict` は解決または graph の前提条件が満たされない場合に非 0 で終了します。 |
 | 順位と filter | public/exported なシンボル一致を protected、internal、private より優先します。従来順は `--no-visibility-rank`、可視性の include / exclude は `symbols`、`definition`、`unused`、`hotspots` の `--visibility` / `--exclude-visibility` で指定できます。query 既定値は `CDIDX_DEFAULT_LIMIT`、`CDIDX_DEFAULT_SNIPPET_LINES`、`CDIDX_DEFAULT_MAX_LINE_WIDTH` で調整でき、明示 CLI flag が常に優先されます。 |
 | project scope | `.sln` / `.csproj` を使った <code>--project &lt;name&#124;path&gt;</code> filter で index と query を .NET project 配下へ絞り込めます。workspace に solution が複数ある場合は `--solution <path>` を指定します。 |
@@ -484,7 +495,8 @@ MCP `status` の `mcp_session` は永続化された index 状態ではなく、
 | `hotspot_family_disabled_at_index_time` | marker fingerprint が利用できない状態で書かれた index。 |
 
 hotspot-family readiness は、hotspot-family contract version 2 で導入された
-言語別 `hotspot_family_version_<lang>` metadata で追跡されます。
+言語別 `hotspot_family_version_<lang>` metadata で追跡されます。degraded の場合は
+unchanged row も restamp するため `cdidx index <projectPath> --rebuild` を使います。
 
 ## ドキュメント
 

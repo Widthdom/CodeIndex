@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 using CodeIndex.Indexer;
@@ -37,6 +38,8 @@ public sealed record GitHeadCommitResult(GitHeadCommitState State, string? Sha =
 /// </summary>
 public static class GitHelper
 {
+    internal const int MaxGitMetadataFileBytes = 4 * 1024;
+
     public sealed record WorktreeStatus(bool IsDirty, IReadOnlyList<string> UnresolvedMergeFiles);
 
     private static readonly HashSet<string> UnresolvedMergeStatuses = new(StringComparer.Ordinal)
@@ -49,6 +52,18 @@ public static class GitHelper
         "AA",
         "UU",
     };
+
+    internal const int MaxCapturedGitOutputChars = 1024 * 1024;
+    private static readonly TimeSpan DefaultGitCommandTimeout = TimeSpan.FromSeconds(60);
+    private static readonly AsyncLocal<TimeSpan?> GitCommandTimeoutOverride = new();
+    internal static TimeSpan GitCommandTimeout
+    {
+        get => GitCommandTimeoutOverride.Value ?? DefaultGitCommandTimeout;
+        set => GitCommandTimeoutOverride.Value = value;
+    }
+
+    private static readonly TimeSpan GitKillWaitTimeout = TimeSpan.FromSeconds(5);
+    private const int GitProcessFailureExitCode = -1;
 
     /// <summary>
     /// Resolve the common git directory for a project root, handling both normal repos and worktrees.
@@ -73,7 +88,11 @@ public static class GitHelper
                 : null;
         }
 
-        var gitFileContent = File.ReadAllText(ioDotGit).Trim();
+        var gitFileContent = DataDirectorySecurity.ReadTextWithinLimit(ioDotGit, MaxGitMetadataFileBytes);
+        if (gitFileContent is null)
+            return null;
+
+        gitFileContent = gitFileContent.Trim();
         if (!gitFileContent.StartsWith("gitdir:")) return null;
 
         var worktreeGitDir = gitFileContent["gitdir:".Length..].Trim();
@@ -85,7 +104,11 @@ public static class GitHelper
         var ioCommonDirFile = LongPath.EnsureWindowsPrefix(commonDirFile);
         if (File.Exists(ioCommonDirFile))
         {
-            var commonDirRelative = File.ReadAllText(ioCommonDirFile).Trim();
+            var commonDirRelative = DataDirectorySecurity.ReadTextWithinLimit(ioCommonDirFile, MaxGitMetadataFileBytes);
+            if (commonDirRelative is null)
+                return null;
+
+            commonDirRelative = commonDirRelative.Trim();
             return Path.GetFullPath(Path.Combine(worktreeGitDir, commonDirRelative));
         }
 
@@ -686,20 +709,124 @@ public static class GitHelper
         using var process = new Process { StartInfo = psi };
         var stdout = new StringBuilder();
         var stderr = new StringBuilder();
+        string? failureReason = null;
+        var failureLock = new object();
+
+        void MarkFailure(string reason)
+        {
+            lock (failureLock)
+            {
+                if (failureReason != null)
+                    return;
+                failureReason = reason;
+            }
+            TryKillProcessTree(process);
+        }
+
         // Always terminate captured lines with '\n' (not Environment.NewLine) so callers that
         // split on '\n' see identical output on Windows and POSIX — git writes LF-only to pipes.
         // キャプチャ行は常に '\n' 区切りにし、Windows/POSIX 双方で git のパイプ出力(LF)と一致させる。
-        process.OutputDataReceived += (_, e) => { if (e.Data != null) stdout.Append(e.Data).Append('\n'); };
-        process.ErrorDataReceived += (_, e) => { if (e.Data != null) stderr.Append(e.Data).Append('\n'); };
+        process.OutputDataReceived += (_, e) =>
+        {
+            if (e.Data != null)
+                AppendBoundedCapturedLine(stdout, e.Data, "stdout", MarkFailure);
+        };
+        process.ErrorDataReceived += (_, e) =>
+        {
+            if (e.Data != null)
+                AppendBoundedCapturedLine(stderr, e.Data, "stderr", MarkFailure);
+        };
 
         if (!process.Start())
             return null;
 
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
-        process.WaitForExit();
+        if (!process.WaitForExit(ToWaitMilliseconds(GitCommandTimeout)))
+        {
+            MarkFailure($"git command timed out after {FormatDuration(GitCommandTimeout)}.");
+            if (!process.WaitForExit(ToWaitMilliseconds(GitKillWaitTimeout)))
+                return (GitProcessFailureExitCode, ReadCaptured(stdout), CombineCapturedError(ReadCaptured(stderr), failureReason!));
+            process.WaitForExit();
+        }
+        else
+        {
+            process.WaitForExit();
+        }
 
-        return (process.ExitCode, stdout.ToString(), stderr.ToString());
+        var output = ReadCaptured(stdout);
+        var error = ReadCaptured(stderr);
+        if (failureReason != null)
+            return (GitProcessFailureExitCode, output, CombineCapturedError(error, failureReason));
+
+        return (process.ExitCode, output, error);
+    }
+
+    private static string ReadCaptured(StringBuilder builder)
+    {
+        lock (builder)
+            return builder.ToString();
+    }
+
+    private static void AppendBoundedCapturedLine(
+        StringBuilder builder,
+        string data,
+        string streamName,
+        Action<string> markFailure)
+    {
+        lock (builder)
+        {
+            var remaining = MaxCapturedGitOutputChars - builder.Length;
+            if (remaining <= 0)
+            {
+                markFailure(BuildCaptureLimitMessage(streamName));
+                return;
+            }
+
+            var required = data.Length + 1;
+            if (required <= remaining)
+            {
+                builder.Append(data).Append('\n');
+                return;
+            }
+
+            builder.Append(data.AsSpan(0, Math.Min(data.Length, remaining)));
+        }
+
+        markFailure(BuildCaptureLimitMessage(streamName));
+    }
+
+    private static string BuildCaptureLimitMessage(string streamName)
+        => $"git command captured {streamName} exceeded {MaxCapturedGitOutputChars.ToString(CultureInfo.InvariantCulture)} characters.";
+
+    private static string CombineCapturedError(string stderr, string diagnostic)
+        => string.IsNullOrWhiteSpace(stderr)
+            ? diagnostic
+            : stderr.TrimEnd('\r', '\n') + "\n" + diagnostic;
+
+    private static int ToWaitMilliseconds(TimeSpan timeout)
+    {
+        if (timeout <= TimeSpan.Zero)
+            return 1;
+        if (timeout.TotalMilliseconds >= int.MaxValue)
+            return int.MaxValue;
+        return Math.Max(1, (int)Math.Ceiling(timeout.TotalMilliseconds));
+    }
+
+    private static string FormatDuration(TimeSpan timeout)
+        => timeout.TotalSeconds.ToString("0.###", CultureInfo.InvariantCulture) + "s";
+
+    private static void TryKillProcessTree(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+                process.Kill(entireProcessTree: true);
+        }
+        catch
+        {
+            // Best-effort cleanup only; callers receive the timeout/capture diagnostic.
+        }
     }
 
     private static bool ProbeFileSystemIgnoreCase(string projectRoot)

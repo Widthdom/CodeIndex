@@ -32,6 +32,7 @@ public class SuggestionStore
     internal const double DefaultDedupThreshold = 0.85;
     internal const int DefaultMaxAgeDays = 365;
     internal const int DefaultMaxCount = 5000;
+    internal const int MaxSuggestionStoreBytes = 8 * 1024 * 1024;
     private const int FuzzyDedupRecentLimit = 100;
     private const string RedactedAwsAccessKey = "[REDACTED:aws_access_key]";
     private const string RedactedBearerToken = "[REDACTED:bearer_token]";
@@ -439,7 +440,13 @@ public class SuggestionStore
             return new List<SuggestionRecord>();
         }
 
-        var json = File.ReadAllText(ioPath);
+        var json = DataDirectorySecurity.ReadTextWithinLimit(ioPath, MaxSuggestionStoreBytes, StreamingReadFileShare);
+        if (json is null)
+        {
+            PreserveCorruptFile();
+            return new List<SuggestionRecord>();
+        }
+
         if (string.IsNullOrWhiteSpace(json))
             return new List<SuggestionRecord>();
 
@@ -622,7 +629,13 @@ public class SuggestionStore
         if (!File.Exists(ioPath))
             return new List<SuggestionRecord>();
 
-        var snapshot = File.ReadAllBytes(ioPath);
+        var snapshot = DataDirectorySecurity.ReadBytesWithinLimit(ioPath, MaxSuggestionStoreBytes, StreamingReadFileShare);
+        if (snapshot is null)
+        {
+            PreserveCorruptFile();
+            return new List<SuggestionRecord>();
+        }
+
         if (snapshot.Length == 0)
         {
             PreserveCorruptFile();

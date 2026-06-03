@@ -229,6 +229,12 @@ Directory scan / shared path filter (built-in skip lists + `.gitignore` / `.cdid
   → Populate FTS5 index
 ```
 
+`FileIssue` rows may include nullable `origin` and `severity` metadata.
+For `replacement_char`, `origin: source_literal` means the file contains a
+valid encoded U+FFFD literal, while `origin: decode_replacement` means the
+decoder inserted U+FFFD for invalid bytes. `severity: info` is used for source
+literals, and `severity: warning` is used for likely encoding damage.
+
 Scoped `--files` / `--commits` refreshes reuse the same path filter as full scans. Before scanning a nested project root, `FileIndexer` loads ignore files from the resolved ignore-rule root through each existing ancestor directory down to the project root's parent, then loads the project directory's own rules during the normal walk. Within each directory, `FileIndexer` loads `.gitignore` before `.cdidxignore`, appends both rule sets in that order, and honors later `!` patterns as re-includes. If an ancestor ignore directory cannot be read, scanning fails closed with a scan error instead of silently skipping those rules; `ScanFilesResult.AncestorIgnoreDirectories` records the resolved ancestor list for troubleshooting. If a commit-scoped refresh includes `.gitignore` or `.cdidxignore` changes, `IndexCommandRunner` falls back to a full scan so newly ignored files are purged safely. Malformed ignore lines are reported as scan errors and skipped instead of aborting the whole run. Directory symlinks default to `--follow-symlinks none`; `internal` follows only targets that resolve under the workspace root, and `all` preserves the broad historical behavior. Dangling symlinks are counted and warned separately. On Windows, files and directories with Hidden or System attributes are rejected before language detection; clear those attributes before indexing project-owned sources because ignore rules cannot re-include them.
 
 Incremental refreshes that mutate `fts_chunks` increment `codeindex_meta.fts_incremental_writes_since_optimize`. When the counter reaches `DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold`, the update path runs `INSERT INTO fts_chunks(fts_chunks) VALUES('optimize')`, resets the counter, and stamps `fts_last_optimized_at`. Users can run the same maintenance directly with `cdidx optimize --db <path>` or `cdidx index <projectPath> --optimize`; this may briefly hold the writer lock on large indexes.
@@ -484,7 +490,7 @@ The MCP JSON-RPC `ping` method returns a structured health object with `status`,
 
 ### MCP keep-alive notifications
 
-HTTP MCP `/events` streams can emit opt-in server-initiated `notifications/keep_alive` JSON-RPC notifications. Set `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S` to a positive number of seconds to enable them; unset or non-positive values keep the default off behavior. Stdio sessions do not emit keep-alive notifications by default because the parent process owns liveness for that transport.
+HTTP MCP `/events` streams can emit opt-in server-initiated `notifications/keep_alive` JSON-RPC notifications. Set `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S` to a finite value from `1` to `300` seconds to enable them; unset, non-finite, or out-of-range values keep the default off behavior and emit a warning. Stdio sessions do not emit keep-alive notifications by default because the parent process owns liveness for that transport.
 
 Each keep-alive notification includes `server_time` and `uptime_s` under `params`. The notification is best-effort: disconnected SSE clients are removed from the stream registry, and keep-alive write failures must not terminate the MCP server.
 
@@ -502,7 +508,7 @@ MCP JSON-RPC の `ping` method は、`status`、`uptime_s`、`last_request_at`�
 
 ### MCP keep-alive notification
 
-HTTP MCP の `/events` stream は、opt-in の server-initiated `notifications/keep_alive` JSON-RPC notification を送信できます。`CDIDX_MCP_KEEP_ALIVE_INTERVAL_S` に正の秒数を設定すると有効になり、未設定または非正値では既定どおり無効です。stdio session は親プロセスが liveness を管理する transport なので、既定では keep-alive notification を出しません。
+HTTP MCP の `/events` stream は、opt-in の server-initiated `notifications/keep_alive` JSON-RPC notification を送信できます。`CDIDX_MCP_KEEP_ALIVE_INTERVAL_S` に有限な `1`〜`300` 秒を設定すると有効になり、未設定・非有限値・範囲外では警告を出して既定どおり無効です。stdio session は親プロセスが liveness を管理する transport なので、既定では keep-alive notification を出しません。
 
 各 keep-alive notification は `params` に `server_time` と `uptime_s` を含めます。この notification は best-effort であり、切断された SSE client は stream registry から除外され、keep-alive 書き込み失敗で MCP server 自体を終了させてはいけません。
 
@@ -1015,6 +1021,8 @@ Exact-match flag compatibility is documented in [USER_GUIDE.md](USER_GUIDE.md#fl
 
 `search --json` and MCP `search` project full chunks into compact match-centered snippets with `chunk_start_line`, `chunk_end_line`, `snippet_start_line`, `snippet_end_line`, `snippet`, `match_lines`, `highlights`, `context_before`, `context_after`, `truncated_line_count`, `dropped_match_line_count`, and `truncation_context`. `--snippet-lines` caps the snippet length up front (default: 8, max: 20), and `--max-line-width` (CLI) / `maxLineWidth` (MCP) clamps each individual snippet line around the first match token via the shared `LineWidthFormatter.ClampLine` contract used by `find` / `references` / `excerpt` / `inspect` (default: 512, max: 4096) so a single match inside a minified / transpiled / generated single-line file no longer returns hundreds of KB per hit. Clamped lines surface `...(+N)...` markers inside the snippet and expose `truncation_context.char_counts`, `truncation_context.total_chars`, `highlights[].truncated`, `highlights[].original_line_length`, and `highlights[].truncated_char_counts` so AI clients can detect clamping and quantify omitted characters. `highlights[].terms` remains a distinct term list for compatibility; `highlights[].term_occurrences` records every matched occurrence with `term`, 1-based `line`, 1-based `column`, and `length`. Exact substring search also adds `highlights[].literal_terms` and `highlights[].literal_term_occurrences` (camelCase in MCP) so clients can render only the requested literal phrase while preserving the broader diagnostic token list. Non-exact punctuation-heavy code-phrase searches add `exact_substring_hint` to CLI JSON compact results and `recovery_hint` to MCP `search` responses so clients can retry with exact substring semantics when FTS tokenization is likely to hide punctuation. `dropped_match_line_count` reports match lines omitted because they fell outside the selected snippet window.
 
+When the match line falls inside an indexed symbol range, `search --json` and MCP `search` also include optional `enclosing_symbol_name`, `enclosing_symbol_kind`, `enclosing_symbol_start_line`, `enclosing_symbol_end_line`, and `enclosing_container_name`.
+
 `excerpt --json` includes `semantic_tokens`, a lightweight range list with 1-based start/end positions, token `type`, and `modifiers`, so IDE and LLM clients can render or post-process excerpt spans without reparsing the raw `content` string.
 
 `inspect` and MCP `analyze_symbol` bundle the primary definition, nearby symbols from the same file, references, callers, callees, file metadata, workspace freshness/git metadata, and graph-support metadata into one response. When those bundled graph sections actually depend on SQL-backed reads, the payload also mirrors `sql_graph_contract_ready` / `sql_graph_contract_degraded_reason` (plus the existing camelCase aliases on MCP responses); mixed-language bundles that only return C# / JS / etc. graph rows omit the SQL trust signal entirely. This is intended for symbol-oriented AI workflows that would otherwise need several back-to-back calls. Call graph sections remain language-aware: for unsupported languages, clients can now distinguish "unsupported" from "no hits" via `graphSupported` / `graphSupportReason`, and should prefer `search` instead of assuming graph data will exist.
@@ -1181,7 +1189,10 @@ Process exit codes are coarse (`0` success including valid zero-row queries, `1`
 - **Authoritative C# metadata-target trust** — `deps` / `impact` metadata-attribute edges (linking `[Foo]` usage to the defining `FooAttribute` class) are promoted from a signature-shape heuristic to an authoritative resolver whenever `is_metadata_target` is persisted under the current `metadata_target_version_csharp` contract. The resolver walks C# class base lists with fixed-point transitive resolution through same-DB class rows and falls back to the BCL `Attribute` suffix convention only for unresolved external bases. Readiness lives in `codeindex_meta`, and the reader uses a three-way branch: (1) ready → `is_metadata_target = 1`; (2) column present but not stamped (legacy row) → `signature LIKE '%: %'`; (3) column missing → naming-only fallback. This fixes non-attribute impostors (`class FooAttribute : BaseService`) silently dropping edges when they shared names with real `FooAttribute : Attribute` classes (#435).
 - **Human-readable default** — All commands default to human-readable output. `--json` for AI/machine consumption.
 - **Structured MCP responses** — MCP tool calls return typed JSON in `structuredContent` and keep `content` concise for compatibility.
-- **MCP `batch_query` response cap** — `batch_query` estimates the UTF-8 JSON size of aggregate slot results and stops appending once the response would exceed `CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES` (default: 1,000,000 bytes, aligned with the JSON-RPC line cap). Truncated responses include `truncated: true`, `truncated_queries`, and byte-limit metadata so clients can split the batch or lower per-slot limits without parsing prose (#1416).
+- **MCP rate limiter bucket eviction** — `RateLimiter` keeps `(tool, caller)` token buckets only while they are active. `CDIDX_MCP_RATE_LIMIT_BUCKET_IDLE_SECONDS` defaults to 900 seconds; stale buckets are pruned on later acquisitions so shared or HTTP MCP deployments do not retain historical caller identities for the process lifetime (#2824).
+- **MCP envelope response cap** — `CDIDX_MCP_RESPONSE_MAX_BYTES` defaults to 10 MiB and clamps at 64 MiB. Invalid values fall back to the default; values above the cap are clamped with a stderr warning so operators cannot accidentally disable the JSON-RPC response guard.
+- **MCP `batch_query` response cap** — `batch_query` estimates the UTF-8 JSON size of aggregate slot results and stops appending once the response would exceed `CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES` (default: 1 MiB / 1,048,576 bytes; maximum: 10 MiB). Truncated responses include `truncated: true`, `truncated_queries`, and byte-limit metadata so clients can split the batch or lower per-slot limits without parsing prose (#1416). Invalid values fall back to the default, values above the maximum are clamped with a stderr warning, and MCP `status` exposes the effective value under `mcp.limits.batch_response_bytes`.
+- **MCP pagination offset cap** — `references`, `callers`, and `callees` clamp `offset` to 10,000 before executing SQL queries. `tools/list` advertises the maximum in each offset schema, and MCP `status` mirrors it under `mcp.limits.max_pagination_offset`.
 - **MCP array argument bounds** — MCP string-array filters such as `path`, `project`, `excludePaths`, and mixed `names` arrays reject invalid entries instead of silently dropping them. Arrays are capped at 100 entries and each entry is capped at 4096 characters; `batch_query` reports these validation failures per slot with `request_index` and `ok: false`.
 - **MCP schema lock-down** — Every tool `inputSchema` includes `additionalProperties: false`, and `tools/call` mirrors that contract by rejecting unknown argument names with `-32602` / `invalid_argument` instead of silently defaulting misspelled fields.
 - **MCP stability markers and naming** — Every tool advertises `x-stability` (`stable`, `experimental`, or `deprecated`). MCP structured payload keys use snake_case, matching the CLI JSON contract; do not add camelCase aliases for new fields.
@@ -1223,7 +1234,7 @@ Process exit codes are coarse (`0` success including valid zero-row queries, `1`
 
 - **Cross-compiled linux-arm64 without runtime smoke test** — The `release.yml` workflow cross-compiles `linux-arm64` on an x64 runner (`dotnet publish -r linux-arm64 --self-contained`). Tests are skipped because the runner cannot execute ARM binaries natively. Ideally, a QEMU-based smoke test (`cdidx --version`) would run before publishing, but GitHub Actions free-tier runners do not include QEMU or ARM runners. Adding a QEMU setup step is possible but increases CI complexity and wall-clock time for every release. .NET's cross-compilation is an officially supported and widely used feature, so the risk of a broken artifact is low in practice. If ARM-specific failures are reported in the future, adding `docker run --platform linux/arm64` with QEMU should be the first mitigation step.
 - **CLI / MCP only — no public library API (#1557)** — The `cdidx` assembly is shipped as `OutputType=Exe` with `PackAsTool=true` and is published as a .NET global tool, not as a referenceable library. The supported, versioned surfaces are the `cdidx` CLI (including its `--json` output) and the `cdidx mcp` JSON-RPC server. `public` types on the assembly (for example `CodeIndex.Database.DbReader` and DTOs in `CodeIndex.Models` / `CodeIndex.Database`) exist to satisfy CLI / MCP composition and the `CodeIndex.Tests` `InternalsVisibleTo` boundary — they are implementation details that may change, move, or become `internal` without a deprecation cycle. Embedders are expected to depend on the CLI / MCP / JSON surfaces, not on the assembly. See [INTEGRATION_POLICY.md — API Surface and Library Use](INTEGRATION_POLICY.md#api-surface-and-library-use). If a real library API is ever justified, it will be carved out as a separate package with its own interface and versioning contract rather than being implied by whatever happens to be `public` on this assembly.
-- **Extractor plugins (#1937)** — `CodeIndex.Indexer.Extensibility.ISymbolExtractor` and `IReferenceExtractor` are the only supported assembly-extension surface. `cdidx` discovers trusted plugin DLLs in workspace `.cdidx/plugins/` and user `~/.cdidx/plugins/`. A plugin assembly must declare `[assembly: CdidxPlugin(minApiVersion: 1, maxApiVersion: 1)]` and expose a public parameterless type implementing one or both interfaces. Set `FileExtensions` when the plugin owns new file extensions so `FileIndexer` can route those files to the plugin language. Plugins run inside the `cdidx` process and are not sandboxed; install only trusted local DLLs. This narrow contract lets teams add DSL-specific symbols/references without forking CodeIndex, but it is not a general library/SDK embedding API.
+- **Extractor plugins (#1937)** — `CodeIndex.Indexer.Extensibility.ISymbolExtractor` and `IReferenceExtractor` are the only supported assembly-extension surface. `cdidx` discovers trusted plugin DLLs in the user-owned `~/.cdidx/plugins/` directory by default. Workspace `.cdidx/plugins/` DLL discovery is fail-closed unless the process sets `CDIDX_TRUST_WORKSPACE_PLUGINS=1` (also accepts `true`, `yes`, or `on`), because loading a workspace DLL executes checkout-provided code inside the `cdidx` process. A plugin assembly must declare `[assembly: CdidxPlugin(minApiVersion: 1, maxApiVersion: 1)]` and expose a public parameterless type implementing one or both interfaces. Set `FileExtensions` when the plugin owns new file extensions so `FileIndexer` can route those files to the plugin language. Plugins run inside the `cdidx` process and are not sandboxed; install only trusted local DLLs. This narrow contract lets teams add DSL-specific symbols/references without forking CodeIndex, but it is not a general library/SDK embedding API.
 
 <a id="reference-kind-filtering-matrix"></a>
 
@@ -1821,10 +1832,18 @@ return `-32600`.
   `204 No Content` for notifications. `GET /events` opens an independent
   `text/event-stream` subscription for future server→client frames; the
   current server does not yet emit unsolicited frames, but a long-lived
-  event stream does not block normal POST requests. Non-POST verbs on `/` return
-  `405 Method Not Allowed`. Empty / whitespace bodies are treated like
-  a closed stdio line and return `204 No Content` *without* killing the
-  loop, so a misbehaving client cannot pin the server on a junk frame.
+  event stream does not block normal POST requests.
+  Non-POST verbs on `/` return `405 Method Not Allowed`. Empty / whitespace
+  bodies are treated like a closed stdio line and return `204 No Content`
+  *without* killing the loop, so a misbehaving client cannot pin the server
+  on a junk frame. Request bodies are capped by
+  `CDIDX_MCP_HTTP_MAX_REQUEST_BYTES` (default: 1,000,000 bytes) and oversized
+  bodies return `413 Payload Too Large` before they are fully buffered. The
+  pending request queue is bounded by `CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH`
+  (default: 64); full queues return `429 Too Many Requests` with
+  `Retry-After: 1` instead of retaining unbounded work.
+- SSE stream lifetime is represented by the active stream registry only;
+  completed stream tasks are not retained after that registry entry is removed.
 - `ResolveListenSpec("host:port")` resolves the prefix up-front so the
   CLI can log the bound port to stderr (`Listening on http://...`).
   Port `0` is resolved by probing a temporary `TcpListener`; the
@@ -2121,6 +2140,12 @@ CI で `NU1004 The packages lock file is inconsistent with the project dependenc
   → チャンク＋シンボル＋参照をバッチ挿入（1トランザクション500件）
   → FTS5インデックス反映
 ```
+
+`FileIssue` rows には nullable な `origin` / `severity` metadata が入ることがある。
+`replacement_char` では `origin: source_literal` が正規にエンコードされた U+FFFD
+literal、`origin: decode_replacement` が不正 byte に対して decoder が挿入した U+FFFD
+を意味する。source literal は `severity: info`、エンコーディング破損の可能性は
+`severity: warning` として返す。
 
 `--files` / `--commits` の部分更新も、フルスキャンと同じパスフィルタを再利用する。各ディレクトリでは `FileIndexer` が `.gitignore` を `.cdidxignore` より先に読み、この順序でルールを追加し、後続の `!` パターンを再包含として扱う。commit 単位更新に `.gitignore` または `.cdidxignore` の変更が含まれる場合、`IndexCommandRunner` は newly ignored file を安全に purge するため自動でフルスキャンへフォールバックする。malformed な ignore 行は走査エラーとして報告し、その行だけをスキップして index 全体は継続する。Windows では Hidden または System 属性が付いたファイルとディレクトリを言語検出前に拒否する。プロジェクト所有のソースを索引したい場合、ignore ルールでは再包含できないため先にそれらの属性を外す。
 
@@ -2629,6 +2654,8 @@ exact-match flag の互換性は [USER_GUIDE.md](USER_GUIDE.md#フラグ互換�
 
 `search --json` と MCP の `search` は、フルチャンクを `chunk_start_line`、`chunk_end_line`、`snippet_start_line`、`snippet_end_line`、`snippet`、`match_lines`、`highlights`、`context_before`、`context_after`、`truncated_line_count`、`dropped_match_line_count`、`truncation_context` を持つ軽量スニペットへ投影します。`--snippet-lines` で抜粋長を先に制限でき（デフォルト: 8、最大: 20）、`--max-line-width`（CLI）/ `maxLineWidth`（MCP）は `find` / `references` / `excerpt` / `inspect` と同じ共有 `LineWidthFormatter.ClampLine` 契約（デフォルト: 512、最大: 4096、`0` で切り詰め解除）で各スニペット行を最初のマッチトークン周辺にクランプするため、minified / transpiled / 生成された 1 行ファイル内の 1 ヒットで数百 KB を返さなくなります。クランプされた行はスニペットに `...(+N)...` マーカーが入り、`truncation_context.char_counts`、`truncation_context.total_chars`、`highlights[].truncated`、`highlights[].original_line_length`、`highlights[].truncated_char_counts` で AI クライアントがクランプの有無と省略文字数を検出できます。`highlights[].terms` は互換性のため distinct な term list のまま残し、`highlights[].term_occurrences` は一致ごとの `term`、1-based の `line` / `column`、`length` を記録します。exact substring search では `highlights[].literal_terms` と `highlights[].literal_term_occurrences`（MCP では camelCase）も追加され、広めの診断 token list を残したまま、要求された literal phrase だけを render できます。exact ではない記号の多い code phrase 検索では、FTS tokenization が記号を失いやすい場合に exact substring semantics で再検索できるよう、CLI JSON compact result に `exact_substring_hint`、MCP `search` に `recovery_hint` を追加します。`dropped_match_line_count` は選択された snippet window 外に落ちた一致行数を示します。
 
+マッチ行がインデックス済みシンボル範囲内にある場合、`search --json` と MCP の `search` は任意フィールドの `enclosing_symbol_name`、`enclosing_symbol_kind`、`enclosing_symbol_start_line`、`enclosing_symbol_end_line`、`enclosing_container_name` も返します。
+
 `excerpt --json` は 1-based の開始/終了位置、token `type`、`modifiers` を持つ軽量 range list の `semantic_tokens` を返すため、IDE や LLM クライアントは生の `content` 文字列を再パースせずに抜粋範囲を描画・後処理できます。
 
 `inspect` と MCP の `analyze_symbol` は、主定義、同一ファイル内の近傍シンボル、参照、caller、callee、ファイルメタデータ、さらにワークスペース鮮度/git メタデータと graph 対応メタデータを1レスポンスにまとめます。bundle 内の graph 節が実際に SQL ベースの read に依存する場合だけ、`sql_graph_contract_ready` / `sql_graph_contract_degraded_reason`（MCP では既存の camelCase alias も）も返します。mixed-language bundle で C# / JS などの graph row しか返っていない場合は SQL trust signal を出さないため、無関係なクエリが stale SQL state に引きずられません。複数の連続クエリを避けたい AI ワークフロー向けです。call graph 系の節は言語差分を考慮しており、未対応言語では `graphSupported` / `graphSupportReason` によって「未対応」と「ヒットなし」を区別できます。その場合は `search` を優先して使う前提です。
@@ -2786,7 +2813,10 @@ USER_GUIDEの[終了コード](USER_GUIDE.md#終了コード)セクションを�
   exact な SQL の graph/dependency reader は解決済み segment 数も保持するため、`"sales.fn_Target"` のようなドット入り quoted single identifier が、本物の qualified name `sales.fn_Target` と exact `references` / `callers` / `impact` や集計系の `deps` / `unused` / `hotspots` で衝突しない。
 - **言語考慮の参照抽出** — `references`、`callers`、`callees` は、正規表現ベースの call/reference 抽出が意味を持つ言語だけに対してインデックス化された参照テーブルで支える。未対応言語では、低信頼な疑似グラフ結果を返す代わりにテキスト検索へ戻る前提で設計する。**nested generic 呼び出し**: `new Dictionary<string, List<int>>()` のような C#/Java のコンストラクタ呼び出しと、`Helper.DoWork<List<int>>()` のような C# generic method call は、平坦な regex fast-path で `>>` を釣り合わせられなくても depth-aware fallback scanner で拾い直し、外側 target を参照テーブルへ残す。**JS/TS の no-paren constructor**: JavaScript / TypeScript の zero-argument constructor call で `()` を合法的に省略できる `new Foo;`、`new Date;`、`new Demo.Provider;`、`new Box<number>;` も、専用の言語別経路で `instantiate` edge として出す。行末 `new Foo` に対する次行 `.bar()` / `[0]` continuation は suppress し、phantom な単独 instantiation にしない。**コンストラクタ連鎖呼び出し**: C# の `: this(...)` / `: base(...)` イニシャライザと、Java のコンストラクタ本体冒頭文 `this(...)` / `super(...)` は、汎用 call regex とは別に検出し、呼び先が実際のコンストラクタとなるように書き換える（`this` は外側の class/record、`base` / `super` は外側クラスのシグネチャから解析した基底型）。C# のクロス行イニシャライザは外側クラスではなく、そのコンストラクタに紐付ける。基底型の解析は generic 引数、record のプライマリコンストラクタ引数、`where` 制約、`global::` やドット付きの namespace 修飾を剥がす。Java の `super.method()` は通常のメソッド呼び出しのまま扱う。**型位置の依存エッジ**: C#/Java の継承リスト、宣言型、generic 制約、`throws`、`is` / `as` / `instanceof`、および C# XML doc の `cref` は `type_reference` 行として索引し、既定の `callers` / `callees` が見せる動的 call graph を汚さずに、`references` / `impact` から compile-time rename 依存を辿れるようにする。C# XML doc の `cref` 抽出は、実際に後続宣言へ結び付く XML-doc comment である `///` 行と delimited `/** ... */` block の両方を対象にしつつ、通常の `//` / `////` コメントや通常の block comment は phantom 依存として扱わない。また、同じ物理行でも closing `*/` より後ろに続く code / string の内容、doc comment と後続宣言の間へ割り込むトップレベル実行文、brace-free field/property initializer continuation、brace-free expression lambda、nested executable continuation、複数行 raw/verbatim string のうち行頭がたまたま `/**` で始まる内容は doc-comment slice の外として扱う。regex 自体は narrowed した doc-comment slice に対して走らせるが、`symbol_references.column` は元の物理ソース行位置に固定したまま保持する。C# の read path では、`using static` による constant-pattern suppress が `is` / `case` の前後の trivia を考慮してトークン単位で判定され、anchor が前行にある場合は anchor-aware な複数行コンテキストをインデックス済み行から再構成するため、`value is/*comment*/Red`、`value is\n    Red or Blue`、`value is\n    // comment\n    Red`、`case\n    // comment\n    Point:`、長い `case` / `or` 連鎖、`case\tRed:` のような形でも phantom `type_reference` を漏らさない。qualified constant/member pattern は exact-name read path でも qualifier 起点で suppress するため、`case Color.Red or Color.Blue:` に対して無関係な `class Red {}` が suppress を打ち消さない。extractor 側の pending type-pattern carry も trivia-only 区切り行、standalone な continuation-line `not`、複数行 `case` head / logical continuation をまたいで維持されるため、comment-only 行や `not` だけの継続行で後続の本物の type head を落とさない。`case > 0:` や `case not > 0:` のような非型 `case` ラベルではその pending carry を armed にしないため、次行の call/identifier token が `type_reference` に混入しない。同名型の rescue も `file` 可視性を尊重し、file-local な型は同じ物理ファイル内の参照だけを救済する。基底クラスから見える protected/public/internal nested type は、基底型参照を active な型 alias / namespace alias 経由まで正規化し、さらに alias 展開後に constructed generic な基底型を再 canonicalize したうえで derived class の pattern head を救済する一方、implemented interface は inherited nested-type rescue に参加しない。さらに same-file `using Namespace;`、project-wide `global using Namespace;`、型 alias も同じ rescue 集合に入る。一方で extractor は file-local な情報だけでは同一 namespace の別ファイルにある実型を判定できないため、`value is Red` のような曖昧な unqualified `using static` head は DB に残し、pure constant-only case の抑止は workspace-aware な read path 側で行う。**SQL qualified-name alignment**: SQL の graph/dependency reader は、各 reference 行の source-line context、記録済み call 列位置、enclosing container から SQL 参照名を復元して定義と照合するため、qualified な `references` / `callers` / `impact` query は exact / non-exact を問わず sibling schema へ widen しない。source 側が genuinely unqualified な場合にだけ bare leaf fallback を許可するので、qualified call を含む `deps` / `unused` / `hotspots` も schema 単位で整合し、`EXEC dbo.fn_Target; EXEC sales.fn_Target;` のような同一行 multi-call も二重計上しない。列位置が記録されている row は、その列に qualified token が見つからなければ whole-line の別 qualified token へ昇格させないため、行末コメント・文字列リテラル・後続の別 call が先頭の unqualified edge を横取りすることもない。qualified な `callees` query でも caller query 自体が unqualified なとき以外は leaf fallback を無効化したため、`callees sales.Caller` が `dbo.Caller` へ広がらない。SQL extractor は qualified-name の `.` 前後空白も許容し、definition 系 reader は quoted qualified SQL name (`[dbo].[fn_X]` → `dbo.fn_X`) を正規化してから照合する。さらに exact SQL 定義照合は segment 数を保持し、SQL の exact graph leaf fallback は Unicode folded exact path を維持する。SQL CTE 本体内の source 行は raw `cte_body_reference` kind を使うため、`references --kind cte_body_reference` で anchor/recursive member 内部を outer query の table reference と区別できる。そのため、quoted single identifier の衝突や Unicode exact lookup の ASCII-only `NOCASE` 退行も防ぐ。exact な SQL の graph/dependency reader は解決済み segment 数も保持するため、`"sales.fn_Target"` のようなドット入り quoted single identifier が、本物の qualified name `sales.fn_Target` と exact `references` / `callers` / `impact` や集計系の `deps` / `unused` / `hotspots` で衝突しない。
 - **構造化MCPレスポンス** — MCPツール呼び出しは `structuredContent` に型付きJSONを返し、`content` は互換性のため簡潔に保つ。
-- **MCP `batch_query` レスポンス上限** — `batch_query` は集約した slot 結果の UTF-8 JSON サイズを見積もり、`CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES`（既定: JSON-RPC 行上限と揃えた 1,000,000 bytes）を超える場合は追加を止める。切り詰めたレスポンスには `truncated: true`、`truncated_queries`、byte limit メタデータを含めるため、クライアントは prose を parsing せず batch 分割や slot limit 縮小を判断できる (#1416)。
+- **MCP rate limiter bucket eviction** — `RateLimiter` は active な `(tool, caller)` token bucket だけを保持する。`CDIDX_MCP_RATE_LIMIT_BUCKET_IDLE_SECONDS` は既定 900 秒で、古い bucket は後続 acquisition 時に pruning されるため、共有または HTTP MCP デプロイが過去の caller ID をプロセス寿命いっぱい保持しない (#2824)。
+- **MCP envelope レスポンス上限** — `CDIDX_MCP_RESPONSE_MAX_BYTES` は既定 10 MiB、最大 64 MiB。invalid 値は既定値へ戻し、最大超過値は stderr 警告付きでクランプするため、operator が誤って JSON-RPC response guard を実質無効化できない。
+- **MCP `batch_query` レスポンス上限** — `batch_query` は集約した slot 結果の UTF-8 JSON サイズを見積もり、`CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES`（既定: 1 MiB / 1,048,576 bytes、最大: 10 MiB）を超える場合は追加を止める。切り詰めたレスポンスには `truncated: true`、`truncated_queries`、byte limit メタデータを含めるため、クライアントは prose を parsing せず batch 分割や slot limit 縮小を判断できる (#1416)。invalid 値は既定値へ戻し、最大超過値は stderr 警告付きでクランプし、有効値は MCP `status` の `mcp.limits.batch_response_bytes` で確認できる。
+- **MCP pagination offset 上限** — `references`、`callers`、`callees` は SQL query 実行前に `offset` を 10,000 へクランプする。`tools/list` は各 offset schema に最大値を広告し、MCP `status` も `mcp.limits.max_pagination_offset` に同じ値を返す。
 - **MCP 配列引数の上限** — `path` / `project` / `excludePaths` / mixed `names` などの string-array filter は、不正要素を暗黙に落とさず拒否する。配列は 100 件、各要素は 4096 文字を上限とし、`batch_query` では `request_index` と `ok: false` 付きの slot 失敗として報告する。
 - **MCP schema のロックダウン** — すべての tool `inputSchema` は `additionalProperties: false` を含み、`tools/call` も同じ契約として未知の引数名を黙って既定値にせず `-32602` / `invalid_argument` で拒否する。
 - **MCP stability marker と命名** — すべての tool は `x-stability`（`stable`、`experimental`、`deprecated`）を公開する。MCP の構造化 payload key は CLI JSON 契約に合わせて snake_case を使う。新規 field に camelCase alias を追加しないこと。
@@ -3130,7 +3160,8 @@ MCP は独立したシリアライズ戦略（オブジェクトを JSON など�
 
 `HttpMcpTransport`（同じく #1558）は `System.Net.HttpListener` をラップする:
 
-- HTTP POST 1 件 = JSON-RPC フレーム 1 件で、対応する応答は HTTP レスポンスのボディ（`200 OK` / `application/json; charset=utf-8`）に乗る。通知は `204 No Content`。`GET /events` は将来のサーバー→クライアント frame 用に独立した `text/event-stream` subscription を開く。現サーバーは自発的な frame をまだ送信しないが、長寿命の event stream は通常の POST リクエストを塞がない。`/` への POST 以外は `405 Method Not Allowed`。空 / 空白のみのボディは stdio の空行と同じ扱いで `204 No Content` を返し、ループは殺さない — クライアントの誤動作で junk フレームに引っかからないため。
+- HTTP POST 1 件 = JSON-RPC フレーム 1 件で、対応する応答は HTTP レスポンスのボディ（`200 OK` / `application/json; charset=utf-8`）に乗る。通知は `204 No Content`。`GET /events` は将来のサーバー→クライアント frame 用に独立した `text/event-stream` subscription を開く。現サーバーは自発的な frame をまだ送信しないが、長寿命の event stream は通常の POST リクエストを塞がない。`/` への POST 以外は `405 Method Not Allowed`。空 / 空白のみのボディは stdio の空行と同じ扱いで `204 No Content` を返し、ループは殺さない — クライアントの誤動作で junk フレームに引っかからないため。リクエスト本文は `CDIDX_MCP_HTTP_MAX_REQUEST_BYTES`（既定: 1,000,000 bytes）で制限し、超過時は全量を buffer する前に `413 Payload Too Large` を返す。保留中 request queue は `CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH`（既定: 64）で制限し、満杯時は無制限に work を保持せず `Retry-After: 1` 付きの `429 Too Many Requests` を返す。
+- SSE stream lifetime は active stream registry だけで表現し、その registry entry が削除された後に完了済み stream task を保持しない。
 - `ResolveListenSpec("host:port")` は prefix を事前に解決するため、CLI が stderr に `Listening on http://...` を出せる。ポート `0` は一時 `TcpListener` を probe して空きポートを取得する。probe から `HttpListener.Start()` までの TOCTOU window は、本トランスポートが local-only / single-tenant 想定であるため許容する。ワイルドカードホスト `+` / `*` はパース時点で拒否する。
 - 任意の共有秘密による認証: `CDIDX_MCP_HTTP_TOKEN` が設定されていれば、listener はすべてのリクエストに `Authorization: Bearer <token>` を要求し、定数時間で比較する。トークン未指定で非 loopback ホストへ bind しようとした場合、CLI は MCP カタログを LAN に漏らさないよう既定で拒否する。
 - 任意のリクエストループログ: `ProgramRunner` は `HttpMcpTransport` を `GlobalToolLog` に接続するため、lifecycle log が有効な場合は HTTP リクエストごとに `mcp_http_request` 行を 1 件記録する。記録内容は method、path、status、duration、auth outcome、remote peer、correlation id、利用可能な JSON-RPC request id で、リクエスト/レスポンス本文は含めない。
@@ -3251,10 +3282,14 @@ Downstream users can add lightweight language support without rebuilding
   workspace ancestor `.cdidx-langmap.yaml`; workspace entries override user
   entries;
 - regex-backed symbol patterns are read from `.cdidx/patterns/*.yaml` and
-  `~/.config/cdidx/patterns/*.yaml`;
+  `~/.config/cdidx/patterns/*.yaml`; sidecars must be regular files under
+  non-symlink pattern directories, each file is capped at 64 KiB / 128 rules,
+  the process loads at most 128 configured rules total, and regex matches use a
+  100 ms timeout;
 - `cdidx test-extractor --language <lang> --file <path> --json` runs symbol
   extraction without building an index, and `--expect-symbols <json>` compares
-  the extracted JSON to a fixture.
+  the extracted JSON to a fixture. The source and expectation files are capped
+  at 4 MiB each.
 
 Minimal examples:
 
@@ -3276,8 +3311,9 @@ patterns:
 ```
 
 Each configured regex should expose a named `name` capture. If it does not,
-`cdidx` uses the full match text as the symbol name. Invalid sidecar files are
-ignored so a broken local experiment does not prevent indexing.
+`cdidx` uses the full match text as the symbol name. Invalid, symlinked,
+oversized, or over-budget sidecar files are skipped with a stderr diagnostic so
+a broken local experiment does not prevent indexing.
 
 ## カスタム言語抽出
 
@@ -3286,9 +3322,16 @@ ignored so a broken local experiment does not prevent indexing.
 - 拡張子 alias は `~/.config/cdidx/langmap.yaml` と、最初に見つかった workspace
   祖先の `.cdidx-langmap.yaml` から読み込まれ、workspace 側が user 側を上書きします。
 - regex ベースのシンボルパターンは `.cdidx/patterns/*.yaml` と
-  `~/.config/cdidx/patterns/*.yaml` から読み込まれます。
+  `~/.config/cdidx/patterns/*.yaml` から読み込まれます。sidecar は symlink ではない
+  pattern directory 配下の通常ファイルのみが対象で、各ファイルは 64 KiB / 128 ルール、
+  プロセス全体では configured rule 128 件に制限され、regex match には 100 ms の timeout が付きます。
 - `cdidx test-extractor --language <lang> --file <path> --json` は index を作らずに
   symbol extraction だけを実行し、`--expect-symbols <json>` で fixture JSON と比較できます。
+  source と expectation file はそれぞれ 4 MiB に制限されます。
+
+各 regex は `name` という名前付き capture を公開することを推奨します。存在しない場合、
+`cdidx` は match 全体の文字列を symbol 名として使います。無効、symlink、過大、または
+上限超過の sidecar は stderr の診断付きで skip されるため、壊れたローカル実験が indexing を止めません。
 
 ## SQLite reader のデバッグ
 

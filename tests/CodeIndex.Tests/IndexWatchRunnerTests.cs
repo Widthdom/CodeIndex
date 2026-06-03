@@ -1,5 +1,6 @@
-using System.Text.Json;
+using System.Diagnostics;
 using System.Reflection;
+using System.Text.Json;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using Microsoft.Data.Sqlite;
@@ -94,7 +95,29 @@ public class IndexWatchRunnerTests
         Assert.True(batcher.TryDrain(out var batch, out var rescan, out var reason));
         Assert.True(rescan);
         Assert.Equal("buffer overflowed", reason);
-        Assert.Single(batch);
+        Assert.Empty(batch);
+    }
+
+    [Fact]
+    public void FileChangeBatcher_Add_WhenPendingPathLimitExceeded_CollapsesToFullRescan()
+    {
+        var clock = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var batcher = new FileChangeBatcher(
+            TimeSpan.FromMilliseconds(100),
+            () => clock,
+            maxPendingPaths: 2);
+
+        batcher.Add("/repo/a.py");
+        batcher.Add("/repo/b.py");
+        batcher.Add("/repo/c.py");
+        batcher.Add("/repo/d.py");
+
+        clock = clock.AddMilliseconds(200);
+        Assert.True(batcher.TryDrain(out var batch, out var rescan, out var reason));
+        Assert.True(rescan);
+        Assert.Empty(batch);
+        Assert.Contains("pending path limit exceeded", reason);
+        Assert.Contains("2", reason);
     }
 
     [Fact]
@@ -175,6 +198,114 @@ public class IndexWatchRunnerTests
         var flagIndex = args.IndexOf("--max-symbols-per-file");
         Assert.True(flagIndex >= 0);
         Assert.Equal("42", args[flagIndex + 1]);
+    }
+
+    [Fact]
+    public void InvokeSubRunAndEmit_JsonSubRunFailure_EmitsFailedStatusAndExitCode()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var options = new IndexCommandOptions
+            {
+                ProjectPath = projectRoot,
+                Json = true,
+                Watch = true,
+            };
+            var method = typeof(IndexWatchRunner).GetMethod("InvokeSubRunAndEmit", BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.NotNull(method);
+
+            var args = new List<string> { projectRoot, "--json", "--quiet", "--unknown-watch-test-option" };
+            string capturedOut;
+            int exitCode;
+
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                var originalErr = Console.Error;
+                using var stdout = new StringWriter();
+                using var stderr = new StringWriter();
+                Console.SetOut(stdout);
+                Console.SetError(stderr);
+                try
+                {
+                    exitCode = Assert.IsType<int>(method.Invoke(
+                        null,
+                        [options, _jsonOptions, args, Stopwatch.StartNew(), "updated", 3]));
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                    Console.SetError(originalErr);
+                }
+                capturedOut = stdout.ToString();
+            }
+
+            Assert.NotEqual(CommandExitCodes.Success, exitCode);
+            var firstLine = Assert.Single(capturedOut.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Take(1));
+            using var doc = JsonDocument.Parse(firstLine);
+            Assert.Equal("failed", doc.RootElement.GetProperty("status").GetString());
+            Assert.Equal(3, doc.RootElement.GetProperty("batch_size").GetInt32());
+            Assert.Equal(exitCode, doc.RootElement.GetProperty("exit_code").GetInt32());
+            var reason = doc.RootElement.GetProperty("reason").GetString();
+            Assert.NotNull(reason);
+            Assert.Contains("updated sub-run exited with code", reason);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void InvokeSubRunAndEmit_HumanSubRunFailure_IncludesExitCode()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var options = new IndexCommandOptions
+            {
+                ProjectPath = projectRoot,
+                Json = false,
+                Watch = true,
+            };
+            var method = typeof(IndexWatchRunner).GetMethod("InvokeSubRunAndEmit", BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.NotNull(method);
+
+            var args = new List<string> { projectRoot, "--json", "--quiet", "--unknown-watch-test-option" };
+            string capturedErr;
+            int exitCode;
+
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                var originalErr = Console.Error;
+                using var stdout = new StringWriter();
+                using var stderr = new StringWriter();
+                Console.SetOut(stdout);
+                Console.SetError(stderr);
+                try
+                {
+                    exitCode = Assert.IsType<int>(method.Invoke(
+                        null,
+                        [options, _jsonOptions, args, Stopwatch.StartNew(), "updated", 3]));
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                    Console.SetError(originalErr);
+                }
+                capturedErr = stderr.ToString();
+            }
+
+            Assert.NotEqual(CommandExitCodes.Success, exitCode);
+            Assert.Contains("[watch] failed", capturedErr);
+            Assert.Contains($"exit code {exitCode}", capturedErr);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
     }
 
     [Fact]

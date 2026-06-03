@@ -2617,6 +2617,66 @@ public static partial class SymbolExtractor
         return builder.ToString().Trim();
     }
 
+    private static bool TryFindCSharpBraceBodyHeaderExtent(
+        string[] lines,
+        int startLineIndex,
+        int startColumn,
+        out int lastLineIndex,
+        out int? lastLineExclusiveEndColumn)
+    {
+        var lexState = new CSharpLexState();
+        var parenDepth = 0;
+        var bracketDepth = 0;
+
+        for (int i = startLineIndex; i < lines.Length; i++)
+        {
+            var lexedLine = LexCSharpLine(lines[i], lexState);
+            lexState = lexedLine.EndState;
+            var sanitizedLine = lexedLine.SanitizedLine;
+            var fromColumn = i == startLineIndex
+                ? Math.Min(Math.Max(0, startColumn), sanitizedLine.Length)
+                : 0;
+
+            for (int column = fromColumn; column < sanitizedLine.Length; column++)
+            {
+                switch (sanitizedLine[column])
+                {
+                    case '(':
+                        parenDepth++;
+                        break;
+                    case ')' when parenDepth > 0:
+                        parenDepth--;
+                        break;
+                    case '[':
+                        bracketDepth++;
+                        break;
+                    case ']' when bracketDepth > 0:
+                        bracketDepth--;
+                        break;
+                    case '{' when parenDepth == 0 && bracketDepth == 0:
+                        lastLineIndex = i;
+                        lastLineExclusiveEndColumn = column + 1;
+                        return true;
+                    case ';' when parenDepth == 0 && bracketDepth == 0:
+                        lastLineIndex = startLineIndex;
+                        lastLineExclusiveEndColumn = null;
+                        return false;
+                    case '=' when parenDepth == 0
+                        && bracketDepth == 0
+                        && column + 1 < sanitizedLine.Length
+                        && sanitizedLine[column + 1] == '>':
+                        lastLineIndex = startLineIndex;
+                        lastLineExclusiveEndColumn = null;
+                        return false;
+                }
+            }
+        }
+
+        lastLineIndex = startLineIndex;
+        lastLineExclusiveEndColumn = null;
+        return false;
+    }
+
     private static bool TryFindCSharpSemicolonTerminatedSignatureExtent(
         string[] lines,
         int startLineIndex,

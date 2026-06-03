@@ -149,6 +149,65 @@ public class DbReaderTests : IDisposable
         Assert.Contains(results, r => r.Path == "src/cafe.md");
     }
 
+    [Fact]
+    public void Search_GuardFiltersReadAcrossChunkBoundaries_Issue2852()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/chunked.cs",
+            Lang = "csharp",
+            Size = 128,
+            Lines = 5,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 3,
+                Content = "public void Guarded(string path)\n{\n    var length = new FileInfo(path).Length;",
+            },
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 1,
+                StartLine = 4,
+                EndLine = 5,
+                Content = "    var text = File.ReadAllText(path);\n}",
+            },
+        ]);
+
+        var requireResults = _reader.Search(
+            "File.ReadAllText",
+            exact: true,
+            pathPatterns: ["src/chunked.cs"],
+            guardFilters: [new SearchGuardFilter(SearchGuardRole.Require, SearchGuardDirection.Before, "Length")],
+            guardWindow: 2);
+        var rejectResults = _reader.Search(
+            "File.ReadAllText",
+            exact: true,
+            pathPatterns: ["src/chunked.cs"],
+            guardFilters: [new SearchGuardFilter(SearchGuardRole.Reject, SearchGuardDirection.Before, "Length")],
+            guardWindow: 2);
+        var cursorResults = _reader.Search(
+            "File.ReadAllText",
+            exact: true,
+            pathPatterns: ["src/chunked.cs"],
+            cursor: new SearchCursor(0, 0, 0),
+            guardFilters: [new SearchGuardFilter(SearchGuardRole.Require, SearchGuardDirection.Before, "Length")],
+            guardWindow: 2);
+
+        var result = Assert.Single(requireResults);
+        Assert.Equal(4, result.StartLine);
+        var evidence = Assert.Single(result.GuardEvidence!);
+        Assert.Equal(3, evidence.Line);
+        Assert.Empty(rejectResults);
+        Assert.Single(cursorResults);
+    }
+
     [Theory]
     [InlineData("rowid:authenticate", "rowid:")]
     [InlineData("title:authenticate", "title:")]
@@ -618,6 +677,61 @@ public class DbReaderTests : IDisposable
         Assert.Single(results);
         Assert.Equal("src/auth.py", results[0].Path);
         Assert.Equal(1, results[0].StartLine);
+    }
+
+    [Fact]
+    public void Search_ReturnsEnclosingSymbolMetadata_Issue2838()
+    {
+        const string token = "issue2838_unique_needle";
+        InsertIndexedFile("src/issue2838/SearchContainer.cs", "csharp",
+            $$"""
+            namespace Issue2838;
+
+            public sealed class SearchContainer
+            {
+                public void Run()
+                {
+                    var message = "{{token}}";
+                }
+            }
+            """);
+
+        var result = Assert.Single(_reader.Search(token, lang: "csharp")
+            .Where(result => result.Path == "src/issue2838/SearchContainer.cs"));
+
+        Assert.Equal("Run", result.EnclosingSymbolName);
+        Assert.Equal("function", result.EnclosingSymbolKind);
+        Assert.Equal("SearchContainer", result.EnclosingContainerName);
+        Assert.True(result.EnclosingSymbolStartLine > 0);
+        Assert.True(result.EnclosingSymbolEndLine >= result.EnclosingSymbolStartLine);
+    }
+
+    [Fact]
+    public void Search_ReturnsEnclosingSymbolForActualMatchLine_Issue2838()
+    {
+        const string token = "issue2838_multifunction_needle";
+        InsertIndexedFile("src/issue2838/MultiFunctionSearch.cs", "csharp",
+            $$"""
+            namespace Issue2838;
+
+            public sealed class MultiFunctionSearch
+            {
+                public void Tiny() { }
+
+                public void Larger()
+                {
+                    var message = "{{token}}";
+                    Console.WriteLine(message);
+                }
+            }
+            """);
+
+        var result = Assert.Single(_reader.Search(token, lang: "csharp")
+            .Where(result => result.Path == "src/issue2838/MultiFunctionSearch.cs"));
+
+        Assert.Equal("Larger", result.EnclosingSymbolName);
+        Assert.Equal("function", result.EnclosingSymbolKind);
+        Assert.Equal("MultiFunctionSearch", result.EnclosingContainerName);
     }
 
     [Fact]
@@ -4649,6 +4763,133 @@ public class DbReaderTests : IDisposable
         // Case-insensitive equality across all three.
         Assert.Single(_reader.SearchReferences("AUTHENTICATE", exact: true));
         Assert.Single(_reader.GetCallers("AUTHENTICATE", exact: true));
+    }
+
+    [Fact]
+    public void GraphReaders_QualifiedMemberQueriesUseContextAndDefinitionFallback_Issue2819()
+    {
+        InsertIndexedFile("src/issue2819/HttpMcpTransport.cs", "csharp",
+            """
+            namespace Issue2819;
+
+            public sealed class HttpMcpTransport
+            {
+                public void HandleContext()
+                {
+                    RunEventStreamAsync();
+                    System.Guid.NewGuid();
+                }
+
+                private void RunEventStreamAsync()
+                {
+                    Guid.NewGuid();
+                }
+            }
+            """);
+
+        var definition = Assert.Single(_reader.GetDefinitions(
+            "HttpMcpTransport.RunEventStreamAsync",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["issue2819"]));
+        Assert.Equal("RunEventStreamAsync", definition.Name);
+        Assert.Equal("HttpMcpTransport", definition.ContainerName);
+
+        var reference = Assert.Single(_reader.SearchReferences(
+            "HttpMcpTransport.RunEventStreamAsync",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["issue2819"]));
+        Assert.Equal("RunEventStreamAsync", reference.SymbolName);
+        Assert.Equal("HandleContext", reference.ContainerName);
+        Assert.Equal(1, _reader.CountSearchReferences(
+            "HttpMcpTransport.RunEventStreamAsync",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["issue2819"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: false), _reader.CountSearchReferencesTotal(
+            "HttpMcpTransport.RunEventStreamAsync",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["issue2819"]));
+
+        var caller = Assert.Single(_reader.GetCallers(
+            "HttpMcpTransport.RunEventStreamAsync",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["issue2819"]));
+        Assert.Equal("HandleContext", caller.CallerName);
+        Assert.Equal(1, _reader.CountCallers(
+            "HttpMcpTransport.RunEventStreamAsync",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["issue2819"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: false), _reader.CountCallersTotal(
+            "HttpMcpTransport.RunEventStreamAsync",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["issue2819"]));
+
+        var callees = _reader.GetCallees(
+            "HttpMcpTransport.RunEventStreamAsync",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["issue2819"]);
+        Assert.Contains(callees, result => result.CallerName == "RunEventStreamAsync" && result.CalleeName == "NewGuid");
+        Assert.Equal(callees.Count, _reader.CountCallees(
+            "HttpMcpTransport.RunEventStreamAsync",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["issue2819"]));
+        Assert.Equal(new QueryCountResult(callees.Count, 1, IncludesSql: false), _reader.CountCalleesTotal(
+            "HttpMcpTransport.RunEventStreamAsync",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["issue2819"]));
+
+        var frameworkCallers = _reader.GetCallers(
+            "System.Guid.NewGuid",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["issue2819"]);
+        Assert.Contains(frameworkCallers, result => result.CallerName == "HandleContext");
+        Assert.Contains(frameworkCallers, result => result.CallerName == "RunEventStreamAsync");
+    }
+
+    [Fact]
+    public void GraphReaders_QualifiedMemberLeafFallbackRequiresUniqueLeaf_Issue2819()
+    {
+        InsertIndexedFile("src/issue2819/AmbiguousLeaf.cs", "csharp",
+            """
+            namespace Issue2819;
+
+            public sealed class TargetTransport
+            {
+                public void RunEventStreamAsync() { }
+            }
+
+            public sealed class OtherTransport
+            {
+                public void RunEventStreamAsync() { }
+
+                public void HandleOther()
+                {
+                    RunEventStreamAsync();
+                }
+            }
+            """);
+
+        Assert.Empty(_reader.SearchReferences(
+            "TargetTransport.RunEventStreamAsync",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["issue2819/AmbiguousLeaf"]));
+
+        Assert.Empty(_reader.GetCallers(
+            "TargetTransport.RunEventStreamAsync",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["issue2819/AmbiguousLeaf"]));
     }
 
     [Fact]
@@ -13828,6 +14069,93 @@ public class DbReaderTests : IDisposable
         Assert.Equal("public_or_exported_no_refs", Assert.Single(unused, symbol => symbol.Name == "TokenService").UnusedBucket);
         Assert.Equal("public_or_exported_no_refs", Assert.Single(unused, symbol => symbol.Name == "ApplyConfiguration").UnusedBucket);
         Assert.Equal("public_or_exported_no_refs", Assert.Single(unused, symbol => symbol.Name == "UseIOptions").UnusedBucket);
+    }
+
+    [Fact]
+    public void GetUnusedSymbols_NonSqlScope_FiltersReferencedPrivateSymbolsBeforeLimit()
+    {
+        const string path = "src/fast_unused_limit_fixture.cs";
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = path,
+            Lang = "csharp",
+            Size = 4096,
+            Lines = 80,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+
+        var content = new StringBuilder();
+        var symbols = new List<SymbolRecord>();
+        var references = new List<ReferenceRecord>();
+        for (var i = 0; i < 64; i++)
+        {
+            var name = $"UsedBeforeLimit{i:D2}";
+            var line = i + 1;
+            content.AppendLine($"    private void {name}() {{ }}");
+            symbols.Add(new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = name,
+                Line = line,
+                StartLine = line,
+                EndLine = line,
+                Signature = $"private void {name}() {{ }}",
+                Visibility = "private",
+                ContainerKind = "class",
+                ContainerName = "FastUnusedLimitFixture",
+            });
+            references.Add(new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = name,
+                ReferenceKind = "call",
+                Line = line,
+                Column = 17,
+                Context = $"{name}();",
+                ContainerKind = "class",
+                ContainerName = "FastUnusedLimitFixture",
+            });
+        }
+
+        content.AppendLine("    private void HiddenUnusedAfterReferencedPrefix() { }");
+        symbols.Add(new SymbolRecord
+        {
+            FileId = fileId,
+            Kind = "function",
+            Name = "HiddenUnusedAfterReferencedPrefix",
+            Line = 65,
+            StartLine = 65,
+            EndLine = 65,
+            Signature = "private void HiddenUnusedAfterReferencedPrefix() { }",
+            Visibility = "private",
+            ContainerKind = "class",
+            ContainerName = "FastUnusedLimitFixture",
+        });
+
+        _writer.InsertChunks([
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 65,
+                Content = content.ToString(),
+            }
+        ]);
+        _writer.InsertSymbols(symbols);
+        _writer.InsertReferences(references);
+
+        var unused = _reader.GetUnusedSymbols(limit: 1, kind: null, lang: "csharp",
+            pathPatterns: ["fast_unused_limit_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+        var count = _reader.CountUnusedSymbols(kind: null, lang: "csharp",
+            pathPatterns: ["fast_unused_limit_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+
+        var result = Assert.Single(unused);
+        Assert.Equal("HiddenUnusedAfterReferencedPrefix", result.Name);
+        Assert.Equal("likely_unused_private", result.UnusedBucket);
+        Assert.Equal(1, count.Count);
+        Assert.Equal(1, count.FileCount);
     }
 
     [Fact]

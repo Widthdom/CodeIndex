@@ -245,6 +245,30 @@ public class JsonEnvelopeWrapperTests
     }
 
     [Fact]
+    public void RunWrapped_CapturedOutputExceedsLimit_ReturnsJsonErrorEnvelope_Issue2901()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => JsonEnvelopeWrapper.RunWrapped(
+            "search",
+            ["Needle", "--json-envelope"],
+            "1.0.0",
+            _jsonOptions,
+            _ =>
+            {
+                Console.Write(new string('x', JsonEnvelopeWrapper.MaxCapturedOutputChars + 1));
+                return CommandExitCodes.Success;
+            }));
+
+        Assert.Equal(CommandExitCodes.InvalidArgument, exitCode);
+        Assert.Contains("--json-envelope captured output exceeded", stderr);
+        using var document = JsonDocument.Parse(stdout);
+        var metadata = document.RootElement.GetProperty("metadata");
+        Assert.Equal(CommandExitCodes.InvalidArgument, metadata.GetProperty("exit_code").GetInt32());
+        Assert.Equal(0, metadata.GetProperty("result_count").GetInt32());
+        Assert.Equal(CommandErrorCodes.UsageError, metadata.GetProperty("error").GetProperty("error_code").GetString());
+        Assert.Equal(0, document.RootElement.GetProperty("results").GetArrayLength());
+    }
+
+    [Fact]
     public void Symbols_WithEnvelope_NormalizesQueryFromExtraNames()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("envelope_symbols");

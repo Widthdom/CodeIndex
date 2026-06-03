@@ -60,7 +60,12 @@ public static class DbPathResolver
         return BuildDataDirResolution(Path.Combine(fullWorkspacePath, ".cdidx"), DataDirSourceWorkspace);
     }
 
-    internal static DbPathResolution ResolveDataDirForQuery(string workspacePath, string? explicitDataDir, string? environmentDataDir, string? xdgDataHome)
+    internal static DbPathResolution ResolveDataDirForQuery(
+        string workspacePath,
+        string? explicitDataDir,
+        string? environmentDataDir,
+        string? xdgDataHome,
+        Func<ActiveWorkspaceState?>? activeWorkspaceLoader = null)
     {
         var fullWorkspacePath = Path.GetFullPath(workspacePath);
         if (!string.IsNullOrWhiteSpace(explicitDataDir))
@@ -69,7 +74,7 @@ public static class DbPathResolver
         if (!string.IsNullOrWhiteSpace(environmentDataDir))
             return BuildDataDirResolution(environmentDataDir, DataDirSourceEnv);
 
-        var active = ActiveWorkspace.Load();
+        var active = (activeWorkspaceLoader ?? ActiveWorkspace.Load)();
         if (active != null)
             return new DbPathResolution(active.DbPath, Path.GetDirectoryName(active.DbPath), DataDirSourceActiveWorkspace);
 
@@ -519,9 +524,11 @@ public static class DbPathResolver
                 // checksums recorded by an indexer running on a different OS.
                 // FileIndexer のヘルパを使い、OS をまたいだ clone (CRLF と LF) でも、
                 // 他 OS で生成された checksum と引き続き一致するようにする。
-                var checksum = FileIndexer.ComputeChecksum(File.ReadAllBytes(ioPath));
-                if (string.Equals(checksum, sample.Checksum, StringComparison.Ordinal))
+                if (FileIndexer.TryComputeChecksum(ioPath, FileIndexer.DefaultMaxFileSizeBytes, out var checksum) &&
+                    string.Equals(checksum, sample.Checksum, StringComparison.Ordinal))
+                {
                     checksumMatches++;
+                }
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {

@@ -91,6 +91,64 @@ public class ProgramRunnerTests
     }
 
     [Fact]
+    public void Run_TestExtractor_SourceTooLarge_ReturnsInvalidArgument_Issue2896()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_test_extractor_large_source_{Guid.NewGuid():N}");
+            try
+            {
+                Directory.CreateDirectory(tempDir);
+                var file = Path.Combine(tempDir, "large.py");
+                File.WriteAllText(file, new string('x', (int)ProgramRunner.TestExtractorMaxInputBytes + 1));
+
+                var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                    ["test-extractor", "--language", "python", "--file", file, "--json"],
+                    appVersion: "1.10.0"));
+
+                Assert.Equal(CommandExitCodes.InvalidArgument, exitCode);
+                Assert.Empty(stdout);
+                Assert.Contains("test-extractor source file is too large", stderr);
+                Assert.Contains($"{ProgramRunner.TestExtractorMaxInputBytes} byte limit", stderr);
+            }
+            finally
+            {
+                TestProjectHelper.DeleteDirectory(tempDir);
+            }
+        }
+    }
+
+    [Fact]
+    public void Run_TestExtractor_ExpectedSymbolsTooLarge_ReturnsInvalidArgument_Issue2896()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_test_extractor_large_expect_{Guid.NewGuid():N}");
+            try
+            {
+                Directory.CreateDirectory(tempDir);
+                var file = Path.Combine(tempDir, "app.py");
+                var expect = Path.Combine(tempDir, "expected.json");
+                File.WriteAllText(file, "def hello():\n    pass\n");
+                File.WriteAllText(expect, new string('x', (int)ProgramRunner.TestExtractorMaxInputBytes + 1));
+
+                var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                    ["test-extractor", "--language", "python", "--file", file, "--expect-symbols", expect],
+                    appVersion: "1.10.0"));
+
+                Assert.Equal(CommandExitCodes.InvalidArgument, exitCode);
+                Assert.Empty(stdout);
+                Assert.Contains("test-extractor expected symbols file is too large", stderr);
+                Assert.Contains($"{ProgramRunner.TestExtractorMaxInputBytes} byte limit", stderr);
+            }
+            finally
+            {
+                TestProjectHelper.DeleteDirectory(tempDir);
+            }
+        }
+    }
+
+    [Fact]
     public void TryConsumeQueryTraceFlag_StripsTraceAndPreservesEscapedQuery()
     {
         string[] args = ["needle", "--trace=stderr", "--lang", "csharp", "--", "--trace=file"];
@@ -353,12 +411,87 @@ public class ProgramRunnerTests
         }
     }
 
+    [Fact]
+    public void UpdateChecker_Check_IgnoresOversizedCache()
+    {
+        var cachePath = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json");
+        try
+        {
+            File.WriteAllText(cachePath, new string('x', UpdateChecker.MaxUpdateCheckCacheBytes + 1));
+
+            var result = UpdateChecker.Check(
+                "1.10.0",
+                cachePath,
+                DateTimeOffset.Parse("2026-01-01T00:00:00Z"),
+                _ => Task.FromResult<string?>("v1.11.0"));
+
+            Assert.False(result.FromCache);
+            Assert.Equal("v1.11.0", result.LatestVersion);
+            Assert.True(result.UpdateAvailable);
+        }
+        finally
+        {
+            if (File.Exists(cachePath))
+                File.Delete(cachePath);
+        }
+    }
+
     [Theory]
     [InlineData("v1.26.0", "https://raw.githubusercontent.com/Widthdom/CodeIndex/v1.26.0/install.sh")]
     [InlineData(" release/test ", "https://raw.githubusercontent.com/Widthdom/CodeIndex/release%2Ftest/install.sh")]
     public void BuildInstallerScriptUrl_UsesResolvedReleaseTag(string releaseTag, string expected)
     {
         Assert.Equal(expected, ProgramRunner.BuildInstallerScriptUrl(releaseTag));
+    }
+
+    [Fact]
+    public void CreateInstallerProcessStartInfo_UsesArgumentList()
+    {
+        var startInfo = ProgramRunner.CreateInstallerProcessStartInfo(
+            "/tmp/install script's path.sh",
+            "v1.27.0",
+            "/opt/cdidx install");
+
+        Assert.Equal("bash", startInfo.FileName);
+        Assert.False(startInfo.UseShellExecute);
+        Assert.Equal(string.Empty, startInfo.Arguments);
+        Assert.Equal(["/tmp/install script's path.sh", "v1.27.0"], startInfo.ArgumentList.ToArray());
+        Assert.Equal("/opt/cdidx install", startInfo.Environment["CDIDX_INSTALL_DIR"]);
+    }
+
+    [Fact]
+    public void RunInstallerProcess_TimesOutHungInstaller()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        lock (TestConsoleLock.Gate)
+        {
+            var root = Path.Combine(Path.GetTempPath(), $"cdidx_installer_timeout_{Guid.NewGuid():N}");
+            Directory.CreateDirectory(root);
+            var script = Path.Combine(root, "install.sh");
+            try
+            {
+                File.WriteAllText(script, """
+#!/bin/sh
+sleep 5
+""");
+                File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+                var startInfo = ProgramRunner.CreateInstallerProcessStartInfo(script, "v1.27.0", root);
+
+                var (exitCode, stdout, stderr) = CaptureConsole(() =>
+                    ProgramRunner.RunInstallerProcess(startInfo, TimeSpan.FromMilliseconds(100)));
+
+                Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+                Assert.Empty(stdout);
+                Assert.Contains("install.sh timed out", stderr);
+                Assert.Contains("rerun `install.sh` manually", stderr);
+            }
+            finally
+            {
+                TestProjectHelper.DeleteDirectory(root);
+            }
+        }
     }
 
     [Fact]
@@ -634,6 +767,180 @@ public class ProgramRunnerTests
         finally
         {
             TestProjectHelper.DeleteDirectory(logDir);
+        }
+    }
+
+    [Fact]
+    public void Run_SearchQueryThatLooksLikeGlobalLogFlag_IsNotConsumed_Issue2955()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue2955_search_log_flag_query");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "USER_GUIDE.md",
+                "markdown",
+                "--log-max-size-mb appears here\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["search", "--log-max-size-mb", "--path", "USER_GUIDE.md", "--db", dbPath, "--count", "--exact-substring"],
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("1", stdout.Trim());
+            Assert.Equal(string.Empty, stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("--log-max-size-mb=50")]
+    [InlineData("--log-format=json")]
+    public void Run_SearchInlineQueryThatLooksLikeGlobalLogFlag_IsNotConsumed_Issue2955(string query)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue2955_search_inline_log_flag_query");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "README.md",
+                "markdown",
+                $"{query} appears here\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["search", query, "--path", "README.md", "--db", dbPath, "--count", "--exact-substring"],
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("1", stdout.Trim());
+            Assert.Equal(string.Empty, stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_SearchStillConsumesValidGlobalLogFlagBeforeQuery_Issue2955()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue2955_search_log_flag_option");
+        using var env = EnvironmentVariableScope.Capture(GlobalToolLog.LogMaxSizeMbEnvironmentVariable);
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "USER_GUIDE.md",
+                "markdown",
+                "needle appears here\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["search", "--log-max-size-mb", "1", "needle", "--path", "USER_GUIDE.md", "--db", dbPath, "--count"],
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("1", stdout.Trim());
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("1", Environment.GetEnvironmentVariable(GlobalToolLog.LogMaxSizeMbEnvironmentVariable));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_SearchStillConsumesInlineGlobalLogFlagAfterQuery_Issue2955()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue2955_search_inline_log_flag_after_query");
+        using var env = EnvironmentVariableScope.Capture(GlobalToolLog.LogMaxSizeMbEnvironmentVariable);
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "USER_GUIDE.md",
+                "markdown",
+                "needle appears here\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["search", "needle", "--log-max-size-mb=1", "--path", "USER_GUIDE.md", "--db", dbPath, "--count"],
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("1", stdout.Trim());
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("1", Environment.GetEnvironmentVariable(GlobalToolLog.LogMaxSizeMbEnvironmentVariable));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("--color", "never")]
+    [InlineData("--palette", "basic")]
+    [InlineData("--trace", "none")]
+    public void Run_SearchSeparatedGlobalValueFlagBeforeLogFlagQuery_IsNotMistakenForQuery_Issue2955(string optionName, string optionValue)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue2955_search_global_value_before_log_flag_query");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "USER_GUIDE.md",
+                "markdown",
+                "--log-max-size-mb appears here\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["search", optionName, optionValue, "--log-max-size-mb", "--path", "USER_GUIDE.md", "--db", dbPath, "--count", "--exact-substring"],
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("1", stdout.Trim());
+            Assert.Equal(string.Empty, stderr);
+        }
+        finally
+        {
+            ConsoleUi.SetColorMode(ColorMode.Auto);
+            ConsoleUi.SetColorPalette(null);
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_SearchSeparatedMetricsFlagBeforeLogFlagQuery_IsNotMistakenForQuery_Issue2955()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue2955_search_metrics_before_log_flag_query");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var metricsPath = Path.Combine(projectRoot, "metrics.jsonl");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "USER_GUIDE.md",
+                "markdown",
+                "--log-max-size-mb appears here\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["search", "--metrics", metricsPath, "--log-max-size-mb", "--path", "USER_GUIDE.md", "--db", dbPath, "--count", "--exact-substring"],
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("1", stdout.Trim());
+            Assert.Equal(string.Empty, stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
 

@@ -280,7 +280,7 @@ sections below show examples and option details for the most common workflows.
 | Analysis | `impact` | Traverse transitive callers from a resolved symbol | `impact_analysis` |
 | Analysis | `unused` | Find symbols defined but not referenced, with confidence buckets | `unused_symbols` |
 | Analysis | `hotspots` | Rank high-impact symbols or statements by reference volume | `symbol_hotspots` |
-| Analysis | `validate` | Report encoding and line-ending issues in indexed files | `validate` |
+| Analysis | `validate` | Report encoding and line-ending issues in indexed files; U+FFFD rows include origin/severity metadata | `validate` |
 | Status | `status` | Show DB statistics, freshness, and readiness metadata | `status` |
 | Status | `languages` | List language extensions and symbol/graph capabilities | `languages` |
 | Diagnostics | `db --integrity-check` | Run SQLite `PRAGMA integrity_check` against the DB | -- |
@@ -388,7 +388,11 @@ be audited whenever the matching help text changes.
 | Status stale-after hint | `24h`, overridden by `--stale-after`, `CDIDX_STALE_AFTER`, or `.cdidxrc.json` | status runner |
 | Color mode | `auto`, overridden by `--color`, `CLICOLOR_FORCE`, `NO_COLOR`, or `CLICOLOR=0` | `ConsoleUi` |
 | ANSI palette | `basic` fallback, auto-upgraded from terminal hints unless overridden | `ConsoleUi` |
-| Report log tail | `200` lines (`--log-lines`) | report runner help |
+| Report log tail | `200` lines (`--log-lines`), clamped to `2000` | report runner help |
+| Report per-log tail read | `1,048,576` bytes | `ReportCommandRunner` |
+| JSON envelope capture | `10,485,760` characters | `JsonEnvelopeWrapper` |
+| CLI batch line | `1,048,576` characters | `QueryCommandRunner` |
+| CLI batch arguments | `256` arguments after command name | `QueryCommandRunner` |
 
 When a default changes, update the help text, this table, affected examples, and
 the changelog fragment in the same PR so users are not asked to reconcile
@@ -400,13 +404,16 @@ conflicting instructions.
 
 ```bash
 cdidx validate
-cdidx validate --kind replacement-character --path src/
+cdidx validate --kind replacement_char --path src/
 cdidx validate --json --path legacy/
 ```
 
 `validate` reports indexed files that are likely to produce misleading snippets
 or symbol names: U+FFFD replacement characters, UTF-16 BOMs, null bytes, mixed or
 CR-only line endings, likely non-UTF-8 content, and Git LFS pointer placeholders.
+For `replacement_char`, JSON and MCP responses include `origin` (`source_literal`
+or `decode_replacement`) and `severity` so agents can distinguish intentional
+U+FFFD literals from likely encoding damage.
 LFS pointers are recorded as `lfs_pointer_skipped` and their placeholder body is
 not indexed; run `git lfs pull` and then `cdidx index .` to index the real file
 content.
@@ -724,7 +731,7 @@ small repositories, and minutes or longer on very large monorepos with around
 
 By default, `cdidx index` stores the database in `<projectPath>/.cdidx/codeindex.db`, even if you run the command from another directory.
 
-`--watch` keeps the process alive after the initial scan and rebuilds the index incrementally as files are created, edited, renamed, or deleted. It uses `FileSystemWatcher` (FSEvents on macOS, inotify on Linux, ReadDirectoryChangesW on Windows), debounces bursts of events (`--debounce <ms>`, default 500 ms) into a single `--files` update, releases the per-DB index lock between batches so other `cdidx` commands can still query, and falls back to a full incremental rescan if the watcher buffer overflows. With `--json` it streams `status: "watching" / "updated" / "rescanned" / "overflow" / "stopped"` lifecycle events to stdout; otherwise it writes `[watch] …` summaries to stderr. Stop the loop with Ctrl+C (or SIGTERM); the final exit code is `0` for a clean stop. `--watch` cannot be combined with `--commits`, `--files`, or `--dry-run` — the loop already drives continuous incremental updates.
+`--watch` keeps the process alive after the initial scan and rebuilds the index incrementally as files are created, edited, renamed, or deleted. It uses `FileSystemWatcher` (FSEvents on macOS, inotify on Linux, ReadDirectoryChangesW on Windows), debounces bursts of events (`--debounce <ms>`, default 500 ms) into a single `--files` update, releases the per-DB index lock between batches so other `cdidx` commands can still query, and falls back to a full incremental rescan if the watcher buffer overflows or a pending path batch reaches its safety cap. With `--json` it streams `status: "watching" / "updated" / "rescanned" / "overflow" / "failed" / "stopped"` lifecycle events to stdout, and update/rescan events include `exit_code`; otherwise it writes `[watch] …` summaries with exit codes to stderr. Stop the loop with Ctrl+C (or SIGTERM); the final exit code is `0` when every batch succeeds, or the most recent non-zero sub-run exit code if a watch update/rescan failed before stop. `--watch` cannot be combined with `--commits`, `--files`, or `--dry-run` — the loop already drives continuous incremental updates.
 
 Indexing keeps the built-in skip lists (`node_modules`, `bin`, `obj`, lockfiles, etc.) and also honors user `.gitignore` plus optional `.cdidxignore` rules across full scans, `--files`, and `--commits` updates. A project-root `.codeindex/.cdidxignore` is also loaded as a workspace-scoped ignore file, which lets multi-workspace manifests keep local cdidx-only ignore rules out of the repository root. Ignore files are read as UTF-8, so non-ASCII patterns behave the same across platforms. On Windows, paths marked with the Hidden or System attribute are skipped before language detection so broad scans do not enter OS-owned caches such as `System Volume Information` or `$Recycle.Bin`; clear those attributes before indexing project-owned source files because ignore rules only exclude additional paths. When the project is inside Git, ignore matching follows the repository's `core.ignorecase` setting, even when the indexed project path is a subdirectory inside that repo; repo-root and other ancestor `.gitignore` files above that subdirectory still apply, and `--commits` resolves changed paths from the repository root before narrowing them back to the indexed project root. Nested directories that contain their own `.git` directory or gitfile are treated as repository boundaries and skipped by default. Indexed file paths are stored in Unicode NFC form so composed and decomposed path spellings match across platforms. `**` only gets Git-style special handling in the documented path forms rather than as an unrestricted cross-directory wildcard. If an update refresh includes ignore-file changes, cdidx automatically falls back to a full scan so newly ignored files are purged safely. Invalid ignore lines are skipped with a warning instead of aborting the whole run, while unreadable ignore files fail closed for that directory scope so cdidx does not index with incomplete rules.
 
@@ -817,6 +824,8 @@ cdidx search "計算" --prefix                            # widen every token to
 cdidx search "content:auth*" --fts                      # raw FTS5 syntax; `content:` is the only valid column qualifier, and NEAR distance is capped at 100
 cdidx search "Run();" --exact-substring                 # case-sensitive exact substring, no FTS5
 cdidx search "Foo.Bar" --lang csharp --exact-substring  # Java/Kotlin/C# exact search/find canonicalizes escaped source identifiers
+cdidx search "File.ReadAllText" --exact-substring --reject-before "Length" --guard-window 8  # API calls missing a nearby preceding guard
+cdidx search "FileMode.Create" --exact-substring --require-after "File.Move" --guard-window 12  # require a nearby follow-up action
 cdidx search "--open-reports" --path README.md --count  # quoted literal that starts with --
 cdidx search --query "--path" --path README.md          # search for an option-looking literal
 ```
@@ -825,6 +834,14 @@ Search normalizes literal FTS queries to Unicode NFC before matching. If every
 literal token exceeds SQLite FTS5 unicode61's 1000-character token cap,
 zero-result JSON includes `query_degraded_reason` and `tokens_dropped`. Index
 validation reports long unbroken FTS tokens as `fts_token_too_long`.
+Guard-aware search filters primary `search` matches by nearby literal guards:
+`--require-before` / `--require-after` keep matches only when the guard query
+appears in the selected line window, while `--reject-before` / `--reject-after`
+drop matches when the guard query appears. JSON search results include
+`guard_evidence` for required guards that matched.
+The MCP `search` tool exposes the same mode as camelCase arguments:
+`requireBefore`, `requireAfter`, `rejectBefore`, `rejectAfter`, and
+`guardWindow`.
 
 ### Debugging queries
 
@@ -845,7 +862,9 @@ cdidx search "authenticate" --json --verbose
 For scripts or editor integrations that need several queries against the same
 index, `cdidx batch --db <path>` keeps one SQLite connection open and reads one
 JSON string array per stdin line. Each array starts with a query command name,
-followed by that command's normal arguments:
+followed by that command's normal arguments. Each stdin line is capped at
+1,048,576 characters, and each command can carry at most 256 arguments after
+the command name:
 
 ```bash
 printf '%s\n' \
@@ -883,7 +902,7 @@ Use `--json` for machine-readable output (AI agents):
 {"path":"src/Auth/TokenService.cs","lang":"csharp","chunk_start_line":1,"chunk_end_line":80,"snippet_start_line":40,"snippet_end_line":47,"snippet":"if (claims.Count == 0)\\n    throw new InvalidOperationException();\\nreturn GenerateToken(claims);","match_lines":[42,47],"highlights":[{"line":47,"text":"return GenerateToken(claims);","terms":["GenerateToken"]}],"context_before":2,"context_after":3,"score":9.8}
 ```
 
-Add `--json-envelope` to wrap the per-line stream into a single document with a `metadata` block (command, `cdidx_version`, `elapsed_ms`, `db_path`, `result_count`, `exit_code`, optional `query_normalized` / `indexed_at_head_sha`) and a `results` array. The flag implies `--json` and works on every query command (`search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `excerpt`, `map`, `inspect`, `outline`, `status`, `validate`, `languages`, `impact`, `deps`, `unused`, `hotspots`). The flat NDJSON / array output stays the default for one release; the envelope will become the default in the next major release, at which point the flat form will be opt-in via `--json-flat`.
+Add `--json-envelope` to wrap the per-line stream into a single document with a `metadata` block (command, `cdidx_version`, `elapsed_ms`, `db_path`, `result_count`, `exit_code`, optional `query_normalized` / `indexed_at_head_sha`) and a `results` array. The flag implies `--json` and works on every query command (`search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `excerpt`, `map`, `inspect`, `outline`, `status`, `validate`, `languages`, `impact`, `deps`, `unused`, `hotspots`). Wrapped commands can capture up to 10,485,760 output characters; if the budget is exceeded, cdidx returns a JSON envelope with empty `results`, non-zero `metadata.exit_code`, and `metadata.error`, and suggests using `--limit` / `--top` or streaming `--json`. The flat NDJSON / array output stays the default for one release; the envelope will become the default in the next major release, at which point the flat form will be opt-in via `--json-flat`.
 
 Add `--profile` to any read command when debugging slow queries. It appends one JSON object after the normal result with `profile.phases` (`name`, `elapsed_ms`, `rows_scanned`), `profile.query_plan` (`EXPLAIN QUERY PLAN` rows), and `profile.queries` (the SQL text). Add `--slow-query-ms <n>` to log profiled SQL statements that meet the threshold to the persistent tool log.
 
@@ -924,7 +943,7 @@ With `--json`, symbol results also include definition ranges, optional body rang
 
 `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, and `find` also share repeatable `--path <glob>` glob-style path filters (multiple values are OR'd together), repeatable `--exclude-path <glob>`, and `--exclude-tests`. Use `*` and `?` to match path segments, and plain text still behaves like a substring filter when you do not include wildcards. Search results prefer source files over tests and docs, and `search` boosts files whose symbol names or paths match the query exactly.
 
-`search --json` and MCP `search` return compact match-centered snippets instead of whole chunks. Each result includes `chunk_start_line`, `chunk_end_line`, `snippet_start_line`, `snippet_end_line`, `snippet`, `match_lines`, `highlights`, `context_before`, `context_after`, and `truncated_line_count`. Use `--snippet-lines <n>` to shrink or widen the excerpt window (default: 8, max: 20), and `--max-line-width <n>` to clamp each line around the strongest match when a minified / transpiled file would otherwise return a single huge line (default: 512, max: 4096; `0` disables clamping). `--snippet-focus <leftmost|quality|proximity>` controls that long-line focus; `quality` is the default, `leftmost` keeps the legacy earliest-match behavior, and `proximity` favors dense multi-token clusters. Clamped lines are marked with `...(+N)...` in the snippet and expose `highlights[].truncated` / `highlights[].original_line_length` in JSON / MCP output.
+`search --json` and MCP `search` return compact match-centered snippets instead of whole chunks. Each result includes `chunk_start_line`, `chunk_end_line`, `snippet_start_line`, `snippet_end_line`, `snippet`, `match_lines`, `highlights`, `context_before`, `context_after`, `truncated_line_count`, `dropped_match_line_count`, and `truncation_context`, plus optional `enclosing_symbol_name`, `enclosing_symbol_kind`, `enclosing_symbol_start_line`, `enclosing_symbol_end_line`, and `enclosing_container_name` when the match line is inside an indexed symbol. Use `--snippet-lines <n>` to shrink or widen the excerpt window (default: 8, max: 20), and `--max-line-width <n>` to clamp each line around the strongest match when a minified / transpiled file would otherwise return a single huge line (default: 512, max: 4096; `0` disables clamping). `--snippet-focus <leftmost|quality|proximity>` controls that long-line focus; `quality` is the default, `leftmost` keeps the legacy earliest-match behavior, and `proximity` favors dense multi-token clusters. Clamped lines are marked with `...(+N)...` in the snippet and expose `highlights[].truncated` / `highlights[].original_line_length` in JSON / MCP output.
 
 ### Resolve a definition
 
@@ -1051,7 +1070,7 @@ Use these fields as concrete remediation hints:
 
 - `fold_ready=false`: `status --json` includes `degraded_reason`, `recommended_action`, and `alternative_action`. Prefer `cdidx backfill-fold`; use a full rebuild as the fallback. For read-only `file:` DB URIs such as `file:///...?...` or `file:codeindex.db?...`, the remediation path is normalized back to a writable filesystem path.
 - `sql_graph_contract_ready=false`: rerun `cdidx index .` before trusting SQL `references` / `callers` / `deps` / `unused` / `hotspots`. The same readiness pair is mirrored by SQL-backed `inspect --json`, JSON graph/dependency output, and MCP graph/dependency tools.
-- `hotspot_family_ready=false`: `hotspots` can still run, but duplicate-name families use a conservative fallback until `cdidx index .` restamps hotspot-family metadata.
+- `hotspot_family_ready=false`: `hotspots` can still run, but duplicate-name families use a conservative fallback until `cdidx index . --rebuild` restamps hotspot-family metadata for every indexed row.
 - `csharp_symbol_name_ready=false`: rerun `cdidx index .` once to rewrite unchanged C# rows to the current canonical operator / conversion-operator / indexer names.
 - `csharp_metadata_target_ready=false`: `deps` / `impact` metadata-attribute edges fall back to a signature-shape heuristic; rerun `cdidx index .` once so the authoritative resolver stamps whether each C# class is attribute-derived.
 
@@ -1081,7 +1100,7 @@ cdidx report --output report.tgz --json
 |---|---|---|
 | `--output <path>` / `-o <path>` | (required) | Destination `.tar.gz`. The directory is created if missing; on POSIX, the archive and tar entries are owner-readable/writable only. |
 | `--db <path>` | `.cdidx/codeindex.db` | Override the database whose schema is summarized. If absent, `schema.txt` records that no DB was found. |
-| `--log-lines <n>` | `200` | How many trailing lifecycle-log lines to include (`0` disables the tail). |
+| `--log-lines <n>` | `200` | How many trailing lifecycle-log lines to include (`0` disables the tail; values above `2000` are clamped). Each log file contributes from a bounded 1,048,576-byte tail window instead of being loaded fully. |
 | `--no-log` | | Skip the lifecycle log entirely. |
 | `--include-args` | | Keep literal `cwd=` and `args=` values in the log tail (opt-in; share only with trusted recipients). |
 | `--json` | | Print a stable summary envelope (`output_path`, `version`, `files`, `schema_tables`, `log_lines_included`, `log_included`, `db_included`, `db_path`) instead of the human-friendly output. |
@@ -1352,8 +1371,20 @@ Example output:
 
 | Environment variable | Meaning |
 |---|---|
-| `CDIDX_MCP_RATE_LIMIT_RPS` | Refill rate in tokens per second. Required to enable rate limiting; values that are missing, non-numeric, zero, negative, or non-finite (`Infinity`, `NaN`) leave the limiter disabled and emit a one-line warning on `stderr`. |
-| `CDIDX_MCP_RATE_LIMIT_BURST` | Bucket capacity (maximum burst). Optional. Defaults to `max(rps, 1)`. Invalid or non-finite values fall back to the default and emit a warning while leaving `rps` honored. |
+| `CDIDX_MCP_RATE_LIMIT_RPS` | Refill rate in tokens per second. Required to enable rate limiting; values that are missing, non-numeric, zero, negative, or non-finite (`Infinity`, `NaN`) leave the limiter disabled and emit a one-line warning on `stderr`. Values above `100` are clamped to `100` with a warning. |
+| `CDIDX_MCP_RATE_LIMIT_BURST` | Bucket capacity (maximum burst). Optional. Defaults to `max(rps, 1)`. Invalid or non-finite values fall back to the default and emit a warning while leaving `rps` honored. Values above `1000` are clamped to `1000` with a warning. |
+| `CDIDX_MCP_RATE_LIMIT_BUCKET_IDLE_SECONDS` | Idle bucket TTL. Optional. Defaults to 900 seconds. Stale `(tool, caller)` buckets are pruned on later calls so long-lived servers do not retain historical caller identities forever. Invalid or non-finite values fall back to the default and emit a warning. |
+
+MCP response-size limits are bounded so environment overrides cannot disable the response guards:
+
+| Environment variable | Default | Maximum | Invalid value |
+|---|---:|---:|---|
+| `CDIDX_MCP_RESPONSE_MAX_BYTES` | `10485760` (10 MiB) | `67108864` (64 MiB) | Uses the default and emits a warning |
+| `CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES` | `1048576` (1 MiB) | `10485760` (10 MiB) | Uses the default and emits a warning |
+
+Values above the maximum are clamped with a warning. `status` reports effective response caps under `mcp.limits.max_response_bytes` and `mcp.limits.batch_response_bytes`.
+
+Pagination-style MCP graph tools clamp `offset` to `10000` before querying SQLite; `tools/list` advertises the schema maximum, and `status` reports the offset cap under `mcp.limits.max_pagination_offset`. `status` also reports the current rate limiter settings under `mcp.rate_limit`.
 
 Caller identity is captured from the `clientInfo.name` (and `version` when present) of the MCP `initialize` request. Tool calls received before `initialize` are billed against an anonymous `"unknown"` bucket so an unidentified client cannot bypass the limiter. The captured caller is sticky for the lifetime of the session — once a named identity has been recorded, subsequent `initialize` calls under a different name are ignored (with a one-line `stderr` warning) so a long-lived stdio or networked session cannot reset its bucket mid-flight by re-identifying.
 
@@ -1924,7 +1955,7 @@ The MCP `tools/list` response includes an `examples` array for every registered 
 | `unused_symbols` | Find symbols defined but never referenced, with confidence buckets for dead-code triage |
 | `symbol_hotspots` | Find high-impact hotspots. `groupBy` supports `symbol`, `file`, and `statement`; SQL scopes default to statement grouping while non-SQL scopes default to symbol grouping. |
 | `batch_query` | Execute multiple queries in a single call (MCP only, max 10). The response includes a top-level `metadata` object with `submitted`, `executed`, `errors`, `total_elapsed_ms`, `success_count`, and `failure_count`; every entry in `results` carries `request_index`, `ok`, `elapsed_ms`, and compact `args_summary` fields so callers can correlate partial failures and slow inner queries without relying on positional guesses. |
-| `validate` | Report encoding issues (U+FFFD, BOM, null bytes, mixed/CR-only line endings, UTF-16 BOM detection, likely non-UTF8 encodings) |
+| `validate` | Report encoding issues (U+FFFD with origin/severity, BOM, null bytes, mixed/CR-only line endings, UTF-16 BOM detection, likely non-UTF8 encodings) |
 | `languages` | List all supported languages, file extensions, and capabilities |
 | `ping` | Lightweight connection check |
 | `index` | Index or re-index a project directory |
@@ -1980,7 +2011,7 @@ CDIDX_MCP_HTTP_TOKEN=s3cret cdidx mcp \
   --transport http --http-listen 0.0.0.0:9000          # LAN bind; bearer token is mandatory
 ```
 
-Each HTTP `POST /` carries one JSON-RPC frame in the request body, the matching response is returned in the same HTTP body (`200 OK`, `application/json`), and notifications return `204 No Content`. `GET /events` opens a `text/event-stream` channel for server-to-client frames; the current server does not emit unsolicited frames, but the stream is independent and does not block normal POST requests. Non-POST verbs on `/` return `405 Method Not Allowed` with `Allow: POST`. When the persistent lifecycle log is enabled, HTTP mode also writes one `mcp_http_request` record per request with method, path, status, duration, auth outcome, remote peer, correlation id, and JSON-RPC request id when available. Request and response bodies are not logged.
+Each HTTP `POST /` carries one JSON-RPC frame in the request body, the matching response is returned in the same HTTP body (`200 OK`, `application/json`), and notifications return `204 No Content`. `GET /events` opens a `text/event-stream` channel for server-to-client frames; the server emits no unsolicited frames unless keep-alive notifications are opted in with `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S`. Accepted keep-alive values are finite seconds from `1` to `300`; invalid or out-of-range values leave keep-alive disabled with a `stderr` warning. The stream is independent and does not block normal POST requests. Non-POST verbs on `/` return `405 Method Not Allowed` with `Allow: POST`. Request bodies are capped at 1,000,000 bytes by default and oversized requests return `413 Payload Too Large`; the pending POST queue is capped at 64 requests by default and full queues return `429 Too Many Requests` with `Retry-After: 1`. Tune those positive-integer limits with `CDIDX_MCP_HTTP_MAX_REQUEST_BYTES` and `CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH`; invalid values fall back to the defaults. When the persistent lifecycle log is enabled, HTTP mode also writes one `mcp_http_request` record per request with method, path, status, duration, auth outcome, remote peer, correlation id, and JSON-RPC request id when available. Request and response bodies are not logged.
 
 Security defaults:
 
@@ -2391,7 +2422,7 @@ cdidx index . --quiet
 | Analysis | `impact` | 解決した symbol から transitive callers を探索 | `impact_analysis` |
 | Analysis | `unused` | 参照されていない可能性がある symbols を confidence bucket 付きで表示 | `unused_symbols` |
 | Analysis | `hotspots` | reference volume で high-impact symbols/statements を ranking | `symbol_hotspots` |
-| Analysis | `validate` | indexed files の encoding / line-ending 問題を報告 | `validate` |
+| Analysis | `validate` | indexed files の encoding / line-ending 問題を報告。U+FFFD 行には origin/severity metadata が付く | `validate` |
 | Status | `status` | DB stats、freshness、readiness metadata を表示 | `status` |
 | Status | `languages` | language extensions と symbol/graph capabilities を一覧 | `languages` |
 | Diagnostics | `db --integrity-check` | DB に対して SQLite `PRAGMA integrity_check` を実行 | -- |
@@ -2490,7 +2521,11 @@ render できます。
 | Status stale-after hint | `24h`。`--stale-after` / `CDIDX_STALE_AFTER` / `.cdidxrc.json` で上書き | status runner |
 | Color mode | `auto`。`--color` / `CLICOLOR_FORCE` / `NO_COLOR` / `CLICOLOR=0` で上書き | `ConsoleUi` |
 | ANSI palette | `basic` fallback。terminal hints で自動昇格、または明示上書き | `ConsoleUi` |
-| Report log tail | `200` lines（`--log-lines`） | report runner help |
+| Report log tail | `200` lines（`--log-lines`）、最大 `2000` に clamp | report runner help |
+| Report per-log tail read | `1,048,576` bytes | `ReportCommandRunner` |
+| JSON envelope capture | `10,485,760` 文字 | `JsonEnvelopeWrapper` |
+| CLI batch line | `1,048,576` 文字 | `QueryCommandRunner` |
+| CLI batch arguments | command 名の後ろに `256` 引数 | `QueryCommandRunner` |
 
 既定値を変更するときは、help text、この表、影響する examples、changelog fragment を
 同じ PR で更新してください。
@@ -2501,13 +2536,16 @@ render できます。
 
 ```bash
 cdidx validate
-cdidx validate --kind replacement-character --path src/
+cdidx validate --kind replacement_char --path src/
 cdidx validate --json --path legacy/
 ```
 
 `validate` は、snippet や symbol name を誤らせやすい indexed file を報告します。
 対象は U+FFFD replacement character、UTF-16 BOM、null byte、mixed / CR-only line
-ending、likely non-UTF-8 content、Git LFS pointer placeholder などです。LFS pointer
+ending、likely non-UTF-8 content、Git LFS pointer placeholder などです。
+`replacement_char` の JSON / MCP response には `origin` (`source_literal` /
+`decode_replacement`) と `severity` が入り、意図的な U+FFFD literal と
+エンコーディング破損の可能性を agent が区別できます。LFS pointer
 は `lfs_pointer_skipped` として記録され、placeholder 本文は index されません。
 実体を index するには `git lfs pull` の後に `cdidx index .` を再実行してください。
 
@@ -2842,7 +2880,7 @@ interactive terminal では spinner と progress bar が動き続けます。待
 
 `cdidx index` は、別ディレクトリから実行しても、デフォルトでは `<projectPath>/.cdidx/codeindex.db` にDBを保存します。
 
-`--watch` を付けると初回スキャン後もプロセスが残り、`FileSystemWatcher`（macOS は FSEvents、Linux は inotify、Windows は ReadDirectoryChangesW）でファイルの作成・編集・リネーム・削除を検知して差分更新を繰り返します。`--debounce <ms>`（既定 500 ms）の窓内で発生したイベントは 1 つの `--files` 更新にまとめられ、バッチ間ではデータベースごとの index lock を解放するため別の `cdidx` コマンドからの問い合わせも可能です。Watcher バッファがオーバーフローした場合は変更を黙って捨てる代わりにフル差分再走査へフォールバックします。`--json` 時は `status: "watching" / "updated" / "rescanned" / "overflow" / "stopped"` のライフサイクルイベントを stdout に流し、そうでなければ `[watch] …` の要約を stderr に出力します。Ctrl+C（または SIGTERM）で正常に停止し、終了コードは正常停止で `0` です。`--watch` は連続的な差分更新を内蔵しているため `--commits` / `--files` / `--dry-run` と併用できません。
+`--watch` を付けると初回スキャン後もプロセスが残り、`FileSystemWatcher`（macOS は FSEvents、Linux は inotify、Windows は ReadDirectoryChangesW）でファイルの作成・編集・リネーム・削除を検知して差分更新を繰り返します。`--debounce <ms>`（既定 500 ms）の窓内で発生したイベントは 1 つの `--files` 更新にまとめられ、バッチ間ではデータベースごとの index lock を解放するため別の `cdidx` コマンドからの問い合わせも可能です。Watcher バッファがオーバーフローした場合や pending path batch が安全上限に達した場合は、変更を黙って捨てる代わりにフル差分再走査へフォールバックします。`--json` 時は `status: "watching" / "updated" / "rescanned" / "overflow" / "failed" / "stopped"` のライフサイクルイベントを stdout に流し、update/rescan event には `exit_code` を含めます。そうでなければ exit code 付きの `[watch] …` 要約を stderr に出力します。Ctrl+C（または SIGTERM）で停止し、すべての batch が成功していれば終了コードは `0`、停止前に watch update/rescan が失敗していれば直近の non-zero sub-run exit code です。`--watch` は連続的な差分更新を内蔵しているため `--commits` / `--files` / `--dry-run` と併用できません。
 
 デフォルト出力:
 
@@ -2933,6 +2971,8 @@ cdidx search "計算" --prefix                            # クエリ全体を p
 cdidx search "content:auth*" --fts                      # 生のFTS5構文。列修飾子は `content:` だけが有効で、NEAR distance は 100 まで
 cdidx search "Run();" --exact-substring                 # 大文字小文字区別の完全部分一致、FTS5 なし
 cdidx search "Foo.Bar" --lang csharp --exact-substring  # Java/Kotlin/C# の exact 検索 / find は escaped source identifier を正規化する
+cdidx search "File.ReadAllText" --exact-substring --reject-before "Length" --guard-window 8  # 直前の guard がない API 呼び出し
+cdidx search "FileMode.Create" --exact-substring --require-after "File.Move" --guard-window 12  # 近傍の後続処理を要求
 cdidx search "--open-reports" --path README.md --count  # `--` で始まる引用済みリテラル
 cdidx search --query "--path" --path README.md          # オプションに見えるリテラルを検索
 ```
@@ -2941,6 +2981,12 @@ literal FTS クエリは照合前に Unicode NFC へ正規化されます。す�
 token が SQLite FTS5 unicode61 の 1000 文字 token 上限を超える場合、0 件
 JSON には `query_degraded_reason` と `tokens_dropped` が含まれます。index
 validation は長い連続 FTS token を `fts_token_too_long` として報告します。
+guard-aware search は primary の `search` 一致を近傍の literal guard で絞り込みます:
+`--require-before` / `--require-after` は指定行窓内に guard query がある場合だけ残し、
+`--reject-before` / `--reject-after` は guard query がある一致を落とします。JSON の検索結果には
+一致した required guard の `guard_evidence` が含まれます。
+MCP `search` tool では同じ mode を camelCase 引数 `requireBefore`, `requireAfter`,
+`rejectBefore`, `rejectAfter`, `guardWindow` で指定できます。
 
 ### クエリのデバッグ
 
@@ -2960,7 +3006,8 @@ cdidx search "authenticate" --json --verbose
 
 同じインデックスに対して複数の query を投げる script や editor integration では、
 `cdidx batch --db <path>` を使うと 1 つの SQLite connection を開いたまま処理できます。
-stdin の各行は JSON 文字列配列で、先頭に query command 名、その後ろに通常の引数を並べます:
+stdin の各行は JSON 文字列配列で、先頭に query command 名、その後ろに通常の引数を並べます。
+各 stdin 行は 1,048,576 文字まで、各 command は command 名の後ろに最大 256 引数までです:
 
 ```bash
 printf '%s\n' \
@@ -2997,6 +3044,8 @@ src/Auth/TokenService.cs:42-58
 {"path":"src/Auth/Login.cs","start_line":15,"end_line":30,"content":"public bool Authenticate(...)...","lang":"csharp","score":12.5}
 {"path":"src/Auth/TokenService.cs","start_line":42,"end_line":58,"content":"public string GenerateToken(...)...","lang":"csharp","score":9.8}
 ```
+
+`--json-envelope` を追加すると、1 行ごとの stream を `metadata`（command、`cdidx_version`、`elapsed_ms`、`db_path`、`result_count`、`exit_code`、任意の `query_normalized` / `indexed_at_head_sha`）と `results` 配列を持つ 1 つの JSON document に包みます。この flag は `--json` を暗黙に有効化し、各 query command で使えます。wrapped command の捕捉出力は最大 10,485,760 文字です。超過した場合は、空の `results`、非 0 の `metadata.exit_code`、`metadata.error` を持つ JSON envelope を返し、`--limit` / `--top` または streaming `--json` の利用を促します。
 
 ### シンボル検索（関数、クラスなど）
 
@@ -3035,7 +3084,7 @@ function   CreateUser                               src/Services/UserService.cs:
 
 `search`、`definition`、`references`、`callers`、`callees`、`symbols`、`files` は共通で繰り返し指定できる `--path <glob>` の glob 形式パスフィルタ（複数値は OR で結合）、繰り返し指定できる `--exclude-path <glob>`、`--exclude-tests` に対応しています。`*` と `?` でパスパターンを指定でき、ワイルドカードを含めない場合は従来どおり部分文字列として扱われます。検索結果は tests や docs より source を優先し、`search` はシンボル名やパスがクエリと正確に一致するファイルを上に出します。
 
-`search --json` と MCP の `search` は、チャンク全文ではなく一致中心の軽量スニペットを返します。各結果には `chunk_start_line`、`chunk_end_line`、`snippet_start_line`、`snippet_end_line`、`snippet`、`match_lines`、`highlights`、`context_before`、`context_after`、`truncated_line_count` が含まれます。抜粋の長さは `--snippet-lines <n>` で調整でき（デフォルト: 8、最大: 20）、minified / transpiled で 1 行が極端に長いファイルでは `--max-line-width <n>` を使って各行を最も強い一致周辺へクランプできます（`0` でクランプ解除、デフォルト: 512、最大: 4096）。長い行の焦点は `--snippet-focus <leftmost|quality|proximity>` で制御でき、`quality` がデフォルト、`leftmost` は従来の最左一致、`proximity` は近接した複数トークンを優先します。クランプされた行はスニペット内に `...(+N)...` マーカーが入り、JSON / MCP 出力では `highlights[].truncated` / `highlights[].original_line_length` でも検出できます。
+`search --json` と MCP の `search` は、チャンク全文ではなく一致中心の軽量スニペットを返します。各結果には `chunk_start_line`、`chunk_end_line`、`snippet_start_line`、`snippet_end_line`、`snippet`、`match_lines`、`highlights`、`context_before`、`context_after`、`truncated_line_count`、`dropped_match_line_count`、`truncation_context` が含まれ、マッチ行がインデックス済みシンボル範囲内にある場合は `enclosing_symbol_name`、`enclosing_symbol_kind`、`enclosing_symbol_start_line`、`enclosing_symbol_end_line`、`enclosing_container_name` も含まれます。抜粋の長さは `--snippet-lines <n>` で調整でき（デフォルト: 8、最大: 20）、minified / transpiled で 1 行が極端に長いファイルでは `--max-line-width <n>` を使って各行を最も強い一致周辺へクランプできます（`0` でクランプ解除、デフォルト: 512、最大: 4096）。長い行の焦点は `--snippet-focus <leftmost|quality|proximity>` で制御でき、`quality` がデフォルト、`leftmost` は従来の最左一致、`proximity` は近接した複数トークンを優先します。クランプされた行はスニペット内に `...(+N)...` マーカーが入り、JSON / MCP 出力では `highlights[].truncated` / `highlights[].original_line_length` でも検出できます。
 
 ### 定義を引く
 
@@ -3164,7 +3213,7 @@ AI agent の作業開始時はこれを先に実行し、`.cdidx/codeindex.db` �
 
 - `fold_ready=false`: `degraded_reason`、`recommended_action`、`alternative_action` に従い、まず `cdidx backfill-fold`、必要なら full rebuild を実行します。read-only `file:` DB URI の場合も、対処用 path は writable な filesystem path に正規化されます。
 - `sql_graph_contract_ready=false`: unchanged な SQL 行が古い graph contract のまま残っている可能性があります。SQL の `references` / `callers` / `deps` / `unused` / `hotspots` を信頼する前に `cdidx index .` を再実行してください。
-- `hotspot_family_ready=false`: `hotspots` は使えますが、duplicate-name family は保守的 fallback に縮退しうるため、`cdidx index .` で hotspot-family metadata を restamp してください。
+- `hotspot_family_ready=false`: `hotspots` は使えますが、duplicate-name family は保守的 fallback に縮退しうるため、`cdidx index . --rebuild` で全 indexed row の hotspot-family metadata を restamp してください。
 - `csharp_symbol_name_ready=false`: `cdidx index .` を 1 回実行し、unchanged な C# 行を現在の canonical operator / conversion operator / indexer 名へ書き換えてください。
 - `csharp_metadata_target_ready=false`: `deps` / `impact` の metadata attribute edge 判定がヒューリスティックへフォールバックします。`cdidx index .` を 1 回実行し、各 C# class が attribute 派生かどうかを authoritative resolver で永続化してください。
 
@@ -3194,7 +3243,7 @@ cdidx report --output report.tgz --json
 |---|---|---|
 | `--output <path>` / `-o <path>` | （必須） | 出力先 `.tar.gz`。親ディレクトリが無ければ作成します。POSIX では archive と tar entry は owner の読み書きのみになります。 |
 | `--db <path>` | `.cdidx/codeindex.db` | スキーマ要約対象の DB を上書きします。存在しなければ `schema.txt` に「DB が見つからなかった」旨が記録されます。 |
-| `--log-lines <n>` | `200` | ライフサイクルログ末尾を何行含めるか（`0` で末尾を含めません）。 |
+| `--log-lines <n>` | `200` | ライフサイクルログ末尾を何行含めるか（`0` で末尾を含めません。`2000` を超える値は clamp されます）。各ログファイルは全体を読み込まず、末尾 1,048,576 byte の範囲から収集します。 |
 | `--no-log` | | ライフサイクルログを完全に省略します。 |
 | `--include-args` | | ログ末尾の `cwd=` / `args=` 値を伏字化せずそのまま含めます（信頼できる相手にだけ使用してください）。 |
 | `--json` | | 人間向け出力の代わりに、安定したサマリ JSON（`output_path` / `version` / `files` / `schema_tables` / `log_lines_included` / `log_included` / `db_included` / `db_path`）を出力します。 |
@@ -3464,8 +3513,20 @@ MCP ツールで catch-all まで突き抜けた例外（想定外の SQLite 例
 
 | 環境変数 | 意味 |
 |---|---|
-| `CDIDX_MCP_RATE_LIMIT_RPS` | 1 秒あたりのトークン補充レート。レート制限を有効化するために必須。未設定・非数値・0 以下・非有限値（`Infinity`/`NaN`）の場合は無効のまま、1 行の警告を `stderr` に出力します。 |
-| `CDIDX_MCP_RATE_LIMIT_BURST` | バケット容量（最大バースト）。任意。既定は `max(rps, 1)`。不正値・非有限値は既定にフォールバックし警告を出力。`rps` はそのまま尊重されます。 |
+| `CDIDX_MCP_RATE_LIMIT_RPS` | 1 秒あたりのトークン補充レート。レート制限を有効化するために必須。未設定・非数値・0 以下・非有限値（`Infinity`/`NaN`）の場合は無効のまま、1 行の警告を `stderr` に出力します。`100` を超える値は警告付きで `100` にクランプされます。 |
+| `CDIDX_MCP_RATE_LIMIT_BURST` | バケット容量（最大バースト）。任意。既定は `max(rps, 1)`。不正値・非有限値は既定にフォールバックし警告を出力。`rps` はそのまま尊重されます。`1000` を超える値は警告付きで `1000` にクランプされます。 |
+| `CDIDX_MCP_RATE_LIMIT_BUCKET_IDLE_SECONDS` | 未使用バケットの TTL。任意。既定は 900 秒です。古い `(tool, caller)` バケットは後続呼び出し時に pruning され、長時間稼働するサーバーが過去の caller ID を永続保持しません。不正値・非有限値は既定にフォールバックし警告を出力します。 |
+
+MCP のレスポンスサイズ上限は、環境変数 override で guard が実質無効化されないよう上限付きです:
+
+| 環境変数 | 既定 | 最大 | 不正値 |
+|---|---:|---:|---|
+| `CDIDX_MCP_RESPONSE_MAX_BYTES` | `10485760` (10 MiB) | `67108864` (64 MiB) | 警告を出して既定値を使用 |
+| `CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES` | `1048576` (1 MiB) | `10485760` (10 MiB) | 警告を出して既定値を使用 |
+
+最大値を超える値は警告付きでクランプされます。`status` は有効なレスポンス上限を `mcp.limits.max_response_bytes` と `mcp.limits.batch_response_bytes` に返します。
+
+ページング型の MCP graph ツールは SQLite クエリ前に `offset` を `10000` へクランプします。`tools/list` は schema の最大値を広告し、`status` は offset 上限を `mcp.limits.max_pagination_offset` に返します。`status` は現在のレート制限設定も `mcp.rate_limit` に返します。
 
 呼び出し元 ID は MCP `initialize` リクエストの `clientInfo.name`（および `version` があれば併記）から取得します。`initialize` 前に届いたツール呼び出しは匿名 `"unknown"` バケットで計量され、未識別クライアントによる制限回避を防ぎます。取得済みの caller はセッション中 sticky で、名前付き ID が一度記録されると以降の別名 `initialize` は無視され（`stderr` に 1 行警告）、長期 stdio / 通信セッションが途中で再 initialize してバケットをリセットする経路を塞ぎます。
 
@@ -4037,7 +4098,7 @@ OpenAI Codex CLI (`codex.json` または `~/.codex/config.json`):
 | `unused_symbols` | 定義されているが参照されていないシンボルを bucket 付きで検索（デッドコード検出向け） |
 | `symbol_hotspots` | 影響の大きい hotspot を検索。`groupBy` は `symbol` / `file` / `statement` を指定でき、SQL scope は statement grouping、非 SQL scope は symbol grouping が既定。 |
 | `batch_query` | 複数クエリを1回で実行（MCP専用、最大10件）。レスポンスにはトップレベル `metadata`（`submitted` / `executed` / `errors` / `total_elapsed_ms` / `success_count` / `failure_count`）と各 `results` エントリの `request_index` / `ok` / `elapsed_ms` / `args_summary` が含まれ、位置だけに依存せず部分失敗や遅い内部クエリを把握できます。 |
-| `validate` | エンコーディング問題（U+FFFD、BOM、null バイト、改行混在 / CR-only 行末、UTF-16 BOM 検出、UTF-8 以外と推定されるエンコーディング）を報告 |
+| `validate` | エンコーディング問題（origin/severity 付き U+FFFD、BOM、null バイト、改行混在 / CR-only 行末、UTF-16 BOM 検出、UTF-8 以外と推定されるエンコーディング）を報告 |
 | `languages` | 対応言語一覧を拡張子・機能付きで表示 |
 | `ping` | 軽量な接続確認 |
 | `index` | プロジェクトのインデックス作成・更新 |
@@ -4073,7 +4134,7 @@ CDIDX_MCP_HTTP_TOKEN=s3cret cdidx mcp \
   --transport http --http-listen 0.0.0.0:9000          # LAN 公開時は bearer token が必須
 ```
 
-HTTP の `POST /` 1 件が JSON-RPC フレーム 1 件に対応し、応答は同じ HTTP レスポンスのボディに `200 OK` / `application/json` で返ります。通知は `204 No Content` です。`GET /events` はサーバー→クライアントフレーム用の `text/event-stream` channel を開きます。現サーバーは自発的な frame をまだ送信しませんが、この stream は独立しており通常の POST リクエストを塞ぎません。`/` への POST 以外は `405 Method Not Allowed`（`Allow: POST` 付き）です。永続 lifecycle log が有効な場合、HTTP mode はリクエストごとに `mcp_http_request` レコードも出力し、method、path、status、duration、auth outcome、remote peer、correlation id、利用可能な JSON-RPC request id を記録します。リクエスト/レスポンス本文は記録しません。
+HTTP の `POST /` 1 件が JSON-RPC フレーム 1 件に対応し、応答は同じ HTTP レスポンスのボディに `200 OK` / `application/json` で返ります。通知は `204 No Content` です。`GET /events` はサーバー→クライアントフレーム用の `text/event-stream` channel を開きます。server-initiated frame は `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S` で keep-alive notification を opt-in した場合だけ送信されます。受理される値は有限な `1`〜`300` 秒で、不正値や範囲外の値では `stderr` に警告を出して keep-alive を無効のままにします。この stream は独立しており通常の POST リクエストを塞ぎません。`/` への POST 以外は `405 Method Not Allowed`（`Allow: POST` 付き）です。リクエスト本文は既定で 1,000,000 bytes までに制限され、超過時は `413 Payload Too Large` を返します。保留中 POST queue は既定で 64 件までに制限され、満杯時は `Retry-After: 1` 付きの `429 Too Many Requests` を返します。正の整数の `CDIDX_MCP_HTTP_MAX_REQUEST_BYTES` と `CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH` で調整でき、不正値は既定にフォールバックします。永続 lifecycle log が有効な場合、HTTP mode はリクエストごとに `mcp_http_request` レコードも出力し、method、path、status、duration、auth outcome、remote peer、correlation id、利用可能な JSON-RPC request id を記録します。リクエスト/レスポンス本文は記録しません。
 
 セキュリティ既定:
 

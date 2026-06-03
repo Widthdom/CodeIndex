@@ -41,7 +41,12 @@
     "char_counts": [],
     "total_chars": 0
   },
-  "score": "\u003CSCORE\u003E"
+  "score": "\u003CSCORE\u003E",
+  "enclosing_symbol_name": "Add",
+  "enclosing_symbol_kind": "function",
+  "enclosing_symbol_start_line": 5,
+  "enclosing_symbol_end_line": 5,
+  "enclosing_container_name": "Lib"
 }
 {
   "done": true,

@@ -3040,6 +3040,29 @@ public static partial class SymbolExtractor
                                 : line[nameLineStartColumn..];
                             signature = (csharpWrappedModifierPrefix + " " + nameLineContent.TrimStart()).Trim();
                         }
+                        else if (lang == "csharp"
+                            && pattern.Kind == "function"
+                            && pattern.BodyStyle == BodyStyle.Brace
+                            && bodyStartLine.HasValue
+                            && bodyEndLine != startLine
+                            && !IsCSharpMultilineExpressionBodiedMember(
+                                lines,
+                                i,
+                                csharpSignatureRawStartColumn)
+                            && TryFindCSharpBraceBodyHeaderExtent(
+                                lines,
+                                i,
+                                Math.Min(csharpSignatureRawStartColumn, line.Length),
+                                out var csharpBraceHeaderLastLineIndex,
+                                out var csharpBraceHeaderLastLineExclusiveEndColumn))
+                        {
+                            signature = BuildCSharpMultilineSignature(
+                                lines,
+                                i,
+                                Math.Min(csharpSignatureRawStartColumn, line.Length),
+                                csharpBraceHeaderLastLineIndex,
+                                csharpBraceHeaderLastLineExclusiveEndColumn);
+                        }
                         else if (sameLineEndColumn >= absoluteStartColumn)
                         {
                             if (lang == "csharp"

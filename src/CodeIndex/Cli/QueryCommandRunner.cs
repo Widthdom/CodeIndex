@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -21,6 +22,8 @@ public static class QueryCommandRunner
     internal const int DefaultQueryLimit = 20;
     internal const int DefaultMapLimit = 10;
     internal const int DefaultImpactLimit = 50;
+    internal const int BatchMaxLineChars = 1024 * 1024;
+    internal const int BatchMaxArgumentCount = 256;
     internal const string DefaultLimitEnvironmentVariable = "CDIDX_DEFAULT_LIMIT";
     internal const string DefaultSnippetLinesEnvironmentVariable = "CDIDX_DEFAULT_SNIPPET_LINES";
     internal const string DefaultMaxLineWidthEnvironmentVariable = "CDIDX_DEFAULT_MAX_LINE_WIDTH";
@@ -37,6 +40,14 @@ public static class QueryCommandRunner
     // OR 結合の `symbols` 名は SQLite の式木深さ上限 1000 を十分下回る値で頭打ちにし、
     // 大量バッチを SQLite 例外ではなく明確な usage error で早期に弾く。
     internal const int MaxSymbolQueryNames = 256;
+    internal const int MaxMapSectionsCsvLength = 256;
+    internal const int MaxMapSectionsCsvEntries = 16;
+    internal const int MaxStatusCheckScopesCsvLength = 256;
+    internal const int MaxStatusCheckScopesCsvEntries = 16;
+    internal const int MaxVisibilityFilterCsvLength = 256;
+    internal const int MaxVisibilityFilterCsvEntries = 16;
+    internal const int MaxQueryPathFilterCount = 128;
+    internal const int MaxQueryPathFilterLength = 1024;
     internal const int ExactZeroHintProbeLimit = 1;
     internal const int ExactZeroHintSampleLimit = 5;
     private const string HotspotsGroupedByNameKind = "name_kind";
@@ -81,6 +92,11 @@ public static class QueryCommandRunner
         "--snippet-lines",
         "--snippet-focus",
         "--path",
+        "--require-before",
+        "--require-after",
+        "--reject-before",
+        "--reject-after",
+        "--guard-window",
         "--project",
         "--solution",
         "--exclude-path",
@@ -144,7 +160,7 @@ public static class QueryCommandRunner
             "Hotspot family contract",
             "cross-file hotspot family grouping is stamped for all supported languages in this index.",
             "cross-file hotspot grouping may be degraded for one or more languages.",
-            "Run `cdidx index <projectPath>` to restamp authoritative hotspot families."),
+            "Run `cdidx index <projectPath> --rebuild` to restamp authoritative hotspot families for every indexed row."),
         new(
             "csharp_symbol_name_ready",
             "C# symbol-name contract",
@@ -219,7 +235,9 @@ public static class QueryCommandRunner
     private const string OutputFormatJsonGraph = "json-graph";
     private const string OutputFormatEdgeList = "edgelist";
     private static readonly HashSet<string> InlineValueOptions =
-        new(ValueTakingOptions.Concat(["--json"]), StringComparer.Ordinal);
+        new(
+            ValueTakingOptions.Concat(["--json", "--log-format", "--log-retain-count", "--log-max-size-mb"]),
+            StringComparer.Ordinal);
     private const string FindUsage = "Usage: cdidx find <query> --path <glob> [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--before <n>] [--after <n>] [--snippet-lines <n>] [--focus-line <line>] [--focus-column <n>] [--max-line-width <n>] [--exact] [--regex] [--count]\n       cdidx find --query <query> --path <glob> [...]\n       cdidx find [options] -- <query>";
 
     public static int RunBatch(string[] cmdArgs, JsonSerializerOptions jsonOptions)
@@ -272,11 +290,18 @@ public static class QueryCommandRunner
             db.TryMigrateForRead();
             s_batchReader = new DbReader(db);
             var firstFailure = CommandExitCodes.Success;
-            string? line;
             var lineNumber = 0;
-            while ((line = Console.In.ReadLine()) != null)
+            while (TryReadBatchLine(Console.In, out var line, out var lineExceededLimit))
             {
                 lineNumber++;
+                if (lineExceededLimit)
+                {
+                    Console.Error.WriteLine($"Error: batch line {lineNumber} exceeds the {BatchMaxLineChars} character limit.");
+                    if (firstFailure == CommandExitCodes.Success)
+                        firstFailure = CommandExitCodes.UsageError;
+                    continue;
+                }
+
                 if (string.IsNullOrWhiteSpace(line))
                     continue;
 
@@ -300,6 +325,41 @@ public static class QueryCommandRunner
         }
     }
 
+    private static bool TryReadBatchLine(TextReader reader, out string? line, out bool exceededLimit)
+    {
+        line = null;
+        exceededLimit = false;
+        var builder = new StringBuilder();
+        while (true)
+        {
+            var next = reader.Read();
+            if (next < 0)
+            {
+                if (builder.Length == 0 && !exceededLimit)
+                    return false;
+                line = exceededLimit ? string.Empty : builder.ToString();
+                return true;
+            }
+
+            var ch = (char)next;
+            if (ch == '\n')
+            {
+                line = exceededLimit ? string.Empty : builder.ToString();
+                return true;
+            }
+
+            if (exceededLimit)
+                continue;
+            if (builder.Length >= BatchMaxLineChars)
+            {
+                exceededLimit = true;
+                continue;
+            }
+
+            builder.Append(ch);
+        }
+    }
+
     private static bool TryParseBatchLine(string line, int lineNumber, out string commandName, out string[] subArgs, out int exitCode)
     {
         commandName = string.Empty;
@@ -312,6 +372,11 @@ public static class QueryCommandRunner
             if (document.RootElement.ValueKind != JsonValueKind.Array || document.RootElement.GetArrayLength() == 0)
             {
                 Console.Error.WriteLine($"Error: batch line {lineNumber} must be a non-empty JSON string array.");
+                return false;
+            }
+            if (document.RootElement.GetArrayLength() > BatchMaxArgumentCount + 1)
+            {
+                Console.Error.WriteLine($"Error: batch line {lineNumber} must contain at most {BatchMaxArgumentCount} command arguments.");
                 return false;
             }
 
@@ -420,7 +485,7 @@ public static class QueryCommandRunner
         {
             if (options.CountOnly)
             {
-                var counts = reader.CountSearchResults(options.Query, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank);
+                var counts = reader.CountSearchResults(options.Query, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank, options.GuardFilters, options.GuardWindow);
                 var queryDiagnostics = DbReader.AnalyzeFtsQuery(options.Query, options.RawFts, options.Prefix, options.Lang);
                 if (counts.Count == 0)
                 {
@@ -448,7 +513,7 @@ public static class QueryCommandRunner
                 return CommandExitCodes.Success;
             }
 
-            var results = reader.Search(options.Query, options.Limit, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank);
+            var results = reader.Search(options.Query, options.Limit, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank, guardFilters: options.GuardFilters, guardWindow: options.GuardWindow);
             var ftsQueryDiagnostics = DbReader.AnalyzeFtsQuery(options.Query, options.RawFts, options.Prefix, options.Lang);
             if (results.Count == 0)
             {
@@ -480,31 +545,58 @@ public static class QueryCommandRunner
                 return ZeroResultExitCode(options);
             }
 
+            var displayRows = BuildSearchDisplayRows(results, options, exact);
+            if (displayRows.Count == 0)
+            {
+                if (options.Json && TryWriteEmptyFormattedResult(options, jsonOptions))
+                    return ZeroResultExitCode(options);
+                if (options.Json)
+                {
+                    if (options.JsonOutputFormat == JsonOutputFormatArray)
+                    {
+                        Console.WriteLine(JsonSerializer.Serialize(
+                            Array.Empty<CompactSearchResult>(),
+                            CliJsonSerializerContextFactory.Create(jsonOptions).CompactSearchResultArray));
+                    }
+                    else
+                    {
+                        Console.WriteLine(BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "results", query: options.Query, ftsQueryDiagnostics: ftsQueryDiagnostics, queryOptions: options, exactSubstringHint: exactSubstringHint).ToJsonString(jsonOptions));
+                        jsonDoneCount = 0;
+                    }
+                }
+                else
+                {
+                    Console.Error.WriteLine(BuildZeroResultLine("No results found", options));
+                    WriteLangHint(options.Lang, reader);
+                    WriteExactSubstringHintIfNeeded(exactSubstringHint);
+                    WriteZeroResultHints(options, reader);
+                }
+                return ZeroResultExitCode(options);
+            }
+
             if (options.Json)
             {
                 if (TryWriteFormattedLocations(
                     options,
-                    results.Select(r => new FormattedLocation(r.Path, r.StartLine, null, $"search match: {options.Query}")),
+                    displayRows.SelectMany(row => ToSearchFormattedLocations(row, options.Query, exact)),
                     jsonOptions))
                     return CommandExitCodes.Success;
                 if (options.OutputFormat == OutputFormatLsp)
                 {
-                    WriteLspLocations(results.Select(ToLspLocation), jsonOptions);
+                    WriteLspLocations(displayRows.SelectMany(row => ToSearchLspLocations(row, exact)), jsonOptions);
                     return CommandExitCodes.Success;
                 }
                 if (options.OutputFormat == OutputFormatQf)
                 {
-                    WriteQuickfix(results.Select(r => (r.Path, r.StartLine, 1, $"search match: {options.Query}")));
+                    WriteQuickfix(displayRows.SelectMany(row => ToSearchQuickfixItems(row, options.Query, exact)));
                     return CommandExitCodes.Success;
                 }
                 if (options.OutputFormat == OutputFormatSarif)
                 {
-                    WriteSarif(results.Select(r => (r.Path, r.StartLine, 1, $"search match: {options.Query}", "search")), jsonOptions);
+                    WriteSarif(displayRows.SelectMany(row => ToSearchSarifItems(row, options.Query, exact)), jsonOptions);
                     return CommandExitCodes.Success;
                 }
-                var compactResults = results
-                    .Select(r => SearchSnippetFormatter.ToCompactResult(r, options.Query, options.SnippetLines, exact, options.MaxLineWidth, r.Lang, options.SnippetFocus, exposeLiteralHighlights: exact))
-                    .ToArray();
+                var compactResults = displayRows.Select(row => row.Compact).ToArray();
                 if (exactSubstringHint != null)
                 {
                     foreach (var result in compactResults)
@@ -527,16 +619,17 @@ public static class QueryCommandRunner
             }
             else
             {
-                foreach (var r in results)
+                foreach (var row in displayRows)
                 {
+                    var r = row.Result;
                     Console.WriteLine($"{r.Path}:{r.StartLine}-{r.EndLine}{FormatSearchVisibilitySuffix(r.Visibility)}");
-                    var snippetLines = SearchSnippetFormatter.Format(r.Content, options.Query, options.SnippetLines, exact, options.MaxLineWidth, r.Lang, options.SnippetFocus);
+                    var snippetLines = row.Compact.Snippet.Split('\n', StringSplitOptions.None);
                     foreach (var line in snippetLines)
                         Console.WriteLine($"  {line}");
                     Console.WriteLine();
                 }
-                var fileCount = results.Select(r => r.Path).Distinct().Count();
-                Console.Error.WriteLine($"({results.Count} results in {fileCount} files)");
+                var fileCount = displayRows.Select(row => row.Result.Path).Distinct().Count();
+                Console.Error.WriteLine($"({displayRows.Count} results in {fileCount} files)");
                 WriteExactSubstringHintIfNeeded(exactSubstringHint);
             }
             return CommandExitCodes.Success;
@@ -546,6 +639,104 @@ public static class QueryCommandRunner
                 WriteJsonStreamDone(jsonDoneCount.Value, jsonOptions);
         });
     }
+
+    private static List<SearchDisplayRow> BuildSearchDisplayRows(List<SearchResult> results, QueryCommandOptions options, bool exact)
+    {
+        var rows = new List<SearchDisplayRow>(results.Count);
+        var seenMatchLocations = !exact || options.NoDedup ? null : new HashSet<string>(StringComparer.Ordinal);
+        foreach (var result in results)
+        {
+            var compact = SearchSnippetFormatter.ToCompactResult(
+                result,
+                options.Query!,
+                options.SnippetLines,
+                exact,
+                options.MaxLineWidth,
+                result.Lang,
+                options.SnippetFocus,
+                exposeLiteralHighlights: exact);
+
+            if (!options.RawFts && compact.MatchLines.Count == 0 && compact.Highlights.Count == 0)
+                continue;
+
+            if (seenMatchLocations != null && compact.MatchLines.Count > 0)
+            {
+                var keptLines = new List<int>(compact.MatchLines.Count);
+                foreach (var line in compact.MatchLines)
+                {
+                    var key = result.Path + "\0" + line.ToString(CultureInfo.InvariantCulture);
+                    if (seenMatchLocations.Add(key))
+                        keptLines.Add(line);
+                }
+
+                if (keptLines.Count == 0)
+                    continue;
+
+                if (keptLines.Count != compact.MatchLines.Count)
+                {
+                    var keptSet = keptLines.ToHashSet();
+                    compact.MatchLines = keptLines;
+                    compact.Highlights = compact.Highlights
+                        .Where(highlight => keptSet.Contains(highlight.Line))
+                        .ToList();
+                }
+            }
+
+            rows.Add(new SearchDisplayRow(result, compact));
+        }
+
+        return rows;
+    }
+
+    private static IEnumerable<FormattedLocation> ToSearchFormattedLocations(SearchDisplayRow row, string query, bool useMatchLines)
+    {
+        if (!useMatchLines || row.Compact.MatchLines.Count == 0)
+        {
+            yield return new FormattedLocation(row.Result.Path, row.Result.StartLine, null, $"search match: {query}");
+            yield break;
+        }
+
+        foreach (var line in row.Compact.MatchLines)
+            yield return new FormattedLocation(row.Result.Path, line, null, $"search match: {query}");
+    }
+
+    private static IEnumerable<LspLocation> ToSearchLspLocations(SearchDisplayRow row, bool useMatchLines)
+    {
+        if (!useMatchLines || row.Compact.MatchLines.Count == 0)
+        {
+            yield return ToLspLocation(row.Result);
+            yield break;
+        }
+
+        foreach (var line in row.Compact.MatchLines)
+            yield return BuildLspLocation(row.Result.Path, line, 1, line + 1, 1);
+    }
+
+    private static IEnumerable<(string Path, int Line, int Column, string Message)> ToSearchQuickfixItems(SearchDisplayRow row, string query, bool useMatchLines)
+    {
+        if (!useMatchLines || row.Compact.MatchLines.Count == 0)
+        {
+            yield return (row.Result.Path, row.Result.StartLine, 1, $"search match: {query}");
+            yield break;
+        }
+
+        foreach (var line in row.Compact.MatchLines)
+            yield return (row.Result.Path, line, 1, $"search match: {query}");
+    }
+
+    private static IEnumerable<(string Path, int Line, int Column, string Message, string RuleId)> ToSearchSarifItems(SearchDisplayRow row, string query, bool useMatchLines)
+    {
+        if (!useMatchLines || row.Compact.MatchLines.Count == 0)
+        {
+            yield return (row.Result.Path, row.Result.StartLine, 1, $"search match: {query}", "search");
+            yield break;
+        }
+
+        foreach (var line in row.Compact.MatchLines)
+            yield return (row.Result.Path, line, 1, $"search match: {query}", "search");
+    }
+
+    private sealed record SearchDisplayRow(SearchResult Result, CompactSearchResult Compact);
 
     private static void WriteJsonStreamDone(int count, JsonSerializerOptions jsonOptions)
         => Console.WriteLine(JsonSerializer.Serialize(
@@ -4936,6 +5127,8 @@ public static class QueryCommandRunner
         bool exact = false;
         bool regex = false;
         bool prefix = false;
+        var guardFilters = new List<SearchGuardFilter>();
+        var guardWindow = DbReader.DefaultSearchGuardWindow;
         List<string>? parseErrors = null;
         bool exactName = false;
         bool exactSubstring = false;
@@ -4972,6 +5165,22 @@ public static class QueryCommandRunner
             parseErrors.Add(error);
         }
 
+        void AddSearchGuardFilter(string optionName, SearchGuardRole role, SearchGuardDirection direction, string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                AddParseError(BuildMissingOptionValueError(optionName));
+                return;
+            }
+            if (value.Length > QueryLimits.MaxQueryLength)
+            {
+                AddParseError($"Error: {optionName} query too long (max {QueryLimits.MaxQueryLength} characters).");
+                return;
+            }
+
+            guardFilters.Add(new SearchGuardFilter(role, direction, value));
+        }
+
         void AddStatusCheckScopes(string rawScopes)
         {
             if (string.IsNullOrWhiteSpace(rawScopes))
@@ -4979,6 +5188,8 @@ public static class QueryCommandRunner
                 AddParseError("Error: --check scope list cannot be empty. Use --check or --check=workspace,fold,graph,issues,hotspot,csharp,sql,newer.");
                 return;
             }
+            if (!ValidateCsvBounds("--check", rawScopes, MaxStatusCheckScopesCsvLength, MaxStatusCheckScopesCsvEntries, AddParseError))
+                return;
 
             statusCheckScopes ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var rawScope in rawScopes.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
@@ -5163,6 +5374,48 @@ public static class QueryCommandRunner
                     }
                     else
                         AddParseError(queryError!);
+                    break;
+                case "--require-before":
+                    if (TryReadStringOptionValue(args, ref i, "--require-before", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var requireBeforeValue, out var requireBeforeError))
+                        AddSearchGuardFilter("--require-before", SearchGuardRole.Require, SearchGuardDirection.Before, requireBeforeValue!);
+                    else
+                        AddParseError(requireBeforeError!);
+                    break;
+                case "--require-after":
+                    if (TryReadStringOptionValue(args, ref i, "--require-after", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var requireAfterValue, out var requireAfterError))
+                        AddSearchGuardFilter("--require-after", SearchGuardRole.Require, SearchGuardDirection.After, requireAfterValue!);
+                    else
+                        AddParseError(requireAfterError!);
+                    break;
+                case "--reject-before":
+                    if (TryReadStringOptionValue(args, ref i, "--reject-before", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var rejectBeforeValue, out var rejectBeforeError))
+                        AddSearchGuardFilter("--reject-before", SearchGuardRole.Reject, SearchGuardDirection.Before, rejectBeforeValue!);
+                    else
+                        AddParseError(rejectBeforeError!);
+                    break;
+                case "--reject-after":
+                    if (TryReadStringOptionValue(args, ref i, "--reject-after", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var rejectAfterValue, out var rejectAfterError))
+                        AddSearchGuardFilter("--reject-after", SearchGuardRole.Reject, SearchGuardDirection.After, rejectAfterValue!);
+                    else
+                        AddParseError(rejectAfterError!);
+                    break;
+                case "--guard-window":
+                    if (!TryReadRawOptionValue(args, ref i, "--guard-window", inlineValue, out var guardWindowValue, out var missingGuardWindowError))
+                    {
+                        AddParseError(missingGuardWindowError!);
+                    }
+                    else if (TryParseNonNegativeInt(guardWindowValue!, "--guard-window", out var parsedGuardWindow, out var guardWindowError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--guard-window", guardWindowValue!);
+                        if (parsedGuardWindow > DbReader.MaxSearchGuardWindow)
+                            AddParseError($"Error: --guard-window must be between 0 and {DbReader.MaxSearchGuardWindow}; got {parsedGuardWindow}.");
+                        else
+                            guardWindow = parsedGuardWindow;
+                    }
+                    else
+                    {
+                        AddParseError(guardWindowError!);
+                    }
                     break;
                 case "--kind":
                     if (TryReadStringOptionValue(args, ref i, "--kind", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var kindValue, out var kindError))
@@ -5394,6 +5647,18 @@ public static class QueryCommandRunner
                         AddParseError("Error: --config is only supported by status.");
                     }
                     break;
+                case "--log-format":
+                case "--log-retain-count":
+                case "--log-max-size-mb":
+                    if (allowNamedQuery && query == null)
+                    {
+                        query = currentArg;
+                    }
+                    else
+                    {
+                        AddParseError($"Error: unsupported option: {currentArg}. Use `--` before a query literal that starts with `-`.");
+                    }
+                    break;
                 case "--path":
                     if (TryReadStringOptionValue(args, ref i, "--path", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var pathPattern, out var pathError))
                     {
@@ -5600,6 +5865,8 @@ public static class QueryCommandRunner
         }
 
         ValidateQueryPathOptionValues(userPathPatterns, excludePaths, AddParseError);
+        if (guardFilters.Count > DbReader.MaxSearchGuardFilters)
+            AddParseError($"Error: search accepts at most {DbReader.MaxSearchGuardFilters} guard filters; got {guardFilters.Count}.");
 
         if (validateDefaultLimit && !limitExplicit && defaultLimitError != null)
             AddParseError(defaultLimitError);
@@ -5657,6 +5924,8 @@ public static class QueryCommandRunner
             Exact = exact,
             Regex = regex,
             Prefix = prefix,
+            GuardFilters = guardFilters,
+            GuardWindow = guardWindow,
             ExactName = exactName,
             ExactSubstring = exactSubstring,
             CheckWorkspace = checkWorkspace,
@@ -5684,6 +5953,9 @@ public static class QueryCommandRunner
     private static List<string> ParseMapSections(string rawValue, Action<string> addParseError)
     {
         var sections = new List<string>();
+        if (!ValidateCsvBounds("--sections", rawValue, MaxMapSectionsCsvLength, MaxMapSectionsCsvEntries, addParseError))
+            return sections;
+
         foreach (var rawSection in rawValue.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
             var section = rawSection.ToLowerInvariant();
@@ -5709,15 +5981,71 @@ public static class QueryCommandRunner
         return sections.Distinct(StringComparer.Ordinal).ToList();
     }
 
+    private static bool ValidateCsvBounds(
+        string optionName,
+        string rawValue,
+        int maxLength,
+        int maxEntries,
+        Action<string> addParseError)
+    {
+        if (rawValue.Length > maxLength)
+        {
+            addParseError($"Error: {optionName} value is too long ({rawValue.Length} characters; max {maxLength}).");
+            return false;
+        }
+
+        var entries = CountCsvEntries(rawValue);
+        if (entries > maxEntries)
+        {
+            addParseError($"Error: {optionName} accepts at most {maxEntries} comma-separated entries.");
+            return false;
+        }
+
+        return true;
+    }
+
+    private static int CountCsvEntries(string rawValue)
+    {
+        if (rawValue.Length == 0)
+            return 0;
+
+        var count = 1;
+        foreach (var ch in rawValue)
+        {
+            if (ch == ',')
+                count++;
+        }
+
+        return count;
+    }
+
     private static void ValidateQueryPathOptionValues(
         IReadOnlyList<string> pathPatterns,
         IReadOnlyList<string> excludePaths,
         Action<string> addParseError)
     {
-        foreach (var pattern in pathPatterns)
-            ValidatePathGlobPattern("--path", pattern, addParseError);
-        foreach (var pattern in excludePaths)
-            ValidatePathGlobPattern("--exclude-path", pattern, addParseError);
+        ValidatePathOptionValues("--path", pathPatterns, addParseError);
+        ValidatePathOptionValues("--exclude-path", excludePaths, addParseError);
+    }
+
+    private static void ValidatePathOptionValues(
+        string optionName,
+        IReadOnlyList<string> patterns,
+        Action<string> addParseError)
+    {
+        if (patterns.Count > MaxQueryPathFilterCount)
+            addParseError($"Error: {optionName} accepts at most {MaxQueryPathFilterCount} values.");
+
+        foreach (var pattern in patterns)
+        {
+            if (pattern.Length > MaxQueryPathFilterLength)
+            {
+                addParseError($"Error: {optionName} value is too long ({pattern.Length} characters; max {MaxQueryPathFilterLength}).");
+                continue;
+            }
+
+            ValidatePathGlobPattern(optionName, pattern, addParseError);
+        }
     }
 
     private static bool TryParseJsonOutputFormat(string rawValue, out string format)
@@ -6442,6 +6770,9 @@ public static class QueryCommandRunner
 
     private static void AddVisibilityFilterValues(string optionName, string rawValue, List<string> target, Action<string> addParseError)
     {
+        if (!ValidateCsvBounds(optionName, rawValue, MaxVisibilityFilterCsvLength, MaxVisibilityFilterCsvEntries, addParseError))
+            return;
+
         var values = rawValue
             .Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
             .Select(value => value.ToLowerInvariant())
@@ -7081,6 +7412,7 @@ public static class QueryCommandRunner
         => fieldName switch
         {
             "sql_graph_contract_ready" => $"Run `{BuildSqlGraphContractRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit)}` before trusting SQL references/callers/deps/unused/hotspots.",
+            "hotspot_family_ready" => $"Run `{BuildHotspotFamilyRebuildRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit)}` to restamp authoritative hotspot families for every indexed row.",
             "csharp_symbol_name_ready" => $"Run `{BuildCSharpCanonicalNameRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit)}` to upgrade canonical C# symbol names in place.",
             "fold_ready" => $"Run `{BuildFoldBackfillCommand(options.DbPath, options.DbPathExplicit)}` to restamp folded-name columns in place, or `{BuildFoldRebuildRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit)}` for a full rebuild.",
             "csharp_metadata_target_ready" => DegradationReasonCodes.GetMetadata(status.CSharpMetadataTargetDegradedReason ?? DegradationReasonCodes.CSharpMetadataTargetNotReady).RecommendedAction,
@@ -7142,6 +7474,7 @@ public static class QueryCommandRunner
             {
                 "fold_ready" => BuildFoldBackfillCommand(options.DbPath, options.DbPathExplicit),
                 "sql_graph_contract_ready" => BuildSqlGraphContractRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit),
+                "hotspot_family_ready" => BuildHotspotFamilyRebuildRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit),
                 "csharp_symbol_name_ready" => BuildCSharpCanonicalNameRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit),
                 _ => metadata.RecommendedAction,
             },
@@ -7370,6 +7703,9 @@ public static class QueryCommandRunner
 
     private static string BuildSqlGraphContractRepairCommand(string? projectRoot, string dbPath, bool dbPathExplicit)
         => BuildReindexRepairCommand(projectRoot, dbPath, dbPathExplicit);
+
+    private static string BuildHotspotFamilyRebuildRepairCommand(string? projectRoot, string dbPath, bool dbPathExplicit)
+        => BuildReindexRepairCommand(projectRoot, dbPath, dbPathExplicit, rebuild: true);
 
     private static string BuildFoldRebuildRepairCommand(string? projectRoot, string dbPath, bool dbPathExplicit)
         => BuildReindexRepairCommand(projectRoot, dbPath, dbPathExplicit, rebuild: true);
@@ -8343,6 +8679,8 @@ public sealed class QueryCommandOptions
     public bool Exact { get; init; }
     public bool Regex { get; init; }
     public bool Prefix { get; init; }
+    public List<SearchGuardFilter> GuardFilters { get; init; } = [];
+    public int GuardWindow { get; init; } = DbReader.DefaultSearchGuardWindow;
     public bool ExactName { get; init; }
     public bool ExactSubstring { get; init; }
     public bool CheckWorkspace { get; init; }

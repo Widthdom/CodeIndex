@@ -17,6 +17,7 @@ namespace CodeIndex.Cli;
 internal static class JsonEnvelopeWrapper
 {
     internal const string EnvelopeFlag = "--json-envelope";
+    internal const int MaxCapturedOutputChars = 10 * 1024 * 1024;
 
     private static readonly HashSet<string> WrappableCommands = new(StringComparer.Ordinal)
     {
@@ -78,18 +79,51 @@ internal static class JsonEnvelopeWrapper
             : explicitDbPath!;
 
         var originalOut = Console.Out;
-        using var captured = new StringWriter();
+        using var captured = new BoundedStringWriter(MaxCapturedOutputChars);
         var stopwatch = Stopwatch.StartNew();
         int exitCode;
+        JsonEnvelopeCaptureLimitExceededException? captureLimitExceeded = null;
         try
         {
             Console.SetOut(captured);
             exitCode = runInner(innerArgs);
         }
+        catch (JsonEnvelopeCaptureLimitExceededException ex)
+        {
+            captureLimitExceeded = ex;
+            exitCode = CommandExitCodes.InvalidArgument;
+        }
         finally
         {
             stopwatch.Stop();
             Console.SetOut(originalOut);
+        }
+
+        if (captureLimitExceeded is not null)
+        {
+            var message = $"--json-envelope captured output exceeded {captureLimitExceeded.MaxChars} characters.";
+            var hint = "Reduce the result set with --limit/--top or run the command with --json for streaming NDJSON output.";
+            Console.Error.WriteLine($"Error [{CommandErrorCodes.UsageError}]: {message}");
+            Console.Error.WriteLine($"Hint: {hint}");
+            var envelopeError = new JsonObject
+            {
+                ["message"] = message,
+                ["hint"] = hint,
+                ["error_code"] = CommandErrorCodes.UsageError,
+            };
+            var overflowEnvelope = BuildEnvelope(
+                command,
+                queryNormalized,
+                resolvedDbPath,
+                dbPathExplicit,
+                appVersion,
+                stopwatch.Elapsed.TotalMilliseconds,
+                new JsonArray(),
+                exitCode,
+                envelopeError);
+
+            Console.WriteLine(overflowEnvelope.ToJsonString(jsonOptions));
+            return exitCode;
         }
 
         var raw = captured.ToString();
@@ -116,7 +150,8 @@ internal static class JsonEnvelopeWrapper
         string appVersion,
         double elapsedMs,
         JsonArray results,
-        int exitCode)
+        int exitCode,
+        JsonObject? error = null)
     {
         var metadata = new JsonObject
         {
@@ -131,6 +166,8 @@ internal static class JsonEnvelopeWrapper
 
         if (!string.IsNullOrEmpty(queryNormalized))
             metadata["query_normalized"] = queryNormalized;
+        if (error is not null)
+            metadata["error"] = error;
 
         var indexedHead = SafeReadIndexedHead(dbPath, dbPathExplicit);
         if (!string.IsNullOrEmpty(indexedHead))
@@ -258,5 +295,50 @@ internal static class JsonEnvelopeWrapper
         }
         dbPath = null;
         return false;
+    }
+
+    private sealed class BoundedStringWriter(int maxChars) : StringWriter
+    {
+        private int _writtenChars;
+
+        public override void Write(char value)
+        {
+            EnsureCapacity(1);
+            base.Write(value);
+        }
+
+        public override void Write(string? value)
+        {
+            if (value is null)
+                return;
+            EnsureCapacity(value.Length);
+            base.Write(value);
+        }
+
+        public override void Write(char[]? buffer, int index, int count)
+        {
+            if (buffer is null)
+                return;
+            EnsureCapacity(count);
+            base.Write(buffer, index, count);
+        }
+
+        public override void Write(ReadOnlySpan<char> buffer)
+        {
+            EnsureCapacity(buffer.Length);
+            base.Write(buffer);
+        }
+
+        private void EnsureCapacity(int charCount)
+        {
+            if (charCount < 0 || _writtenChars > maxChars - charCount)
+                throw new JsonEnvelopeCaptureLimitExceededException(maxChars);
+            _writtenChars += charCount;
+        }
+    }
+
+    private sealed class JsonEnvelopeCaptureLimitExceededException(int maxChars) : Exception
+    {
+        public int MaxChars { get; } = maxChars;
     }
 }

@@ -2883,6 +2883,55 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void McpToolFilter_Parse_OverlongAllowListFailsClosed_Issue2905()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalError = Console.Error;
+            using var stderr = new StringWriter();
+            try
+            {
+                Console.SetError(stderr);
+                var filter = McpToolFilter.Parse(new string('s', McpToolFilter.MaxToolFilterCsvLength + 1), null);
+
+                foreach (var name in McpToolFilter.KnownToolNames)
+                    Assert.False(filter.IsEnabled(name), $"{name} should be disabled when an invalid allowlist is supplied");
+                Assert.Contains(McpToolFilter.AllowEnvVarName, stderr.ToString());
+                Assert.Contains("was rejected", stderr.ToString());
+            }
+            finally
+            {
+                Console.SetError(originalError);
+            }
+        }
+    }
+
+    [Fact]
+    public void McpToolFilter_Parse_TooManyDenyEntriesAreRejected_Issue2905()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalError = Console.Error;
+            using var stderr = new StringWriter();
+            try
+            {
+                Console.SetError(stderr);
+                var tooMany = string.Join(',', Enumerable.Repeat("index", McpToolFilter.MaxToolFilterCsvEntries + 1));
+                var filter = McpToolFilter.Parse(null, tooMany);
+
+                Assert.True(filter.IsEnabled("index"));
+                Assert.Contains(McpToolFilter.DenyEnvVarName, stderr.ToString());
+                Assert.Contains("accepts at most", stderr.ToString());
+                Assert.Contains("was rejected", stderr.ToString());
+            }
+            finally
+            {
+                Console.SetError(originalError);
+            }
+        }
+    }
+
+    [Fact]
     public void McpToolFilter_Parse_AllowWinsOverDeny()
     {
         var filter = McpToolFilter.Parse("search,index", "index");
@@ -3078,6 +3127,81 @@ public class McpServerTests : IDisposable
         Assert.NotNull(structured["results"]![0]!["matchLines"]);
         Assert.NotNull(structured["results"]![0]!["highlights"]);
         Assert.Null(structured["results"]![0]!["content"]);
+    }
+
+    [Fact]
+    public void ToolsCall_Search_GuardFiltersReturnEvidence_Issue2852()
+    {
+        InsertIndexedFile(
+            "src/guard-mcp.cs",
+            "csharp",
+            """
+            using System.IO;
+
+            public class GuardMcp
+            {
+                public void Atomic(string path, string tempPath)
+                {
+                    using var stream = new FileStream(path, FileMode.Create);
+                    File.Move(tempPath, path, overwrite: true);
+                }
+
+                public void NonAtomic(string path)
+                {
+                    using var stream = new FileStream(path, FileMode.Create);
+                }
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"FileMode.Create","exactSubstring":true,"requireAfter":"File.Move","guardWindow":2}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(1, structured["count"]!.GetValue<int>());
+        var result = structured["results"]![0]!;
+        Assert.Equal("src/guard-mcp.cs", result["path"]!.GetValue<string>());
+        var evidence = Assert.Single(result["guardEvidence"]!.AsArray());
+        Assert.Equal("require", evidence!["role"]!.GetValue<string>());
+        Assert.Equal("after", evidence["direction"]!.GetValue<string>());
+        Assert.Equal("File.Move", evidence["query"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Search_GuardPaginationResumesWithinSplitChunk_Issue2852()
+    {
+        InsertIndexedFile(
+            "src/guard-paged.cs",
+            "csharp",
+            """
+            using System.IO;
+
+            public class GuardPaged
+            {
+                public void First(string path)
+                {
+                    var one = File.ReadAllText(path);
+                }
+
+                public void Second(string path)
+                {
+                    var two = File.ReadAllText(path);
+                }
+            }
+            """);
+
+        var firstRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"File.ReadAllText","exactSubstring":true,"rejectBefore":"Length","guardWindow":1,"limit":1}}}""")!;
+        var firstResponse = _server.HandleMessage(firstRequest)!;
+        var firstStructured = firstResponse["result"]!["structuredContent"]!;
+        var firstSnippet = firstStructured["results"]![0]!["snippet"]!.GetValue<string>();
+        var cursor = firstStructured["next_cursor"]!.GetValue<string>();
+
+        var secondRequest = JsonNode.Parse("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"search\",\"arguments\":{\"query\":\"File.ReadAllText\",\"exactSubstring\":true,\"rejectBefore\":\"Length\",\"guardWindow\":1,\"limit\":1,\"cursor\":\"" + cursor + "\"}}}")!;
+        var secondResponse = _server.HandleMessage(secondRequest)!;
+        var secondStructured = secondResponse["result"]!["structuredContent"]!;
+        var secondSnippet = secondStructured["results"]![0]!["snippet"]!.GetValue<string>();
+
+        Assert.Contains("one", firstSnippet);
+        Assert.Contains("two", secondSnippet);
     }
 
     [Fact]
@@ -5194,6 +5318,166 @@ public class McpServerTests : IDisposable
         Assert.Equal("response_too_large", response["error"]!["data"]!["reason"]!.GetValue<string>());
         Assert.Equal(256, response["error"]!["data"]!["limit_bytes"]!.GetValue<int>());
         Assert.True(response["error"]!["data"]!["actual_bytes"]!.GetValue<int>() > 256);
+        Assert.False(response["error"]!["data"]!["actual_bytes_exact"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public void ResponseLimitSerializer_StopsBeforeFullStringMaterialization_Issue2860()
+    {
+        var payload = new JsonObject
+        {
+            ["value"] = new string('x', 10_000),
+        };
+
+        var withinLimit = _server.TrySerializeJsonNodeWithinByteLimitForTests(payload, 256, out var serialized, out var bytesWritten);
+
+        Assert.False(withinLimit);
+        Assert.Null(serialized);
+        Assert.True(bytesWritten > 256);
+        Assert.True(bytesWritten < 10_000);
+    }
+
+    [Fact]
+    public void ResponseLimitSerializer_ReturnsCapturedJsonWhenWithinLimit_Issue2860()
+    {
+        var payload = new JsonObject
+        {
+            ["value"] = "ok",
+        };
+
+        var withinLimit = _server.TrySerializeJsonNodeWithinByteLimitForTests(payload, 256, out var serialized, out var bytesWritten);
+
+        Assert.True(withinLimit);
+        Assert.NotNull(serialized);
+        Assert.Equal(Encoding.UTF8.GetByteCount(serialized), bytesWritten);
+        using var parsed = JsonDocument.Parse(serialized);
+        Assert.Equal("ok", parsed.RootElement.GetProperty("value").GetString());
+    }
+
+    [Fact]
+    public void ToolsCall_Status_ReportsResponseByteLimitCaps()
+    {
+        using var env = EnvironmentVariableScope.Capture(
+            "CDIDX_MCP_RESPONSE_MAX_BYTES",
+            "CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES");
+        env.Set("CDIDX_MCP_RESPONSE_MAX_BYTES", int.MaxValue.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        env.Set("CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES", int.MaxValue.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+        using var server = new McpServer(_dbPath, "1.0", dbPathExplicit: true);
+        var response = server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status"}}""")!)!;
+
+        var mcp = response["result"]!["structuredContent"]!["mcp"]!;
+        var limits = mcp["limits"]!;
+        Assert.Equal(McpServer.MaxConfiguredResponseBytes, limits["max_response_bytes"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxConfiguredResponseBytes, limits["max_configured_response_bytes"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxBatchQueryResponseByteLimit, limits["batch_response_bytes"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxBatchQueryResponseByteLimit, limits["max_batch_response_bytes"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsList_ReferencesOffsetSchemaAdvertisesCap()
+    {
+        var response = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!)!;
+
+        var tools = response["result"]!["tools"]!.AsArray();
+        var references = tools.First(tool => tool!["name"]!.GetValue<string>() == "references")!;
+        var offset = references["inputSchema"]!["properties"]!["offset"]!;
+        Assert.Equal(0, offset["minimum"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxMcpPaginationOffset, offset["maximum"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsCall_References_ClampsTooLargeOffset()
+    {
+        InsertIndexedFile(
+            "src/offset-clamp.cs",
+            "csharp",
+            """
+            public class OffsetClampCaller { public void Hit(App app) { app.Run(); } }
+            """);
+
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "references",
+                ["arguments"] = new JsonObject
+                {
+                    ["query"] = "Run",
+                    ["lang"] = "csharp",
+                    ["offset"] = McpServer.MaxMcpPaginationOffset + 1,
+                    ["limit"] = 1,
+                },
+            },
+        };
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(McpServer.MaxMcpPaginationOffset, structured["offset"]!.GetValue<int>());
+        Assert.True(structured["total"]!.GetValue<int>() > 0);
+    }
+
+    [Fact]
+    public void ToolsCall_Status_ReportsPaginationOffsetCap()
+    {
+        var response = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status"}}""")!)!;
+
+        var limits = response["result"]!["structuredContent"]!["mcp"]!["limits"]!;
+        Assert.Equal(McpServer.MaxMcpPaginationOffset, limits["max_pagination_offset"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void Constructor_InvalidKeepAliveEnvironment_DoesNotThrow()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_MCP_KEEP_ALIVE_INTERVAL_S");
+        env.Set("CDIDX_MCP_KEEP_ALIVE_INTERVAL_S", "Infinity");
+
+        using var server = new McpServer(_dbPath, "1.0", dbPathExplicit: true);
+        var response = server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"ping"}""")!)!;
+
+        Assert.Equal("ok", response["result"]!["status"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Status_ReportsKeepAliveIntervalBounds()
+    {
+        var response = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status"}}""")!)!;
+
+        var limits = response["result"]!["structuredContent"]!["mcp"]!["limits"]!;
+        Assert.Equal(McpServer.MinKeepAliveIntervalSeconds, limits["keep_alive_min_interval_s"]!.GetValue<double>());
+        Assert.Equal(McpServer.MaxKeepAliveIntervalSeconds, limits["keep_alive_max_interval_s"]!.GetValue<double>());
+    }
+
+    [Fact]
+    public void ToolsCall_Status_ReportsEffectiveRateLimitCaps()
+    {
+        using var env = EnvironmentVariableScope.Capture(
+            "CDIDX_MCP_RATE_LIMIT_RPS",
+            "CDIDX_MCP_RATE_LIMIT_BURST");
+        env.Set("CDIDX_MCP_RATE_LIMIT_RPS", "1000000");
+        env.Set("CDIDX_MCP_RATE_LIMIT_BURST", "1000000");
+
+        using var server = new McpServer(_dbPath, "1.0", dbPathExplicit: true);
+        var response = server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status"}}""")!)!;
+
+        var mcp = response["result"]!["structuredContent"]!["mcp"]!;
+        var limits = mcp["limits"]!;
+        Assert.Equal(RateLimiterOptions.MaxRefillTokensPerSecond, limits["rate_limit_max_rps"]!.GetValue<double>());
+        Assert.Equal(RateLimiterOptions.MaxBurstCapacity, limits["rate_limit_max_burst"]!.GetValue<double>());
+
+        var rateLimit = mcp["rate_limit"]!;
+        Assert.True(rateLimit["enabled"]!.GetValue<bool>());
+        Assert.Equal(RateLimiterOptions.MaxRefillTokensPerSecond, rateLimit["rps"]!.GetValue<double>());
+        Assert.Equal(RateLimiterOptions.MaxBurstCapacity, rateLimit["burst"]!.GetValue<double>());
     }
 
     [Fact]
@@ -6644,6 +6928,37 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_BatchQuery_SanitizesSlotExceptionMessage_Issue2849()
+    {
+        const string secret = "SECRET_BATCH_SLOT_2849";
+        var corruptDbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_corrupt_{Guid.NewGuid():N}.db");
+        File.WriteAllText(corruptDbPath, $"not a sqlite database {secret}");
+        var previous = Environment.GetEnvironmentVariable(McpServer.DebugEnvironmentVariable);
+        try
+        {
+            Environment.SetEnvironmentVariable(McpServer.DebugEnvironmentVariable, null);
+            using var server = new McpServer(corruptDbPath, ConsoleUi.LoadVersion(), dbPathExplicit: true);
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[{"tool":"status"}]}}}""")!;
+
+            var response = server.HandleMessage(request)!;
+
+            var structured = response["result"]!["structuredContent"]!;
+            Assert.Equal(1, structured["failure_count"]!.GetValue<int>());
+            var slot = structured["results"]!.AsArray().Single()!;
+            var error = slot["error"]!.GetValue<string>();
+            Assert.Equal("Tool 'status' failed. See cdidx server stderr for details.", error);
+            Assert.DoesNotContain(secret, error);
+            Assert.DoesNotContain("file is not a database", error, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(McpErrorEnvelope.CategoryIndexCorrupted, slot["category"]!.GetValue<string>());
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(McpServer.DebugEnvironmentVariable, previous);
+            DeleteFileRobust(corruptDbPath);
+        }
+    }
+
+    [Fact]
     public void ToolsCall_BatchQuery_RejectsTypeMismatchedInnerArguments_Issue1615()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[{"tool":"search","arguments":{"query":"App","limit":"twenty"}},{"tool":"search","arguments":{"query":"App","format":false}},{"tool":"ping"}]}}}""")!;
@@ -6767,6 +7082,19 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_BatchQuery_ClampsTooLargeResponseLimitEnvironment()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES");
+        env.Set("CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES", int.MaxValue.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[{"tool":"ping"}]}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var metadata = response["result"]!["structuredContent"]!["metadata"]!;
+        Assert.Equal(McpServer.MaxBatchQueryResponseByteLimit, metadata["response_byte_limit"]!.GetValue<int>());
+    }
+
+    [Fact]
     public void ApplyExcerptOutputBudget_TruncatesAtLineBoundary_Issue1605()
     {
         var payload = new JsonObject
@@ -6885,6 +7213,52 @@ public class McpServerTests : IDisposable
         var response = _server.HandleMessage(request)!;
 
         Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+    }
+
+    [Theory]
+    [InlineData("db")]
+    [InlineData("parallelism")]
+    [InlineData("files")]
+    [InlineData("commits")]
+    [InlineData("changedBetween")]
+    [InlineData("dryRun")]
+    [InlineData("optimize")]
+    public void ToolsCall_Index_RejectsUnsupportedArguments_Issue2848(string argumentName)
+    {
+        var arguments = new JsonObject
+        {
+            ["path"] = ".",
+            [argumentName] = argumentName switch
+            {
+                "db" => JsonValue.Create("alternate.db"),
+                "parallelism" => JsonValue.Create(2),
+                "files" => new JsonArray(JsonValue.Create("src/app.cs")),
+                "commits" => new JsonArray(JsonValue.Create("HEAD")),
+                "changedBetween" => new JsonArray(JsonValue.Create("HEAD~1"), JsonValue.Create("HEAD")),
+                "dryRun" => JsonValue.Create(true),
+                "optimize" => JsonValue.Create(true),
+                _ => throw new ArgumentOutOfRangeException(nameof(argumentName), argumentName, null),
+            },
+        };
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "index",
+                ["arguments"] = arguments,
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+        var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains($"Unknown argument '{argumentName}' for tool 'index'.", text);
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(argumentName, structured["unknown_argument"]!.GetValue<string>());
     }
 
     [Fact]

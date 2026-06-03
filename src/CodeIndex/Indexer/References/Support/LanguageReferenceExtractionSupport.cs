@@ -150,6 +150,11 @@ internal static class LanguageReferenceExtractionSupport
     private static readonly Regex CTaggedVaArgTypeRegex = new(
         @"\b(?:va_arg|__builtin_va_arg)\s*\(\s*[^,;{}]+,\s*(?<type>(?:struct|enum|union)\s+[A-Za-z_]\w*)\s*(?:\*+\s*)?\)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly string[] CVaArgFunctionNames =
+    {
+        "va_arg",
+        "__builtin_va_arg",
+    };
     private static readonly Regex CppTypeOperandOperatorRegex = new(
         @"\b(?:sizeof|alignof)\s*\(\s*(?<type>(?:(?:const|volatile|typename|class|struct|enum)\s+)*(?:[A-Z_]\w*|[A-Za-z_]\w*\s*::\s*[A-Za-z_]\w*)(?:\s*<[^;{}]+>)?(?:\s*[*&])*)\s*\)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -1606,6 +1611,8 @@ internal static class LanguageReferenceExtractionSupport
                 var group = match.Groups["type"];
                 ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
             }
+
+            EmitCVaArgTypeOperandReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn, language);
         }
 
         foreach (Match match in CppTypeOperandOperatorRegex.Matches(preparedLine))
@@ -1771,6 +1778,160 @@ internal static class LanguageReferenceExtractionSupport
             var start = group.Index + group.Value.IndexOf(expression, StringComparison.Ordinal);
             ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, expression, start, context, lineNumber, resolveContainerForColumn(start), language);
         }
+    }
+
+    private static void EmitCVaArgTypeOperandReferences(
+        string line,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn,
+        string language)
+    {
+        foreach (var functionName in CVaArgFunctionNames)
+        {
+            var searchStart = 0;
+            while (searchStart < line.Length)
+            {
+                var functionIndex = line.IndexOf(functionName, searchStart, StringComparison.Ordinal);
+                if (functionIndex < 0)
+                    break;
+
+                searchStart = functionIndex + functionName.Length;
+                if (!IsIdentifierAt(line, functionIndex, functionName))
+                    continue;
+
+                var open = SkipWhitespace(line, functionIndex + functionName.Length);
+                if (open >= line.Length || line[open] != '(')
+                    continue;
+
+                var close = ReferenceExtractor.FindMatchingChar(line, open, '(', ')');
+                if (close < 0)
+                    continue;
+
+                var argumentList = line.Substring(open + 1, close - open - 1);
+                var arguments = SplitTopLevelCArgumentSpans(argumentList);
+                if (arguments.Count < 2)
+                    continue;
+
+                var typeArgument = arguments[1];
+                if (typeArgument.Length <= 0)
+                    continue;
+
+                var rawType = argumentList.Substring(typeArgument.Start, typeArgument.Length);
+                var expression = rawType.Trim();
+                if (expression.Length == 0 || !LooksLikeCVaArgTypeOperand(expression))
+                    continue;
+
+                var trimStart = rawType.IndexOf(expression, StringComparison.Ordinal);
+                var absoluteStart = open + 1 + typeArgument.Start + Math.Max(0, trimStart);
+                ReferenceExtractor.AddTypeExpressionSegments(
+                    references,
+                    seen,
+                    fileId,
+                    expression,
+                    absoluteStart,
+                    context,
+                    lineNumber,
+                    resolveContainerForColumn(absoluteStart),
+                    language);
+            }
+        }
+    }
+
+    private static List<(int Start, int Length)> SplitTopLevelCArgumentSpans(string text)
+    {
+        var spans = new List<(int Start, int Length)>();
+        int parenDepth = 0;
+        int squareDepth = 0;
+        int braceDepth = 0;
+        int start = 0;
+
+        for (int i = 0; i < text.Length; i++)
+        {
+            switch (text[i])
+            {
+                case '(':
+                    parenDepth++;
+                    break;
+                case ')':
+                    if (parenDepth > 0)
+                        parenDepth--;
+                    break;
+                case '[':
+                    squareDepth++;
+                    break;
+                case ']':
+                    if (squareDepth > 0)
+                        squareDepth--;
+                    break;
+                case '{':
+                    braceDepth++;
+                    break;
+                case '}':
+                    if (braceDepth > 0)
+                        braceDepth--;
+                    break;
+                case ',' when parenDepth == 0 && squareDepth == 0 && braceDepth == 0:
+                    spans.Add((start, i - start));
+                    start = i + 1;
+                    break;
+            }
+        }
+
+        spans.Add((start, text.Length - start));
+        return spans;
+    }
+
+    private static bool LooksLikeCVaArgTypeOperand(string expression)
+    {
+        var cursor = SkipLeadingCTypeQualifiers(expression, 0);
+        if (cursor >= expression.Length)
+            return false;
+
+        foreach (var keyword in new[] { "struct", "enum", "union" })
+        {
+            if (StartsWithKeyword(expression, cursor, keyword))
+            {
+                cursor = SkipWhitespace(expression, cursor + keyword.Length);
+                return cursor < expression.Length && IsIdentifierStart(expression[cursor]);
+            }
+        }
+
+        if (!IsIdentifierStart(expression[cursor]))
+            return false;
+
+        var nameStart = cursor;
+        cursor++;
+        while (cursor < expression.Length && IsSimpleIdentifierPart(expression[cursor]))
+            cursor++;
+
+        return expression.AsSpan(nameStart, cursor - nameStart).EndsWith("_t", StringComparison.Ordinal);
+    }
+
+    private static int SkipLeadingCTypeQualifiers(string expression, int cursor)
+    {
+        while (cursor < expression.Length)
+        {
+            cursor = SkipWhitespace(expression, cursor);
+            var next = cursor;
+            if (StartsWithKeyword(expression, cursor, "const"))
+                next += "const".Length;
+            else if (StartsWithKeyword(expression, cursor, "volatile"))
+                next += "volatile".Length;
+            else if (StartsWithKeyword(expression, cursor, "restrict"))
+                next += "restrict".Length;
+            else if (StartsWithKeyword(expression, cursor, "_Atomic"))
+                next += "_Atomic".Length;
+            else
+                return cursor;
+
+            cursor = next;
+        }
+
+        return cursor;
     }
 
     private static void EmitGoTypeReferences(

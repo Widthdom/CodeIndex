@@ -20,6 +20,7 @@ namespace CodeIndex.Mcp;
 public partial class McpServer
 {
     private const int DefaultBatchQueryResponseByteLimit = MaxLineByteLength;
+    internal const int MaxBatchQueryResponseByteLimit = 10 * 1024 * 1024;
     private const int DefaultExcerptOutputByteLimit = MaxLineByteLength;
     private const string BatchQueryResponseByteLimitEnvVar = "CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES";
     internal const int MaxMcpArrayFilterCount = 100;
@@ -291,7 +292,7 @@ public partial class McpServer
     private static int ClampLimit(int limit) => Math.Clamp(limit, 1, MaxLimit);
 
     private static int ReadOffset(JsonNode? args)
-        => Math.Max(0, args?["offset"]?.GetValue<int>() ?? 0);
+        => Math.Clamp(args?["offset"]?.GetValue<int>() ?? 0, 0, MaxMcpPaginationOffset);
 
     private static string ReadResponseFormat(JsonNode? args)
         => args?["format"]?.GetValue<string>()?.Trim().ToLowerInvariant() ?? "full";
@@ -406,6 +407,71 @@ public partial class McpServer
             : [];
     }
 
+    private JsonNode? TryReadStringOrStringList(JsonNode? id, JsonNode? args, string propertyName, out List<string> values)
+    {
+        values = [];
+        var node = args?[propertyName];
+        if (node is null)
+            return null;
+
+        if (node is JsonValue singleValue && singleValue.TryGetValue<string>(out var singleText))
+        {
+            values.Add(singleText);
+            return null;
+        }
+
+        if (node is JsonArray array)
+        {
+            foreach (var item in array)
+            {
+                if (item is not JsonValue value || !value.TryGetValue<string>(out var text))
+                    return CreateToolErrorResponse(id, $"'{propertyName}' entries must be strings.");
+                values.Add(text);
+            }
+            return null;
+        }
+
+        return CreateToolErrorResponse(id, $"'{propertyName}' must be a string or string array.");
+    }
+
+    private JsonNode? TryReadSearchGuardFilters(JsonNode? id, JsonNode? args, out List<SearchGuardFilter> filters)
+    {
+        filters = [];
+        var collected = new List<SearchGuardFilter>();
+
+        JsonNode? AddFilters(string propertyName, SearchGuardRole role, SearchGuardDirection direction)
+        {
+            if (TryReadStringOrStringList(id, args, propertyName, out var values) is JsonNode readError)
+                return readError;
+
+            foreach (var value in values)
+            {
+                if (string.IsNullOrWhiteSpace(value))
+                    return CreateToolErrorResponse(id, $"'{propertyName}' entries must be non-empty strings.");
+                if (value.Length > QueryLimits.MaxQueryLength)
+                    return CreateToolErrorResponse(id, $"'{propertyName}' query too long (max {QueryLimits.MaxQueryLength} characters).");
+
+                collected.Add(new SearchGuardFilter(role, direction, value));
+            }
+
+            return null;
+        }
+
+        if (AddFilters("requireBefore", SearchGuardRole.Require, SearchGuardDirection.Before) is JsonNode requireBeforeError)
+            return requireBeforeError;
+        if (AddFilters("requireAfter", SearchGuardRole.Require, SearchGuardDirection.After) is JsonNode requireAfterError)
+            return requireAfterError;
+        if (AddFilters("rejectBefore", SearchGuardRole.Reject, SearchGuardDirection.Before) is JsonNode rejectBeforeError)
+            return rejectBeforeError;
+        if (AddFilters("rejectAfter", SearchGuardRole.Reject, SearchGuardDirection.After) is JsonNode rejectAfterError)
+            return rejectAfterError;
+
+        filters = collected;
+        return filters.Count > DbReader.MaxSearchGuardFilters
+            ? CreateToolErrorResponse(id, $"search accepts at most {DbReader.MaxSearchGuardFilters} guard filters; got {filters.Count}.")
+            : null;
+    }
+
     private static JsonObject? ValidateCommonListArguments(JsonNode? args)
     {
         foreach (var propertyName in new[] { "path", "project", "excludePaths", "names" })
@@ -494,10 +560,11 @@ public partial class McpServer
         {
             "limit" or "offset" or "snippetLines" or "maxLineWidth" or "before" or "after" or
                 "focusLine" or "focusColumn" or "focusLength" or "startLine" or "endLine" or
-                "maxHops" or "maxDepth" or "depth" or "parallelism" or "maxFileBytes" => "integer",
+                "maxHops" or "maxDepth" or "depth" or "parallelism" or "maxFileBytes" or "guardWindow" => "integer",
             "excludeTests" or "includeGenerated" or "rawQuery" or "noDedup" or "exactSubstring" or
                 "exactName" or "exact" or "prefix" or "countOnly" or "includeBody" or "lsp_compatible" or
                 "regex" or "withPaths" or "rebuild" or "dryRun" or "dry_run" or "force" or "optimize" => "boolean",
+            "requireBefore" or "requireAfter" or "rejectBefore" or "rejectAfter" => "string_or_array",
             "query" or "lang" or "kind" or "format" or "rankBy" or "since" or "path" or "project" or
                 "solution" or "symbol" or "direction" or "groupBy" or "category" or "language" or
                 "description" or "context" or "toolInvocationContext" or "db" => "string",
@@ -516,6 +583,7 @@ public partial class McpServer
         "integer" => node is JsonValue value && value.TryGetValue<int>(out _),
         "boolean" => node is JsonValue value && value.TryGetValue<bool>(out _),
         "string" => node is JsonValue value && value.TryGetValue<string>(out _),
+        "string_or_array" => node is JsonArray || node is JsonValue value && value.TryGetValue<string>(out _),
         "array" => node is JsonArray,
         _ => true,
     };
@@ -548,7 +616,7 @@ public partial class McpServer
 
     private static IReadOnlySet<string> GetAllowedToolArguments(string toolName) => toolName switch
     {
-        "search" => new HashSet<string>(StringComparer.Ordinal) { "query", "limit", "lang", "snippetLines", "maxLineWidth", "rawQuery", "cursor", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "noDedup", "exactSubstring", "exact", "prefix", "countOnly", "format", "project", "solution" },
+        "search" => new HashSet<string>(StringComparer.Ordinal) { "query", "limit", "lang", "snippetLines", "maxLineWidth", "rawQuery", "cursor", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "noDedup", "exactSubstring", "exact", "prefix", "requireBefore", "requireAfter", "rejectBefore", "rejectAfter", "guardWindow", "countOnly", "format", "project", "solution" },
         "definition" => new HashSet<string>(StringComparer.Ordinal) { "query", "kind", "lang", "limit", "includeBody", "lsp_compatible", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "exactName", "exact", "format", "project", "solution" },
         "references" => new HashSet<string>(StringComparer.Ordinal) { "query", "kind", "lang", "limit", "offset", "maxLineWidth", "lsp_compatible", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "countOnly", "format", "project", "solution" },
         "callers" or "callees" => new HashSet<string>(StringComparer.Ordinal) { "query", "kind", "rankBy", "lang", "limit", "offset", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "countOnly", "format", "project", "solution" },
@@ -565,7 +633,7 @@ public partial class McpServer
         "validate" => new HashSet<string>(StringComparer.Ordinal) { "path", "lang", "limit", "excludePaths", "excludeTests", "project", "solution" },
         "unused_symbols" => new HashSet<string>(StringComparer.Ordinal) { "kind", "lang", "limit", "path", "excludePaths", "excludeTests", "project", "solution" },
         "symbol_hotspots" => new HashSet<string>(StringComparer.Ordinal) { "kind", "lang", "limit", "groupBy", "path", "excludePaths", "excludeTests", "project", "solution" },
-        "index" => new HashSet<string>(StringComparer.Ordinal) { "path", "db", "rebuild", "parallelism", "maxFileBytes", "files", "commits", "changedBetween", "dryRun", "optimize" },
+        "index" => new HashSet<string>(StringComparer.Ordinal) { "path", "rebuild", "maxFileBytes" },
         "backfill_fold" => new HashSet<string>(StringComparer.Ordinal) { "dry_run", "dryRun", "force" },
         "suggest_improvement" => new HashSet<string>(StringComparer.Ordinal) { "category", "language", "description", "context", "toolInvocationContext", "evidencePaths", "evidence_paths" },
         _ => new HashSet<string>(StringComparer.Ordinal),
@@ -998,13 +1066,18 @@ public partial class McpServer
         var prefix = args?["prefix"]?.GetValue<bool>() ?? false;
         if (prefix && exact)
             return CreateToolErrorResponse(id, "'prefix' cannot be combined with 'exact' / 'exactSubstring' (exact uses instr(), not FTS5 prefix phrases).");
+        if (TryReadSearchGuardFilters(id, args, out var guardFilters) is JsonNode guardError)
+            return guardError;
+        var guardWindow = args?["guardWindow"]?.GetValue<int>() ?? DbReader.DefaultSearchGuardWindow;
+        if (guardWindow < 0 || guardWindow > DbReader.MaxSearchGuardWindow)
+            return CreateToolErrorResponse(id, $"'guardWindow' must be between 0 and {DbReader.MaxSearchGuardWindow}; got {guardWindow}.");
         var suggestExactSubstring = SearchQueryAdvisor.ShouldSuggestExactSubstring(query, rawQuery, exact, prefix);
 
         return WithDbReader(id, args, reader =>
         {
             if (countOnly)
             {
-                var countResults = reader.Search(query, MaxLimit, lang, rawQuery, pathPatterns, excludePaths, excludeTests, deduplicate, since, exact, prefix);
+                var countResults = reader.Search(query, MaxLimit, lang, rawQuery, pathPatterns, excludePaths, excludeTests, deduplicate, since, exact, prefix, guardFilters: guardFilters, guardWindow: guardWindow);
                 var truncatedCount = countResults.Count >= MaxLimit;
                 var payload = BuildCountOnlyPayload(countResults.Count, truncatedCount ? null : countResults.Count, truncatedCount, countResults, result => result.Path);
                 payload["query"] = query;
@@ -1019,7 +1092,7 @@ public partial class McpServer
                 return CreateToolResult(id, $"Counted {countResults.Count} search result(s).", payload);
             }
 
-            var results = reader.Search(query, FetchLimitForEnvelope(limit), lang, rawQuery, pathPatterns, excludePaths, excludeTests, deduplicate, since, exact, prefix, cursor: cursor);
+            var results = reader.Search(query, FetchLimitForEnvelope(limit), lang, rawQuery, pathPatterns, excludePaths, excludeTests, deduplicate, since, exact, prefix, cursor: cursor, guardFilters: guardFilters, guardWindow: guardWindow);
             var ftsDiagnostics = DbReader.AnalyzeFtsQuery(query, rawQuery, prefix, lang);
             var truncated = TrimToRequestedLimit(results, limit);
             if (results.Count == 0)
@@ -1975,9 +2048,23 @@ public partial class McpServer
                     ["max_request_characters"] = MaxLineCharacterCount,
                     ["max_request_bytes"] = MaxLineByteLength,
                     ["max_response_bytes"] = GetMaxResponseBytes(),
+                    ["max_configured_response_bytes"] = MaxConfiguredResponseBytes,
+                    ["batch_response_bytes"] = GetBatchQueryResponseByteLimit(),
+                    ["max_batch_response_bytes"] = MaxBatchQueryResponseByteLimit,
+                    ["max_pagination_offset"] = MaxMcpPaginationOffset,
                     ["max_json_depth"] = MaxJsonDepth,
                     ["max_batch_requests"] = MaxBatchRequestCount,
-                }
+                    ["keep_alive_min_interval_s"] = MinKeepAliveIntervalSeconds,
+                    ["keep_alive_max_interval_s"] = MaxKeepAliveIntervalSeconds,
+                    ["rate_limit_max_rps"] = RateLimiterOptions.MaxRefillTokensPerSecond,
+                    ["rate_limit_max_burst"] = RateLimiterOptions.MaxBurstCapacity,
+                },
+                ["rate_limit"] = new JsonObject
+                {
+                    ["enabled"] = RateLimiter.Options.IsEnabled,
+                    ["rps"] = RateLimiter.Options.RefillTokensPerSecond,
+                    ["burst"] = RateLimiter.Options.BurstCapacity,
+                },
             };
             return CreateToolResult(id, "Database stats returned.", structured);
         });
@@ -2642,16 +2729,16 @@ public partial class McpServer
             }
             catch (Exception ex)
             {
-                // #1581: classify the exception so the slot carries the same `category`
-                // envelope as a standalone tools/call would. The wire message stays the raw
-                // ex.Message — batch_query slot errors did not pass through the #1530
-                // sanitizer, so keeping it is unchanged behavior; the classification is purely
-                // additive metadata that lets clients branch on retry-safe failures.
-                // #1581: 例外をカテゴリに分類して、独立した tools/call 呼び出しと同じ
-                // envelope を batch_query スロットでも提供する。`ex.Message` の取り扱いは
-                // #1530 サニタイザを通っていない既存挙動を維持し、追加メタデータのみを載せる。
+                // #2849: classify and sanitize slot exceptions the same way standalone
+                // tools/call does, so bound values, paths, and SQL/content snippets stay
+                // in stderr instead of the batch_query response.
+                DeferFrameLog(() =>
+                {
+                    WriteMcpLogLine(BuildToolErrorLog(toolName, ex.Message));
+                    Database.DbDebug.DumpToStderr(ex);
+                });
                 var classification = McpErrorEnvelope.ClassifyException(ex);
-                AppendSlotError(requestIndex, toolName, toolArgs, slotStopwatch, ex.Message,
+                AppendSlotError(requestIndex, toolName, toolArgs, slotStopwatch, BuildSanitizedToolErrorMessage(toolName, ex),
                     category: classification.Category,
                     suggestion: classification.Suggestion,
                     retrySafe: classification.RetrySafe);
@@ -2705,7 +2792,7 @@ public partial class McpServer
             }
 
             summary = BuildSummary();
-            estimatedResponseBytes = EstimateJsonUtf8Bytes(CreateToolResult(id, summary, payload.DeepClone()));
+            estimatedResponseBytes = EstimateJsonUtf8Bytes(CreateToolResult(id, summary, payload.DeepClone()), responseByteLimit);
             if (estimatedResponseBytes <= responseByteLimit)
                 break;
             if (resultsArray.Count > 0)
@@ -2734,15 +2821,17 @@ public partial class McpServer
     }
 
     private static int GetBatchQueryResponseByteLimit()
-    {
-        var configured = Environment.GetEnvironmentVariable(BatchQueryResponseByteLimitEnvVar);
-        if (int.TryParse(configured, out var limit) && limit > 0)
-            return limit;
-        return DefaultBatchQueryResponseByteLimit;
-    }
+        => ReadPositiveIntEnvironmentLimit(
+            BatchQueryResponseByteLimitEnvVar,
+            DefaultBatchQueryResponseByteLimit,
+            MaxBatchQueryResponseByteLimit,
+            "MCP batch_query response byte limit");
 
-    private int EstimateJsonUtf8Bytes(JsonNode node) =>
-        Encoding.UTF8.GetByteCount(node.ToJsonString(_jsonOptions));
+    private int EstimateJsonUtf8Bytes(JsonNode node, int maxBytes = int.MaxValue)
+    {
+        _ = TryMeasureJsonUtf8BytesWithinLimit(node, _jsonOptions, maxBytes, out var bytesWritten);
+        return bytesWritten;
+    }
 
     private int EstimateBatchResponseBytes(JsonNode? id, string summary, int submittedCount, int successCount, int failureCount,
         string failureScope, int? cascadeStartedAtIndex, int responseByteLimit, JsonArray resultsArray, bool truncated, JsonArray truncatedQueries)
@@ -2775,7 +2864,7 @@ public partial class McpServer
             payload["truncated_queries"] = truncatedQueries.DeepClone();
         }
 
-        return EstimateJsonUtf8Bytes(CreateToolResult(id, summary, payload));
+        return EstimateJsonUtf8Bytes(CreateToolResult(id, summary, payload), responseByteLimit);
     }
 
     private static string GetBatchFailureScope(int submittedCount, int successCount, int failureCount, int? cascadeStartedAtIndex)

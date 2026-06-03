@@ -81,6 +81,32 @@ public class SuggestionStoreTests : IDisposable
         Assert.NotEqual(hash1, hash2);
     }
 
+    [Fact]
+    public void LoadAll_OversizedStore_PreservesBackupAndReturnsEmpty()
+    {
+        var path = Path.Combine(_tempDir, "suggestions-codeindex.json");
+        File.WriteAllBytes(path, Enumerable.Repeat((byte)'x', SuggestionStore.MaxSuggestionStoreBytes + 1).ToArray());
+
+        var records = _store.LoadAll();
+
+        Assert.Empty(records);
+        Assert.False(File.Exists(path));
+        Assert.True(File.Exists(path + ".bak"));
+    }
+
+    [Fact]
+    public void LoadByStatus_OversizedStore_PreservesBackupAndReturnsEmpty()
+    {
+        var path = Path.Combine(_tempDir, "suggestions-codeindex.json");
+        File.WriteAllBytes(path, Enumerable.Repeat((byte)'x', SuggestionStore.MaxSuggestionStoreBytes + 1).ToArray());
+
+        var records = _store.LoadByStatus(SuggestionStatus.Draft);
+
+        Assert.Empty(records);
+        Assert.False(File.Exists(path));
+        Assert.True(File.Exists(path + ".bak"));
+    }
+
     // --- TryAdd tests / TryAdd テスト ---
 
     [Fact]

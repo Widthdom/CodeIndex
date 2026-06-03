@@ -97,6 +97,11 @@ public class SearchSnippetFormatterTests
             EndLine = 24,
             Content = "line 20\nline 21\nRun(App)\nline 23\nline 24",
             Score = -1.5,
+            EnclosingSymbolName = "Run",
+            EnclosingSymbolKind = "function",
+            EnclosingSymbolStartLine = 18,
+            EnclosingSymbolEndLine = 25,
+            EnclosingContainerName = "AppService",
         };
 
         var compact = SearchSnippetFormatter.ToCompactResult(result, "App", maxLines: 3);
@@ -110,6 +115,11 @@ public class SearchSnippetFormatterTests
         Assert.Equal([22], compact.MatchLines);
         Assert.Single(compact.Highlights);
         Assert.Equal(-1.5, compact.Score);
+        Assert.Equal("Run", compact.EnclosingSymbolName);
+        Assert.Equal("function", compact.EnclosingSymbolKind);
+        Assert.Equal(18, compact.EnclosingSymbolStartLine);
+        Assert.Equal(25, compact.EnclosingSymbolEndLine);
+        Assert.Equal("AppService", compact.EnclosingContainerName);
     }
 
     [Fact]

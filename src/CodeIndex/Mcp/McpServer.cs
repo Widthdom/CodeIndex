@@ -32,6 +32,7 @@ public partial class McpServer : IDisposable
     private readonly string _version;
     private readonly JsonSerializerOptions _jsonOptions;
     private readonly Func<JsonNode, string> _serializeResponse;
+    private readonly bool _usesDefaultResponseSerializer;
     private readonly IMcpAuthenticator _authenticator;
     private readonly McpToolFilter _toolFilter;
     private readonly TimeProvider _timeProvider;
@@ -159,6 +160,10 @@ public partial class McpServer : IDisposable
     internal const int MaxLineCharacterCount = 1_000_000;
     internal const int MaxLineByteLength = 1_048_576;
     internal const int DefaultMaxResponseBytes = 10 * 1024 * 1024;
+    internal const int MaxConfiguredResponseBytes = 64 * 1024 * 1024;
+    internal const int MaxMcpPaginationOffset = 10_000;
+    internal const double MinKeepAliveIntervalSeconds = 1.0;
+    internal const double MaxKeepAliveIntervalSeconds = 300.0;
     private const string MaxResponseBytesEnvVar = "CDIDX_MCP_RESPONSE_MAX_BYTES";
     private const string KeepAliveIntervalEnvironmentVariable = "CDIDX_MCP_KEEP_ALIVE_INTERVAL_S";
     internal const string DebugEnvironmentVariable = "CDIDX_DEBUG";
@@ -258,6 +263,7 @@ public partial class McpServer : IDisposable
             WriteIndented = false,
             TypeInfoResolver = new DefaultJsonTypeInfoResolver(),
         };
+        _usesDefaultResponseSerializer = serializeResponse is null;
         _serializeResponse = serializeResponse ?? (node => node.ToJsonString(_jsonOptions));
         _authenticator = authenticator ?? LocalStdioAuthenticator.Instance;
         _toolFilter = toolFilter ?? McpToolFilter.FromEnvironment();
@@ -1038,9 +1044,17 @@ public partial class McpServer : IDisposable
     {
         try
         {
+            var responseLimit = GetMaxResponseBytes();
+            if (_usesDefaultResponseSerializer)
+            {
+                if (!TrySerializeJsonNodeWithinByteLimit(response, _jsonOptions, responseLimit, captureSerialized: true, out var boundedSerialized, out var boundedResponseBytes))
+                    return CreateResponseTooLargeError(hasId, id, boundedResponseBytes, responseLimit, actualBytesExact: false).ToJsonString(_jsonOptions);
+
+                return boundedSerialized!;
+            }
+
             var serialized = _serializeResponse(response);
             var responseBytes = Encoding.UTF8.GetByteCount(serialized);
-            var responseLimit = GetMaxResponseBytes();
             if (responseBytes <= responseLimit)
                 return serialized;
 
@@ -1336,8 +1350,14 @@ public partial class McpServer : IDisposable
         if (string.IsNullOrWhiteSpace(raw))
             return null;
         if (!double.TryParse(raw, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var seconds)
-            || seconds <= 0)
+            || !double.IsFinite(seconds)
+            || seconds < MinKeepAliveIntervalSeconds
+            || seconds > MaxKeepAliveIntervalSeconds)
+        {
+            Console.Error.WriteLine(
+                $"[cdidx-mcp] Ignoring invalid {KeepAliveIntervalEnvironmentVariable}='{raw}'. Expected a finite value between {MinKeepAliveIntervalSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} and {MaxKeepAliveIntervalSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} seconds. Keep-alive notifications stay disabled.");
             return null;
+        }
         return TimeSpan.FromSeconds(seconds);
     }
 
@@ -2981,7 +3001,7 @@ public partial class McpServer : IDisposable
     /// Create a tool result response (MCP format).
     /// ツール結果レスポンスを作成（MCP形式）。
     /// </summary>
-    private static JsonObject CreateToolResult(JsonNode? id, string text, JsonNode? structuredContent = null, string? mimeType = null)
+    private JsonObject CreateToolResult(JsonNode? id, string text, JsonNode? structuredContent = null, string? mimeType = null)
     {
         mimeType ??= structuredContent is null ? "text/plain" : "application/json";
         var result = new JsonObject
@@ -2999,15 +3019,113 @@ public partial class McpServer : IDisposable
         if (structuredContent != null)
             result["structuredContent"] = structuredContent;
         var response = CreateSuccessResponse(true, id, result);
-        var responseBytes = Encoding.UTF8.GetByteCount(response.ToJsonString());
         var responseLimit = GetMaxResponseBytes();
-        if (responseBytes <= responseLimit)
+        if (TryMeasureJsonUtf8BytesWithinLimit(response, _jsonOptions, responseLimit, out var responseBytes))
             return response;
 
-        return CreateResponseTooLargeError(true, id, responseBytes, responseLimit);
+        return CreateResponseTooLargeError(true, id, responseBytes, responseLimit, actualBytesExact: false);
     }
 
-    private static JsonObject CreateResponseTooLargeError(bool hasId, JsonNode? id, int responseBytes, int responseLimit)
+    internal bool TrySerializeJsonNodeWithinByteLimitForTests(JsonNode node, int maxBytes, out string? serialized, out int bytesWritten)
+        => TrySerializeJsonNodeWithinByteLimit(node, _jsonOptions, maxBytes, captureSerialized: true, out serialized, out bytesWritten);
+
+    private static bool TryMeasureJsonUtf8BytesWithinLimit(JsonNode node, JsonSerializerOptions options, int maxBytes, out int bytesWritten)
+        => TrySerializeJsonNodeWithinByteLimit(node, options, maxBytes, captureSerialized: false, out _, out bytesWritten);
+
+    private static bool TrySerializeJsonNodeWithinByteLimit(JsonNode node, JsonSerializerOptions options, int maxBytes, bool captureSerialized, out string? serialized, out int bytesWritten)
+    {
+        if (maxBytes < 0)
+            throw new ArgumentOutOfRangeException(nameof(maxBytes), maxBytes, "JSON byte limit must be non-negative.");
+
+        serialized = null;
+        using var stream = new BoundedJsonUtf8Stream(maxBytes, captureSerialized);
+        var writerOptions = new JsonWriterOptions
+        {
+            Encoder = options.Encoder,
+            Indented = options.WriteIndented,
+        };
+
+        try
+        {
+            using var writer = new Utf8JsonWriter(stream, writerOptions);
+            node.WriteTo(writer, options);
+            writer.Flush();
+            bytesWritten = stream.BytesWritten;
+            serialized = stream.GetCapturedString();
+            return true;
+        }
+        catch (JsonResponseByteLimitExceededException ex)
+        {
+            bytesWritten = ex.BytesWritten;
+            return false;
+        }
+    }
+
+    private sealed class JsonResponseByteLimitExceededException(int bytesWritten) : Exception
+    {
+        public int BytesWritten { get; } = bytesWritten;
+    }
+
+    private sealed class BoundedJsonUtf8Stream(int maxBytes, bool captureSerialized) : Stream
+    {
+        private readonly MemoryStream? _buffer = captureSerialized ? new MemoryStream(Math.Min(Math.Max(maxBytes, 0), 16 * 1024)) : null;
+
+        public int BytesWritten { get; private set; }
+
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public string? GetCapturedString()
+        {
+            if (_buffer is null)
+                return null;
+            return Encoding.UTF8.GetString(_buffer.GetBuffer(), 0, (int)_buffer.Length);
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override int Read(byte[] buffer, int offset, int count)
+            => throw new NotSupportedException();
+
+        public override long Seek(long offset, SeekOrigin origin)
+            => throw new NotSupportedException();
+
+        public override void SetLength(long value)
+            => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count)
+            => Write(buffer.AsSpan(offset, count));
+
+        public override void Write(ReadOnlySpan<byte> buffer)
+        {
+            if (buffer.Length == 0)
+                return;
+
+            var remaining = maxBytes - BytesWritten;
+            if (remaining < buffer.Length)
+            {
+                if (remaining > 0)
+                    _buffer?.Write(buffer[..remaining]);
+                BytesWritten = maxBytes == int.MaxValue ? int.MaxValue : maxBytes + 1;
+                throw new JsonResponseByteLimitExceededException(BytesWritten);
+            }
+
+            _buffer?.Write(buffer);
+            BytesWritten += buffer.Length;
+        }
+    }
+
+    private static JsonObject CreateResponseTooLargeError(bool hasId, JsonNode? id, int responseBytes, int responseLimit, bool actualBytesExact = true)
     {
         return CreateErrorResponse(
             hasId: hasId,
@@ -3022,15 +3140,37 @@ public partial class McpServer : IDisposable
                 ["reason"] = "response_too_large",
                 ["limit_bytes"] = responseLimit,
                 ["actual_bytes"] = responseBytes,
+                ["actual_bytes_exact"] = actualBytesExact,
             });
     }
 
     private static int GetMaxResponseBytes()
+        => ReadPositiveIntEnvironmentLimit(
+            MaxResponseBytesEnvVar,
+            DefaultMaxResponseBytes,
+            MaxConfiguredResponseBytes,
+            "MCP response byte limit");
+
+    private static int ReadPositiveIntEnvironmentLimit(string envVar, int defaultValue, int maximumValue, string description)
     {
-        var configured = Environment.GetEnvironmentVariable(MaxResponseBytesEnvVar);
-        if (int.TryParse(configured, out var limit) && limit > 0)
-            return limit;
-        return DefaultMaxResponseBytes;
+        var raw = Environment.GetEnvironmentVariable(envVar);
+        if (string.IsNullOrWhiteSpace(raw))
+            return defaultValue;
+
+        if (!int.TryParse(raw, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var limit)
+            || limit <= 0)
+        {
+            Console.Error.WriteLine($"[cdidx-mcp] Ignoring invalid {envVar}='{raw}'. Expected a positive integer for {description}. Using default {defaultValue.ToString(System.Globalization.CultureInfo.InvariantCulture)}.");
+            return defaultValue;
+        }
+
+        if (limit > maximumValue)
+        {
+            Console.Error.WriteLine($"[cdidx-mcp] Clamping {envVar}='{raw}' to maximum {maximumValue.ToString(System.Globalization.CultureInfo.InvariantCulture)} for {description}.");
+            return maximumValue;
+        }
+
+        return limit;
     }
 
     /// <summary>

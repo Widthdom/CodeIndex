@@ -3332,7 +3332,11 @@ public class FileIndexer
         const double NonUtf8LikelyRatioThreshold = 0.01;
         const int NonUtf8LikelyMinCount = 5;
         var fffdCount = CountReplacementChars(content);
-        var nonUtf8Likely = fffdCount >= NonUtf8LikelyMinCount
+        var replacementCharOrigin = fffdCount > 0
+            ? DetermineReplacementCharOrigin(rawBytes, isUtf16, utf16BigEndian, hasUtf16Bom)
+            : null;
+        var nonUtf8Likely = replacementCharOrigin == FileIssue.OriginDecodeReplacement
+            && fffdCount >= NonUtf8LikelyMinCount
             && content.Length > 0
             && (double)fffdCount / content.Length >= NonUtf8LikelyRatioThreshold;
         if (nonUtf8Likely)
@@ -3344,6 +3348,8 @@ public class FileIndexer
                 Kind = "non_utf8_likely",
                 Line = 0,
                 Message = $"Likely non-UTF8 encoding ({fffdCount} U+FFFD over {content.Length} chars, {ratioPercent:F1}%); source may be SHIFT_JIS, GBK, ISO-8859-1, or UTF-16 without BOM",
+                Origin = FileIssue.OriginDecodeReplacement,
+                Severity = FileIssue.SeverityWarning,
             });
         }
 
@@ -3359,12 +3365,17 @@ public class FileIndexer
                 {
                     // Find line number / 行番号を特定
                     var lineNum = content[..i].Count(c => c == '\n') + 1;
+                    var isSourceLiteral = replacementCharOrigin == FileIssue.OriginSourceLiteral;
                     issues.Add(new FileIssue
                     {
                         Path = relativePath,
                         Kind = "replacement_char",
                         Line = lineNum,
-                        Message = $"U+FFFD replacement character at line {lineNum}",
+                        Message = isSourceLiteral
+                            ? $"U+FFFD source literal at line {lineNum}"
+                            : $"U+FFFD decoder replacement character at line {lineNum}",
+                        Origin = replacementCharOrigin,
+                        Severity = isSourceLiteral ? FileIssue.SeverityInfo : FileIssue.SeverityWarning,
                     });
                     // Skip to next line to avoid reporting every char on the same line
                     // 同じ行の連続報告を避けるため次の行までスキップ
@@ -3729,6 +3740,29 @@ public class FileIndexer
         return count;
     }
 
+    private static string DetermineReplacementCharOrigin(byte[] rawBytes, bool isUtf16, bool utf16BigEndian, bool hasUtf16Bom)
+    {
+        try
+        {
+            if (isUtf16)
+            {
+                _ = new UnicodeEncoding(utf16BigEndian, byteOrderMark: hasUtf16Bom, throwOnInvalidBytes: true)
+                    .GetString(rawBytes);
+            }
+            else
+            {
+                _ = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true)
+                    .GetString(rawBytes);
+            }
+
+            return FileIssue.OriginSourceLiteral;
+        }
+        catch (DecoderFallbackException)
+        {
+            return FileIssue.OriginDecodeReplacement;
+        }
+    }
+
     /// <summary>
     /// Compute SHA256 checksum from file bytes after collapsing CRLF / CR to LF.
     /// Matches the line-ending normalization that BuildRecord applies to the decoded
@@ -3747,29 +3781,108 @@ public class FileIndexer
     internal static string ComputeChecksum(byte[] bytes)
     {
         using var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        Span<byte> buffer = stackalloc byte[4096];
-        int n = 0;
-        for (int i = 0; i < bytes.Length; i++)
+        var pendingCarriageReturn = false;
+        AppendNormalizedChecksumBytes(hasher, bytes, ref pendingCarriageReturn);
+        FlushPendingChecksumCarriageReturn(hasher, ref pendingCarriageReturn);
+        return FinishChecksum(hasher);
+    }
+
+    internal static bool TryComputeChecksum(string filePath, long maxBytes, out string checksum)
+    {
+        if (maxBytes < 0)
+            throw new ArgumentOutOfRangeException(nameof(maxBytes), maxBytes, "Maximum byte count must be non-negative.");
+
+        checksum = string.Empty;
+        using var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        using var stream = new FileStream(
+            filePath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            bufferSize: 81920,
+            options: FileOptions.SequentialScan);
+
+        var buffer = new byte[81920];
+        var pendingCarriageReturn = false;
+        long total = 0;
+        while (true)
         {
-            byte b = bytes[i];
+            var read = stream.Read(buffer, 0, buffer.Length);
+            if (read == 0)
+                break;
+
+            total += read;
+            if (total > maxBytes)
+                return false;
+
+            AppendNormalizedChecksumBytes(hasher, buffer.AsSpan(0, read), ref pendingCarriageReturn);
+        }
+
+        FlushPendingChecksumCarriageReturn(hasher, ref pendingCarriageReturn);
+        checksum = FinishChecksum(hasher);
+        return true;
+    }
+
+    private static void AppendNormalizedChecksumBytes(
+        IncrementalHash hasher,
+        ReadOnlySpan<byte> bytes,
+        ref bool pendingCarriageReturn)
+    {
+        Span<byte> normalized = stackalloc byte[4096];
+        var n = 0;
+
+        if (pendingCarriageReturn)
+        {
+            if (bytes.Length > 0 && bytes[0] == 0x0A)
+                bytes = bytes[1..];
+            normalized[n++] = 0x0A;
+            pendingCarriageReturn = false;
+        }
+
+        for (var i = 0; i < bytes.Length; i++)
+        {
+            var b = bytes[i];
             if (b == 0x0D)
             {
-                buffer[n++] = 0x0A;
+                if (i + 1 == bytes.Length)
+                {
+                    pendingCarriageReturn = true;
+                    continue;
+                }
+
+                normalized[n++] = 0x0A;
                 if (i + 1 < bytes.Length && bytes[i + 1] == 0x0A)
                     i++;
             }
             else
             {
-                buffer[n++] = b;
+                normalized[n++] = b;
             }
-            if (n == buffer.Length)
+
+            if (n == normalized.Length)
             {
-                hasher.AppendData(buffer);
+                hasher.AppendData(normalized);
                 n = 0;
             }
         }
+
         if (n > 0)
-            hasher.AppendData(buffer[..n]);
+            hasher.AppendData(normalized[..n]);
+    }
+
+    private static void FlushPendingChecksumCarriageReturn(IncrementalHash hasher, ref bool pendingCarriageReturn)
+    {
+        if (!pendingCarriageReturn)
+            return;
+
+        Span<byte> lineFeed = stackalloc byte[1];
+        lineFeed[0] = 0x0A;
+        hasher.AppendData(lineFeed);
+        pendingCarriageReturn = false;
+    }
+
+    private static string FinishChecksum(IncrementalHash hasher)
+    {
         Span<byte> hash = stackalloc byte[32];
         if (!hasher.TryGetHashAndReset(hash, out var written) || written != hash.Length)
             throw new InvalidOperationException("SHA256 produced an unexpected hash length");
