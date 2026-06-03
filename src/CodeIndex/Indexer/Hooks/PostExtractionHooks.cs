@@ -166,13 +166,16 @@ public sealed class PostExtractionHookRunner : IDisposable
         if (!task.Wait(callbackBudget))
         {
             stopwatch.Stop();
+            var timeoutDurationMs = Math.Max(
+                stopwatch.ElapsedMilliseconds,
+                (long)Math.Ceiling(callbackBudget.TotalMilliseconds));
             disabledHooks.TryAdd(hook.Info.TypeName, 0);
             diagnostics.Enqueue(new PostExtractionHookDiagnostic(
                 hook.Info.AssemblyPath,
                 hook.Info.TypeName,
                 $"{callback} exceeded the {callbackBudget.TotalMilliseconds:0} ms callback budget; hook disabled for this index run.",
                 callback,
-                stopwatch.ElapsedMilliseconds));
+                timeoutDurationMs));
             return false;
         }
 
