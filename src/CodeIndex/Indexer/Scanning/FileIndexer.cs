@@ -3034,6 +3034,58 @@ public class FileIndexer
         var relativePath = Path.GetRelativePath(_projectRoot, absolutePath);
         var normalizedRelativePath = NormalizeIndexPath(relativePath);
 
+        var (bytes, sizeBytes, modifiedUtc) = ReadRawBytesWithSizeLimit(
+            absolutePath,
+            normalizedRelativePath,
+            cancellationToken);
+        var (content, warning) = DecodeIndexableContent(bytes, relativePath);
+        // Normalize line endings to LF in one pass / 改行を1パスでLFに正規化
+        content = NormalizeLineEndings(content);
+        // Strip every line-leading UTF-8 BOM (U+FEFF): the leading BOM at offset 0
+        // and any BOM that immediately follows a `\n` (e.g. from accidental file
+        // concatenation or tool insertion). Leading BOM alone would make `^\s*`-
+        // anchored regexes silently miss line-1 declarations in BOM-prefixed
+        // Windows-authored sources; a BOM at the start of a mid-file line would
+        // additionally leak a phantom glyph through `search` / `excerpt` chunk
+        // output. Non-line-leading U+FEFF (Unicode 3.2+ ZWNBSP inside a string
+        // literal, identifier, or comment — e.g. `const s = "A\uFEFFB"`) is kept
+        // verbatim: stripping it would corrupt content fidelity for intentional
+        // mid-line ZWNBSP use. The checksum is computed after this canonicalization
+        // so freshness decisions match stored chunk/symbol line metadata. Closes #183/#1467.
+        // 行頭の UTF-8 BOM (U+FEFF) だけを剥がす — オフセット 0 の先頭 BOM と、
+        // `\n` の直後にある BOM (ファイル連結やツール挿入で発生) が対象。先頭 BOM
+        // だけでも行指向の `^\s*` 固定正規表現で BOM 付き Windows 作成ソースの
+        // 1 行目宣言を黙って取りこぼし、mid-file 行頭 BOM は `search` / `excerpt`
+        // のチャンク出力にそのまま幽霊グリフを漏らす。行頭以外の U+FEFF
+        // (Unicode 3.2+ の ZWNBSP を文字列リテラル・識別子・コメントで意図的に
+        // 使用しているケース、例: `const s = "A\uFEFFB"`) はそのまま保持する:
+        // これを剥がすと mid-line ZWNBSP の意図的利用に対して内容が壊れる。
+        // checksum はこの canonicalization 後に算出し、freshness 判定と保存される
+        // chunk / symbol 行メタデータを一致させる。Closes #183/#1467。
+        content = StripLineLeadingInvisibles(content);
+        if (IsGitLfsPointer(bytes))
+            content = string.Empty;
+        var lineCount = CountPhysicalLines(content);
+        var checksum = ComputeChecksum(Encoding.UTF8.GetBytes(content));
+        var record = new FileRecord
+        {
+            Path = normalizedRelativePath,
+            Lang = TryDetectLanguage(absolutePath, content).Language,
+            Size = sizeBytes,
+            Lines = lineCount,
+            Checksum = checksum,
+            Modified = modifiedUtc,
+            Generated = IsGeneratedCodeFile(normalizedRelativePath, content),
+        };
+
+        return (record, content, bytes, warning);
+    }
+
+    private (byte[] Bytes, long SizeBytes, DateTime ModifiedUtc) ReadRawBytesWithSizeLimit(
+        string absolutePath,
+        string normalizedRelativePath,
+        CancellationToken cancellationToken)
+    {
         // Read raw bytes through a single FileStream and cap the accumulated payload at
         // the configured max-file limit so a file that grew between the size probe and the read can no
         // longer bypass the cap. Splitting `FileInfo.Length` from `File.ReadAllBytes`
@@ -3103,13 +3155,16 @@ public class FileIndexer
                 break;
         }
 
+        return (bytes, sizeBytes, modifiedUtc);
+    }
+
+    private static (string Content, string? Warning) DecodeIndexableContent(byte[] bytes, string relativePath)
+    {
         var isUtf16Encoded = TryDetectUtf16Encoding(bytes, allowHeuristic: true, out var utf16BigEndian, out var hasUtf16Bom);
 
         if (!isUtf16Encoded && ContainsIndexBlockingNullByte(bytes))
             throw new BinaryFileSkippedException($"{relativePath}: binary file skipped because it contains NULL bytes");
 
-        string content;
-        string? warning = null;
         // BOM-based encoding detection: UTF-16 LE/BE source files are otherwise mangled
         // by the UTF-8 decoder (every other byte is U+FFFD or NUL), silently dropping
         // every symbol they declare. UTF-32 LE shares the first two bytes with UTF-16 LE
@@ -3121,62 +3176,21 @@ public class FileIndexer
         // ため、UTF-16 LE 経路から除外し UTF-8 fallback に流す。Closes #1540.
         if (isUtf16Encoded)
         {
-            content = new UnicodeEncoding(utf16BigEndian, byteOrderMark: hasUtf16Bom, throwOnInvalidBytes: false)
+            var content = new UnicodeEncoding(utf16BigEndian, byteOrderMark: hasUtf16Bom, throwOnInvalidBytes: false)
                 .GetString(bytes);
+            return (content, null);
         }
-        else
-        {
-            try
-            {
-                content = new UTF8Encoding(false, throwOnInvalidBytes: true).GetString(bytes);
-            }
-            catch (DecoderFallbackException)
-            {
-                // Fall back to replacement mode but warn / 置換モードにフォールバックし警告
-                content = new UTF8Encoding(false, throwOnInvalidBytes: false).GetString(bytes);
-                warning = $"{relativePath}: contains invalid UTF-8 bytes (replaced with U+FFFD)";
-            }
-        }
-        // Normalize line endings to LF in one pass / 改行を1パスでLFに正規化
-        content = NormalizeLineEndings(content);
-        // Strip every line-leading UTF-8 BOM (U+FEFF): the leading BOM at offset 0
-        // and any BOM that immediately follows a `\n` (e.g. from accidental file
-        // concatenation or tool insertion). Leading BOM alone would make `^\s*`-
-        // anchored regexes silently miss line-1 declarations in BOM-prefixed
-        // Windows-authored sources; a BOM at the start of a mid-file line would
-        // additionally leak a phantom glyph through `search` / `excerpt` chunk
-        // output. Non-line-leading U+FEFF (Unicode 3.2+ ZWNBSP inside a string
-        // literal, identifier, or comment — e.g. `const s = "A\uFEFFB"`) is kept
-        // verbatim: stripping it would corrupt content fidelity for intentional
-        // mid-line ZWNBSP use. The checksum is computed after this canonicalization
-        // so freshness decisions match stored chunk/symbol line metadata. Closes #183/#1467.
-        // 行頭の UTF-8 BOM (U+FEFF) だけを剥がす — オフセット 0 の先頭 BOM と、
-        // `\n` の直後にある BOM (ファイル連結やツール挿入で発生) が対象。先頭 BOM
-        // だけでも行指向の `^\s*` 固定正規表現で BOM 付き Windows 作成ソースの
-        // 1 行目宣言を黙って取りこぼし、mid-file 行頭 BOM は `search` / `excerpt`
-        // のチャンク出力にそのまま幽霊グリフを漏らす。行頭以外の U+FEFF
-        // (Unicode 3.2+ の ZWNBSP を文字列リテラル・識別子・コメントで意図的に
-        // 使用しているケース、例: `const s = "A\uFEFFB"`) はそのまま保持する:
-        // これを剥がすと mid-line ZWNBSP の意図的利用に対して内容が壊れる。
-        // checksum はこの canonicalization 後に算出し、freshness 判定と保存される
-        // chunk / symbol 行メタデータを一致させる。Closes #183/#1467。
-        content = StripLineLeadingInvisibles(content);
-        if (IsGitLfsPointer(bytes))
-            content = string.Empty;
-        var lineCount = CountPhysicalLines(content);
-        var checksum = ComputeChecksum(Encoding.UTF8.GetBytes(content));
-        var record = new FileRecord
-        {
-            Path = normalizedRelativePath,
-            Lang = TryDetectLanguage(absolutePath, content).Language,
-            Size = sizeBytes,
-            Lines = lineCount,
-            Checksum = checksum,
-            Modified = modifiedUtc,
-            Generated = IsGeneratedCodeFile(normalizedRelativePath, content),
-        };
 
-        return (record, content, bytes, warning);
+        try
+        {
+            return (new UTF8Encoding(false, throwOnInvalidBytes: true).GetString(bytes), null);
+        }
+        catch (DecoderFallbackException)
+        {
+            // Fall back to replacement mode but warn / 置換モードにフォールバックし警告
+            var content = new UTF8Encoding(false, throwOnInvalidBytes: false).GetString(bytes);
+            return (content, $"{relativePath}: contains invalid UTF-8 bytes (replaced with U+FFFD)");
+        }
     }
 
     public FileRecord BuildSkippedFileRecord(string absolutePath)

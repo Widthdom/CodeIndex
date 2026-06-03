@@ -60,90 +60,15 @@ public static partial class IndexCommandRunner
                 CommandErrorCodes.UsageError);
         }
 
-        var targetPaths = new HashSet<string>(StringComparer.Ordinal);
-        var relevantIgnoreFileChanged = false;
-
-        if (options.Commits.Count > 0)
-        {
-            CancellationTokenSource? spinnerCts = null;
-            try
-            {
-                if (!options.Json)
-                    spinnerCts = ConsoleUi.StartSpinner("Resolving changed files...", spinnerFrames);
-                var repoRoot = GitHelper.TryGetRepositoryRoot(projectRoot) ?? Path.GetFullPath(projectRoot);
-                foreach (var commit in options.Commits)
-                {
-                    var changedFiles = GitHelper.GetChangedFilesFromCommit(projectRoot, commit);
-                    var normalized = NormalizeCommitFileTargets(projectRoot, repoRoot, changedFiles, out var commitTouchedRelevantIgnoreFile);
-                    relevantIgnoreFileChanged |= commitTouchedRelevantIgnoreFile;
-                    foreach (var f in normalized)
-                        targetPaths.Add(f);
-                }
-            }
-            catch (Exception ex)
-            {
-                return WriteCommandError(
-                    options.Json,
-                    jsonOptions,
-                    $"failed to resolve changed files from git commits: {ex.Message}",
-                    CommandExitCodes.UsageError,
-                    "Check the commit refs and rerun `cdidx index <projectPath> --commits <commit-ref> [commit-ref ...]`.",
-                    CommandErrorCodes.UsageError);
-            }
-            finally
-            {
-                ConsoleUi.StopSpinner(spinnerCts);
-            }
-            if (!options.Json && !options.Quiet)
-            {
-                Console.WriteLine($"  Found {ConsoleUi.Counted(targetPaths.Count, "changed file")} from git");
-                Console.WriteLine("  Note    : After reset/rebase/amend/switch/merge, prefer `cdidx .` over `--commits` for a full sync / 履歴改変やcheckout変更後は `--commits` より `cdidx .` を推奨");
-            }
-        }
-
-        if (options.ChangedBetweenSpecified)
-        {
-            CancellationTokenSource? spinnerCts = null;
-            WriteJsonLiveness("resolving changed files between git refs...");
-            var resolveHeartbeat = StartJsonPhaseHeartbeat("resolving changed files between git refs");
-            try
-            {
-                if (!options.Json)
-                    spinnerCts = ConsoleUi.StartSpinner("Resolving changed files between refs...", spinnerFrames);
-                var repoRoot = GitHelper.TryGetRepositoryRoot(projectRoot) ?? Path.GetFullPath(projectRoot);
-                var changedFiles = GitHelper.GetChangedFilesBetweenRefs(projectRoot, options.ChangedBetweenRefs[0], options.ChangedBetweenRefs[1]);
-                var normalized = NormalizeCommitFileTargets(projectRoot, repoRoot, changedFiles, out var rangeTouchedRelevantIgnoreFile);
-                relevantIgnoreFileChanged |= rangeTouchedRelevantIgnoreFile;
-                foreach (var f in normalized)
-                    targetPaths.Add(f);
-            }
-            catch (Exception ex)
-            {
-                return WriteCommandError(
-                    options.Json,
-                    jsonOptions,
-                    $"failed to resolve changed files between git refs: {ex.Message}",
-                    CommandExitCodes.UsageError,
-                    "Check the refs and rerun `cdidx index <projectPath> --changed-between <old-ref> <new-ref>`.",
-                    CommandErrorCodes.UsageError);
-            }
-            finally
-            {
-                StopJsonPhaseHeartbeat(resolveHeartbeat);
-                ConsoleUi.StopSpinner(spinnerCts);
-            }
-
-            WriteJsonLiveness($"found {ConsoleUi.Counted(targetPaths.Count, "changed file")}; preparing update...");
-            if (!options.Json)
-                Console.WriteLine($"  Found {targetPaths.Count} changed file(s) between git refs");
-        }
-
-        if (options.UpdateFiles.Count > 0)
-        {
-            relevantIgnoreFileChanged |= ContainsRelevantIgnoreFileUpdate(projectRoot, options.UpdateFiles);
-            foreach (var relPath in NormalizeUpdateFileTargets(projectRoot, options.UpdateFiles, options.Json))
-                targetPaths.Add(relPath);
-        }
+        var resolveTargetsExitCode = TryResolveUpdateTargets(
+            projectRoot,
+            options,
+            spinnerFrames,
+            jsonOptions,
+            out var targetPaths,
+            out var relevantIgnoreFileChanged);
+        if (resolveTargetsExitCode != null)
+            return resolveTargetsExitCode.Value;
 
         var typeScriptJavaScriptConfigChanged = ContainsJavaScriptTypeScriptConfigPath(targetPaths);
         if (relevantIgnoreFileChanged || ContainsIgnoreFilePath(targetPaths) || typeScriptJavaScriptConfigChanged)
@@ -211,61 +136,6 @@ public static partial class IndexCommandRunner
         var currentMetadataTargetVersion = DbContext.MetadataTargetVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var priorMetadataTargetCsharpMatchesCurrent = priorMetadataTargetCsharp == currentMetadataTargetVersion;
         var symbolsDroppedByKindFilter = 0;
-
-        void WriteJsonLiveness(string message)
-        {
-            if (!options.Json || options.Quiet)
-                return;
-
-            Console.Error.WriteLine($"cdidx: {message}");
-        }
-
-        (CancellationTokenSource Cts, Task Task)? StartJsonPhaseHeartbeat(string phase, Func<string?>? detailProvider = null)
-        {
-            if (!options.Json || options.Quiet)
-                return null;
-
-            var cts = new CancellationTokenSource();
-            var token = cts.Token;
-            var task = Task.Run(async () =>
-            {
-                while (!token.IsCancellationRequested)
-                {
-                    try
-                    {
-                        await Task.Delay(TimeSpan.FromSeconds(5), token).ConfigureAwait(false);
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        break;
-                    }
-
-                    if (token.IsCancellationRequested)
-                        break;
-
-                    var detail = detailProvider?.Invoke();
-                    var suffix = string.IsNullOrWhiteSpace(detail) ? string.Empty : $": {detail}";
-                    Console.Error.WriteLine($"cdidx: still {phase}{suffix}...");
-                }
-            }, token);
-            return (cts, task);
-        }
-
-        void StopJsonPhaseHeartbeat((CancellationTokenSource Cts, Task Task)? heartbeat)
-        {
-            if (heartbeat == null)
-                return;
-
-            heartbeat.Value.Cts.Cancel();
-            try
-            {
-                heartbeat.Value.Task.Wait(TimeSpan.FromSeconds(1));
-            }
-            catch (AggregateException ex) when (ex.InnerExceptions.All(inner => inner is OperationCanceledException or TaskCanceledException))
-            {
-            }
-            heartbeat.Value.Cts.Dispose();
-        }
 
         void DemoteReadinessOnce()
         {
@@ -374,8 +244,8 @@ public static partial class IndexCommandRunner
         }
 
         ThrowIfUpdateCancelled();
-        WriteJsonLiveness("checking C# workspace contracts...");
-        var csharpWorkspaceHeartbeat = StartJsonPhaseHeartbeat("checking C# workspace contracts");
+        WriteIndexJsonLiveness(options, "checking C# workspace contracts...");
+        var csharpWorkspaceHeartbeat = StartIndexJsonPhaseHeartbeat(options, "checking C# workspace contracts");
         CSharpStaticInterfaceWorkspaceSymbols csharpWorkspace;
         try
         {
@@ -392,12 +262,12 @@ public static partial class IndexCommandRunner
         }
         finally
         {
-            StopJsonPhaseHeartbeat(csharpWorkspaceHeartbeat);
+            StopIndexJsonPhaseHeartbeat(csharpWorkspaceHeartbeat);
         }
         if (csharpWorkspace.HasStaticInterfaceContracts)
         {
-            WriteJsonLiveness("expanding C# update set for static interface contracts...");
-            var expandHeartbeat = StartJsonPhaseHeartbeat("expanding C# update set for static interface contracts");
+            WriteIndexJsonLiveness(options, "expanding C# update set for static interface contracts...");
+            var expandHeartbeat = StartIndexJsonPhaseHeartbeat(options, "expanding C# update set for static interface contracts");
             try
             {
                 foreach (var filePath in indexer.ScanFilesDetailed(cancellationToken: cancellationToken).Files)
@@ -423,7 +293,7 @@ public static partial class IndexCommandRunner
             }
             finally
             {
-                StopJsonPhaseHeartbeat(expandHeartbeat);
+                StopIndexJsonPhaseHeartbeat(expandHeartbeat);
             }
         }
 
@@ -439,9 +309,10 @@ public static partial class IndexCommandRunner
 
         StartUpdateSpinnerIfNeeded();
 
-        WriteJsonLiveness($"updating {ConsoleUi.Counted(targetPaths.Count, "file")}...");
+        WriteIndexJsonLiveness(options, $"updating {ConsoleUi.Counted(targetPaths.Count, "file")}...");
         string? currentUpdatePath = null;
-        var updateHeartbeat = StartJsonPhaseHeartbeat(
+        var updateHeartbeat = StartIndexJsonPhaseHeartbeat(
+            options,
             "updating index",
             () => currentUpdatePath == null
                 ? $"{updated + removed + skipped:N0}/{targetPaths.Count:N0} files processed"
@@ -980,7 +851,7 @@ public static partial class IndexCommandRunner
         }
         finally
         {
-            StopJsonPhaseHeartbeat(updateHeartbeat);
+            StopIndexJsonPhaseHeartbeat(updateHeartbeat);
         }
 
         ThrowIfUpdateCancelled();
