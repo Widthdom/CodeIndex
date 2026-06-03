@@ -533,6 +533,81 @@ public class DbCommandRunnerTests
         }
     }
 
+    [Fact]
+    public void Run_IntegrityCheck_JsonCapsRowsAndText_Issue2881()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_integrity_cap_{Guid.NewGuid():N}.db");
+        try
+        {
+            File.WriteAllText(dbPath, "placeholder");
+            DbCommandRunner.IntegrityCheckRowsForTesting = () =>
+                Enumerable.Range(0, DbCommandRunner.IntegrityCheckRowLimit + 1)
+                    .Select(i => i == 0
+                        ? new string('x', DbCommandRunner.IntegrityCheckTextLimit + 10)
+                        : $"issue {i}");
+
+            var (exitCode, json) = RunAndCaptureJson(["--integrity-check", "--db", dbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.True(json.GetProperty("truncated").GetBoolean());
+            Assert.True(json.GetProperty("rows_truncated").GetBoolean());
+            Assert.True(json.GetProperty("text_truncated").GetBoolean());
+            Assert.Equal(DbCommandRunner.IntegrityCheckRowLimit, json.GetProperty("row_limit").GetInt32());
+            Assert.Equal(DbCommandRunner.IntegrityCheckTextLimit, json.GetProperty("text_limit").GetInt32());
+            var issues = json.GetProperty("issues");
+            Assert.Equal(DbCommandRunner.IntegrityCheckRowLimit, issues.GetArrayLength());
+            Assert.EndsWith(" [truncated]", issues[0].GetString());
+        }
+        finally
+        {
+            DbCommandRunner.IntegrityCheckRowsForTesting = null;
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void Run_Schema_JsonCapsEntriesAndSqlText_Issue2881()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_schema_cap_{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = dbPath,
+                Mode = SqliteOpenMode.ReadWriteCreate,
+            }.ConnectionString))
+            {
+                connection.Open();
+                var columns = string.Join(", ", Enumerable.Range(0, 900).Select(i => $"col{i:D4} TEXT"));
+                Execute(connection, $"CREATE TABLE aaaa_long({columns})");
+                for (var i = 0; i < DbCommandRunner.SchemaEntryLimit + 1; i++)
+                    Execute(connection, $"CREATE TABLE t{i:D4}(value TEXT)");
+            }
+            SqliteConnection.ClearAllPools();
+
+            var (exitCode, json) = RunAndCaptureJson(["schema", "--db", dbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.True(json.GetProperty("truncated").GetBoolean());
+            Assert.True(json.GetProperty("entries_truncated").GetBoolean());
+            Assert.True(json.GetProperty("sql_truncated").GetBoolean());
+            Assert.Equal(DbCommandRunner.SchemaEntryLimit, json.GetProperty("entry_limit").GetInt32());
+            Assert.Equal(DbCommandRunner.SchemaSqlTextLimit, json.GetProperty("sql_text_limit").GetInt32());
+            var entries = json.GetProperty("entries");
+            Assert.Equal(DbCommandRunner.SchemaEntryLimit, entries.GetArrayLength());
+            var longEntry = entries.EnumerateArray().Single(entry => entry.GetProperty("name").GetString() == "aaaa_long");
+            Assert.EndsWith(" [truncated]", longEntry.GetProperty("sql").GetString());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
     private (int ExitCode, string StdOut, string StdErr) RunAndCaptureStreams(string[] args)
     {
         using var capture = ConsoleCapture.Start(captureOut: true, captureError: true);

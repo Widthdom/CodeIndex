@@ -15,8 +15,13 @@ public static class DbCommandRunner
     private const string AutoCheckpointPrefix = "auto-";
     internal const int CheckpointListEntryLimit = 100;
     internal const int CheckpointFileInspectLimit = 32;
+    internal const int IntegrityCheckRowLimit = 100;
+    internal const int IntegrityCheckTextLimit = 4096;
+    internal const int SchemaEntryLimit = 200;
+    internal const int SchemaSqlTextLimit = 8192;
     private static readonly char[] InvalidCheckpointNameChars = Path.GetInvalidFileNameChars();
     internal static Action? RestoreFailureAfterBackupForTesting { get; set; }
+    internal static Func<IEnumerable<string>>? IntegrityCheckRowsForTesting { get; set; }
 
     public static int Run(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
@@ -101,7 +106,8 @@ public static class DbCommandRunner
     {
         try
         {
-            var issues = RunIntegrityCheckPragma(dbPath);
+            var result = RunIntegrityCheckPragma(dbPath);
+            var issues = result.Rows;
             var ok = issues.Count == 1 && string.Equals(issues[0], "ok", StringComparison.Ordinal);
             var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
 
@@ -111,7 +117,12 @@ public static class DbCommandRunner
                     new DbIntegrityCheckJsonResult(
                         Path.GetFullPath(isUri ? dbPath : dbPath),
                         ok,
-                        ok ? new List<string>() : issues),
+                        ok ? new List<string>() : issues,
+                        result.Truncated,
+                        result.RowsTruncated,
+                        result.TextTruncated,
+                        IntegrityCheckRowLimit,
+                        IntegrityCheckTextLimit),
                     jsonContext.DbIntegrityCheckJsonResult));
             }
             else
@@ -121,7 +132,9 @@ public static class DbCommandRunner
                 Console.WriteLine($"  result  : {(ok ? "ok" : "corrupted")}");
                 if (!ok)
                 {
-                    Console.WriteLine($"  issues  : {ConsoleUi.Counted(issues.Count, "row")}");
+                    Console.WriteLine($"  issues  : {ConsoleUi.Counted(issues.Count, "row")}{(result.RowsTruncated ? " (truncated)" : string.Empty)}");
+                    if (result.Truncated)
+                        Console.WriteLine($"  truncated: yes (row limit {IntegrityCheckRowLimit:N0}, text limit {IntegrityCheckTextLimit:N0} chars)");
                     foreach (var line in issues)
                         Console.WriteLine($"    - {line}");
                     Console.WriteLine();
@@ -157,7 +170,15 @@ public static class DbCommandRunner
             {
                 var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
                 Console.WriteLine(JsonSerializer.Serialize(
-                    new DbSchemaJsonResult(fullPath, schema.UserVersion, schema.Entries),
+                    new DbSchemaJsonResult(
+                        fullPath,
+                        schema.UserVersion,
+                        schema.Entries,
+                        schema.Truncated,
+                        schema.EntriesTruncated,
+                        schema.SqlTruncated,
+                        SchemaEntryLimit,
+                        SchemaSqlTextLimit),
                     jsonContext.DbSchemaJsonResult));
             }
             else
@@ -165,6 +186,8 @@ public static class DbCommandRunner
                 Console.WriteLine("Database schema");
                 Console.WriteLine($"  database    : {fullPath}");
                 Console.WriteLine($"  user_version: {schema.UserVersion}");
+                if (schema.Truncated)
+                    Console.WriteLine($"  truncated   : yes (entry limit {SchemaEntryLimit:N0}, SQL text limit {SchemaSqlTextLimit:N0} chars)");
                 foreach (var entry in schema.Entries)
                 {
                     Console.WriteLine();
@@ -394,8 +417,11 @@ public static class DbCommandRunner
     // pragma side effects of the normal DbContext open path.
     // PRAGMA integrity_check は問題が無ければ 1 行の `"ok"` を、破損があれば最大 N 行の検出結果を返す。
     // 読み取りのみのため read-only 接続で十分で、DbContext の WAL モード設定副作用を避けられる。
-    private static List<string> RunIntegrityCheckPragma(string dbPath)
+    private static DbIntegrityCheckReadResult RunIntegrityCheckPragma(string dbPath)
     {
+        if (IntegrityCheckRowsForTesting != null)
+            return BoundIntegrityRows(IntegrityCheckRowsForTesting());
+
         var connectionString = dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase)
             ? $"Data Source={dbPath}"
             : new SqliteConnectionStringBuilder
@@ -407,18 +433,28 @@ public static class DbCommandRunner
         using var connection = new SqliteConnection(connectionString);
         connection.Open();
         using var cmd = connection.CreateCommand();
-        cmd.CommandText = "PRAGMA integrity_check";
+        cmd.CommandText = $"PRAGMA integrity_check({IntegrityCheckRowLimit + 1})";
         using var reader = cmd.ExecuteReader();
         var rows = new List<string>();
+        var rowsTruncated = false;
+        var textTruncated = false;
         while (reader.Read())
         {
+            if (rows.Count >= IntegrityCheckRowLimit)
+            {
+                rowsTruncated = true;
+                break;
+            }
+
             var raw = reader.IsDBNull(0) ? string.Empty : reader.GetString(0);
-            rows.Add(raw);
+            var bounded = TruncateDiagnosticText(raw, IntegrityCheckTextLimit);
+            textTruncated |= bounded.Truncated;
+            rows.Add(bounded.Text);
         }
-        return rows.Count > 0 ? rows : new List<string> { "ok" };
+        return new DbIntegrityCheckReadResult(rows.Count > 0 ? rows : new List<string> { "ok" }, rowsTruncated, textTruncated);
     }
 
-    private static (int UserVersion, List<DbSchemaEntryJsonResult> Entries) ReadSchema(string dbPath)
+    private static DbSchemaReadResult ReadSchema(string dbPath)
     {
         using var connection = OpenConnection(dbPath, writable: false);
         using var versionCmd = connection.CreateCommand();
@@ -428,22 +464,64 @@ public static class DbCommandRunner
 
         using var cmd = connection.CreateCommand();
         cmd.CommandText = @"
-            SELECT type, name, tbl_name, sql
+            SELECT type, name, tbl_name, substr(sql, 1, @sql_limit)
             FROM sqlite_master
             WHERE type IN ('table', 'index', 'trigger', 'view')
-            ORDER BY type, name";
+            ORDER BY type, name
+            LIMIT @entry_limit";
+        cmd.Parameters.AddWithValue("@sql_limit", SchemaSqlTextLimit + 1);
+        cmd.Parameters.AddWithValue("@entry_limit", SchemaEntryLimit + 1);
         using var reader = cmd.ExecuteReader();
         var entries = new List<DbSchemaEntryJsonResult>();
+        var entriesTruncated = false;
+        var sqlTruncated = false;
         while (reader.Read())
         {
+            if (entries.Count >= SchemaEntryLimit)
+            {
+                entriesTruncated = true;
+                break;
+            }
+
+            var rawSql = reader.IsDBNull(3) ? null : reader.GetString(3);
+            var boundedSql = rawSql is null ? (Text: (string?)null, Truncated: false) : TruncateDiagnosticText(rawSql, SchemaSqlTextLimit);
+            sqlTruncated |= boundedSql.Truncated;
             entries.Add(new DbSchemaEntryJsonResult(
                 reader.GetString(0),
                 reader.GetString(1),
                 reader.IsDBNull(2) ? null : reader.GetString(2),
-                reader.IsDBNull(3) ? null : reader.GetString(3)));
+                boundedSql.Text));
         }
 
-        return (userVersion, entries);
+        return new DbSchemaReadResult(userVersion, entries, entriesTruncated, sqlTruncated);
+    }
+
+    private static DbIntegrityCheckReadResult BoundIntegrityRows(IEnumerable<string> rawRows)
+    {
+        var rows = new List<string>();
+        var rowsTruncated = false;
+        var textTruncated = false;
+        foreach (var raw in rawRows)
+        {
+            if (rows.Count >= IntegrityCheckRowLimit)
+            {
+                rowsTruncated = true;
+                break;
+            }
+
+            var bounded = TruncateDiagnosticText(raw, IntegrityCheckTextLimit);
+            textTruncated |= bounded.Truncated;
+            rows.Add(bounded.Text);
+        }
+
+        return new DbIntegrityCheckReadResult(rows.Count > 0 ? rows : new List<string> { "ok" }, rowsTruncated, textTruncated);
+    }
+
+    private static (string Text, bool Truncated) TruncateDiagnosticText(string text, int limit)
+    {
+        if (text.Length <= limit)
+            return (text, false);
+        return (text[..limit] + " [truncated]", true);
     }
 
     private static (int OrphanSymbolReferences, int OrphanReferenceLines, int OrphanSymbols, int Total) PruneOrphans(string dbPath, bool apply)
@@ -930,3 +1008,17 @@ internal sealed class DbCommandOptions
 internal sealed record DbCheckpointOperationResult(string Name, string CheckpointPath, List<string> Files, bool FilesTruncated);
 
 internal sealed record DbCheckpointListReadResult(List<DbCheckpointListEntryJsonResult> Entries, bool Truncated);
+
+internal sealed record DbIntegrityCheckReadResult(List<string> Rows, bool RowsTruncated, bool TextTruncated)
+{
+    public bool Truncated => RowsTruncated || TextTruncated;
+}
+
+internal sealed record DbSchemaReadResult(
+    int UserVersion,
+    List<DbSchemaEntryJsonResult> Entries,
+    bool EntriesTruncated,
+    bool SqlTruncated)
+{
+    public bool Truncated => EntriesTruncated || SqlTruncated;
+}
