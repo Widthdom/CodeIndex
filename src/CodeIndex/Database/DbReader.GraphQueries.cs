@@ -7,6 +7,13 @@ namespace CodeIndex.Database;
 
 public partial class DbReader
 {
+    private static readonly HashSet<string> CSharpReceiverQualifiedBareMemberFilterNames = new(StringComparer.Ordinal)
+    {
+        "GetString",
+        "ToList",
+        "NewGuid",
+    };
+
     private static string BuildCSharpBareMemberGraphReferenceFilter(
         string query,
         string? lang,
@@ -33,7 +40,8 @@ public partial class DbReader
         if (value.Length == 0 || !(char.IsLetter(value[0]) || value[0] == '_'))
             return false;
 
-        return value.All(c => char.IsLetterOrDigit(c) || c == '_');
+        return value.All(c => char.IsLetterOrDigit(c) || c == '_')
+            && CSharpReceiverQualifiedBareMemberFilterNames.Contains(value);
     }
 
     /// <summary>
