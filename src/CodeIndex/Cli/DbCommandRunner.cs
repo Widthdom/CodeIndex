@@ -13,6 +13,8 @@ public static class DbCommandRunner
 {
     private const string CheckpointsDirectorySuffix = ".checkpoints";
     private const string AutoCheckpointPrefix = "auto-";
+    internal const int CheckpointListEntryLimit = 100;
+    internal const int CheckpointFileInspectLimit = 32;
     private static readonly char[] InvalidCheckpointNameChars = Path.GetInvalidFileNameChars();
     internal static Action? RestoreFailureAfterBackupForTesting { get; set; }
 
@@ -274,7 +276,14 @@ public static class DbCommandRunner
             if (options.Json)
             {
                 Console.WriteLine(JsonSerializer.Serialize(
-                    new DbCheckpointJsonResult("success", fullDbPath, result.Name, result.CheckpointPath, result.Files),
+                    new DbCheckpointJsonResult(
+                        "success",
+                        fullDbPath,
+                        result.Name,
+                        result.CheckpointPath,
+                        result.Files,
+                        result.FilesTruncated,
+                        CheckpointFileInspectLimit),
                     CliJsonSerializerContextFactory.Create(jsonOptions).DbCheckpointJsonResult));
             }
             else
@@ -283,7 +292,7 @@ public static class DbCommandRunner
                 Console.WriteLine($"  database  : {fullDbPath}");
                 Console.WriteLine($"  name      : {result.Name}");
                 Console.WriteLine($"  checkpoint: {result.CheckpointPath}");
-                Console.WriteLine($"  files     : {ConsoleUi.Counted(result.Files.Count, "file")}");
+                Console.WriteLine($"  files     : {ConsoleUi.Counted(result.Files.Count, "file")}{(result.FilesTruncated ? " (truncated)" : string.Empty)}");
             }
 
             return CommandExitCodes.Success;
@@ -305,25 +314,32 @@ public static class DbCommandRunner
         if (!TryResolveFileDb(options.DbPath, out var fullDbPath, out var error))
             return WriteCommandError(options.Json, jsonOptions, error, CommandExitCodes.DatabaseError, "Use a filesystem database path, not a SQLite URI.", CommandErrorCodes.DbError);
 
-        var entries = ListCheckpoints(fullDbPath);
+        var result = ListCheckpoints(fullDbPath);
         if (options.Json)
         {
             Console.WriteLine(JsonSerializer.Serialize(
-                new DbCheckpointListJsonResult(fullDbPath, entries),
+                new DbCheckpointListJsonResult(
+                    fullDbPath,
+                    result.Entries,
+                    result.Truncated,
+                    CheckpointListEntryLimit,
+                    CheckpointFileInspectLimit),
                 CliJsonSerializerContextFactory.Create(jsonOptions).DbCheckpointListJsonResult));
         }
         else
         {
             Console.WriteLine("Database checkpoints");
             Console.WriteLine($"  database: {fullDbPath}");
-            if (entries.Count == 0)
+            if (result.Truncated)
+                Console.WriteLine($"  truncated: yes (checkpoint directory limit {CheckpointListEntryLimit:N0}, file limit {CheckpointFileInspectLimit:N0} per checkpoint)");
+            if (result.Entries.Count == 0)
             {
                 Console.WriteLine("  checkpoints: none");
             }
             else
             {
-                foreach (var entry in entries)
-                    Console.WriteLine($"  {entry.Name}  {entry.CreatedAtUtc}  {entry.Bytes:N0} bytes");
+                foreach (var entry in result.Entries)
+                    Console.WriteLine($"  {entry.Name}  {entry.CreatedAtUtc}  {entry.Bytes:N0} bytes{(entry.FilesTruncated ? " (files truncated)" : string.Empty)}");
             }
         }
 
@@ -599,28 +615,83 @@ public static class DbCommandRunner
             throw;
         }
 
-        var files = Directory.GetFiles(checkpointPath).Select(Path.GetFileName).Where(f => f is not null).Select(f => f!).OrderBy(f => f, StringComparer.Ordinal).ToList();
-        return new DbCheckpointOperationResult(name, checkpointPath, files);
+        var files = EnumerateCheckpointFileNames(checkpointPath);
+        return new DbCheckpointOperationResult(name, checkpointPath, files.Items, files.Truncated);
     }
 
-    private static List<DbCheckpointListEntryJsonResult> ListCheckpoints(string fullDbPath)
+    private static DbCheckpointListReadResult ListCheckpoints(string fullDbPath)
     {
         var root = GetCheckpointRoot(fullDbPath);
         if (!Directory.Exists(root))
-            return [];
+            return new DbCheckpointListReadResult([], Truncated: false);
 
         var dbFileName = Path.GetFileName(fullDbPath);
-        return Directory.GetDirectories(root)
-            .Where(path => !Path.GetFileName(path).StartsWith(".tmp-", StringComparison.Ordinal))
-            .Where(path => File.Exists(LongPath.EnsureWindowsPrefix(Path.Combine(path, dbFileName))))
-            .Select(path =>
+        var entries = new List<DbCheckpointListEntryJsonResult>();
+        var checkpointsTruncated = false;
+        var directoriesInspected = 0;
+        foreach (var path in Directory.EnumerateDirectories(root))
+        {
+            if (directoriesInspected >= CheckpointListEntryLimit)
             {
-                var info = new DirectoryInfo(path);
-                var bytes = Directory.GetFiles(path).Sum(file => new FileInfo(file).Length);
-                return new DbCheckpointListEntryJsonResult(info.Name, path, info.CreationTimeUtc.ToString("O", System.Globalization.CultureInfo.InvariantCulture), bytes);
-            })
-            .OrderBy(entry => entry.Name, StringComparer.Ordinal)
-            .ToList();
+                checkpointsTruncated = true;
+                break;
+            }
+
+            directoriesInspected++;
+            if (Path.GetFileName(path).StartsWith(".tmp-", StringComparison.Ordinal))
+                continue;
+            if (!File.Exists(LongPath.EnsureWindowsPrefix(Path.Combine(path, dbFileName))))
+                continue;
+
+            var info = new DirectoryInfo(path);
+            var bytes = SumCheckpointBytes(path);
+            entries.Add(new DbCheckpointListEntryJsonResult(
+                info.Name,
+                path,
+                info.CreationTimeUtc.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
+                bytes.Bytes,
+                bytes.Truncated));
+        }
+
+        entries.Sort((left, right) => string.Compare(left.Name, right.Name, StringComparison.Ordinal));
+        return new DbCheckpointListReadResult(entries, checkpointsTruncated || entries.Any(entry => entry.FilesTruncated));
+    }
+
+    private static (List<string> Items, bool Truncated) EnumerateCheckpointFileNames(string checkpointPath)
+    {
+        var files = new List<string>();
+        var truncated = false;
+        foreach (var file in Directory.EnumerateFiles(checkpointPath))
+        {
+            if (files.Count >= CheckpointFileInspectLimit)
+            {
+                truncated = true;
+                break;
+            }
+
+            var name = Path.GetFileName(file);
+            if (name is not null)
+                files.Add(name);
+        }
+
+        files.Sort(StringComparer.Ordinal);
+        return (files, truncated);
+    }
+
+    private static (long Bytes, bool Truncated) SumCheckpointBytes(string checkpointPath)
+    {
+        long bytes = 0;
+        var filesSeen = 0;
+        foreach (var file in Directory.EnumerateFiles(checkpointPath))
+        {
+            if (filesSeen >= CheckpointFileInspectLimit)
+                return (bytes, Truncated: true);
+
+            bytes += new FileInfo(file).Length;
+            filesSeen++;
+        }
+
+        return (bytes, Truncated: false);
     }
 
     private static string RestoreCheckpoint(string fullDbPath, string name, string checkpointPath)
@@ -856,4 +927,6 @@ internal sealed class DbCommandOptions
     public string? ParseError { get; init; }
 }
 
-internal sealed record DbCheckpointOperationResult(string Name, string CheckpointPath, List<string> Files);
+internal sealed record DbCheckpointOperationResult(string Name, string CheckpointPath, List<string> Files, bool FilesTruncated);
+
+internal sealed record DbCheckpointListReadResult(List<DbCheckpointListEntryJsonResult> Entries, bool Truncated);

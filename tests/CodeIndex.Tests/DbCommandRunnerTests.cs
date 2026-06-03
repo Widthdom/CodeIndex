@@ -347,6 +347,47 @@ public class DbCommandRunnerTests
     }
 
     [Fact]
+    public void Run_CheckpointsList_CapsCheckpointAndFileEnumeration_Issue2880()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_list_cap_{Guid.NewGuid():N}");
+        var dbPath = Path.Combine(root, "codeindex.db");
+        var checkpointRoot = dbPath + ".checkpoints";
+        Directory.CreateDirectory(checkpointRoot);
+        try
+        {
+            File.WriteAllText(dbPath, "db");
+            for (var i = 0; i < DbCommandRunner.CheckpointListEntryLimit + 1; i++)
+            {
+                var checkpointPath = Path.Combine(checkpointRoot, $"checkpoint-{i:D4}");
+                Directory.CreateDirectory(checkpointPath);
+                File.WriteAllText(Path.Combine(checkpointPath, "codeindex.db"), "db");
+                for (var file = 0; file < DbCommandRunner.CheckpointFileInspectLimit + 1; file++)
+                    File.WriteAllText(Path.Combine(checkpointPath, $"extra-{file:D4}.txt"), "x");
+            }
+
+            var (listExit, json) = RunAndCaptureJson(["checkpoints", "--list", "--db", dbPath, "--json"]);
+            var (textExit, stdout, _) = RunAndCaptureStreams(["checkpoints", "--list", "--db", dbPath]);
+
+            Assert.Equal(CommandExitCodes.Success, listExit);
+            Assert.Equal(CommandExitCodes.Success, textExit);
+            Assert.True(json.GetProperty("truncated").GetBoolean());
+            Assert.Equal(DbCommandRunner.CheckpointListEntryLimit, json.GetProperty("checkpoint_limit").GetInt32());
+            Assert.Equal(DbCommandRunner.CheckpointFileInspectLimit, json.GetProperty("file_limit").GetInt32());
+            var checkpoints = json.GetProperty("checkpoints");
+            Assert.Equal(DbCommandRunner.CheckpointListEntryLimit, checkpoints.GetArrayLength());
+            Assert.Contains(checkpoints.EnumerateArray(), entry => entry.GetProperty("files_truncated").GetBoolean());
+            Assert.Contains("truncated: yes", stdout);
+            Assert.Contains("files truncated", stdout);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Run_RestoreIncompleteCheckpoint_ReturnsErrorAndKeepsDatabase()
     {
         var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_bad_{Guid.NewGuid():N}");
