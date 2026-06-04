@@ -65,6 +65,145 @@ public class WorkspaceCommandRunnerTests
     }
 
     [Fact]
+    public void WorkspaceManifestLoader_Load_RejectsDeeplyNestedManifest()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_manifest_depth");
+        try
+        {
+            var manifestPath = Path.Combine(root, "cdidx.workspace.json");
+            var nestedPrefix = string.Concat(Enumerable.Repeat("{\"nested\":", WorkspaceManifestLoader.MaxManifestDepth + 1));
+            File.WriteAllText(manifestPath, nestedPrefix + "0" + new string('}', WorkspaceManifestLoader.MaxManifestDepth + 1));
+
+            Assert.ThrowsAny<JsonException>(() => WorkspaceManifestLoader.Load(manifestPath));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
+    public void WorkspaceManifestLoader_Load_RejectsTooManyMembers()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_manifest_members");
+        try
+        {
+            var manifestPath = Path.Combine(root, "cdidx.workspace.json");
+            var members = string.Join(",", Enumerable.Range(0, WorkspaceManifestLoader.MaxManifestMembers + 1).Select(i => $"\"src{i}\""));
+            File.WriteAllText(manifestPath, $$"""
+                {
+                  "members": [{{members}}]
+                }
+                """);
+
+            var ex = Assert.Throws<InvalidDataException>(() => WorkspaceManifestLoader.Load(manifestPath));
+
+            Assert.Contains($"{WorkspaceManifestLoader.MaxManifestMembers} member limit", ex.Message);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
+    public void WorkspaceManifestLoader_Load_RejectsRootedMemberPath()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_manifest_rooted_member");
+        try
+        {
+            var manifestPath = Path.Combine(root, "cdidx.workspace.json");
+            var absoluteMember = Path.Combine(root, "src", "A");
+            File.WriteAllText(manifestPath, $$"""
+                {
+                  "members": [{{JsonSerializer.Serialize(absoluteMember)}}]
+                }
+                """);
+
+            var ex = Assert.Throws<InvalidDataException>(() => WorkspaceManifestLoader.Load(manifestPath));
+
+            Assert.Contains("member path must be relative", ex.Message);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
+    public void WorkspaceManifestLoader_Load_RejectsEscapingMemberPath()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_manifest_escaping_member");
+        try
+        {
+            var manifestPath = Path.Combine(root, "cdidx.workspace.json");
+            File.WriteAllText(manifestPath, """
+                {
+                  "members": ["../outside"]
+                }
+                """);
+
+            var ex = Assert.Throws<InvalidDataException>(() => WorkspaceManifestLoader.Load(manifestPath));
+
+            Assert.Contains("member path escapes the manifest root", ex.Message);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
+    public void WorkspaceManifestLoader_Load_RejectsAbsoluteDefaultDbName()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_manifest_absolute_db");
+        try
+        {
+            var manifestPath = Path.Combine(root, "cdidx.workspace.json");
+            var dbName = Path.Combine(root, "outside.db");
+            File.WriteAllText(manifestPath, $$"""
+                {
+                  "default_db_name": {{JsonSerializer.Serialize(dbName)}}
+                }
+                """);
+
+            var ex = Assert.Throws<InvalidDataException>(() => WorkspaceManifestLoader.Load(manifestPath));
+
+            Assert.Contains("default_db_name must be a plain file name", ex.Message);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(root);
+        }
+    }
+
+    [Theory]
+    [InlineData("..")]
+    [InlineData("../outside.db")]
+    [InlineData("nested/index.db")]
+    public void WorkspaceManifestLoader_Load_RejectsUnsafeDefaultDbName(string dbName)
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_manifest_unsafe_db");
+        try
+        {
+            var manifestPath = Path.Combine(root, "cdidx.workspace.json");
+            File.WriteAllText(manifestPath, $$"""
+                {
+                  "default_db_name": {{JsonSerializer.Serialize(dbName)}}
+                }
+                """);
+
+            var ex = Assert.Throws<InvalidDataException>(() => WorkspaceManifestLoader.Load(manifestPath));
+
+            Assert.Contains("default_db_name must be a plain file name", ex.Message);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
     public void WorkspaceManifestLoader_Load_AcceptsUtf8BomManifest()
     {
         var root = TestProjectHelper.CreateTempProject("cdidx_workspace_manifest_bom");

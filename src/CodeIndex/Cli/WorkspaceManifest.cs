@@ -27,6 +27,8 @@ internal static class WorkspaceManifestLoader
     internal const string FileName = "cdidx.workspace.json";
     internal const string DotFileName = ".cdidx-workspace.json";
     internal const int MaxManifestBytes = 64 * 1024;
+    internal const int MaxManifestDepth = 16;
+    internal const int MaxManifestMembers = 1024;
 
     internal static WorkspaceManifest? Find(string startingDirectory)
     {
@@ -65,23 +67,17 @@ internal static class WorkspaceManifestLoader
         {
             CommentHandling = JsonCommentHandling.Skip,
             AllowTrailingCommas = true,
+            MaxDepth = MaxManifestDepth,
         });
 
         var element = document.RootElement;
         var strategy = ReadString(element, "index_strategy") ?? "per_member";
-        var dbName = ReadString(element, "default_db_name") ?? "codeindex.db";
-        var rawMembers = element.TryGetProperty("members", out var membersElement) && membersElement.ValueKind == JsonValueKind.Array
-            ? membersElement.EnumerateArray()
-                .Where(m => m.ValueKind == JsonValueKind.String)
-                .Select(m => m.GetString())
-                .Where(m => !string.IsNullOrWhiteSpace(m))
-                .Select(m => m!)
-                .ToArray()
-            : Array.Empty<string>();
+        var dbName = ValidateDefaultDbName(ReadString(element, "default_db_name") ?? "codeindex.db");
+        var rawMembers = ReadMembers(element);
 
         var members = rawMembers.Select(member =>
         {
-            var fullMember = Path.GetFullPath(Path.Combine(root, member));
+            var fullMember = ResolveMemberPath(root, member);
             var dbPath = string.Equals(strategy, "single", StringComparison.OrdinalIgnoreCase)
                 ? Path.Combine(root, ".cdidx", dbName)
                 : Path.Combine(fullMember, ".cdidx", dbName);
@@ -95,4 +91,70 @@ internal static class WorkspaceManifestLoader
         => element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
             ? value.GetString()
             : null;
+
+    private static string ValidateDefaultDbName(string dbName)
+    {
+        if (string.IsNullOrWhiteSpace(dbName)
+            || dbName is "." or ".."
+            || Path.IsPathRooted(dbName)
+            || dbName.Contains('/')
+            || dbName.Contains('\\')
+            || dbName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0
+            || !string.Equals(Path.GetFileName(dbName), dbName, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException($"Workspace manifest default_db_name must be a plain file name: {dbName}");
+        }
+
+        return dbName;
+    }
+
+    private static IReadOnlyList<string> ReadMembers(JsonElement element)
+    {
+        if (!element.TryGetProperty("members", out var membersElement) || membersElement.ValueKind != JsonValueKind.Array)
+            return Array.Empty<string>();
+
+        var members = new List<string>();
+        foreach (var member in membersElement.EnumerateArray())
+        {
+            if (member.ValueKind != JsonValueKind.String)
+                continue;
+
+            var value = member.GetString();
+            if (string.IsNullOrWhiteSpace(value))
+                continue;
+
+            if (members.Count >= MaxManifestMembers)
+                throw new InvalidDataException($"Workspace manifest members exceed the {MaxManifestMembers} member limit.");
+
+            members.Add(value);
+        }
+
+        return members;
+    }
+
+    private static string ResolveMemberPath(string root, string member)
+    {
+        if (Path.IsPathRooted(member))
+            throw new InvalidDataException($"Workspace manifest member path must be relative: {member}");
+
+        var fullMember = Path.GetFullPath(Path.Combine(root, member));
+        if (!IsSameOrDescendant(root, fullMember))
+            throw new InvalidDataException($"Workspace manifest member path escapes the manifest root: {member}");
+
+        return fullMember;
+    }
+
+    private static bool IsSameOrDescendant(string root, string path)
+    {
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        var normalizedRoot = Path.GetFullPath(root);
+        var normalizedPath = Path.GetFullPath(path);
+        if (string.Equals(normalizedRoot, normalizedPath, comparison))
+            return true;
+
+        var rootWithSeparator = Path.EndsInDirectorySeparator(normalizedRoot)
+            ? normalizedRoot
+            : normalizedRoot + Path.DirectorySeparatorChar;
+        return normalizedPath.StartsWith(rootWithSeparator, comparison);
+    }
 }

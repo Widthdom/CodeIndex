@@ -132,7 +132,7 @@ git status --short -- '**/packages.lock.json'
 
 ### Workspaces
 
-`cdidx.workspace.json` and `.cdidx-workspace.json` declare monorepo members without adding a YAML dependency. The supported schema is additive: `members` is an array of member paths relative to the manifest directory, `index_strategy` is `per_member` or `single`, `default_db_name` overrides `codeindex.db`, and `shared_ignores` is reserved for shared ignore policy. `cdidx workspace list` and `cdidx workspace status` report member DB paths.
+`cdidx.workspace.json` and `.cdidx-workspace.json` declare monorepo members without adding a YAML dependency. Workspace manifests are capped at 64 KiB, 16 JSON nesting levels, and 1024 members. The supported schema is additive: `members` is an array of member paths that must be relative to and resolve under the manifest directory, `index_strategy` is `per_member` or `single`, `default_db_name` is a plain file name that overrides `codeindex.db`, and `shared_ignores` is reserved for shared ignore policy. `cdidx workspace list` and `cdidx workspace status` report member DB paths.
 
 `cdidx workspace use <name>` writes the active workspace to the per-user config directory. Query DB resolution keeps existing precedence: explicit `--db`, then explicit `--data-dir` / `CDIDX_DATA_DIR`, then active workspace state, then ancestor/CWD discovery.
 
@@ -2199,9 +2199,11 @@ git status --short -- '**/packages.lock.json'
 ### ワークスペース
 
 `cdidx.workspace.json` と `.cdidx-workspace.json` は YAML dependency を増やさずに monorepo
-member を宣言します。schema は additive で、`members` は manifest directory からの相対
-member path、`index_strategy` は `per_member` または `single`、`default_db_name` は
-`codeindex.db` の上書き、`shared_ignores` は共有 ignore policy 用の予約 field です。
+member を宣言します。workspace manifest は 64 KiB、JSON nesting 16 level、1024 members に制限されます。
+schema は additive で、`members` は manifest directory からの相対 path かつ正規化後も
+manifest directory 配下に残る member path、
+`index_strategy` は `per_member` または `single`、`default_db_name` は
+`codeindex.db` を上書きする plain file name、`shared_ignores` は共有 ignore policy 用の予約 field です。
 `cdidx workspace list` と `cdidx workspace status` は member DB path を報告します。
 
 `cdidx workspace use <name>` は active workspace を per-user config directory に保存します。
