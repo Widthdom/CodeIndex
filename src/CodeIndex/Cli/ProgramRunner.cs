@@ -35,6 +35,7 @@ internal static class ProgramRunner
         "--metrics",
         "--debug-unsafe",
         "--strict-version",
+        "--pretty",
     };
     private static readonly HashSet<string> TopLevelValueOptionNames = new(StringComparer.Ordinal)
     {
@@ -125,6 +126,8 @@ internal static class ProgramRunner
             CommandErrorWriter.Write(StripErrorPrefix(strictVersionError), "use `--strict-version` without a value.");
             return CommandExitCodes.InvalidArgument;
         }
+        if (TryConsumePrettyJsonFlag(ref args))
+            jsonOptions = new JsonSerializerOptions(jsonOptions) { WriteIndented = true };
         using var jsonAnsiScope = ConsoleUi.SuppressAnsiForJsonOutput(ContainsJsonOutputFlag(args));
 
         var commandStopwatch = Stopwatch.StartNew();
@@ -921,6 +924,46 @@ internal static class ProgramRunner
 
         args = kept.ToArray();
         return quiet;
+    }
+
+    internal static bool TryConsumePrettyJsonFlag(ref string[] args)
+    {
+        if (args.Length == 0)
+            return false;
+
+        var kept = new List<string>(args.Length);
+        var pretty = false;
+        var passthrough = false;
+        for (var i = 0; i < args.Length; i++)
+        {
+            var arg = args[i];
+            if (passthrough)
+            {
+                kept.Add(arg);
+                continue;
+            }
+            if (arg == "--")
+            {
+                passthrough = true;
+                kept.Add(arg);
+                continue;
+            }
+            if (ShouldPreserveQueryCommandToken(args, i))
+            {
+                kept.Add(arg);
+                continue;
+            }
+            if (arg == "--pretty")
+            {
+                pretty = true;
+                continue;
+            }
+
+            kept.Add(arg);
+        }
+
+        args = kept.ToArray();
+        return pretty;
     }
 
     internal static bool TryConsumeGlobalLogFlags(ref string[] args, out string error)

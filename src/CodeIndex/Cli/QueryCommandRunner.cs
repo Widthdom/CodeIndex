@@ -220,6 +220,7 @@ public static class QueryCommandRunner
         "--check-updates",
         "--read-only",
         "--immutable",
+        "--pretty",
     ];
     private const string OutputFormatText = "text";
     private const string OutputFormatJson = "json";
@@ -480,6 +481,7 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
 
         var exactSubstringHint = SearchQueryAdvisor.BuildExactSubstringHint(options.Query, options.RawFts, exact, options.Prefix);
+        var ndjsonOptions = options.JsonOutputFormat == JsonOutputFormatNdjson ? GetCompactJsonOptions(jsonOptions) : jsonOptions;
         int? jsonDoneCount = null;
         return WithDb(options, jsonOptions, reader =>
         {
@@ -531,7 +533,7 @@ public static class QueryCommandRunner
                     }
                     else
                     {
-                        Console.WriteLine(BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "results", query: options.Query, ftsQueryDiagnostics: ftsQueryDiagnostics, queryOptions: options, exactSubstringHint: exactSubstringHint).ToJsonString(jsonOptions));
+                        Console.WriteLine(BuildJsonZeroResultPayload(reader, ndjsonOptions, resultsKey: "results", query: options.Query, ftsQueryDiagnostics: ftsQueryDiagnostics, queryOptions: options, exactSubstringHint: exactSubstringHint).ToJsonString(ndjsonOptions));
                         jsonDoneCount = 0;
                     }
                 }
@@ -560,7 +562,7 @@ public static class QueryCommandRunner
                     }
                     else
                     {
-                        Console.WriteLine(BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "results", query: options.Query, ftsQueryDiagnostics: ftsQueryDiagnostics, queryOptions: options, exactSubstringHint: exactSubstringHint).ToJsonString(jsonOptions));
+                        Console.WriteLine(BuildJsonZeroResultPayload(reader, ndjsonOptions, resultsKey: "results", query: options.Query, ftsQueryDiagnostics: ftsQueryDiagnostics, queryOptions: options, exactSubstringHint: exactSubstringHint).ToJsonString(ndjsonOptions));
                         jsonDoneCount = 0;
                     }
                 }
@@ -613,7 +615,7 @@ public static class QueryCommandRunner
                     foreach (var result in compactResults)
                         Console.WriteLine(JsonSerializer.Serialize(
                             result,
-                            CliJsonSerializerContextFactory.Create(jsonOptions).CompactSearchResult));
+                            CliJsonSerializerContextFactory.Create(ndjsonOptions).CompactSearchResult));
                     jsonDoneCount = compactResults.Length;
                 }
             }
@@ -636,7 +638,7 @@ public static class QueryCommandRunner
         }, exitCode =>
         {
             if (options.Json && options.JsonOutputFormat == JsonOutputFormatNdjson && jsonDoneCount.HasValue)
-                WriteJsonStreamDone(jsonDoneCount.Value, jsonOptions);
+                WriteJsonStreamDone(jsonDoneCount.Value, ndjsonOptions);
         });
     }
 
@@ -742,6 +744,9 @@ public static class QueryCommandRunner
         => Console.WriteLine(JsonSerializer.Serialize(
             new JsonStreamDoneResult(Done: true, Count: count, Interrupted: false),
             CliJsonSerializerContextFactory.Create(jsonOptions).JsonStreamDoneResult));
+
+    private static JsonSerializerOptions GetCompactJsonOptions(JsonSerializerOptions jsonOptions)
+        => jsonOptions.WriteIndented ? new JsonSerializerOptions(jsonOptions) { WriteIndented = false } : jsonOptions;
 
     public static void AttachLspLocations(IEnumerable<DefinitionResult> results)
     {
@@ -5262,6 +5267,8 @@ public static class QueryCommandRunner
                 case "--read-only":
                 case "--immutable":
                     readOnly = true;
+                    break;
+                case "--pretty":
                     break;
                 case "--workspace-db":
                     if (TryReadStringOptionValue(args, ref i, "--workspace-db", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var workspaceDbPath, out var workspaceDbError))
