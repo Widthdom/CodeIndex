@@ -159,7 +159,8 @@ public class ConsoleUiTests
         Assert.Contains("--json                     Output as JSON (search/files stream ndjson by", output);
         Assert.Contains("--json=array for one array)", output);
         Assert.Contains("--lang <lang>              Filter by language (aliases: bat, cmd, cshtml, razor, ts, tsx, cts, mts)", output);
-        Assert.Contains("--bytes                    Show raw byte counts in human output for files/map instead of binary units; JSON always keeps raw integer bytes", output);
+        Assert.Contains("--bytes                    files: sort by size and show raw byte counts in human", output);
+        Assert.Contains("map: show raw byte counts; JSON always keeps raw", output);
         Assert.Contains("--group-by-name            hotspots: collapse rows sharing (name, kind) across files; JSON count is the number of name/kind groups, not reference, file, or definition-site count", output);
         Assert.Contains("cdidx search \"Run();\" --exact-substring        Case-sensitive exact substring search", output);
         Assert.Contains("cdidx search --query --path --path README.md   Search for a literal option token", output);

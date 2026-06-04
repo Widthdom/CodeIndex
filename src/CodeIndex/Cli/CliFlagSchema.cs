@@ -235,7 +235,7 @@ internal static class CliFlagSchema
             new() { Name = "--strict-not-found", Description = "Return exit code 2 when a valid query has zero rows", Commands = Set(StrictNotFoundCommands) },
             new() { Name = "--strict", Description = "Return exit code 4 when impact preconditions are unmet", Commands = Set("impact") },
             new() { Name = "--since", ValuePlaceholder = "<datetime>", Description = "Filter by modified-since timestamp", Commands = Set(SinceCommands) },
-            new() { Name = "--bytes", Description = "Show raw byte counts in human output", Commands = Set(ByteFormatCommands) },
+            new() { Name = "--bytes", Description = "Files: sort by size and show raw byte counts in human output; map: show raw byte counts", Commands = Set(ByteFormatCommands) },
             new() { Name = "--min-entrypoint-confidence", ValuePlaceholder = "<0.0..1.0>", Description = "Map: omit entrypoint candidates below this confidence", Commands = Set(EntrypointConfidenceCommands) },
             new() { Name = "--sections", ValuePlaceholder = "<tree,languages,hotspots,metrics>", Description = "Map: comma-separated response sections to include", Commands = Set(MapSectionCommands) },
             new() { Name = "--cycles", Description = "Deps: return dependency cycles instead of edge rows", Commands = Set(DependencyCycleCommands) },

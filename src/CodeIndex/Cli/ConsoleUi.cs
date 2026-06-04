@@ -982,7 +982,7 @@ public static class ConsoleUi
         Console.WriteLine("  --no-dedup                 search only: return every raw overlapping chunk hit (debug/density)");
         WriteHelpLine($"  --require-before/--require-after <query>  search only: keep primary matches only when the guard query appears within --guard-window lines before/after the match (default {DbReader.DefaultSearchGuardWindow}, max {DbReader.MaxSearchGuardWindow})");
         WriteHelpLine("  --reject-before/--reject-after <query>    search only: drop primary matches when the guard query appears within the same before/after window; useful for finding API calls missing nearby checks");
-        Console.WriteLine("  --bytes                    Show raw byte counts in human output for files/map instead of binary units; JSON always keeps raw integer bytes");
+        WriteHelpLine("  --bytes                    files: sort by size and show raw byte counts in human output; map: show raw byte counts; JSON always keeps raw integer bytes");
         Console.WriteLine("  --min-entrypoint-confidence <n>  map only: omit entrypoint candidates below this 0.0..1.0 confidence");
         WriteHelpLine("  --max-hops <n>             Max BFS hops for impact analysis, inclusive (default: 5; --max-hops 2 returns callers at hop 1 and 2; --max-hops 0 resolves the symbol without traversing callers)");
         Console.WriteLine("  --depth <n>                Deprecated alias for --max-hops");

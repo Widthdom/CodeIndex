@@ -2025,7 +2025,7 @@ public static class QueryCommandRunner
                 return CommandExitCodes.Success;
             }
 
-            var results = reader.ListFiles(options.Query, options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since);
+            var results = reader.ListFiles(options.Query, options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, orderBySize: options.RawBytes);
             if (results.Count == 0)
             {
                 if (options.Json)
