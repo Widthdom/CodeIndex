@@ -213,6 +213,47 @@ public class McpServerTests : IDisposable
         Assert.Empty(structured["results"]!.AsArray());
     }
 
+    [Theory]
+    [InlineData("search", "format")]
+    [InlineData("symbol_hotspots", "groupBy")]
+    public void ToolsCall_EnumLikeScalarTooLong_RejectsBeforeNormalization_Issue3116(string toolName, string argumentName)
+    {
+        var oversized = new string('A', McpBoundedText.MaxScalarArgumentChars + 1);
+        var args = new JsonObject
+        {
+            [argumentName] = oversized,
+        };
+        if (toolName == "search")
+            args["query"] = "Run";
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = toolName,
+                ["arguments"] = args,
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        var result = response["result"]!;
+        Assert.True(result["isError"]!.GetValue<bool>());
+        var text = result["content"]![0]!["text"]!.GetValue<string>();
+        var structured = result["structuredContent"]!;
+        Assert.Contains($"Argument '{argumentName}' on tool '{toolName}' is too long", text);
+        Assert.DoesNotContain(oversized, response.ToJsonString(), StringComparison.Ordinal);
+        Assert.Equal(toolName, structured["tool"]!.GetValue<string>());
+        Assert.Equal(argumentName, structured["parameter"]!.GetValue<string>());
+        Assert.Equal(McpBoundedText.MaxScalarArgumentChars, structured["max_length"]!.GetValue<int>());
+        Assert.Equal(oversized.Length, structured["actual_length"]!.GetValue<int>());
+        Assert.True(structured["value_truncated"]!.GetValue<bool>());
+        Assert.Equal(oversized.Length, structured["value_length"]!.GetValue<int>());
+        Assert.Equal(McpBoundedText.ForDisplay(oversized).Text, structured["value"]!.GetValue<string>());
+    }
+
     [Fact]
     public void ToolsCall_SearchReturnsStableAtAndCursorContinuesAfterAnchor_Issue1462()
     {
@@ -488,6 +529,119 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public async Task ProcessLineAsync_UnknownToolName_TruncatesTelemetry_Issue3118()
+    {
+        using var writer = new StringWriter();
+        using var error = new StringWriter();
+        var toolName = new string('l', McpBoundedText.MaxToolNameChars + 25);
+        var display = McpBoundedText.ForDisplay(toolName, McpBoundedText.MaxToolNameChars);
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 123,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = toolName,
+                ["arguments"] = new JsonObject
+                {
+                    ["x"] = 1,
+                },
+            },
+        };
+
+        await Task.Run(() =>
+        {
+            lock (TestConsoleLock.Gate)
+            {
+                var previousError = Console.Error;
+                try
+                {
+                    Console.SetError(error);
+#pragma warning disable xUnit1031
+                    _server.ProcessLineAsync(request.ToJsonString(), writer).GetAwaiter().GetResult();
+#pragma warning restore xUnit1031
+                }
+                finally
+                {
+                    Console.SetError(previousError);
+                }
+            }
+        });
+
+        Assert.DoesNotContain(toolName, writer.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(toolName, error.ToString(), StringComparison.Ordinal);
+        var line = error.ToString()
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Single(l => l.Contains("\"event\":\"mcp.tool.invocation\"", StringComparison.Ordinal));
+        var jsonStart = line.IndexOf('{');
+        using var document = JsonDocument.Parse(line[jsonStart..]);
+        var root = document.RootElement;
+        Assert.Equal("mcp.tool.invocation", root.GetProperty("event").GetString());
+        Assert.Equal(display.Text, root.GetProperty("tool").GetString());
+        Assert.Equal(toolName.Length, root.GetProperty("tool_length").GetInt32());
+        Assert.True(root.GetProperty("tool_truncated").GetBoolean());
+        Assert.Equal("error", root.GetProperty("status").GetString());
+        Assert.Equal(-32602, root.GetProperty("error_code").GetInt32());
+    }
+
+    [Fact]
+    public async Task ProcessLineAsync_UnknownArgumentName_TruncatesTelemetryKeyMetadata_Issue3117()
+    {
+        using var writer = new StringWriter();
+        using var error = new StringWriter();
+        var argumentName = new string('k', McpBoundedText.MaxDiagnosticDisplayChars + 25);
+        var display = McpBoundedText.ForDisplay(argumentName);
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 123,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "index",
+                ["arguments"] = new JsonObject
+                {
+                    ["path"] = ".",
+                    [argumentName] = true,
+                },
+            },
+        };
+
+        await Task.Run(() =>
+        {
+            lock (TestConsoleLock.Gate)
+            {
+                var previousError = Console.Error;
+                try
+                {
+                    Console.SetError(error);
+#pragma warning disable xUnit1031
+                    _server.ProcessLineAsync(request.ToJsonString(), writer).GetAwaiter().GetResult();
+#pragma warning restore xUnit1031
+                }
+                finally
+                {
+                    Console.SetError(previousError);
+                }
+            }
+        });
+
+        Assert.DoesNotContain(argumentName, writer.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(argumentName, error.ToString(), StringComparison.Ordinal);
+        var line = error.ToString()
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Single(l => l.Contains("\"event\":\"mcp.tool.invocation\"", StringComparison.Ordinal));
+        var jsonStart = line.IndexOf('{');
+        using var document = JsonDocument.Parse(line[jsonStart..]);
+        var root = document.RootElement;
+        Assert.Equal("mcp.tool.invocation", root.GetProperty("event").GetString());
+        Assert.Contains(root.GetProperty("arg_keys").EnumerateArray(), key => key.GetString() == display.Text);
+        Assert.Equal(argumentName.Length, root.GetProperty("arg_key_lengths").GetProperty(display.Text).GetInt32());
+        Assert.True(root.GetProperty("arg_keys_truncated").GetBoolean());
+    }
+
+    [Fact]
     public async Task ProcessLineAsync_FallbackErrorIncludesCorrelationData()
     {
         using var writer = new StringWriter();
@@ -628,6 +782,45 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void Initialize_ClientInfo_TruncatesSessionStatusAndCallerIdentity_Issue3120()
+    {
+        var name = new string('n', McpBoundedText.MaxClientInfoChars + 25);
+        var version = new string('v', McpBoundedText.MaxClientInfoChars + 25);
+        var nameDisplay = McpBoundedText.ForDisplay(name, McpBoundedText.MaxClientInfoChars);
+        var versionDisplay = McpBoundedText.ForDisplay(version, McpBoundedText.MaxClientInfoChars);
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "initialize",
+            ["params"] = new JsonObject
+            {
+                ["clientInfo"] = new JsonObject
+                {
+                    ["name"] = name,
+                    ["version"] = version,
+                },
+            },
+        };
+
+        _server.HandleMessage(request);
+
+        Assert.Equal($"{nameDisplay.Text}/{versionDisplay.Text}", _server.CurrentCaller);
+        var status = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
+        var response = _server.HandleMessage(status)!;
+
+        Assert.DoesNotContain(name, response.ToJsonString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(version, response.ToJsonString(), StringComparison.Ordinal);
+        var clientInfo = response["result"]!["structuredContent"]!["mcp_session"]!["client_info"]!;
+        Assert.Equal(nameDisplay.Text, clientInfo["name"]!.GetValue<string>());
+        Assert.Equal(name.Length, clientInfo["name_length"]!.GetValue<int>());
+        Assert.True(clientInfo["name_truncated"]!.GetValue<bool>());
+        Assert.Equal(versionDisplay.Text, clientInfo["version"]!.GetValue<string>());
+        Assert.Equal(version.Length, clientInfo["version_length"]!.GetValue<int>());
+        Assert.True(clientInfo["version_truncated"]!.GetValue<bool>());
+    }
+
+    [Fact]
     public void LoggingSetLevel_UpdatesSessionLogLevel()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"logging/setLevel","params":{"level":"emergency"}}""")!;
@@ -708,6 +901,49 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ResourcesRead_UriTooLong_RejectsBeforeParse_Issue3122()
+    {
+        var uri = "cdidx://file/" + new string('x', McpBoundedText.MaxResourceUriChars + 25);
+        var display = McpBoundedText.ForDisplay(uri, McpBoundedText.MaxResourceUriChars);
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "resources/read",
+            ["params"] = new JsonObject
+            {
+                ["uri"] = uri,
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal(-32602, response["error"]!["code"]!.GetValue<int>());
+        Assert.DoesNotContain(uri, response.ToJsonString(), StringComparison.Ordinal);
+        Assert.Equal($"Resource uri is too long: {display.Text}", response["error"]!["message"]!.GetValue<string>());
+        var data = response["error"]!["data"]!;
+        Assert.Equal(display.Text, data["uri"]!.GetValue<string>());
+        Assert.Equal(uri.Length, data["uri_length"]!.GetValue<int>());
+        Assert.True(data["uri_truncated"]!.GetValue<bool>());
+        Assert.Equal(McpBoundedText.MaxResourceUriChars, data["max_length"]!.GetValue<int>());
+        Assert.Equal(uri.Length, data["actual_length"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ResourcesRead_NotFound_ReturnsBoundedUriData_Issue3122()
+    {
+        const string uri = "cdidx://file/src/missing.cs";
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"cdidx://file/src/missing.cs"}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal(-32602, response["error"]!["code"]!.GetValue<int>());
+        Assert.Equal($"Resource not found: {uri}", response["error"]!["message"]!.GetValue<string>());
+        Assert.Equal(uri, response["error"]!["data"]!["uri"]!.GetValue<string>());
+        Assert.Equal("invalid_argument", response["error"]!["data"]!["category"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void PromptsListAndGet_ReturnPromptMessages()
     {
         var list = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"prompts/list","params":{}}""")!;
@@ -726,6 +962,70 @@ public class McpServerTests : IDisposable
         Assert.Equal("user", message["role"]!.GetValue<string>());
         Assert.Contains("impact_analysis", message["content"]!["text"]!.GetValue<string>());
         Assert.Contains("Run", message["content"]!["text"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void PromptsGet_PromptNameTooLong_TruncatesDiagnostics_Issue3121()
+    {
+        var name = new string('p', McpBoundedText.MaxPromptNameChars + 25);
+        var display = McpBoundedText.ForDisplay(name, McpBoundedText.MaxPromptNameChars);
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "prompts/get",
+            ["params"] = new JsonObject
+            {
+                ["name"] = name,
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal(-32602, response["error"]!["code"]!.GetValue<int>());
+        Assert.DoesNotContain(name, response.ToJsonString(), StringComparison.Ordinal);
+        Assert.Equal($"Prompt name is too long: '{display.Text}'", response["error"]!["message"]!.GetValue<string>());
+        var data = response["error"]!["data"]!;
+        Assert.Equal("name", data["parameter"]!.GetValue<string>());
+        Assert.Equal(McpBoundedText.MaxPromptNameChars, data["max_length"]!.GetValue<int>());
+        Assert.Equal(name.Length, data["actual_length"]!.GetValue<int>());
+        Assert.Equal(display.Text, data["value"]!.GetValue<string>());
+        Assert.Equal(name.Length, data["value_length"]!.GetValue<int>());
+        Assert.True(data["value_truncated"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public void PromptsGet_ArgumentValueTooLong_RejectsBeforePromptInterpolation_Issue3121()
+    {
+        var path = new string('x', McpBoundedText.MaxPromptArgumentChars + 25);
+        var display = McpBoundedText.ForDisplay(path, McpBoundedText.MaxPromptArgumentChars);
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "prompts/get",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "summarize_file",
+                ["arguments"] = new JsonObject
+                {
+                    ["path"] = path,
+                },
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal(-32602, response["error"]!["code"]!.GetValue<int>());
+        Assert.DoesNotContain(path, response.ToJsonString(), StringComparison.Ordinal);
+        Assert.Equal($"Prompt argument 'path' is too long: '{display.Text}'", response["error"]!["message"]!.GetValue<string>());
+        var data = response["error"]!["data"]!;
+        Assert.Equal("path", data["parameter"]!.GetValue<string>());
+        Assert.Equal(McpBoundedText.MaxPromptArgumentChars, data["max_length"]!.GetValue<int>());
+        Assert.Equal(path.Length, data["actual_length"]!.GetValue<int>());
+        Assert.Equal(display.Text, data["value"]!.GetValue<string>());
+        Assert.Equal(path.Length, data["value_length"]!.GetValue<int>());
+        Assert.True(data["value_truncated"]!.GetValue<bool>());
     }
 
     [Fact]
@@ -991,6 +1291,52 @@ public class McpServerTests : IDisposable
         Assert.Contains("Rejecting initialize", log);
         Assert.Contains("2099-01-01", log);
         Assert.Contains("Upgrade the server or pin a supported version", log);
+    }
+
+    [Fact]
+    public void NegotiateProtocolVersion_TruncatesUnsupportedRequestedVersion_Issue3119()
+    {
+        var requested = new string('v', McpBoundedText.MaxProtocolVersionChars + 25);
+        var display = McpBoundedText.ForDisplay(requested, McpBoundedText.MaxProtocolVersionChars);
+        var initializeParams = new JsonObject
+        {
+            ["protocolVersion"] = requested,
+        };
+
+        var negotiated = McpServer.NegotiateProtocolVersion(initializeParams, out var requestedVersion);
+
+        Assert.Null(negotiated);
+        Assert.NotNull(requestedVersion);
+        Assert.Equal(display.Text, requestedVersion.Value.Text);
+        Assert.Equal(requested.Length, requestedVersion.Value.OriginalLength);
+        Assert.True(requestedVersion.Value.Truncated);
+    }
+
+    [Fact]
+    public void Initialize_UnsupportedProtocolVersion_TruncatesDiagnostics_Issue3119()
+    {
+        var requested = new string('p', McpBoundedText.MaxProtocolVersionChars + 25);
+        var display = McpBoundedText.ForDisplay(requested, McpBoundedText.MaxProtocolVersionChars);
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "initialize",
+            ["params"] = new JsonObject
+            {
+                ["protocolVersion"] = requested,
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal(-32602, response["error"]!["code"]!.GetValue<int>());
+        Assert.DoesNotContain(requested, response.ToJsonString(), StringComparison.Ordinal);
+        Assert.Contains(display.Text, response["error"]!["message"]!.GetValue<string>());
+        var data = response["error"]!["data"]!;
+        Assert.Equal(display.Text, data["requestedVersion"]!.GetValue<string>());
+        Assert.Equal(requested.Length, data["requestedVersion_length"]!.GetValue<int>());
+        Assert.True(data["requestedVersion_truncated"]!.GetValue<bool>());
     }
 
     [Fact]
@@ -1760,6 +2106,44 @@ public class McpServerTests : IDisposable
         }
 
         Assert.Contains("Unsupported MCP protocolVersion", writer.ToString());
+        Assert.Contains("Rejecting initialize", error.ToString());
+    }
+
+    [Fact]
+    public async Task ProcessLineAsync_UnsupportedProtocol_TruncatesErrorLog_Issue3119()
+    {
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
+        using var writer = new StringWriter();
+        using var error = new StringWriter();
+        var requested = new string('q', McpBoundedText.MaxProtocolVersionChars + 25);
+        var display = McpBoundedText.ForDisplay(requested, McpBoundedText.MaxProtocolVersionChars);
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "initialize",
+            ["params"] = new JsonObject
+            {
+                ["protocolVersion"] = requested,
+            },
+        };
+        var previousError = Console.Error;
+        Console.SetError(error);
+        try
+        {
+            await server.ProcessLineAsync(
+                request.ToJsonString(),
+                new AssertingTextWriter(writer, () => Assert.Equal(string.Empty, error.ToString())));
+        }
+        finally
+        {
+            Console.SetError(previousError);
+        }
+
+        Assert.DoesNotContain(requested, writer.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(requested, error.ToString(), StringComparison.Ordinal);
+        Assert.Contains(display.Text, writer.ToString());
+        Assert.Contains(display.Text, error.ToString());
         Assert.Contains("Rejecting initialize", error.ToString());
     }
 
@@ -6956,6 +7340,141 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_BatchQuery_UnknownToolName_TruncatesDisplay_Issue3118()
+    {
+        var toolName = new string('b', McpBoundedText.MaxToolNameChars + 25);
+        var display = McpBoundedText.ForDisplay(toolName, McpBoundedText.MaxToolNameChars);
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "batch_query",
+                ["arguments"] = new JsonObject
+                {
+                    ["queries"] = new JsonArray
+                    {
+                        new JsonObject
+                        {
+                            ["tool"] = toolName,
+                            ["arguments"] = new JsonObject
+                            {
+                                ["x"] = 1,
+                            },
+                        },
+                    },
+                },
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        Assert.DoesNotContain(toolName, response.ToJsonString(), StringComparison.Ordinal);
+        var result = response["result"]!;
+        var structured = result["structuredContent"]!;
+        Assert.True(structured["partial_failure"]!.GetValue<bool>());
+        var slot = Assert.Single(structured["results"]!.AsArray())!;
+        Assert.False(slot["ok"]!.GetValue<bool>());
+        Assert.Equal(display.Text, slot["tool"]!.GetValue<string>());
+        Assert.Equal(toolName.Length, slot["tool_length"]!.GetValue<int>());
+        Assert.True(slot["tool_truncated"]!.GetValue<bool>());
+        Assert.Equal($"Unknown tool: {display.Text}", slot["error"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_BatchQuery_UnknownArgumentName_CarriesTruncationMetadata_Issue3117()
+    {
+        var argumentName = new string('u', McpBoundedText.MaxDiagnosticDisplayChars + 25);
+        var display = McpBoundedText.ForDisplay(argumentName);
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "batch_query",
+                ["arguments"] = new JsonObject
+                {
+                    ["queries"] = new JsonArray
+                    {
+                        new JsonObject
+                        {
+                            ["tool"] = "search",
+                            ["arguments"] = new JsonObject
+                            {
+                                ["query"] = "App",
+                                [argumentName] = 1,
+                            },
+                        },
+                    },
+                },
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        Assert.DoesNotContain(argumentName, response.ToJsonString(), StringComparison.Ordinal);
+        var slot = Assert.Single(response["result"]!["structuredContent"]!["results"]!.AsArray())!;
+        Assert.False(slot["ok"]!.GetValue<bool>());
+        Assert.Equal("search", slot["tool"]!.GetValue<string>());
+        Assert.Equal(display.Text, slot["unknown_argument"]!.GetValue<string>());
+        Assert.Equal(argumentName.Length, slot["unknown_argument_length"]!.GetValue<int>());
+        Assert.True(slot["unknown_argument_truncated"]!.GetValue<bool>());
+        Assert.Contains(display.Text, slot["error"]!.GetValue<string>());
+        Assert.Contains(display.Text, slot["args_summary"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_BatchQuery_EnumLikeScalarTooLong_CarriesTruncationMetadata_Issue3116()
+    {
+        var oversized = new string('A', McpBoundedText.MaxScalarArgumentChars + 25);
+        var display = McpBoundedText.ForDisplay(oversized);
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "batch_query",
+                ["arguments"] = new JsonObject
+                {
+                    ["queries"] = new JsonArray
+                    {
+                        new JsonObject
+                        {
+                            ["tool"] = "search",
+                            ["arguments"] = new JsonObject
+                            {
+                                ["query"] = "App",
+                                ["format"] = oversized,
+                            },
+                        },
+                    },
+                },
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        Assert.DoesNotContain(oversized, response.ToJsonString(), StringComparison.Ordinal);
+        var slot = Assert.Single(response["result"]!["structuredContent"]!["results"]!.AsArray())!;
+        Assert.False(slot["ok"]!.GetValue<bool>());
+        Assert.Equal("search", slot["tool"]!.GetValue<string>());
+        Assert.Equal("format", slot["parameter"]!.GetValue<string>());
+        Assert.Equal(display.Text, slot["value"]!.GetValue<string>());
+        Assert.Equal(McpBoundedText.MaxScalarArgumentChars, slot["max_length"]!.GetValue<int>());
+        Assert.Equal(oversized.Length, slot["actual_length"]!.GetValue<int>());
+        Assert.Equal(oversized.Length, slot["value_length"]!.GetValue<int>());
+        Assert.True(slot["value_truncated"]!.GetValue<bool>());
+        Assert.Contains(display.Text, slot["error"]!.GetValue<string>());
+        Assert.Contains(display.Text, slot["args_summary"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void ToolsCall_BatchQuery_SanitizesSlotExceptionMessage_Issue2849()
     {
         const string secret = "SECRET_BATCH_SLOT_2849";
@@ -7287,6 +7806,185 @@ public class McpServerTests : IDisposable
         Assert.Contains($"Unknown argument '{argumentName}' for tool 'index'.", text);
         var structured = response["result"]!["structuredContent"]!;
         Assert.Equal(argumentName, structured["unknown_argument"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_UnknownArgumentName_TruncatesDisplay_Issue3117()
+    {
+        var argumentName = new string('x', McpBoundedText.MaxDiagnosticDisplayChars + 25);
+        var display = McpBoundedText.ForDisplay(argumentName);
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "index",
+                ["arguments"] = new JsonObject
+                {
+                    ["path"] = ".",
+                    [argumentName] = true,
+                },
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+        Assert.DoesNotContain(argumentName, response.ToJsonString(), StringComparison.Ordinal);
+        var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains($"Unknown argument '{display.Text}' for tool 'index'.", text);
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(display.Text, structured["unknown_argument"]!.GetValue<string>());
+        Assert.Equal(argumentName.Length, structured["unknown_argument_length"]!.GetValue<int>());
+        Assert.True(structured["unknown_argument_truncated"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public void ToolsCall_UnknownToolName_TruncatesDisplay_Issue3118()
+    {
+        var toolName = new string('t', McpBoundedText.MaxToolNameChars + 25);
+        var display = McpBoundedText.ForDisplay(toolName, McpBoundedText.MaxToolNameChars);
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = toolName,
+                ["arguments"] = new JsonObject
+                {
+                    ["x"] = 1,
+                },
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal(-32602, response["error"]!["code"]!.GetValue<int>());
+        Assert.DoesNotContain(toolName, response.ToJsonString(), StringComparison.Ordinal);
+        Assert.Equal($"Unknown tool: {display.Text}", response["error"]!["message"]!.GetValue<string>());
+        var data = response["error"]!["data"]!;
+        Assert.Equal(display.Text, data["tool"]!.GetValue<string>());
+        Assert.Equal(toolName.Length, data["tool_length"]!.GetValue<int>());
+        Assert.True(data["tool_truncated"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public void ToolsCall_UnknownToolName_TruncatesMetricsLabels_Issue3118()
+    {
+        var toolName = new string('m', McpBoundedText.MaxToolNameChars + 25);
+        var language = new string('l', McpBoundedText.MaxDiagnosticDisplayChars + 25);
+        var toolDisplay = McpBoundedText.ForDisplay(toolName, McpBoundedText.MaxToolNameChars);
+        var languageDisplay = McpBoundedText.ForDisplay(language);
+        var metricsPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_metrics_{Guid.NewGuid():N}.jsonl");
+        try
+        {
+            using var session = MetricsSink.TryStartForTesting(metricsPath, maxBytes: 1024 * 1024);
+            Assert.NotNull(session);
+            var request = new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = 1,
+                ["method"] = "tools/call",
+                ["params"] = new JsonObject
+                {
+                    ["name"] = toolName,
+                    ["arguments"] = new JsonObject
+                    {
+                        ["lang"] = language,
+                    },
+                },
+            };
+
+            var response = _server.HandleMessage(request)!;
+
+            Assert.Equal(-32602, response["error"]!["code"]!.GetValue<int>());
+            var line = Assert.Single(File.ReadAllLines(metricsPath));
+            Assert.DoesNotContain(toolName, line, StringComparison.Ordinal);
+            Assert.DoesNotContain(language, line, StringComparison.Ordinal);
+            using var doc = JsonDocument.Parse(line);
+            var root = doc.RootElement;
+            Assert.Equal(toolDisplay.Text, root.GetProperty("tool").GetString());
+            Assert.Equal(languageDisplay.Text, root.GetProperty("language").GetString());
+            Assert.Equal(1, root.GetProperty("exit_code").GetInt32());
+            Assert.Equal("unknown_tool", root.GetProperty("error").GetString());
+        }
+        finally
+        {
+            DeleteFileRobust(metricsPath);
+        }
+    }
+
+    [Fact]
+    public void SanitizeArgs_TruncatesArgumentKeysForAuditAndTelemetry_Issue3117()
+    {
+        var argumentName = new string('k', McpBoundedText.MaxDiagnosticDisplayChars + 1);
+        var display = McpBoundedText.ForDisplay(argumentName);
+        var args = new JsonObject
+        {
+            [argumentName] = "value",
+        };
+
+        var (keys, lengths, keyLengths, valuesEcho) = McpServer.SanitizeArgs(args, includeValues: false);
+
+        Assert.Equal([display.Text], keys);
+        var length = Assert.Single(lengths);
+        Assert.Equal(display.Text, length.Key);
+        Assert.Equal("value".Length, length.Value);
+        var keyLength = Assert.Single(keyLengths);
+        Assert.Equal(display.Text, keyLength.Key);
+        Assert.Equal(argumentName.Length, keyLength.Value);
+        Assert.Null(valuesEcho);
+    }
+
+    [Fact]
+    public void SanitizeArgs_TruncatesArgumentKeysInValuesEcho_Issue3117()
+    {
+        var argumentName = new string('k', McpBoundedText.MaxDiagnosticDisplayChars + 25);
+        var display = McpBoundedText.ForDisplay(argumentName);
+        var args = new JsonObject
+        {
+            [argumentName] = "value",
+        };
+
+        var (_, _, keyLengths, valuesEcho) = McpServer.SanitizeArgs(args, includeValues: true);
+
+        Assert.NotNull(valuesEcho);
+        var json = valuesEcho!.ToJsonString();
+        Assert.DoesNotContain(argumentName, json, StringComparison.Ordinal);
+        Assert.Equal("value", valuesEcho[display.Text]!.GetValue<string>());
+        var keyLength = Assert.Single(keyLengths);
+        Assert.Equal(display.Text, keyLength.Key);
+        Assert.Equal(argumentName.Length, keyLength.Value);
+    }
+
+    [Fact]
+    public void SanitizeArgs_DisambiguatesCollidingTruncatedKeys_Issue3117()
+    {
+        var sharedPrefix = new string('c', McpBoundedText.MaxDiagnosticDisplayChars + 25);
+        var firstArgumentName = sharedPrefix + "a";
+        var secondArgumentName = sharedPrefix + "b";
+        var args = new JsonObject
+        {
+            [firstArgumentName] = "one",
+            [secondArgumentName] = "two",
+        };
+
+        var (keys, lengths, keyLengths, valuesEcho) = McpServer.SanitizeArgs(args, includeValues: true);
+
+        Assert.Equal(2, keys.Count);
+        Assert.Equal(2, keys.Distinct(StringComparer.Ordinal).Count());
+        Assert.Equal(2, lengths.Select(pair => pair.Key).Distinct(StringComparer.Ordinal).Count());
+        Assert.Equal(2, keyLengths.Select(pair => pair.Key).Distinct(StringComparer.Ordinal).Count());
+        Assert.NotNull(valuesEcho);
+        var json = valuesEcho!.ToJsonString();
+        Assert.DoesNotContain(firstArgumentName, json, StringComparison.Ordinal);
+        Assert.DoesNotContain(secondArgumentName, json, StringComparison.Ordinal);
+        Assert.Equal("one", valuesEcho[keys[0]]!.GetValue<string>());
+        Assert.Equal("two", valuesEcho[keys[1]]!.GetValue<string>());
     }
 
     [Fact]
@@ -11041,6 +11739,22 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void BuildCallerSwapRejectionLog_TruncatesClientInfoIdentities_Issue3120()
+    {
+        var current = new string('c', McpBoundedText.MaxClientIdentityChars + 25);
+        var attempted = new string('a', McpBoundedText.MaxClientIdentityChars + 25);
+        var currentDisplay = McpBoundedText.ForDisplay(current, McpBoundedText.MaxClientIdentityChars);
+        var attemptedDisplay = McpBoundedText.ForDisplay(attempted, McpBoundedText.MaxClientIdentityChars);
+
+        var log = McpServer.BuildCallerSwapRejectionLog(current, attempted);
+
+        Assert.DoesNotContain(current, log, StringComparison.Ordinal);
+        Assert.DoesNotContain(attempted, log, StringComparison.Ordinal);
+        Assert.Contains(currentDisplay.Text, log);
+        Assert.Contains(attemptedDisplay.Text, log);
+    }
+
+    [Fact]
     public void BatchQuery_RejectsNestedBatchQuerySlots()
     {
         // batch_query slots that themselves request `batch_query` are rejected before
@@ -11236,6 +11950,24 @@ public class McpServerTests : IDisposable
         Assert.Equal("status", data["tool"]!.GetValue<string>());
         // Canonical envelope added / canonical envelope を併載
         AssertEnvelope(data, "rate_limited", expectedRetrySafe: true);
+    }
+
+    [Fact]
+    public void RateLimited_ErrorAndLog_TruncatesCallerIdentity_Issue3120()
+    {
+        var caller = new string('r', McpBoundedText.MaxClientIdentityChars + 25);
+        var display = McpBoundedText.ForDisplay(caller, McpBoundedText.MaxClientIdentityChars);
+
+        var response = McpServer.CreateRateLimitedErrorResponse(null, "status", caller, retryAfterMs: 123);
+        var log = McpServer.BuildRateLimitedLog("status", caller, retryAfterMs: 123);
+
+        Assert.DoesNotContain(caller, response.ToJsonString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(caller, log, StringComparison.Ordinal);
+        var data = response["error"]!["data"]!;
+        Assert.Equal(display.Text, data["caller"]!.GetValue<string>());
+        Assert.Equal(caller.Length, data["caller_length"]!.GetValue<int>());
+        Assert.True(data["caller_truncated"]!.GetValue<bool>());
+        Assert.Contains(display.Text, log);
     }
 
     [Fact]

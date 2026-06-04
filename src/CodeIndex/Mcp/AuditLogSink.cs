@@ -212,10 +212,22 @@ internal sealed class AuditLogSink : IDisposable
             jw.WriteStartObject();
             jw.WriteString("timestamp", evt.Timestamp.ToString("O", CultureInfo.InvariantCulture));
             jw.WriteString("tool", evt.Tool);
+            if (evt.ToolLength is { } toolLength)
+                jw.WriteNumber("tool_length", toolLength);
+            if (evt.ToolTruncated)
+                jw.WriteBoolean("tool_truncated", true);
             if (evt.CallerName is { } caller)
                 jw.WriteString("caller", caller);
+            if (evt.CallerNameLength is { } callerLength)
+                jw.WriteNumber("caller_length", callerLength);
+            if (evt.CallerNameTruncated)
+                jw.WriteBoolean("caller_truncated", true);
             if (evt.CallerVersion is { } callerVersion)
                 jw.WriteString("caller_version", callerVersion);
+            if (evt.CallerVersionLength is { } callerVersionLength)
+                jw.WriteNumber("caller_version_length", callerVersionLength);
+            if (evt.CallerVersionTruncated)
+                jw.WriteBoolean("caller_version_truncated", true);
             if (evt.RequestId is { } reqId)
                 jw.WriteString("request_id", reqId);
 
@@ -230,6 +242,16 @@ internal sealed class AuditLogSink : IDisposable
             foreach (var kv in evt.ArgLengths)
                 jw.WriteNumber(kv.Key, kv.Value);
             jw.WriteEndObject();
+
+            if (evt.ArgKeyLengths is { Count: > 0 } argKeyLengths)
+            {
+                jw.WritePropertyName("arg_key_lengths");
+                jw.WriteStartObject();
+                foreach (var kv in argKeyLengths)
+                    jw.WriteNumber(kv.Key, kv.Value);
+                jw.WriteEndObject();
+                jw.WriteBoolean("arg_keys_truncated", true);
+            }
 
             if (includeValues && evt.ArgValues is { } values)
             {
@@ -278,5 +300,12 @@ internal sealed class AuditLogSink : IDisposable
         int? ResultCount,
         double ElapsedMs,
         int ErrorCode,
-        string? ErrorType);
+        string? ErrorType,
+        int? ToolLength = null,
+        bool ToolTruncated = false,
+        IReadOnlyList<KeyValuePair<string, int>>? ArgKeyLengths = null,
+        int? CallerNameLength = null,
+        bool CallerNameTruncated = false,
+        int? CallerVersionLength = null,
+        bool CallerVersionTruncated = false);
 }

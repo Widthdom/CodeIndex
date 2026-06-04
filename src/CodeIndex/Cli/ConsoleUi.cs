@@ -108,7 +108,7 @@ public static class ConsoleUi
         ("export", "cdidx export <archive> [--db <path>] [--json]"),
         ("export", "cdidx export ctags [--output <path>] [--db <path>]"),
         ("import", "cdidx import <archive> [--db <path>] [--prune-paths] [--json]"),
-        ("languages", "cdidx languages [--json]"),
+        ("languages", "cdidx languages [--db <path>] [--json] [--indexed-only] [--capability <graph|symbols|references>]"),
         ("batch", "cdidx batch [--db <path>]  # reads JSON string arrays from stdin, one query command per line; max 1,048,576 chars/line and 256 arguments"),
         ("mcp", "cdidx mcp [--db <path>] [--transport stdio|http] [--http-listen <host:port>] [--audit-log <path>] [--audit-log-include-values] [--audit-log-max-bytes <n>] [--suggestion-dedup-threshold <0..1>]"),
         ("lsp", "cdidx lsp [--db <path>]"),

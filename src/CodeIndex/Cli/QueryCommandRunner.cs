@@ -28,6 +28,9 @@ public static class QueryCommandRunner
     internal const string DefaultSnippetLinesEnvironmentVariable = "CDIDX_DEFAULT_SNIPPET_LINES";
     internal const string DefaultMaxLineWidthEnvironmentVariable = "CDIDX_DEFAULT_MAX_LINE_WIDTH";
     internal const string StaleAfterEnvironmentVariable = "CDIDX_STALE_AFTER";
+    private const string LanguageCapabilityGraph = "graph";
+    private const string LanguageCapabilityReferences = "references";
+    private const string LanguageCapabilitySymbols = "symbols";
     internal static readonly TimeSpan DefaultStaleAfter = TimeSpan.FromHours(24);
     internal static TimeProvider TimeProvider { get; set; } = TimeProvider.System;
     [ThreadStatic]
@@ -5375,13 +5378,13 @@ public static class QueryCommandRunner
 
         // Build a consolidated view: language -> (extensions, hasSymbols, hasGraph)
         // 統合ビュー: 言語 -> (拡張子, シンボル対応, グラフ対応)
-        var allLangs = new Dictionary<string, (List<string> Extensions, List<string> Aliases, bool Symbols, bool Graph)>(StringComparer.Ordinal);
+        var allLangs = new Dictionary<string, LanguageSupportInfo>(StringComparer.Ordinal);
 
         foreach (var (ext, lang) in langExtensions)
         {
             if (!allLangs.TryGetValue(lang, out var info))
             {
-                info = (new List<string>(), GetLanguageAliases(lang).ToList(), symbolLangs.Contains(lang), graphLangs.Contains(lang));
+                info = new LanguageSupportInfo([], GetLanguageAliases(lang).ToList(), symbolLangs.Contains(lang), graphLangs.Contains(lang));
                 allLangs[lang] = info;
             }
             info.Extensions.Add(ext);
@@ -5390,48 +5393,84 @@ public static class QueryCommandRunner
         // Sort by language name / 言語名でソート
         var sorted = allLangs.OrderBy(kv => kv.Key).ToList();
 
-        if (json)
+        if (options.LanguagesIndexedOnly)
         {
-            var entries = sorted.Select(kv => new LanguageEntryJsonResult(
-                kv.Key,
-                kv.Value.Extensions.OrderBy(e => e).ToList(),
-                kv.Value.Aliases.OrderBy(a => a).ToList(),
-                kv.Value.Symbols,
-                kv.Value.Graph)).ToList();
-            Console.WriteLine(JsonSerializer.Serialize(new LanguagesJsonResult(entries), CliJsonSerializerContextFactory.Create(jsonOptions).LanguagesJsonResult));
-        }
-        else
-        {
-            // Fixed-width Extensions column for short lists; spill long lists onto a continuation
-            // line so the Symbols / Graph columns are never swallowed by a wide extension string.
-            // 拡張子が短い場合は固定幅テーブル、長い場合は継続行に退避させることで、
-            // Symbols / Graph 列が拡張子文字列に埋もれないようにする。
-            const int ExtensionColumnWidth = 36;
-            const int AliasColumnWidth = 12;
-            Console.WriteLine($"{"Language",-14} {"Extensions",-36} {"Aliases",-12} {"Symbols",-9} {"Graph",-7}");
-            Console.WriteLine(new string('-', 79));
-            foreach (var (lang, info) in sorted)
+            return WithDb(options, jsonOptions, reader =>
             {
-                var exts = string.Join(" ", info.Extensions.OrderBy(e => e));
-                var aliases = string.Join(" ", info.Aliases.OrderBy(a => a));
-                var aliasCell = string.IsNullOrWhiteSpace(aliases) ? "-" : aliases;
-                var sym = info.Symbols ? "yes" : "-";
-                var graph = info.Graph ? "yes" : "-";
-                if (exts.Length <= ExtensionColumnWidth && aliases.Length <= AliasColumnWidth)
-                {
-                    Console.WriteLine($"{lang,-14} {exts,-36} {aliasCell,-12} {sym,-9} {graph,-7}");
-                }
-                else
-                {
-                    Console.WriteLine($"{lang,-14} {"",-36} {"",-12} {sym,-9} {graph,-7}");
-                    Console.WriteLine($"  Extensions: {exts}");
-                    if (!string.IsNullOrWhiteSpace(aliases))
-                        Console.WriteLine($"  Aliases: {aliases}");
-                }
-            }
-            Console.Error.WriteLine($"\n({sorted.Count} languages)");
+                var indexedLanguages = new HashSet<string>(reader.GetStatus().Languages.Keys, StringComparer.Ordinal);
+                return WriteLanguages(sorted.Where(kv => indexedLanguages.Contains(kv.Key)));
+            });
         }
-        return CommandExitCodes.Success;
+
+        return WriteLanguages(sorted);
+
+        int WriteLanguages(IEnumerable<KeyValuePair<string, LanguageSupportInfo>> languages)
+        {
+            var filtered = languages
+                .Where(kv => options.LanguageCapabilities.All(capability => LanguageMatchesCapability(kv.Value, capability)))
+                .OrderBy(kv => kv.Key, StringComparer.Ordinal)
+                .ToList();
+
+            if (json)
+            {
+                var entries = filtered.Select(kv => new LanguageEntryJsonResult(
+                    kv.Key,
+                    kv.Value.Extensions.OrderBy(e => e).ToList(),
+                    kv.Value.Aliases.OrderBy(a => a).ToList(),
+                    kv.Value.Symbols,
+                    kv.Value.Graph)).ToList();
+                Console.WriteLine(JsonSerializer.Serialize(new LanguagesJsonResult(entries), CliJsonSerializerContextFactory.Create(jsonOptions).LanguagesJsonResult));
+            }
+            else
+            {
+                // Fixed-width Extensions column for short lists; spill long lists onto a continuation
+                // line so the Symbols / Graph columns are never swallowed by a wide extension string.
+                // 拡張子が短い場合は固定幅テーブル、長い場合は継続行に退避させることで、
+                // Symbols / Graph 列が拡張子文字列に埋もれないようにする。
+                const int ExtensionColumnWidth = 36;
+                const int AliasColumnWidth = 12;
+                Console.WriteLine($"{"Language",-14} {"Extensions",-36} {"Aliases",-12} {"Symbols",-9} {"Graph",-7}");
+                Console.WriteLine(new string('-', 79));
+                foreach (var (lang, info) in filtered)
+                {
+                    var exts = string.Join(" ", info.Extensions.OrderBy(e => e));
+                    var aliases = string.Join(" ", info.Aliases.OrderBy(a => a));
+                    var aliasCell = string.IsNullOrWhiteSpace(aliases) ? "-" : aliases;
+                    var sym = info.Symbols ? "yes" : "-";
+                    var graph = info.Graph ? "yes" : "-";
+                    if (exts.Length <= ExtensionColumnWidth && aliases.Length <= AliasColumnWidth)
+                    {
+                        Console.WriteLine($"{lang,-14} {exts,-36} {aliasCell,-12} {sym,-9} {graph,-7}");
+                    }
+                    else
+                    {
+                        Console.WriteLine($"{lang,-14} {"",-36} {"",-12} {sym,-9} {graph,-7}");
+                        Console.WriteLine($"  Extensions: {exts}");
+                        if (!string.IsNullOrWhiteSpace(aliases))
+                            Console.WriteLine($"  Aliases: {aliases}");
+                    }
+                }
+                Console.Error.WriteLine($"\n({filtered.Count} languages)");
+            }
+
+            return CommandExitCodes.Success;
+        }
+    }
+
+    private sealed record LanguageSupportInfo(List<string> Extensions, List<string> Aliases, bool Symbols, bool Graph);
+
+    private static bool LanguageMatchesCapability(LanguageSupportInfo language, string capability)
+        => capability switch
+        {
+            LanguageCapabilitySymbols => language.Symbols,
+            LanguageCapabilityGraph or LanguageCapabilityReferences => language.Graph,
+            _ => false,
+        };
+
+    private static bool TryNormalizeLanguageCapability(string value, out string capability)
+    {
+        capability = value.Trim().ToLowerInvariant();
+        return capability is LanguageCapabilityGraph or LanguageCapabilityReferences or LanguageCapabilitySymbols;
     }
 
     public static QueryCommandOptions ParseArgs(
@@ -5517,6 +5556,8 @@ public static class QueryCommandRunner
         string? recipeName = null;
         bool listRecipes = false;
         string? openIssuesPath = null;
+        bool languagesIndexedOnly = false;
+        var languageCapabilities = new List<string>();
 
         void AddParseError(string error)
         {
@@ -5665,6 +5706,23 @@ public static class QueryCommandRunner
                     else
                     {
                         AddParseError($"Error: --json format must be one of ndjson or array, got '{inlineValue}'. Hint: use `--json` or `--json=ndjson` for newline-delimited JSON, or `--json=array` for a single JSON array.");
+                    }
+                    break;
+                case "--indexed-only":
+                    languagesIndexedOnly = true;
+                    break;
+                case "--capability":
+                    if (!TryReadStringOptionValue(args, ref i, "--capability", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var capabilityValue, out var capabilityError))
+                    {
+                        AddParseError(capabilityError!);
+                    }
+                    else if (TryNormalizeLanguageCapability(capabilityValue!, out var capability))
+                    {
+                        languageCapabilities.Add(capability);
+                    }
+                    else
+                    {
+                        AddParseError($"Error: unsupported --capability value '{capabilityValue}'. Use graph, symbols, or references.");
                     }
                     break;
                 case "--format":
@@ -6337,6 +6395,8 @@ public static class QueryCommandRunner
             RecipeName = recipeName,
             ListRecipes = listRecipes,
             OpenIssuesPath = openIssuesPath,
+            LanguagesIndexedOnly = languagesIndexedOnly,
+            LanguageCapabilities = languageCapabilities,
             ParseError = parseErrors == null ? null : string.Join(Environment.NewLine, parseErrors),
         };
     }
@@ -9128,5 +9188,7 @@ public sealed class QueryCommandOptions
     public string? RecipeName { get; init; }
     public bool ListRecipes { get; init; }
     public string? OpenIssuesPath { get; init; }
+    public bool LanguagesIndexedOnly { get; init; }
+    public List<string> LanguageCapabilities { get; init; } = [];
     public string? ParseError { get; init; }
 }

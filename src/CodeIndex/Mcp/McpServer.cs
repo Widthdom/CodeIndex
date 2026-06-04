@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Globalization;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -109,6 +111,8 @@ public partial class McpServer : IDisposable
     // にする。`initialize` 毎に上書きすることで再接続時に caller identity が追随する。
     private string? _clientName;
     private string? _clientVersion;
+    private BoundedMcpText? _clientNameDisplay;
+    private BoundedMcpText? _clientVersionDisplay;
     private JsonNode? _clientCapabilities;
     private JsonArray _clientRoots = [];
     private string _mcpLogLevel = "info";
@@ -1801,13 +1805,17 @@ public partial class McpServer : IDisposable
         // 再接続が前回のクライアント名/version を引き継がないようにするため。
         _clientName = null;
         _clientVersion = null;
+        _clientNameDisplay = null;
+        _clientVersionDisplay = null;
         if (initializeParams is not JsonObject obj)
             return;
         _clientRootsStale = true;
         if (obj["clientInfo"] is not JsonObject info)
             return;
-        _clientName = TryReadStringMember(info, "name");
-        _clientVersion = TryReadStringMember(info, "version");
+        _clientNameDisplay = TryReadBoundedClientInfoMember(info, "name");
+        _clientVersionDisplay = TryReadBoundedClientInfoMember(info, "version");
+        _clientName = _clientNameDisplay?.Text;
+        _clientVersion = _clientVersionDisplay?.Text;
     }
 
     private void CaptureClientSession(JsonNode? initializeParams)
@@ -1853,8 +1861,14 @@ public partial class McpServer : IDisposable
         if (!obj.TryGetPropertyValue(key, out var node))
             return null;
         if (node is JsonValue value && value.TryGetValue<string>(out var s) && !string.IsNullOrWhiteSpace(s))
-            return s;
+            return s.Trim();
         return null;
+    }
+
+    private static BoundedMcpText? TryReadBoundedClientInfoMember(JsonObject obj, string key)
+    {
+        var value = TryReadStringMember(obj, key);
+        return value is null ? null : BoundClientInfoForDisplay(value);
     }
 
     private JsonNode HandleResourcesList(JsonNode? id, JsonNode? listParams)
@@ -1903,10 +1917,14 @@ public partial class McpServer : IDisposable
                 category: McpErrorEnvelope.CategoryMissingParameter,
                 suggestion: "resources/read requires `params.uri` from resources/list, such as `cdidx://file/src/app.cs`.",
                 retrySafe: false);
+        if (uri.Length > McpBoundedText.MaxResourceUriChars)
+            return CreateResourceUriError(id, uri, messagePrefix: "Resource uri is too long",
+                suggestion: "Use a resource URI returned by resources/list and keep it within the documented MCP resource URI length limit.",
+                retrySafe: false,
+                includeLengthLimit: true);
 
         if (!TryParseResourceUri(uri, out var path))
-            return CreateErrorResponse(hasId: true, id: id, code: -32602, message: $"Invalid resource uri: {uri}",
-                category: McpErrorEnvelope.CategoryInvalidArgument,
+            return CreateResourceUriError(id, uri, messagePrefix: "Invalid resource uri",
                 suggestion: "Use a cdidx file resource URI returned by resources/list (`cdidx://file/<indexed-path>`).",
                 retrySafe: false);
 
@@ -1915,8 +1933,7 @@ public partial class McpServer : IDisposable
             var files = reader.ListFiles(query: path, limit: 2);
             var file = files.FirstOrDefault(f => string.Equals(f.Path, path, StringComparison.Ordinal));
             if (file == null)
-                return CreateErrorResponse(hasId: true, id: id, code: -32602, message: $"Resource not found: {uri}",
-                    category: McpErrorEnvelope.CategoryInvalidArgument,
+                return CreateResourceUriError(id, uri, messagePrefix: "Resource not found",
                     suggestion: "Call resources/list again and retry with one of the returned resource URIs.",
                     retrySafe: true);
 
@@ -1932,6 +1949,26 @@ public partial class McpServer : IDisposable
             };
             return CreateSuccessResponse(true, id, new JsonObject { ["contents"] = contents });
         });
+    }
+
+    private static JsonNode CreateResourceUriError(JsonNode? id, string uri, string messagePrefix, string suggestion, bool retrySafe, bool includeLengthLimit = false)
+    {
+        var display = McpBoundedText.ForDisplay(uri, McpBoundedText.MaxResourceUriChars);
+        var data = new JsonObject
+        {
+            ["uri"] = display.Text,
+        };
+        display.AddMetadata(data, "uri");
+        if (includeLengthLimit)
+        {
+            data["max_length"] = McpBoundedText.MaxResourceUriChars;
+            data["actual_length"] = uri.Length;
+        }
+        return CreateErrorResponse(hasId: true, id: id, code: -32602, message: $"{messagePrefix}: {display.Text}",
+            category: McpErrorEnvelope.CategoryInvalidArgument,
+            suggestion: suggestion,
+            retrySafe: retrySafe,
+            extraData: data);
     }
 
     private JsonNode HandlePromptsList(JsonNode? id)
@@ -1953,25 +1990,63 @@ public partial class McpServer : IDisposable
                 category: McpErrorEnvelope.CategoryMissingParameter,
                 suggestion: "prompts/get requires `params.name`; call prompts/list to enumerate available names.",
                 retrySafe: false);
+        name = name.Trim();
+        if (name.Length > McpBoundedText.MaxPromptNameChars)
+            return CreatePromptStringTooLongError(id, parameterName: "name", value: name, maxChars: McpBoundedText.MaxPromptNameChars,
+                messagePrefix: "Prompt name is too long",
+                suggestion: "Use one of the short prompt names returned by prompts/list.");
 
         var args = getParams?["arguments"] as JsonObject;
-        string? ReadArg(string key)
-            => args != null && args.TryGetPropertyValue(key, out var node) && node is JsonValue value && value.TryGetValue<string>(out var s)
-                ? s
-                : null;
-
-        var text = name switch
+        string? ReadArg(string key, out JsonNode? error)
         {
-            "summarize_file" => $"Use the `outline` tool for `{ReadArg("path") ?? "<path>"}`, then use `excerpt` only for the ranges needed to summarize public API, key symbols, and responsibilities.",
-            "find_unused" => $"Use `unused_symbols` with the requested scope `{ReadArg("scope") ?? "<scope>"}`. Cross-check surprising results with `references` or `callers` before recommending deletions.",
-            "impact_of_changing" => $"Use `impact_analysis` for `{ReadArg("symbol") ?? "<symbol>"}`. Summarize direct callers, transitive callers, and files that likely need tests.",
-            _ => null,
-        };
-        if (text == null)
-            return CreateErrorResponse(hasId: true, id: id, code: -32602, message: $"Unknown prompt: {name}",
-                category: McpErrorEnvelope.CategoryInvalidArgument,
-                suggestion: "Call prompts/list and request one of the advertised prompt names.",
-                retrySafe: false);
+            error = null;
+            if (args == null
+                || !args.TryGetPropertyValue(key, out var node)
+                || node is not JsonValue value
+                || !value.TryGetValue<string>(out var s))
+            {
+                return null;
+            }
+            if (s.Length > McpBoundedText.MaxPromptArgumentChars)
+            {
+                error = CreatePromptStringTooLongError(id, parameterName: key, value: s, maxChars: McpBoundedText.MaxPromptArgumentChars,
+                    messagePrefix: $"Prompt argument '{key}' is too long",
+                    suggestion: "Shorten prompt arguments before calling prompts/get; long source or path context should be fetched with tools instead.");
+                return null;
+            }
+            return McpBoundedText.ForDisplay(s, McpBoundedText.MaxPromptArgumentChars).Text;
+        }
+
+        string text;
+        switch (name)
+        {
+            case "summarize_file":
+                {
+                    var path = ReadArg("path", out var argumentError);
+                    if (argumentError is not null)
+                        return argumentError;
+                    text = $"Use the `outline` tool for `{path ?? "<path>"}`, then use `excerpt` only for the ranges needed to summarize public API, key symbols, and responsibilities.";
+                    break;
+                }
+            case "find_unused":
+                {
+                    var scope = ReadArg("scope", out var argumentError);
+                    if (argumentError is not null)
+                        return argumentError;
+                    text = $"Use `unused_symbols` with the requested scope `{scope ?? "<scope>"}`. Cross-check surprising results with `references` or `callers` before recommending deletions.";
+                    break;
+                }
+            case "impact_of_changing":
+                {
+                    var symbol = ReadArg("symbol", out var argumentError);
+                    if (argumentError is not null)
+                        return argumentError;
+                    text = $"Use `impact_analysis` for `{symbol ?? "<symbol>"}`. Summarize direct callers, transitive callers, and files that likely need tests.";
+                    break;
+                }
+            default:
+                return CreateUnknownPromptError(id, name);
+        }
 
         var messages = new JsonArray
         {
@@ -1990,6 +2065,39 @@ public partial class McpServer : IDisposable
             ["description"] = name,
             ["messages"] = messages,
         });
+    }
+
+    private static JsonNode CreatePromptStringTooLongError(JsonNode? id, string parameterName, string value, int maxChars, string messagePrefix, string suggestion)
+    {
+        var display = McpBoundedText.ForDisplay(value, maxChars);
+        var data = new JsonObject
+        {
+            ["parameter"] = parameterName,
+            ["max_length"] = maxChars,
+            ["actual_length"] = value.Length,
+            ["value"] = display.Text,
+        };
+        display.AddMetadata(data, "value");
+        return CreateErrorResponse(hasId: true, id: id, code: -32602, message: $"{messagePrefix}: '{display.Text}'",
+            category: McpErrorEnvelope.CategoryInvalidArgument,
+            suggestion: suggestion,
+            retrySafe: false,
+            extraData: data);
+    }
+
+    private static JsonNode CreateUnknownPromptError(JsonNode? id, string name)
+    {
+        var display = McpBoundedText.ForDisplay(name, McpBoundedText.MaxPromptNameChars);
+        var data = new JsonObject
+        {
+            ["prompt"] = display.Text,
+        };
+        display.AddMetadata(data, "prompt");
+        return CreateErrorResponse(hasId: true, id: id, code: -32602, message: $"Unknown prompt: {display.Text}",
+            category: McpErrorEnvelope.CategoryInvalidArgument,
+            suggestion: "Call prompts/list and request one of the advertised prompt names.",
+            retrySafe: false,
+            extraData: data);
     }
 
     private JsonNode HandleLoggingSetLevel(JsonNode? id, JsonNode? setLevelParams)
@@ -2086,26 +2194,14 @@ public partial class McpServer : IDisposable
         if (obj["clientInfo"] is not JsonObject clientInfo)
             return "unknown";
 
-        string? Read(string key)
-        {
-            if (clientInfo.TryGetPropertyValue(key, out var node)
-                && node is JsonValue value
-                && value.TryGetValue<string>(out var s)
-                && !string.IsNullOrWhiteSpace(s))
-            {
-                return s.Trim();
-            }
-            return null;
-        }
-
-        var name = Read("name");
+        var name = TryReadBoundedClientInfoMember(clientInfo, "name")?.Text;
         if (name == null)
             return "unknown";
-        var version = Read("version");
+        var version = TryReadBoundedClientInfoMember(clientInfo, "version")?.Text;
         return version == null ? name : $"{name}/{version}";
     }
 
-    internal static string? NegotiateProtocolVersion(JsonNode? initializeParams, out string? requestedVersion)
+    internal static string? NegotiateProtocolVersion(JsonNode? initializeParams, out BoundedMcpText? requestedVersion)
     {
         requestedVersion = null;
         if (initializeParams is JsonObject obj
@@ -2114,7 +2210,7 @@ public partial class McpServer : IDisposable
             && value.TryGetValue<string>(out var versionString)
             && !string.IsNullOrWhiteSpace(versionString))
         {
-            requestedVersion = versionString;
+            requestedVersion = BoundProtocolVersionForDisplay(versionString);
             foreach (var supported in SupportedProtocolVersions)
             {
                 if (string.Equals(supported, versionString, StringComparison.Ordinal))
@@ -2129,7 +2225,7 @@ public partial class McpServer : IDisposable
         return ProtocolVersion;
     }
 
-    private static JsonObject CreateUnsupportedProtocolError(JsonNode? id, string? requestedVersion)
+    private static JsonObject CreateUnsupportedProtocolError(JsonNode? id, BoundedMcpText? requestedVersion)
     {
         var supportedArray = new JsonArray();
         foreach (var supported in SupportedProtocolVersions)
@@ -2146,7 +2242,10 @@ public partial class McpServer : IDisposable
             ["supportedVersions"] = supportedArray
         };
         if (requestedVersion != null)
-            extra["requestedVersion"] = requestedVersion;
+        {
+            extra["requestedVersion"] = requestedVersion.Value.Text;
+            requestedVersion.Value.AddMetadata(extra, "requestedVersion");
+        }
 
         var data = McpErrorEnvelope.BuildData(
             McpErrorEnvelope.CategoryInvalidArgument,
@@ -2170,18 +2269,35 @@ public partial class McpServer : IDisposable
     }
 
     internal static string BuildUnsupportedProtocolMessage(string? requestedVersion)
+        => BuildUnsupportedProtocolMessage(BoundProtocolVersionForDisplay(requestedVersion));
+
+    private static string BuildUnsupportedProtocolMessage(BoundedMcpText? requestedVersion)
     {
         var supported = string.Join(", ", SupportedProtocolVersions);
-        var requested = string.IsNullOrEmpty(requestedVersion) ? "(unspecified)" : requestedVersion;
+        var requested = requestedVersion?.Text ?? "(unspecified)";
         return $"Unsupported MCP protocolVersion '{requested}'. Server supports: {supported}.";
     }
 
     internal static string BuildUnsupportedProtocolLog(string? requestedVersion)
+        => BuildUnsupportedProtocolLog(BoundProtocolVersionForDisplay(requestedVersion));
+
+    private static string BuildUnsupportedProtocolLog(BoundedMcpText? requestedVersion)
     {
         var supported = string.Join(", ", SupportedProtocolVersions);
-        var requested = string.IsNullOrEmpty(requestedVersion) ? "(unspecified)" : requestedVersion;
+        var requested = requestedVersion?.Text ?? "(unspecified)";
         return $"[cdidx-mcp] Rejecting initialize: client requested protocolVersion '{requested}', server supports {supported}. Upgrade the server or pin a supported version on the client.";
     }
+
+    private static BoundedMcpText? BoundProtocolVersionForDisplay(string? requestedVersion)
+        => string.IsNullOrEmpty(requestedVersion)
+            ? null
+            : McpBoundedText.ForDisplay(requestedVersion, McpBoundedText.MaxProtocolVersionChars);
+
+    private static BoundedMcpText BoundClientInfoForDisplay(string value)
+        => McpBoundedText.ForDisplay(value, McpBoundedText.MaxClientInfoChars);
+
+    private static BoundedMcpText BoundClientIdentityForDisplay(string value)
+        => McpBoundedText.ForDisplay(value, McpBoundedText.MaxClientIdentityChars);
 
     /// <summary>
     /// Build a structured `-32000` JSON-RPC error for a rate-limited tool call. Surfacing
@@ -2194,6 +2310,7 @@ public partial class McpServer : IDisposable
     /// </summary>
     internal static JsonObject CreateRateLimitedErrorResponse(JsonNode? id, string tool, string caller, long retryAfterMs)
     {
+        var callerDisplay = BoundClientIdentityForDisplay(caller);
         // #1560 contract preserved: `error_category`, `tool`, `caller`, `retry_after_ms`.
         // #1581 adds the canonical envelope (`category`, `suggestion`, `retry_safe`) alongside.
         // #1560 の契約（`error_category`, `tool`, `caller`, `retry_after_ms`）を維持しつつ、
@@ -2202,9 +2319,10 @@ public partial class McpServer : IDisposable
         {
             ["error_category"] = "rate_limited",
             ["tool"] = tool,
-            ["caller"] = caller,
+            ["caller"] = callerDisplay.Text,
             ["retry_after_ms"] = retryAfterMs,
         };
+        callerDisplay.AddMetadata(extraData, "caller");
         var data = McpErrorEnvelope.BuildData(
             category: McpErrorEnvelope.CategoryRateLimited,
             suggestion: $"Back off for at least {retryAfterMs} ms before retrying this tool, or raise {RateLimiterOptions.RpsEnvVar} / {RateLimiterOptions.BurstEnvVar} on the server.",
@@ -2253,6 +2371,7 @@ public partial class McpServer : IDisposable
             TryEmitAudit("(missing)", id, args, missingNameResponse, DateTimeOffset.UtcNow, 0.0, errorType: "missing_tool_name");
             return missingNameResponse;
         }
+        var toolNameTooLong = toolName.Length > McpBoundedText.MaxToolNameChars;
 
         // Per-deployment enablement gate (#1561). Disabled known tools return `-32601 method
         // not found` so clients can branch on a structured JSON-RPC code; truly unknown names
@@ -2289,9 +2408,19 @@ public partial class McpServer : IDisposable
         var metricsStopwatch = System.Diagnostics.Stopwatch.StartNew();
         string? metricsError = null;
         JsonNode response;
+        JsonObject CreateUnknownToolResponseForMetrics()
+        {
+            metricsError = "unknown_tool";
+            return CreateUnknownToolErrorResponse(hasId: true, id: id, toolName);
+        }
+
         try
         {
-            if (ValidateToolArguments(toolName, args) is JsonObject argumentError)
+            if (toolNameTooLong)
+            {
+                response = CreateUnknownToolResponseForMetrics();
+            }
+            else if (ValidateToolArguments(toolName, args) is JsonObject argumentError)
             {
                 metricsError = "invalid_argument";
                 if (argumentError["jsonrpc_invalid_params"] is JsonValue invalidParamsMarker
@@ -2366,11 +2495,7 @@ public partial class McpServer : IDisposable
                         "index" => await ExecuteIndexAsync(id, args, progressToken).ConfigureAwait(false),
                         "backfill_fold" => ExecuteBackfillFold(id, args, progressToken),
                         "suggest_improvement" => await ExecuteSuggestImprovementAsync(id, args).ConfigureAwait(false),
-                        _ => CreateErrorResponse(hasId: true, id: id, code: -32602, message: $"Unknown tool: {toolName}",
-                            category: McpErrorEnvelope.CategoryToolUnknown,
-                            suggestion: "Call tools/list to enumerate the available tool names for this server. Tool name match is case-sensitive.",
-                            retrySafe: false,
-                            extraData: new JsonObject { ["tool"] = toolName }),
+                        _ => CreateUnknownToolResponseForMetrics(),
                     };
                 }
             }
@@ -2403,11 +2528,7 @@ public partial class McpServer : IDisposable
                 category: classification.Category,
                 suggestion: classification.Suggestion,
                 retrySafe: classification.RetrySafe,
-                extraData: new JsonObject
-                {
-                    ["tool"] = toolName,
-                    ["exception_type"] = ex.GetType().Name,
-                });
+                extraData: BuildToolExceptionData(toolName, ex.GetType().Name));
         }
         finally
         {
@@ -2415,13 +2536,14 @@ public partial class McpServer : IDisposable
             if (MetricsSink.IsActive)
             {
                 metricsStopwatch.Stop();
+                var metricsTool = BoundToolNameForDisplay(toolName).Text;
                 MetricsSink.Record(new MetricsEvent(
                     Timestamp: metricsStartedAt,
-                    Tool: toolName,
+                    Tool: metricsTool,
                     Source: "mcp",
                     ElapsedMs: metricsStopwatch.Elapsed.TotalMilliseconds,
                     ExitCode: metricsError == null ? 0 : 1,
-                    Language: TryReadStringArg(args, "language") ?? TryReadStringArg(args, "lang"),
+                    Language: TryReadMetricStringArg(args, "language") ?? TryReadMetricStringArg(args, "lang"),
                     Error: metricsError));
             }
         }
@@ -2433,7 +2555,8 @@ public partial class McpServer : IDisposable
         // audit はワイヤーレスポンスと例外型の両方を参照するため metrics finally の後で
         // 出力する。Stopwatch.Stop は冪等。TryEmitAudit 内部でベストエフォート化済み (#1562)。
         metricsStopwatch.Stop();
-        TryEmitAudit(toolName, id, args, response, metricsStartedAt, metricsStopwatch.Elapsed.TotalMilliseconds, errorType: metricsError);
+        var auditErrorType = metricsError == "unknown_tool" ? null : metricsError;
+        TryEmitAudit(toolName, id, args, response, metricsStartedAt, metricsStopwatch.Elapsed.TotalMilliseconds, errorType: auditErrorType);
         EmitToolInvocationTelemetry(toolName, args, response, metricsStartedAt, metricsStopwatch.Elapsed.TotalMilliseconds, metricsError);
         return response;
     }
@@ -2443,7 +2566,8 @@ public partial class McpServer : IDisposable
         var context = CurrentCorrelationContext.Value;
         var (errorCode, observedErrorType) = ExtractErrorCode(response);
         var resultCount = ExtractResultCount(response);
-        var (argKeys, argLengths, _) = SanitizeArgs(args, includeValues: false);
+        var (argKeys, argLengths, argKeyLengths, _) = SanitizeArgs(args, includeValues: false);
+        var toolDisplay = BoundToolNameForDisplay(toolName);
         var argsObject = new JsonObject();
         foreach (var pair in argLengths)
             argsObject[pair.Key] = pair.Value;
@@ -2452,7 +2576,7 @@ public partial class McpServer : IDisposable
         {
             ["event"] = "mcp.tool.invocation",
             ["timestamp"] = startedAt.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
-            ["tool"] = toolName,
+            ["tool"] = toolDisplay.Text,
             ["request_id"] = context?.RequestId,
             ["correlation_id"] = context?.CorrelationId,
             ["elapsed_ms"] = Math.Round(elapsedMs, 3),
@@ -2463,6 +2587,8 @@ public partial class McpServer : IDisposable
             ["arg_keys"] = JsonSerializer.SerializeToNode(argKeys, _jsonOptions),
             ["arg_lengths"] = argsObject,
         };
+        toolDisplay.AddMetadata(evt, "tool");
+        AddArgKeyMetadata(evt, argKeyLengths);
         DeferFrameLog(() => WriteMcpLogLine(evt.ToJsonString(_jsonOptions)));
     }
 
@@ -2533,10 +2659,11 @@ public partial class McpServer : IDisposable
         {
             var (errorCode, observedErrorType) = ExtractErrorCode(response);
             var resultCount = ExtractResultCount(response);
-            var (argKeys, argLengths, argValuesEcho) = SanitizeArgs(args, _auditLog.IncludeValues);
+            var (argKeys, argLengths, argKeyLengths, argValuesEcho) = SanitizeArgs(args, _auditLog.IncludeValues);
+            var toolDisplay = BoundToolNameForDisplay(toolName);
             var evt = new AuditLogSink.AuditEvent(
                 Timestamp: startedAt,
-                Tool: toolName,
+                Tool: toolDisplay.Text,
                 CallerName: _clientName,
                 CallerVersion: _clientVersion,
                 RequestId: SerializeRequestId(id),
@@ -2546,7 +2673,14 @@ public partial class McpServer : IDisposable
                 ResultCount: resultCount,
                 ElapsedMs: elapsedMs,
                 ErrorCode: errorCode,
-                ErrorType: errorType ?? observedErrorType);
+                ErrorType: errorType ?? observedErrorType,
+                ToolLength: toolDisplay.Truncated ? toolDisplay.OriginalLength : null,
+                ToolTruncated: toolDisplay.Truncated,
+                ArgKeyLengths: argKeyLengths,
+                CallerNameLength: _clientNameDisplay?.Truncated == true ? _clientNameDisplay.Value.OriginalLength : null,
+                CallerNameTruncated: _clientNameDisplay?.Truncated == true,
+                CallerVersionLength: _clientVersionDisplay?.Truncated == true ? _clientVersionDisplay.Value.OriginalLength : null,
+                CallerVersionTruncated: _clientVersionDisplay?.Truncated == true);
             _auditLog.Record(evt);
         }
         catch
@@ -2614,7 +2748,7 @@ public partial class McpServer : IDisposable
     }
 
     /// <summary>
-    /// Build the `(arg_keys, arg_lengths, arg_values?)` audit triple. Values are echoed
+    /// Build the `(arg_keys, arg_lengths, arg_key_lengths, arg_values?)` audit triple. Values are echoed
     /// only when the operator has opted in via `--audit-log-include-values`; otherwise we
     /// keep keys + per-key length so AI argument shapes can be reconstructed without
     /// persisting query bodies that may contain sensitive substrings (#1562).
@@ -2622,33 +2756,81 @@ public partial class McpServer : IDisposable
     /// `--audit-log-include-values` がオンの場合のみ転写し、それ以外はキーと長さだけ残す
     /// （secret 風の検索クエリを取り込まないため）。
     /// </summary>
-    internal static (IReadOnlyList<string> Keys, IReadOnlyList<KeyValuePair<string, int>> Lengths, JsonNode? ValuesEcho)
+    internal static (IReadOnlyList<string> Keys, IReadOnlyList<KeyValuePair<string, int>> Lengths, IReadOnlyList<KeyValuePair<string, int>> KeyLengths, JsonNode? ValuesEcho)
         SanitizeArgs(JsonNode? args, bool includeValues)
     {
         if (args is not JsonObject argsObj)
-            return (Array.Empty<string>(), Array.Empty<KeyValuePair<string, int>>(), null);
+            return (Array.Empty<string>(), Array.Empty<KeyValuePair<string, int>>(), Array.Empty<KeyValuePair<string, int>>(), null);
 
         var keys = new List<string>(argsObj.Count);
         var lengths = new List<KeyValuePair<string, int>>(argsObj.Count);
+        var keyLengths = new List<KeyValuePair<string, int>>();
+        var usedKeys = new HashSet<string>(StringComparer.Ordinal);
+        JsonObject? echoObject = includeValues ? new JsonObject() : null;
         foreach (var (key, value) in argsObj)
         {
-            keys.Add(key);
-            lengths.Add(new KeyValuePair<string, int>(key, AuditLogSink.MeasureArgLength(value)));
+            var keyDisplay = McpBoundedText.ForDisplay(key);
+            var displayKey = MakeUniqueArgumentDisplayKey(key, keyDisplay, usedKeys);
+            keys.Add(displayKey);
+            lengths.Add(new KeyValuePair<string, int>(displayKey, AuditLogSink.MeasureArgLength(value)));
+            if (keyDisplay.Truncated)
+                keyLengths.Add(new KeyValuePair<string, int>(displayKey, keyDisplay.OriginalLength));
+            if (echoObject is not null)
+            {
+                try
+                {
+                    echoObject[displayKey] = value?.DeepClone();
+                }
+                catch
+                {
+                    echoObject = null;
+                }
+            }
+        }
+        return (keys, lengths, keyLengths, includeValues ? echoObject : null);
+    }
+
+    private static string MakeUniqueArgumentDisplayKey(string rawKey, BoundedMcpText display, ISet<string> usedKeys)
+    {
+        if (usedKeys.Add(display.Text))
+            return display.Text;
+
+        var hashSuffix = "#" + ShortStableHash(rawKey);
+        var candidate = ComposeDisplayKeyWithSuffix(rawKey, hashSuffix);
+        var disambiguator = 2;
+        while (!usedKeys.Add(candidate))
+        {
+            candidate = ComposeDisplayKeyWithSuffix(
+                rawKey,
+                $"{hashSuffix}-{disambiguator.ToString(CultureInfo.InvariantCulture)}");
+            disambiguator++;
         }
 
-        JsonNode? echo = null;
-        if (includeValues)
-        {
-            try
-            {
-                echo = argsObj.DeepClone();
-            }
-            catch
-            {
-                echo = null;
-            }
-        }
-        return (keys, lengths, echo);
+        return candidate;
+    }
+
+    private static string ComposeDisplayKeyWithSuffix(string rawKey, string suffix)
+    {
+        const int maxDisplayTextChars = McpBoundedText.MaxDiagnosticDisplayChars + 3;
+        var maxPrefixChars = Math.Max(0, maxDisplayTextChars - suffix.Length - 3);
+        return McpBoundedText.ForDisplay(rawKey, maxPrefixChars).Text + suffix;
+    }
+
+    private static string ShortStableHash(string value)
+    {
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(value));
+        return Convert.ToHexString(bytes.AsSpan(0, 4)).ToLowerInvariant();
+    }
+
+    private static void AddArgKeyMetadata(JsonObject target, IReadOnlyList<KeyValuePair<string, int>> argKeyLengths)
+    {
+        if (argKeyLengths.Count == 0)
+            return;
+        var lengths = new JsonObject();
+        foreach (var pair in argKeyLengths)
+            lengths[pair.Key] = pair.Value;
+        target["arg_key_lengths"] = lengths;
+        target["arg_keys_truncated"] = true;
     }
 
     private static string? SerializeRequestId(JsonNode? id)
@@ -2686,6 +2868,12 @@ public partial class McpServer : IDisposable
         return null;
     }
 
+    private static string? TryReadMetricStringArg(JsonNode? args, string key)
+    {
+        var value = TryReadStringArg(args, key);
+        return value is null ? null : McpBoundedText.ForDisplay(value).Text;
+    }
+
     internal static string BuildOversizedMessageLog(int characterCount, int byteCount) =>
         $"[cdidx-mcp] Message too large ({characterCount} chars / {byteCount} bytes), rejecting. Split the request into smaller JSON-RPC messages or shorter arguments, then retry.";
 
@@ -2702,7 +2890,7 @@ public partial class McpServer : IDisposable
         $"[cdidx-mcp] Error writing response: {detail}. The request was handled but the client connection may already be closed.";
 
     internal static string BuildToolErrorLog(string toolName, string detail) =>
-        $"[cdidx-mcp] Tool error ({toolName}): {detail}. Fix the tool arguments, refresh the index if needed, then retry.";
+        $"[cdidx-mcp] Tool error ({BoundToolNameForDisplay(toolName).Text}): {detail}. Fix the tool arguments, refresh the index if needed, then retry.";
 
     // Stderr log emitted when the rate limiter denies a tool call. Mirrors the JSON-RPC
     // `-32000` payload (tool + caller + retry_after_ms) so operators tailing the MCP log
@@ -2710,10 +2898,10 @@ public partial class McpServer : IDisposable
     // レート制限で拒否されたツール呼び出しを stderr に記録する。配線上の JSON-RPC `-32000`
     // ペイロードと内容を揃え、運用側がログ追跡から状況把握できるようにする（#1560）。
     internal static string BuildRateLimitedLog(string toolName, string caller, long retryAfterMs) =>
-        $"[cdidx-mcp] Rate limit exceeded: tool='{toolName}', caller='{caller}', retry_after_ms={retryAfterMs}. Increase {RateLimiterOptions.RpsEnvVar} / {RateLimiterOptions.BurstEnvVar} on the server, or back off and retry.";
+        $"[cdidx-mcp] Rate limit exceeded: tool='{BoundToolNameForDisplay(toolName).Text}', caller='{BoundClientIdentityForDisplay(caller).Text}', retry_after_ms={retryAfterMs}. Increase {RateLimiterOptions.RpsEnvVar} / {RateLimiterOptions.BurstEnvVar} on the server, or back off and retry.";
 
     internal static string BuildCallerSwapRejectionLog(string current, string attempted) =>
-        $"[cdidx-mcp] Ignoring re-initialize with new clientInfo identity '{attempted}': retaining original caller '{current}' so rate-limit buckets cannot be reset mid-session.";
+        $"[cdidx-mcp] Ignoring re-initialize with new clientInfo identity '{BoundClientIdentityForDisplay(attempted).Text}': retaining original caller '{BoundClientIdentityForDisplay(current).Text}' so rate-limit buckets cannot be reset mid-session.";
 
     internal static string BuildUnknownNotificationLog(string method) =>
         $"[cdidx-mcp] Ignoring unknown notification: {method}";
@@ -2756,11 +2944,12 @@ public partial class McpServer : IDisposable
     // #1530 で封じた ex.Message 漏れを再現させずに失敗詳細をクライアントへ届ける。
     internal static string BuildSanitizedToolErrorMessage(string toolName, Exception ex)
     {
+        var toolDisplay = BoundToolNameForDisplay(toolName).Text;
         if (!IsUnsafeDebugEnabled())
-            return $"Tool '{toolName}' failed. See cdidx server stderr for details.";
+            return $"Tool '{toolDisplay}' failed. See cdidx server stderr for details.";
         if (ex is CodeIndexException codeIndexEx)
-            return $"Error executing {toolName} ({ex.GetType().Name}) [{codeIndexEx.Code}/{codeIndexEx.Category}]{BuildPathFragment(codeIndexEx)}{BuildHintFragment(codeIndexEx)}. See cdidx server stderr for details.";
-        return $"Error executing {toolName} ({ex.GetType().Name}). See cdidx server stderr for details.";
+            return $"Error executing {toolDisplay} ({ex.GetType().Name}) [{codeIndexEx.Code}/{codeIndexEx.Category}]{BuildPathFragment(codeIndexEx)}{BuildHintFragment(codeIndexEx)}. See cdidx server stderr for details.";
+        return $"Error executing {toolDisplay} ({ex.GetType().Name}). See cdidx server stderr for details.";
     }
 
     // Wire-safe error body for the JSON-RPC loop catch-all. Same rationale as
@@ -2964,6 +3153,49 @@ public partial class McpServer : IDisposable
     private static JsonObject CreateErrorResponse(JsonNode? id, int code, string message,
         string category, string suggestion, bool retrySafe, JsonObject? extraData = null)
         => CreateErrorResponse(id is not null, id, code, message, category, suggestion, retrySafe, extraData);
+
+    private static BoundedMcpText BoundToolNameForDisplay(string toolName)
+        => McpBoundedText.ForDisplay(toolName, McpBoundedText.MaxToolNameChars);
+
+    private static void AddToolDisplayData(JsonObject target, string? toolName)
+    {
+        if (toolName is null)
+        {
+            target["tool"] = null;
+            return;
+        }
+
+        var display = BoundToolNameForDisplay(toolName);
+        target["tool"] = display.Text;
+        display.AddMetadata(target, "tool");
+    }
+
+    internal static string BuildUnknownToolMessage(string toolName)
+        => $"Unknown tool: {BoundToolNameForDisplay(toolName).Text}";
+
+    private static JsonObject BuildUnknownToolData(string toolName)
+    {
+        var data = new JsonObject();
+        AddToolDisplayData(data, toolName);
+        return data;
+    }
+
+    private static JsonObject BuildToolExceptionData(string toolName, string exceptionType)
+    {
+        var data = new JsonObject
+        {
+            ["exception_type"] = exceptionType,
+        };
+        AddToolDisplayData(data, toolName);
+        return data;
+    }
+
+    private static JsonObject CreateUnknownToolErrorResponse(bool hasId, JsonNode? id, string toolName)
+        => CreateErrorResponse(hasId: hasId, id: id, code: -32602, message: BuildUnknownToolMessage(toolName),
+            category: McpErrorEnvelope.CategoryToolUnknown,
+            suggestion: "Call tools/list to enumerate the available tool names for this server. Tool name match is case-sensitive.",
+            retrySafe: false,
+            extraData: BuildUnknownToolData(toolName));
 
     // Issue #1581: every MCP error response carries a structured `data` envelope
     // (`category` / `suggestion` / `retry_safe`) so clients can branch on a stable
