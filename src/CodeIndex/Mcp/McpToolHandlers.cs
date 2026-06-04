@@ -28,7 +28,6 @@ public partial class McpServer
     private static readonly HashSet<string> BoundedEnumLikeScalarArguments = new(StringComparer.Ordinal)
     {
         "category",
-        "direction",
         "format",
         "groupBy",
         "kind",
@@ -486,7 +485,7 @@ public partial class McpServer
 
     private static JsonObject? ValidateCommonListArguments(JsonNode? args)
     {
-        foreach (var propertyName in new[] { "path", "project", "excludePaths", "names" })
+        foreach (var propertyName in new[] { "path", "project", "excludePaths", "names", "sections" })
         {
             if (ValidateStringListArgument(args, propertyName) is JsonObject error)
                 return error;
@@ -603,23 +602,31 @@ public partial class McpServer
 
     private static bool TryGetExpectedJsonType(string toolName, string argumentName, out string expected)
     {
-        if (argumentName is "path" or "project" or "excludePaths" or "names" or "files" or "commits" or "changedBetween")
+        if (argumentName is "excludePaths" or "names" or "sections" or "files" or "commits" or "changedBetween")
         {
             expected = string.Empty;
             return false;
+        }
+
+        if (argumentName == "path")
+        {
+            expected = ToolAllowsStringOrArrayPath(toolName) ? "string_or_array" : "string";
+            return true;
         }
 
         expected = argumentName switch
         {
             "limit" or "offset" or "snippetLines" or "maxLineWidth" or "before" or "after" or
                 "focusLine" or "focusColumn" or "focusLength" or "startLine" or "endLine" or
-                "maxHops" or "maxDepth" or "depth" or "parallelism" or "maxFileBytes" or "guardWindow" => "integer",
+                "maxHops" or "maxDepth" or "depth" or "parallelism" or "maxFileBytes" or
+                "guardWindow" or "maxOutputBytes" => "integer",
             "excludeTests" or "includeGenerated" or "rawQuery" or "noDedup" or "exactSubstring" or
                 "exactName" or "exact" or "prefix" or "countOnly" or "includeBody" or "lsp_compatible" or
-                "regex" or "withPaths" or "rebuild" or "dryRun" or "dry_run" or "force" or "optimize" => "boolean",
-            "requireBefore" or "requireAfter" or "rejectBefore" or "rejectAfter" => "string_or_array",
-            "query" or "lang" or "kind" or "format" or "rankBy" or "since" or "path" or "project" or
-                "solution" or "symbol" or "direction" or "groupBy" or "category" or "language" or
+                "regex" or "withPaths" or "rebuild" or "dryRun" or "dry_run" or "force" or
+                "optimize" or "reverse" or "cycles" => "boolean",
+            "project" or "requireBefore" or "requireAfter" or "rejectBefore" or "rejectAfter" => "string_or_array",
+            "query" or "lang" or "kind" or "format" or "rankBy" or "since" or "cursor" or
+                "solution" or "symbol" or "groupBy" or "category" or "language" or
                 "description" or "context" or "toolInvocationContext" or "db" => "string",
             "queries" or "evidencePaths" or "evidence_paths" => "array",
             _ => string.Empty,
@@ -630,6 +637,14 @@ public partial class McpServer
 
         return true;
     }
+
+    private static bool ToolAllowsStringOrArrayPath(string toolName) => toolName switch
+    {
+        "search" or "definition" or "references" or "callers" or "callees" or "symbols" or
+        "files" or "find_in_file" or "map" or "analyze_symbol" or "deps" or "impact_analysis" or
+        "validate" or "unused_symbols" or "symbol_hotspots" => true,
+        _ => false,
+    };
 
     private static bool MatchesExpectedJsonType(JsonNode? node, string expected) => expected switch
     {
@@ -674,16 +689,16 @@ public partial class McpServer
         "references" => new HashSet<string>(StringComparer.Ordinal) { "query", "kind", "lang", "limit", "offset", "maxLineWidth", "lsp_compatible", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "countOnly", "format", "project", "solution" },
         "callers" or "callees" => new HashSet<string>(StringComparer.Ordinal) { "query", "kind", "rankBy", "lang", "limit", "offset", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "countOnly", "format", "project", "solution" },
         "symbols" => new HashSet<string>(StringComparer.Ordinal) { "query", "names", "kind", "lang", "limit", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "exactName", "exact", "project", "solution" },
-        "files" => new HashSet<string>(StringComparer.Ordinal) { "query", "lang", "limit", "path", "excludePaths", "excludeTests", "includeGenerated", "since" },
+        "files" => new HashSet<string>(StringComparer.Ordinal) { "query", "lang", "limit", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "project", "solution" },
         "find_in_file" => new HashSet<string>(StringComparer.Ordinal) { "query", "path", "limit", "lang", "excludePaths", "excludeTests", "includeGenerated", "before", "after", "snippetLines", "focusLine", "focusColumn", "maxLineWidth", "exact", "regex" },
-        "excerpt" => new HashSet<string>(StringComparer.Ordinal) { "path", "startLine", "endLine", "before", "after", "focusLine", "focusColumn", "focusLength", "maxLineWidth" },
-        "map" => new HashSet<string>(StringComparer.Ordinal) { "limit", "lang", "path", "excludePaths", "excludeTests", "project", "solution" },
+        "excerpt" => new HashSet<string>(StringComparer.Ordinal) { "path", "startLine", "endLine", "before", "after", "focusLine", "focusColumn", "focusLength", "maxLineWidth", "maxOutputBytes" },
+        "map" => new HashSet<string>(StringComparer.Ordinal) { "limit", "lang", "path", "excludePaths", "excludeTests", "sections", "depth", "project", "solution" },
         "analyze_symbol" => new HashSet<string>(StringComparer.Ordinal) { "query", "lang", "limit", "includeBody", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "maxLineWidth", "project", "solution" },
-        "outline" => new HashSet<string>(StringComparer.Ordinal) { "path", "limit", "includeImports", "maxLineWidth" },
+        "outline" => new HashSet<string>(StringComparer.Ordinal) { "path" },
         "batch_query" => new HashSet<string>(StringComparer.Ordinal) { "queries" },
-        "deps" => new HashSet<string>(StringComparer.Ordinal) { "path", "direction", "lang", "limit", "excludePaths", "excludeTests", "project", "solution" },
-        "impact_analysis" => new HashSet<string>(StringComparer.Ordinal) { "symbol", "query", "lang", "maxHops", "maxDepth", "depth", "limit", "path", "excludePaths", "excludeTests", "includeGenerated", "withPaths", "countOnly", "project", "solution" },
-        "validate" => new HashSet<string>(StringComparer.Ordinal) { "path", "lang", "limit", "excludePaths", "excludeTests", "project", "solution" },
+        "deps" => new HashSet<string>(StringComparer.Ordinal) { "path", "reverse", "format", "cycles", "lang", "limit", "excludePaths", "excludeTests", "project", "solution" },
+        "impact_analysis" => new HashSet<string>(StringComparer.Ordinal) { "query", "lang", "maxHops", "maxDepth", "limit", "path", "excludePaths", "excludeTests", "includeGenerated", "withPaths", "countOnly", "project", "solution" },
+        "validate" => new HashSet<string>(StringComparer.Ordinal) { "kind", "path", "excludePaths", "excludeTests", "project", "solution" },
         "unused_symbols" => new HashSet<string>(StringComparer.Ordinal) { "kind", "lang", "limit", "path", "excludePaths", "excludeTests", "project", "solution" },
         "symbol_hotspots" => new HashSet<string>(StringComparer.Ordinal) { "kind", "lang", "limit", "groupBy", "path", "excludePaths", "excludeTests", "project", "solution" },
         "index" => new HashSet<string>(StringComparer.Ordinal) { "path", "rebuild", "maxFileBytes" },
@@ -740,8 +755,12 @@ public partial class McpServer
 
         if (node is JsonValue scalar && scalar.TryGetValue<string>(out var scalarText))
         {
-            if (propertyName == "names")
-                return null;
+            if (propertyName is "excludePaths" or "names" or "sections")
+                return new JsonObject
+                {
+                    ["message"] = $"{propertyName} must be an array of strings.",
+                    ["invalid_count"] = 1,
+                };
             if (propertyName == "path" && string.IsNullOrWhiteSpace(scalarText))
                 return null;
             if (string.IsNullOrWhiteSpace(scalarText))
