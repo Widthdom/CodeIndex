@@ -832,6 +832,24 @@ public class SuggestionStoreTests : IDisposable
     }
 
     [Fact]
+    public void TryAdd_OnPosixCreatesPrivateArchiveFile()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var clock = new ManualTimeProvider(new DateTimeOffset(2031, 1, 1, 0, 0, 0, TimeSpan.Zero));
+        var store = new SuggestionStore(_tempDir, null, clock);
+        var old = MakeRecord("other", null, "Old suggestion");
+        Assert.True(store.TryAdd(old));
+
+        clock.SetUtcNow(new DateTimeOffset(2032, 2, 5, 0, 0, 0, TimeSpan.Zero));
+        var fresh = MakeRecord("other", null, "Fresh suggestion");
+        Assert.True(store.TryAdd(fresh));
+
+        AssertPrivateFileMode(Path.Combine(_tempDir, "suggestions-codeindex.archive.jsonl"));
+    }
+
+    [Fact]
     public void TryAdd_PrunesOldestRecordsOverConfiguredMaxCount()
     {
         using var env = EnvironmentVariableScope.Capture(SuggestionStore.MaxCountEnvironmentVariable);
@@ -943,6 +961,15 @@ public class SuggestionStoreTests : IDisposable
             Hash = SuggestionStore.ComputeHash(category, language, description),
             CreatedAt = DateTime.UtcNow,
         };
+    }
+
+    private static void AssertPrivateFileMode(string path)
+    {
+#pragma warning disable CA1416
+        Assert.Equal(
+            DataDirectorySecurity.PrivateFileMode,
+            File.GetUnixFileMode(path) & DataDirectorySecurity.PermissionBits);
+#pragma warning restore CA1416
     }
 
     public void Dispose()

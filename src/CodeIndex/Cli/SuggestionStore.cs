@@ -819,9 +819,19 @@ public class SuggestionStore
     {
         var dir = Path.GetDirectoryName(_archivePath);
         if (!string.IsNullOrEmpty(dir))
-            Directory.CreateDirectory(dir);
+            DataDirectorySecurity.CreatePrivateDirectory(dir);
 
-        using var stream = new FileStream(_archivePath, FileMode.Append, FileAccess.Write, FileShare.Read);
+        var options = new FileStreamOptions
+        {
+            Mode = FileMode.Append,
+            Access = FileAccess.Write,
+            Share = FileShare.Read,
+        };
+        if (!OperatingSystem.IsWindows())
+            options.UnixCreateMode = DataDirectorySecurity.PrivateFileMode;
+
+        using var stream = new FileStream(_archivePath, options);
+        DataDirectorySecurity.ApplyPrivateFileMode(_archivePath);
         using var writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
         foreach (var record in records)
             writer.WriteLine(JsonSerializer.Serialize(record, s_jsonOptions));
