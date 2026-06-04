@@ -16,6 +16,9 @@ public static class ExtractorPluginRegistry
     internal const int MaxPatternRulesPerConfig = 128;
     internal const int MaxPatternRulesTotal = 128;
     internal const int MaxPatternRegexLength = 4096;
+    internal const int MaxPluginAssemblyCandidatesPerDirectory = 128;
+    internal const int MaxPluginAssemblyCandidatesTotal = 256;
+    internal const long MaxPluginAssemblyBytes = 64 * 1024 * 1024;
     internal static readonly TimeSpan PatternRegexTimeout = TimeSpan.FromMilliseconds(100);
 
     private static readonly object Gate = new();
@@ -153,6 +156,15 @@ public static class ExtractorPluginRegistry
     internal static IReadOnlyList<string> EnumeratePluginAssemblyPathsForTests()
         => EnumeratePluginAssemblyPaths().ToArray();
 
+    internal static IReadOnlyList<string> EnumeratePluginAssemblyPathsForTests(IReadOnlyList<string> directories)
+        => EnumeratePluginAssemblyPaths(directories).ToArray();
+
+    internal static void LoadPluginAssembliesForTests(IReadOnlyList<string> directories)
+        => LoadPluginAssemblies(directories);
+
+    internal static void LoadPluginForTests(string pluginPath)
+        => TryLoadPlugin(pluginPath);
+
     internal static void LoadPatternConfigsForProjectRoot(string? projectRoot)
     {
         EnsurePluginsLoaded();
@@ -191,8 +203,7 @@ public static class ExtractorPluginRegistry
             if (pluginsLoaded)
                 return;
 
-            foreach (var pluginPath in EnumeratePluginAssemblyPaths())
-                TryLoadPlugin(pluginPath);
+            LoadPluginAssemblies(EnumeratePluginDirectories());
             foreach (var patternPath in EnumeratePatternConfigPaths(Environment.CurrentDirectory))
                 TryLoadPatternConfig(patternPath);
 
@@ -200,15 +211,82 @@ public static class ExtractorPluginRegistry
         }
     }
 
-    private static IEnumerable<string> EnumeratePluginAssemblyPaths()
+    private static void LoadPluginAssemblies(IEnumerable<string> directories)
     {
-        foreach (var directory in EnumeratePluginDirectories())
+        var pluginPaths = EnumeratePluginAssemblyPaths(directories).ToArray();
+        foreach (var pluginPath in pluginPaths)
+            TryLoadPlugin(pluginPath);
+    }
+
+    private static IEnumerable<string> EnumeratePluginAssemblyPaths()
+        => EnumeratePluginAssemblyPaths(EnumeratePluginDirectories());
+
+    private static IEnumerable<string> EnumeratePluginAssemblyPaths(IEnumerable<string> directories)
+    {
+        var totalCandidates = 0;
+        foreach (var directory in directories)
         {
             if (!Directory.Exists(directory))
                 continue;
 
-            foreach (var pluginPath in Directory.EnumerateFiles(directory, "*.dll", SearchOption.TopDirectoryOnly))
+            using var enumerator = TryEnumeratePluginFiles(directory);
+            if (enumerator == null)
+                continue;
+
+            var directoryCandidates = 0;
+            while (TryMoveNextPluginFile(directory, enumerator, out var pluginPath))
+            {
+                if (directoryCandidates >= MaxPluginAssemblyCandidatesPerDirectory)
+                {
+                    ReportPluginDirectorySkipped(
+                        directory,
+                        $"too many plugin assembly candidates (maximum {MaxPluginAssemblyCandidatesPerDirectory} per directory)");
+                    break;
+                }
+
+                if (totalCandidates >= MaxPluginAssemblyCandidatesTotal)
+                {
+                    ReportPluginDirectorySkipped(
+                        directory,
+                        $"too many plugin assembly candidates (maximum {MaxPluginAssemblyCandidatesTotal} total)");
+                    yield break;
+                }
+
+                directoryCandidates++;
+                totalCandidates++;
                 yield return pluginPath;
+            }
+        }
+    }
+
+    private static IEnumerator<string>? TryEnumeratePluginFiles(string directory)
+    {
+        try
+        {
+            return Directory.EnumerateFiles(directory, "*.dll", SearchOption.TopDirectoryOnly).GetEnumerator();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            ReportPluginDirectorySkipped(directory, ex.Message);
+            return null;
+        }
+    }
+
+    private static bool TryMoveNextPluginFile(string directory, IEnumerator<string> enumerator, out string pluginPath)
+    {
+        pluginPath = string.Empty;
+        try
+        {
+            if (!enumerator.MoveNext())
+                return false;
+
+            pluginPath = enumerator.Current;
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            ReportPluginDirectorySkipped(directory, ex.Message);
+            return false;
         }
     }
 
@@ -435,6 +513,17 @@ public static class ExtractorPluginRegistry
             typeName: null,
             severity: "error",
             $"Pattern directory skipped: {reason}",
+            countsAsSkippedFile: false);
+    }
+
+    private static void ReportPluginDirectorySkipped(string path, string reason)
+    {
+        RecordDiagnostic(
+            "plugin_directory",
+            path,
+            typeName: null,
+            severity: "skipped",
+            $"Plugin directory skipped: {reason}.",
             countsAsSkippedFile: false);
     }
 
@@ -727,6 +816,9 @@ public static class ExtractorPluginRegistry
         try
         {
             fullPath = Path.GetFullPath(pluginPath);
+            if (!PluginAssemblyCandidateIsWithinBudget(fullPath))
+                return;
+
             var assembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(fullPath);
             var attribute = assembly.GetCustomAttribute<CdidxPluginAttribute>();
             if (attribute == null)
@@ -773,6 +865,64 @@ public static class ExtractorPluginRegistry
                 $"Failed to load plugin assembly: {ex.Message}",
                 countsAsSkippedFile: true);
         }
+    }
+
+    private static bool PluginAssemblyCandidateIsWithinBudget(string fullPath)
+    {
+        FileInfo fileInfo;
+        try
+        {
+            fileInfo = new FileInfo(fullPath);
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            RecordDiagnostic(
+                "plugin",
+                fullPath,
+                typeName: null,
+                severity: "error",
+                $"Plugin assembly skipped: could not inspect file ({ex.Message}).",
+                countsAsSkippedFile: true);
+            return false;
+        }
+
+        if (!fileInfo.Exists)
+        {
+            RecordDiagnostic(
+                "plugin",
+                fullPath,
+                typeName: null,
+                severity: "error",
+                "Plugin assembly skipped: file does not exist.",
+                countsAsSkippedFile: true);
+            return false;
+        }
+
+        if ((fileInfo.Attributes & FileAttributes.Directory) != 0)
+        {
+            RecordDiagnostic(
+                "plugin",
+                fullPath,
+                typeName: null,
+                severity: "error",
+                "Plugin assembly skipped: path is a directory.",
+                countsAsSkippedFile: true);
+            return false;
+        }
+
+        if (fileInfo.Length > MaxPluginAssemblyBytes)
+        {
+            RecordDiagnostic(
+                "plugin",
+                fullPath,
+                typeName: null,
+                severity: "skipped",
+                $"Plugin assembly skipped: file is too large ({fileInfo.Length} bytes; maximum {MaxPluginAssemblyBytes}).",
+                countsAsSkippedFile: true);
+            return false;
+        }
+
+        return true;
     }
 
     private static void TryRegisterPluginType(Type type, string pluginPath)

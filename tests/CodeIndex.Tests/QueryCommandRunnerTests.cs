@@ -1566,8 +1566,7 @@ public partial class QueryCommandRunnerTests
 
 
     [Theory]
-    [InlineData("--db", "/tmp/does-not-matter.db")]
-    [InlineData("--db=")]
+    [InlineData("--path", "src")]
     [InlineData("--mystery")]
     public void RunLanguages_UnsupportedOptionsReturnUsageError(string flag, string? value = null)
     {
@@ -1582,6 +1581,123 @@ public partial class QueryCommandRunnerTests
         Assert.Contains($"Usage: {ConsoleUi.GetUsageLine("languages")}", stderr);
         Assert.DoesNotContain("requires a value", stderr);
         Assert.DoesNotContain("Warning: unknown option", stderr);
+    }
+
+    [Fact]
+    public void RunLanguages_JsonIndexedOnlyListsLanguagesPresentInDatabase()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_languages_indexed_only");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp", "class App { }\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "README.md", "markdown", "# App\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunLanguages(["--json", "--indexed-only", "--db", dbPath], _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+
+            using var document = ParseJsonOutput(stdout);
+            var names = document.RootElement.GetProperty("languages").EnumerateArray()
+                .Select(lang => lang.GetProperty("lang").GetString())
+                .ToList();
+
+            Assert.Equal(["csharp", "markdown"], names);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunLanguages_JsonIndexedOnlyCombinesWithCapabilityFilter()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_languages_indexed_capability");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp", "class App { }\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "README.md", "markdown", "# App\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunLanguages(["--json", "--indexed-only", "--capability", "graph", "--db", dbPath], _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+
+            using var document = ParseJsonOutput(stdout);
+            var names = document.RootElement.GetProperty("languages").EnumerateArray()
+                .Select(lang => lang.GetProperty("lang").GetString())
+                .ToList();
+
+            Assert.Equal(["csharp"], names);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("graph")]
+    [InlineData("references")]
+    public void RunLanguages_JsonCapabilityGraphFiltersGraphSupport(string capability)
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() =>
+            QueryCommandRunner.RunLanguages(["--json", "--capability", capability], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+
+        using var document = ParseJsonOutput(stdout);
+        var languages = document.RootElement.GetProperty("languages").EnumerateArray().ToList();
+
+        Assert.NotEmpty(languages);
+        Assert.Contains(languages, lang => lang.GetProperty("lang").GetString() == "csharp");
+        Assert.All(languages, lang => Assert.True(lang.GetProperty("graph_queries").GetBoolean()));
+    }
+
+    [Fact]
+    public void RunLanguages_JsonCapabilitySymbolsFiltersSymbolSupport()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() =>
+            QueryCommandRunner.RunLanguages(["--json", "--capability", "symbols"], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+
+        using var document = ParseJsonOutput(stdout);
+        var languages = document.RootElement.GetProperty("languages").EnumerateArray().ToList();
+
+        Assert.NotEmpty(languages);
+        Assert.Contains(languages, lang => lang.GetProperty("lang").GetString() == "html");
+        Assert.DoesNotContain(languages, lang => lang.GetProperty("lang").GetString() == "msbuild");
+        Assert.All(languages, lang => Assert.True(lang.GetProperty("symbol_extraction").GetBoolean()));
+    }
+
+    [Fact]
+    public void RunLanguages_InvalidCapabilityReturnsUsageError()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() =>
+            QueryCommandRunner.RunLanguages(["--capability", "lint"], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("unsupported --capability value 'lint'", stderr);
+        Assert.Contains("graph, symbols, or references", stderr);
+    }
+
+    [Fact]
+    public void RunLanguages_MissingCapabilityReturnsUsageError()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() =>
+            QueryCommandRunner.RunLanguages(["--capability"], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("--capability", stderr);
+        Assert.Contains($"Usage: {ConsoleUi.GetUsageLine("languages")}", stderr);
     }
 
     [Fact]

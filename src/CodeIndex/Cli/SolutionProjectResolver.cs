@@ -1,12 +1,15 @@
-using System.Text.RegularExpressions;
 using CodeIndex.Indexer;
 
 namespace CodeIndex.Cli;
 
 internal sealed record DotNetProjectInfo(string Name, string ProjectPath, string DirectoryPath);
 
-internal static partial class SolutionProjectResolver
+internal static class SolutionProjectResolver
 {
+    internal const long MaxSolutionFileBytes = 8L * 1024 * 1024;
+    internal const int MaxSolutionLineChars = 16 * 1024;
+    internal const int MaxSolutionProjectReferences = 4096;
+
     public static IReadOnlyList<DotNetProjectInfo> ResolveProjects(string workspaceRoot, string? solutionPath = null)
     {
         var root = Path.GetFullPath(workspaceRoot);
@@ -115,21 +118,41 @@ internal static partial class SolutionProjectResolver
         string workspaceRoot,
         FileIndexer indexer)
     {
+        RejectOversizedSolutionFile(solutionPath);
+        var root = Path.GetFullPath(workspaceRoot);
         var solutionDir = Path.GetDirectoryName(solutionPath) ?? workspaceRoot;
         var projects = new List<DotNetProjectInfo>();
+        var lineNumber = 0;
+        var projectReferenceCount = 0;
         foreach (var line in File.ReadLines(solutionPath))
         {
-            var match = SolutionProjectLineRegex().Match(line);
-            if (!match.Success)
+            lineNumber++;
+            if (line.Length > MaxSolutionLineChars)
+            {
+                throw new InvalidOperationException(
+                    $"solution line is too long at {solutionPath}:{lineNumber}: {line.Length} characters exceeds limit {MaxSolutionLineChars}.");
+            }
+
+            if (!TryParseSolutionProjectLine(line, out var name, out var projectPath))
                 continue;
 
-            var projectPath = match.Groups["path"].Value.Replace('\\', Path.DirectorySeparatorChar);
             if (!IsDotNetProjectFile(projectPath))
                 continue;
 
+            projectReferenceCount++;
+            if (projectReferenceCount > MaxSolutionProjectReferences)
+            {
+                throw new InvalidOperationException(
+                    $"solution contains too many .NET project references: limit {MaxSolutionProjectReferences} exceeded in {solutionPath}.");
+            }
+
+            projectPath = projectPath.Replace('\\', Path.DirectorySeparatorChar);
             var fullPath = Path.GetFullPath(Path.Combine(solutionDir, projectPath));
+            if (!IsPathEqualOrParent(root, fullPath))
+                continue;
+
             if (File.Exists(fullPath) && !indexer.EvaluatePathFilter(fullPath).ShouldSkip)
-                projects.Add(BuildProjectInfo(fullPath, workspaceRoot, match.Groups["name"].Value));
+                projects.Add(BuildProjectInfo(fullPath, root, name));
         }
 
         return projects
@@ -209,6 +232,60 @@ internal static partial class SolutionProjectResolver
             || extension.Equals(".vbproj", StringComparison.OrdinalIgnoreCase);
     }
 
-    [GeneratedRegex("^Project\\([^)]*\\)\\s*=\\s*\"(?<name>[^\"]+)\",\\s*\"(?<path>[^\"]+\\.(?:csproj|fsproj|vbproj))\"", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
-    private static partial Regex SolutionProjectLineRegex();
+    private static void RejectOversizedSolutionFile(string solutionPath)
+    {
+        var length = new FileInfo(solutionPath).Length;
+        if (length > MaxSolutionFileBytes)
+        {
+            throw new InvalidOperationException(
+                $"solution file is too large: {solutionPath} is {length} bytes; limit is {MaxSolutionFileBytes} bytes.");
+        }
+    }
+
+    private static bool TryParseSolutionProjectLine(string line, out string name, out string projectPath)
+    {
+        name = string.Empty;
+        projectPath = string.Empty;
+        if (!line.StartsWith("Project(", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var equalsIndex = line.IndexOf('=');
+        if (equalsIndex < 0)
+            return false;
+
+        var cursor = equalsIndex + 1;
+        if (!TryReadQuotedValue(line, ref cursor, out name))
+            return false;
+
+        cursor = SkipWhitespace(line, cursor);
+        if (cursor >= line.Length || line[cursor] != ',')
+            return false;
+
+        cursor++;
+        return TryReadQuotedValue(line, ref cursor, out projectPath);
+    }
+
+    private static bool TryReadQuotedValue(string line, ref int cursor, out string value)
+    {
+        value = string.Empty;
+        cursor = SkipWhitespace(line, cursor);
+        if (cursor >= line.Length || line[cursor] != '"')
+            return false;
+
+        var start = cursor + 1;
+        var end = line.IndexOf('"', start);
+        if (end < 0)
+            return false;
+
+        value = line[start..end];
+        cursor = end + 1;
+        return true;
+    }
+
+    private static int SkipWhitespace(string line, int cursor)
+    {
+        while (cursor < line.Length && char.IsWhiteSpace(line[cursor]))
+            cursor++;
+        return cursor;
+    }
 }

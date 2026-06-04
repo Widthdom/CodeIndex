@@ -25,6 +25,17 @@ public partial class McpServer
     private const string BatchQueryResponseByteLimitEnvVar = "CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES";
     internal const int MaxMcpArrayFilterCount = 100;
     internal const int MaxMcpArrayFilterStringLength = 4096;
+    private static readonly HashSet<string> BoundedEnumLikeScalarArguments = new(StringComparer.Ordinal)
+    {
+        "category",
+        "direction",
+        "format",
+        "groupBy",
+        "kind",
+        "lang",
+        "language",
+        "rankBy",
+    };
     internal const int MaxMcpIndexFailureMessageLength = 512;
 
     // --- Tool implementations / ツール実装 ---
@@ -500,23 +511,25 @@ public partial class McpServer
 
         var allowed = GetAllowedToolArguments(toolName);
         if (allowed.Count == 0)
-            return obj.Count == 0 ? null : new JsonObject
-            {
-                ["message"] = $"Tool '{toolName}' does not accept arguments.",
-                ["tool"] = toolName,
-                ["unknown_argument"] = obj.First().Key,
-            };
+            return obj.Count == 0 ? null : AddUnknownArgumentData(
+                new JsonObject
+                {
+                    ["message"] = $"Tool '{toolName}' does not accept arguments.",
+                    ["tool"] = toolName,
+                },
+                obj.First().Key);
 
         foreach (var property in obj)
         {
             if (!allowed.Contains(property.Key))
             {
-                return new JsonObject
-                {
-                    ["message"] = $"Unknown argument '{property.Key}' for tool '{toolName}'.",
-                    ["tool"] = toolName,
-                    ["unknown_argument"] = property.Key,
-                };
+                return AddUnknownArgumentData(
+                    new JsonObject
+                    {
+                        ["message"] = $"Unknown argument '{McpBoundedText.ForDisplay(property.Key).Text}' for tool '{toolName}'.",
+                        ["tool"] = toolName,
+                    },
+                    property.Key);
             }
 
         }
@@ -524,7 +537,46 @@ public partial class McpServer
         if (ValidateToolArgumentTypes(toolName, obj) is JsonObject typeError)
             return typeError;
 
+        if (ValidateBoundedEnumLikeScalarArguments(toolName, obj) is JsonObject scalarError)
+            return scalarError;
+
         return null;
+    }
+
+    private static JsonObject? ValidateBoundedEnumLikeScalarArguments(string toolName, JsonObject args)
+    {
+        foreach (var property in args)
+        {
+            if (!BoundedEnumLikeScalarArguments.Contains(property.Key))
+                continue;
+            if (property.Value is not JsonValue value || !value.TryGetValue<string>(out var scalar))
+                continue;
+            if (scalar.Length <= McpBoundedText.MaxScalarArgumentChars)
+                continue;
+
+            var display = McpBoundedText.ForDisplay(scalar);
+            var error = new JsonObject
+            {
+                ["message"] = $"Argument '{property.Key}' on tool '{toolName}' is too long (max {McpBoundedText.MaxScalarArgumentChars} characters): '{display.Text}'.",
+                ["tool"] = toolName,
+                ["parameter"] = property.Key,
+                ["value"] = display.Text,
+                ["max_length"] = McpBoundedText.MaxScalarArgumentChars,
+                ["actual_length"] = display.OriginalLength,
+            };
+            display.AddMetadata(error, "value");
+            return error;
+        }
+
+        return null;
+    }
+
+    private static JsonObject AddUnknownArgumentData(JsonObject error, string argumentName)
+    {
+        var display = McpBoundedText.ForDisplay(argumentName);
+        error["unknown_argument"] = display.Text;
+        display.AddMetadata(error, "unknown_argument");
+        return error;
     }
 
     private static JsonObject? ValidateToolArgumentTypes(string toolName, JsonObject args)
@@ -2097,10 +2149,16 @@ public partial class McpServer
         if (_clientName is not null || _clientVersion is not null)
         {
             var clientInfo = new JsonObject();
-            if (_clientName is not null)
+            if (_clientNameDisplay is not null)
+            {
                 clientInfo["name"] = _clientName;
-            if (_clientVersion is not null)
+                _clientNameDisplay.Value.AddMetadata(clientInfo, "name");
+            }
+            if (_clientVersionDisplay is not null)
+            {
                 clientInfo["version"] = _clientVersion;
+                _clientVersionDisplay.Value.AddMetadata(clientInfo, "version");
+            }
             session["client_info"] = clientInfo;
         }
         if (_clientCapabilities is not null)
@@ -2460,13 +2518,14 @@ public partial class McpServer
             {
                 truncated = true;
                 cascadeStartedAtIndex ??= requestIndex;
-                truncatedQueries.Add(new JsonObject
+                var truncatedEntry = new JsonObject
                 {
                     ["request_index"] = requestIndex,
-                    ["tool"] = toolName,
                     ["args_summary"] = BuildArgsSummary(toolArgs),
                     ["reason"] = "response_byte_limit_exceeded",
-                });
+                };
+                AddToolDisplayData(truncatedEntry, toolName);
+                truncatedQueries.Add(truncatedEntry);
                 return false;
             }
 
@@ -2475,20 +2534,36 @@ public partial class McpServer
             return true;
         }
 
+        static void CopySlotErrorData(JsonObject entry, JsonObject? extraData)
+        {
+            if (extraData is null)
+                return;
+
+            foreach (var (key, value) in extraData)
+            {
+                if (key is "message" or "jsonrpc_invalid_params")
+                    continue;
+                if (entry.ContainsKey(key))
+                    continue;
+                entry[key] = value?.DeepClone();
+            }
+        }
+
         void AppendSlotError(int requestIndex, string? toolName, JsonNode? toolArgs, Stopwatch slotStopwatch, string errorMessage,
-            int? code = null, string? category = null, string? suggestion = null, bool? retrySafe = null)
+            int? code = null, string? category = null, string? suggestion = null, bool? retrySafe = null, JsonObject? extraData = null)
         {
             slotStopwatch.Stop();
             var entry = new JsonObject
             {
                 ["request_index"] = requestIndex,
-                ["tool"] = toolName,
                 ["ok"] = false,
                 ["correlation_id"] = CurrentCorrelationContext.Value?.CorrelationId,
                 ["args_summary"] = BuildArgsSummary(toolArgs),
                 ["elapsed_ms"] = slotStopwatch.ElapsedMilliseconds,
                 ["error"] = errorMessage,
             };
+            AddToolDisplayData(entry, toolName);
+            CopySlotErrorData(entry, extraData);
             if (code.HasValue)
                 entry["code"] = code.Value;
             // #1581: batch_query slot errors also carry the canonical envelope so clients
@@ -2520,6 +2595,7 @@ public partial class McpServer
         void AppendRateLimitedSlot(int requestIndex, string? toolName, JsonNode? toolArgs, Stopwatch slotStopwatch, long retryAfterMs)
         {
             slotStopwatch.Stop();
+            var toolDisplay = toolName is null ? "(missing)" : BoundToolNameForDisplay(toolName).Text;
             // #1581: emit the canonical envelope (`category`, `suggestion`, `retry_safe`)
             // next to the legacy #1560 fields so clients have a single decision shape across
             // top-level and slot-level rate-limit errors.
@@ -2529,18 +2605,18 @@ public partial class McpServer
             var entry = new JsonObject
             {
                 ["request_index"] = requestIndex,
-                ["tool"] = toolName,
                 ["ok"] = false,
                 ["correlation_id"] = CurrentCorrelationContext.Value?.CorrelationId,
                 ["args_summary"] = BuildArgsSummary(toolArgs),
                 ["elapsed_ms"] = slotStopwatch.ElapsedMilliseconds,
-                ["error"] = $"Rate limit exceeded for tool '{toolName}' (retry after {retryAfterMs} ms).",
+                ["error"] = $"Rate limit exceeded for tool '{toolDisplay}' (retry after {retryAfterMs} ms).",
                 ["error_category"] = "rate_limited",
                 ["retry_after_ms"] = retryAfterMs,
                 ["category"] = McpErrorEnvelope.CategoryRateLimited,
                 ["suggestion"] = $"Back off for at least {retryAfterMs} ms before retrying this tool.",
                 ["retry_safe"] = true,
             };
+            AddToolDisplayData(entry, toolName);
             TryAppendResult(entry, toolName, toolArgs, requestIndex, failedSlot: true);
             failureCount++;
         }
@@ -2560,13 +2636,14 @@ public partial class McpServer
             {
                 slotStopwatch.Stop();
                 cascadeStartedAtIndex ??= requestIndex;
-                truncatedQueries.Add(new JsonObject
+                var truncatedEntry = new JsonObject
                 {
                     ["request_index"] = requestIndex,
-                    ["tool"] = toolName,
                     ["args_summary"] = BuildArgsSummary(toolArgs),
                     ["reason"] = "response_byte_limit_already_exceeded",
-                });
+                };
+                AddToolDisplayData(truncatedEntry, toolName);
+                truncatedQueries.Add(truncatedEntry);
                 continue;
             }
 
@@ -2579,13 +2656,22 @@ public partial class McpServer
                     retrySafe: false);
                 continue;
             }
+            if (toolName.Length > McpBoundedText.MaxToolNameChars)
+            {
+                AppendSlotError(requestIndex, toolName, toolArgs, slotStopwatch, BuildUnknownToolMessage(toolName),
+                    category: McpErrorEnvelope.CategoryToolUnknown,
+                    suggestion: "Call tools/list to see the tool catalog. Slot tool names are case-sensitive.",
+                    retrySafe: false);
+                continue;
+            }
 
             if (ValidateToolArguments(toolName, toolArgs) is JsonObject argumentError)
             {
                 AppendSlotError(requestIndex, toolName, toolArgs, slotStopwatch, argumentError["message"]!.GetValue<string>(),
                     category: McpErrorEnvelope.CategoryInvalidArgument,
                     suggestion: "Use exactly the argument names advertised by tools/list for this tool.",
-                    retrySafe: false);
+                    retrySafe: false,
+                    extraData: argumentError);
                 continue;
             }
 
@@ -2594,7 +2680,8 @@ public partial class McpServer
                 AppendSlotError(requestIndex, toolName, toolArgs, slotStopwatch, listArgumentError["message"]!.GetValue<string>(),
                     category: McpErrorEnvelope.CategoryInvalidArgument,
                     suggestion: "Send only non-empty string entries within the documented MCP array bounds.",
-                    retrySafe: false);
+                    retrySafe: false,
+                    extraData: listArgumentError);
                 continue;
             }
 
@@ -2692,7 +2779,7 @@ public partial class McpServer
 
                 if (response == null)
                 {
-                    AppendSlotError(requestIndex, toolName, toolArgs, slotStopwatch, $"Unknown tool: {toolName}",
+                    AppendSlotError(requestIndex, toolName, toolArgs, slotStopwatch, BuildUnknownToolMessage(toolName),
                         category: McpErrorEnvelope.CategoryToolUnknown,
                         suggestion: "Call tools/list to see the tool catalog. Slot tool names are case-sensitive.",
                         retrySafe: false);
@@ -2730,13 +2817,13 @@ public partial class McpServer
                 var entry = new JsonObject
                 {
                     ["request_index"] = requestIndex,
-                    ["tool"] = toolName,
                     ["ok"] = true,
                     ["correlation_id"] = CurrentCorrelationContext.Value?.CorrelationId,
                     ["args_summary"] = BuildArgsSummary(toolArgs),
                     ["elapsed_ms"] = slotStopwatch.ElapsedMilliseconds,
                     ["result"] = structured?.DeepClone(),
                 };
+                AddToolDisplayData(entry, toolName);
                 TryAppendResult(entry, toolName, toolArgs, requestIndex, successfulSlot: true);
                 successCount++;
             }
@@ -2912,15 +2999,16 @@ public partial class McpServer
         var parts = new List<string>(obj.Count);
         foreach (var kv in obj)
         {
-            var key = kv.Key;
+            var key = McpBoundedText.ForDisplay(kv.Key).Text;
             var value = kv.Value;
             string rendered = value switch
             {
                 null => "null",
-                JsonValue v => v.ToJsonString(),
+                JsonValue v when v.TryGetValue<string>(out var text) => JsonSerializer.Serialize(McpBoundedText.ForDisplay(text).Text),
+                JsonValue v => McpBoundedText.ForDisplay(v.ToJsonString()).Text,
                 JsonArray arr => $"[{arr.Count}]",
                 JsonObject inner => $"{{{inner.Count}}}",
-                _ => value.ToJsonString(),
+                _ => McpBoundedText.ForDisplay(value.ToJsonString()).Text,
             };
             parts.Add($"{key}={rendered}");
         }
@@ -3194,7 +3282,22 @@ public partial class McpServer
         var groupBy = args?["groupBy"]?.GetValue<string>()?.ToLowerInvariant()
             ?? (string.Equals(lang, "sql", StringComparison.Ordinal) ? "statement" : "symbol");
         if (groupBy is not ("symbol" or "file" or "statement"))
-            return CreateToolErrorResponse(id, $"Unsupported symbol_hotspots groupBy '{groupBy}'. Use symbol, file, or statement.");
+        {
+            var groupByDisplay = McpBoundedText.ForDisplay(groupBy);
+            var extra = new JsonObject
+            {
+                ["parameter"] = "groupBy",
+                ["value"] = groupByDisplay.Text,
+            };
+            groupByDisplay.AddMetadata(extra, "value");
+            return CreateToolErrorResponse(
+                id,
+                $"Unsupported symbol_hotspots groupBy '{groupByDisplay.Text}'. Use symbol, file, or statement.",
+                category: McpErrorEnvelope.CategoryInvalidArgument,
+                suggestion: "Use symbol, file, or statement for symbol_hotspots groupBy.",
+                retrySafe: false,
+                extraData: extra);
+        }
         var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;

@@ -282,7 +282,7 @@ sections below show examples and option details for the most common workflows.
 | Analysis | `hotspots` | Rank high-impact symbols or statements by reference volume | `symbol_hotspots` |
 | Analysis | `validate` | Report encoding and line-ending issues in indexed files; U+FFFD rows include origin/severity metadata | `validate` |
 | Status | `status` | Show DB statistics, freshness, and readiness metadata | `status` |
-| Status | `languages` | List language extensions and symbol/graph capabilities | `languages` |
+| Status | `languages` | List language extensions and symbol/graph capabilities; add `--indexed-only` and `--capability graph|symbols|references` for workspace audits | `languages` |
 | Diagnostics | `db --integrity-check` | Run SQLite `PRAGMA integrity_check` against the DB | -- |
 | Diagnostics | `report --output <path>` | Build a redacted bug-report bundle | -- |
 | Feedback | `suggestions` | List, inspect, and export local suggestion history | -- |
@@ -1182,7 +1182,7 @@ same source location.
 | `--category <category>` | `suggestions` | Filter local suggestion history by suggestion category. |
 | `--agent <name>` | `suggestions` | Filter local suggestion history by recorded agent/tool name when present. |
 | `--format <json\|markdown\|issue-drafts>` | `suggestions export` | Choose export format. JSON is the default, markdown is intended for human triage, and issue-drafts emits issue-ready draft objects. |
-| `--open-issues <path>` | `suggestions export --format issue-drafts` | Preflight drafts against an open-issues JSON file such as `gh issue list --state open --json number,title,labels,url`. |
+| `--open-issues <path>` | `suggestions export --format issue-drafts` | Preflight drafts against an open-issues JSON file such as `gh issue list --state open --json number,title,labels,url`. Inputs are capped at 8 MiB and 32 JSON nesting levels. |
 | `--check` | `status` | Verify that `.cdidx/codeindex.db` exactly matches the current indexable workspace by comparing DB file paths/checksums against a fresh filesystem scan. Matching indexes exit `0`; stale indexes exit `5`. |
 | `--dry-run` | `index` | Scan files and report what would change without writing to the database |
 | `--limit <n>` | Query commands | Max results (default: 20, max: 10000; `map` uses it per section) |
@@ -1548,7 +1548,7 @@ The database reflects the working tree at the time of the last index. After swit
 
 ## Supported languages
 
-All indexed languages are searchable through FTS5. Rows with **Symbols = yes** also support structured queries by function, class, import, or language-specific symbol name.
+All indexed languages are searchable through FTS5. Rows with **Symbols = yes** also support structured queries by function, class, import, or language-specific symbol name. Use `cdidx languages --indexed-only --json` to list only languages present in the current DB, and add `--capability graph|symbols|references` to narrow the table to languages that support a specific structured capability.
 
 | Language | Extensions | Symbols |
 |---|---|:---:|
@@ -1644,9 +1644,11 @@ All indexed languages are searchable through FTS5. Rows with **Symbols = yes** a
 
 ### Language extraction matrix
 
-Use `cdidx languages --json` as the live capability probe. This matrix explains
-the common extraction behavior so users know when to trust structured commands
-and when to fall back to `search`.
+Use `cdidx languages --json` as the live capability probe. Add `--indexed-only`
+when you only want languages present in the current DB, and add
+`--capability graph|symbols|references` when auditing a specific structured
+capability. This matrix explains the common extraction behavior so users know
+when to trust structured commands and when to fall back to `search`.
 
 | Language family | Symbols | References / graph | Notes and example query |
 |---|---|---|---|
@@ -2080,7 +2082,7 @@ CDIDX_MCP_HTTP_TOKEN=s3cret cdidx mcp \
   --transport http --http-listen 0.0.0.0:9000          # LAN bind; bearer token is mandatory
 ```
 
-Each HTTP `POST /` carries one JSON-RPC frame in the request body, the matching response is returned in the same HTTP body (`200 OK`, `application/json`), and notifications return `204 No Content`. `GET /events` opens a `text/event-stream` channel for server-to-client frames; the server emits no unsolicited frames unless keep-alive notifications are opted in with `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S`. Accepted keep-alive values are finite seconds from `1` to `300`; invalid or out-of-range values leave keep-alive disabled with a `stderr` warning. The stream is independent and does not block normal POST requests. Non-POST verbs on `/` return `405 Method Not Allowed` with `Allow: POST`. Request bodies are capped at 1,000,000 bytes by default and oversized requests return `413 Payload Too Large`; the pending POST queue is capped at 64 requests by default and full queues return `429 Too Many Requests` with `Retry-After: 1`. Tune those positive-integer limits with `CDIDX_MCP_HTTP_MAX_REQUEST_BYTES` and `CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH`; invalid values fall back to the defaults. When the persistent lifecycle log is enabled, HTTP mode also writes one `mcp_http_request` record per request with method, path, status, duration, auth outcome, remote peer, correlation id, and JSON-RPC request id when available. Request and response bodies are not logged.
+Each HTTP `POST /` carries one JSON-RPC frame in the request body, the matching response is returned in the same HTTP body (`200 OK`, `application/json`), and notifications return `204 No Content`. `GET /events` opens a `text/event-stream` channel for server-to-client frames; the server emits no unsolicited frames unless keep-alive notifications are opted in with `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S`. Accepted keep-alive values are finite seconds from `1` to `300`; invalid or out-of-range values leave keep-alive disabled with a `stderr` warning. The stream is independent and does not block normal POST requests. Non-POST verbs on `/` return `405 Method Not Allowed` with `Allow: POST`. Request bodies are capped at 1,000,000 bytes by default and oversized requests return `413 Payload Too Large`; the pending POST queue is capped at 64 requests by default and full queues return `429 Too Many Requests` with `Retry-After: 1`. Tune those positive-integer limits with `CDIDX_MCP_HTTP_MAX_REQUEST_BYTES` and `CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH`; accepted ranges are `1..16777216` bytes and `1..1024` queued requests. Invalid non-positive or non-numeric values fall back to the defaults, while values above those maximums are rejected before the listener starts. When the persistent lifecycle log is enabled, HTTP mode also writes one `mcp_http_request` record per request with method, path, status, duration, auth outcome, remote peer, correlation id, and JSON-RPC request id when available. Request and response bodies are not logged.
 
 Security defaults:
 
@@ -3398,7 +3400,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--category <category>` | `suggestions` | ローカル提案履歴を提案カテゴリで絞り込みます。 |
 | `--agent <name>` | `suggestions` | 記録されている場合、ローカル提案履歴をエージェント / ツール名で絞り込みます。 |
 | `--format <json\|markdown\|issue-drafts>` | `suggestions export` | エクスポート形式を選びます。既定は JSON、markdown は人間の triage 共有向け、issue-drafts は Issue 作成用の draft object を出力します。 |
-| `--open-issues <path>` | `suggestions export --format issue-drafts` | `gh issue list --state open --json number,title,labels,url` などの open issue JSON と照合して draft を事前重複確認します。 |
+| `--open-issues <path>` | `suggestions export --format issue-drafts` | `gh issue list --state open --json number,title,labels,url` などの open issue JSON と照合して draft を事前重複確認します。入力は 8 MiB、JSON ネスト 32 段までに制限されます。 |
 | `--check` | `status` | DB のファイル path/checksum と現在の index 対象 workspace を比較し、`.cdidx/codeindex.db` が完全一致するか確認。完全一致なら終了コード `0`、stale なら `5` |
 | `--dry-run` | `index` | DB に書き込まず、どの変更が発生するかだけを走査して報告 |
 | `--limit <n>` | クエリ系 | 最大結果数（デフォルト: 20、最大: 10000。`map` では各セクションごとの件数） |
@@ -3855,7 +3857,9 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 ### 言語別 extraction matrix
 
 現在の capability は `cdidx languages --json` を live probe として確認してください。
-この matrix は、構造化 command を信頼できる場面と `search` に戻るべき場面を判断するための概要です。
+現在の DB に存在する言語だけを見たい場合は `--indexed-only`、特定の構造化 capability を監査する場合は
+`--capability graph|symbols|references` を追加します。この matrix は、構造化 command を信頼できる場面と
+`search` に戻るべき場面を判断するための概要です。
 
 | 言語ファミリ | Symbols | References / graph | メモと例 |
 |---|---|---|---|
@@ -4233,7 +4237,7 @@ OpenAI Codex CLI (`codex.json` または `~/.codex/config.json`):
 | `symbol_hotspots` | 影響の大きい hotspot を検索。`groupBy` は `symbol` / `file` / `statement` を指定でき、SQL scope は statement grouping、非 SQL scope は symbol grouping が既定。 |
 | `batch_query` | 複数クエリを1回で実行（MCP専用、最大10件）。レスポンスにはトップレベル `metadata`（`submitted` / `executed` / `errors` / `total_elapsed_ms` / `success_count` / `failure_count`）と各 `results` エントリの `request_index` / `ok` / `elapsed_ms` / `args_summary` が含まれ、位置だけに依存せず部分失敗や遅い内部クエリを把握できます。 |
 | `validate` | エンコーディング問題（origin/severity 付き U+FFFD、BOM、null バイト、改行混在 / CR-only 行末、UTF-16 BOM 検出、UTF-8 以外と推定されるエンコーディング）を報告 |
-| `languages` | 対応言語一覧を拡張子・機能付きで表示 |
+| `languages` | 対応言語一覧を拡張子・機能付きで表示。`--indexed-only` と `--capability graph|symbols|references` で現在の DB や機能別に絞り込み可能 |
 | `ping` | 軽量な接続確認 |
 | `index` | プロジェクトのインデックス作成・更新 |
 | `backfill_fold` | 既存 DB の folded-name key をソース再解析なしで更新 |
@@ -4268,7 +4272,7 @@ CDIDX_MCP_HTTP_TOKEN=s3cret cdidx mcp \
   --transport http --http-listen 0.0.0.0:9000          # LAN 公開時は bearer token が必須
 ```
 
-HTTP の `POST /` 1 件が JSON-RPC フレーム 1 件に対応し、応答は同じ HTTP レスポンスのボディに `200 OK` / `application/json` で返ります。通知は `204 No Content` です。`GET /events` はサーバー→クライアントフレーム用の `text/event-stream` channel を開きます。server-initiated frame は `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S` で keep-alive notification を opt-in した場合だけ送信されます。受理される値は有限な `1`〜`300` 秒で、不正値や範囲外の値では `stderr` に警告を出して keep-alive を無効のままにします。この stream は独立しており通常の POST リクエストを塞ぎません。`/` への POST 以外は `405 Method Not Allowed`（`Allow: POST` 付き）です。リクエスト本文は既定で 1,000,000 bytes までに制限され、超過時は `413 Payload Too Large` を返します。保留中 POST queue は既定で 64 件までに制限され、満杯時は `Retry-After: 1` 付きの `429 Too Many Requests` を返します。正の整数の `CDIDX_MCP_HTTP_MAX_REQUEST_BYTES` と `CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH` で調整でき、不正値は既定にフォールバックします。永続 lifecycle log が有効な場合、HTTP mode はリクエストごとに `mcp_http_request` レコードも出力し、method、path、status、duration、auth outcome、remote peer、correlation id、利用可能な JSON-RPC request id を記録します。リクエスト/レスポンス本文は記録しません。
+HTTP の `POST /` 1 件が JSON-RPC フレーム 1 件に対応し、応答は同じ HTTP レスポンスのボディに `200 OK` / `application/json` で返ります。通知は `204 No Content` です。`GET /events` はサーバー→クライアントフレーム用の `text/event-stream` channel を開きます。server-initiated frame は `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S` で keep-alive notification を opt-in した場合だけ送信されます。受理される値は有限な `1`〜`300` 秒で、不正値や範囲外の値では `stderr` に警告を出して keep-alive を無効のままにします。この stream は独立しており通常の POST リクエストを塞ぎません。`/` への POST 以外は `405 Method Not Allowed`（`Allow: POST` 付き）です。リクエスト本文は既定で 1,000,000 bytes までに制限され、超過時は `413 Payload Too Large` を返します。保留中 POST queue は既定で 64 件までに制限され、満杯時は `Retry-After: 1` 付きの `429 Too Many Requests` を返します。正の整数の `CDIDX_MCP_HTTP_MAX_REQUEST_BYTES` と `CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH` で調整でき、受理範囲は本文が `1..16777216` bytes、queue が `1..1024` 件です。正でない値や数値でない値は既定にフォールバックし、最大値を超える値は listener 起動前に拒否されます。永続 lifecycle log が有効な場合、HTTP mode はリクエストごとに `mcp_http_request` レコードも出力し、method、path、status、duration、auth outcome、remote peer、correlation id、利用可能な JSON-RPC request id を記録します。リクエスト/レスポンス本文は記録しません。
 
 セキュリティ既定:
 

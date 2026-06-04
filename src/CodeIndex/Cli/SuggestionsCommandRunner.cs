@@ -11,6 +11,8 @@ namespace CodeIndex.Cli;
 internal static class SuggestionsCommandRunner
 {
     private const string Usage = "Usage: cdidx suggestions <list|show|export> [id] [--db <path>] [--json] [--status <all|draft|submitted_pending_triage|open_in_upstream|resolved_in_upstream|wont_fix|duplicate|superseded|submitted|unsubmitted>] [--language <lang>] [--category <category>] [--since <datetime>] [--agent <name>] [--format <json|markdown|issue-drafts>] [--open-issues <path>]";
+    internal const int MaxOpenIssuesJsonBytes = 8 * 1024 * 1024;
+    internal const int MaxOpenIssuesJsonDepth = 32;
 
     public static int Run(string[] args, JsonSerializerOptions jsonOptions)
     {
@@ -671,7 +673,17 @@ internal static class SuggestionsCommandRunner
             try
             {
                 var fullPath = Path.GetFullPath(path);
-                var root = JsonNode.Parse(File.ReadAllText(fullPath));
+                var json = DataDirectorySecurity.ReadTextWithinLimit(fullPath, MaxOpenIssuesJsonBytes);
+                if (json == null)
+                {
+                    preflight = new IssueDuplicatePreflight(false, null, []);
+                    error = $"--open-issues file '{path}' exceeds maximum supported size of {MaxOpenIssuesJsonBytes} bytes.";
+                    return false;
+                }
+
+                var root = JsonNode.Parse(
+                    json,
+                    documentOptions: new JsonDocumentOptions { MaxDepth = MaxOpenIssuesJsonDepth });
                 preflight = new IssueDuplicatePreflight(true, fullPath, ParseOpenIssues(root));
                 return true;
             }

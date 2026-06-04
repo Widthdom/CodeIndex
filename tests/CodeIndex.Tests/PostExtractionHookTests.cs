@@ -148,6 +148,76 @@ public class PostExtractionHookTests
         }
     }
 
+    [Fact]
+    public void Discover_CapsHookAssemblyCandidates()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("post-extraction-hook-discovery-cap");
+        lock (TestConsoleLock.Gate)
+        {
+            var originalLimit = PostExtractionHookRunner.DiscoveryLimitForTesting;
+            try
+            {
+                PostExtractionHookRunner.DiscoveryLimitForTesting = () => 2;
+                var hooksDir = Path.Combine(projectRoot, "hooks");
+                Directory.CreateDirectory(hooksDir);
+                File.WriteAllText(Path.Combine(hooksDir, "a.dll"), "not a real dll");
+                File.WriteAllText(Path.Combine(hooksDir, "b.dll"), "not a real dll");
+                File.WriteAllText(Path.Combine(hooksDir, "c.dll"), "not a real dll");
+
+                using var runner = PostExtractionHookRunner.Discover(hooksDir);
+
+                Assert.Empty(runner.Hooks);
+                Assert.Equal(3, runner.Diagnostics.Count);
+                Assert.Contains(
+                    runner.Diagnostics,
+                    diagnostic => diagnostic.AssemblyPath == hooksDir
+                                  && diagnostic.Message.Contains("candidate limit", StringComparison.Ordinal));
+                Assert.Equal(
+                    2,
+                    runner.Diagnostics.Count(diagnostic => diagnostic.Message.StartsWith("Failed to load hook assembly", StringComparison.Ordinal)));
+            }
+            finally
+            {
+                PostExtractionHookRunner.DiscoveryLimitForTesting = originalLimit;
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void Discover_SkipsOversizeHookAssemblyCandidate()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("post-extraction-hook-size-cap");
+        lock (TestConsoleLock.Gate)
+        {
+            var originalMaxBytes = PostExtractionHookRunner.DiscoveryMaxBytesForTesting;
+            try
+            {
+                PostExtractionHookRunner.DiscoveryMaxBytesForTesting = () => 16;
+                var hooksDir = Path.Combine(projectRoot, "hooks");
+                Directory.CreateDirectory(hooksDir);
+                var hookPath = Path.Combine(hooksDir, "oversize.dll");
+                using (var stream = File.Create(hookPath))
+                {
+                    stream.SetLength(17);
+                }
+
+                using var runner = PostExtractionHookRunner.Discover(hooksDir);
+
+                Assert.Empty(runner.Hooks);
+                var diagnostic = Assert.Single(runner.Diagnostics);
+                Assert.Equal(hookPath, diagnostic.AssemblyPath);
+                Assert.Contains("too large", diagnostic.Message, StringComparison.Ordinal);
+                Assert.Contains("maximum 16", diagnostic.Message, StringComparison.Ordinal);
+            }
+            finally
+            {
+                PostExtractionHookRunner.DiscoveryMaxBytesForTesting = originalMaxBytes;
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
     private static void CollectUnloadedHookAssemblies()
     {
         GC.Collect();
