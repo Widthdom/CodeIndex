@@ -1628,7 +1628,7 @@ internal static class ProgramRunner
                 return false;
             }
 
-            return TryParseWorkspaceVersionPin(Encoding.UTF8.GetString(bytes), pinPath, out required, out warning);
+            return TryParseWorkspaceVersionPin(DecodeWorkspaceVersionPinBytes(bytes), pinPath, out required, out warning);
         }
         catch (Exception ex)
         {
@@ -1664,6 +1664,17 @@ internal static class ProgramRunner
         var result = new byte[totalRead];
         Array.Copy(buffer, result, totalRead);
         return result;
+    }
+
+    private static string DecodeWorkspaceVersionPinBytes(byte[] bytes)
+    {
+        using var stream = new MemoryStream(bytes, writable: false);
+        using var reader = new StreamReader(
+            stream,
+            Encoding.UTF8,
+            detectEncodingFromByteOrderMarks: true,
+            bufferSize: Math.Min(1024, Math.Max(1, bytes.Length)));
+        return reader.ReadToEnd();
     }
 
     private static bool TryParseWorkspaceVersionPin(string content, string pinPath, out string required, out string warning)

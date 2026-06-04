@@ -390,6 +390,32 @@ public class ProgramRunnerTests
     }
 
     [Fact]
+    public void Run_WorkspaceVersionPinUtf8Bom_MatchingStrictPinSucceeds()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("version-pin-bom");
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, ".cdidx-version"),
+                "1.10.0\n",
+                new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["--strict-version", "--version", "--json"],
+                appVersion: "1.10.0",
+                configStartDirectory: projectRoot));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("\"version\":\"1.10.0\"", stdout);
+            Assert.DoesNotContain("workspace requires cdidx", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_WorkspaceVersionPinTooLarge_WarnsAndIgnoresPin()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("version-pin-large");
