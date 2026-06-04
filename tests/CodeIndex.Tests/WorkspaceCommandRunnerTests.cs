@@ -154,6 +154,56 @@ public class WorkspaceCommandRunnerTests
     }
 
     [Fact]
+    public void WorkspaceManifestLoader_Load_RejectsAbsoluteDefaultDbName()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_manifest_absolute_db");
+        try
+        {
+            var manifestPath = Path.Combine(root, "cdidx.workspace.json");
+            var dbName = Path.Combine(root, "outside.db");
+            File.WriteAllText(manifestPath, $$"""
+                {
+                  "default_db_name": {{JsonSerializer.Serialize(dbName)}}
+                }
+                """);
+
+            var ex = Assert.Throws<InvalidDataException>(() => WorkspaceManifestLoader.Load(manifestPath));
+
+            Assert.Contains("default_db_name must be a plain file name", ex.Message);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(root);
+        }
+    }
+
+    [Theory]
+    [InlineData("..")]
+    [InlineData("../outside.db")]
+    [InlineData("nested/index.db")]
+    public void WorkspaceManifestLoader_Load_RejectsUnsafeDefaultDbName(string dbName)
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_manifest_unsafe_db");
+        try
+        {
+            var manifestPath = Path.Combine(root, "cdidx.workspace.json");
+            File.WriteAllText(manifestPath, $$"""
+                {
+                  "default_db_name": {{JsonSerializer.Serialize(dbName)}}
+                }
+                """);
+
+            var ex = Assert.Throws<InvalidDataException>(() => WorkspaceManifestLoader.Load(manifestPath));
+
+            Assert.Contains("default_db_name must be a plain file name", ex.Message);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
     public void WorkspaceManifestLoader_Load_AcceptsUtf8BomManifest()
     {
         var root = TestProjectHelper.CreateTempProject("cdidx_workspace_manifest_bom");

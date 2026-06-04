@@ -72,7 +72,7 @@ internal static class WorkspaceManifestLoader
 
         var element = document.RootElement;
         var strategy = ReadString(element, "index_strategy") ?? "per_member";
-        var dbName = ReadString(element, "default_db_name") ?? "codeindex.db";
+        var dbName = ValidateDefaultDbName(ReadString(element, "default_db_name") ?? "codeindex.db");
         var rawMembers = ReadMembers(element);
 
         var members = rawMembers.Select(member =>
@@ -91,6 +91,22 @@ internal static class WorkspaceManifestLoader
         => element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
             ? value.GetString()
             : null;
+
+    private static string ValidateDefaultDbName(string dbName)
+    {
+        if (string.IsNullOrWhiteSpace(dbName)
+            || dbName is "." or ".."
+            || Path.IsPathRooted(dbName)
+            || dbName.Contains('/')
+            || dbName.Contains('\\')
+            || dbName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0
+            || !string.Equals(Path.GetFileName(dbName), dbName, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException($"Workspace manifest default_db_name must be a plain file name: {dbName}");
+        }
+
+        return dbName;
+    }
 
     private static IReadOnlyList<string> ReadMembers(JsonElement element)
     {
