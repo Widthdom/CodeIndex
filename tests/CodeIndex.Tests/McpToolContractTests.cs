@@ -74,7 +74,16 @@ public class McpToolContractTests
                 }
 
                 if (SpecializedListValidatedArguments.Contains(argumentName))
+                {
+                    if (schemaType != "array")
+                    {
+                        failures.Add(
+                            $"{toolName}.{argumentName}: schema={schemaType}; "
+                            + "specialized_list_validator=array");
+                    }
+
                     continue;
+                }
 
                 var (hasValidator, validatorType) = TryGetExpectedJsonType(toolName, argumentName);
                 if (!hasValidator || validatorType != schemaType)
