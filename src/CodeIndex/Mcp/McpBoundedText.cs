@@ -23,6 +23,8 @@ internal static class McpBoundedText
     internal const int MaxProtocolVersionChars = 128;
     internal const int MaxClientInfoChars = 128;
     internal const int MaxClientIdentityChars = (MaxClientInfoChars * 2) + 1;
+    internal const int MaxPromptNameChars = 128;
+    internal const int MaxPromptArgumentChars = 512;
 
     internal static BoundedMcpText ForDisplay(string value, int maxChars = MaxDiagnosticDisplayChars)
     {

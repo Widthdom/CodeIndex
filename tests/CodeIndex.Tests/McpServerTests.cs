@@ -866,6 +866,70 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void PromptsGet_PromptNameTooLong_TruncatesDiagnostics_Issue3121()
+    {
+        var name = new string('p', McpBoundedText.MaxPromptNameChars + 25);
+        var display = McpBoundedText.ForDisplay(name, McpBoundedText.MaxPromptNameChars);
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "prompts/get",
+            ["params"] = new JsonObject
+            {
+                ["name"] = name,
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal(-32602, response["error"]!["code"]!.GetValue<int>());
+        Assert.DoesNotContain(name, response.ToJsonString(), StringComparison.Ordinal);
+        Assert.Equal($"Prompt name is too long: '{display.Text}'", response["error"]!["message"]!.GetValue<string>());
+        var data = response["error"]!["data"]!;
+        Assert.Equal("name", data["parameter"]!.GetValue<string>());
+        Assert.Equal(McpBoundedText.MaxPromptNameChars, data["max_length"]!.GetValue<int>());
+        Assert.Equal(name.Length, data["actual_length"]!.GetValue<int>());
+        Assert.Equal(display.Text, data["value"]!.GetValue<string>());
+        Assert.Equal(name.Length, data["value_length"]!.GetValue<int>());
+        Assert.True(data["value_truncated"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public void PromptsGet_ArgumentValueTooLong_RejectsBeforePromptInterpolation_Issue3121()
+    {
+        var path = new string('x', McpBoundedText.MaxPromptArgumentChars + 25);
+        var display = McpBoundedText.ForDisplay(path, McpBoundedText.MaxPromptArgumentChars);
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "prompts/get",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "summarize_file",
+                ["arguments"] = new JsonObject
+                {
+                    ["path"] = path,
+                },
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal(-32602, response["error"]!["code"]!.GetValue<int>());
+        Assert.DoesNotContain(path, response.ToJsonString(), StringComparison.Ordinal);
+        Assert.Equal($"Prompt argument 'path' is too long: '{display.Text}'", response["error"]!["message"]!.GetValue<string>());
+        var data = response["error"]!["data"]!;
+        Assert.Equal("path", data["parameter"]!.GetValue<string>());
+        Assert.Equal(McpBoundedText.MaxPromptArgumentChars, data["max_length"]!.GetValue<int>());
+        Assert.Equal(path.Length, data["actual_length"]!.GetValue<int>());
+        Assert.Equal(display.Text, data["value"]!.GetValue<string>());
+        Assert.Equal(path.Length, data["value_length"]!.GetValue<int>());
+        Assert.True(data["value_truncated"]!.GetValue<bool>());
+    }
+
+    [Fact]
     public void Initialize_RequestedCurrentProtocolVersion_EchoesBack()
     {
         // Issue #1554: when the client pins the current preferred version, the server

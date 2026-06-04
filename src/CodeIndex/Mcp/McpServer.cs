@@ -1965,25 +1965,63 @@ public partial class McpServer : IDisposable
                 category: McpErrorEnvelope.CategoryMissingParameter,
                 suggestion: "prompts/get requires `params.name`; call prompts/list to enumerate available names.",
                 retrySafe: false);
+        name = name.Trim();
+        if (name.Length > McpBoundedText.MaxPromptNameChars)
+            return CreatePromptStringTooLongError(id, parameterName: "name", value: name, maxChars: McpBoundedText.MaxPromptNameChars,
+                messagePrefix: "Prompt name is too long",
+                suggestion: "Use one of the short prompt names returned by prompts/list.");
 
         var args = getParams?["arguments"] as JsonObject;
-        string? ReadArg(string key)
-            => args != null && args.TryGetPropertyValue(key, out var node) && node is JsonValue value && value.TryGetValue<string>(out var s)
-                ? s
-                : null;
-
-        var text = name switch
+        string? ReadArg(string key, out JsonNode? error)
         {
-            "summarize_file" => $"Use the `outline` tool for `{ReadArg("path") ?? "<path>"}`, then use `excerpt` only for the ranges needed to summarize public API, key symbols, and responsibilities.",
-            "find_unused" => $"Use `unused_symbols` with the requested scope `{ReadArg("scope") ?? "<scope>"}`. Cross-check surprising results with `references` or `callers` before recommending deletions.",
-            "impact_of_changing" => $"Use `impact_analysis` for `{ReadArg("symbol") ?? "<symbol>"}`. Summarize direct callers, transitive callers, and files that likely need tests.",
-            _ => null,
-        };
-        if (text == null)
-            return CreateErrorResponse(hasId: true, id: id, code: -32602, message: $"Unknown prompt: {name}",
-                category: McpErrorEnvelope.CategoryInvalidArgument,
-                suggestion: "Call prompts/list and request one of the advertised prompt names.",
-                retrySafe: false);
+            error = null;
+            if (args == null
+                || !args.TryGetPropertyValue(key, out var node)
+                || node is not JsonValue value
+                || !value.TryGetValue<string>(out var s))
+            {
+                return null;
+            }
+            if (s.Length > McpBoundedText.MaxPromptArgumentChars)
+            {
+                error = CreatePromptStringTooLongError(id, parameterName: key, value: s, maxChars: McpBoundedText.MaxPromptArgumentChars,
+                    messagePrefix: $"Prompt argument '{key}' is too long",
+                    suggestion: "Shorten prompt arguments before calling prompts/get; long source or path context should be fetched with tools instead.");
+                return null;
+            }
+            return McpBoundedText.ForDisplay(s, McpBoundedText.MaxPromptArgumentChars).Text;
+        }
+
+        string text;
+        switch (name)
+        {
+            case "summarize_file":
+            {
+                var path = ReadArg("path", out var argumentError);
+                if (argumentError is not null)
+                    return argumentError;
+                text = $"Use the `outline` tool for `{path ?? "<path>"}`, then use `excerpt` only for the ranges needed to summarize public API, key symbols, and responsibilities.";
+                break;
+            }
+            case "find_unused":
+            {
+                var scope = ReadArg("scope", out var argumentError);
+                if (argumentError is not null)
+                    return argumentError;
+                text = $"Use `unused_symbols` with the requested scope `{scope ?? "<scope>"}`. Cross-check surprising results with `references` or `callers` before recommending deletions.";
+                break;
+            }
+            case "impact_of_changing":
+            {
+                var symbol = ReadArg("symbol", out var argumentError);
+                if (argumentError is not null)
+                    return argumentError;
+                text = $"Use `impact_analysis` for `{symbol ?? "<symbol>"}`. Summarize direct callers, transitive callers, and files that likely need tests.";
+                break;
+            }
+            default:
+                return CreateUnknownPromptError(id, name);
+        }
 
         var messages = new JsonArray
         {
@@ -2002,6 +2040,39 @@ public partial class McpServer : IDisposable
             ["description"] = name,
             ["messages"] = messages,
         });
+    }
+
+    private static JsonNode CreatePromptStringTooLongError(JsonNode? id, string parameterName, string value, int maxChars, string messagePrefix, string suggestion)
+    {
+        var display = McpBoundedText.ForDisplay(value, maxChars);
+        var data = new JsonObject
+        {
+            ["parameter"] = parameterName,
+            ["max_length"] = maxChars,
+            ["actual_length"] = value.Length,
+            ["value"] = display.Text,
+        };
+        display.AddMetadata(data, "value");
+        return CreateErrorResponse(hasId: true, id: id, code: -32602, message: $"{messagePrefix}: '{display.Text}'",
+            category: McpErrorEnvelope.CategoryInvalidArgument,
+            suggestion: suggestion,
+            retrySafe: false,
+            extraData: data);
+    }
+
+    private static JsonNode CreateUnknownPromptError(JsonNode? id, string name)
+    {
+        var display = McpBoundedText.ForDisplay(name, McpBoundedText.MaxPromptNameChars);
+        var data = new JsonObject
+        {
+            ["prompt"] = display.Text,
+        };
+        display.AddMetadata(data, "prompt");
+        return CreateErrorResponse(hasId: true, id: id, code: -32602, message: $"Unknown prompt: {display.Text}",
+            category: McpErrorEnvelope.CategoryInvalidArgument,
+            suggestion: "Call prompts/list and request one of the advertised prompt names.",
+            retrySafe: false,
+            extraData: data);
     }
 
     private JsonNode HandleLoggingSetLevel(JsonNode? id, JsonNode? setLevelParams)
