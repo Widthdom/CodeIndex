@@ -330,21 +330,29 @@ public class SuggestionStoreTests : IDisposable
         var record = MakeRecord(
             "other",
             null,
-            "AWS AKIA1234567890ABCDEF and password=swordfish and Bearer AbCdEfGhIjKlMnOpQrStUvWxYz123456 should not persist");
+            "AWS AKIA1234567890ABCDEF and password=swordfish and token=tok123 and api_key=abc123 and access-key=def456 and Bearer AbCdEfGhIjKlMnOpQrStUvWxYz123456 should not persist");
         record.Context = "token aaBB11ccDD22eeFF33ggHH44iiJJ55kk";
-        record.ToolInvocationContext = "secret=hunter2";
+        record.ToolInvocationContext = "secret=hunter2 access_key=ghi789";
 
         Assert.True(_store.TryAdd(record));
 
         var stored = Assert.Single(_store.LoadAll());
         Assert.Contains("[REDACTED:aws_access_key]", stored.Description);
         Assert.Contains("password=[REDACTED:credential]", stored.Description);
+        Assert.Contains("token=[REDACTED:credential]", stored.Description);
+        Assert.Contains("api_key=[REDACTED:credential]", stored.Description);
+        Assert.Contains("access-key=[REDACTED:credential]", stored.Description);
         Assert.Contains("[REDACTED:bearer_token]", stored.Description);
         Assert.Contains("[REDACTED:high_entropy_token]", stored.Context);
         Assert.Contains("secret=[REDACTED:credential]", stored.ToolInvocationContext);
+        Assert.Contains("access_key=[REDACTED:credential]", stored.ToolInvocationContext);
         Assert.DoesNotContain("AKIA1234567890ABCDEF", stored.Description);
         Assert.DoesNotContain("swordfish", stored.Description);
+        Assert.DoesNotContain("tok123", stored.Description);
+        Assert.DoesNotContain("abc123", stored.Description);
+        Assert.DoesNotContain("def456", stored.Description);
         Assert.DoesNotContain("hunter2", stored.ToolInvocationContext);
+        Assert.DoesNotContain("ghi789", stored.ToolInvocationContext);
     }
 
     [Fact]

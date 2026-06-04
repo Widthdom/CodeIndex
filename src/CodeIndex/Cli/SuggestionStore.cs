@@ -42,7 +42,7 @@ public class SuggestionStore
     private const string RedactedHighEntropyToken = "[REDACTED:high_entropy_token]";
     private static readonly Regex s_awsAccessKeyRegex = new(@"\bAKIA[0-9A-Z]{16}\b", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex s_bearerTokenRegex = new(@"\bBearer\s+[A-Za-z0-9._~+/=-]{16,}\b", RegexOptions.Compiled | RegexOptions.CultureInvariant);
-    private static readonly Regex s_namedSecretRegex = new(@"(?i)\b(password|secret)=([^&\s]{1,200})", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex s_namedSecretRegex = new(@"(?i)\b(password|secret|token|api[-_]?key|access[-_]?key)=([^&\s]{1,200})", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex s_highEntropyTokenRegex = new(@"\b(?=[A-Za-z0-9._~+/=-]{32,}\b)(?=.*[A-Z])(?=.*[a-z])(?=.*\d)[A-Za-z0-9._~+/=-]+\b", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly HashSet<string> s_dedupStopWords = new(StringComparer.Ordinal)
