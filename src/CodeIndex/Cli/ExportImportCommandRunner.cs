@@ -121,7 +121,7 @@ internal static class ExportImportCommandRunner
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or SqliteException)
         {
-            return WriteError($"import failed: {ex.Message}", "check the archive path and destination database permissions.", "cdidx import <archive> [--db <path>] [--prune-paths] [--json]");
+            return WriteError($"import failed ({CommandErrorWriter.FormatSanitizedException(ex)}).", "check the archive path and destination database permissions.", "cdidx import <archive> [--db <path>] [--prune-paths] [--json]");
         }
         finally
         {
@@ -202,7 +202,7 @@ internal static class ExportImportCommandRunner
         }
         catch (Exception ex)
         {
-            return WriteError($"export failed: {ex.Message}", "check the database and output archive paths.", "cdidx export <archive> [--db <path>] [--json]");
+            return WriteError($"export failed ({CommandErrorWriter.FormatSanitizedException(ex)}).", "check the database and output archive paths.", "cdidx export <archive> [--db <path>] [--json]");
         }
         finally
         {
@@ -286,7 +286,7 @@ internal static class ExportImportCommandRunner
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SqliteException)
         {
-            return WriteError($"ctags export failed: {ex.Message}", "check the database and output paths.", "cdidx export ctags [--output <path>] [--db <path>]");
+            return WriteError($"ctags export failed ({CommandErrorWriter.FormatSanitizedException(ex)}).", "check the database and output paths.", "cdidx export ctags [--output <path>] [--db <path>]");
         }
     }
 

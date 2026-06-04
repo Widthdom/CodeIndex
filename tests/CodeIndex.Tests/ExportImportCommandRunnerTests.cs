@@ -106,6 +106,81 @@ public class ExportImportCommandRunnerTests
     }
 
     [Fact]
+    public void RunImport_FailureOmitsRawExceptionMessage()
+    {
+        var workDir = TestProjectHelper.CreateTempProject("import_error_sanitize");
+        try
+        {
+            var archiveDirectory = Path.Combine(workDir, "archive-directory");
+            Directory.CreateDirectory(archiveDirectory);
+            var dbPath = Path.Combine(workDir, "codeindex.db");
+
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
+                ExportImportCommandRunner.RunImport([archiveDirectory, "--db", dbPath], new JsonSerializerOptions()));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains("import failed (", stderr);
+            Assert.DoesNotContain(archiveDirectory, stderr);
+            Assert.DoesNotContain(Path.GetFileName(archiveDirectory), stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(workDir);
+        }
+    }
+
+    [Fact]
+    public void RunExportArchive_FailureOmitsRawExceptionMessage()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("export_error_sanitize");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var outputDirectory = Path.Combine(projectRoot, "archive-output");
+            Directory.CreateDirectory(outputDirectory);
+
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
+                ExportImportCommandRunner.RunExport([outputDirectory, "--db", dbPath], new JsonSerializerOptions(), "test"));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains("export failed (", stderr);
+            Assert.DoesNotContain(outputDirectory, stderr);
+            Assert.DoesNotContain(Path.GetFileName(outputDirectory), stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunExportCtags_FailureOmitsRawExceptionMessage()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("ctags_error_sanitize");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var outputDirectory = Path.Combine(projectRoot, "tags-output");
+            Directory.CreateDirectory(outputDirectory);
+
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
+                ExportImportCommandRunner.RunExport(["ctags", "--db", dbPath, "--output", outputDirectory], new JsonSerializerOptions(), "test"));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains("ctags export failed (", stderr);
+            Assert.DoesNotContain(outputDirectory, stderr);
+            Assert.DoesNotContain(Path.GetFileName(outputDirectory), stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void WriteExportArchiveFile_FailurePreservesExistingArchive()
     {
         var workDir = Path.Combine(Path.GetTempPath(), $"cdidx_export_{Guid.NewGuid():N}");
