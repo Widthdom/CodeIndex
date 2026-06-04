@@ -667,6 +667,31 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunBatch_TooDeepJsonLine_ReturnsUsageError_Issue3022()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_batch_json_depth");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var nestedPrefix = string.Concat(Enumerable.Repeat("""{"next":""", QueryCommandRunner.BatchMaxJsonDepth + 1));
+            var nested = nestedPrefix + "0" + new string('}', QueryCommandRunner.BatchMaxJsonDepth + 1);
+            var input = $$"""["status",{{nested}}]""" + "\n";
+
+            var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
+                input,
+                () => QueryCommandRunner.RunBatch(["--db", dbPath], _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains("is not valid JSON", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void ParseArgs_ImpactDepthZeroIsRetainedWhenExplicit()
     {
         var options = QueryCommandRunner.ParseArgs(["RunImpact", "--depth", "0"], jsonDefault: false, allowNamedQuery: true);
