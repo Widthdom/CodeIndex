@@ -1502,10 +1502,13 @@ public partial class DbReader : IDisposable
     /// List indexed files, optionally filtered by name pattern and language.
     /// インデックス済みファイルを一覧（名前パターン・言語でフィルタ可能）。
     /// </summary>
-    public List<FileResult> ListFiles(string? query = null, int limit = 20, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null)
+    public List<FileResult> ListFiles(string? query = null, int limit = 20, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool orderBySize = false)
     {
         lang = NormalizeQueryLanguage(lang);
         using var cmd = _conn.CreateCommand();
+        var orderSql = orderBySize
+            ? $"f.size DESC, {PathBucketOrder}, f.path"
+            : $"{PathBucketOrder}, f.path";
 
         var sql = $@"
             WITH file_page AS (
@@ -1523,7 +1526,7 @@ public partial class DbReader : IDisposable
         if (since != null && _fileColumns.Contains("modified"))
             sql += " AND f.modified >= @since";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        sql += $" ORDER BY {PathBucketOrder}, f.path LIMIT @limit";
+        sql += $" ORDER BY {orderSql} LIMIT @limit";
 
         sql += $@"
             )
@@ -1541,7 +1544,7 @@ public partial class DbReader : IDisposable
                 GROUP BY s.file_id
             ) AS symbol_counts ON symbol_counts.file_id = f.id
             {BuildFileReferenceCountJoinSql("file_page")}
-            ORDER BY {PathBucketOrder}, f.path";
+            ORDER BY {orderSql}";
 
         cmd.CommandText = sql;
         if (query != null)

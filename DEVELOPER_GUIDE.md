@@ -207,7 +207,7 @@ Interactive terminal controls are allowed only when stdout is not redirected or 
 
 ### C# / .NET integration
 
-`SolutionProjectResolver` parses the plain-text `.sln` `Project(...) = "...", "...csproj"` entries and resolves C# / F# / VB project files. When exactly one `.sln` exists at the workspace root, `--project <name|path>` uses it automatically; otherwise callers can pass `--solution <path>`.
+`SolutionProjectResolver` parses the plain-text `.sln` `Project(...) = "...", "...csproj"` entries with a non-regex parser and resolves C# / F# / VB project files. Project entries that normalize outside the active workspace root are ignored before filesystem probing or path-filter evaluation. Solution parsing rejects `.sln` files above 8 MiB, lines above 16,384 characters, and more than 4096 .NET project references with clear diagnostics. When exactly one `.sln` exists at the workspace root, `--project <name|path>` uses it automatically; otherwise callers can pass `--solution <path>`.
 
 Query commands that accept path filters (`search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `deps`, `impact`, `unused`, `hotspots`, and `validate`) expand `--project` into the matching project directory glob before hitting `DbReader`, so all existing SQL path predicates keep working. `index --project` expands to the files under the selected project directory and reuses the existing `--files` update path.
 
@@ -2304,7 +2304,7 @@ override が文書化されていない限り ANSI/progress control を抑止す
 
 ### C# / .NET 連携
 
-`SolutionProjectResolver` は plain-text の `.sln` に含まれる `Project(...) = "...", "...csproj"` 行を読み、C# / F# / VB の project file を解決する。workspace root に `.sln` が 1 つだけある場合、`--project <name|path>` は自動でそれを使う。複数ある場合は caller が `--solution <path>` を渡せる。
+`SolutionProjectResolver` は plain-text の `.sln` に含まれる `Project(...) = "...", "...csproj"` 行を non-regex parser で読み、C# / F# / VB の project file を解決する。active workspace root の外側へ正規化される project entry は、filesystem probe や path-filter 評価の前に無視する。solution parsing は 8 MiB を超える `.sln`、16,384 文字を超える行、4096 件を超える .NET project reference を明確な diagnostic とともに拒否する。workspace root に `.sln` が 1 つだけある場合、`--project <name|path>` は自動でそれを使う。複数ある場合は caller が `--solution <path>` を渡せる。
 
 path filter を受け付ける query コマンド（`search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `deps`, `impact`, `unused`, `hotspots`, `validate`）は、`--project` を対応する project directory glob に展開してから `DbReader` に渡す。これにより既存の SQL path predicate をそのまま利用できる。`index --project` は選択された project directory 配下のファイルに展開し、既存の `--files` 更新経路を再利用する。
 

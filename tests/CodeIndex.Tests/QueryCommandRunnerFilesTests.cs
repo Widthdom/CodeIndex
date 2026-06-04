@@ -1975,6 +1975,42 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunFiles_BytesOrdersBySizeBeforeLimit_Issue2994()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_files_size_order");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/a-small.cs", "csharp", "class Small {}\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/z-large.cs", "csharp", "class Large {}\n");
+            SetIndexedFileSize(dbPath, "src/a-small.cs", 10);
+            SetIndexedFileSize(dbPath, "src/z-large.cs", 1_000);
+
+            var (defaultExit, defaultStdout, defaultStderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(
+                ["--db", dbPath, "--json", "--limit", "1"],
+                _jsonOptions));
+            var (bytesExit, bytesStdout, bytesStderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(
+                ["--db", dbPath, "--json", "--bytes", "--limit", "1"],
+                _jsonOptions));
+
+            using var defaultDocument = ParseJsonOutput(defaultStdout);
+            using var bytesDocument = ParseJsonOutput(bytesStdout);
+
+            Assert.Equal(CommandExitCodes.Success, defaultExit);
+            Assert.Equal(CommandExitCodes.Success, bytesExit);
+            Assert.Equal(string.Empty, defaultStderr);
+            Assert.Equal(string.Empty, bytesStderr);
+            Assert.Equal("src/a-small.cs", defaultDocument.RootElement.GetProperty("path").GetString());
+            Assert.Equal("src/z-large.cs", bytesDocument.RootElement.GetProperty("path").GetString());
+            Assert.Equal(1_000, bytesDocument.RootElement.GetProperty("size").GetInt64());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunFiles_JsonOutputKeepsRawSizeInteger()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_files_size_json");
@@ -1993,6 +2029,58 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(5L * 1024 * 1024 * 1024, document.RootElement.GetProperty("size").GetInt64());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunFiles_JsonArray_EmitsSingleArray_Issue2993()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_files_json_array");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(
+                ["--db", dbPath, "--json=array"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var files = document.RootElement.EnumerateArray().ToArray();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            var file = Assert.Single(files);
+            Assert.Equal("src/app.cs", file.GetProperty("path").GetString());
+            Assert.Equal("csharp", file.GetProperty("lang").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunFiles_JsonArray_ZeroResultsEmitsEmptyArray_Issue2993()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_files_json_array_zero");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(
+                ["missing", "--db", dbPath, "--json=array"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Empty(document.RootElement.EnumerateArray());
         }
         finally
         {

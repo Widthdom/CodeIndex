@@ -31,6 +31,11 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     internal const string MaxRequestBodyBytesEnvVar = "CDIDX_MCP_HTTP_MAX_REQUEST_BYTES";
     internal const string MaxQueueDepthEnvVar = "CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH";
 
+    private static readonly JsonDocumentOptions HttpProbeJsonDocumentOptions = new()
+    {
+        MaxDepth = McpServer.MaxJsonDepth,
+    };
+
     private readonly HttpListener _listener;
     private readonly string _endpoint;
     private readonly Action<HttpRequestLogRecord>? _requestLogger;
@@ -417,7 +422,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     {
         try
         {
-            var node = JsonNode.Parse(body);
+            var node = JsonNode.Parse(body, documentOptions: HttpProbeJsonDocumentOptions);
             if (node is not JsonObject obj)
                 return false;
             var method = obj["method"]?.GetValue<string>();
@@ -434,7 +439,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     {
         try
         {
-            var node = JsonNode.Parse(body);
+            var node = JsonNode.Parse(body, documentOptions: HttpProbeJsonDocumentOptions);
             return node is JsonObject obj
                 && obj.ContainsKey("id")
                 && obj["method"] is null
@@ -775,7 +780,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     {
         try
         {
-            using var doc = JsonDocument.Parse(body);
+            using var doc = JsonDocument.Parse(body, HttpProbeJsonDocumentOptions);
             if (!doc.RootElement.TryGetProperty("id", out var id))
                 return null;
 
