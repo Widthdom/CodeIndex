@@ -510,6 +510,22 @@ public static class QueryCommandRunner
                     "Remove --prefix, or run the individual query from the recipe list yourself.");
                 return CommandExitCodes.UsageError;
             }
+            if (options.OutputFormat is not OutputFormatText and not OutputFormatJson and not OutputFormatIssueDrafts)
+            {
+                WriteUsageError(
+                    "--format count/compact/csv/tsv/lsp/qf/sarif is not supported with --recipe.",
+                    GetUsageLineOrThrow("search"),
+                    "Use `--json` for grouped recipe results or `--format issue-drafts` for draft exports.");
+                return CommandExitCodes.UsageError;
+            }
+            if (options.JsonOutputFormat == JsonOutputFormatArray)
+            {
+                WriteUsageError(
+                    "--json=array is not supported with --recipe because recipe output is grouped by query.",
+                    GetUsageLineOrThrow("search"),
+                    "Use plain `--json` for the grouped recipe object.");
+                return CommandExitCodes.UsageError;
+            }
 
             if (options.OutputFormat == OutputFormatIssueDrafts)
                 return RunSearchRecipeIssueDrafts(options, jsonOptions, exact);

@@ -293,6 +293,32 @@ public partial class QueryCommandRunnerTests
         }
     }
 
+    [Theory]
+    [InlineData("count")]
+    [InlineData("compact")]
+    public void RunSearch_RecipeRejectsUnsupportedFormattedOutputs_Issue3144(string format)
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["--recipe", "risky-code", "--format", format],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("--format count/compact/csv/tsv/lsp/qf/sarif is not supported with --recipe", stderr);
+    }
+
+    [Fact]
+    public void RunSearch_RecipeRejectsJsonArray_Issue3144()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["--recipe", "risky-code", "--json=array"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("--json=array is not supported with --recipe", stderr);
+    }
+
     [Fact]
     public void RunSearch_RecipeIssueDraftsIncludeLabelsEvidenceAndDuplicatePreflight_Issue3145()
     {
