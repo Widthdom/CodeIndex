@@ -84,6 +84,8 @@ public static class QueryCommandRunner
         "--top",
         "--lang",
         "--kind",
+        "--bucket",
+        "--min-confidence",
         "--visibility",
         "--exclude-visibility",
         "--since",
@@ -4654,6 +4656,8 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteInvalidKindFilterError(options, "unused", KnownSymbolKindFilters))
             return CommandExitCodes.InvalidArgument;
+        if (TryWriteInvalidUnusedFilterError(options))
+            return CommandExitCodes.InvalidArgument;
         if (TryWriteUnexpectedPositionals("unused", options))
             return CommandExitCodes.UsageError;
 
@@ -4671,7 +4675,16 @@ public static class QueryCommandRunner
                 reader.ScopeMayIncludeSqlSymbols(options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests));
             if (options.CountOnly)
             {
-                var countSummary = reader.CountUnusedSymbols(options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters);
+                var countSummary = reader.CountUnusedSymbols(
+                    options.Kind,
+                    options.Lang,
+                    options.PathPatterns,
+                    options.ExcludePaths,
+                    options.ExcludeTests,
+                    visibilityFilters: options.VisibilityFilters,
+                    excludeVisibilityFilters: options.ExcludeVisibilityFilters,
+                    bucketFilter: options.UnusedBucket,
+                    minConfidence: options.MinUnusedConfidence);
                 var effectiveSqlGraphSignal = countSummary.Count == 0
                     ? zeroResultSqlGraphSignal
                     : NarrowSqlGraphContractSignal(
@@ -4703,7 +4716,17 @@ public static class QueryCommandRunner
                 return CommandExitCodes.Success;
             }
 
-            var results = reader.GetUnusedSymbols(options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters);
+            var results = reader.GetUnusedSymbols(
+                options.Limit,
+                options.Kind,
+                options.Lang,
+                options.PathPatterns,
+                options.ExcludePaths,
+                options.ExcludeTests,
+                visibilityFilters: options.VisibilityFilters,
+                excludeVisibilityFilters: options.ExcludeVisibilityFilters,
+                bucketFilter: options.UnusedBucket,
+                minConfidence: options.MinUnusedConfidence);
             var sqlGraphSignal = results.Count == 0
                 ? zeroResultSqlGraphSignal
                 : NarrowSqlGraphContractSignalByLanguages(
@@ -5131,6 +5154,8 @@ public static class QueryCommandRunner
         int limit = ResolveDefaultPositiveInt(DefaultLimitEnvironmentVariable, DefaultQueryLimit, "--limit", out var defaultLimitError);
         string? lang = null;
         string? kind = null;
+        string? unusedBucket = null;
+        string? minUnusedConfidence = null;
         string? query = null;
         bool rawFts = false;
         bool includeBody = false;
@@ -5484,6 +5509,24 @@ public static class QueryCommandRunner
                     }
                     else
                         AddParseError(kindError!);
+                    break;
+                case "--bucket":
+                    if (TryReadStringOptionValue(args, ref i, "--bucket", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var unusedBucketValue, out var unusedBucketError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--bucket", unusedBucketValue!);
+                        unusedBucket = unusedBucketValue?.ToLowerInvariant();
+                    }
+                    else
+                        AddParseError(unusedBucketError!);
+                    break;
+                case "--min-confidence":
+                    if (TryReadStringOptionValue(args, ref i, "--min-confidence", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var minUnusedConfidenceValue, out var minUnusedConfidenceError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--min-confidence", minUnusedConfidenceValue!);
+                        minUnusedConfidence = minUnusedConfidenceValue?.ToLowerInvariant();
+                    }
+                    else
+                        AddParseError(minUnusedConfidenceError!);
                     break;
                 case "--visibility":
                     if (TryReadStringOptionValue(args, ref i, "--visibility", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var visibilityValue, out var visibilityError))
@@ -5946,6 +5989,8 @@ public static class QueryCommandRunner
             Limit = limit,
             Lang = lang,
             Kind = kind,
+            UnusedBucket = unusedBucket,
+            MinUnusedConfidence = minUnusedConfidence,
             Query = query,
             RawFts = rawFts,
             IncludeBody = includeBody,
@@ -6870,6 +6915,35 @@ public static class QueryCommandRunner
         return false;
     }
 
+    internal static bool IsKnownUnusedBucket(string value)
+        => OrderedUnusedBuckets.Contains(value, StringComparer.Ordinal);
+
+    internal static bool IsKnownUnusedConfidence(string value)
+        => value is "medium" or "low";
+
+    private static bool TryWriteInvalidUnusedFilterError(QueryCommandOptions options)
+    {
+        if (options.UnusedBucket != null && !IsKnownUnusedBucket(options.UnusedBucket))
+        {
+            CommandErrorWriter.Write(
+                $"invalid --bucket value `{options.UnusedBucket}`.",
+                $"use one of: {string.Join(", ", OrderedUnusedBuckets)}.",
+                GetUsageLineOrThrow("unused"));
+            return true;
+        }
+
+        if (options.MinUnusedConfidence != null && !IsKnownUnusedConfidence(options.MinUnusedConfidence))
+        {
+            CommandErrorWriter.Write(
+                $"invalid --min-confidence value `{options.MinUnusedConfidence}`.",
+                "use one of: medium, low.",
+                GetUsageLineOrThrow("unused"));
+            return true;
+        }
+
+        return false;
+    }
+
     private static bool TryWriteUnsupportedOptionError(string commandName, string[] cmdArgs, IEnumerable<string> supportedOptions, string? queryLiteral = null)
     {
         var supported = supportedOptions.ToHashSet(StringComparer.Ordinal);
@@ -7171,6 +7245,10 @@ public static class QueryCommandRunner
             yield return $"lang: {options.Lang}";
         if (options.Kind != null)
             yield return $"kind: {options.Kind}";
+        if (options.UnusedBucket != null)
+            yield return $"bucket: {options.UnusedBucket}";
+        if (options.MinUnusedConfidence != null)
+            yield return $"min-confidence: {options.MinUnusedConfidence}";
         if (options.RankMode != ReferenceRankMode.Weighted)
             yield return $"rank-by: {FormatReferenceRankMode(options.RankMode)}";
         if (options.ExcludeTests)
@@ -7211,6 +7289,10 @@ public static class QueryCommandRunner
             query["lang"] = options.Lang;
         if (options.Kind != null)
             query["kind"] = options.Kind;
+        if (options.UnusedBucket != null)
+            query["bucket"] = options.UnusedBucket;
+        if (options.MinUnusedConfidence != null)
+            query["min_confidence"] = options.MinUnusedConfidence;
         if (options.RankMode != ReferenceRankMode.Weighted)
             query["rank_by"] = FormatReferenceRankMode(options.RankMode);
         if (options.ExcludeTests)
@@ -8381,6 +8463,8 @@ public static class QueryCommandRunner
         ["--lang"] = "pass a language identifier, e.g. `--lang csharp`. Run `cdidx languages` for the supported set.",
         ["--query"] = "pass a search literal, e.g. `--query \"authenticate\"`. Use the `--query` form when the literal starts with `-`.",
         ["--kind"] = "pass a kind identifier, e.g. `--kind function`. definition/symbols/hotspots/unused take a symbol kind; references/callers/callees take a reference kind such as `call`, `instantiate`, or `subscribe`. Run the command's `--help` for the kind list.",
+        ["--bucket"] = "pass one unused-symbol bucket: likely_unused_private, maybe_unused_nonpublic, public_or_exported_no_refs, or reflection_or_config_suspect.",
+        ["--min-confidence"] = "pass one unused-symbol confidence threshold: medium or low.",
         ["--visibility"] = "pass one or more of public, protected, internal, private, e.g. `--visibility public,internal`.",
         ["--exclude-visibility"] = "pass one or more of public, protected, internal, private to exclude, e.g. `--exclude-visibility private`.",
         ["--rank-by"] = "pass `weighted`, `count`, or `kind` (callers/callees only).",
@@ -8734,6 +8818,8 @@ public sealed class QueryCommandOptions
     public int Limit { get; init; } = 20;
     public string? Lang { get; init; }
     public string? Kind { get; init; }
+    public string? UnusedBucket { get; init; }
+    public string? MinUnusedConfidence { get; init; }
     public List<string> VisibilityFilters { get; init; } = [];
     public List<string> ExcludeVisibilityFilters { get; init; } = [];
     public string? Query { get; init; }

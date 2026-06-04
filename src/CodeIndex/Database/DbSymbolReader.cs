@@ -2788,7 +2788,17 @@ public partial class DbReader
                 )";
     }
 
-    public List<UnusedSymbolResult> GetUnusedSymbols(int limit, string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)
+    public List<UnusedSymbolResult> GetUnusedSymbols(
+        int limit,
+        string? kind,
+        string? lang,
+        IReadOnlyList<string>? pathPatterns,
+        IReadOnlyList<string>? excludePathPatterns,
+        bool excludeTests,
+        IReadOnlyList<string>? visibilityFilters = null,
+        IReadOnlyList<string>? excludeVisibilityFilters = null,
+        string? bucketFilter = null,
+        string? minConfidence = null)
     {
         // Without symbol_references (legacy read-only DB), every symbol would appear unused,
         // which is a meaningless signal. Return empty rather than drowning the caller in noise.
@@ -2801,8 +2811,10 @@ public partial class DbReader
         // (unsupported languages have no references indexed, so all symbols appear unused)
         // グラフ対応言語に制限して偽陽性を防ぐ
         // （未対応言語は参照がインデックスされないため全シンボルが未使用に見える）
+        if (HasEffectiveUnusedFilter(bucketFilter, minConfidence))
+            return GetFilteredUnusedSymbols(limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters, bucketFilter, minConfidence);
         if (!ScopeMayIncludeSqlSymbols(kind, lang, pathPatterns, excludePathPatterns, excludeTests))
-            return GetUnusedSymbolsWithoutSqlResolver(limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters);
+            return GetUnusedSymbolsWithoutSqlResolver(limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters, bucketFilter, minConfidence);
 
         var targetCount = Math.Max(limit, 1);
         var privateLike = FetchUnusedCandidates(targetCount, 0, 0, kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters);
@@ -2842,11 +2854,52 @@ public partial class DbReader
         merged.AddRange(maybeNonPublic);
         merged.AddRange(publicOrExported);
         merged.AddRange(reflectionOrConfig);
+        return DiversifyUnusedResults(FilterUnusedResults(merged, bucketFilter, minConfidence), limit);
+    }
+
+    private List<UnusedSymbolResult> GetFilteredUnusedSymbols(int limit, string? kind, string? lang,
+        IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests,
+        IReadOnlyList<string>? visibilityFilters, IReadOnlyList<string>? excludeVisibilityFilters,
+        string? bucketFilter, string? minConfidence)
+    {
+        if (!ScopeMayIncludeSqlSymbols(kind, lang, pathPatterns, excludePathPatterns, excludeTests))
+            return GetFilteredUnusedSymbolsWithoutSqlResolver(limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters, bucketFilter, minConfidence);
+
+        var targetCount = Math.Max(limit, 1);
+        var targetBuckets = GetTargetUnusedBuckets(bucketFilter, minConfidence);
+        if (targetBuckets.Count == 0)
+            return [];
+
+        var resultsByBucket = CreateUnusedBucketResultLists();
+        const int batchSize = UnusedPublicOverfetchMaximum;
+        foreach (var provisionalBucket in GetRelevantUnusedProvisionalBuckets(targetBuckets))
+        {
+            var offset = 0;
+            while (!AllTargetUnusedBucketsFilled(resultsByBucket, targetBuckets, targetCount))
+            {
+                var batch = FetchUnusedCandidates(batchSize, provisionalBucket, offset, kind, lang,
+                    pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters);
+                if (batch.Count == 0)
+                    break;
+
+                offset += batch.Count;
+                foreach (var result in batch)
+                    AddFilteredUnusedResult(resultsByBucket, targetBuckets, targetCount, result, bucketFilter, minConfidence);
+
+                if (batch.Count < batchSize)
+                    break;
+            }
+        }
+
+        var merged = OrderedUnusedBuckets
+            .SelectMany(bucket => resultsByBucket[bucket])
+            .ToList();
         return DiversifyUnusedResults(merged, limit);
     }
 
     private List<UnusedSymbolResult> GetUnusedSymbolsWithoutSqlResolver(int limit, string? kind, string? lang,
-        IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)
+        IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null,
+        string? bucketFilter = null, string? minConfidence = null)
     {
         var referencedNames = LoadReferencedSymbolNames();
         var targetCount = Math.Max(limit, 1);
@@ -2876,6 +2929,53 @@ public partial class DbReader
         merged.AddRange(maybeNonPublic);
         merged.AddRange(publicOrExported);
         merged.AddRange(reflectionOrConfig);
+        return DiversifyUnusedResults(FilterUnusedResults(merged, bucketFilter, minConfidence), limit);
+    }
+
+    private List<UnusedSymbolResult> GetFilteredUnusedSymbolsWithoutSqlResolver(int limit, string? kind, string? lang,
+        IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests,
+        IReadOnlyList<string>? visibilityFilters, IReadOnlyList<string>? excludeVisibilityFilters,
+        string? bucketFilter, string? minConfidence)
+    {
+        var targetCount = Math.Max(limit, 1);
+        var targetBuckets = GetTargetUnusedBuckets(bucketFilter, minConfidence);
+        if (targetBuckets.Count == 0)
+            return [];
+
+        var referencedNames = LoadReferencedSymbolNames();
+        var chunksByFileId = new Dictionary<long, List<UnusedCandidateChunk>>();
+        var resultsByBucket = CreateUnusedBucketResultLists();
+        const int batchSize = UnusedPublicOverfetchMaximum;
+        foreach (var provisionalBucket in GetRelevantUnusedProvisionalBuckets(targetBuckets))
+        {
+            var offset = 0;
+            while (!AllTargetUnusedBucketsFilled(resultsByBucket, targetBuckets, targetCount))
+            {
+                var batch = FetchUnusedCandidateSymbols(batchSize, offset, provisionalBucket, kind, lang,
+                    pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters).ToList();
+                if (batch.Count == 0)
+                    break;
+
+                offset += batch.Count;
+                foreach (var candidate in batch)
+                {
+                    if (referencedNames.Contains(candidate.Name))
+                        continue;
+                    if (HasSameFilePrivateUse(candidate, chunksByFileId))
+                        continue;
+
+                    var result = CreateUnusedSymbolResult(candidate);
+                    AddFilteredUnusedResult(resultsByBucket, targetBuckets, targetCount, result, bucketFilter, minConfidence);
+                }
+
+                if (batch.Count < batchSize)
+                    break;
+            }
+        }
+
+        var merged = OrderedUnusedBuckets
+            .SelectMany(bucket => resultsByBucket[bucket])
+            .ToList();
         return DiversifyUnusedResults(merged, limit);
     }
 
@@ -3352,12 +3452,102 @@ public partial class DbReader
         return limited;
     }
 
-    public QueryCountResult CountUnusedSymbols(string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)
+    private static List<UnusedSymbolResult> FilterUnusedResults(IEnumerable<UnusedSymbolResult> results, string? bucketFilter, string? minConfidence)
+        => results
+            .Where(result => MatchesUnusedFilters(result, bucketFilter, minConfidence))
+            .ToList();
+
+    private static bool HasEffectiveUnusedFilter(string? bucketFilter, string? minConfidence)
+        => bucketFilter != null || string.Equals(minConfidence, "medium", StringComparison.Ordinal);
+
+    private static Dictionary<string, List<UnusedSymbolResult>> CreateUnusedBucketResultLists()
+        => OrderedUnusedBuckets.ToDictionary(
+            bucket => bucket,
+            _ => new List<UnusedSymbolResult>(),
+            StringComparer.Ordinal);
+
+    private static HashSet<string> GetTargetUnusedBuckets(string? bucketFilter, string? minConfidence)
+    {
+        var minConfidenceRank = minConfidence == null ? int.MinValue : GetUnusedConfidenceRank(minConfidence);
+        return OrderedUnusedBuckets
+            .Where(bucket => bucketFilter == null || string.Equals(bucket, bucketFilter, StringComparison.Ordinal))
+            .Where(bucket => GetUnusedConfidenceRank(GetUnusedBucketConfidence(bucket)) >= minConfidenceRank)
+            .ToHashSet(StringComparer.Ordinal);
+    }
+
+    private static IEnumerable<int> GetRelevantUnusedProvisionalBuckets(IReadOnlySet<string> targetBuckets)
+    {
+        if (targetBuckets.Contains(UnusedBucketLikelyPrivate))
+            yield return 0;
+        if (targetBuckets.Contains(UnusedBucketMaybeNonPublic))
+            yield return 1;
+        if (targetBuckets.Contains(UnusedBucketPublicOrExported) || targetBuckets.Contains(UnusedBucketReflectionOrConfig))
+            yield return 2;
+        if (targetBuckets.Contains(UnusedBucketReflectionOrConfig))
+            yield return 3;
+    }
+
+    private static bool AllTargetUnusedBucketsFilled(
+        IReadOnlyDictionary<string, List<UnusedSymbolResult>> resultsByBucket,
+        HashSet<string> targetBuckets,
+        int targetCount)
+    {
+        foreach (var bucket in targetBuckets)
+        {
+            if (resultsByBucket[bucket].Count < targetCount)
+                return false;
+        }
+
+        return true;
+    }
+
+    private static void AddFilteredUnusedResult(
+        Dictionary<string, List<UnusedSymbolResult>> resultsByBucket,
+        HashSet<string> targetBuckets,
+        int targetCount,
+        UnusedSymbolResult result,
+        string? bucketFilter,
+        string? minConfidence)
+    {
+        if (!MatchesUnusedFilters(result, bucketFilter, minConfidence))
+            return;
+        if (!targetBuckets.Contains(result.UnusedBucket))
+            return;
+
+        var bucketResults = resultsByBucket[result.UnusedBucket];
+        if (bucketResults.Count < targetCount)
+            bucketResults.Add(result);
+    }
+
+    private static bool MatchesUnusedFilters(UnusedSymbolResult result, string? bucketFilter, string? minConfidence)
+    {
+        if (bucketFilter != null && !string.Equals(result.UnusedBucket, bucketFilter, StringComparison.Ordinal))
+            return false;
+
+        if (minConfidence != null && GetUnusedConfidenceRank(result.UnusedConfidence) < GetUnusedConfidenceRank(minConfidence))
+            return false;
+
+        return true;
+    }
+
+    private static string GetUnusedBucketConfidence(string bucket)
+        => string.Equals(bucket, UnusedBucketLikelyPrivate, StringComparison.Ordinal) ? "medium" : "low";
+
+    private static int GetUnusedConfidenceRank(string confidence) => confidence switch
+    {
+        "medium" => 1,
+        "low" => 0,
+        _ => -1,
+    };
+
+    public QueryCountResult CountUnusedSymbols(string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null, string? bucketFilter = null, string? minConfidence = null)
     {
         if (!_hasReferencesTable)
             return new QueryCountResult(0, 0);
         if (lang != null && !ReferenceExtractor.SupportsLanguage(lang))
             return new QueryCountResult(0, 0);
+        if (bucketFilter != null || minConfidence != null)
+            return CountFilteredUnusedSymbols(kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters, bucketFilter, minConfidence);
         if (!ScopeMayIncludeSqlSymbols(kind, lang, pathPatterns, excludePathPatterns, excludeTests))
             return CountUnusedSymbolsWithoutSqlResolver(kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters);
 
@@ -3433,6 +3623,92 @@ public partial class DbReader
             reader.GetInt32(0),
             reader.GetInt32(1),
             reader.FieldCount > 2 && !reader.IsDBNull(2) && Convert.ToInt32(reader.GetValue(2)) != 0);
+    }
+
+    private QueryCountResult CountFilteredUnusedSymbols(string? kind, string? lang,
+        IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests,
+        IReadOnlyList<string>? visibilityFilters, IReadOnlyList<string>? excludeVisibilityFilters,
+        string? bucketFilter, string? minConfidence)
+    {
+        if (!ScopeMayIncludeSqlSymbols(kind, lang, pathPatterns, excludePathPatterns, excludeTests))
+            return CountFilteredUnusedSymbolsWithoutSqlResolver(kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters, bucketFilter, minConfidence);
+
+        var count = 0;
+        var paths = new HashSet<string>(StringComparer.Ordinal);
+        var includesSql = false;
+        const int batchSize = UnusedPublicOverfetchMaximum;
+        for (var bucket = 0; bucket <= 3; bucket++)
+        {
+            var offset = 0;
+            while (true)
+            {
+                var batch = FetchUnusedCandidates(batchSize, bucket, offset, kind, lang,
+                    pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters);
+                if (batch.Count == 0)
+                    break;
+
+                offset += batch.Count;
+                foreach (var result in batch)
+                {
+                    if (!MatchesUnusedFilters(result, bucketFilter, minConfidence))
+                        continue;
+
+                    count++;
+                    paths.Add(result.Path);
+                    if (IsSqlLanguage(result.Lang))
+                        includesSql = true;
+                }
+
+                if (batch.Count < batchSize)
+                    break;
+            }
+        }
+
+        return new QueryCountResult(count, paths.Count, includesSql);
+    }
+
+    private QueryCountResult CountFilteredUnusedSymbolsWithoutSqlResolver(string? kind, string? lang,
+        IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests,
+        IReadOnlyList<string>? visibilityFilters, IReadOnlyList<string>? excludeVisibilityFilters,
+        string? bucketFilter, string? minConfidence)
+    {
+        var referencedNames = LoadReferencedSymbolNames();
+        var count = 0;
+        var paths = new HashSet<string>(StringComparer.Ordinal);
+        var chunksByFileId = new Dictionary<long, List<UnusedCandidateChunk>>();
+        const int batchSize = UnusedPublicOverfetchMaximum;
+        for (var bucket = 0; bucket <= 3; bucket++)
+        {
+            var offset = 0;
+            while (true)
+            {
+                var batch = FetchUnusedCandidateSymbols(batchSize, offset, bucket, kind, lang,
+                    pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters).ToList();
+                if (batch.Count == 0)
+                    break;
+
+                offset += batch.Count;
+                foreach (var candidate in batch)
+                {
+                    if (referencedNames.Contains(candidate.Name))
+                        continue;
+                    if (HasSameFilePrivateUse(candidate, chunksByFileId))
+                        continue;
+
+                    var result = CreateUnusedSymbolResult(candidate);
+                    if (!MatchesUnusedFilters(result, bucketFilter, minConfidence))
+                        continue;
+
+                    count++;
+                    paths.Add(candidate.Path);
+                }
+
+                if (batch.Count < batchSize)
+                    break;
+            }
+        }
+
+        return new QueryCountResult(count, paths.Count);
     }
 
     private QueryCountResult CountUnusedSymbolsWithoutSqlResolver(string? kind, string? lang,

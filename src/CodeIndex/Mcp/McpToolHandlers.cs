@@ -684,7 +684,7 @@ public partial class McpServer
         "deps" => new HashSet<string>(StringComparer.Ordinal) { "path", "direction", "lang", "limit", "excludePaths", "excludeTests", "project", "solution" },
         "impact_analysis" => new HashSet<string>(StringComparer.Ordinal) { "symbol", "query", "lang", "maxHops", "maxDepth", "depth", "limit", "path", "excludePaths", "excludeTests", "includeGenerated", "withPaths", "countOnly", "project", "solution" },
         "validate" => new HashSet<string>(StringComparer.Ordinal) { "path", "lang", "limit", "excludePaths", "excludeTests", "project", "solution" },
-        "unused_symbols" => new HashSet<string>(StringComparer.Ordinal) { "kind", "lang", "limit", "path", "excludePaths", "excludeTests", "project", "solution" },
+        "unused_symbols" => new HashSet<string>(StringComparer.Ordinal) { "kind", "lang", "limit", "path", "excludePaths", "excludeTests", "bucket", "minConfidence", "project", "solution" },
         "symbol_hotspots" => new HashSet<string>(StringComparer.Ordinal) { "kind", "lang", "limit", "groupBy", "path", "excludePaths", "excludeTests", "project", "solution" },
         "index" => new HashSet<string>(StringComparer.Ordinal) { "path", "rebuild", "maxFileBytes" },
         "backfill_fold" => new HashSet<string>(StringComparer.Ordinal) { "dry_run", "dryRun", "force" },
@@ -3392,9 +3392,15 @@ public partial class McpServer
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? QueryCommandRunner.DefaultImpactLimit);
         var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
         var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
+        var bucket = args?["bucket"]?.GetValue<string>()?.ToLowerInvariant();
+        var minConfidence = args?["minConfidence"]?.GetValue<string>()?.ToLowerInvariant();
         var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
+        if (bucket != null && !QueryCommandRunner.IsKnownUnusedBucket(bucket))
+            return CreateToolErrorResponse(id, $"Invalid bucket '{bucket}'. Use one of: {string.Join(", ", QueryCommandRunner.OrderedUnusedBuckets)}.");
+        if (minConfidence != null && !QueryCommandRunner.IsKnownUnusedConfidence(minConfidence))
+            return CreateToolErrorResponse(id, $"Invalid minConfidence '{minConfidence}'. Use one of: medium, low.");
 
         // Add graph-support metadata for AI trust decisions
         // AI の信頼判断のためにグラフ対応メタデータを追加
@@ -3403,7 +3409,15 @@ public partial class McpServer
 
         return WithDbReader(id, args, reader =>
         {
-            var results = reader.GetUnusedSymbols(limit, kind, lang, pathPatterns, excludePaths, excludeTests);
+            var results = reader.GetUnusedSymbols(
+                limit,
+                kind,
+                lang,
+                pathPatterns,
+                excludePaths,
+                excludeTests,
+                bucketFilter: bucket,
+                minConfidence: minConfidence);
             var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests);
             var zeroResultSqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignal(
                 baseSqlGraphSignal,
