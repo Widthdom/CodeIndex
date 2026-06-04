@@ -5,6 +5,7 @@ namespace CodeIndex.Cli;
 internal static class CommandErrorWriter
 {
     internal const string DefaultHint = "Run '<cmd> --help' for usage information.";
+    private const int SanitizedExceptionTypeNameLimit = 120;
 
     internal static void Write(string message, string? hint = null, string? usage = null, string? errorCode = null)
     {
@@ -45,5 +46,18 @@ internal static class CommandErrorWriter
 
         Write(message, exitCode, hint, usage, errorCode);
         return exitCode;
+    }
+
+    internal static string FormatSanitizedException(Exception ex)
+    {
+        ArgumentNullException.ThrowIfNull(ex);
+
+        var typeName = ex.GetType().Name;
+        if (string.IsNullOrWhiteSpace(typeName))
+            return nameof(Exception);
+
+        return typeName.Length <= SanitizedExceptionTypeNameLimit
+            ? typeName
+            : typeName[..SanitizedExceptionTypeNameLimit] + "...";
     }
 }

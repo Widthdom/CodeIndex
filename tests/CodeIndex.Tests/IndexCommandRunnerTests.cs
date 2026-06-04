@@ -1073,6 +1073,107 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void ResolveProjects_SkipsSolutionProjectsOutsideWorkspaceRoot_Issue3063()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_solution_outside_root");
+        var externalRoot = Path.Combine(Path.GetDirectoryName(projectRoot)!, Path.GetFileName(projectRoot) + "_external");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src", "App"));
+            Directory.CreateDirectory(externalRoot);
+            var externalProject = Path.Combine(externalRoot, "External.csproj");
+            var externalProjectReference = Path.GetRelativePath(projectRoot, externalProject).Replace('/', '\\');
+            File.WriteAllText(Path.Combine(projectRoot, "Repo.sln"), $$"""
+            Microsoft Visual Studio Solution File, Format Version 12.00
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "App", "src\App\App.csproj", "{11111111-1111-1111-1111-111111111111}"
+            EndProject
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "External", "{{externalProjectReference}}", "{22222222-2222-2222-2222-222222222222}"
+            EndProject
+            """);
+            File.WriteAllText(Path.Combine(projectRoot, "src", "App", "App.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+            File.WriteAllText(externalProject, "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+
+            var projects = SolutionProjectResolver.ResolveProjects(projectRoot, "Repo.sln");
+
+            Assert.Contains(projects, project => project.ProjectPath == "src/App/App.csproj");
+            Assert.DoesNotContain(projects, project => project.Name == "External");
+            Assert.DoesNotContain(projects, project => project.ProjectPath.Contains("..", StringComparison.Ordinal));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            TestProjectHelper.DeleteDirectory(externalRoot);
+        }
+    }
+
+    [Fact]
+    public void ResolveProjects_RejectsOversizedSolutionFile_Issue3064()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_solution_size_limit");
+        try
+        {
+            var solutionPath = Path.Combine(projectRoot, "Repo.sln");
+            using (var stream = new FileStream(solutionPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                stream.SetLength(SolutionProjectResolver.MaxSolutionFileBytes + 1);
+
+            var ex = Assert.Throws<InvalidOperationException>(
+                () => SolutionProjectResolver.ResolveProjects(projectRoot, "Repo.sln"));
+
+            Assert.Contains("solution file is too large", ex.Message);
+            Assert.Contains(SolutionProjectResolver.MaxSolutionFileBytes.ToString(), ex.Message);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ResolveProjects_RejectsOverlongSolutionLine_Issue3064()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_solution_line_limit");
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Repo.sln"),
+                new string('x', SolutionProjectResolver.MaxSolutionLineChars + 1));
+
+            var ex = Assert.Throws<InvalidOperationException>(
+                () => SolutionProjectResolver.ResolveProjects(projectRoot, "Repo.sln"));
+
+            Assert.Contains("solution line is too long", ex.Message);
+            Assert.Contains(":1", ex.Message);
+            Assert.Contains(SolutionProjectResolver.MaxSolutionLineChars.ToString(), ex.Message);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ResolveProjects_RejectsTooManySolutionProjectReferences_Issue3064()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_solution_project_limit");
+        try
+        {
+            var lines = Enumerable.Range(0, SolutionProjectResolver.MaxSolutionProjectReferences + 1)
+                .Select(i => $"Project(\"{{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}}\") = \"P{i}\", \"src\\P{i}\\P{i}.csproj\", \"{{11111111-1111-1111-1111-111111111111}}\"");
+            File.WriteAllLines(Path.Combine(projectRoot, "Repo.sln"), lines);
+
+            var ex = Assert.Throws<InvalidOperationException>(
+                () => SolutionProjectResolver.ResolveProjects(projectRoot, "Repo.sln"));
+
+            Assert.Contains("solution contains too many .NET project references", ex.Message);
+            Assert.Contains(SolutionProjectResolver.MaxSolutionProjectReferences.ToString(), ex.Message);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void ResolveProjectFiles_HonorsGitRootIgnoreRulesForNestedWorkspace_Issue2862()
     {
         var repoRoot = TestProjectHelper.CreateTempProject("cdidx_index_project_filter_git_root");

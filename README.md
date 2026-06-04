@@ -168,7 +168,7 @@ downgrading `cdidx`.
 | Storage | Local-first `.cdidx/codeindex.db` storage. Query commands run from nested directories prefer the outermost ancestor `.cdidx/codeindex.db` before falling back to the current directory. `--data-dir <dir>`, `CDIDX_DATA_DIR`, or `XDG_DATA_HOME` can move default SQLite storage outside the workspace; explicit `--db <path>` still wins. |
 | DB maintenance | New indexes use SQLite incremental auto-vacuum. Successful writer runs truncate-checkpoint the WAL. `cdidx vacuum` reclaims free pages from existing DBs, including a one-time full `VACUUM` conversion for legacy no-autovacuum DBs. `cdidx db schema` reports the on-disk schema, `cdidx db prune --dry-run\|--apply` audits or removes orphaned DB rows, and `status --json` reports metrics under `db_pragma_settings`. |
 | Security defaults | On POSIX systems, `.cdidx` is created with `0700` permissions, lifecycle, metrics, MCP audit, and query trace logs are created owner-read/write from the start, metrics and audit logs rotate to bounded slots, query trace logs are pruned to a bounded retained set, and `status --json` reports the effective `data_dir_mode` when available. |
-| Diagnostics | `doctor` prints a redacted environment summary for bug reports. `status --config` prints effective configuration with source attribution, and `status --explain <field>` describes readiness fields and remediation. Read commands support `--profile`, `--slow-query-ms <n>`, and <code>--trace=stderr&#124;file&#124;none</code>; file traces write daily `query-trace-YYYYMMDD.jsonl` files next to the lifecycle log and retain the newest 30 trace files. |
+| Diagnostics | `doctor` prints a redacted environment summary for bug reports. `status --config` prints effective configuration with source attribution, and `status --explain <field>` describes readiness fields and remediation; add `--json` for a machine-readable explanation payload. Read commands support `--profile`, `--slow-query-ms <n>`, and <code>--trace=stderr&#124;file&#124;none</code>; file traces write daily `query-trace-YYYYMMDD.jsonl` files next to the lifecycle log and retain the newest 30 trace files. |
 | Query exit codes | Valid zero-result query commands exit `0` by default. Pass `--strict-not-found` when scripts should treat zero rows as exit code `2`. |
 | Drift checks | `cdidx diff <db1> <db2>` compares schema, file, symbol, and reference deltas with stable exit codes: `0` identical, `1` drift, `2` schema mismatch, `3` unreadable DB. |
 | Extensibility and feedback | Post-extraction hooks from `~/.config/cdidx/hooks/*.dll` or `CDIDX_HOOKS_DIR` can enrich symbols and references. `cdidx suggestions` lists, inspects, and exports local suggestion history, including issue-draft JSON with optional open-issue duplicate preflight, with fuzzy MCP suggestion deduplication controlled by CLI, env, or `.cdidxrc.json`. |
@@ -202,8 +202,9 @@ The documented `status --json` trust contract covers these fields:
 <tr><td><code>unknown_extension_file_path_limit</code></td><td><code>path_case_sensitive</code></td><td><code>data_dir</code></td><td><code>data_dir_source</code></td></tr>
 <tr><td><code>data_dir_mode</code></td><td><code>mac_profile</code></td><td><code>db_size_bytes</code></td><td><code>wal_size_bytes</code></td></tr>
 <tr><td><code>db_pragma_settings</code></td><td><code>symbols_by_language</code></td><td><code>process</code></td><td><code>last_index_run</code></td></tr>
-<tr><td><code>hooks</code></td><td><code>stale_after_seconds</code></td><td><code>index_age_seconds</code></td><td><code>degraded_reason</code></td></tr>
-<tr><td><code>recommended_action</code></td><td><code>alternative_action</code></td><td><code>mcp_session</code></td><td><code>extractors</code></td></tr>
+<tr><td><code>last_workspace_freshened_at</code></td><td><code>hooks</code></td><td><code>stale_after_seconds</code></td><td><code>index_age_seconds</code></td></tr>
+<tr><td><code>degraded_reason</code></td><td><code>recommended_action</code></td><td><code>alternative_action</code></td><td><code>mcp_session</code></td></tr>
+<tr><td><code>extractors</code></td><td></td><td></td><td></td></tr>
 </tbody>
 </table>
 
@@ -217,7 +218,7 @@ After a current full-repository scan, `unknown_extension_file_count` reports how
 
 For MCP `status`, `mcp_session` is session-scoped diagnostic data rather than persisted index state. It includes `log_level`, `roots`, optional `client_info`, and optional `client_capabilities`.
 
-`process` is captured at status-call time and includes heap, GC collection, and working-set counters. `last_index_run` is persisted by successful CLI and MCP index runs with the run mode, duration, file counts, byte count, row-change counts, and optional peak-memory summary from CLI `--memory-trace`.
+`process` is captured at status-call time and includes heap, GC collection, and working-set counters. `last_index_run` is persisted by successful CLI and MCP index runs with the run mode, duration, file counts, byte count, row-change counts, and optional peak-memory summary from CLI `--memory-trace`. `last_workspace_freshened_at` is the latest successful index/update run timestamp and can be newer than `indexed_at` when a partial or no-op update confirms freshness without rewriting indexed file rows.
 
 `hotspot_family_degraded_reason` uses these values:
 
@@ -455,7 +456,7 @@ upgrade / downgrade 後はインストール済み補完 script を再生成し�
 | storage | `.cdidx/codeindex.db` に保存する local-first 設計。ネストしたディレクトリからの query コマンドは、current directory にフォールバックする前に最上位祖先の `.cdidx/codeindex.db` を優先します。既定の SQLite 保存先は `--data-dir <dir>`、`CDIDX_DATA_DIR`、`XDG_DATA_HOME` で workspace 外へ移せます。明示的な `--db <path>` は引き続き最優先です。 |
 | DB maintenance | 新規 index DB は SQLite incremental auto-vacuum を使います。成功した writer 実行は WAL を `TRUNCATE` checkpoint します。既存 DB は `cdidx vacuum` で free page を回収でき、legacy no-autovacuum DB は初回だけ full `VACUUM` で変換します。`cdidx db schema` は on-disk schema を出力し、`cdidx db prune --dry-run\|--apply` は orphaned DB rows を検査・削除します。`status --json` は `db_pragma_settings` 配下に metrics を出力します。 |
 | security defaults | POSIX では `.cdidx` を `0700` 権限で作成し、lifecycle log、metrics log、MCP audit log、query trace log は作成時点から owner read/write のみで作成します。metrics log と audit log は bounded slot へ rotation し、query trace log は bounded な保持件数へ pruning します。`status --json` は利用可能な場合に実効 POSIX mode を `data_dir_mode` として報告します。 |
-| diagnostics | `doctor` はバグ報告向けの redacted environment summary を出力します。`status --config` は source attribution 付きの effective configuration を出力し、`status --explain <field>` は readiness field の意味と対処を説明します。read 系コマンドは `--profile`、`--slow-query-ms <n>`、<code>--trace=stderr&#124;file&#124;none</code> に対応し、file trace は lifecycle log と同じ場所に日次 `query-trace-YYYYMMDD.jsonl` を書き、最新30件の trace file を保持します。 |
+| diagnostics | `doctor` はバグ報告向けの redacted environment summary を出力します。`status --config` は source attribution 付きの effective configuration を出力し、`status --explain <field>` は readiness field の意味と対処を説明します。`--json` を追加すると機械可読な説明 payload を返します。read 系コマンドは `--profile`、`--slow-query-ms <n>`、<code>--trace=stderr&#124;file&#124;none</code> に対応し、file trace は lifecycle log と同じ場所に日次 `query-trace-YYYYMMDD.jsonl` を書き、最新30件の trace file を保持します。 |
 | query exit codes | 有効な 0 件 query は既定で exit code `0` です。script で 0 件を exit code `2` として扱いたい場合は `--strict-not-found` を使います。 |
 | drift checks | `cdidx diff <db1> <db2>` は schema、file、symbol、reference の差分を比較します。exit code は `0` identical、`1` drift、`2` schema mismatch、`3` unreadable DB です。 |
 | extensibility / feedback | `~/.config/cdidx/hooks/*.dll` または `CDIDX_HOOKS_DIR` の post-extraction hook で永続化前のシンボルと参照を拡張できます。`cdidx suggestions` はローカル提案履歴の一覧表示、詳細表示、open issue 重複 preflight 付き issue draft JSON エクスポートに対応し、MCP 提案の近似重複排除しきい値は CLI、env、`.cdidxrc.json` で調整できます。 |
@@ -494,12 +495,15 @@ shell completion script、Homebrew install、.NET global-tool install は削除�
 <tr><td><code>unknown_extension_file_path_limit</code></td><td><code>path_case_sensitive</code></td><td><code>data_dir</code></td><td><code>data_dir_source</code></td></tr>
 <tr><td><code>data_dir_mode</code></td><td><code>mac_profile</code></td><td><code>db_size_bytes</code></td><td><code>wal_size_bytes</code></td></tr>
 <tr><td><code>db_pragma_settings</code></td><td><code>symbols_by_language</code></td><td><code>process</code></td><td><code>last_index_run</code></td></tr>
-<tr><td><code>hooks</code></td><td><code>stale_after_seconds</code></td><td><code>index_age_seconds</code></td><td><code>degraded_reason</code></td></tr>
-<tr><td><code>recommended_action</code></td><td><code>alternative_action</code></td><td><code>mcp_session</code></td><td><code>extractors</code></td></tr>
+<tr><td><code>last_workspace_freshened_at</code></td><td><code>hooks</code></td><td><code>stale_after_seconds</code></td><td><code>index_age_seconds</code></td></tr>
+<tr><td><code>degraded_reason</code></td><td><code>recommended_action</code></td><td><code>alternative_action</code></td><td><code>mcp_session</code></td></tr>
+<tr><td><code>extractors</code></td><td></td><td></td><td></td></tr>
 </tbody>
 </table>
 
 readiness field のいずれかが degraded の場合、`degraded_root_cause` は primary の安定コードを示し、`readiness_degradations[]` は degraded な各 field と `root_cause`、人間向け `degraded_reason`、`recommended_action`、`alternative_action` を列挙します。`issues_table_available` は物理 table の有無を表し、`file_issues` 行が現在の index generation に対して current かどうかは `file_issues_data_current` を使って判定します。
+
+`process` は status 呼び出し時点で取得され、heap、GC collection、working-set counters を含みます。`last_index_run` は成功した CLI / MCP index 実行の mode、duration、file count、byte count、row-change count、CLI `--memory-trace` 由来の optional peak-memory summary を永続化します。`last_workspace_freshened_at` は最後に成功した index/update 実行時刻で、partial / no-op update が indexed file row を書き換えずに鮮度だけ確認した場合は `indexed_at` より新しくなることがあります。
 
 現行の全体 scan 後、`unknown_extension_file_count` は未知の非空拡張子で skip された件数を返し、`unknown_extension_files` は `unknown_extension_file_path_limit` 件までの path sample、`unknown_extension_files_truncated` は sample より多くの path があることを示します。
 

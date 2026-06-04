@@ -126,6 +126,7 @@ internal static class CliFlagSchema
     private static readonly string[] EntrypointConfidenceCommands = ["map"];
     private static readonly string[] MapSectionCommands = ["map"];
     private static readonly string[] DependencyCycleCommands = ["deps"];
+    private static readonly string[] LanguagesFilterCommands = ["languages"];
 
     // `--exact` is the legacy shorthand that every name-resolution command accepts.
     // `--exact` は名前解決系の全コマンドで受け付けるレガシー shorthand。
@@ -159,7 +160,7 @@ internal static class CliFlagSchema
     [
         "index", "backfill-fold", "optimize", "search", "definition", "goto", "references", "callers", "callees",
         "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status",
-        "validate", "deps", "impact", "unused", "hotspots", "db", "vacuum", "report", "batch", "mcp",
+        "validate", "deps", "impact", "unused", "hotspots", "languages", "db", "vacuum", "report", "batch", "mcp",
     ];
 
     private static readonly string[] WorkspaceDbCommands = ["deps"];
@@ -168,14 +169,14 @@ internal static class CliFlagSchema
     [
         "index", "search", "definition", "goto", "references", "callers", "callees",
         "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status",
-        "validate", "deps", "impact", "unused", "hotspots", "batch",
+        "validate", "deps", "impact", "unused", "hotspots", "languages", "batch",
     ];
 
     private static readonly string[] ReadOnlyDbCommands =
     [
         "search", "definition", "goto", "references", "callers", "callees",
         "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status",
-        "validate", "deps", "impact", "unused", "hotspots",
+        "validate", "deps", "impact", "unused", "hotspots", "languages",
     ];
 
     private static readonly string[] JsonCommands =
@@ -211,7 +212,7 @@ internal static class CliFlagSchema
             new() { Name = "--immutable", Description = "Alias for --read-only", Commands = Set(ReadOnlyDbCommands) },
             new() { Name = "--workspace-db", ValuePlaceholder = "<path>", Description = "Additional workspace member database path for dependency aggregation", Commands = Set(WorkspaceDbCommands) },
             new() { Name = "--data-dir", ValuePlaceholder = "<dir>", Description = "Directory containing codeindex.db; overrides CDIDX_DATA_DIR/XDG/workspace defaults", Commands = Set(DataDirCommands) },
-            new() { Name = "--json", Description = "JSON output; search and validate also accept --json=array for a single JSON array", Commands = Set(JsonCommands) },
+            new() { Name = "--json", Description = "JSON output; search/files/validate also accept --json=array for a single JSON array", Commands = Set(JsonCommands) },
             new() { Name = "--format", ValuePlaceholder = "<text|json|count|compact|csv|tsv|lsp|qf|sarif>", Description = "Standard output format for token budgets, editor integrations, and CI", Commands = Set(FormatCommands) },
             new() { Name = "--quiet", ShortName = "-q", Description = "Suppress informational stderr output; errors still print", Commands = Set(AllCommands.ToArray()) },
             new() { Name = "--silent", Description = "Alias for --quiet", Commands = Set(AllCommands.ToArray()) },
@@ -241,10 +242,12 @@ internal static class CliFlagSchema
             new() { Name = "--strict-not-found", Description = "Return exit code 2 when a valid query has zero rows", Commands = Set(StrictNotFoundCommands) },
             new() { Name = "--strict", Description = "Return exit code 4 when impact preconditions are unmet", Commands = Set("impact") },
             new() { Name = "--since", ValuePlaceholder = "<datetime>", Description = "Filter by modified-since timestamp", Commands = Set(SinceCommands) },
-            new() { Name = "--bytes", Description = "Show raw byte counts in human output", Commands = Set(ByteFormatCommands) },
+            new() { Name = "--bytes", Description = "Files: sort by size and show raw byte counts in human output; map: show raw byte counts", Commands = Set(ByteFormatCommands) },
             new() { Name = "--min-entrypoint-confidence", ValuePlaceholder = "<0.0..1.0>", Description = "Map: omit entrypoint candidates below this confidence", Commands = Set(EntrypointConfidenceCommands) },
             new() { Name = "--sections", ValuePlaceholder = "<tree,languages,hotspots,metrics>", Description = "Map: comma-separated response sections to include", Commands = Set(MapSectionCommands) },
             new() { Name = "--cycles", Description = "Deps: return dependency cycles instead of edge rows", Commands = Set(DependencyCycleCommands) },
+            new() { Name = "--indexed-only", Description = "Languages: list only languages present in the current index", Commands = Set(LanguagesFilterCommands) },
+            new() { Name = "--capability", ValuePlaceholder = "<graph|symbols|references>", Description = "Languages: filter by language capability", Commands = Set(LanguagesFilterCommands) },
             new() { Name = "--query", ValuePlaceholder = "<query>", Description = "Literal query", Commands = Set(QueryCommands) },
             new() { Name = "--body", Description = "Include body", Commands = Set(BodyCommands) },
             new() { Name = "--exact", Description = "Backward-compatible exact shorthand", Commands = Set(ExactCommands) },

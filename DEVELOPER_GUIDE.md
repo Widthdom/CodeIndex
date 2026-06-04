@@ -175,7 +175,7 @@ trust metadata before the dependent rows are written.
 
 ### Extending the indexer
 
-Out-of-tree post-extraction hooks can implement `CodeIndex.Indexer.Hooks.IPostExtractionHook` in a `.dll` placed under `~/.config/cdidx/hooks/` (or the directory named by `CDIDX_HOOKS_DIR`). Hook assemblies are discovered in path order. Each concrete hook type is instantiated with a public parameterless constructor, then called after built-in symbol extraction and again after built-in reference extraction, before rows are persisted. Hooks receive a `FileContext` plus mutable `IList<SymbolRecord>` / `IList<ReferenceRecord>` values, so they can annotate extracted records, add synthetic symbols, or add domain-specific references.
+Out-of-tree post-extraction hooks can implement `CodeIndex.Indexer.Hooks.IPostExtractionHook` in a `.dll` placed under `~/.config/cdidx/hooks/` (or the directory named by `CDIDX_HOOKS_DIR`). Hook discovery examines at most `CDIDX_HOOK_DISCOVERY_MAX_DLLS` DLL candidates (default: 128), requires each candidate to be no larger than `CDIDX_HOOK_DISCOVERY_MAX_BYTES` bytes (default: 67108864), then loads the bounded candidate set in path order. Each concrete hook type is instantiated with a public parameterless constructor, then called after built-in symbol extraction and again after built-in reference extraction, before rows are persisted. Hooks receive a `FileContext` plus mutable `IList<SymbolRecord>` / `IList<ReferenceRecord>` values, so they can annotate extracted records, add synthetic symbols, or add domain-specific references.
 
 Hook failures are isolated to that hook invocation: assembly load, construction, and callback exceptions are captured as diagnostics and indexing continues. Each callback runs against a scratch copy with a bounded wall-clock budget controlled by `CDIDX_HOOK_CALLBACK_BUDGET_MS` (default: 5000 ms). A timed-out callback contributes no mutations, emits an index warning, and disables that hook for the remainder of the current index run. `status --json` and MCP `status` expose loaded hooks under `hooks` with `name`, `assembly_path`, `type_name`, and `callback_budget_ms` so users can confirm which extensions are active and what timeout is being enforced.
 
@@ -207,7 +207,7 @@ Interactive terminal controls are allowed only when stdout is not redirected or 
 
 ### C# / .NET integration
 
-`SolutionProjectResolver` parses the plain-text `.sln` `Project(...) = "...", "...csproj"` entries and resolves C# / F# / VB project files. When exactly one `.sln` exists at the workspace root, `--project <name|path>` uses it automatically; otherwise callers can pass `--solution <path>`.
+`SolutionProjectResolver` parses the plain-text `.sln` `Project(...) = "...", "...csproj"` entries with a non-regex parser and resolves C# / F# / VB project files. Project entries that normalize outside the active workspace root are ignored before filesystem probing or path-filter evaluation. Solution parsing rejects `.sln` files above 8 MiB, lines above 16,384 characters, and more than 4096 .NET project references with clear diagnostics. When exactly one `.sln` exists at the workspace root, `--project <name|path>` uses it automatically; otherwise callers can pass `--solution <path>`.
 
 Query commands that accept path filters (`search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `deps`, `impact`, `unused`, `hotspots`, and `validate`) expand `--project` into the matching project directory glob before hitting `DbReader`, so all existing SQL path predicates keep working. `index --project` expands to the files under the selected project directory and reuses the existing `--files` update path.
 
@@ -368,7 +368,7 @@ Current stable codes and triggers:
 | Read-only fallback | When the normal writable open cannot create or lock journal/WAL side files, read-only fallback uses an immutable SQLite URI so query commands can still read a DB from read-only or sandboxed storage. The fallback intentionally skips writable pragmas, migrations, and WAL recovery writes. If a WAL is present and must be observed, copy `.db`, `.db-wal`, and `.db-shm` together to a writable location or use a SQLite backup from an environment that can open the full WAL set. |
 | Status pragma diagnostics | `status --json` exposes resolved connection values under `db_pragma_settings` (`journal_mode`, `synchronous`, `wal_autocheckpoint`, `page_count`, `freelist_count`, `page_size`) for automation and support diagnostics. |
 | Vacuum | `cdidx vacuum` runs `PRAGMA incremental_vacuum` against writable incremental-auto-vacuum DBs, and performs a one-time `PRAGMA auto_vacuum=INCREMENTAL` plus full `VACUUM` conversion for legacy no-autovacuum DBs. |
-| Size and process diagnostics | `status --json` also reports `db_size_bytes`, `wal_size_bytes`, `symbols_by_language`, current `process` heap/GC/working-set metrics, and `last_index_run` metadata from successful CLI and MCP index runs. |
+| Size and process diagnostics | `status --json` also reports `db_size_bytes`, `wal_size_bytes`, `symbols_by_language`, current `process` heap/GC/working-set metrics, `last_index_run` metadata from successful CLI and MCP index runs, and `last_workspace_freshened_at` as the latest successful index/update timestamp. `indexed_at` still comes from indexed file rows, so partial or no-op updates can freshen the workspace without moving `indexed_at`. |
 | Memory tracing | `index --json --memory-trace` adds a `memory_timeline` block to the CLI index result and persists peak working-set MB into `last_index_run`; `CDIDX_MEM_WARN_MB=<mb>` prints a warning when the sampled working set crosses that threshold. |
 | Newer schema protection | Writable opens reject databases whose `PRAGMA user_version` contains readiness bits outside the current binary's `CurrentSchemaVersion` mask. Read-only status/query paths may still surface `index_newer_than_reader=true` as a degraded audit signal, but write-capable paths must fail with `E003_SCHEMA_TOO_NEW` so an older cdidx cannot silently rewrite a DB stamped by a newer one. |
 
@@ -1199,6 +1199,8 @@ Process exit codes are coarse (`0` success including valid zero-row queries, `1`
 - **CLI / MCP only — no public library API (#1557)** — The `cdidx` assembly is shipped as `OutputType=Exe` with `PackAsTool=true` and is published as a .NET global tool, not as a referenceable library. The supported, versioned surfaces are the `cdidx` CLI (including its `--json` output) and the `cdidx mcp` JSON-RPC server. `public` types on the assembly (for example `CodeIndex.Database.DbReader` and DTOs in `CodeIndex.Models` / `CodeIndex.Database`) exist to satisfy CLI / MCP composition and the `CodeIndex.Tests` `InternalsVisibleTo` boundary — they are implementation details that may change, move, or become `internal` without a deprecation cycle. Embedders are expected to depend on the CLI / MCP / JSON surfaces, not on the assembly. See [INTEGRATION_POLICY.md — API Surface and Library Use](INTEGRATION_POLICY.md#api-surface-and-library-use). If a real library API is ever justified, it will be carved out as a separate package with its own interface and versioning contract rather than being implied by whatever happens to be `public` on this assembly.
 - **Extractor plugins (#1937)** — `CodeIndex.Indexer.Extensibility.ISymbolExtractor` and `IReferenceExtractor` are the only supported assembly-extension surface. `cdidx` discovers trusted plugin DLLs in the user-owned `~/.cdidx/plugins/` directory by default. Workspace `.cdidx/plugins/` DLL discovery is fail-closed unless the process sets `CDIDX_TRUST_WORKSPACE_PLUGINS=1` (also accepts `true`, `yes`, or `on`), because loading a workspace DLL executes checkout-provided code inside the `cdidx` process. A plugin assembly must declare `[assembly: CdidxPlugin(minApiVersion: 1, maxApiVersion: 1)]` and expose a public parameterless type implementing one or both interfaces. Set `FileExtensions` when the plugin owns new file extensions so `FileIndexer` can route those files to the plugin language. Plugins run inside the `cdidx` process and are not sandboxed; install only trusted local DLLs. This narrow contract lets teams add DSL-specific symbols/references without forking CodeIndex, but it is not a general library/SDK embedding API.
 
+  Plugin DLL discovery is bounded to `ExtractorPluginRegistry.MaxPluginAssemblyCandidatesPerDirectory` candidates per directory and `ExtractorPluginRegistry.MaxPluginAssemblyCandidatesTotal` candidates per process. Each candidate must also be no larger than `ExtractorPluginRegistry.MaxPluginAssemblyBytes` bytes. Discovery truncation and oversize skips are reported through `status --json` / MCP `status` `extractors.diagnostics`.
+
 <a id="reference-kind-filtering-matrix"></a>
 
 ## Reference-kind filtering matrix
@@ -1808,11 +1810,14 @@ return `-32600`.
   bodies are treated like a closed stdio line and return `204 No Content`
   *without* killing the loop, so a misbehaving client cannot pin the server
   on a junk frame. Request bodies are capped by
-  `CDIDX_MCP_HTTP_MAX_REQUEST_BYTES` (default: 1,000,000 bytes) and oversized
-  bodies return `413 Payload Too Large` before they are fully buffered. The
+  `CDIDX_MCP_HTTP_MAX_REQUEST_BYTES` (default: 1,000,000 bytes, maximum:
+  16,777,216 bytes) and oversized bodies return `413 Payload Too Large`
+  before they are fully buffered. The
   pending request queue is bounded by `CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH`
-  (default: 64); full queues return `429 Too Many Requests` with
-  `Retry-After: 1` instead of retaining unbounded work.
+  (default: 64, maximum: 1,024); full queues return `429 Too Many Requests`
+  with `Retry-After: 1` instead of retaining unbounded work. Non-positive or
+  non-numeric environment values fall back to defaults, while values above
+  the maximum are rejected before listener startup.
 - SSE stream lifetime is represented by the active stream registry only;
   completed stream tasks are not retained after that registry entry is removed.
 - `ResolveListenSpec("host:port")` resolves the prefix up-front so the
@@ -2255,8 +2260,10 @@ readiness や schema trust metadata を stamp してはいけません。
 
 out-of-tree の post-extraction hook は、`~/.config/cdidx/hooks/` または
 `CDIDX_HOOKS_DIR` が指す directory に置いた `.dll` 内で
-`CodeIndex.Indexer.Hooks.IPostExtractionHook` を実装できます。hook assembly は path order で
-discover され、public parameterless constructor を持つ concrete hook type が instantiate されます。
+`CodeIndex.Indexer.Hooks.IPostExtractionHook` を実装できます。hook discovery は
+`CDIDX_HOOK_DISCOVERY_MAX_DLLS` 件（既定 128）までの DLL 候補を調べ、各候補は
+`CDIDX_HOOK_DISCOVERY_MAX_BYTES` bytes（既定 67108864）以下である必要があります。その bounded
+candidate set を path order で load します。public parameterless constructor を持つ concrete hook type が instantiate されます。
 built-in symbol extraction 後と built-in reference extraction 後、row 永続化前に呼び出されます。
 hook は `FileContext` と mutable な `IList<SymbolRecord>` / `IList<ReferenceRecord>` を受け取り、
 extracted record の annotation、synthetic symbol 追加、domain-specific reference 追加ができます。
@@ -2304,7 +2311,7 @@ override が文書化されていない限り ANSI/progress control を抑止す
 
 ### C# / .NET 連携
 
-`SolutionProjectResolver` は plain-text の `.sln` に含まれる `Project(...) = "...", "...csproj"` 行を読み、C# / F# / VB の project file を解決する。workspace root に `.sln` が 1 つだけある場合、`--project <name|path>` は自動でそれを使う。複数ある場合は caller が `--solution <path>` を渡せる。
+`SolutionProjectResolver` は plain-text の `.sln` に含まれる `Project(...) = "...", "...csproj"` 行を non-regex parser で読み、C# / F# / VB の project file を解決する。active workspace root の外側へ正規化される project entry は、filesystem probe や path-filter 評価の前に無視する。solution parsing は 8 MiB を超える `.sln`、16,384 文字を超える行、4096 件を超える .NET project reference を明確な diagnostic とともに拒否する。workspace root に `.sln` が 1 つだけある場合、`--project <name|path>` は自動でそれを使う。複数ある場合は caller が `--solution <path>` を渡せる。
 
 path filter を受け付ける query コマンド（`search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `deps`, `impact`, `unused`, `hotspots`, `validate`）は、`--project` を対応する project directory glob に展開してから `DbReader` に渡す。これにより既存の SQL path predicate をそのまま利用できる。`index --project` は選択された project directory 配下のファイルに展開し、既存の `--files` 更新経路を再利用する。
 
@@ -2378,7 +2385,7 @@ alternative action を同じ場所へ追加してください。代表例は `mi
 | read-only fallback | 通常の writable open が journal/WAL side file を作成または lock できない場合、read-only fallback は immutable SQLite URI を使うため、query command は read-only / sandboxed storage 上の DB でも読み取りを継続できます。この fallback は意図的に writable pragma、migration、WAL recovery write を skip します。WAL が存在し、その内容を観測する必要がある場合は、`.db` / `.db-wal` / `.db-shm` をまとめて writable location に copy するか、full WAL set を open できる環境で SQLite backup を使います。 |
 | status pragma diagnostics | `status --json` は automation / support diagnostics 用に、解決済みの接続値を `db_pragma_settings` (`journal_mode`, `synchronous`, `wal_autocheckpoint`, `page_count`, `freelist_count`, `page_size`) で公開します。 |
 | vacuum | `cdidx vacuum` は incremental-auto-vacuum DB では `PRAGMA incremental_vacuum` を実行し、legacy no-autovacuum DB では初回のみ `PRAGMA auto_vacuum=INCREMENTAL` と full `VACUUM` で変換します。 |
-| size / process diagnostics | `status --json` は `db_size_bytes`、`wal_size_bytes`、`symbols_by_language`、現在の `process` heap / GC / working-set metrics、成功した CLI / MCP index 実行由来の `last_index_run` metadata も公開します。 |
+| size / process diagnostics | `status --json` は `db_size_bytes`、`wal_size_bytes`、`symbols_by_language`、現在の `process` heap / GC / working-set metrics、成功した CLI / MCP index 実行由来の `last_index_run` metadata、最新の成功 index/update 時刻を示す `last_workspace_freshened_at` も公開します。`indexed_at` は引き続き indexed file row 由来なので、partial / no-op update は `indexed_at` を動かさずに workspace 鮮度だけを更新することがあります。 |
 | memory tracing | `index --json --memory-trace` は CLI index 結果に `memory_timeline` block を追加し、peak working-set MB を `last_index_run` に保存します。`CDIDX_MEM_WARN_MB=<mb>` は sampled working set がしきい値を超えたときに warning を出します。 |
 | newer schema protection | writable open は、`PRAGMA user_version` に current binary の `CurrentSchemaVersion` mask 外の readiness bit が含まれる database も拒否します。read-only status/query path は degraded audit signal として `index_newer_than_reader=true` を表示できますが、write-capable path は古い cdidx が新しい binary で stamp された DB を黙って rewrite しないよう `E003_SCHEMA_TOO_NEW` で失敗しなければなりません。 |
 
@@ -3472,7 +3479,7 @@ MCP は独立したシリアライズ戦略（オブジェクトを JSON など�
 
 `HttpMcpTransport`（同じく #1558）は `System.Net.HttpListener` をラップする:
 
-- HTTP POST 1 件 = JSON-RPC フレーム 1 件で、対応する応答は HTTP レスポンスのボディ（`200 OK` / `application/json; charset=utf-8`）に乗る。通知は `204 No Content`。`GET /events` は将来のサーバー→クライアント frame 用に独立した `text/event-stream` subscription を開く。サーバーは `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S` で keep-alive notification が opt-in された場合を除き、自発的な frame を送信しない。長寿命の event stream は通常の POST リクエストを塞がない。`/` への POST 以外は `405 Method Not Allowed`。空 / 空白のみのボディは stdio の空行と同じ扱いで `204 No Content` を返し、ループは殺さない — クライアントの誤動作で junk フレームに引っかからないため。リクエスト本文は `CDIDX_MCP_HTTP_MAX_REQUEST_BYTES`（既定: 1,000,000 bytes）で制限し、超過時は全量を buffer する前に `413 Payload Too Large` を返す。保留中 request queue は `CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH`（既定: 64）で制限し、満杯時は無制限に work を保持せず `Retry-After: 1` 付きの `429 Too Many Requests` を返す。
+- HTTP POST 1 件 = JSON-RPC フレーム 1 件で、対応する応答は HTTP レスポンスのボディ（`200 OK` / `application/json; charset=utf-8`）に乗る。通知は `204 No Content`。`GET /events` は将来のサーバー→クライアント frame 用に独立した `text/event-stream` subscription を開く。サーバーは `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S` で keep-alive notification が opt-in された場合を除き、自発的な frame を送信しない。長寿命の event stream は通常の POST リクエストを塞がない。`/` への POST 以外は `405 Method Not Allowed`。空 / 空白のみのボディは stdio の空行と同じ扱いで `204 No Content` を返し、ループは殺さない — クライアントの誤動作で junk フレームに引っかからないため。リクエスト本文は `CDIDX_MCP_HTTP_MAX_REQUEST_BYTES`（既定: 1,000,000 bytes、最大: 16,777,216 bytes）で制限し、超過時は全量を buffer する前に `413 Payload Too Large` を返す。保留中 request queue は `CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH`（既定: 64、最大: 1,024）で制限し、満杯時は無制限に work を保持せず `Retry-After: 1` 付きの `429 Too Many Requests` を返す。正でない値や数値でない環境変数値は既定にフォールバックし、最大値を超える値は listener 起動前に拒否する。
 - SSE stream lifetime は active stream registry だけで表現し、その registry entry が削除された後に完了済み stream task を保持しない。
 - `ResolveListenSpec("host:port")` は prefix を事前に解決するため、CLI が stderr に `Listening on http://...` を出せる。ポート `0` は一時 `TcpListener` を probe して空きポートを取得する。probe から `HttpListener.Start()` までの TOCTOU window は、本トランスポートが local-only / single-tenant 想定であるため許容する。ワイルドカードホスト `+` / `*` はパース時点で拒否する。
 - 任意の共有秘密による認証: `CDIDX_MCP_HTTP_TOKEN` が設定されていれば、listener はすべてのリクエストに `Authorization: Bearer <token>` を要求し、定数時間で比較する。トークン未指定で非 loopback ホストへ bind しようとした場合、CLI は MCP カタログを LAN に漏らさないよう既定で拒否する。

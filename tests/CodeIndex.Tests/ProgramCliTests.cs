@@ -1,7 +1,9 @@
 using CodeIndex.Cli;
 using CodeIndex.Database;
+using CodeIndex.Mcp;
 using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
+using System.Globalization;
 using System.IO.Compression;
 using System.Text.Json;
 
@@ -41,6 +43,24 @@ public class ProgramCliTests
         Assert.Contains("Error: --json is not supported for mcp; MCP already speaks JSON-RPC", stderr);
         Assert.Contains("Usage: cdidx mcp [--db <path>]", stderr);
         Assert.DoesNotContain("Warning: unknown option", stderr);
+    }
+
+    [Fact]
+    public void Mcp_HttpOversizedLimitEnvironmentReturnsUsageError()
+    {
+        var oversized = (HttpMcpTransport.MaxConfiguredRequestBodyBytes + 1).ToString(CultureInfo.InvariantCulture);
+        var (exitCode, _, stderr) = RunCliInSubprocess(
+            ["mcp", "--transport", "http"],
+            new Dictionary<string, string?> { [HttpMcpTransport.MaxRequestBodyBytesEnvVar] = oversized });
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains(HttpMcpTransport.MaxRequestBodyBytesEnvVar, stderr);
+        Assert.Contains(
+            $"between 1 and {HttpMcpTransport.MaxConfiguredRequestBodyBytes.ToString(CultureInfo.InvariantCulture)}",
+            stderr,
+            StringComparison.Ordinal);
+        Assert.Contains("HTTP limits:", stderr);
+        Assert.DoesNotContain("HTTP transport listening", stderr);
     }
 
     [Fact]
@@ -726,6 +746,51 @@ public class ProgramCliTests
         Assert.Equal(1, preflight.GetProperty("match_count").GetInt32());
         Assert.Equal(2878, preflight.GetProperty("matches")[0].GetProperty("number").GetInt32());
         Assert.Equal("title_exact", preflight.GetProperty("matches")[0].GetProperty("reason").GetString());
+    }
+
+    [Fact]
+    public void Suggestions_ExportIssueDraftsRejectsOversizedOpenIssuesPreflight()
+    {
+        using var fixture = SuggestionFixture.Create();
+        fixture.Add(
+            "security",
+            "csharp",
+            "Issue draft export should reject oversized duplicate preflight files",
+            submitted: false,
+            sampledTitle: "Reject oversized duplicate preflight files");
+        var openIssuesPath = fixture.WriteOpenIssuesJson(new string(' ', SuggestionsCommandRunner.MaxOpenIssuesJsonBytes + 1));
+
+        var (exitCode, stdout, stderr) = RunCliInSubprocess([
+            "suggestions", "export", "--db", fixture.DbPath, "--format", "issue-drafts", "--open-issues", openIssuesPath
+        ]);
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("--open-issues file", stderr);
+        Assert.Contains("exceeds maximum supported size", stderr);
+    }
+
+    [Fact]
+    public void Suggestions_ExportIssueDraftsRejectsTooDeepOpenIssuesPreflight()
+    {
+        using var fixture = SuggestionFixture.Create();
+        fixture.Add(
+            "security",
+            "csharp",
+            "Issue draft export should reject deeply nested duplicate preflight files",
+            submitted: false,
+            sampledTitle: "Reject deeply nested duplicate preflight files");
+        var nesting = SuggestionsCommandRunner.MaxOpenIssuesJsonDepth + 1;
+        var openIssuesPath = fixture.WriteOpenIssuesJson(new string('[', nesting) + new string(']', nesting));
+
+        var (exitCode, stdout, stderr) = RunCliInSubprocess([
+            "suggestions", "export", "--db", fixture.DbPath, "--format", "issue-drafts", "--open-issues", openIssuesPath
+        ]);
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("could not read --open-issues file", stderr);
+        Assert.Contains("maximum configured depth", stderr);
     }
 
     private static (int ExitCode, string StdOut, string StdErr) RunCliInSubprocess(string[] args, IReadOnlyDictionary<string, string?>? environment = null)

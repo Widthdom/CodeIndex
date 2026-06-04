@@ -54,6 +54,23 @@ public partial class QueryCommandRunnerTests
         }
     }
 
+    [Theory]
+    [InlineData("--limit")]
+    [InlineData("--top")]
+    public void RunValidate_InvalidLimitOrTopReturnsUsageError_Issue2992(string flag)
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunValidate(
+            [flag, "nope"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("requires an integer between 1 and 10000", stderr);
+        Assert.Contains("got 'nope'", stderr);
+        Assert.Contains($"Usage: {ConsoleUi.GetUsageLine("validate")}", stderr);
+        Assert.DoesNotContain("is not supported for validate", stderr);
+        Assert.DoesNotContain("database not found", stderr);
+    }
+
     [Fact]
     public void RunValidate_JsonArrayEmitsIssueArray_Issue3010()
     {
