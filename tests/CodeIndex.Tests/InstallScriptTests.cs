@@ -552,6 +552,31 @@ public sealed class InstallScriptTests : IDisposable
     }
 
     [Fact]
+    public void ResolveVersion_TunnelForbiddenLatestLookup_CapsCurlStderrBeforePrinting()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            """
+            curl() {
+                printf '%s' "curl: (56) CONNECT tunnel failed, response 403 " >&2
+                for _ in {1..9000}; do printf 'X' >&2; done
+                printf '%s\n' "TAIL_SHOULD_NOT_APPEAR" >&2
+                return 56
+            }
+
+            resolve_version ""
+            """);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("curl: (56) CONNECT tunnel failed, response 403", stderr);
+        Assert.Contains("[cdidx installer truncated curl stderr for GitHub API: showing first 8192", stderr);
+        Assert.Contains("CONNECT tunnel failed with HTTP 403 while reaching GitHub API", stderr);
+        Assert.DoesNotContain("TAIL_SHOULD_NOT_APPEAR", stderr);
+    }
+
+    [Fact]
     public void DownloadAndInstall_ForbiddenGitHubAssetDownload_PrintsGitHubAndAllowListHints()
     {
         if (OperatingSystem.IsWindows())
@@ -4882,6 +4907,34 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("API probe: FAILED", stdout);
         Assert.Contains("Release asset probe: FAILED", stdout);
         Assert.Contains("Checksums probe: FAILED", stdout);
+    }
+
+    [Fact]
+    public void Doctor_ConnectTunnel403_CapsCurlStderrBeforePrinting()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            curl() {
+                printf '%s' "curl: (56) CONNECT tunnel failed, response 403 " >&2
+                for _ in {1..9000}; do printf 'X' >&2; done
+                printf '%s\n' "TAIL_SHOULD_NOT_APPEAR" >&2
+                return 56
+            }
+
+            run_doctor v1.2.3
+            """);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("[cdidx installer truncated curl stderr for GitHub API: showing first 8192", stderr);
+        Assert.Contains("CONNECT tunnel failed with HTTP 403", stderr);
+        Assert.Contains("Doctor detected at least one unreachable endpoint", stderr);
+        Assert.Contains("API probe: FAILED", stdout);
+        Assert.DoesNotContain("TAIL_SHOULD_NOT_APPEAR", stderr);
     }
 
     [Fact]

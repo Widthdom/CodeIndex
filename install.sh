@@ -79,6 +79,7 @@ BINARY_NAME="cdidx"
 MANIFEST_REQUIRED_VERSION="1.24.6"
 GITHUB_BASE_URL="${CDIDX_GITHUB_BASE_URL:-https://github.com}"
 GITHUB_API_BASE_URL="${CDIDX_GITHUB_API_BASE_URL:-https://api.github.com}"
+CURL_STDERR_SAMPLE_BYTES=8192
 REQUIRE_ATTESTATION="${CDIDX_REQUIRE_ATTESTATION:-0}"
 STRICT_VERIFY="${CDIDX_STRICT_VERIFY:-0}"
 RELEASE_GPG_FINGERPRINT="${CDIDX_RELEASE_GPG_FINGERPRINT:-}"
@@ -593,6 +594,29 @@ is_proxy_tunnel_403() {
     printf '%s' "$1" | grep -Eqi 'CONNECT tunnel failed, response 403|HTTP code 403 from proxy after CONNECT'
 }
 
+file_size_bytes() {
+    wc -c < "$1" | tr -d '[:space:]'
+}
+
+read_bounded_file_sample() {
+    local path="$1"
+    local max_bytes="$2"
+    local label="$3"
+    local byte_count
+
+    if ! byte_count="$(file_size_bytes "$path")"; then
+        return 1
+    fi
+
+    if [ "${byte_count:-0}" -le "$max_bytes" ]; then
+        cat "$path"
+        return 0
+    fi
+
+    head -c "$max_bytes" "$path"
+    printf '\n[cdidx installer truncated %s: showing first %s of %s bytes]\n' "$label" "$max_bytes" "$byte_count"
+}
+
 curl_http_get() {
     local url="$1"
     local output_path="$2"
@@ -615,7 +639,7 @@ curl_http_get() {
         local curl_status=$?
         local stderr_text=""
         if [ -f "$curl_stderr" ]; then
-            stderr_text="$(cat "$curl_stderr")"
+            stderr_text="$(read_bounded_file_sample "$curl_stderr" "$CURL_STDERR_SAMPLE_BYTES" "curl stderr for ${source_label}")"
             rm -f "$curl_stderr"
         fi
 
@@ -1950,7 +1974,7 @@ probe_doctor_url() {
 
     local stderr_text=""
     if [ -f "$curl_stderr" ]; then
-        stderr_text="$(cat "$curl_stderr")"
+        stderr_text="$(read_bounded_file_sample "$curl_stderr" "$CURL_STDERR_SAMPLE_BYTES" "curl stderr for ${label}")"
         rm -f "$curl_stderr"
     fi
 
