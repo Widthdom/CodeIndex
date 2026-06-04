@@ -1073,6 +1073,40 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void ResolveProjects_SkipsSolutionProjectsOutsideWorkspaceRoot_Issue3063()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_solution_outside_root");
+        var externalRoot = Path.Combine(Path.GetDirectoryName(projectRoot)!, Path.GetFileName(projectRoot) + "_external");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src", "App"));
+            Directory.CreateDirectory(externalRoot);
+            var externalProject = Path.Combine(externalRoot, "External.csproj");
+            var externalProjectReference = Path.GetRelativePath(projectRoot, externalProject).Replace('/', '\\');
+            File.WriteAllText(Path.Combine(projectRoot, "Repo.sln"), $$"""
+            Microsoft Visual Studio Solution File, Format Version 12.00
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "App", "src\App\App.csproj", "{11111111-1111-1111-1111-111111111111}"
+            EndProject
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "External", "{{externalProjectReference}}", "{22222222-2222-2222-2222-222222222222}"
+            EndProject
+            """);
+            File.WriteAllText(Path.Combine(projectRoot, "src", "App", "App.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+            File.WriteAllText(externalProject, "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+
+            var projects = SolutionProjectResolver.ResolveProjects(projectRoot, "Repo.sln");
+
+            Assert.Contains(projects, project => project.ProjectPath == "src/App/App.csproj");
+            Assert.DoesNotContain(projects, project => project.Name == "External");
+            Assert.DoesNotContain(projects, project => project.ProjectPath.Contains("..", StringComparison.Ordinal));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            TestProjectHelper.DeleteDirectory(externalRoot);
+        }
+    }
+
+    [Fact]
     public void ResolveProjectFiles_HonorsGitRootIgnoreRulesForNestedWorkspace_Issue2862()
     {
         var repoRoot = TestProjectHelper.CreateTempProject("cdidx_index_project_filter_git_root");

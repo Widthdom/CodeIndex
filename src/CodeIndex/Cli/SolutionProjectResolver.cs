@@ -115,6 +115,7 @@ internal static partial class SolutionProjectResolver
         string workspaceRoot,
         FileIndexer indexer)
     {
+        var root = Path.GetFullPath(workspaceRoot);
         var solutionDir = Path.GetDirectoryName(solutionPath) ?? workspaceRoot;
         var projects = new List<DotNetProjectInfo>();
         foreach (var line in File.ReadLines(solutionPath))
@@ -128,8 +129,11 @@ internal static partial class SolutionProjectResolver
                 continue;
 
             var fullPath = Path.GetFullPath(Path.Combine(solutionDir, projectPath));
+            if (!IsPathEqualOrParent(root, fullPath))
+                continue;
+
             if (File.Exists(fullPath) && !indexer.EvaluatePathFilter(fullPath).ShouldSkip)
-                projects.Add(BuildProjectInfo(fullPath, workspaceRoot, match.Groups["name"].Value));
+                projects.Add(BuildProjectInfo(fullPath, root, match.Groups["name"].Value));
         }
 
         return projects
