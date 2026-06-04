@@ -241,6 +241,32 @@ public partial class QueryCommandRunnerTests
         Assert.Contains("False positives", query.GetProperty("false_positive_guidance").GetString(), StringComparison.OrdinalIgnoreCase);
     }
 
+    [Theory]
+    [InlineData("count")]
+    [InlineData("csv")]
+    public void RunSearch_ListRecipesRejectsUnsupportedFormattedOutputs_Issue3144(string format)
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["--list-recipes", "--format", format],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("--format count/compact/csv/tsv/lsp/qf/sarif/issue-drafts is not supported with --list-recipes", stderr);
+    }
+
+    [Fact]
+    public void RunSearch_ListRecipesRejectsJsonArray_Issue3144()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["--list-recipes", "--json=array"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("--json=array is not supported with --list-recipes", stderr);
+    }
+
     [Fact]
     public void RunSearch_RecipeJsonRunsBuiltInQueries_Issue3144()
     {

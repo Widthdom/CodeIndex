@@ -869,8 +869,9 @@ recommended labels, query text, exact-match mode, and false-positive guidance.
 query in the recipe. With `--json`, recipe runs emit one aggregate JSON payload
 grouped by recipe query instead of the usual newline-delimited search stream.
 Recipe runs support text output, `--json` / `--format json`, and
-`--format issue-drafts`; other search export formats and `--json=array` are
-rejected because recipe output is grouped by query.
+`--format issue-drafts`; `--list-recipes` supports text or JSON. Other search
+export formats and `--json=array` are rejected for recipe modes because recipe
+output is grouped by query or list metadata.
 For triage automation, `--format issue-drafts` emits draft issue objects with
 titles, labels, evidence paths, Markdown bodies, and duplicate-preflight
 metadata. `--open-issues <path>` accepts an open-issue JSON list such as
@@ -3093,8 +3094,9 @@ false-positive guidance を表示します。`--recipe <name>` は `--lang`、`-
 newline-delimited search stream ではなく、recipe query ごとに grouped された 1 つの
 aggregate JSON payload を出力します。
 recipe run が対応する形式は text output、`--json` / `--format json`、
-`--format issue-drafts` です。その他の search export format と `--json=array` は、
-recipe output が query ごとに grouped されるため usage error で拒否します。
+`--format issue-drafts` です。`--list-recipes` は text または JSON に対応します。
+その他の search export format と `--json=array` は、recipe output が query または
+list metadata ごとに grouped されるため usage error で拒否します。
 triage automation では `--format issue-drafts` を使うと、title、label、evidence path、
 Markdown body、duplicate-preflight metadata を持つ issue draft object を出力します。
 `--open-issues <path>` は `gh issue list --state open --json number,title,labels,url`

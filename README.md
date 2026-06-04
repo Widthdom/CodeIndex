@@ -72,8 +72,9 @@ cdidx lsp --db .cdidx/codeindex.db
 ```
 
 Recipe runs support text, `--json` / `--format json`, and
-`--format issue-drafts`; other search export formats and `--json=array` are
-rejected because recipe output is grouped by query.
+`--format issue-drafts`; `--list-recipes` supports text or JSON. Other search
+export formats and `--json=array` are rejected for recipe modes because recipe
+output is grouped by query or list metadata.
 
 Custom language loops can stay out of tree: put extension aliases in
 `.cdidx-langmap.yaml`, put regex symbol patterns in `.cdidx/patterns/*.yaml`,
@@ -377,8 +378,9 @@ cdidx lsp --db .cdidx/codeindex.db
 ```
 
 recipe run が対応する形式は text、`--json` / `--format json`、
-`--format issue-drafts` です。その他の search export format と `--json=array` は、
-recipe output が query ごとに grouped されるため usage error で拒否します。
+`--format issue-drafts` です。`--list-recipes` は text または JSON に対応します。
+その他の search export format と `--json=array` は、recipe output が query または
+list metadata ごとに grouped されるため usage error で拒否します。
 
 カスタム言語の開発ループは out-of-tree で回せます。拡張子 alias は
 `.cdidx-langmap.yaml`、regex シンボルパターンは `.cdidx/patterns/*.yaml` に置き、

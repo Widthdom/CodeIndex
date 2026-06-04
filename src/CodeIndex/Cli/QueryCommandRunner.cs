@@ -465,12 +465,28 @@ public static class QueryCommandRunner
         }
         if (options.ListRecipes)
         {
-            if (options.Query != null || options.RecipeName != null || options.ExtraNames.Count > 0 || options.OutputFormat == OutputFormatIssueDrafts)
+            if (options.Query != null || options.RecipeName != null || options.ExtraNames.Count > 0)
             {
                 WriteUsageError(
-                    "--list-recipes cannot be combined with a query, --recipe, --format issue-drafts, or extra positional arguments.",
+                    "--list-recipes cannot be combined with a query, --recipe, or extra positional arguments.",
                     GetUsageLineOrThrow("search"),
                     "Run `cdidx search --list-recipes` to list built-in audit recipes.");
+                return CommandExitCodes.UsageError;
+            }
+            if (options.OutputFormat is not OutputFormatText and not OutputFormatJson)
+            {
+                WriteUsageError(
+                    "--format count/compact/csv/tsv/lsp/qf/sarif/issue-drafts is not supported with --list-recipes.",
+                    GetUsageLineOrThrow("search"),
+                    "Use plain text output or `--json` / `--format json` for the recipe list.");
+                return CommandExitCodes.UsageError;
+            }
+            if (options.JsonOutputFormat == JsonOutputFormatArray)
+            {
+                WriteUsageError(
+                    "--json=array is not supported with --list-recipes because recipe-list output is a JSON object.",
+                    GetUsageLineOrThrow("search"),
+                    "Use plain `--json` for the recipe-list object.");
                 return CommandExitCodes.UsageError;
             }
 
