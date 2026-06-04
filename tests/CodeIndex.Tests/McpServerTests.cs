@@ -213,6 +213,47 @@ public class McpServerTests : IDisposable
         Assert.Empty(structured["results"]!.AsArray());
     }
 
+    [Theory]
+    [InlineData("search", "format")]
+    [InlineData("symbol_hotspots", "groupBy")]
+    public void ToolsCall_EnumLikeScalarTooLong_RejectsBeforeNormalization_Issue3116(string toolName, string argumentName)
+    {
+        var oversized = new string('A', McpBoundedText.MaxScalarArgumentChars + 1);
+        var args = new JsonObject
+        {
+            [argumentName] = oversized,
+        };
+        if (toolName == "search")
+            args["query"] = "Run";
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = toolName,
+                ["arguments"] = args,
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        var result = response["result"]!;
+        Assert.True(result["isError"]!.GetValue<bool>());
+        var text = result["content"]![0]!["text"]!.GetValue<string>();
+        var structured = result["structuredContent"]!;
+        Assert.Contains($"Argument '{argumentName}' on tool '{toolName}' is too long", text);
+        Assert.DoesNotContain(oversized, response.ToJsonString(), StringComparison.Ordinal);
+        Assert.Equal(toolName, structured["tool"]!.GetValue<string>());
+        Assert.Equal(argumentName, structured["parameter"]!.GetValue<string>());
+        Assert.Equal(McpBoundedText.MaxScalarArgumentChars, structured["max_length"]!.GetValue<int>());
+        Assert.Equal(oversized.Length, structured["actual_length"]!.GetValue<int>());
+        Assert.True(structured["value_truncated"]!.GetValue<bool>());
+        Assert.Equal(oversized.Length, structured["value_length"]!.GetValue<int>());
+        Assert.Equal(McpBoundedText.ForDisplay(oversized).Text, structured["value"]!.GetValue<string>());
+    }
+
     [Fact]
     public void ToolsCall_SearchReturnsStableAtAndCursorContinuesAfterAnchor_Issue1462()
     {

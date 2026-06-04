@@ -25,6 +25,17 @@ public partial class McpServer
     private const string BatchQueryResponseByteLimitEnvVar = "CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES";
     internal const int MaxMcpArrayFilterCount = 100;
     internal const int MaxMcpArrayFilterStringLength = 4096;
+    private static readonly HashSet<string> BoundedEnumLikeScalarArguments = new(StringComparer.Ordinal)
+    {
+        "category",
+        "direction",
+        "format",
+        "groupBy",
+        "kind",
+        "lang",
+        "language",
+        "rankBy",
+    };
 
     // --- Tool implementations / ツール実装 ---
 
@@ -522,6 +533,37 @@ public partial class McpServer
 
         if (ValidateToolArgumentTypes(toolName, obj) is JsonObject typeError)
             return typeError;
+
+        if (ValidateBoundedEnumLikeScalarArguments(toolName, obj) is JsonObject scalarError)
+            return scalarError;
+
+        return null;
+    }
+
+    private static JsonObject? ValidateBoundedEnumLikeScalarArguments(string toolName, JsonObject args)
+    {
+        foreach (var property in args)
+        {
+            if (!BoundedEnumLikeScalarArguments.Contains(property.Key))
+                continue;
+            if (property.Value is not JsonValue value || !value.TryGetValue<string>(out var scalar))
+                continue;
+            if (scalar.Length <= McpBoundedText.MaxScalarArgumentChars)
+                continue;
+
+            var display = McpBoundedText.ForDisplay(scalar);
+            var error = new JsonObject
+            {
+                ["message"] = $"Argument '{property.Key}' on tool '{toolName}' is too long (max {McpBoundedText.MaxScalarArgumentChars} characters): '{display.Text}'.",
+                ["tool"] = toolName,
+                ["parameter"] = property.Key,
+                ["value"] = display.Text,
+                ["max_length"] = McpBoundedText.MaxScalarArgumentChars,
+                ["actual_length"] = display.OriginalLength,
+            };
+            display.AddMetadata(error, "value");
+            return error;
+        }
 
         return null;
     }
@@ -3193,7 +3235,22 @@ public partial class McpServer
         var groupBy = args?["groupBy"]?.GetValue<string>()?.ToLowerInvariant()
             ?? (string.Equals(lang, "sql", StringComparison.Ordinal) ? "statement" : "symbol");
         if (groupBy is not ("symbol" or "file" or "statement"))
-            return CreateToolErrorResponse(id, $"Unsupported symbol_hotspots groupBy '{groupBy}'. Use symbol, file, or statement.");
+        {
+            var groupByDisplay = McpBoundedText.ForDisplay(groupBy);
+            var extra = new JsonObject
+            {
+                ["parameter"] = "groupBy",
+                ["value"] = groupByDisplay.Text,
+            };
+            groupByDisplay.AddMetadata(extra, "value");
+            return CreateToolErrorResponse(
+                id,
+                $"Unsupported symbol_hotspots groupBy '{groupByDisplay.Text}'. Use symbol, file, or statement.",
+                category: McpErrorEnvelope.CategoryInvalidArgument,
+                suggestion: "Use symbol, file, or statement for symbol_hotspots groupBy.",
+                retrySafe: false,
+                extraData: extra);
+        }
         var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
