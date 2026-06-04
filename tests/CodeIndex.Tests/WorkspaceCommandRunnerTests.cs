@@ -83,6 +83,30 @@ public class WorkspaceCommandRunnerTests
     }
 
     [Fact]
+    public void WorkspaceManifestLoader_Load_RejectsTooManyMembers()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_manifest_members");
+        try
+        {
+            var manifestPath = Path.Combine(root, "cdidx.workspace.json");
+            var members = string.Join(",", Enumerable.Range(0, WorkspaceManifestLoader.MaxManifestMembers + 1).Select(i => $"\"src{i}\""));
+            File.WriteAllText(manifestPath, $$"""
+                {
+                  "members": [{{members}}]
+                }
+                """);
+
+            var ex = Assert.Throws<InvalidDataException>(() => WorkspaceManifestLoader.Load(manifestPath));
+
+            Assert.Contains($"{WorkspaceManifestLoader.MaxManifestMembers} member limit", ex.Message);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
     public void WorkspaceManifestLoader_Load_AcceptsUtf8BomManifest()
     {
         var root = TestProjectHelper.CreateTempProject("cdidx_workspace_manifest_bom");

@@ -28,6 +28,7 @@ internal static class WorkspaceManifestLoader
     internal const string DotFileName = ".cdidx-workspace.json";
     internal const int MaxManifestBytes = 64 * 1024;
     internal const int MaxManifestDepth = 16;
+    internal const int MaxManifestMembers = 1024;
 
     internal static WorkspaceManifest? Find(string startingDirectory)
     {
@@ -72,14 +73,7 @@ internal static class WorkspaceManifestLoader
         var element = document.RootElement;
         var strategy = ReadString(element, "index_strategy") ?? "per_member";
         var dbName = ReadString(element, "default_db_name") ?? "codeindex.db";
-        var rawMembers = element.TryGetProperty("members", out var membersElement) && membersElement.ValueKind == JsonValueKind.Array
-            ? membersElement.EnumerateArray()
-                .Where(m => m.ValueKind == JsonValueKind.String)
-                .Select(m => m.GetString())
-                .Where(m => !string.IsNullOrWhiteSpace(m))
-                .Select(m => m!)
-                .ToArray()
-            : Array.Empty<string>();
+        var rawMembers = ReadMembers(element);
 
         var members = rawMembers.Select(member =>
         {
@@ -97,4 +91,28 @@ internal static class WorkspaceManifestLoader
         => element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
             ? value.GetString()
             : null;
+
+    private static IReadOnlyList<string> ReadMembers(JsonElement element)
+    {
+        if (!element.TryGetProperty("members", out var membersElement) || membersElement.ValueKind != JsonValueKind.Array)
+            return Array.Empty<string>();
+
+        var members = new List<string>();
+        foreach (var member in membersElement.EnumerateArray())
+        {
+            if (member.ValueKind != JsonValueKind.String)
+                continue;
+
+            var value = member.GetString();
+            if (string.IsNullOrWhiteSpace(value))
+                continue;
+
+            if (members.Count >= MaxManifestMembers)
+                throw new InvalidDataException($"Workspace manifest members exceed the {MaxManifestMembers} member limit.");
+
+            members.Add(value);
+        }
+
+        return members;
+    }
 }
