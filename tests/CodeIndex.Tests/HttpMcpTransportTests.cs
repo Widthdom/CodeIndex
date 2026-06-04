@@ -282,6 +282,41 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
+    public async Task HttpTransport_JsonRpcResponseBeyondJsonDepth_IsQueuedForNormalHandling()
+    {
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        var outOfBandHandlerCalls = 0;
+        await using var transport = new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null);
+        transport.OutOfBandFrameHandler = _ =>
+        {
+            Interlocked.Increment(ref outOfBandHandlerCalls);
+            return null;
+        };
+
+        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+        var body = BuildNestedJsonRpcResponse(McpServer.MaxJsonDepth + 1);
+        var post = client.PostAsync(
+            listen.Prefix,
+            new StringContent(body, Encoding.UTF8, "application/json"));
+
+        await WaitUntilAsync(
+            () => transport.QueuedRequestCount == 1,
+            "deep JSON-RPC response to stay in the normal HTTP MCP queue");
+
+        Assert.Equal(0, Volatile.Read(ref outOfBandHandlerCalls));
+        var frame = await transport.ReadFrameAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(body, frame);
+
+        await transport.WriteFrameAsync("""{"jsonrpc":"2.0","id":null,"result":{}}""", CancellationToken.None);
+        using var response = await post.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
     public async Task HttpTransport_RequestBodyOverLimit_Returns413AndDoesNotKillServer()
     {
         await using var harness = await McpHttpHarness.StartAsync(_dbPath, maxRequestBodyBytes: 64);
@@ -633,6 +668,14 @@ public class HttpMcpTransportTests : IDisposable
     private static string BuildNestedCancellationNotification(int nestedObjectCount)
     {
         var builder = new StringBuilder("""{"jsonrpc":"2.0","method":"$/cancelRequest","params":""");
+        AppendNestedObject(builder, nestedObjectCount);
+        builder.Append('}');
+        return builder.ToString();
+    }
+
+    private static string BuildNestedJsonRpcResponse(int nestedObjectCount)
+    {
+        var builder = new StringBuilder("""{"jsonrpc":"2.0","id":1,"result":""");
         AppendNestedObject(builder, nestedObjectCount);
         builder.Append('}');
         return builder.ToString();

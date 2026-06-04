@@ -439,7 +439,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     {
         try
         {
-            var node = JsonNode.Parse(body);
+            var node = JsonNode.Parse(body, documentOptions: HttpProbeJsonDocumentOptions);
             return node is JsonObject obj
                 && obj.ContainsKey("id")
                 && obj["method"] is null
