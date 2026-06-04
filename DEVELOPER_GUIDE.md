@@ -321,7 +321,7 @@ Do not add mutable static caches, shared `StringBuilder` instances, reused `Matc
 
 ### Workspace version pinning
 
-On startup, `cdidx` walks up from the current directory looking for `.cdidx-version`. The first non-empty line is treated as the required CLI version for that workspace. A mismatch prints a warning and continues by default; `--strict-version` or `CDIDX_STRICT_VERSION=1` turns the mismatch into exit code `64` (`EX_USAGE`). This check is advisory and does not rewrite the file. Use it to keep teams on the same binary when index contracts or query behavior differ between releases.
+On startup, `cdidx` walks up from the current directory looking for `.cdidx-version`. The first non-empty line is treated as the required CLI version for that workspace. The pin file is read with a 4096-byte cap; `cdidx` skips at most 16 leading blank lines, and each scanned line must be at most 256 characters. If those limits are exceeded, the pin is ignored with a warning. A mismatch prints a warning and continues by default; `--strict-version` or `CDIDX_STRICT_VERSION=1` turns the mismatch into exit code `64` (`EX_USAGE`). This check is advisory and does not rewrite the file. Use it to keep teams on the same binary when index contracts or query behavior differ between releases.
 
 ### Release freshness and upgrade checks
 
@@ -2335,7 +2335,9 @@ graph edge 意味を表します。端末表示、JSON 出力、MCP contract の
 ### ワークスペースのバージョン固定
 
 startup 時、`cdidx` は current directory から上へ `.cdidx-version` を探します。最初の non-empty
-line を workspace が要求する CLI version として扱い、mismatch は既定では warning のみです。
+line を workspace が要求する CLI version として扱います。pin file は 4096 byte 上限で読み、
+先頭の blank line は最大 16 行まで skip し、読み取る各 line は最大 256 文字です。これらの
+上限を超えた場合、pin は warning とともに無視されます。mismatch は既定では warning のみです。
 `--strict-version` または `CDIDX_STRICT_VERSION=1` では exit code `64` (`EX_USAGE`) になります。
 この check は advisory で、file は書き換えません。index contract や query behavior が
 release 間で異なる場合に、team の binary version を揃えるために使います。

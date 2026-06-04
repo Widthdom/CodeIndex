@@ -390,6 +390,109 @@ public class ProgramRunnerTests
     }
 
     [Fact]
+    public void Run_WorkspaceVersionPinUtf8Bom_MatchingStrictPinSucceeds()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("version-pin-bom");
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, ".cdidx-version"),
+                "1.10.0\n",
+                new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["--strict-version", "--version", "--json"],
+                appVersion: "1.10.0",
+                configStartDirectory: projectRoot));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("\"version\":\"1.10.0\"", stdout);
+            Assert.DoesNotContain("workspace requires cdidx", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_WorkspaceVersionPinTooLarge_WarnsAndIgnoresPin()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("version-pin-large");
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, ".cdidx-version"),
+                "9.9.9\n" + new string('x', ProgramRunner.WorkspaceVersionPinMaxBytes));
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["--strict-version", "--version", "--json"],
+                appVersion: "1.10.0",
+                configStartDirectory: projectRoot));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("\"version\":\"1.10.0\"", stdout);
+            Assert.Contains($"file exceeds {ProgramRunner.WorkspaceVersionPinMaxBytes} bytes", stderr);
+            Assert.DoesNotContain("workspace requires cdidx v9.9.9", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_WorkspaceVersionPinTooManyBlankLines_WarnsAndIgnoresPin()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("version-pin-blanks");
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, ".cdidx-version"),
+                new string('\n', ProgramRunner.WorkspaceVersionPinMaxSkippedBlankLines + 1) + "9.9.9\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["--strict-version", "--version", "--json"],
+                appVersion: "1.10.0",
+                configStartDirectory: projectRoot));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("\"version\":\"1.10.0\"", stdout);
+            Assert.Contains($"more than {ProgramRunner.WorkspaceVersionPinMaxSkippedBlankLines} leading blank lines", stderr);
+            Assert.DoesNotContain("workspace requires cdidx v9.9.9", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_WorkspaceVersionPinLineTooLong_WarnsAndIgnoresPin()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("version-pin-line");
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, ".cdidx-version"),
+                new string('9', ProgramRunner.WorkspaceVersionPinMaxLineChars + 1) + "\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["--strict-version", "--version", "--json"],
+                appVersion: "1.10.0",
+                configStartDirectory: projectRoot));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("\"version\":\"1.10.0\"", stdout);
+            Assert.Contains($"line 1 exceeds {ProgramRunner.WorkspaceVersionPinMaxLineChars} characters", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void UpdateChecker_Check_ReportsNewerRelease()
     {
         var cachePath = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json");

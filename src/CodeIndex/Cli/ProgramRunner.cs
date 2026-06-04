@@ -20,6 +20,9 @@ internal static class ProgramRunner
     internal const string QuietEnvironmentVariable = "CDIDX_QUIET";
     private const string InstallerScriptUrlTemplate = "https://raw.githubusercontent.com/Widthdom/CodeIndex/{0}/install.sh";
     private const long MaxInstallerScriptBytes = 1024 * 1024;
+    internal const int WorkspaceVersionPinMaxBytes = 4096;
+    internal const int WorkspaceVersionPinMaxSkippedBlankLines = 16;
+    internal const int WorkspaceVersionPinMaxLineChars = 256;
     internal const long TestExtractorMaxInputBytes = 4 * 1024 * 1024;
     private static readonly TimeSpan InstallerRunTimeout = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan InstallerKillWaitTimeout = TimeSpan.FromSeconds(5);
@@ -1590,13 +1593,9 @@ internal static class ProgramRunner
             return CommandExitCodes.Success;
 
         string required;
-        try
+        if (!TryReadWorkspaceVersionPin(pinPath, out required, out var warning))
         {
-            required = File.ReadLines(pinPath).FirstOrDefault(line => !string.IsNullOrWhiteSpace(line))?.Trim() ?? "";
-        }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine($"Warning: could not read .cdidx-version at {pinPath}: {ex.Message}");
+            Console.Error.WriteLine(warning);
             return CommandExitCodes.Success;
         }
 
@@ -1613,6 +1612,106 @@ internal static class ProgramRunner
         Console.Error.WriteLine($"Error: {message}");
         Console.Error.WriteLine("Hint: rerun without --strict-version to warn only, or install the pinned cdidx version for this workspace.");
         return CommandExitCodes.ExUsage;
+    }
+
+    private static bool TryReadWorkspaceVersionPin(string pinPath, out string required, out string warning)
+    {
+        required = string.Empty;
+        warning = string.Empty;
+
+        try
+        {
+            var bytes = ReadWorkspaceVersionPinBytes(pinPath);
+            if (bytes.Length > WorkspaceVersionPinMaxBytes)
+            {
+                warning = $"Warning: ignoring .cdidx-version at {pinPath}: file exceeds {WorkspaceVersionPinMaxBytes} bytes.";
+                return false;
+            }
+
+            return TryParseWorkspaceVersionPin(DecodeWorkspaceVersionPinBytes(bytes), pinPath, out required, out warning);
+        }
+        catch (Exception ex)
+        {
+            warning = $"Warning: could not read .cdidx-version at {pinPath}: {ex.Message}";
+            return false;
+        }
+    }
+
+    private static byte[] ReadWorkspaceVersionPinBytes(string pinPath)
+    {
+        var buffer = new byte[WorkspaceVersionPinMaxBytes + 1];
+        var totalRead = 0;
+
+        using var stream = new FileStream(
+            pinPath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete,
+            bufferSize: Math.Min(1024, buffer.Length),
+            FileOptions.SequentialScan);
+
+        while (totalRead < buffer.Length)
+        {
+            var read = stream.Read(buffer, totalRead, buffer.Length - totalRead);
+            if (read == 0)
+                break;
+            totalRead += read;
+        }
+
+        if (totalRead == buffer.Length)
+            return buffer;
+
+        var result = new byte[totalRead];
+        Array.Copy(buffer, result, totalRead);
+        return result;
+    }
+
+    private static string DecodeWorkspaceVersionPinBytes(byte[] bytes)
+    {
+        using var stream = new MemoryStream(bytes, writable: false);
+        using var reader = new StreamReader(
+            stream,
+            Encoding.UTF8,
+            detectEncodingFromByteOrderMarks: true,
+            bufferSize: Math.Min(1024, Math.Max(1, bytes.Length)));
+        return reader.ReadToEnd();
+    }
+
+    private static bool TryParseWorkspaceVersionPin(string content, string pinPath, out string required, out string warning)
+    {
+        required = string.Empty;
+        warning = string.Empty;
+
+        using var reader = new StringReader(content);
+        var skippedBlankLines = 0;
+        var lineNumber = 0;
+        string? line;
+        while ((line = reader.ReadLine()) != null)
+        {
+            lineNumber++;
+            if (line.Length > WorkspaceVersionPinMaxLineChars)
+            {
+                warning = $"Warning: ignoring .cdidx-version at {pinPath}: line {lineNumber} exceeds {WorkspaceVersionPinMaxLineChars} characters.";
+                return false;
+            }
+
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                skippedBlankLines++;
+                if (skippedBlankLines > WorkspaceVersionPinMaxSkippedBlankLines)
+                {
+                    warning = $"Warning: ignoring .cdidx-version at {pinPath}: more than {WorkspaceVersionPinMaxSkippedBlankLines} leading blank lines.";
+                    return false;
+                }
+
+                continue;
+            }
+
+            required = line.Trim();
+            return true;
+        }
+
+        return true;
     }
 
     internal static string? FindWorkspaceVersionPin(string startDirectory)
