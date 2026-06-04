@@ -21,21 +21,28 @@ internal static class GlobalToolLog
     private const long DefaultLogMaxSizeBytes = 50L * 1024L * 1024L;
     internal const int MaxLogSizeMb = 1024;
     internal const long MaxLogSizeBytes = MaxLogSizeMb * 1024L * 1024L;
+    internal const int RedactionArgumentLengthLimit = 8192;
+    internal const string RedactionTruncationMarker = "<truncated>";
     private const string RedactedValue = "<redacted>";
+    private static readonly TimeSpan RedactionRegexTimeout = TimeSpan.FromSeconds(1);
     internal static TimeProvider TimeProvider { get; set; } = TimeProvider.System;
     private static readonly AsyncLocal<Session?> CurrentSession = new();
     private static readonly Regex SensitiveAssignmentPattern = new(
         @"^(?<name>--?[^=\s]*(?:token|password|passwd|pwd|secret|auth|apikey|api-key|api_key|access-key|access_key|credential)[^=\s]*)=(?<value>.+)$",
-        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled,
+        RedactionRegexTimeout);
     private static readonly Regex UriUserInfoPattern = new(
         @"(?<scheme>[a-z][a-z0-9+\-.]*://)(?<user>[^:@/\s]+):(?<password>[^@/\s]+)@",
-        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled,
+        RedactionRegexTimeout);
     private static readonly Regex LongHexPattern = new(
         @"\b[0-9a-f]{32,}\b",
-        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled,
+        RedactionRegexTimeout);
     private static readonly Regex LongBase64Pattern = new(
         @"\b[A-Za-z0-9+/]{40,}={0,2}\b",
-        RegexOptions.CultureInvariant | RegexOptions.Compiled);
+        RegexOptions.CultureInvariant | RegexOptions.Compiled,
+        RedactionRegexTimeout);
 
     internal static IDisposable? TryStart(string[] args, string appVersion)
         => TryStart(args, appVersion, createWriter: null, afterWriterCreated: null);
@@ -496,14 +503,32 @@ internal static class GlobalToolLog
 
     private static string RedactSensitiveText(string value)
     {
-        var assignment = SensitiveAssignmentPattern.Match(value);
-        if (assignment.Success)
-            value = $"{assignment.Groups["name"].Value}={RedactedValue}";
+        var truncated = false;
+        if (value.Length > RedactionArgumentLengthLimit)
+        {
+            value = value[..RedactionArgumentLengthLimit];
+            truncated = true;
+        }
 
-        value = UriUserInfoPattern.Replace(value, match => $"{match.Groups["scheme"].Value}{match.Groups["user"].Value}:{RedactedValue}@");
-        value = LongHexPattern.Replace(value, RedactedValue);
-        value = LongBase64Pattern.Replace(value, RedactedValue);
-        return value;
+        try
+        {
+            if (value.Contains('=', StringComparison.Ordinal))
+            {
+                var assignment = SensitiveAssignmentPattern.Match(value);
+                if (assignment.Success)
+                    return $"{assignment.Groups["name"].Value}={RedactedValue}";
+            }
+
+            value = UriUserInfoPattern.Replace(value, match => $"{match.Groups["scheme"].Value}{match.Groups["user"].Value}:{RedactedValue}@");
+            value = LongHexPattern.Replace(value, RedactedValue);
+            value = LongBase64Pattern.Replace(value, RedactedValue);
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            return RedactedValue;
+        }
+
+        return truncated ? value + RedactionTruncationMarker : value;
     }
 
     private static string RedactPathLikeValue(string value)
