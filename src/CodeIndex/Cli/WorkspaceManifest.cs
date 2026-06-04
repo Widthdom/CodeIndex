@@ -27,6 +27,7 @@ internal static class WorkspaceManifestLoader
     internal const string FileName = "cdidx.workspace.json";
     internal const string DotFileName = ".cdidx-workspace.json";
     internal const int MaxManifestBytes = 64 * 1024;
+    internal const int MaxManifestDepth = 16;
 
     internal static WorkspaceManifest? Find(string startingDirectory)
     {
@@ -65,6 +66,7 @@ internal static class WorkspaceManifestLoader
         {
             CommentHandling = JsonCommentHandling.Skip,
             AllowTrailingCommas = true,
+            MaxDepth = MaxManifestDepth,
         });
 
         var element = document.RootElement;

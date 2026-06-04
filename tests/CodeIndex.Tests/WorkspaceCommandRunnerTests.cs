@@ -65,6 +65,24 @@ public class WorkspaceCommandRunnerTests
     }
 
     [Fact]
+    public void WorkspaceManifestLoader_Load_RejectsDeeplyNestedManifest()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_manifest_depth");
+        try
+        {
+            var manifestPath = Path.Combine(root, "cdidx.workspace.json");
+            var nestedPrefix = string.Concat(Enumerable.Repeat("{\"nested\":", WorkspaceManifestLoader.MaxManifestDepth + 1));
+            File.WriteAllText(manifestPath, nestedPrefix + "0" + new string('}', WorkspaceManifestLoader.MaxManifestDepth + 1));
+
+            Assert.ThrowsAny<JsonException>(() => WorkspaceManifestLoader.Load(manifestPath));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
     public void WorkspaceManifestLoader_Load_AcceptsUtf8BomManifest()
     {
         var root = TestProjectHelper.CreateTempProject("cdidx_workspace_manifest_bom");
