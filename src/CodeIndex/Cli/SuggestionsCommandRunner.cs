@@ -305,8 +305,8 @@ internal static class SuggestionsCommandRunner
         record.McpClientName,
         record.McpClientVersion,
         record.ToolInvocationContext,
-        record.SampledTitle,
-        NormalizeNullableArray(record.SampledTags),
+        RedactSuggestionOutputValue(record.SampledTitle),
+        RedactSuggestionOutputArray(record.SampledTags),
         NormalizeEvidencePaths(record),
         record.Description,
         record.Context,
@@ -351,8 +351,18 @@ internal static class SuggestionsCommandRunner
         var titleSource = !string.IsNullOrWhiteSpace(record.SampledTitle)
             ? record.SampledTitle
             : record.Description;
-        return GitHubIssueReporter.BuildIssueTitle(record.Category, titleSource);
+        return GitHubIssueReporter.BuildIssueTitle(record.Category, RedactSuggestionOutputValue(titleSource) ?? string.Empty);
     }
+
+    private static string? RedactSuggestionOutputValue(string? value)
+        => value == null ? null : SuggestionStore.RedactSensitiveText(value, out _);
+
+    private static List<string> RedactSuggestionOutputArray(string[]? values)
+        => NormalizeNullableArray(values)
+            .Select(RedactSuggestionOutputValue)
+            .Where(value => value != null)
+            .Cast<string>()
+            .ToList();
 
     private static string BuildIssueDraftBody(SuggestionRecord record, IReadOnlyList<string> evidencePaths)
     {

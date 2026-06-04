@@ -950,7 +950,16 @@ public class SuggestionStore
         var redactedDescription = RedactNullable(record.Description, out var descriptionTypes) ?? string.Empty;
         var redactedContext = RedactNullable(record.Context, out var contextTypes);
         var redactedToolInvocationContext = RedactNullable(record.ToolInvocationContext, out var toolInvocationTypes);
-        var allTypes = descriptionTypes.Concat(contextTypes).Concat(toolInvocationTypes).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+        var redactedSampledTitle = RedactNullable(record.SampledTitle, out var sampledTitleTypes);
+        var redactedSampledTags = RedactArray(record.SampledTags, out var sampledTagTypes);
+        var allTypes = descriptionTypes
+            .Concat(contextTypes)
+            .Concat(toolInvocationTypes)
+            .Concat(sampledTitleTypes)
+            .Concat(sampledTagTypes)
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
 
         if (allTypes.Length == 0)
             return record;
@@ -960,8 +969,31 @@ public class SuggestionStore
         copy.Description = redactedDescription;
         copy.Context = redactedContext;
         copy.ToolInvocationContext = redactedToolInvocationContext;
+        copy.SampledTitle = redactedSampledTitle;
+        copy.SampledTags = redactedSampledTags;
         copy.Hash = ComputeHash(copy.Category, copy.Language, copy.Description);
         return copy;
+    }
+
+    private static string[]? RedactArray(string[]? values, out IReadOnlyCollection<string> redactedTypes)
+    {
+        if (values == null)
+        {
+            redactedTypes = Array.Empty<string>();
+            return null;
+        }
+
+        var types = new SortedSet<string>(StringComparer.Ordinal);
+        var redacted = new string[values.Length];
+        for (var i = 0; i < values.Length; i++)
+        {
+            redacted[i] = RedactSensitiveText(values[i] ?? string.Empty, out var valueTypes);
+            foreach (var type in valueTypes)
+                types.Add(type);
+        }
+
+        redactedTypes = types;
+        return redacted;
     }
 
     private static string? RedactNullable(string? value, out IReadOnlyCollection<string> redactedTypes)

@@ -10815,6 +10815,64 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void SuggestImprovement_WhenSamplingReturnsSensitiveMetadata_RedactsBeforeResponseAndPersistence()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_GITHUB_TOKEN");
+        env.Set("CDIDX_GITHUB_TOKEN", null);
+        _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"capabilities":{"sampling":{}}}}""")!);
+        var secret = $"sample-secret-{Guid.NewGuid():N}";
+        string? capturedPrompt = null;
+        _server.ClientRequestHandlerForTests = (method, parameters) =>
+        {
+            Assert.Equal("sampling/createMessage", method);
+            capturedPrompt = parameters?["messages"]?[0]?["content"]?["text"]?.GetValue<string>();
+            return new JsonObject
+            {
+                ["content"] = new JsonObject
+                {
+                    ["type"] = "text",
+                    ["text"] = $$"""{"title":"Echoed api_key={{secret}}","tags":["github_token={{secret}}"]}"""
+                }
+            };
+        };
+        var description = $"Sampling metadata redaction regression api_key={secret}";
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "suggest_improvement",
+                ["arguments"] = new JsonObject
+                {
+                    ["category"] = "other",
+                    ["description"] = description,
+                }
+            }
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        var sampledTitle = structured["sampled_title"]!.GetValue<string>();
+        var sampledTags = string.Join(" ", structured["sampled_tags"]!.AsArray().Select(tag => tag!.GetValue<string>()));
+        Assert.Contains("api_key=[REDACTED:credential]", sampledTitle);
+        Assert.Contains("redacted", sampledTags);
+        Assert.NotNull(capturedPrompt);
+        Assert.DoesNotContain(secret, capturedPrompt);
+        Assert.DoesNotContain(secret, sampledTitle);
+        Assert.DoesNotContain(secret, sampledTags);
+        var responseHash = structured["hash"]!.GetValue<string>();
+        var stored = new SuggestionStore(Path.GetDirectoryName(_dbPath)!, Path.GetFileNameWithoutExtension(_dbPath)).LoadAll()
+            .Single(s => s.Hash == responseHash);
+        Assert.DoesNotContain(secret, stored.Description);
+        Assert.DoesNotContain(secret, stored.SampledTitle!);
+        Assert.DoesNotContain(secret, string.Join(" ", stored.SampledTags!));
+    }
+
+    [Fact]
     public void SuggestImprovement_WhenSamplingResponseIsTooLarge_IgnoresSampledMetadata()
     {
         _server.HandleMessage(JsonNode.Parse(

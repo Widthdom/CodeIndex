@@ -368,6 +368,22 @@ public class SuggestionStoreTests : IDisposable
     }
 
     [Fact]
+    public void TryAdd_RedactsSensitiveSampledMetadataBeforePersistence()
+    {
+        var record = MakeRecord("other", null, "Sampled metadata redaction");
+        record.SampledTitle = "Sampled title api_key=sample-title-secret";
+        record.SampledTags = ["security", "github_token=sample-tag-secret"];
+
+        Assert.True(_store.TryAdd(record));
+
+        var stored = Assert.Single(_store.LoadAll());
+        Assert.Contains("api_key=[REDACTED:credential]", stored.SampledTitle!);
+        Assert.Contains("github_token=[REDACTED:credential]", stored.SampledTags!);
+        Assert.DoesNotContain("sample-title-secret", stored.SampledTitle!);
+        Assert.DoesNotContain("sample-tag-secret", string.Join(" ", stored.SampledTags!));
+    }
+
+    [Fact]
     public void TryAdd_TruncatesLargeSensitiveFieldsBeforePersistence()
     {
         var tailSecret = "tail-secret-value-should-not-survive";
