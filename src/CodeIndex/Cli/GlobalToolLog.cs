@@ -25,7 +25,7 @@ internal static class GlobalToolLog
     internal static TimeProvider TimeProvider { get; set; } = TimeProvider.System;
     private static readonly AsyncLocal<Session?> CurrentSession = new();
     private static readonly Regex SensitiveAssignmentPattern = new(
-        @"^(?<name>--?[^=\s]*(?:token|password|passwd|pwd|secret|auth|apikey|api-key|access-key|credential)[^=\s]*)=(?<value>.+)$",
+        @"^(?<name>--?[^=\s]*(?:token|password|passwd|pwd|secret|auth|apikey|api-key|api_key|access-key|access_key|credential)[^=\s]*)=(?<value>.+)$",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
     private static readonly Regex UriUserInfoPattern = new(
         @"(?<scheme>[a-z][a-z0-9+\-.]*://)(?<user>[^:@/\s]+):(?<password>[^@/\s]+)@",
@@ -488,7 +488,9 @@ internal static class GlobalToolLog
             || arg.Contains("auth", StringComparison.OrdinalIgnoreCase)
             || arg.Contains("apikey", StringComparison.OrdinalIgnoreCase)
             || arg.Contains("api-key", StringComparison.OrdinalIgnoreCase)
+            || arg.Contains("api_key", StringComparison.OrdinalIgnoreCase)
             || arg.Contains("access-key", StringComparison.OrdinalIgnoreCase)
+            || arg.Contains("access_key", StringComparison.OrdinalIgnoreCase)
             || arg.Contains("credential", StringComparison.OrdinalIgnoreCase);
     }
 

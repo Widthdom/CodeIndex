@@ -53,6 +53,24 @@ public class GlobalToolLogTests
     }
 
     [Fact]
+    public void FormatArgs_RedactsUnderscoreSeparatedSecretArguments()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_LOG_REDACT");
+        env.Set("CDIDX_LOG_REDACT", null);
+
+        var formatted = GlobalToolLog.FormatArgs([
+            "--api_key=api-secret",
+            "--access_key",
+            "access-secret",
+        ]);
+
+        Assert.Contains("--api_key=<redacted>", formatted);
+        Assert.Contains("--access_key <redacted>", formatted);
+        Assert.DoesNotContain("api-secret", formatted);
+        Assert.DoesNotContain("access-secret", formatted);
+    }
+
+    [Fact]
     public void FormatArgs_AllowsExplicitNoRedaction()
     {
         using var env = EnvironmentVariableScope.Capture("CDIDX_LOG_REDACT");
