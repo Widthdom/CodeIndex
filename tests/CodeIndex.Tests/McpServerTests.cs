@@ -879,6 +879,21 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ResourcesList_DoesNotAdvertiseUrisTooLongToRead_Issue3122()
+    {
+        var longPath = "src/" + new string('x', McpBoundedText.MaxResourceUriChars) + ".cs";
+        InsertIndexedFile(longPath, "csharp", "public class TooLongResource { }");
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"resources/list","params":{}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+
+        var resources = response["result"]!["resources"]!.AsArray();
+        Assert.DoesNotContain(resources, resource => resource!["name"]!.GetValue<string>() == longPath);
+        Assert.All(resources, resource =>
+            Assert.True(resource!["uri"]!.GetValue<string>().Length <= McpBoundedText.MaxResourceUriChars));
+    }
+
+    [Fact]
     public void ResourcesRead_ReturnsIndexedFileContent()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"cdidx://file/src/app.cs"}}""")!;

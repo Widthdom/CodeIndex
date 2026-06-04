@@ -1890,9 +1890,13 @@ public partial class McpServer : IDisposable
             var resources = new JsonArray();
             foreach (var file in page)
             {
+                var uri = BuildResourceUri(file.Path);
+                if (uri.Length > McpBoundedText.MaxResourceUriChars)
+                    continue;
+
                 resources.Add(new JsonObject
                 {
-                    ["uri"] = BuildResourceUri(file.Path),
+                    ["uri"] = uri,
                     ["name"] = file.Path,
                     ["description"] = $"{file.Path} ({file.Lang ?? "unknown"}, {file.Lines} lines)",
                     ["mimeType"] = GetResourceMimeType(file.Lang),
