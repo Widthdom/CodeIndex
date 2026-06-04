@@ -603,9 +603,9 @@ internal static class ProgramRunner
         Console.WriteLine("terminal:");
         Console.WriteLine(ConsoleUi.FormatSummaryLine("stdout_tty", !Console.IsOutputRedirected, indent: "  "));
         Console.WriteLine(ConsoleUi.FormatSummaryLine("stderr_tty", !Console.IsErrorRedirected, indent: "  "));
-        Console.WriteLine(ConsoleUi.FormatSummaryLine("columns", Environment.GetEnvironmentVariable("COLUMNS") ?? "<unset>", indent: "  "));
-        Console.WriteLine(ConsoleUi.FormatSummaryLine("no_color", Environment.GetEnvironmentVariable("NO_COLOR") ?? "<unset>", indent: "  "));
-        Console.WriteLine(ConsoleUi.FormatSummaryLine("term", Environment.GetEnvironmentVariable("TERM") ?? "<unset>", indent: "  "));
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("columns", FormatDoctorEnvironmentValue(Environment.GetEnvironmentVariable("COLUMNS")), indent: "  "));
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("no_color", FormatDoctorEnvironmentValue(Environment.GetEnvironmentVariable("NO_COLOR")), indent: "  "));
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("term", FormatDoctorEnvironmentValue(Environment.GetEnvironmentVariable("TERM")), indent: "  "));
         Console.WriteLine(ConsoleUi.FormatSummaryLine("locale", CultureInfo.CurrentCulture.Name, indent: "  "));
         Console.WriteLine(ConsoleUi.FormatSummaryLine("ui_locale", CultureInfo.CurrentUICulture.Name, indent: "  "));
         Console.WriteLine();
@@ -617,7 +617,7 @@ internal static class ProgramRunner
         Console.WriteLine();
         Console.WriteLine("config:");
         Console.WriteLine(ConsoleUi.FormatSummaryLine(CdidxConfigFile.FileName, File.Exists(Path.Combine(Environment.CurrentDirectory, CdidxConfigFile.FileName)) ? "present" : "not found", indent: "  "));
-        Console.WriteLine(ConsoleUi.FormatSummaryLine(CdidxConfigFile.DisableEnvVar, Environment.GetEnvironmentVariable(CdidxConfigFile.DisableEnvVar) ?? "<unset>", indent: "  "));
+        Console.WriteLine(ConsoleUi.FormatSummaryLine(CdidxConfigFile.DisableEnvVar, FormatDoctorEnvironmentValue(Environment.GetEnvironmentVariable(CdidxConfigFile.DisableEnvVar)), indent: "  "));
         Console.WriteLine();
         Console.WriteLine("cdidx_env:");
         foreach (var (key, value) in EnumerateCdidxEnvironment())
@@ -636,12 +636,15 @@ internal static class ProgramRunner
         foreach (var row in rows)
         {
             any = true;
-            yield return (row.Key, IsSensitiveEnvironmentName(row.Key) ? "<redacted>" : string.IsNullOrEmpty(row.Value) ? "<empty>" : row.Value);
+            yield return (row.Key, IsSensitiveEnvironmentName(row.Key) ? "<redacted>" : string.IsNullOrEmpty(row.Value) ? "<empty>" : ConsoleUi.FormatBoundedValue(row.Value));
         }
 
         if (!any)
             yield return ("<none>", "");
     }
+
+    private static string FormatDoctorEnvironmentValue(string? value)
+        => value == null ? "<unset>" : ConsoleUi.FormatBoundedValue(value);
 
     private static bool IsSensitiveEnvironmentName(string name) =>
         name.Contains("TOKEN", StringComparison.OrdinalIgnoreCase)

@@ -127,6 +127,31 @@ public static class ConsoleUi
     public static string FormatSummaryLine(string label, object? value, int labelWidth = SummaryLabelWidth, string indent = "")
         => $"{indent}{label.PadRight(labelWidth)}: {value}";
 
+    internal const int DefaultDiagnosticValueCharLimit = 120;
+
+    internal readonly record struct BoundedDisplayText(string Text, bool Truncated, int OriginalLength);
+
+    internal static BoundedDisplayText BoundDisplayText(string? value, int maxChars = DefaultDiagnosticValueCharLimit)
+    {
+        if (maxChars < 0)
+            throw new ArgumentOutOfRangeException(nameof(maxChars), maxChars, "Display limit must be non-negative.");
+
+        if (value == null)
+            return new BoundedDisplayText("<null>", Truncated: false, OriginalLength: 0);
+
+        if (value.Length <= maxChars)
+            return new BoundedDisplayText(value, Truncated: false, value.Length);
+
+        var marker = string.Create(CultureInfo.InvariantCulture, $"... <truncated; original length {value.Length} chars>");
+        var text = maxChars == 0
+            ? marker.TrimStart('.', ' ')
+            : value[..maxChars] + marker;
+        return new BoundedDisplayText(text, Truncated: true, value.Length);
+    }
+
+    internal static string FormatBoundedValue(string? value, int maxChars = DefaultDiagnosticValueCharLimit)
+        => BoundDisplayText(value, maxChars).Text;
+
     private const int SpinnerFrameDelayMs = 100;
     private const int SpinnerStopDelayMs = 20;
     private const int ConsoleLineMargin = 1;

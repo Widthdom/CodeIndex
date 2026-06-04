@@ -225,6 +225,30 @@ public class ProgramRunnerTests
     }
 
     [Fact]
+    public void RunDoctor_TruncatesTerminalEnvironmentValues_Issue3109()
+    {
+        var prefix = new string('c', ConsoleUi.DefaultDiagnosticValueCharLimit);
+        const string tail = "TAIL_ISSUE_3109";
+        var raw = prefix + tail;
+        using var env = EnvironmentVariableScope.Capture("COLUMNS", "NO_COLOR", "TERM", "CDIDX_VISIBLE_LONG_VALUE");
+        env.Set("COLUMNS", raw);
+        env.Set("NO_COLOR", raw);
+        env.Set("TERM", raw);
+        env.Set("CDIDX_VISIBLE_LONG_VALUE", raw);
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["doctor"],
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Empty(stderr);
+        Assert.Contains("terminal:", stdout);
+        Assert.Contains("cdidx_env:", stdout);
+        Assert.Contains($"original length {raw.Length} chars", stdout);
+        Assert.DoesNotContain(tail, stdout);
+    }
+
+    [Fact]
     public void Run_QueryTraceFile_AppendsDailyJsonl()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("query-trace-file");
