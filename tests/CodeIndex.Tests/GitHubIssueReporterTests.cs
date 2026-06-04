@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Net;
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using CodeIndex.Cli;
 using CodeIndex.Models;
@@ -695,6 +696,268 @@ public class GitHubIssueReporterTests : IDisposable
     }
 
     [Fact]
+    public async Task TryCreateIssueDetailedAsync_CreateSuccessBodyOverLimit_ReturnsDiagnosticError()
+    {
+        _env.Set("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
+
+        var handler = new RecordingHandler();
+        handler.AddResponse(req => req.Method == HttpMethod.Get && req.RequestUri!.AbsolutePath == "/search/issues",
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = MakeJsonContent("""{ "total_count": 0, "items": [] }"""),
+            });
+        handler.AddResponse(req => req.Method == HttpMethod.Get && req.RequestUri!.AbsolutePath == "/repos/widthdom/CodeIndex/issues",
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = MakeJsonContent("[]"),
+            });
+        handler.AddResponse(req => req.Method == HttpMethod.Post && req.RequestUri!.AbsolutePath.Contains("/issues"),
+            new HttpResponseMessage(HttpStatusCode.Created)
+            {
+                Content = new ByteArrayContent(new byte[GitHubIssueReporter.MaxGitHubApiResponseBodyBytes + 1]),
+            });
+        using var mockClient = new HttpClient(handler);
+        GitHubIssueReporter.s_httpClientOverride = mockClient;
+        try
+        {
+            var record = MakeRecordWithKnownHash();
+            var result = await GitHubIssueReporter.TryCreateIssueDetailedAsync(record, "1.0.0-test");
+
+            Assert.Null(result.IssueUrl);
+            Assert.Contains("InvalidDataException", result.Error);
+            Assert.Contains("HTTP response body exceeded", result.Error);
+        }
+        finally
+        {
+            GitHubIssueReporter.s_httpClientOverride = null;
+        }
+    }
+
+    [Fact]
+    public async Task TryCreateIssueAsync_SearchSuccessBodyOverLimit_StillAttemptsCreate()
+    {
+        _env.Set("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
+
+        var handler = new RecordingHandler();
+        handler.AddResponse(req => req.Method == HttpMethod.Get && req.RequestUri!.AbsolutePath == "/search/issues",
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent(new byte[GitHubIssueReporter.MaxGitHubApiResponseBodyBytes + 1]),
+            });
+        handler.AddResponse(req => req.Method == HttpMethod.Get && req.RequestUri!.AbsolutePath == "/repos/widthdom/CodeIndex/issues",
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = MakeJsonContent("[]"),
+            });
+        handler.AddResponse(req => req.Method == HttpMethod.Post && req.RequestUri!.AbsolutePath.Contains("/issues"),
+            new HttpResponseMessage(HttpStatusCode.Created)
+            {
+                Content = MakeJsonContent("""{ "html_url": "https://github.com/widthdom/CodeIndex/issues/3333" }"""),
+            });
+        using var mockClient = new HttpClient(handler);
+        GitHubIssueReporter.s_httpClientOverride = mockClient;
+        try
+        {
+            var record = MakeRecordWithKnownHash();
+            var url = await GitHubIssueReporter.TryCreateIssueAsync(record, "1.0.0-test");
+
+            Assert.Equal("https://github.com/widthdom/CodeIndex/issues/3333", url);
+            Assert.Equal(3, handler.RequestCount);
+            Assert.Equal(HttpMethod.Post, handler.Requests[2].Method);
+        }
+        finally
+        {
+            GitHubIssueReporter.s_httpClientOverride = null;
+        }
+    }
+
+    [Fact]
+    public async Task TryCreateIssueAsync_SearchSuccessDoesNotPrebufferResponseContent()
+    {
+        _env.Set("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
+
+        var handler = new RecordingHandler();
+        handler.AddResponse(req => req.Method == HttpMethod.Get && req.RequestUri!.AbsolutePath == "/search/issues",
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new NonBufferingJsonContent("""
+                {
+                    "total_count": 1,
+                    "items": [
+                        { "html_url": "https://github.com/widthdom/CodeIndex/issues/3335" }
+                    ]
+                }
+                """),
+            });
+        using var mockClient = new HttpClient(handler);
+        GitHubIssueReporter.s_httpClientOverride = mockClient;
+        try
+        {
+            var record = MakeRecordWithKnownHash();
+            var url = await GitHubIssueReporter.TryCreateIssueAsync(record, "1.0.0-test");
+
+            Assert.Equal("https://github.com/widthdom/CodeIndex/issues/3335", url);
+            Assert.Equal(1, handler.RequestCount);
+        }
+        finally
+        {
+            GitHubIssueReporter.s_httpClientOverride = null;
+        }
+    }
+
+    [Fact]
+    public async Task TryCreateIssueAsync_LabelListJsonOverDepthLimit_StillAttemptsCreate()
+    {
+        _env.Set("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
+
+        var handler = new RecordingHandler();
+        handler.AddResponse(req => req.Method == HttpMethod.Get && req.RequestUri!.AbsolutePath == "/search/issues",
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = MakeJsonContent("""{ "total_count": 0, "items": [] }"""),
+            });
+        handler.AddResponse(req => req.Method == HttpMethod.Get && req.RequestUri!.AbsolutePath == "/repos/widthdom/CodeIndex/issues",
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = MakeJsonContent(MakeDeepObjectJson(GitHubIssueReporter.MaxGitHubApiResponseJsonDepth + 8)),
+            });
+        handler.AddResponse(req => req.Method == HttpMethod.Post && req.RequestUri!.AbsolutePath.Contains("/issues"),
+            new HttpResponseMessage(HttpStatusCode.Created)
+            {
+                Content = MakeJsonContent("""{ "html_url": "https://github.com/widthdom/CodeIndex/issues/3334" }"""),
+            });
+        using var mockClient = new HttpClient(handler);
+        GitHubIssueReporter.s_httpClientOverride = mockClient;
+        try
+        {
+            var record = MakeRecordWithKnownHash();
+            var url = await GitHubIssueReporter.TryCreateIssueAsync(record, "1.0.0-test");
+
+            Assert.Equal("https://github.com/widthdom/CodeIndex/issues/3334", url);
+            Assert.Equal(3, handler.RequestCount);
+            Assert.Equal(HttpMethod.Post, handler.Requests[2].Method);
+        }
+        finally
+        {
+            GitHubIssueReporter.s_httpClientOverride = null;
+        }
+    }
+
+    [Fact]
+    public async Task TryCreateIssueAsync_LabelListSuccessDoesNotPrebufferResponseContent()
+    {
+        _env.Set("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
+
+        var record = MakeRecordWithKnownHash();
+        var handler = new RecordingHandler();
+        handler.AddResponse(req => req.Method == HttpMethod.Get && req.RequestUri!.AbsolutePath == "/search/issues",
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = MakeJsonContent("""{ "total_count": 0, "items": [] }"""),
+            });
+        handler.AddResponse(req => req.Method == HttpMethod.Get && req.RequestUri!.AbsolutePath == "/repos/widthdom/CodeIndex/issues",
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new NonBufferingJsonContent($$"""
+                [
+                    {
+                        "html_url": "https://github.com/widthdom/CodeIndex/issues/3336",
+                        "body": "Submitted by cdidx. Hash: `{{record.Hash}}`"
+                    }
+                ]
+                """),
+            });
+        using var mockClient = new HttpClient(handler);
+        GitHubIssueReporter.s_httpClientOverride = mockClient;
+        try
+        {
+            var url = await GitHubIssueReporter.TryCreateIssueAsync(record, "1.0.0-test");
+
+            Assert.Equal("https://github.com/widthdom/CodeIndex/issues/3336", url);
+            Assert.Equal(2, handler.RequestCount);
+        }
+        finally
+        {
+            GitHubIssueReporter.s_httpClientOverride = null;
+        }
+    }
+
+    [Fact]
+    public async Task TryCreateIssueDetailedAsync_CreateSuccessJsonOverDepthLimit_ReturnsDiagnosticError()
+    {
+        _env.Set("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
+
+        var handler = new RecordingHandler();
+        handler.AddResponse(req => req.Method == HttpMethod.Get && req.RequestUri!.AbsolutePath == "/search/issues",
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = MakeJsonContent("""{ "total_count": 0, "items": [] }"""),
+            });
+        handler.AddResponse(req => req.Method == HttpMethod.Get && req.RequestUri!.AbsolutePath == "/repos/widthdom/CodeIndex/issues",
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = MakeJsonContent("[]"),
+            });
+        handler.AddResponse(req => req.Method == HttpMethod.Post && req.RequestUri!.AbsolutePath.Contains("/issues"),
+            new HttpResponseMessage(HttpStatusCode.Created)
+            {
+                Content = MakeJsonContent(MakeDeepObjectJson(GitHubIssueReporter.MaxGitHubApiResponseJsonDepth + 8)),
+            });
+        using var mockClient = new HttpClient(handler);
+        GitHubIssueReporter.s_httpClientOverride = mockClient;
+        try
+        {
+            var record = MakeRecordWithKnownHash();
+            var result = await GitHubIssueReporter.TryCreateIssueDetailedAsync(record, "1.0.0-test");
+
+            Assert.Null(result.IssueUrl);
+            Assert.Contains("Json", result.Error);
+            Assert.Contains("maximum configured depth", result.Error);
+        }
+        finally
+        {
+            GitHubIssueReporter.s_httpClientOverride = null;
+        }
+    }
+
+    [Fact]
+    public async Task TryCreateIssueAsync_CreateSuccessDoesNotPrebufferResponseContent()
+    {
+        _env.Set("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
+
+        var handler = new RecordingHandler();
+        handler.AddResponse(req => req.Method == HttpMethod.Get && req.RequestUri!.AbsolutePath == "/search/issues",
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = MakeJsonContent("""{ "total_count": 0, "items": [] }"""),
+            });
+        handler.AddResponse(req => req.Method == HttpMethod.Get && req.RequestUri!.AbsolutePath == "/repos/widthdom/CodeIndex/issues",
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = MakeJsonContent("[]"),
+            });
+        handler.AddResponse(req => req.Method == HttpMethod.Post && req.RequestUri!.AbsolutePath.Contains("/issues"),
+            new HttpResponseMessage(HttpStatusCode.Created)
+            {
+                Content = new NonBufferingJsonContent("""{ "html_url": "https://github.com/widthdom/CodeIndex/issues/3337" }"""),
+            });
+        using var mockClient = new HttpClient(handler);
+        GitHubIssueReporter.s_httpClientOverride = mockClient;
+        try
+        {
+            var record = MakeRecordWithKnownHash();
+            var url = await GitHubIssueReporter.TryCreateIssueAsync(record, "1.0.0-test");
+
+            Assert.Equal("https://github.com/widthdom/CodeIndex/issues/3337", url);
+            Assert.Equal(3, handler.RequestCount);
+        }
+        finally
+        {
+            GitHubIssueReporter.s_httpClientOverride = null;
+        }
+    }
+
+    [Fact]
     public async Task TryCreateIssueAsync_SearchApiFails_StillAttemptsCreate()
     {
         // Search-API failure (e.g. 5xx or rate limited) must not block a
@@ -830,6 +1093,39 @@ public class GitHubIssueReporterTests : IDisposable
 
         Assert.True(stream.BytesRead <= GitHubIssueReporter.MaxGitHubApiErrorBodyBytes + 1);
         Assert.EndsWith(" [response body truncated]", result);
+    }
+
+    [Fact]
+    public async Task ReadGitHubApiResponseJsonAsync_RejectsBodyOverLimit()
+    {
+        using var content = new ByteArrayContent(new byte[GitHubIssueReporter.MaxGitHubApiResponseBodyBytes + 1]);
+
+        var ex = await Assert.ThrowsAsync<InvalidDataException>(
+            () => GitHubIssueReporter.ReadGitHubApiResponseJsonAsync(content, CancellationToken.None));
+
+        Assert.Contains("HTTP response body exceeded", ex.Message);
+    }
+
+    [Fact]
+    public async Task ReadGitHubApiResponseJsonAsync_RejectsJsonOverDepthLimit()
+    {
+        using var content = MakeJsonContent(MakeDeepObjectJson(GitHubIssueReporter.MaxGitHubApiResponseJsonDepth + 8));
+
+        await Assert.ThrowsAnyAsync<JsonException>(
+            () => GitHubIssueReporter.ReadGitHubApiResponseJsonAsync(content, CancellationToken.None));
+    }
+
+    [Fact]
+    public void BuildApiErrorDetail_DeepJsonUsesRegexFallbackWithoutLeakingSecret()
+    {
+        var errorBody = "{\"token\":\"value-that-must-not-leak\",\"nested\":"
+            + MakeDeepObjectJson(GitHubIssueReporter.MaxGitHubApiResponseJsonDepth + 8)
+            + "}";
+
+        var detail = GitHubIssueReporter.BuildApiErrorDetail(500, errorBody);
+
+        Assert.DoesNotContain("value-that-must-not-leak", detail);
+        Assert.Contains("[redacted]", detail);
     }
 
     [Fact]
@@ -1013,6 +1309,17 @@ public class GitHubIssueReporterTests : IDisposable
     private static StringContent MakeJsonContent(string json) =>
         new(json, Encoding.UTF8, "application/json");
 
+    private static string MakeDeepObjectJson(int depth)
+    {
+        var builder = new StringBuilder();
+        for (var i = 0; i < depth; i++)
+            builder.Append("{\"x\":");
+        builder.Append('0');
+        for (var i = 0; i < depth; i++)
+            builder.Append('}');
+        return builder.ToString();
+    }
+
     public void Dispose()
     {
         _env.Dispose();
@@ -1058,6 +1365,37 @@ public class GitHubIssueReporterTests : IDisposable
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             return Task.FromException<HttpResponseMessage>(exception);
+        }
+    }
+
+    private sealed class NonBufferingJsonContent : HttpContent
+    {
+        private readonly byte[] _payload;
+
+        internal NonBufferingJsonContent(string json)
+        {
+            _payload = Encoding.UTF8.GetBytes(json);
+        }
+
+        protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context) =>
+            Task.FromException(new InvalidOperationException("Response content was pre-buffered."));
+
+        protected override Task SerializeToStreamAsync(
+            Stream stream,
+            TransportContext? context,
+            CancellationToken cancellationToken) =>
+            Task.FromException(new InvalidOperationException("Response content was pre-buffered."));
+
+        protected override Task<Stream> CreateContentReadStreamAsync() =>
+            Task.FromResult<Stream>(new MemoryStream(_payload, writable: false));
+
+        protected override Task<Stream> CreateContentReadStreamAsync(CancellationToken cancellationToken) =>
+            Task.FromResult<Stream>(new MemoryStream(_payload, writable: false));
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = _payload.Length;
+            return true;
         }
     }
 
