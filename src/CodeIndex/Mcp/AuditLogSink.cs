@@ -212,6 +212,10 @@ internal sealed class AuditLogSink : IDisposable
             jw.WriteStartObject();
             jw.WriteString("timestamp", evt.Timestamp.ToString("O", CultureInfo.InvariantCulture));
             jw.WriteString("tool", evt.Tool);
+            if (evt.ToolLength is { } toolLength)
+                jw.WriteNumber("tool_length", toolLength);
+            if (evt.ToolTruncated)
+                jw.WriteBoolean("tool_truncated", true);
             if (evt.CallerName is { } caller)
                 jw.WriteString("caller", caller);
             if (evt.CallerNameLength is { } callerLength)
@@ -297,6 +301,8 @@ internal sealed class AuditLogSink : IDisposable
         double ElapsedMs,
         int ErrorCode,
         string? ErrorType,
+        int? ToolLength = null,
+        bool ToolTruncated = false,
         IReadOnlyList<KeyValuePair<string, int>>? ArgKeyLengths = null,
         int? CallerNameLength = null,
         bool CallerNameTruncated = false,

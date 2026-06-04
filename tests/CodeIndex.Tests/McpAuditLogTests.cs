@@ -223,6 +223,8 @@ public class McpAuditLogTests : IDisposable
         Assert.DoesNotContain(toolName, rawLog, StringComparison.Ordinal);
         var record = ReadOnlyRecord();
         Assert.Equal(display.Text, record.GetProperty("tool").GetString());
+        Assert.Equal(toolName.Length, record.GetProperty("tool_length").GetInt32());
+        Assert.True(record.GetProperty("tool_truncated").GetBoolean());
         Assert.Equal(-32602, record.GetProperty("error_code").GetInt32());
     }
 

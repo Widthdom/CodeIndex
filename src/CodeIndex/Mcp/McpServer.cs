@@ -2664,6 +2664,8 @@ public partial class McpServer : IDisposable
                 ElapsedMs: elapsedMs,
                 ErrorCode: errorCode,
                 ErrorType: errorType ?? observedErrorType,
+                ToolLength: toolDisplay.Truncated ? toolDisplay.OriginalLength : null,
+                ToolTruncated: toolDisplay.Truncated,
                 ArgKeyLengths: argKeyLengths,
                 CallerNameLength: _clientNameDisplay?.Truncated == true ? _clientNameDisplay.Value.OriginalLength : null,
                 CallerNameTruncated: _clientNameDisplay?.Truncated == true,
