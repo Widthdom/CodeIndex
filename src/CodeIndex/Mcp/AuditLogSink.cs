@@ -27,6 +27,7 @@ internal sealed class AuditLogSink : IDisposable
 {
     internal const long DefaultMaxBytes = 50L * 1024 * 1024; // 50 MiB
     internal const long MinMaxBytes = 4 * 1024;              // 4 KiB
+    internal const long MaxMaxBytes = 1024L * 1024 * 1024;   // 1 GiB
     internal const int RotationKeep = 3;                     // path, path.1, path.2
 
     private readonly object _gate = new();
@@ -43,6 +44,8 @@ internal sealed class AuditLogSink : IDisposable
             throw new ArgumentException("Audit log path must be non-empty.", nameof(path));
         if (maxBytes < MinMaxBytes)
             throw new ArgumentOutOfRangeException(nameof(maxBytes), $"maxBytes must be >= {MinMaxBytes} bytes.");
+        if (maxBytes > MaxMaxBytes)
+            throw new ArgumentOutOfRangeException(nameof(maxBytes), $"maxBytes must be <= {MaxMaxBytes} bytes.");
 
         _path = System.IO.Path.GetFullPath(path);
         _maxBytes = maxBytes;

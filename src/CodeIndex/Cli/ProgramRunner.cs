@@ -2833,9 +2833,10 @@ internal static class ProgramRunner
         }
 
         if (!long.TryParse(raw, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsed)
-            || parsed < AuditLogSink.MinMaxBytes)
+            || parsed < AuditLogSink.MinMaxBytes
+            || parsed > AuditLogSink.MaxMaxBytes)
         {
-            error = $"Error: --audit-log-max-bytes must be an integer >= {AuditLogSink.MinMaxBytes}.";
+            error = $"Error: --audit-log-max-bytes must be an integer between {AuditLogSink.MinMaxBytes} and {AuditLogSink.MaxMaxBytes}.";
             return false;
         }
 

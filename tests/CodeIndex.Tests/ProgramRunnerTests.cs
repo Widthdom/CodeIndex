@@ -2187,6 +2187,16 @@ sleep 5
     }
 
     [Fact]
+    public void TryConsumeAuditLogFlags_MaxBytesAboveMax_ReturnsError()
+    {
+        var args = new[] { "--audit-log", "/tmp/a.jsonl", "--audit-log-max-bytes", (AuditLogSink.MaxMaxBytes + 1).ToString(CultureInfo.InvariantCulture) };
+        var ok = ProgramRunner.TryConsumeAuditLogFlags(ref args, out _, out var error);
+
+        Assert.False(ok);
+        Assert.Contains(AuditLogSink.MaxMaxBytes.ToString(CultureInfo.InvariantCulture), error);
+    }
+
+    [Fact]
     public void TryConsumeAuditLogFlags_NonNumericMaxBytes_ReturnsError()
     {
         var args = new[] { "--audit-log", "/tmp/a.jsonl", "--audit-log-max-bytes=oops" };
