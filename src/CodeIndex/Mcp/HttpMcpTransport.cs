@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
+using System.Numerics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -27,7 +28,9 @@ namespace CodeIndex.Mcp;
 internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
 {
     internal const int DefaultMaxRequestBodyBytes = 1_000_000;
+    internal const int MaxConfiguredRequestBodyBytes = 16 * 1024 * 1024;
     internal const int DefaultMaxQueuedRequests = 64;
+    internal const int MaxConfiguredQueuedRequests = 1024;
     internal const string MaxRequestBodyBytesEnvVar = "CDIDX_MCP_HTTP_MAX_REQUEST_BYTES";
     internal const string MaxQueueDepthEnvVar = "CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH";
 
@@ -75,8 +78,20 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         int? maxRequestBodyBytes = null,
         int? maxQueuedRequests = null)
     {
-        _maxRequestBodyBytes = ResolvePositiveIntOption(maxRequestBodyBytes, MaxRequestBodyBytesEnvVar, DefaultMaxRequestBodyBytes);
-        _maxQueuedRequests = ResolvePositiveIntOption(maxQueuedRequests, MaxQueueDepthEnvVar, DefaultMaxQueuedRequests);
+        _maxRequestBodyBytes = ResolvePositiveIntOption(
+            maxRequestBodyBytes,
+            nameof(maxRequestBodyBytes),
+            MaxRequestBodyBytesEnvVar,
+            DefaultMaxRequestBodyBytes,
+            MaxConfiguredRequestBodyBytes,
+            "HTTP MCP request body byte limit");
+        _maxQueuedRequests = ResolvePositiveIntOption(
+            maxQueuedRequests,
+            nameof(maxQueuedRequests),
+            MaxQueueDepthEnvVar,
+            DefaultMaxQueuedRequests,
+            MaxConfiguredQueuedRequests,
+            "HTTP MCP request queue depth");
         _requestQueue = Channel.CreateBounded<PendingRequest>(new BoundedChannelOptions(_maxQueuedRequests)
         {
             SingleReader = true,
@@ -209,18 +224,36 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         }
     }
 
-    private static int ResolvePositiveIntOption(int? explicitValue, string envVar, int defaultValue)
+    private static int ResolvePositiveIntOption(
+        int? explicitValue,
+        string explicitValueName,
+        string envVar,
+        int defaultValue,
+        int maximumValue,
+        string description)
     {
         if (explicitValue is { } configured)
         {
             if (configured <= 0)
-                throw new ArgumentOutOfRangeException(nameof(explicitValue), configured, "HTTP MCP limits must be positive integers.");
+                throw new ArgumentOutOfRangeException(
+                    explicitValueName,
+                    configured,
+                    $"{description} must be between 1 and {maximumValue.ToString(CultureInfo.InvariantCulture)}.");
+            if (configured > maximumValue)
+                throw new ArgumentOutOfRangeException(
+                    explicitValueName,
+                    configured,
+                    $"{description} must be between 1 and {maximumValue.ToString(CultureInfo.InvariantCulture)}.");
             return configured;
         }
 
         var raw = Environment.GetEnvironmentVariable(envVar);
-        if (int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) && parsed > 0)
-            return parsed;
+        if (BigInteger.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) && parsed > 0)
+        {
+            if (parsed > maximumValue)
+                throw new FormatException($"{envVar} must be between 1 and {maximumValue.ToString(CultureInfo.InvariantCulture)} for {description}; got {parsed.ToString(CultureInfo.InvariantCulture)}.");
+            return (int)parsed;
+        }
 
         return defaultValue;
     }
