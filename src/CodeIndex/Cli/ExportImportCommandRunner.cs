@@ -575,6 +575,7 @@ internal static class ExportImportCommandRunner
     internal static void ReplaceImportedDatabase(string tempPath, string fullDbPath)
     {
         File.Move(tempPath, fullDbPath, overwrite: true);
+        DataDirectorySecurity.ApplyPrivateFileMode(fullDbPath);
         DeleteSqliteSidecars(fullDbPath);
     }
 

@@ -319,6 +319,33 @@ public class ExportImportCommandRunnerTests
     }
 
     [Fact]
+    public void ReplaceImportedDatabase_AppliesPrivateFileMode()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var workDir = Path.Combine(Path.GetTempPath(), $"cdidx_import_mode_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(workDir);
+        try
+        {
+            var dbPath = Path.Combine(workDir, "codeindex.db");
+            var tempPath = Path.Combine(workDir, "staged.db");
+            File.WriteAllText(dbPath, "existing db");
+            File.WriteAllText(tempPath, "imported db");
+            File.SetUnixFileMode(tempPath, DataDirectorySecurity.PermissionBits);
+
+            ExportImportCommandRunner.ReplaceImportedDatabase(tempPath, dbPath);
+
+            var mode = File.GetUnixFileMode(dbPath) & DataDirectorySecurity.PermissionBits;
+            Assert.Equal(DataDirectorySecurity.PrivateFileMode, mode);
+        }
+        finally
+        {
+            Directory.Delete(workDir, recursive: true);
+        }
+    }
+
+    [Fact]
     public void TryValidateDatabaseEntrySize_RejectsOversizedUncompressedLength()
     {
         var ok = ExportImportCommandRunner.TryValidateDatabaseEntrySize(
