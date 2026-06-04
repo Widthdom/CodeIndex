@@ -316,6 +316,17 @@ public class ProgramRunnerTests
     }
 
     [Fact]
+    public void WorkspaceVersionPinReadWarning_SanitizesPathLikeExceptionMessages_Issue3218()
+    {
+        var warning = ProgramRunner.BuildWorkspaceVersionPinReadWarningForTesting(
+            new IOException("could not read /Users/alice/private/repo/.cdidx-version"));
+
+        Assert.Equal("Warning: could not read .cdidx-version: read failed.", warning);
+        Assert.DoesNotContain("/Users/alice", warning);
+        Assert.DoesNotContain("private/repo", warning);
+    }
+
+    [Fact]
     public void Run_QueryTraceFile_AppendsDailyJsonl()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("query-trace-file");

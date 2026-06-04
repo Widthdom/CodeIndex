@@ -1629,15 +1629,15 @@ internal static class ProgramRunner
             var bytes = ReadWorkspaceVersionPinBytes(pinPath);
             if (bytes.Length > WorkspaceVersionPinMaxBytes)
             {
-                warning = $"Warning: ignoring .cdidx-version at {pinPath}: file exceeds {WorkspaceVersionPinMaxBytes} bytes.";
+                warning = BuildWorkspaceVersionPinWarning($"file exceeds {WorkspaceVersionPinMaxBytes} bytes");
                 return false;
             }
 
-            return TryParseWorkspaceVersionPin(DecodeWorkspaceVersionPinBytes(bytes), pinPath, out required, out warning);
+            return TryParseWorkspaceVersionPin(DecodeWorkspaceVersionPinBytes(bytes), out required, out warning);
         }
         catch (Exception ex)
         {
-            warning = $"Warning: could not read .cdidx-version at {pinPath}: {ex.Message}";
+            warning = BuildWorkspaceVersionPinReadWarning(ex);
             return false;
         }
     }
@@ -1682,7 +1682,7 @@ internal static class ProgramRunner
         return reader.ReadToEnd();
     }
 
-    private static bool TryParseWorkspaceVersionPin(string content, string pinPath, out string required, out string warning)
+    private static bool TryParseWorkspaceVersionPin(string content, out string required, out string warning)
     {
         required = string.Empty;
         warning = string.Empty;
@@ -1696,7 +1696,7 @@ internal static class ProgramRunner
             lineNumber++;
             if (line.Length > WorkspaceVersionPinMaxLineChars)
             {
-                warning = $"Warning: ignoring .cdidx-version at {pinPath}: line {lineNumber} exceeds {WorkspaceVersionPinMaxLineChars} characters.";
+                warning = BuildWorkspaceVersionPinWarning($"line {lineNumber} exceeds {WorkspaceVersionPinMaxLineChars} characters");
                 return false;
             }
 
@@ -1705,7 +1705,7 @@ internal static class ProgramRunner
                 skippedBlankLines++;
                 if (skippedBlankLines > WorkspaceVersionPinMaxSkippedBlankLines)
                 {
-                    warning = $"Warning: ignoring .cdidx-version at {pinPath}: more than {WorkspaceVersionPinMaxSkippedBlankLines} leading blank lines.";
+                    warning = BuildWorkspaceVersionPinWarning($"more than {WorkspaceVersionPinMaxSkippedBlankLines} leading blank lines");
                     return false;
                 }
 
@@ -1717,6 +1717,24 @@ internal static class ProgramRunner
         }
 
         return true;
+    }
+
+    internal static string BuildWorkspaceVersionPinReadWarningForTesting(Exception exception)
+        => BuildWorkspaceVersionPinReadWarning(exception);
+
+    private static string BuildWorkspaceVersionPinWarning(string reason)
+        => $"Warning: ignoring .cdidx-version: {ConsoleUi.FormatBoundedValue(reason)}.";
+
+    private static string BuildWorkspaceVersionPinReadWarning(Exception exception)
+    {
+        var reason = exception switch
+        {
+            UnauthorizedAccessException => "permission denied",
+            ArgumentException or NotSupportedException or PathTooLongException => "invalid path",
+            IOException => "read failed",
+            _ => "read failed",
+        };
+        return $"Warning: could not read .cdidx-version: {reason}.";
     }
 
     internal static string? FindWorkspaceVersionPin(string startDirectory)
