@@ -137,6 +137,8 @@ public class ExtractorPluginRegistryTests
                 var diagnostic = Assert.Single(status.Diagnostics!);
                 Assert.Equal("plugin", diagnostic.Kind);
                 Assert.Equal("skipped", diagnostic.Severity);
+                Assert.Equal("oversize.dll", diagnostic.Path);
+                Assert.DoesNotContain(projectRoot, diagnostic.Path, StringComparison.Ordinal);
                 Assert.Contains("too large", diagnostic.Message, StringComparison.Ordinal);
                 Assert.Contains(ExtractorPluginRegistry.MaxPluginAssemblyBytes.ToString(), diagnostic.Message, StringComparison.Ordinal);
             }

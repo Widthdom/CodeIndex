@@ -4,6 +4,7 @@ using System.Runtime.Loader;
 using System.Text;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using CodeIndex.Diagnostics;
 using Microsoft.Win32.SafeHandles;
 
 namespace CodeIndex.Indexer.Extensibility;
@@ -267,7 +268,7 @@ public static class ExtractorPluginRegistry
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            ReportPluginDirectorySkipped(directory, ex.Message);
+            ReportPluginDirectorySkipped(directory, "could not enumerate plugin directory");
             return null;
         }
     }
@@ -285,7 +286,7 @@ public static class ExtractorPluginRegistry
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            ReportPluginDirectorySkipped(directory, ex.Message);
+            ReportPluginDirectorySkipped(directory, "could not enumerate plugin directory");
             return false;
         }
     }
@@ -855,14 +856,14 @@ public static class ExtractorPluginRegistry
                     TryRegisterPluginType(type, fullPath);
             }
         }
-        catch (Exception ex)
+        catch (Exception)
         {
             RecordDiagnostic(
                 "plugin",
                 fullPath,
                 typeName: null,
                 severity: "error",
-                $"Failed to load plugin assembly: {ex.Message}",
+                "Failed to load plugin assembly.",
                 countsAsSkippedFile: true);
         }
     }
@@ -881,7 +882,7 @@ public static class ExtractorPluginRegistry
                 fullPath,
                 typeName: null,
                 severity: "error",
-                $"Plugin assembly skipped: could not inspect file ({ex.Message}).",
+                "Plugin assembly skipped: could not inspect file.",
                 countsAsSkippedFile: true);
             return false;
         }
@@ -941,14 +942,14 @@ public static class ExtractorPluginRegistry
                 Register(referenceExtractor);
             }
         }
-        catch (Exception ex)
+        catch (Exception)
         {
             RecordDiagnostic(
                 "plugin_type",
                 pluginPath,
                 type.FullName,
                 severity: "error",
-                $"Failed to instantiate plugin type: {ex.Message}",
+                "Failed to instantiate plugin type.",
                 countsAsSkippedFile: false);
         }
     }
@@ -967,7 +968,12 @@ public static class ExtractorPluginRegistry
             if (countsAsSkippedFile)
                 skippedFileCount++;
             if (Diagnostics.Count < DiagnosticLimit)
-                Diagnostics.Add(new ExtractorRegistryDiagnostic(kind, path, typeName, severity, message));
+                Diagnostics.Add(new ExtractorRegistryDiagnostic(
+                    DiagnosticSanitizer.ForMessage(kind),
+                    DiagnosticSanitizer.ForPath(path),
+                    DiagnosticSanitizer.ForOptionalLabel(typeName),
+                    DiagnosticSanitizer.ForMessage(severity),
+                    DiagnosticSanitizer.ForMessage(message)));
         }
     }
 
