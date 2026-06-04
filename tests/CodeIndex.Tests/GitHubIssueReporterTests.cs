@@ -772,6 +772,40 @@ public class GitHubIssueReporterTests : IDisposable
     }
 
     [Fact]
+    public async Task TryCreateIssueAsync_SearchSuccessDoesNotPrebufferResponseContent()
+    {
+        _env.Set("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
+
+        var handler = new RecordingHandler();
+        handler.AddResponse(req => req.Method == HttpMethod.Get && req.RequestUri!.AbsolutePath == "/search/issues",
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new NonBufferingJsonContent("""
+                {
+                    "total_count": 1,
+                    "items": [
+                        { "html_url": "https://github.com/widthdom/CodeIndex/issues/3335" }
+                    ]
+                }
+                """),
+            });
+        using var mockClient = new HttpClient(handler);
+        GitHubIssueReporter.s_httpClientOverride = mockClient;
+        try
+        {
+            var record = MakeRecordWithKnownHash();
+            var url = await GitHubIssueReporter.TryCreateIssueAsync(record, "1.0.0-test");
+
+            Assert.Equal("https://github.com/widthdom/CodeIndex/issues/3335", url);
+            Assert.Equal(1, handler.RequestCount);
+        }
+        finally
+        {
+            GitHubIssueReporter.s_httpClientOverride = null;
+        }
+    }
+
+    [Fact]
     public async Task TryCreateIssueAsync_LabelListJsonOverDepthLimit_StillAttemptsCreate()
     {
         _env.Set("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
@@ -810,6 +844,45 @@ public class GitHubIssueReporterTests : IDisposable
     }
 
     [Fact]
+    public async Task TryCreateIssueAsync_LabelListSuccessDoesNotPrebufferResponseContent()
+    {
+        _env.Set("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
+
+        var record = MakeRecordWithKnownHash();
+        var handler = new RecordingHandler();
+        handler.AddResponse(req => req.Method == HttpMethod.Get && req.RequestUri!.AbsolutePath == "/search/issues",
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = MakeJsonContent("""{ "total_count": 0, "items": [] }"""),
+            });
+        handler.AddResponse(req => req.Method == HttpMethod.Get && req.RequestUri!.AbsolutePath == "/repos/widthdom/CodeIndex/issues",
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new NonBufferingJsonContent($$"""
+                [
+                    {
+                        "html_url": "https://github.com/widthdom/CodeIndex/issues/3336",
+                        "body": "Submitted by cdidx. Hash: `{{record.Hash}}`"
+                    }
+                ]
+                """),
+            });
+        using var mockClient = new HttpClient(handler);
+        GitHubIssueReporter.s_httpClientOverride = mockClient;
+        try
+        {
+            var url = await GitHubIssueReporter.TryCreateIssueAsync(record, "1.0.0-test");
+
+            Assert.Equal("https://github.com/widthdom/CodeIndex/issues/3336", url);
+            Assert.Equal(2, handler.RequestCount);
+        }
+        finally
+        {
+            GitHubIssueReporter.s_httpClientOverride = null;
+        }
+    }
+
+    [Fact]
     public async Task TryCreateIssueDetailedAsync_CreateSuccessJsonOverDepthLimit_ReturnsDiagnosticError()
     {
         _env.Set("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
@@ -840,6 +913,43 @@ public class GitHubIssueReporterTests : IDisposable
             Assert.Null(result.IssueUrl);
             Assert.Contains("Json", result.Error);
             Assert.Contains("maximum configured depth", result.Error);
+        }
+        finally
+        {
+            GitHubIssueReporter.s_httpClientOverride = null;
+        }
+    }
+
+    [Fact]
+    public async Task TryCreateIssueAsync_CreateSuccessDoesNotPrebufferResponseContent()
+    {
+        _env.Set("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
+
+        var handler = new RecordingHandler();
+        handler.AddResponse(req => req.Method == HttpMethod.Get && req.RequestUri!.AbsolutePath == "/search/issues",
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = MakeJsonContent("""{ "total_count": 0, "items": [] }"""),
+            });
+        handler.AddResponse(req => req.Method == HttpMethod.Get && req.RequestUri!.AbsolutePath == "/repos/widthdom/CodeIndex/issues",
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = MakeJsonContent("[]"),
+            });
+        handler.AddResponse(req => req.Method == HttpMethod.Post && req.RequestUri!.AbsolutePath.Contains("/issues"),
+            new HttpResponseMessage(HttpStatusCode.Created)
+            {
+                Content = new NonBufferingJsonContent("""{ "html_url": "https://github.com/widthdom/CodeIndex/issues/3337" }"""),
+            });
+        using var mockClient = new HttpClient(handler);
+        GitHubIssueReporter.s_httpClientOverride = mockClient;
+        try
+        {
+            var record = MakeRecordWithKnownHash();
+            var url = await GitHubIssueReporter.TryCreateIssueAsync(record, "1.0.0-test");
+
+            Assert.Equal("https://github.com/widthdom/CodeIndex/issues/3337", url);
+            Assert.Equal(3, handler.RequestCount);
         }
         finally
         {
@@ -1255,6 +1365,37 @@ public class GitHubIssueReporterTests : IDisposable
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             return Task.FromException<HttpResponseMessage>(exception);
+        }
+    }
+
+    private sealed class NonBufferingJsonContent : HttpContent
+    {
+        private readonly byte[] _payload;
+
+        internal NonBufferingJsonContent(string json)
+        {
+            _payload = Encoding.UTF8.GetBytes(json);
+        }
+
+        protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context) =>
+            Task.FromException(new InvalidOperationException("Response content was pre-buffered."));
+
+        protected override Task SerializeToStreamAsync(
+            Stream stream,
+            TransportContext? context,
+            CancellationToken cancellationToken) =>
+            Task.FromException(new InvalidOperationException("Response content was pre-buffered."));
+
+        protected override Task<Stream> CreateContentReadStreamAsync() =>
+            Task.FromResult<Stream>(new MemoryStream(_payload, writable: false));
+
+        protected override Task<Stream> CreateContentReadStreamAsync(CancellationToken cancellationToken) =>
+            Task.FromResult<Stream>(new MemoryStream(_payload, writable: false));
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = _payload.Length;
+            return true;
         }
     }
 

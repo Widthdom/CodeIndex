@@ -254,7 +254,10 @@ internal static class GitHubIssueReporter
         using var requestMessage = new HttpRequestMessage(HttpMethod.Get, url);
         requestMessage.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
-        var response = await HttpClient.SendAsync(requestMessage, cancellationToken);
+        using var response = await HttpClient.SendAsync(
+            requestMessage,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken);
         if (!response.IsSuccessStatusCode)
             return null;
 
@@ -298,7 +301,10 @@ internal static class GitHubIssueReporter
                 using var requestMessage = new HttpRequestMessage(HttpMethod.Get, url);
                 requestMessage.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
-                var response = await HttpClient.SendAsync(requestMessage, cancellationToken);
+                using var response = await HttpClient.SendAsync(
+                    requestMessage,
+                    HttpCompletionOption.ResponseHeadersRead,
+                    cancellationToken);
                 if (!response.IsSuccessStatusCode)
                     return null;
 
@@ -462,7 +468,10 @@ internal static class GitHubIssueReporter
         };
         requestMessage.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
-        var response = await HttpClient.SendAsync(requestMessage, cancellationToken);
+        using var response = await HttpClient.SendAsync(
+            requestMessage,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken);
 
         if (!response.IsSuccessStatusCode)
         {
