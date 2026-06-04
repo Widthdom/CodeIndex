@@ -2072,8 +2072,8 @@ public partial class McpServer
             var status = reader.GetStatus();
             WorkspaceMetadataEnricher.Enrich(status, _dbPath, _dbPathExplicit);
             status.MacProfile = MacProfileDetector.DetectCurrent();
-            status.GraphSupportedLanguages = ReferenceExtractor.GetSupportedLanguages().OrderBy(l => l).ToList();
             ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(status.ProjectRoot);
+            status.GraphSupportedLanguages = ReferenceExtractor.GetSupportedLanguages().OrderBy(l => l).ToList();
             status.Extractors = ExtractorPluginRegistry.GetStatusSnapshot();
             var postExtractionHookSnapshot = PostExtractionHookRunner.DiscoverDefaultMetadata();
             var postExtractionHooks = postExtractionHookSnapshot.Hooks;
