@@ -108,3 +108,30 @@ internal sealed record SearchRecipeQueryResultJsonResult(
     [property: JsonPropertyName("exact_substring")] bool ExactSubstring,
     [property: JsonPropertyName("count")] int Count,
     [property: JsonPropertyName("results")] List<CompactSearchResult> Results);
+
+internal sealed record SearchIssueDraftExportJsonResult(
+    [property: JsonPropertyName("api_version")] string ApiVersion,
+    [property: JsonPropertyName("recipe")] SearchRecipeListItemJsonResult Recipe,
+    [property: JsonPropertyName("query_count")] int QueryCount,
+    [property: JsonPropertyName("result_count")] int ResultCount,
+    [property: JsonPropertyName("count")] int Count,
+    [property: JsonPropertyName("duplicate_preflight")] SuggestionIssueDraftPreflightSummaryJsonResult DuplicatePreflight,
+    [property: JsonPropertyName("drafts")] List<SearchIssueDraftJsonResult> Drafts);
+
+internal sealed record SearchIssueDraftJsonResult(
+    [property: JsonPropertyName("draft_id")] string DraftId,
+    [property: JsonPropertyName("title")] string Title,
+    [property: JsonPropertyName("labels")] List<string> Labels,
+    [property: JsonPropertyName("evidence_paths")] List<string> EvidencePaths,
+    [property: JsonPropertyName("body")] string Body,
+    [property: JsonPropertyName("source")] SearchIssueDraftSourceJsonResult Source,
+    [property: JsonPropertyName("duplicate_preflight")] SuggestionIssueDraftDuplicatePreflightJsonResult DuplicatePreflight);
+
+internal sealed record SearchIssueDraftSourceJsonResult(
+    [property: JsonPropertyName("recipe")] string Recipe,
+    [property: JsonPropertyName("query_name")] string QueryName,
+    [property: JsonPropertyName("query")] string Query,
+    [property: JsonPropertyName("description")] string Description,
+    [property: JsonPropertyName("false_positive_guidance")] string FalsePositiveGuidance,
+    [property: JsonPropertyName("exact_substring")] bool ExactSubstring,
+    [property: JsonPropertyName("result_count")] int ResultCount);

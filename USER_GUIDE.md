@@ -843,6 +843,7 @@ cdidx search "File.ReadAllText" --exact-substring --reject-before "Length" --gua
 cdidx search "FileMode.Create" --exact-substring --require-after "File.Move" --guard-window 12  # require a nearby follow-up action
 cdidx search --list-recipes                             # show reusable audit recipes
 cdidx search --recipe risky-code --json                 # run a curated audit query set and return grouped JSON
+cdidx search --recipe risky-code --format issue-drafts --open-issues open-issues.json  # issue draft JSON with duplicate preflight
 cdidx search "--open-reports" --path README.md --count  # quoted literal that starts with --
 cdidx search --query "--path" --path README.md          # search for an option-looking literal
 ```
@@ -867,6 +868,12 @@ recommended labels, query text, exact-match mode, and false-positive guidance.
 `--exclude-path`, `--exclude-tests`, `--limit`, and snippet controls to every
 query in the recipe. With `--json`, recipe runs emit one aggregate JSON payload
 grouped by recipe query instead of the usual newline-delimited search stream.
+For triage automation, `--format issue-drafts` emits draft issue objects with
+titles, labels, evidence paths, Markdown bodies, and duplicate-preflight
+metadata. `--open-issues <path>` accepts an open-issue JSON list such as
+`gh issue list --state open --json number,title,labels,url`; when omitted,
+the payload still includes `duplicate_preflight.checked: false`. Draft bodies
+include evidence paths and recipe metadata but not source snippets.
 
 ### Debugging queries
 
@@ -1186,6 +1193,7 @@ same source location.
 | `--query <query>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `inspect`, `impact` | Pass a query literal explicitly, useful when the query starts with `-`. Query commands except `find` also accept `-- <query>` as a one-token query escape while continuing to parse later options. |
 | `--recipe <name>` | `search` | Run a reusable audit recipe such as `risky-code`. Normal search filters and snippet controls apply to every recipe query; `--json` emits one grouped recipe payload. |
 | `--list-recipes` | `search` | List available search audit recipes with query text, recommended labels, exact-match mode, and false-positive guidance. |
+| `--open-issues <path>` | `search --recipe <name> --format issue-drafts` | Preflight generated issue drafts against an open-issues JSON file such as `gh issue list --state open --json number,title,labels,url`. |
 | `--exclude-path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | Exclude glob-style path patterns. `*` and `?` are wildcards (repeatable) |
 | `--exclude-tests` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | Exclude likely test files and prefer production code |
 | `--include-generated` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `deps`, `impact`, `unused`, `hotspots` | Include files detected as generated code; generated files are excluded from query results by default |
@@ -3058,6 +3066,7 @@ cdidx search "File.ReadAllText" --exact-substring --reject-before "Length" --gua
 cdidx search "FileMode.Create" --exact-substring --require-after "File.Move" --guard-window 12  # 近傍の後続処理を要求
 cdidx search --list-recipes                             # 再利用可能な audit recipe を表示
 cdidx search --recipe risky-code --json                 # curated audit query set を実行し、grouped JSON を返す
+cdidx search --recipe risky-code --format issue-drafts --open-issues open-issues.json  # duplicate preflight 付き issue draft JSON
 cdidx search "--open-reports" --path README.md --count  # `--` で始まる引用済みリテラル
 cdidx search --query "--path" --path README.md          # オプションに見えるリテラルを検索
 ```
@@ -3080,6 +3089,12 @@ false-positive guidance を表示します。`--recipe <name>` は `--lang`、`-
 を recipe 内の各 query に適用します。`--json` 併用時、recipe run は通常の
 newline-delimited search stream ではなく、recipe query ごとに grouped された 1 つの
 aggregate JSON payload を出力します。
+triage automation では `--format issue-drafts` を使うと、title、label、evidence path、
+Markdown body、duplicate-preflight metadata を持つ issue draft object を出力します。
+`--open-issues <path>` は `gh issue list --state open --json number,title,labels,url`
+のような open issue JSON list を受け取り、未指定の場合も payload には
+`duplicate_preflight.checked: false` が含まれます。draft body は evidence path と
+recipe metadata を含みますが、source snippet は含めません。
 
 ### クエリのデバッグ
 
@@ -3395,6 +3410,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--query <query>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `inspect`, `impact` | クエリを明示的なリテラルとして渡す。クエリが `-` で始まる場合に有用。`find` 以外のクエリ系コマンドでは `-- <query>` も1トークンのクエリエスケープとして受け付け、その後のオプション解析を続ける。 |
 | `--recipe <name>` | `search` | `risky-code` などの再利用可能な audit recipe を実行する。通常の search filter と snippet control は recipe 内の各 query に適用され、`--json` は grouped recipe payload を出力する。 |
 | `--list-recipes` | `search` | 利用可能な search audit recipe を query text、推奨 label、exact-match mode、false-positive guidance 付きで一覧表示する。 |
+| `--open-issues <path>` | `search --recipe <name> --format issue-drafts` | `gh issue list --state open --json number,title,labels,url` のような open issue JSON file と照合し、生成した issue draft を事前重複確認する。 |
 | `--exclude-path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | glob 形式のパスパターンを除外する。`*` と `?` がワイルドカード。繰り返し指定可 |
 | `--exclude-tests` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | テストらしいパスを除外し、本番コードを優先 |
 | `--include-generated` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `deps`, `impact`, `unused`, `hotspots` | 生成コードとして検出されたファイルを含める。生成ファイルは既定でクエリ結果から除外される |

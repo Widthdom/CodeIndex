@@ -294,6 +294,87 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_RecipeIssueDraftsIncludeLabelsEvidenceAndDuplicatePreflight_Issue3145()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_recipe_issue_drafts");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var openIssuesPath = Path.Combine(projectRoot, "open-issues.json");
+            File.WriteAllText(
+                openIssuesPath,
+                """
+                [
+                  {
+                    "number": 3145,
+                    "title": "Search audit recipe risky-code: unbounded-json-parse",
+                    "labels": [{"name": "audit"}, {"name": "bug"}],
+                    "url": "https://example.test/issues/3145"
+                  }
+                ]
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                """
+                using System.Text.Json;
+
+                public sealed class App
+                {
+                    public void Run()
+                    {
+                        JsonDocument.Parse("{}");
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "risky-code", "--db", dbPath, "--format", "issue-drafts", "--open-issues", openIssuesPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            var draft = Assert.Single(root.GetProperty("drafts").EnumerateArray());
+            var duplicatePreflight = draft.GetProperty("duplicate_preflight");
+            var match = Assert.Single(duplicatePreflight.GetProperty("matches").EnumerateArray());
+            var body = draft.GetProperty("body").GetString();
+
+            Assert.Equal(1, root.GetProperty("count").GetInt32());
+            Assert.True(root.GetProperty("duplicate_preflight").GetProperty("checked").GetBoolean());
+            Assert.Equal(1, root.GetProperty("duplicate_preflight").GetProperty("open_issue_count").GetInt32());
+            Assert.Equal("Search audit recipe risky-code: unbounded-json-parse", draft.GetProperty("title").GetString());
+            Assert.Contains(draft.GetProperty("labels").EnumerateArray(), label => label.GetString() == "audit");
+            Assert.Contains(draft.GetProperty("labels").EnumerateArray(), label => label.GetString() == "bug");
+            Assert.Equal("src/app.cs", draft.GetProperty("evidence_paths")[0].GetString());
+            Assert.Contains("JsonDocument.Parse", body, StringComparison.Ordinal);
+            Assert.Contains("False-positive guidance", body, StringComparison.Ordinal);
+            Assert.DoesNotContain("public sealed class App", body, StringComparison.Ordinal);
+            Assert.Equal("unbounded-json-parse", draft.GetProperty("source").GetProperty("query_name").GetString());
+            Assert.Equal(1, duplicatePreflight.GetProperty("match_count").GetInt32());
+            Assert.Equal(3145, match.GetProperty("number").GetInt32());
+            Assert.Equal("title_exact", match.GetProperty("reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_IssueDraftsRequireRecipe_Issue3145()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["Authenticate", "--format", "issue-drafts"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("--format issue-drafts requires --recipe", stderr);
+    }
+
+    [Fact]
     public void RunSearch_ProfileEmitsSqlPhasesAndQueryPlan_Issue1643()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_profile");
