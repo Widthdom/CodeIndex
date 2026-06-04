@@ -11986,6 +11986,25 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void RateLimited_ErrorAndLog_TruncatesToolName_Issue3118()
+    {
+        var tool = new string('t', McpBoundedText.MaxToolNameChars + 25);
+        var display = McpBoundedText.ForDisplay(tool, McpBoundedText.MaxToolNameChars);
+
+        var response = McpServer.CreateRateLimitedErrorResponse(null, tool, "client", retryAfterMs: 123);
+        var log = McpServer.BuildRateLimitedLog(tool, "client", retryAfterMs: 123);
+
+        Assert.DoesNotContain(tool, response.ToJsonString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(tool, log, StringComparison.Ordinal);
+        Assert.Contains(display.Text, response["error"]!["message"]!.GetValue<string>());
+        Assert.Contains(display.Text, log);
+        var data = response["error"]!["data"]!;
+        Assert.Equal(display.Text, data["tool"]!.GetValue<string>());
+        Assert.Equal(tool.Length, data["tool_length"]!.GetValue<int>());
+        Assert.True(data["tool_truncated"]!.GetValue<bool>());
+    }
+
+    [Fact]
     public void ToolResult_DatabaseMissing_CarriesEnvelopeOnStructuredContent()
     {
         // Tool-result errors (MCP isError shape) mirror the JSON-RPC envelope by exposing
