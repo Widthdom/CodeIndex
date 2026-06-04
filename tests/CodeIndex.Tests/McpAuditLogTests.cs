@@ -227,6 +227,40 @@ public class McpAuditLogTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_IncludeValues_TruncatesArgumentKeysInAuditValues_Issue3117()
+    {
+        using var sink = new AuditLogSink(_auditPath, AuditLogSink.DefaultMaxBytes, includeValues: true);
+        using var server = CreateServer(sink);
+        var argumentName = new string('k', McpBoundedText.MaxDiagnosticDisplayChars + 25);
+        var display = McpBoundedText.ForDisplay(argumentName);
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "index",
+                ["arguments"] = new JsonObject
+                {
+                    ["path"] = ".",
+                    [argumentName] = "value",
+                },
+            },
+        };
+
+        _ = server.HandleMessage(request);
+
+        var rawLog = File.ReadAllText(_auditPath);
+        Assert.DoesNotContain(argumentName, rawLog, StringComparison.Ordinal);
+        var record = ReadOnlyRecord();
+        Assert.Equal(display.Text, record.GetProperty("arg_keys")[1].GetString());
+        Assert.Equal(argumentName.Length, record.GetProperty("arg_key_lengths").GetProperty(display.Text).GetInt32());
+        Assert.True(record.GetProperty("arg_keys_truncated").GetBoolean());
+        Assert.True(record.GetProperty("arg_values").TryGetProperty(display.Text, out _));
+    }
+
+    [Fact]
     public void ToolsCall_IncludeValues_EchoesArgValuesIntoRecord()
     {
         using var sink = new AuditLogSink(_auditPath, AuditLogSink.DefaultMaxBytes, includeValues: true);
@@ -311,9 +345,10 @@ public class McpAuditLogTests : IDisposable
     [Fact]
     public void SanitizeArgs_NullArgs_ReturnsEmptyTriple()
     {
-        var (keys, lengths, echo) = McpServer.SanitizeArgs(null, includeValues: true);
+        var (keys, lengths, keyLengths, echo) = McpServer.SanitizeArgs(null, includeValues: true);
         Assert.Empty(keys);
         Assert.Empty(lengths);
+        Assert.Empty(keyLengths);
         Assert.Null(echo);
     }
 
@@ -321,10 +356,11 @@ public class McpAuditLogTests : IDisposable
     public void SanitizeArgs_IncludeValuesFalse_ReturnsKeysAndLengthsOnly()
     {
         var args = JsonNode.Parse("""{"query":"hello","items":[1,2,3]}""");
-        var (keys, lengths, echo) = McpServer.SanitizeArgs(args, includeValues: false);
+        var (keys, lengths, keyLengths, echo) = McpServer.SanitizeArgs(args, includeValues: false);
         Assert.Equal(new[] { "query", "items" }, keys);
         Assert.Equal(5, lengths.Single(kv => kv.Key == "query").Value);
         Assert.Equal(3, lengths.Single(kv => kv.Key == "items").Value);
+        Assert.Empty(keyLengths);
         Assert.Null(echo);
     }
 
@@ -332,7 +368,7 @@ public class McpAuditLogTests : IDisposable
     public void SanitizeArgs_IncludeValuesTrue_DeepClonesArgs()
     {
         var args = JsonNode.Parse("""{"query":"hello"}""")!.AsObject();
-        var (_, _, echo) = McpServer.SanitizeArgs(args, includeValues: true);
+        var (_, _, _, echo) = McpServer.SanitizeArgs(args, includeValues: true);
         Assert.NotNull(echo);
         // Mutating the source must not change the cloned echo.
         // 元データを書き換えてもクローンに影響しないこと。

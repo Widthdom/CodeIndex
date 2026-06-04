@@ -239,6 +239,16 @@ internal sealed class AuditLogSink : IDisposable
                 jw.WriteNumber(kv.Key, kv.Value);
             jw.WriteEndObject();
 
+            if (evt.ArgKeyLengths is { Count: > 0 } argKeyLengths)
+            {
+                jw.WritePropertyName("arg_key_lengths");
+                jw.WriteStartObject();
+                foreach (var kv in argKeyLengths)
+                    jw.WriteNumber(kv.Key, kv.Value);
+                jw.WriteEndObject();
+                jw.WriteBoolean("arg_keys_truncated", true);
+            }
+
             if (includeValues && evt.ArgValues is { } values)
             {
                 jw.WritePropertyName("arg_values");
@@ -287,6 +297,7 @@ internal sealed class AuditLogSink : IDisposable
         double ElapsedMs,
         int ErrorCode,
         string? ErrorType,
+        IReadOnlyList<KeyValuePair<string, int>>? ArgKeyLengths = null,
         int? CallerNameLength = null,
         bool CallerNameTruncated = false,
         int? CallerVersionLength = null,

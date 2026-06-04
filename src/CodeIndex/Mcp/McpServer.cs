@@ -2556,7 +2556,7 @@ public partial class McpServer : IDisposable
         var context = CurrentCorrelationContext.Value;
         var (errorCode, observedErrorType) = ExtractErrorCode(response);
         var resultCount = ExtractResultCount(response);
-        var (argKeys, argLengths, _) = SanitizeArgs(args, includeValues: false);
+        var (argKeys, argLengths, argKeyLengths, _) = SanitizeArgs(args, includeValues: false);
         var toolDisplay = BoundToolNameForDisplay(toolName);
         var argsObject = new JsonObject();
         foreach (var pair in argLengths)
@@ -2578,6 +2578,7 @@ public partial class McpServer : IDisposable
             ["arg_lengths"] = argsObject,
         };
         toolDisplay.AddMetadata(evt, "tool");
+        AddArgKeyMetadata(evt, argKeyLengths);
         DeferFrameLog(() => WriteMcpLogLine(evt.ToJsonString(_jsonOptions)));
     }
 
@@ -2648,7 +2649,7 @@ public partial class McpServer : IDisposable
         {
             var (errorCode, observedErrorType) = ExtractErrorCode(response);
             var resultCount = ExtractResultCount(response);
-            var (argKeys, argLengths, argValuesEcho) = SanitizeArgs(args, _auditLog.IncludeValues);
+            var (argKeys, argLengths, argKeyLengths, argValuesEcho) = SanitizeArgs(args, _auditLog.IncludeValues);
             var toolDisplay = BoundToolNameForDisplay(toolName);
             var evt = new AuditLogSink.AuditEvent(
                 Timestamp: startedAt,
@@ -2663,6 +2664,7 @@ public partial class McpServer : IDisposable
                 ElapsedMs: elapsedMs,
                 ErrorCode: errorCode,
                 ErrorType: errorType ?? observedErrorType,
+                ArgKeyLengths: argKeyLengths,
                 CallerNameLength: _clientNameDisplay?.Truncated == true ? _clientNameDisplay.Value.OriginalLength : null,
                 CallerNameTruncated: _clientNameDisplay?.Truncated == true,
                 CallerVersionLength: _clientVersionDisplay?.Truncated == true ? _clientVersionDisplay.Value.OriginalLength : null,
@@ -2734,7 +2736,7 @@ public partial class McpServer : IDisposable
     }
 
     /// <summary>
-    /// Build the `(arg_keys, arg_lengths, arg_values?)` audit triple. Values are echoed
+    /// Build the `(arg_keys, arg_lengths, arg_key_lengths, arg_values?)` audit triple. Values are echoed
     /// only when the operator has opted in via `--audit-log-include-values`; otherwise we
     /// keep keys + per-key length so AI argument shapes can be reconstructed without
     /// persisting query bodies that may contain sensitive substrings (#1562).
@@ -2742,34 +2744,47 @@ public partial class McpServer : IDisposable
     /// `--audit-log-include-values` がオンの場合のみ転写し、それ以外はキーと長さだけ残す
     /// （secret 風の検索クエリを取り込まないため）。
     /// </summary>
-    internal static (IReadOnlyList<string> Keys, IReadOnlyList<KeyValuePair<string, int>> Lengths, JsonNode? ValuesEcho)
+    internal static (IReadOnlyList<string> Keys, IReadOnlyList<KeyValuePair<string, int>> Lengths, IReadOnlyList<KeyValuePair<string, int>> KeyLengths, JsonNode? ValuesEcho)
         SanitizeArgs(JsonNode? args, bool includeValues)
     {
         if (args is not JsonObject argsObj)
-            return (Array.Empty<string>(), Array.Empty<KeyValuePair<string, int>>(), null);
+            return (Array.Empty<string>(), Array.Empty<KeyValuePair<string, int>>(), Array.Empty<KeyValuePair<string, int>>(), null);
 
         var keys = new List<string>(argsObj.Count);
         var lengths = new List<KeyValuePair<string, int>>(argsObj.Count);
+        var keyLengths = new List<KeyValuePair<string, int>>();
+        JsonObject? echoObject = includeValues ? new JsonObject() : null;
         foreach (var (key, value) in argsObj)
         {
             var keyDisplay = McpBoundedText.ForDisplay(key);
             keys.Add(keyDisplay.Text);
             lengths.Add(new KeyValuePair<string, int>(keyDisplay.Text, AuditLogSink.MeasureArgLength(value)));
+            if (keyDisplay.Truncated)
+                keyLengths.Add(new KeyValuePair<string, int>(keyDisplay.Text, keyDisplay.OriginalLength));
+            if (echoObject is not null)
+            {
+                try
+                {
+                    echoObject[keyDisplay.Text] = value?.DeepClone();
+                }
+                catch
+                {
+                    echoObject = null;
+                }
+            }
         }
+        return (keys, lengths, keyLengths, includeValues ? echoObject : null);
+    }
 
-        JsonNode? echo = null;
-        if (includeValues)
-        {
-            try
-            {
-                echo = argsObj.DeepClone();
-            }
-            catch
-            {
-                echo = null;
-            }
-        }
-        return (keys, lengths, echo);
+    private static void AddArgKeyMetadata(JsonObject target, IReadOnlyList<KeyValuePair<string, int>> argKeyLengths)
+    {
+        if (argKeyLengths.Count == 0)
+            return;
+        var lengths = new JsonObject();
+        foreach (var pair in argKeyLengths)
+            lengths[pair.Key] = pair.Value;
+        target["arg_key_lengths"] = lengths;
+        target["arg_keys_truncated"] = true;
     }
 
     private static string? SerializeRequestId(JsonNode? id)

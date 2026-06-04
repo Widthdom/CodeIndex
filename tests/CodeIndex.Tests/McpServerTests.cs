@@ -586,6 +586,62 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public async Task ProcessLineAsync_UnknownArgumentName_TruncatesTelemetryKeyMetadata_Issue3117()
+    {
+        using var writer = new StringWriter();
+        using var error = new StringWriter();
+        var argumentName = new string('k', McpBoundedText.MaxDiagnosticDisplayChars + 25);
+        var display = McpBoundedText.ForDisplay(argumentName);
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 123,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "index",
+                ["arguments"] = new JsonObject
+                {
+                    ["path"] = ".",
+                    [argumentName] = true,
+                },
+            },
+        };
+
+        await Task.Run(() =>
+        {
+            lock (TestConsoleLock.Gate)
+            {
+                var previousError = Console.Error;
+                try
+                {
+                    Console.SetError(error);
+#pragma warning disable xUnit1031
+                    _server.ProcessLineAsync(request.ToJsonString(), writer).GetAwaiter().GetResult();
+#pragma warning restore xUnit1031
+                }
+                finally
+                {
+                    Console.SetError(previousError);
+                }
+            }
+        });
+
+        Assert.DoesNotContain(argumentName, writer.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(argumentName, error.ToString(), StringComparison.Ordinal);
+        var line = error.ToString()
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Single(l => l.Contains("\"event\":\"mcp.tool.invocation\"", StringComparison.Ordinal));
+        var jsonStart = line.IndexOf('{');
+        using var document = JsonDocument.Parse(line[jsonStart..]);
+        var root = document.RootElement;
+        Assert.Equal("mcp.tool.invocation", root.GetProperty("event").GetString());
+        Assert.Contains(root.GetProperty("arg_keys").EnumerateArray(), key => key.GetString() == display.Text);
+        Assert.Equal(argumentName.Length, root.GetProperty("arg_key_lengths").GetProperty(display.Text).GetInt32());
+        Assert.True(root.GetProperty("arg_keys_truncated").GetBoolean());
+    }
+
+    [Fact]
     public async Task ProcessLineAsync_FallbackErrorIncludesCorrelationData()
     {
         using var writer = new StringWriter();
@@ -7735,13 +7791,37 @@ public class McpServerTests : IDisposable
             [argumentName] = "value",
         };
 
-        var (keys, lengths, valuesEcho) = McpServer.SanitizeArgs(args, includeValues: false);
+        var (keys, lengths, keyLengths, valuesEcho) = McpServer.SanitizeArgs(args, includeValues: false);
 
         Assert.Equal([display.Text], keys);
         var length = Assert.Single(lengths);
         Assert.Equal(display.Text, length.Key);
         Assert.Equal("value".Length, length.Value);
+        var keyLength = Assert.Single(keyLengths);
+        Assert.Equal(display.Text, keyLength.Key);
+        Assert.Equal(argumentName.Length, keyLength.Value);
         Assert.Null(valuesEcho);
+    }
+
+    [Fact]
+    public void SanitizeArgs_TruncatesArgumentKeysInValuesEcho_Issue3117()
+    {
+        var argumentName = new string('k', McpBoundedText.MaxDiagnosticDisplayChars + 25);
+        var display = McpBoundedText.ForDisplay(argumentName);
+        var args = new JsonObject
+        {
+            [argumentName] = "value",
+        };
+
+        var (_, _, keyLengths, valuesEcho) = McpServer.SanitizeArgs(args, includeValues: true);
+
+        Assert.NotNull(valuesEcho);
+        var json = valuesEcho!.ToJsonString();
+        Assert.DoesNotContain(argumentName, json, StringComparison.Ordinal);
+        Assert.Equal("value", valuesEcho[display.Text]!.GetValue<string>());
+        var keyLength = Assert.Single(keyLengths);
+        Assert.Equal(display.Text, keyLength.Key);
+        Assert.Equal(argumentName.Length, keyLength.Value);
     }
 
     [Fact]
