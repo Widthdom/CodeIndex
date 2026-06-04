@@ -4917,7 +4917,10 @@ public static class QueryCommandRunner
 
         return WithDb(options, jsonOptions, reader =>
         {
-            var issues = reader.GetIssues(options.Kind, options.PathPatterns);
+            var issueLimit = HasOption(cmdArgs, "--limit") || HasOption(cmdArgs, "--top")
+                ? options.Limit
+                : (int?)null;
+            var issues = reader.GetIssues(options.Kind, options.PathPatterns, issueLimit);
             var issuesAvailable = reader._hasIssuesTable;
             if (issues.Count == 0)
             {

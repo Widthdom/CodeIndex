@@ -405,7 +405,7 @@ conflicting instructions.
 ```bash
 cdidx validate
 cdidx validate --kind replacement_char --path src/
-cdidx validate --json --path legacy/
+cdidx validate --json --limit 50 --path legacy/
 ```
 
 `validate` reports indexed files that are likely to produce misleading snippets
@@ -2591,7 +2591,7 @@ render できます。
 ```bash
 cdidx validate
 cdidx validate --kind replacement_char --path src/
-cdidx validate --json --path legacy/
+cdidx validate --json --limit 50 --path legacy/
 ```
 
 `validate` は、snippet や symbol name を誤らせやすい indexed file を報告します。

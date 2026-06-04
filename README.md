@@ -424,7 +424,7 @@ GPG 検証が成功した後にこの fingerprint の設定も必須です。
 
 ### Validate
 
-`cdidx validate [--db <path>] [--json] [--verbose] [--kind <kind>] [--path <glob>]`
+`cdidx validate [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--kind <kind>] [--path <glob>]`
 は、index 済みファイルの replacement character (`U+FFFD`)、BOM、NUL byte、
 混在改行、UTF-16 BOM、非 UTF-8 らしい内容などを報告します。validation finding は
 出力で報告され、それ自体では command failure になりません。DB を読めない場合や
