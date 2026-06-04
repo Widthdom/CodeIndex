@@ -2021,29 +2021,29 @@ public partial class McpServer : IDisposable
         switch (name)
         {
             case "summarize_file":
-            {
-                var path = ReadArg("path", out var argumentError);
-                if (argumentError is not null)
-                    return argumentError;
-                text = $"Use the `outline` tool for `{path ?? "<path>"}`, then use `excerpt` only for the ranges needed to summarize public API, key symbols, and responsibilities.";
-                break;
-            }
+                {
+                    var path = ReadArg("path", out var argumentError);
+                    if (argumentError is not null)
+                        return argumentError;
+                    text = $"Use the `outline` tool for `{path ?? "<path>"}`, then use `excerpt` only for the ranges needed to summarize public API, key symbols, and responsibilities.";
+                    break;
+                }
             case "find_unused":
-            {
-                var scope = ReadArg("scope", out var argumentError);
-                if (argumentError is not null)
-                    return argumentError;
-                text = $"Use `unused_symbols` with the requested scope `{scope ?? "<scope>"}`. Cross-check surprising results with `references` or `callers` before recommending deletions.";
-                break;
-            }
+                {
+                    var scope = ReadArg("scope", out var argumentError);
+                    if (argumentError is not null)
+                        return argumentError;
+                    text = $"Use `unused_symbols` with the requested scope `{scope ?? "<scope>"}`. Cross-check surprising results with `references` or `callers` before recommending deletions.";
+                    break;
+                }
             case "impact_of_changing":
-            {
-                var symbol = ReadArg("symbol", out var argumentError);
-                if (argumentError is not null)
-                    return argumentError;
-                text = $"Use `impact_analysis` for `{symbol ?? "<symbol>"}`. Summarize direct callers, transitive callers, and files that likely need tests.";
-                break;
-            }
+                {
+                    var symbol = ReadArg("symbol", out var argumentError);
+                    if (argumentError is not null)
+                        return argumentError;
+                    text = $"Use `impact_analysis` for `{symbol ?? "<symbol>"}`. Summarize direct callers, transitive callers, and files that likely need tests.";
+                    break;
+                }
             default:
                 return CreateUnknownPromptError(id, name);
         }
