@@ -334,6 +334,52 @@ public class CdidxConfigFileTests
     }
 
     [Fact]
+    public void LoadAndApply_StringArrayAboveMaximumItemCount_ReturnsError()
+    {
+        var dir = CreateTempDir();
+        try
+        {
+            var items = string.Join(
+                ",",
+                Enumerable.Range(0, CdidxConfigFile.MaxConfigStringArrayItems + 1).Select(i => $"\"kind{i}\""));
+            File.WriteAllText(
+                Path.Combine(dir, ".cdidxrc.json"),
+                $$"""{ "indexing": { "includeKinds": [{{items}}] } }""");
+
+            var env = new TestEnvironment();
+            var result = CdidxConfigFile.LoadAndApply(dir, env.Read, env.Write);
+
+            Assert.True(result.Failed);
+            Assert.Contains("indexing.includeKinds", result.Error);
+            Assert.Contains($"<= {CdidxConfigFile.MaxConfigStringArrayItems} items", result.Error);
+            Assert.Empty(env.Writes);
+        }
+        finally { TestProjectHelper.DeleteDirectory(dir); }
+    }
+
+    [Fact]
+    public void LoadAndApply_StringArrayItemAboveMaximumLength_ReturnsError()
+    {
+        var dir = CreateTempDir();
+        try
+        {
+            var item = new string('x', CdidxConfigFile.MaxConfigStringArrayItemChars + 1);
+            File.WriteAllText(
+                Path.Combine(dir, ".cdidxrc.json"),
+                $$"""{ "mcp": { "tools": { "allow": ["{{item}}"] } } }""");
+
+            var env = new TestEnvironment();
+            var result = CdidxConfigFile.LoadAndApply(dir, env.Read, env.Write);
+
+            Assert.True(result.Failed);
+            Assert.Contains("mcp.tools.allow", result.Error);
+            Assert.Contains($"<= {CdidxConfigFile.MaxConfigStringArrayItemChars} characters", result.Error);
+            Assert.Empty(env.Writes);
+        }
+        finally { TestProjectHelper.DeleteDirectory(dir); }
+    }
+
+    [Fact]
     public void LoadAndApply_WrongType_ReturnsError()
     {
         var dir = CreateTempDir();

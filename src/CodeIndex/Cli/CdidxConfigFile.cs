@@ -29,6 +29,8 @@ internal static class CdidxConfigFile
     internal const string ConfigSourceEnvironmentVariablePrefix = "CDIDX_CONFIG_SOURCE__";
     internal const int MaxConfigFileBytes = 64 * 1024;
     internal const int MaxConfigJsonDepth = 32;
+    internal const int MaxConfigStringArrayItems = 128;
+    internal const int MaxConfigStringArrayItemChars = 256;
 
     private static readonly IReadOnlyList<string> KnownTopLevelKeys = new[]
     {
@@ -527,7 +529,14 @@ internal static class CdidxConfigFile
             error = $"[cdidx] {path}: `{key}` must be an array of strings.";
             return false;
         }
-        var collected = new List<string>(element.GetArrayLength());
+        var arrayLength = element.GetArrayLength();
+        if (arrayLength > MaxConfigStringArrayItems)
+        {
+            error = $"[cdidx] {path}: `{key}` must contain <= {MaxConfigStringArrayItems} items.";
+            return false;
+        }
+
+        var collected = new List<string>(arrayLength);
         foreach (var item in element.EnumerateArray())
         {
             if (item.ValueKind != JsonValueKind.String)
@@ -535,7 +544,12 @@ internal static class CdidxConfigFile
                 error = $"[cdidx] {path}: `{key}` must contain only strings.";
                 return false;
             }
-            var raw = item.GetString();
+            var raw = item.GetString() ?? string.Empty;
+            if (raw.Length > MaxConfigStringArrayItemChars)
+            {
+                error = $"[cdidx] {path}: `{key}` items must be <= {MaxConfigStringArrayItemChars} characters.";
+                return false;
+            }
             if (string.IsNullOrWhiteSpace(raw))
                 continue;
             collected.Add(raw);
