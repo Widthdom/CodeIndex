@@ -130,6 +130,12 @@ git status --short -- '**/packages.lock.json'
 | DTOs | `Models/FileRecord.cs`, `Models/ChunkRecord.cs`, `Models/SymbolRecord.cs`, `Models/ReferenceRecord.cs` | Records shared by indexing, storage, query, and MCP layers. |
 | Tests | `tests/CodeIndex.Tests/*Tests.cs`, `TestProjectHelper.cs`, `TestConsoleLock.cs` | Focused unit/integration coverage for chunking, extraction, DB reads/writes, CLI behavior, MCP behavior, git helpers, and shared test harness utilities. |
 
+Large command and extractor files have a tracked decomposition plan in
+[docs/large-file-decomposition-plan.md](docs/large-file-decomposition-plan.md).
+Use that plan when splitting `QueryCommandRunner`, `SymbolExtractor`,
+`McpToolHandlers`, or `FileIndexer` ownership boundaries so behavior changes
+remain reviewable and testable.
+
 ### Workspaces
 
 `cdidx.workspace.json` and `.cdidx-workspace.json` declare monorepo members without adding a YAML dependency. Workspace manifests are capped at 64 KiB, 16 JSON nesting levels, and 1024 members. The supported schema is additive: `members` is an array of member paths that must be relative to and resolve under the manifest directory, `index_strategy` is `per_member` or `single`, `default_db_name` is a plain file name that overrides `codeindex.db`, and `shared_ignores` is reserved for shared ignore policy. `cdidx workspace list` and `cdidx workspace status` report member DB paths.
@@ -2197,6 +2203,12 @@ git status --short -- '**/packages.lock.json'
 | MCP トランスポート | `Mcp/IMcpTransport.cs`, `Mcp/StdioMcpTransport.cs`, `Mcp/HttpMcpTransport.cs` | MCP サーバー向けの stdio（既定）と任意の HTTP `POST /` トランスポート（#1558）。 |
 | DTO | `Models/FileRecord.cs`, `Models/ChunkRecord.cs`, `Models/SymbolRecord.cs`, `Models/ReferenceRecord.cs` | indexing、storage、query、MCP layers で共有する record。 |
 | テスト | `tests/CodeIndex.Tests/*Tests.cs`, `TestProjectHelper.cs`, `TestConsoleLock.cs` | chunking、extraction、DB read/write、CLI、MCP、git helper、共有 test harness の focused unit / integration coverage。 |
+
+大きな command / extractor file については
+[docs/large-file-decomposition-plan.md](docs/large-file-decomposition-plan.md)
+に追跡可能な分割計画があります。`QueryCommandRunner`、`SymbolExtractor`、
+`McpToolHandlers`、`FileIndexer` の ownership boundary を分けるときは、
+挙動変更を review しやすく test しやすい単位に保つため、この計画を使ってください。
 
 ### ワークスペース
 
