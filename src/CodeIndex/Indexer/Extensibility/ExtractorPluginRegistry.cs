@@ -18,6 +18,7 @@ public static class ExtractorPluginRegistry
     internal const int MaxPatternRegexLength = 4096;
     internal const int MaxPluginAssemblyCandidatesPerDirectory = 128;
     internal const int MaxPluginAssemblyCandidatesTotal = 256;
+    internal const long MaxPluginAssemblyBytes = 64 * 1024 * 1024;
     internal static readonly TimeSpan PatternRegexTimeout = TimeSpan.FromMilliseconds(100);
 
     private static readonly object Gate = new();
@@ -160,6 +161,9 @@ public static class ExtractorPluginRegistry
 
     internal static void LoadPluginAssembliesForTests(IReadOnlyList<string> directories)
         => LoadPluginAssemblies(directories);
+
+    internal static void LoadPluginForTests(string pluginPath)
+        => TryLoadPlugin(pluginPath);
 
     internal static void LoadPatternConfigsForProjectRoot(string? projectRoot)
     {
@@ -812,6 +816,9 @@ public static class ExtractorPluginRegistry
         try
         {
             fullPath = Path.GetFullPath(pluginPath);
+            if (!PluginAssemblyCandidateIsWithinBudget(fullPath))
+                return;
+
             var assembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(fullPath);
             var attribute = assembly.GetCustomAttribute<CdidxPluginAttribute>();
             if (attribute == null)
@@ -858,6 +865,64 @@ public static class ExtractorPluginRegistry
                 $"Failed to load plugin assembly: {ex.Message}",
                 countsAsSkippedFile: true);
         }
+    }
+
+    private static bool PluginAssemblyCandidateIsWithinBudget(string fullPath)
+    {
+        FileInfo fileInfo;
+        try
+        {
+            fileInfo = new FileInfo(fullPath);
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            RecordDiagnostic(
+                "plugin",
+                fullPath,
+                typeName: null,
+                severity: "error",
+                $"Plugin assembly skipped: could not inspect file ({ex.Message}).",
+                countsAsSkippedFile: true);
+            return false;
+        }
+
+        if (!fileInfo.Exists)
+        {
+            RecordDiagnostic(
+                "plugin",
+                fullPath,
+                typeName: null,
+                severity: "error",
+                "Plugin assembly skipped: file does not exist.",
+                countsAsSkippedFile: true);
+            return false;
+        }
+
+        if ((fileInfo.Attributes & FileAttributes.Directory) != 0)
+        {
+            RecordDiagnostic(
+                "plugin",
+                fullPath,
+                typeName: null,
+                severity: "error",
+                "Plugin assembly skipped: path is a directory.",
+                countsAsSkippedFile: true);
+            return false;
+        }
+
+        if (fileInfo.Length > MaxPluginAssemblyBytes)
+        {
+            RecordDiagnostic(
+                "plugin",
+                fullPath,
+                typeName: null,
+                severity: "skipped",
+                $"Plugin assembly skipped: file is too large ({fileInfo.Length} bytes; maximum {MaxPluginAssemblyBytes}).",
+                countsAsSkippedFile: true);
+            return false;
+        }
+
+        return true;
     }
 
     private static void TryRegisterPluginType(Type type, string pluginPath)

@@ -114,6 +114,41 @@ public class ExtractorPluginRegistryTests
     }
 
     [Fact]
+    public void LoadPlugin_SkipsOversizeAssemblyCandidate()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_plugin_size_cap");
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                var pluginPath = Path.Combine(projectRoot, "oversize.dll");
+                using (var stream = File.Create(pluginPath))
+                {
+                    stream.SetLength(ExtractorPluginRegistry.MaxPluginAssemblyBytes + 1);
+                }
+
+                ExtractorPluginRegistry.LoadPluginForTests(pluginPath);
+                var status = ExtractorPluginRegistry.GetStatusSnapshot();
+
+                Assert.Equal(0, status.PluginAssemblyCount);
+                Assert.Equal(1, status.SkippedFileCount);
+                Assert.Equal(1, status.DiagnosticCount);
+                var diagnostic = Assert.Single(status.Diagnostics!);
+                Assert.Equal("plugin", diagnostic.Kind);
+                Assert.Equal("skipped", diagnostic.Severity);
+                Assert.Contains("too large", diagnostic.Message, StringComparison.Ordinal);
+                Assert.Contains(ExtractorPluginRegistry.MaxPluginAssemblyBytes.ToString(), diagnostic.Message, StringComparison.Ordinal);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
     public void LoadPatternConfigs_BoundsDiagnosticsAndCountsSkippedFiles()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_diagnostics");
