@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
+using System.Reflection;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
@@ -12075,6 +12076,16 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void IsServerResponseFrame_TooDeepResponse_ReturnsFalse_Issue3012()
+    {
+        Assert.True(InvokeIsServerResponseFrame("""{"jsonrpc":"2.0","id":1,"result":{}}"""));
+
+        var frame = BuildNestedJsonRpcResponse(McpServer.MaxJsonDepth + 1);
+
+        Assert.False(InvokeIsServerResponseFrame(frame));
+    }
+
+    [Fact]
     public void HandleMessage_BatchMixedRequests_ReturnsResponseArray()
     {
         var batch = JsonNode.Parse("""[{"jsonrpc":"2.0","id":1,"method":"ping"},{"jsonrpc":"2.0","method":"notifications/initialized"},{"jsonrpc":"2.0","id":2,"method":"nope"}]""")!;
@@ -12150,6 +12161,32 @@ public class McpServerTests : IDisposable
         var obj = Assert.IsType<JsonObject>(node);
         Assert.True(obj.ContainsKey("id"));
         Assert.Null(obj["id"]);
+    }
+
+    private static bool InvokeIsServerResponseFrame(string frame)
+    {
+        var method = typeof(McpServer).GetMethod("IsServerResponseFrame", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(method);
+        return (bool)method.Invoke(null, [frame])!;
+    }
+
+    private static string BuildNestedJsonRpcResponse(int nestedObjectCount)
+    {
+        var builder = new StringBuilder("""{"jsonrpc":"2.0","id":1,"result":""");
+        AppendNestedObject(builder, nestedObjectCount);
+        builder.Append('}');
+        return builder.ToString();
+    }
+
+    private static void AppendNestedObject(StringBuilder builder, int nestedObjectCount)
+    {
+        for (var i = 0; i < nestedObjectCount; i++)
+            builder.Append("""{"next":""");
+
+        builder.Append('0');
+
+        for (var i = 0; i < nestedObjectCount; i++)
+            builder.Append('}');
     }
 
     private static void WriteOversizedAsciiFile(string path)
