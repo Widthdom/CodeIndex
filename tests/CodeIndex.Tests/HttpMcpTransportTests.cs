@@ -456,6 +456,28 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
+    public async Task HttpTransport_EventsStreamLimit_Returns429()
+    {
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        await using var transport = new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null,
+            maxEventStreams: 1);
+
+        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+        using var first = await client.GetAsync(new Uri(new Uri(listen.Prefix), "events"), HttpCompletionOption.ResponseHeadersRead);
+        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+        await WaitUntilAsync(() => transport.EventStreamCount == 1, "the first event stream to fill the stream limit");
+
+        using var second = await client.GetAsync(new Uri(new Uri(listen.Prefix), "events"), HttpCompletionOption.ResponseHeadersRead);
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, second.StatusCode);
+        Assert.Contains(second.Headers, header => header.Key == "Retry-After");
+    }
+
+    [Fact]
     public async Task HttpTransport_EventsStream_EmitsOptInKeepAliveNotifications()
     {
         using var env = EnvironmentVariableScope.Capture("CDIDX_MCP_KEEP_ALIVE_INTERVAL_S");

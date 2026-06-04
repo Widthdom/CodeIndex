@@ -29,11 +29,13 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     internal const int DefaultMaxRequestBodyBytes = 1_000_000;
     internal const int DefaultMaxQueuedRequests = 64;
     internal const int DefaultMaxConcurrentHandlers = 64;
+    internal const int DefaultMaxEventStreams = 16;
     internal const int MaxRequestLogFieldCharacters = 256;
     internal const string RequestLogTruncationMarker = "...<truncated>";
     internal const string MaxRequestBodyBytesEnvVar = "CDIDX_MCP_HTTP_MAX_REQUEST_BYTES";
     internal const string MaxQueueDepthEnvVar = "CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH";
     internal const string MaxConcurrentHandlersEnvVar = "CDIDX_MCP_HTTP_MAX_CONCURRENT_HANDLERS";
+    internal const string MaxEventStreamsEnvVar = "CDIDX_MCP_HTTP_MAX_EVENT_STREAMS";
     private const string BearerPrefix = "Bearer ";
 
     private static readonly JsonDocumentOptions HttpProbeJsonDocumentOptions = new()
@@ -52,6 +54,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     private readonly int _maxRequestBodyBytes;
     private readonly int _maxQueuedRequests;
     private readonly int _maxConcurrentHandlers;
+    private readonly int _maxEventStreams;
     private readonly Task _acceptLoop;
     // The configured bearer token's SHA-256 digest, precomputed once at construction so the
     // per-request auth path never hashes the secret. Storing the digest (not the token) keeps the
@@ -62,6 +65,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     private readonly byte[]? _bearerTokenHash;
     private PendingRequest? _pendingRequest;
     private int _queuedRequestCount;
+    private int _eventStreamCount;
     private bool _disposed;
 
     /// <summary>
@@ -81,11 +85,13 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         Action<HttpRequestLogRecord>? requestLogger = null,
         int? maxRequestBodyBytes = null,
         int? maxQueuedRequests = null,
-        int? maxConcurrentHandlers = null)
+        int? maxConcurrentHandlers = null,
+        int? maxEventStreams = null)
     {
         _maxRequestBodyBytes = ResolvePositiveIntOption(maxRequestBodyBytes, MaxRequestBodyBytesEnvVar, DefaultMaxRequestBodyBytes);
         _maxQueuedRequests = ResolvePositiveIntOption(maxQueuedRequests, MaxQueueDepthEnvVar, DefaultMaxQueuedRequests);
         _maxConcurrentHandlers = ResolvePositiveIntOption(maxConcurrentHandlers, MaxConcurrentHandlersEnvVar, DefaultMaxConcurrentHandlers);
+        _maxEventStreams = ResolvePositiveIntOption(maxEventStreams, MaxEventStreamsEnvVar, DefaultMaxEventStreams);
         _requestQueue = Channel.CreateBounded<PendingRequest>(new BoundedChannelOptions(_maxQueuedRequests)
         {
             SingleReader = true,
@@ -121,7 +127,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
 
     internal Func<string>? KeepAliveFrameProvider { get; set; }
 
-    internal bool HasEventStreams => !_eventStreams.IsEmpty;
+    internal bool HasEventStreams => EventStreamCount > 0;
 
     internal int MaxRequestBodyBytes => _maxRequestBodyBytes;
 
@@ -129,7 +135,11 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
 
     internal int MaxConcurrentHandlers => _maxConcurrentHandlers;
 
+    internal int MaxEventStreams => _maxEventStreams;
+
     internal int QueuedRequestCount => Volatile.Read(ref _queuedRequestCount);
+
+    internal int EventStreamCount => Volatile.Read(ref _eventStreamCount);
 
     /// <summary>
     /// Resolve a `host:port` listen spec into the corresponding HTTP prefix. Ephemeral ports
@@ -647,6 +657,15 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     private async Task RunEventStreamAsync(PendingRequest request, CancellationToken cancellationToken)
     {
         var context = request.Context;
+        if (Interlocked.Increment(ref _eventStreamCount) > _maxEventStreams)
+        {
+            Interlocked.Decrement(ref _eventStreamCount);
+            context.Response.AddHeader("Retry-After", "1");
+            await RespondAsync(context, (int)HttpStatusCode.TooManyRequests, "MCP HTTP event stream limit is full.\n").ConfigureAwait(false);
+            LogRequest(request, (int)HttpStatusCode.TooManyRequests);
+            return;
+        }
+
         var streamId = Guid.NewGuid();
         var stream = new EventStream(context.Response);
         try
@@ -671,6 +690,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         finally
         {
             _eventStreams.TryRemove(streamId, out _);
+            Interlocked.Decrement(ref _eventStreamCount);
             LogRequest(request, (int)HttpStatusCode.OK);
             try { context.Response.Close(); } catch { /* ignore */ }
         }
