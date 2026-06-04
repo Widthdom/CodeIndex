@@ -6510,6 +6510,12 @@ public static class QueryCommandRunner
             }
             return CommandExitCodes.UsageError;
         }
+        catch (SearchGuardCandidateLimitException ex)
+        {
+            Console.Error.WriteLine($"Error [{CommandErrorCodes.UsageError}]: guarded search is too broad: {ex.Message}");
+            Console.Error.WriteLine("Hint: narrow the search with more specific query text, --lang, --path, or --exclude-tests, or reduce pagination offset before retrying guarded search.");
+            return CommandExitCodes.UsageError;
+        }
         catch (Exception ex)
         {
             if (JsonOutputFailure.TryHandle(ex, out var exitCode))

@@ -19,6 +19,9 @@ public partial class DbReader
     internal const int DefaultSearchGuardWindow = 8;
     internal const int MaxSearchGuardWindow = 200;
     internal const int MaxSearchGuardFilters = 8;
+    internal const int MaxGuardedSearchCandidates = 1000;
+    private const int MinGuardedSearchCandidates = 200;
+    private const int GuardedSearchOverFetchFactor = 50;
 
     /// <summary>
     /// Sanitize user input for FTS5 MATCH by quoting each token as a phrase.
@@ -114,6 +117,7 @@ public partial class DbReader
         var coverageTokens = exact ? new List<string>() : GetSearchCoverageTokens(normalizedQuery, rawQuery);
         var hasGuardFilters = guardFilters is { Count: > 0 };
         var exactSubstringBoost = !exact && !rawQuery && IsPunctuationHeavyLiteralQuery(query);
+        var guardedCandidateLimit = hasGuardFilters ? GetGuardedSearchCandidateLimit(limit, cursor) : 0;
         using var cmd = _conn.CreateCommand();
         string sql;
 
@@ -155,7 +159,9 @@ public partial class DbReader
             sql += " AND f.modified >= @since";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
         sql += $" ORDER BY {GetSearchOrderSql(coverageTokens.Count, exactSubstringBoost)}";
-        if (!hasGuardFilters)
+        if (hasGuardFilters)
+            sql += " LIMIT @candidateFetchLimit";
+        else
             sql += " LIMIT @limit";
         if (cursor is { } && !hasGuardFilters)
             sql += " OFFSET @cursorOffset";
@@ -169,6 +175,8 @@ public partial class DbReader
         AddSearchCoverageParameters(cmd, coverageTokens);
         if (!hasGuardFilters)
             cmd.Parameters.AddWithValue("@limit", limit);
+        else
+            cmd.Parameters.AddWithValue("@candidateFetchLimit", guardedCandidateLimit + 1);
         if (lang != null)
             cmd.Parameters.AddWithValue("@lang", lang);
         if (since != null && _fileColumns.Contains("modified"))
@@ -206,12 +214,39 @@ public partial class DbReader
             throw new FtsQuerySyntaxException(ex.Message, ex);
         }
 
+        var guardCandidateLimitReached = hasGuardFilters && raw.Count > guardedCandidateLimit;
+        if (guardCandidateLimitReached)
+            raw.RemoveRange(guardedCandidateLimit, raw.Count - guardedCandidateLimit);
+
         if (hasGuardFilters)
             raw = FilterBySearchGuards(raw, query, normalizedQuery, rawQuery, exact, lang, guardFilters!, guardWindow);
 
         var results = deduplicate ? DeduplicateOverlappingResults(raw) : raw;
+        if (guardCandidateLimitReached && results.Count < GetGuardedSearchRequestedPageEnd(limit, cursor))
+            throw new SearchGuardCandidateLimitException(guardedCandidateLimit, limit, cursor?.Offset ?? 0);
+
         AttachSearchEnclosingSymbols(results, query, exact);
         return hasGuardFilters ? PageGuardedSearchResults(results, limit, cursor) : results;
+    }
+
+    private static int GetGuardedSearchCandidateLimit(int limit, SearchCursor? cursor)
+    {
+        var requestedLimit = Math.Max(0L, limit);
+        var requestedOffset = Math.Max(0L, cursor?.Offset ?? 0);
+        var requestedPageEnd = requestedOffset + requestedLimit;
+        if (requestedPageEnd <= 0)
+            return 0;
+
+        var overFetched = requestedPageEnd * GuardedSearchOverFetchFactor;
+        var candidateLimit = Math.Max(MinGuardedSearchCandidates, overFetched);
+        return (int)Math.Min(MaxGuardedSearchCandidates, candidateLimit);
+    }
+
+    private static long GetGuardedSearchRequestedPageEnd(int limit, SearchCursor? cursor)
+    {
+        var requestedLimit = Math.Max(0L, limit);
+        var requestedOffset = Math.Max(0L, cursor?.Offset ?? 0);
+        return requestedOffset + requestedLimit;
     }
 
     private void AttachSearchEnclosingSymbols(IReadOnlyList<SearchResult> results, string query, bool caseSensitive)

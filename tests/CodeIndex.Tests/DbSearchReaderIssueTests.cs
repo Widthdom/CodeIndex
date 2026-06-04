@@ -50,6 +50,47 @@ public sealed class DbSearchReaderIssueTests : IDisposable
         Assert.Equal("src/search-boost-exact.cs", results[0].Path);
     }
 
+    [Fact]
+    public void Search_GuardFiltersRejectTooBroadCandidateCollectionBeforePagination_Issue3082()
+    {
+        for (var i = 0; i < 200; i++)
+            InsertIndexedFile($"src/guard-budget-{i:0000}.cs", "csharp", "public void Run() { BudgetNeedle(); }");
+
+        InsertIndexedFile(
+            "src/guard-budget-9999.cs",
+            "csharp",
+            """
+            public void Setup() { GuardMarker(); }
+            public void Run() { BudgetNeedle(); }
+            """);
+
+        var ex = Assert.Throws<SearchGuardCandidateLimitException>(() => _reader.Search(
+            "BudgetNeedle",
+            pathPatterns: ["src/guard-budget-*.cs"],
+            limit: 1,
+            guardFilters: [new SearchGuardFilter(SearchGuardRole.Require, SearchGuardDirection.Before, "GuardMarker")],
+            guardWindow: 1));
+
+        Assert.Equal(200, ex.CandidateLimit);
+        Assert.Contains("guarded search inspected the maximum", ex.Message);
+    }
+
+    [Fact]
+    public void Search_GuardFiltersDoNotRejectWhenCandidateCountExactlyMatchesBudget_Issue3082()
+    {
+        for (var i = 0; i < 200; i++)
+            InsertIndexedFile($"src/guard-budget-exact-{i:0000}.cs", "csharp", "public void Run() { ExactBudgetNeedle(); }");
+
+        var results = _reader.Search(
+            "ExactBudgetNeedle",
+            pathPatterns: ["src/guard-budget-exact-*.cs"],
+            limit: 1,
+            guardFilters: [new SearchGuardFilter(SearchGuardRole.Require, SearchGuardDirection.Before, "MissingGuardMarker")],
+            guardWindow: 1);
+
+        Assert.Empty(results);
+    }
+
     private void InsertIndexedFile(string path, string lang, string content, DateTime? modified = null)
     {
         var normalized = content.Replace("\r\n", "\n");
