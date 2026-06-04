@@ -349,6 +349,10 @@ public class WorkspaceCommandRunnerTests
 
             Assert.NotNull(query);
             Assert.Contains("Ignoring active workspace state", stderr);
+            Assert.DoesNotContain(configHome, stderr);
+            Assert.DoesNotContain(ActiveWorkspace.StatePath, stderr);
+            Assert.DoesNotContain("LineNumber", stderr);
+            Assert.Contains("invalid JSON", stderr);
             Assert.Equal(Path.Combine(projectRoot, ".cdidx", "codeindex.db"), query!.DbPath);
             Assert.Equal(DbPathResolver.DataDirSourceWorkspace, query.DataDirSource);
         }

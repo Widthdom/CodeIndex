@@ -43,7 +43,7 @@ internal static class ActiveWorkspace
             var text = DataDirectorySecurity.ReadTextWithinLimit(path, MaxStateBytes, FileShare.ReadWrite);
             if (text is null)
             {
-                WriteLoadWarning(path, $"file exceeds {MaxStateBytes} bytes");
+                WriteLoadWarning("state file", $"file exceeds {MaxStateBytes} bytes");
                 return null;
             }
 
@@ -58,7 +58,7 @@ internal static class ActiveWorkspace
         }
         catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
-            WriteLoadWarning(path, ex.Message);
+            WriteLoadWarning("state file", DescribeLoadFailure(ex));
             return null;
         }
     }
