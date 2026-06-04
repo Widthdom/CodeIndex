@@ -1990,8 +1990,6 @@ public partial class QueryCommandRunnerTests
     [InlineData("validate", "--lang", "javascript")]
     [InlineData("validate", "--exclude-path", "src/")]
     [InlineData("validate", "--exclude-tests")]
-    [InlineData("validate", "--limit", "nope")]
-    [InlineData("validate", "--top", "nope")]
     public void QueryEntrypoints_UnsupportedOptionsReturnUsageError(string command, string flag, string? value = null)
     {
         var args = value == null

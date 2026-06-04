@@ -1130,7 +1130,15 @@ public partial class McpServer
         {
             if (countOnly)
             {
-                var countResults = reader.Search(query, MaxLimit, lang, rawQuery, pathPatterns, excludePaths, excludeTests, deduplicate, since, exact, prefix, guardFilters: guardFilters, guardWindow: guardWindow);
+                List<SearchResult> countResults;
+                try
+                {
+                    countResults = reader.Search(query, MaxLimit, lang, rawQuery, pathPatterns, excludePaths, excludeTests, deduplicate, since, exact, prefix, guardFilters: guardFilters, guardWindow: guardWindow);
+                }
+                catch (SearchGuardCandidateLimitException ex)
+                {
+                    return CreateToolErrorResponse(id, $"guarded search is too broad: {ex.Message} Narrow the search with more specific query text, lang/path filters, or a smaller cursor offset.");
+                }
                 var truncatedCount = countResults.Count >= MaxLimit;
                 var payload = BuildCountOnlyPayload(countResults.Count, truncatedCount ? null : countResults.Count, truncatedCount, countResults, result => result.Path);
                 payload["query"] = query;
@@ -1145,7 +1153,15 @@ public partial class McpServer
                 return CreateToolResult(id, $"Counted {countResults.Count} search result(s).", payload);
             }
 
-            var results = reader.Search(query, FetchLimitForEnvelope(limit), lang, rawQuery, pathPatterns, excludePaths, excludeTests, deduplicate, since, exact, prefix, cursor: cursor, guardFilters: guardFilters, guardWindow: guardWindow);
+            List<SearchResult> results;
+            try
+            {
+                results = reader.Search(query, FetchLimitForEnvelope(limit), lang, rawQuery, pathPatterns, excludePaths, excludeTests, deduplicate, since, exact, prefix, cursor: cursor, guardFilters: guardFilters, guardWindow: guardWindow);
+            }
+            catch (SearchGuardCandidateLimitException ex)
+            {
+                return CreateToolErrorResponse(id, $"guarded search is too broad: {ex.Message} Narrow the search with more specific query text, lang/path filters, or a smaller cursor offset.");
+            }
             var ftsDiagnostics = DbReader.AnalyzeFtsQuery(query, rawQuery, prefix, lang);
             var truncated = TrimToRequestedLimit(results, limit);
             if (results.Count == 0)

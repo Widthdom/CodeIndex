@@ -137,6 +137,7 @@ public class ConsoleUiTests
         Assert.Contains("                              Legacy/stale-fold DBs fall back to ASCII NOCASE;", output);
         Assert.Contains("                              run `cdidx backfill-fold` or check fold_ready.", output);
         Assert.Contains("--kind <kind>              definition/symbols/hotspots/unused: symbol kind; references: reference kind (call/instantiate/subscribe/attribute/annotation); callers/callees: call-graph kinds only (call/instantiate/subscribe — metadata kinds rejected, use references instead); validate: issue kind", output);
+        Assert.Contains("--severity <s>             validate only: filter issues by severity: info, warning, error", output);
         Assert.Contains("--count                    Count only; search/definition/references/callers/callees/symbols/files/find/unused ignore --limit, impact/hotspots still use visible page counts", output);
         Assert.Contains("--no-dedup                 search only: return every raw overlapping chunk hit (debug/density)", output);
         Assert.Contains("--commits <commit-ref> [commit-ref ...]", output);
@@ -151,13 +152,13 @@ public class ConsoleUiTests
         Assert.Contains("cdidx map [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--bytes]", output);
         Assert.Contains("cdidx symbols [query|--query <query>|-- <query>] [--name <name>] [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exact|--exact-name] [--count] [--since <datetime>]", output);
         Assert.Contains("cdidx files [query|--query <query>|-- <query>] [--db <path>] [--json[=ndjson|array]] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--since <datetime>] [--bytes]", output);
-        Assert.Contains("cdidx validate [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--kind <kind>] [--path <glob>]", output);
+        Assert.Contains("cdidx validate [--db <path>] [--json[=array]] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--kind <kind>] [--severity <info|warning|error>] [--path <glob>]", output);
         Assert.Contains("Note: if a query itself starts with '-', pass it with --query <query> or -- <query>", output);
         Assert.DoesNotContain("cdidx validate [--db <path>] [--json] [--limit <n>] [--lang <lang>]", output);
         Assert.Contains("cdidx unused [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count]", output);
         Assert.Contains("cdidx hotspots [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--group-by <symbol|file|statement>] [--group-by-name]", output);
         Assert.Contains("--json                     Output as JSON (search/files stream ndjson by", output);
-        Assert.Contains("--json=array for one array)", output);
+        Assert.Contains("search/files/validate accept --json=array for one array)", output);
         Assert.Contains("--lang <lang>              Filter by language (aliases: bat, cmd, cshtml, razor, ts, tsx, cts, mts)", output);
         Assert.Contains("--bytes                    files: sort by size and show raw byte counts in human", output);
         Assert.Contains("map: show raw byte counts; JSON always keeps raw", output);
