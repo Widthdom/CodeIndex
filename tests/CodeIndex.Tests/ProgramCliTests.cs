@@ -1,7 +1,9 @@
 using CodeIndex.Cli;
 using CodeIndex.Database;
+using CodeIndex.Mcp;
 using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
+using System.Globalization;
 using System.IO.Compression;
 using System.Text.Json;
 
@@ -41,6 +43,24 @@ public class ProgramCliTests
         Assert.Contains("Error: --json is not supported for mcp; MCP already speaks JSON-RPC", stderr);
         Assert.Contains("Usage: cdidx mcp [--db <path>]", stderr);
         Assert.DoesNotContain("Warning: unknown option", stderr);
+    }
+
+    [Fact]
+    public void Mcp_HttpOversizedLimitEnvironmentReturnsUsageError()
+    {
+        var oversized = (HttpMcpTransport.MaxConfiguredRequestBodyBytes + 1).ToString(CultureInfo.InvariantCulture);
+        var (exitCode, _, stderr) = RunCliInSubprocess(
+            ["mcp", "--transport", "http"],
+            new Dictionary<string, string?> { [HttpMcpTransport.MaxRequestBodyBytesEnvVar] = oversized });
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains(HttpMcpTransport.MaxRequestBodyBytesEnvVar, stderr);
+        Assert.Contains(
+            $"between 1 and {HttpMcpTransport.MaxConfiguredRequestBodyBytes.ToString(CultureInfo.InvariantCulture)}",
+            stderr,
+            StringComparison.Ordinal);
+        Assert.Contains("HTTP limits:", stderr);
+        Assert.DoesNotContain("HTTP transport listening", stderr);
     }
 
     [Fact]
