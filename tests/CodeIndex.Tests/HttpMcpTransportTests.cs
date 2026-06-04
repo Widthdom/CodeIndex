@@ -413,6 +413,30 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
+    public async Task HttpTransport_ConcurrentHandlerLimit_Returns429()
+    {
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        await using var transport = new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null,
+            maxConcurrentHandlers: 1);
+
+        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+        using var events = await client.GetAsync(new Uri(new Uri(listen.Prefix), "events"), HttpCompletionOption.ResponseHeadersRead);
+        Assert.Equal(HttpStatusCode.OK, events.StatusCode);
+        await WaitUntilAsync(() => transport.HasEventStreams, "the first event stream to occupy the only handler slot");
+
+        using var second = await client.PostAsync(
+            listen.Prefix,
+            new StringContent("""{"jsonrpc":"2.0","id":2,"method":"ping"}""", Encoding.UTF8, "application/json"));
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, second.StatusCode);
+        Assert.Contains(second.Headers, header => header.Key == "Retry-After");
+    }
+
+    [Fact]
     public async Task HttpTransport_EventsStream_DoesNotBlockPostRequests()
     {
         await using var harness = await McpHttpHarness.StartAsync(_dbPath);

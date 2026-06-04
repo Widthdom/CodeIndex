@@ -28,10 +28,12 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
 {
     internal const int DefaultMaxRequestBodyBytes = 1_000_000;
     internal const int DefaultMaxQueuedRequests = 64;
+    internal const int DefaultMaxConcurrentHandlers = 64;
     internal const int MaxRequestLogFieldCharacters = 256;
     internal const string RequestLogTruncationMarker = "...<truncated>";
     internal const string MaxRequestBodyBytesEnvVar = "CDIDX_MCP_HTTP_MAX_REQUEST_BYTES";
     internal const string MaxQueueDepthEnvVar = "CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH";
+    internal const string MaxConcurrentHandlersEnvVar = "CDIDX_MCP_HTTP_MAX_CONCURRENT_HANDLERS";
     private const string BearerPrefix = "Bearer ";
 
     private static readonly JsonDocumentOptions HttpProbeJsonDocumentOptions = new()
@@ -46,8 +48,10 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     private readonly ConcurrentDictionary<Guid, EventStream> _eventStreams = new();
     private readonly CancellationTokenSource _acceptCts = new();
     private readonly Channel<PendingRequest> _requestQueue;
+    private readonly SemaphoreSlim _handlerSemaphore;
     private readonly int _maxRequestBodyBytes;
     private readonly int _maxQueuedRequests;
+    private readonly int _maxConcurrentHandlers;
     private readonly Task _acceptLoop;
     // The configured bearer token's SHA-256 digest, precomputed once at construction so the
     // per-request auth path never hashes the secret. Storing the digest (not the token) keeps the
@@ -76,10 +80,12 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         string? bearerToken,
         Action<HttpRequestLogRecord>? requestLogger = null,
         int? maxRequestBodyBytes = null,
-        int? maxQueuedRequests = null)
+        int? maxQueuedRequests = null,
+        int? maxConcurrentHandlers = null)
     {
         _maxRequestBodyBytes = ResolvePositiveIntOption(maxRequestBodyBytes, MaxRequestBodyBytesEnvVar, DefaultMaxRequestBodyBytes);
         _maxQueuedRequests = ResolvePositiveIntOption(maxQueuedRequests, MaxQueueDepthEnvVar, DefaultMaxQueuedRequests);
+        _maxConcurrentHandlers = ResolvePositiveIntOption(maxConcurrentHandlers, MaxConcurrentHandlersEnvVar, DefaultMaxConcurrentHandlers);
         _requestQueue = Channel.CreateBounded<PendingRequest>(new BoundedChannelOptions(_maxQueuedRequests)
         {
             SingleReader = true,
@@ -89,6 +95,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         });
         if (McpAuthenticationLimits.IsTokenOversized(bearerToken))
             throw new ArgumentException($"Token must not exceed {McpAuthenticationLimits.MaxTokenCharacters.ToString(CultureInfo.InvariantCulture)} characters.", nameof(bearerToken));
+        _handlerSemaphore = new SemaphoreSlim(_maxConcurrentHandlers, _maxConcurrentHandlers);
         _listener = new HttpListener();
         _listener.Prefixes.Add(prefix);
         _listener.Start();
@@ -119,6 +126,8 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     internal int MaxRequestBodyBytes => _maxRequestBodyBytes;
 
     internal int MaxQueuedRequests => _maxQueuedRequests;
+
+    internal int MaxConcurrentHandlers => _maxConcurrentHandlers;
 
     internal int QueuedRequestCount => Volatile.Read(ref _queuedRequestCount);
 
@@ -269,13 +278,40 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
                     break;
                 }
 
-                _ = Task.Run(() => HandleContextAsync(context, cancellationToken), CancellationToken.None);
+                if (!_handlerSemaphore.Wait(0))
+                {
+                    await RejectHandlerLimitAsync(context).ConfigureAwait(false);
+                    continue;
+                }
+
+                _ = Task.Run(() => RunHandlerAsync(context, cancellationToken), CancellationToken.None);
             }
         }
         finally
         {
             _requestQueue.Writer.TryComplete();
         }
+    }
+
+    private async Task RunHandlerAsync(HttpListenerContext context, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await HandleContextAsync(context, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _handlerSemaphore.Release();
+        }
+    }
+
+    private async Task RejectHandlerLimitAsync(HttpListenerContext context)
+    {
+        var request = BeginRequest(context);
+        request.AuthOutcome = "not-checked";
+        context.Response.AddHeader("Retry-After", "1");
+        await RespondAsync(context, (int)HttpStatusCode.TooManyRequests, "MCP HTTP concurrent handler limit is full.\n").ConfigureAwait(false);
+        LogRequest(request, (int)HttpStatusCode.TooManyRequests);
     }
 
     private async Task HandleContextAsync(HttpListenerContext context, CancellationToken cancellationToken)
@@ -311,7 +347,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
                 return;
             }
 
-            _ = Task.Run(() => RunEventStreamAsync(request, cancellationToken), CancellationToken.None);
+            await RunEventStreamAsync(request, cancellationToken).ConfigureAwait(false);
             return;
         }
 
