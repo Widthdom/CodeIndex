@@ -212,9 +212,9 @@ When any readiness field is degraded, `degraded_root_cause` identifies the prima
 
 After a current full-repository scan, `unknown_extension_file_count` reports how many skipped files had unmapped non-empty extensions, while `unknown_extension_files` lists up to `unknown_extension_file_path_limit` paths and `unknown_extension_files_truncated` marks when more paths exist.
 
-`extractors` reports runtime extractor plugin and pattern-config diagnostics, including loaded counts, skipped file counts, and a bounded diagnostics list for load failures.
+`extractors` reports runtime extractor plugin and pattern-config diagnostics, including loaded counts, skipped file counts, and a bounded diagnostics list for load failures. Diagnostic paths and messages are sanitized before they are surfaced.
 
-`hooks[]` includes `callback_budget_ms`. `CDIDX_HOOK_CALLBACK_BUDGET_MS` bounds each post-extraction hook callback in milliseconds (default: 5000); callbacks that exceed the budget emit index warnings, drop timed-out mutations, and disable that hook for the current index run.
+`hooks[]` includes metadata-only hook candidates and `callback_budget_ms`; `status` does not load hook assemblies. `CDIDX_HOOK_CALLBACK_BUDGET_MS` bounds each post-extraction hook callback in milliseconds (default: 5000); callbacks that exceed the budget emit sanitized index warnings, drop timed-out mutations, and disable that hook for the current index run.
 
 For MCP `status`, `mcp_session` is session-scoped diagnostic data rather than persisted index state. It includes `log_level`, `roots`, optional `client_info`, and optional `client_capabilities`.
 
@@ -505,9 +505,9 @@ readiness field のいずれかが degraded の場合、`degraded_root_cause` �
 
 現行の全体 scan 後、`unknown_extension_file_count` は未知の非空拡張子で skip された件数を返し、`unknown_extension_files` は `unknown_extension_file_path_limit` 件までの path sample、`unknown_extension_files_truncated` は sample より多くの path があることを示します。
 
-`extractors` は extractor plugin と pattern config の runtime 診断で、読み込み済み件数、skip されたファイル数、読み込み失敗の上限付き diagnostics list を含みます。
+`extractors` は extractor plugin と pattern config の runtime 診断で、読み込み済み件数、skip されたファイル数、読み込み失敗の上限付き diagnostics list を含みます。diagnostic の path と message は表面化前に sanitization されます。
 
-`hooks[]` は `callback_budget_ms` を含みます。`CDIDX_HOOK_CALLBACK_BUDGET_MS` は post-extraction hook callback ごとの上限ミリ秒を指定します（既定値: 5000）。上限を超えた callback は index warning を出し、timeout した変更を捨て、その index run 中は該当 hook を無効化します。
+`hooks[]` は metadata-only の hook candidate と `callback_budget_ms` を含み、`status` は hook assembly を読み込みません。`CDIDX_HOOK_CALLBACK_BUDGET_MS` は post-extraction hook callback ごとの上限ミリ秒を指定します（既定値: 5000）。上限を超えた callback は sanitized index warning を出し、timeout した変更を捨て、その index run 中は該当 hook を無効化します。
 
 MCP `status` の `mcp_session` は永続化された index 状態ではなく、セッション単位の診断情報です。`log_level`、`roots`、任意の `client_info`、任意の `client_capabilities` を含みます。
 

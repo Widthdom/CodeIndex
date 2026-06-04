@@ -25,6 +25,11 @@ public sealed record PostExtractionHookDiagnostic(
     string? Callback = null,
     long? DurationMs = null);
 
+public sealed record PostExtractionHookDiscoverySnapshot(
+    IReadOnlyList<PostExtractionHookInfo> Hooks,
+    IReadOnlyList<PostExtractionHookDiagnostic> Diagnostics,
+    TimeSpan CallbackBudget);
+
 public sealed class PostExtractionHookRunner : IDisposable
 {
     public const string CallbackBudgetEnvironmentVariable = "CDIDX_HOOK_CALLBACK_BUDGET_MS";
@@ -51,6 +56,30 @@ public sealed class PostExtractionHookRunner : IDisposable
 
     public static PostExtractionHookRunner DiscoverDefault()
         => Discover(GetDefaultHooksDirectory());
+
+    public static PostExtractionHookDiscoverySnapshot DiscoverDefaultMetadata()
+        => DiscoverMetadata(GetDefaultHooksDirectory());
+
+    public static PostExtractionHookDiscoverySnapshot DiscoverMetadata(string? hooksDirectory)
+    {
+        var loaded = new List<LoadedPostExtractionHook>();
+        var runner = new PostExtractionHookRunner(loaded, ResolveCallbackBudget());
+        if (string.IsNullOrWhiteSpace(hooksDirectory) || !Directory.Exists(hooksDirectory))
+            return new PostExtractionHookDiscoverySnapshot([], runner.Diagnostics, runner.CallbackBudget);
+
+        var hooks = EnumerateHookAssemblyPaths(hooksDirectory, runner, ResolveDiscoveryLimit())
+            .Select(dllPath =>
+            {
+                var fullPath = Path.GetFullPath(dllPath);
+                return new PostExtractionHookInfo(
+                    Path.GetFileNameWithoutExtension(fullPath),
+                    DiagnosticSanitizer.ForPath(fullPath),
+                    string.Empty);
+            })
+            .ToArray();
+
+        return new PostExtractionHookDiscoverySnapshot(hooks, runner.Diagnostics, runner.CallbackBudget);
+    }
 
     public static PostExtractionHookRunner Discover(string? hooksDirectory)
     {
