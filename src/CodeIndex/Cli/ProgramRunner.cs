@@ -2464,6 +2464,18 @@ internal static class ProgramRunner
         {
             transport = new HttpMcpTransport(resolved.Prefix, resolved.Host, resolved.Port, bearerToken, LogHttpMcpRequest);
         }
+        catch (FormatException ex)
+        {
+            Console.Error.WriteLine($"Error: {ex.Message}");
+            PrintMcpUsage();
+            return CommandExitCodes.UsageError;
+        }
+        catch (ArgumentOutOfRangeException ex)
+        {
+            Console.Error.WriteLine($"Error: {ex.Message}");
+            PrintMcpUsage();
+            return CommandExitCodes.UsageError;
+        }
         catch (HttpListenerException ex)
         {
             Console.Error.WriteLine($"Error: failed to bind HTTP listener on {resolved.Prefix}: {ex.Message}");
@@ -2544,7 +2556,7 @@ internal static class ProgramRunner
     {
         Console.Error.WriteLine("Usage: cdidx mcp [--db <path>] [--transport stdio|http] [--http-listen <host:port>] [--audit-log <path>] [--audit-log-include-values] [--audit-log-max-bytes <n>] [--suggestion-dedup-threshold <0..1>]");
         Console.Error.WriteLine("Note: --json is not supported; MCP requests and responses are JSON-RPC over the selected transport.");
-        Console.Error.WriteLine($"HTTP limits: {HttpMcpTransport.MaxRequestBodyBytesEnvVar}=<bytes> (default {HttpMcpTransport.DefaultMaxRequestBodyBytes.ToString(CultureInfo.InvariantCulture)}), {HttpMcpTransport.MaxQueueDepthEnvVar}=<n> (default {HttpMcpTransport.DefaultMaxQueuedRequests.ToString(CultureInfo.InvariantCulture)}).");
+        Console.Error.WriteLine($"HTTP limits: {HttpMcpTransport.MaxRequestBodyBytesEnvVar}=<bytes> (1..{HttpMcpTransport.MaxConfiguredRequestBodyBytes.ToString(CultureInfo.InvariantCulture)}, default {HttpMcpTransport.DefaultMaxRequestBodyBytes.ToString(CultureInfo.InvariantCulture)}), {HttpMcpTransport.MaxQueueDepthEnvVar}=<n> (1..{HttpMcpTransport.MaxConfiguredQueuedRequests.ToString(CultureInfo.InvariantCulture)}, default {HttpMcpTransport.DefaultMaxQueuedRequests.ToString(CultureInfo.InvariantCulture)}).");
     }
 
     internal static bool TryConsumeSuggestionDedupThresholdFlag(ref string[] args, out string error)
