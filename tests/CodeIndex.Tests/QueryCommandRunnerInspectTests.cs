@@ -323,6 +323,57 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunOutline_CompactJson_UsesExplicitLimit_Issue3009()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_compact_limit_json");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/many.cs",
+                "csharp",
+                """
+                public class Many
+                {
+                    public void M0() { }
+                    public void M1() { }
+                    public void M2() { }
+                    public void M3() { }
+                    public void M4() { }
+                    public void M5() { }
+                    public void M6() { }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/many.cs", "--db", dbPath, "--compact", "--limit", "2"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var symbols = json.GetProperty("symbols").EnumerateArray().ToList();
+            var symbolTruncation = json
+                .GetProperty("truncation")
+                .GetProperty("sections")
+                .GetProperty("symbols");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(json.GetProperty("compact").GetBoolean());
+            Assert.Equal(2, json.GetProperty("compact_limit").GetInt32());
+            Assert.Equal(2, symbols.Count);
+            Assert.Equal(2, symbolTruncation.GetProperty("returned").GetInt32());
+            Assert.Equal(QueryCommandRunner.DefaultCompactSectionLimit + 3, symbolTruncation.GetProperty("source_count").GetInt32());
+            Assert.True(symbolTruncation.GetProperty("truncated").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunOutline_UsesNestedSymbolDepthInHumanOutput()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_depth");

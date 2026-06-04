@@ -75,7 +75,7 @@ internal static class CliFlagSchema
     private static readonly string[] LimitCapableCommands =
     [
         "search", "definition", "goto", "references", "callers", "callees", "symbols",
-        "files", "find", "map", "inspect", "deps", "impact", "unused", "hotspots",
+        "files", "find", "map", "inspect", "outline", "deps", "impact", "unused", "hotspots",
     ];
 
     private static readonly string[] LangCapableCommands = LimitCapableCommands;
