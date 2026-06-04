@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Globalization;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -2406,11 +2408,17 @@ public partial class McpServer : IDisposable
         var metricsStopwatch = System.Diagnostics.Stopwatch.StartNew();
         string? metricsError = null;
         JsonNode response;
+        JsonObject CreateUnknownToolResponseForMetrics()
+        {
+            metricsError = "unknown_tool";
+            return CreateUnknownToolErrorResponse(hasId: true, id: id, toolName);
+        }
+
         try
         {
             if (toolNameTooLong)
             {
-                response = CreateUnknownToolErrorResponse(hasId: true, id: id, toolName);
+                response = CreateUnknownToolResponseForMetrics();
             }
             else if (ValidateToolArguments(toolName, args) is JsonObject argumentError)
             {
@@ -2487,7 +2495,7 @@ public partial class McpServer : IDisposable
                         "index" => await ExecuteIndexAsync(id, args, progressToken).ConfigureAwait(false),
                         "backfill_fold" => ExecuteBackfillFold(id, args, progressToken),
                         "suggest_improvement" => await ExecuteSuggestImprovementAsync(id, args).ConfigureAwait(false),
-                        _ => CreateUnknownToolErrorResponse(hasId: true, id: id, toolName),
+                        _ => CreateUnknownToolResponseForMetrics(),
                     };
                 }
             }
@@ -2528,13 +2536,14 @@ public partial class McpServer : IDisposable
             if (MetricsSink.IsActive)
             {
                 metricsStopwatch.Stop();
+                var metricsTool = BoundToolNameForDisplay(toolName).Text;
                 MetricsSink.Record(new MetricsEvent(
                     Timestamp: metricsStartedAt,
-                    Tool: toolName,
+                    Tool: metricsTool,
                     Source: "mcp",
                     ElapsedMs: metricsStopwatch.Elapsed.TotalMilliseconds,
                     ExitCode: metricsError == null ? 0 : 1,
-                    Language: TryReadStringArg(args, "language") ?? TryReadStringArg(args, "lang"),
+                    Language: TryReadMetricStringArg(args, "language") ?? TryReadMetricStringArg(args, "lang"),
                     Error: metricsError));
             }
         }
@@ -2546,7 +2555,8 @@ public partial class McpServer : IDisposable
         // audit はワイヤーレスポンスと例外型の両方を参照するため metrics finally の後で
         // 出力する。Stopwatch.Stop は冪等。TryEmitAudit 内部でベストエフォート化済み (#1562)。
         metricsStopwatch.Stop();
-        TryEmitAudit(toolName, id, args, response, metricsStartedAt, metricsStopwatch.Elapsed.TotalMilliseconds, errorType: metricsError);
+        var auditErrorType = metricsError == "unknown_tool" ? null : metricsError;
+        TryEmitAudit(toolName, id, args, response, metricsStartedAt, metricsStopwatch.Elapsed.TotalMilliseconds, errorType: auditErrorType);
         EmitToolInvocationTelemetry(toolName, args, response, metricsStartedAt, metricsStopwatch.Elapsed.TotalMilliseconds, metricsError);
         return response;
     }
@@ -2755,19 +2765,21 @@ public partial class McpServer : IDisposable
         var keys = new List<string>(argsObj.Count);
         var lengths = new List<KeyValuePair<string, int>>(argsObj.Count);
         var keyLengths = new List<KeyValuePair<string, int>>();
+        var usedKeys = new HashSet<string>(StringComparer.Ordinal);
         JsonObject? echoObject = includeValues ? new JsonObject() : null;
         foreach (var (key, value) in argsObj)
         {
             var keyDisplay = McpBoundedText.ForDisplay(key);
-            keys.Add(keyDisplay.Text);
-            lengths.Add(new KeyValuePair<string, int>(keyDisplay.Text, AuditLogSink.MeasureArgLength(value)));
+            var displayKey = MakeUniqueArgumentDisplayKey(key, keyDisplay, usedKeys);
+            keys.Add(displayKey);
+            lengths.Add(new KeyValuePair<string, int>(displayKey, AuditLogSink.MeasureArgLength(value)));
             if (keyDisplay.Truncated)
-                keyLengths.Add(new KeyValuePair<string, int>(keyDisplay.Text, keyDisplay.OriginalLength));
+                keyLengths.Add(new KeyValuePair<string, int>(displayKey, keyDisplay.OriginalLength));
             if (echoObject is not null)
             {
                 try
                 {
-                    echoObject[keyDisplay.Text] = value?.DeepClone();
+                    echoObject[displayKey] = value?.DeepClone();
                 }
                 catch
                 {
@@ -2776,6 +2788,38 @@ public partial class McpServer : IDisposable
             }
         }
         return (keys, lengths, keyLengths, includeValues ? echoObject : null);
+    }
+
+    private static string MakeUniqueArgumentDisplayKey(string rawKey, BoundedMcpText display, ISet<string> usedKeys)
+    {
+        if (usedKeys.Add(display.Text))
+            return display.Text;
+
+        var hashSuffix = "#" + ShortStableHash(rawKey);
+        var candidate = ComposeDisplayKeyWithSuffix(rawKey, hashSuffix);
+        var disambiguator = 2;
+        while (!usedKeys.Add(candidate))
+        {
+            candidate = ComposeDisplayKeyWithSuffix(
+                rawKey,
+                $"{hashSuffix}-{disambiguator.ToString(CultureInfo.InvariantCulture)}");
+            disambiguator++;
+        }
+
+        return candidate;
+    }
+
+    private static string ComposeDisplayKeyWithSuffix(string rawKey, string suffix)
+    {
+        const int maxDisplayTextChars = McpBoundedText.MaxDiagnosticDisplayChars + 3;
+        var maxPrefixChars = Math.Max(0, maxDisplayTextChars - suffix.Length - 3);
+        return McpBoundedText.ForDisplay(rawKey, maxPrefixChars).Text + suffix;
+    }
+
+    private static string ShortStableHash(string value)
+    {
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(value));
+        return Convert.ToHexString(bytes.AsSpan(0, 4)).ToLowerInvariant();
     }
 
     private static void AddArgKeyMetadata(JsonObject target, IReadOnlyList<KeyValuePair<string, int>> argKeyLengths)
@@ -2822,6 +2866,12 @@ public partial class McpServer : IDisposable
             // ベストエフォート: 引数形状が不正でも language ヒントを抑止するだけ。
         }
         return null;
+    }
+
+    private static string? TryReadMetricStringArg(JsonNode? args, string key)
+    {
+        var value = TryReadStringArg(args, key);
+        return value is null ? null : McpBoundedText.ForDisplay(value).Text;
     }
 
     internal static string BuildOversizedMessageLog(int characterCount, int byteCount) =>

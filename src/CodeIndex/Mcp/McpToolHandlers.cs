@@ -2534,8 +2534,23 @@ public partial class McpServer
             return true;
         }
 
+        static void CopySlotErrorData(JsonObject entry, JsonObject? extraData)
+        {
+            if (extraData is null)
+                return;
+
+            foreach (var (key, value) in extraData)
+            {
+                if (key is "message" or "jsonrpc_invalid_params")
+                    continue;
+                if (entry.ContainsKey(key))
+                    continue;
+                entry[key] = value?.DeepClone();
+            }
+        }
+
         void AppendSlotError(int requestIndex, string? toolName, JsonNode? toolArgs, Stopwatch slotStopwatch, string errorMessage,
-            int? code = null, string? category = null, string? suggestion = null, bool? retrySafe = null)
+            int? code = null, string? category = null, string? suggestion = null, bool? retrySafe = null, JsonObject? extraData = null)
         {
             slotStopwatch.Stop();
             var entry = new JsonObject
@@ -2548,6 +2563,7 @@ public partial class McpServer
                 ["error"] = errorMessage,
             };
             AddToolDisplayData(entry, toolName);
+            CopySlotErrorData(entry, extraData);
             if (code.HasValue)
                 entry["code"] = code.Value;
             // #1581: batch_query slot errors also carry the canonical envelope so clients
@@ -2654,7 +2670,8 @@ public partial class McpServer
                 AppendSlotError(requestIndex, toolName, toolArgs, slotStopwatch, argumentError["message"]!.GetValue<string>(),
                     category: McpErrorEnvelope.CategoryInvalidArgument,
                     suggestion: "Use exactly the argument names advertised by tools/list for this tool.",
-                    retrySafe: false);
+                    retrySafe: false,
+                    extraData: argumentError);
                 continue;
             }
 
@@ -2663,7 +2680,8 @@ public partial class McpServer
                 AppendSlotError(requestIndex, toolName, toolArgs, slotStopwatch, listArgumentError["message"]!.GetValue<string>(),
                     category: McpErrorEnvelope.CategoryInvalidArgument,
                     suggestion: "Send only non-empty string entries within the documented MCP array bounds.",
-                    retrySafe: false);
+                    retrySafe: false,
+                    extraData: listArgumentError);
                 continue;
             }
 
@@ -2981,15 +2999,16 @@ public partial class McpServer
         var parts = new List<string>(obj.Count);
         foreach (var kv in obj)
         {
-            var key = kv.Key;
+            var key = McpBoundedText.ForDisplay(kv.Key).Text;
             var value = kv.Value;
             string rendered = value switch
             {
                 null => "null",
-                JsonValue v => v.ToJsonString(),
+                JsonValue v when v.TryGetValue<string>(out var text) => JsonSerializer.Serialize(McpBoundedText.ForDisplay(text).Text),
+                JsonValue v => McpBoundedText.ForDisplay(v.ToJsonString()).Text,
                 JsonArray arr => $"[{arr.Count}]",
                 JsonObject inner => $"{{{inner.Count}}}",
-                _ => value.ToJsonString(),
+                _ => McpBoundedText.ForDisplay(value.ToJsonString()).Text,
             };
             parts.Add($"{key}={rendered}");
         }
