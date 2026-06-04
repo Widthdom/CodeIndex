@@ -1915,10 +1915,14 @@ public partial class McpServer : IDisposable
                 category: McpErrorEnvelope.CategoryMissingParameter,
                 suggestion: "resources/read requires `params.uri` from resources/list, such as `cdidx://file/src/app.cs`.",
                 retrySafe: false);
+        if (uri.Length > McpBoundedText.MaxResourceUriChars)
+            return CreateResourceUriError(id, uri, messagePrefix: "Resource uri is too long",
+                suggestion: "Use a resource URI returned by resources/list and keep it within the documented MCP resource URI length limit.",
+                retrySafe: false,
+                includeLengthLimit: true);
 
         if (!TryParseResourceUri(uri, out var path))
-            return CreateErrorResponse(hasId: true, id: id, code: -32602, message: $"Invalid resource uri: {uri}",
-                category: McpErrorEnvelope.CategoryInvalidArgument,
+            return CreateResourceUriError(id, uri, messagePrefix: "Invalid resource uri",
                 suggestion: "Use a cdidx file resource URI returned by resources/list (`cdidx://file/<indexed-path>`).",
                 retrySafe: false);
 
@@ -1927,8 +1931,7 @@ public partial class McpServer : IDisposable
             var files = reader.ListFiles(query: path, limit: 2);
             var file = files.FirstOrDefault(f => string.Equals(f.Path, path, StringComparison.Ordinal));
             if (file == null)
-                return CreateErrorResponse(hasId: true, id: id, code: -32602, message: $"Resource not found: {uri}",
-                    category: McpErrorEnvelope.CategoryInvalidArgument,
+                return CreateResourceUriError(id, uri, messagePrefix: "Resource not found",
                     suggestion: "Call resources/list again and retry with one of the returned resource URIs.",
                     retrySafe: true);
 
@@ -1944,6 +1947,26 @@ public partial class McpServer : IDisposable
             };
             return CreateSuccessResponse(true, id, new JsonObject { ["contents"] = contents });
         });
+    }
+
+    private static JsonNode CreateResourceUriError(JsonNode? id, string uri, string messagePrefix, string suggestion, bool retrySafe, bool includeLengthLimit = false)
+    {
+        var display = McpBoundedText.ForDisplay(uri, McpBoundedText.MaxResourceUriChars);
+        var data = new JsonObject
+        {
+            ["uri"] = display.Text,
+        };
+        display.AddMetadata(data, "uri");
+        if (includeLengthLimit)
+        {
+            data["max_length"] = McpBoundedText.MaxResourceUriChars;
+            data["actual_length"] = uri.Length;
+        }
+        return CreateErrorResponse(hasId: true, id: id, code: -32602, message: $"{messagePrefix}: {display.Text}",
+            category: McpErrorEnvelope.CategoryInvalidArgument,
+            suggestion: suggestion,
+            retrySafe: retrySafe,
+            extraData: data);
     }
 
     private JsonNode HandlePromptsList(JsonNode? id)

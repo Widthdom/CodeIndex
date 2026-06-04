@@ -845,6 +845,49 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ResourcesRead_UriTooLong_RejectsBeforeParse_Issue3122()
+    {
+        var uri = "cdidx://file/" + new string('x', McpBoundedText.MaxResourceUriChars + 25);
+        var display = McpBoundedText.ForDisplay(uri, McpBoundedText.MaxResourceUriChars);
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "resources/read",
+            ["params"] = new JsonObject
+            {
+                ["uri"] = uri,
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal(-32602, response["error"]!["code"]!.GetValue<int>());
+        Assert.DoesNotContain(uri, response.ToJsonString(), StringComparison.Ordinal);
+        Assert.Equal($"Resource uri is too long: {display.Text}", response["error"]!["message"]!.GetValue<string>());
+        var data = response["error"]!["data"]!;
+        Assert.Equal(display.Text, data["uri"]!.GetValue<string>());
+        Assert.Equal(uri.Length, data["uri_length"]!.GetValue<int>());
+        Assert.True(data["uri_truncated"]!.GetValue<bool>());
+        Assert.Equal(McpBoundedText.MaxResourceUriChars, data["max_length"]!.GetValue<int>());
+        Assert.Equal(uri.Length, data["actual_length"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ResourcesRead_NotFound_ReturnsBoundedUriData_Issue3122()
+    {
+        const string uri = "cdidx://file/src/missing.cs";
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"cdidx://file/src/missing.cs"}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal(-32602, response["error"]!["code"]!.GetValue<int>());
+        Assert.Equal($"Resource not found: {uri}", response["error"]!["message"]!.GetValue<string>());
+        Assert.Equal(uri, response["error"]!["data"]!["uri"]!.GetValue<string>());
+        Assert.Equal("invalid_argument", response["error"]!["data"]!["category"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void PromptsListAndGet_ReturnPromptMessages()
     {
         var list = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"prompts/list","params":{}}""")!;
