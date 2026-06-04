@@ -86,6 +86,19 @@ public class GlobalToolLogTests
     }
 
     [Fact]
+    public void FormatArgs_RedactsOverlongUriUserInfoBeforeTruncation()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_LOG_REDACT");
+        env.Set("CDIDX_LOG_REDACT", null);
+        var argument = "https://user:" + new string('!', GlobalToolLog.RedactionArgumentLengthLimit) + "@example.test/repo.git";
+
+        var formatted = GlobalToolLog.FormatArgs([argument]);
+
+        Assert.Equal("<redacted>", formatted);
+        Assert.DoesNotContain("user:", formatted);
+    }
+
+    [Fact]
     public void FormatArgs_RedactsOverlongSensitiveAssignment()
     {
         using var env = EnvironmentVariableScope.Capture("CDIDX_LOG_REDACT");

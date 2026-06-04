@@ -528,7 +528,41 @@ internal static class GlobalToolLog
             return RedactedValue;
         }
 
+        if (truncated && LooksLikeTruncatedUriUserInfo(value))
+            return RedactedValue;
+
         return truncated ? value + RedactionTruncationMarker : value;
+    }
+
+    private static bool LooksLikeTruncatedUriUserInfo(string value)
+    {
+        var schemeEnd = value.IndexOf("://", StringComparison.Ordinal);
+        if (schemeEnd <= 0)
+            return false;
+
+        var authorityStart = schemeEnd + 3;
+        if (authorityStart >= value.Length)
+            return false;
+
+        var authorityEnd = value.Length;
+        for (var i = authorityStart; i < value.Length; i++)
+        {
+            var ch = value[i];
+            if (char.IsWhiteSpace(ch) || ch == '/' || ch == '?' || ch == '#')
+            {
+                authorityEnd = i;
+                break;
+            }
+        }
+
+        if (authorityEnd <= authorityStart)
+            return false;
+
+        var authorityLength = authorityEnd - authorityStart;
+        if (value.IndexOf('@', authorityStart, authorityLength) >= 0)
+            return false;
+
+        return value.IndexOf(':', authorityStart, authorityLength) >= 0;
     }
 
     private static string RedactPathLikeValue(string value)
