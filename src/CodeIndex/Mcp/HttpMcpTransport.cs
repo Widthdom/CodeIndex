@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
+using System.Numerics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -27,9 +28,13 @@ namespace CodeIndex.Mcp;
 internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
 {
     internal const int DefaultMaxRequestBodyBytes = 1_000_000;
+    internal const int MaxConfiguredRequestBodyBytes = 16 * 1024 * 1024;
     internal const int DefaultMaxQueuedRequests = 64;
+    internal const int MaxConfiguredQueuedRequests = 1024;
     internal const int DefaultMaxConcurrentHandlers = 64;
+    internal const int MaxConfiguredConcurrentHandlers = 1024;
     internal const int DefaultMaxEventStreams = 16;
+    internal const int MaxConfiguredEventStreams = 1024;
     internal const int MaxRequestLogFieldCharacters = 256;
     internal const string RequestLogTruncationMarker = "...<truncated>";
     internal const string MaxRequestBodyBytesEnvVar = "CDIDX_MCP_HTTP_MAX_REQUEST_BYTES";
@@ -37,6 +42,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     internal const string MaxConcurrentHandlersEnvVar = "CDIDX_MCP_HTTP_MAX_CONCURRENT_HANDLERS";
     internal const string MaxEventStreamsEnvVar = "CDIDX_MCP_HTTP_MAX_EVENT_STREAMS";
     private const string BearerPrefix = "Bearer ";
+    private static readonly TimeSpan EventStreamDisconnectProbeInterval = TimeSpan.FromSeconds(1);
 
     private static readonly JsonDocumentOptions HttpProbeJsonDocumentOptions = new()
     {
@@ -88,10 +94,34 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         int? maxConcurrentHandlers = null,
         int? maxEventStreams = null)
     {
-        _maxRequestBodyBytes = ResolvePositiveIntOption(maxRequestBodyBytes, MaxRequestBodyBytesEnvVar, DefaultMaxRequestBodyBytes);
-        _maxQueuedRequests = ResolvePositiveIntOption(maxQueuedRequests, MaxQueueDepthEnvVar, DefaultMaxQueuedRequests);
-        _maxConcurrentHandlers = ResolvePositiveIntOption(maxConcurrentHandlers, MaxConcurrentHandlersEnvVar, DefaultMaxConcurrentHandlers);
-        _maxEventStreams = ResolvePositiveIntOption(maxEventStreams, MaxEventStreamsEnvVar, DefaultMaxEventStreams);
+        _maxRequestBodyBytes = ResolvePositiveIntOption(
+            maxRequestBodyBytes,
+            nameof(maxRequestBodyBytes),
+            MaxRequestBodyBytesEnvVar,
+            DefaultMaxRequestBodyBytes,
+            MaxConfiguredRequestBodyBytes,
+            "HTTP MCP request body byte limit");
+        _maxQueuedRequests = ResolvePositiveIntOption(
+            maxQueuedRequests,
+            nameof(maxQueuedRequests),
+            MaxQueueDepthEnvVar,
+            DefaultMaxQueuedRequests,
+            MaxConfiguredQueuedRequests,
+            "HTTP MCP request queue depth");
+        _maxConcurrentHandlers = ResolvePositiveIntOption(
+            maxConcurrentHandlers,
+            nameof(maxConcurrentHandlers),
+            MaxConcurrentHandlersEnvVar,
+            DefaultMaxConcurrentHandlers,
+            MaxConfiguredConcurrentHandlers,
+            "HTTP MCP concurrent handler limit");
+        _maxEventStreams = ResolvePositiveIntOption(
+            maxEventStreams,
+            nameof(maxEventStreams),
+            MaxEventStreamsEnvVar,
+            DefaultMaxEventStreams,
+            MaxConfiguredEventStreams,
+            "HTTP MCP event stream limit");
         _requestQueue = Channel.CreateBounded<PendingRequest>(new BoundedChannelOptions(_maxQueuedRequests)
         {
             SingleReader = true,
@@ -233,18 +263,36 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         }
     }
 
-    private static int ResolvePositiveIntOption(int? explicitValue, string envVar, int defaultValue)
+    private static int ResolvePositiveIntOption(
+        int? explicitValue,
+        string explicitValueName,
+        string envVar,
+        int defaultValue,
+        int maximumValue,
+        string description)
     {
         if (explicitValue is { } configured)
         {
             if (configured <= 0)
-                throw new ArgumentOutOfRangeException(nameof(explicitValue), configured, "HTTP MCP limits must be positive integers.");
+                throw new ArgumentOutOfRangeException(
+                    explicitValueName,
+                    configured,
+                    $"{description} must be between 1 and {maximumValue.ToString(CultureInfo.InvariantCulture)}.");
+            if (configured > maximumValue)
+                throw new ArgumentOutOfRangeException(
+                    explicitValueName,
+                    configured,
+                    $"{description} must be between 1 and {maximumValue.ToString(CultureInfo.InvariantCulture)}.");
             return configured;
         }
 
         var raw = Environment.GetEnvironmentVariable(envVar);
-        if (int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) && parsed > 0)
-            return parsed;
+        if (BigInteger.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) && parsed > 0)
+        {
+            if (parsed > maximumValue)
+                throw new FormatException($"{envVar} must be between 1 and {maximumValue.ToString(CultureInfo.InvariantCulture)} for {description}; got {parsed.ToString(CultureInfo.InvariantCulture)}.");
+            return (int)parsed;
+        }
 
         return defaultValue;
     }
@@ -550,8 +598,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             }
             catch
             {
-                _eventStreams.TryRemove(id, out _);
-                try { stream.Response.Abort(); } catch { /* ignore */ }
+                RemoveEventStream(id, stream);
             }
         }
     }
@@ -689,11 +736,18 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         }
         finally
         {
-            _eventStreams.TryRemove(streamId, out _);
-            Interlocked.Decrement(ref _eventStreamCount);
+            RemoveEventStream(streamId, stream);
             LogRequest(request, (int)HttpStatusCode.OK);
             try { context.Response.Close(); } catch { /* ignore */ }
         }
+    }
+
+    private void RemoveEventStream(Guid streamId, EventStream stream)
+    {
+        _eventStreams.TryRemove(streamId, out _);
+        if (stream.TryReleaseSlot())
+            Interlocked.Decrement(ref _eventStreamCount);
+        try { stream.Response.Abort(); } catch { /* ignore */ }
     }
 
     private async Task RunKeepAliveLoopAsync(EventStream stream, CancellationToken cancellationToken)
@@ -701,14 +755,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         var interval = KeepAliveInterval;
         if (interval is null || interval.Value <= TimeSpan.Zero || KeepAliveFrameProvider is null)
         {
-            try
-            {
-                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                // Normal server shutdown.
-            }
+            await RunEventStreamDisconnectProbeLoopAsync(stream, cancellationToken).ConfigureAwait(false);
             return;
         }
 
@@ -727,9 +774,26 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         }
     }
 
+    private static async Task RunEventStreamDisconnectProbeLoopAsync(EventStream stream, CancellationToken cancellationToken)
+    {
+        try
+        {
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                await Task.Delay(EventStreamDisconnectProbeInterval, cancellationToken).ConfigureAwait(false);
+                await stream.WriteCommentAsync("cdidx mcp event stream heartbeat", cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Normal server shutdown.
+        }
+    }
+
     private sealed class EventStream(HttpListenerResponse response)
     {
         private readonly SemaphoreSlim _writeGate = new(1, 1);
+        private int _released;
 
         public HttpListenerResponse Response { get; } = response;
 
@@ -742,6 +806,20 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             builder.Append('\n');
             var bytes = Encoding.UTF8.GetBytes(builder.ToString());
 
+            await WriteSseBytesAsync(bytes, cancellationToken).ConfigureAwait(false);
+        }
+
+        public Task WriteCommentAsync(string comment, CancellationToken cancellationToken)
+        {
+            var payload = ": " + comment.Replace("\r\n", "\n").Replace('\r', '\n').Replace('\n', ' ') + "\n\n";
+            return WriteSseBytesAsync(Encoding.UTF8.GetBytes(payload), cancellationToken);
+        }
+
+        public bool TryReleaseSlot()
+            => Interlocked.Exchange(ref _released, 1) == 0;
+
+        private async Task WriteSseBytesAsync(byte[] bytes, CancellationToken cancellationToken)
+        {
             await _writeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {

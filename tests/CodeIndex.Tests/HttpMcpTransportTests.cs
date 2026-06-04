@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Globalization;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -381,6 +382,197 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
+    public async Task HttpTransport_DefaultLimitOptions_UseBoundedDefaults()
+    {
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        await using var transport = new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null);
+
+        Assert.Equal(HttpMcpTransport.DefaultMaxRequestBodyBytes, transport.MaxRequestBodyBytes);
+        Assert.Equal(HttpMcpTransport.DefaultMaxQueuedRequests, transport.MaxQueuedRequests);
+        Assert.Equal(HttpMcpTransport.DefaultMaxConcurrentHandlers, transport.MaxConcurrentHandlers);
+        Assert.Equal(HttpMcpTransport.DefaultMaxEventStreams, transport.MaxEventStreams);
+        Assert.InRange(transport.MaxRequestBodyBytes, 1, HttpMcpTransport.MaxConfiguredRequestBodyBytes);
+        Assert.InRange(transport.MaxQueuedRequests, 1, HttpMcpTransport.MaxConfiguredQueuedRequests);
+        Assert.InRange(transport.MaxConcurrentHandlers, 1, HttpMcpTransport.MaxConfiguredConcurrentHandlers);
+        Assert.InRange(transport.MaxEventStreams, 1, HttpMcpTransport.MaxConfiguredEventStreams);
+    }
+
+    [Fact]
+    public async Task HttpTransport_ValidEnvironmentLimitOptions_AreApplied()
+    {
+        using var env = EnvironmentVariableScope.Capture(
+            HttpMcpTransport.MaxRequestBodyBytesEnvVar,
+            HttpMcpTransport.MaxQueueDepthEnvVar,
+            HttpMcpTransport.MaxConcurrentHandlersEnvVar,
+            HttpMcpTransport.MaxEventStreamsEnvVar);
+        env.Set(HttpMcpTransport.MaxRequestBodyBytesEnvVar, (2 * 1024 * 1024).ToString(CultureInfo.InvariantCulture));
+        env.Set(HttpMcpTransport.MaxQueueDepthEnvVar, "128");
+        env.Set(HttpMcpTransport.MaxConcurrentHandlersEnvVar, "32");
+        env.Set(HttpMcpTransport.MaxEventStreamsEnvVar, "8");
+
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        await using var transport = new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null);
+
+        Assert.Equal(2 * 1024 * 1024, transport.MaxRequestBodyBytes);
+        Assert.Equal(128, transport.MaxQueuedRequests);
+        Assert.Equal(32, transport.MaxConcurrentHandlers);
+        Assert.Equal(8, transport.MaxEventStreams);
+    }
+
+    [Fact]
+    public void HttpTransport_OversizedRequestBytesEnvironment_ThrowsWithRange()
+    {
+        using var env = EnvironmentVariableScope.Capture(HttpMcpTransport.MaxRequestBodyBytesEnvVar);
+        env.Set(
+            HttpMcpTransport.MaxRequestBodyBytesEnvVar,
+            (HttpMcpTransport.MaxConfiguredRequestBodyBytes + 1).ToString(CultureInfo.InvariantCulture));
+
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        var ex = Assert.Throws<FormatException>(() => new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null));
+
+        Assert.Contains(HttpMcpTransport.MaxRequestBodyBytesEnvVar, ex.Message, StringComparison.Ordinal);
+        Assert.Contains(
+            $"between 1 and {HttpMcpTransport.MaxConfiguredRequestBodyBytes.ToString(CultureInfo.InvariantCulture)}",
+            ex.Message,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void HttpTransport_PositiveOverflowRequestBytesEnvironment_ThrowsWithRange()
+    {
+        using var env = EnvironmentVariableScope.Capture(HttpMcpTransport.MaxRequestBodyBytesEnvVar);
+        env.Set(HttpMcpTransport.MaxRequestBodyBytesEnvVar, ((long)int.MaxValue + 1).ToString(CultureInfo.InvariantCulture));
+
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        var ex = Assert.Throws<FormatException>(() => new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null));
+
+        Assert.Contains(HttpMcpTransport.MaxRequestBodyBytesEnvVar, ex.Message, StringComparison.Ordinal);
+        Assert.Contains(
+            $"between 1 and {HttpMcpTransport.MaxConfiguredRequestBodyBytes.ToString(CultureInfo.InvariantCulture)}",
+            ex.Message,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void HttpTransport_OversizedQueueDepthEnvironment_ThrowsWithRange()
+    {
+        using var env = EnvironmentVariableScope.Capture(HttpMcpTransport.MaxQueueDepthEnvVar);
+        env.Set(
+            HttpMcpTransport.MaxQueueDepthEnvVar,
+            (HttpMcpTransport.MaxConfiguredQueuedRequests + 1).ToString(CultureInfo.InvariantCulture));
+
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        var ex = Assert.Throws<FormatException>(() => new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null));
+
+        Assert.Contains(HttpMcpTransport.MaxQueueDepthEnvVar, ex.Message, StringComparison.Ordinal);
+        Assert.Contains(
+            $"between 1 and {HttpMcpTransport.MaxConfiguredQueuedRequests.ToString(CultureInfo.InvariantCulture)}",
+            ex.Message,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void HttpTransport_PositiveOverflowQueueDepthEnvironment_ThrowsWithRange()
+    {
+        using var env = EnvironmentVariableScope.Capture(HttpMcpTransport.MaxQueueDepthEnvVar);
+        env.Set(HttpMcpTransport.MaxQueueDepthEnvVar, ((long)int.MaxValue + 1).ToString(CultureInfo.InvariantCulture));
+
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        var ex = Assert.Throws<FormatException>(() => new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null));
+
+        Assert.Contains(HttpMcpTransport.MaxQueueDepthEnvVar, ex.Message, StringComparison.Ordinal);
+        Assert.Contains(
+            $"between 1 and {HttpMcpTransport.MaxConfiguredQueuedRequests.ToString(CultureInfo.InvariantCulture)}",
+            ex.Message,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void HttpTransport_OversizedConcurrentHandlersEnvironment_ThrowsWithRange()
+    {
+        using var env = EnvironmentVariableScope.Capture(HttpMcpTransport.MaxConcurrentHandlersEnvVar);
+        env.Set(
+            HttpMcpTransport.MaxConcurrentHandlersEnvVar,
+            (HttpMcpTransport.MaxConfiguredConcurrentHandlers + 1).ToString(CultureInfo.InvariantCulture));
+
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        var ex = Assert.Throws<FormatException>(() => new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null));
+
+        Assert.Contains(HttpMcpTransport.MaxConcurrentHandlersEnvVar, ex.Message, StringComparison.Ordinal);
+        Assert.Contains(
+            $"between 1 and {HttpMcpTransport.MaxConfiguredConcurrentHandlers.ToString(CultureInfo.InvariantCulture)}",
+            ex.Message,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void HttpTransport_OversizedEventStreamsEnvironment_ThrowsWithRange()
+    {
+        using var env = EnvironmentVariableScope.Capture(HttpMcpTransport.MaxEventStreamsEnvVar);
+        env.Set(
+            HttpMcpTransport.MaxEventStreamsEnvVar,
+            (HttpMcpTransport.MaxConfiguredEventStreams + 1).ToString(CultureInfo.InvariantCulture));
+
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        var ex = Assert.Throws<FormatException>(() => new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null));
+
+        Assert.Contains(HttpMcpTransport.MaxEventStreamsEnvVar, ex.Message, StringComparison.Ordinal);
+        Assert.Contains(
+            $"between 1 and {HttpMcpTransport.MaxConfiguredEventStreams.ToString(CultureInfo.InvariantCulture)}",
+            ex.Message,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void HttpTransport_OversizedExplicitLimitOption_ThrowsWithRange()
+    {
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        var ex = Assert.Throws<ArgumentOutOfRangeException>(() => new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null,
+            maxRequestBodyBytes: HttpMcpTransport.MaxConfiguredRequestBodyBytes + 1));
+
+        Assert.Contains(
+            $"between 1 and {HttpMcpTransport.MaxConfiguredRequestBodyBytes.ToString(CultureInfo.InvariantCulture)}",
+            ex.Message,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task HttpTransport_RequestQueueFull_Returns429()
     {
         var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
@@ -500,8 +692,6 @@ public class HttpMcpTransportTests : IDisposable
     [Fact]
     public async Task HttpTransport_EventsStream_RemovesDisconnectedStreams()
     {
-        using var env = EnvironmentVariableScope.Capture("CDIDX_MCP_KEEP_ALIVE_INTERVAL_S");
-        env.Set("CDIDX_MCP_KEEP_ALIVE_INTERVAL_S", "1");
         await using var harness = await McpHttpHarness.StartAsync(_dbPath);
 
         using var client = new HttpClient();

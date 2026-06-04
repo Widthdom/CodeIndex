@@ -1810,18 +1810,23 @@ return `-32600`.
   bodies are treated like a closed stdio line and return `204 No Content`
   *without* killing the loop, so a misbehaving client cannot pin the server
   on a junk frame. Request bodies are capped by
-  `CDIDX_MCP_HTTP_MAX_REQUEST_BYTES` (default: 1,000,000 bytes) and oversized
-  bodies return `413 Payload Too Large` before they are fully buffered. The
+  `CDIDX_MCP_HTTP_MAX_REQUEST_BYTES` (default: 1,000,000 bytes, maximum:
+  16,777,216 bytes) and oversized bodies return `413 Payload Too Large`
+  before they are fully buffered. The
   pending request queue is bounded by `CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH`
-  (default: 64); full queues return `429 Too Many Requests` with
-  `Retry-After: 1` instead of retaining unbounded work. Accepted context
+  (default: 64, maximum: 1,024); full queues return `429 Too Many Requests`
+  with `Retry-After: 1` instead of retaining unbounded work. Accepted context
   handler tasks are bounded by `CDIDX_MCP_HTTP_MAX_CONCURRENT_HANDLERS`
-  (default: 64), and concurrent `/events` streams are bounded by
-  `CDIDX_MCP_HTTP_MAX_EVENT_STREAMS` (default: 16); saturated limits return
-  `429 Too Many Requests` with `Retry-After: 1`.
+  (default: 64, maximum: 1,024), and concurrent `/events` streams are bounded
+  by `CDIDX_MCP_HTTP_MAX_EVENT_STREAMS` (default: 16, maximum: 1,024);
+  saturated limits return `429 Too Many Requests` with `Retry-After: 1`.
+  Non-positive or non-numeric environment values fall back to defaults, while
+  values above the maximum are rejected before listener startup.
 - SSE stream lifetime is represented by the active stream registry and a
-  bounded active-stream counter only; completed stream tasks are not retained
-  after that registry entry is removed.
+  bounded active-stream counter only. Idle streams receive minimal SSE comment
+  heartbeats so disconnected clients are detected and stream slots are
+  released; completed stream tasks are not retained after the registry entry
+  is removed.
 - `ResolveListenSpec("host:port")` resolves the prefix up-front so the
   CLI can log the bound port to stderr (`Listening on http://...`).
   Port `0` is resolved by probing a temporary `TcpListener`; the
@@ -3483,8 +3488,8 @@ MCP は独立したシリアライズ戦略（オブジェクトを JSON など�
 
 `HttpMcpTransport`（同じく #1558）は `System.Net.HttpListener` をラップする:
 
-- HTTP POST 1 件 = JSON-RPC フレーム 1 件で、対応する応答は HTTP レスポンスのボディ（`200 OK` / `application/json; charset=utf-8`）に乗る。通知は `204 No Content`。`GET /events` は将来のサーバー→クライアント frame 用に独立した `text/event-stream` subscription を開く。サーバーは `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S` で keep-alive notification が opt-in された場合を除き、自発的な frame を送信しない。長寿命の event stream は通常の POST リクエストを塞がない。`/` への POST 以外は `405 Method Not Allowed`。空 / 空白のみのボディは stdio の空行と同じ扱いで `204 No Content` を返し、ループは殺さない — クライアントの誤動作で junk フレームに引っかからないため。リクエスト本文は `CDIDX_MCP_HTTP_MAX_REQUEST_BYTES`（既定: 1,000,000 bytes）で制限し、超過時は全量を buffer する前に `413 Payload Too Large` を返す。保留中 request queue は `CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH`（既定: 64）、受理済み context handler task は `CDIDX_MCP_HTTP_MAX_CONCURRENT_HANDLERS`（既定: 64）、同時 `/events` stream は `CDIDX_MCP_HTTP_MAX_EVENT_STREAMS`（既定: 16）で制限し、満杯時は無制限に work を保持せず `Retry-After: 1` 付きの `429 Too Many Requests` を返す。
-- SSE stream lifetime は active stream registry と上限付き active-stream counter だけで表現し、その registry entry が削除された後に完了済み stream task を保持しない。
+- HTTP POST 1 件 = JSON-RPC フレーム 1 件で、対応する応答は HTTP レスポンスのボディ（`200 OK` / `application/json; charset=utf-8`）に乗る。通知は `204 No Content`。`GET /events` は将来のサーバー→クライアント frame 用に独立した `text/event-stream` subscription を開く。サーバーは `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S` で keep-alive notification が opt-in された場合を除き、自発的な frame を送信しない。長寿命の event stream は通常の POST リクエストを塞がない。`/` への POST 以外は `405 Method Not Allowed`。空 / 空白のみのボディは stdio の空行と同じ扱いで `204 No Content` を返し、ループは殺さない — クライアントの誤動作で junk フレームに引っかからないため。リクエスト本文は `CDIDX_MCP_HTTP_MAX_REQUEST_BYTES`（既定: 1,000,000 bytes、最大: 16,777,216 bytes）で制限し、超過時は全量を buffer する前に `413 Payload Too Large` を返す。保留中 request queue は `CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH`（既定: 64、最大: 1,024）、受理済み context handler task は `CDIDX_MCP_HTTP_MAX_CONCURRENT_HANDLERS`（既定: 64、最大: 1,024）、同時 `/events` stream は `CDIDX_MCP_HTTP_MAX_EVENT_STREAMS`（既定: 16、最大: 1,024）で制限し、満杯時は無制限に work を保持せず `Retry-After: 1` 付きの `429 Too Many Requests` を返す。正でない値や数値でない環境変数値は既定にフォールバックし、最大値を超える値は listener 起動前に拒否する。
+- SSE stream lifetime は active stream registry と上限付き active-stream counter だけで表現する。idle stream には最小限の SSE comment heartbeat を送り、切断済み client を検出して stream slot を解放する。その registry entry が削除された後に完了済み stream task を保持しない。
 - `ResolveListenSpec("host:port")` は prefix を事前に解決するため、CLI が stderr に `Listening on http://...` を出せる。ポート `0` は一時 `TcpListener` を probe して空きポートを取得する。probe から `HttpListener.Start()` までの TOCTOU window は、本トランスポートが local-only / single-tenant 想定であるため許容する。ワイルドカードホスト `+` / `*` はパース時点で拒否する。
 - 任意の共有秘密による認証: `CDIDX_MCP_HTTP_TOKEN` が設定されていれば、listener はすべてのリクエストに `Authorization: Bearer <token>` を要求し、定数時間で比較する。トークン未指定で非 loopback ホストへ bind しようとした場合、CLI は MCP カタログを LAN に漏らさないよう既定で拒否する。設定 token と受信 token は 4096 文字を超える場合、hash 前に拒否する。
 - 任意のリクエストループログ: `ProgramRunner` は `HttpMcpTransport` を `GlobalToolLog` に接続するため、lifecycle log が有効な場合は HTTP リクエストごとに `mcp_http_request` 行を 1 件記録する。記録内容は method、path、status、duration、auth outcome、remote peer、correlation id、利用可能な JSON-RPC request id で、caller-controlled な method、path、remote peer、request id は 256 文字を上限に `...<truncated>` marker 付きで切り詰める。リクエスト/レスポンス本文は含めない。
