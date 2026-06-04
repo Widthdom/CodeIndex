@@ -4938,6 +4938,13 @@ public static class QueryCommandRunner
                 {
                     if (TryWriteEmptyFormattedResult(options, jsonOptions))
                         return CommandExitCodes.Success;
+                    if (options.OutputFormat == OutputFormatJson && options.JsonOutputFormat == JsonOutputFormatArray)
+                    {
+                        Console.WriteLine(JsonSerializer.Serialize(
+                            new List<FileIssue>(),
+                            CliJsonSerializerContextFactory.Create(jsonOptions).ListFileIssue));
+                        return CommandExitCodes.Success;
+                    }
                     Console.WriteLine(new JsonObject
                     {
                         ["count"] = 0,
@@ -4976,6 +4983,13 @@ public static class QueryCommandRunner
                 if (options.OutputFormat == OutputFormatSarif)
                 {
                     WriteSarif(issues.Select(i => (i.Path, i.Line, 1, i.Message, i.Kind)), jsonOptions);
+                    return CommandExitCodes.Success;
+                }
+                if (options.OutputFormat == OutputFormatJson && options.JsonOutputFormat == JsonOutputFormatArray)
+                {
+                    Console.WriteLine(JsonSerializer.Serialize(
+                        issues,
+                        CliJsonSerializerContextFactory.Create(jsonOptions).ListFileIssue));
                     return CommandExitCodes.Success;
                 }
                 Console.WriteLine(new JsonObject
@@ -6842,16 +6856,26 @@ public static class QueryCommandRunner
                 continue;
             }
 
-            var normalizedArg = TrySplitInlineOptionValue(arg, out var inlineOptionName)
-                ? inlineOptionName!
-                : arg;
+            var inlineValue = TrySplitInlineOptionValue(arg, out var inlineOptionName)
+                ? arg[(inlineOptionName!.Length + 1)..]
+                : null;
+            var normalizedArg = inlineOptionName ?? arg;
             if (arg.StartsWith("--check=", StringComparison.Ordinal) && supported.Contains("--check"))
                 normalizedArg = "--check";
             if (normalizedArg == "--json" && !string.Equals(arg, "--json", StringComparison.Ordinal) && commandName != "search")
             {
+                if (commandName == "validate" && string.Equals(inlineValue, JsonOutputFormatArray, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
                 CommandErrorWriter.Write(
-                    "--json=<format> is only supported by 'search'.",
-                    "use plain `--json` here, or rerun search with `--json=array`.",
+                    commandName == "validate"
+                        ? "--json=<format> for validate only supports 'array'."
+                        : "--json=<format> is only supported by 'search' and validate's array output.",
+                    commandName == "validate"
+                        ? "use plain `--json` or `--json=array`."
+                        : "use plain `--json` here, rerun search with `--json=array`, or rerun validate with `--json=array`.",
                     GetUsageLineOrThrow(commandName));
                 return true;
             }
