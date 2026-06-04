@@ -1744,7 +1744,11 @@ public partial class DbReader : IDisposable
     /// Get all file validation issues from the index.
     /// インデックスから全ファイル検証問題を取得する。
     /// </summary>
-    public List<Models.FileIssue> GetIssues(string? kind = null, IReadOnlyList<string>? pathPatterns = null, int? limit = null)
+    public List<Models.FileIssue> GetIssues(
+        string? kind = null,
+        IReadOnlyList<string>? pathPatterns = null,
+        int? limit = null,
+        string? severity = null)
     {
         if (!_hasIssuesTable) return new List<Models.FileIssue>();
         using var cmd = _conn.CreateCommand();
@@ -1757,6 +1761,8 @@ public partial class DbReader : IDisposable
             WHERE 1=1";
         if (kind != null)
             sql += " AND i.kind = @kind";
+        if (severity != null)
+            sql += " AND " + severityColumn + " = @severity";
         if (pathPatterns is { Count: > 0 })
         {
             // OR multiple path filters / 複数パスフィルタを OR で結合
@@ -1772,6 +1778,8 @@ public partial class DbReader : IDisposable
         cmd.CommandText = sql;
         if (kind != null)
             cmd.Parameters.AddWithValue("@kind", kind);
+        if (severity != null)
+            cmd.Parameters.AddWithValue("@severity", severity);
         if (pathPatterns is { Count: > 0 })
         {
             for (int i = 0; i < pathPatterns.Count; i++)
