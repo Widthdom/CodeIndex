@@ -2632,8 +2632,9 @@ public partial class McpServer : IDisposable
         var lengths = new List<KeyValuePair<string, int>>(argsObj.Count);
         foreach (var (key, value) in argsObj)
         {
-            keys.Add(key);
-            lengths.Add(new KeyValuePair<string, int>(key, AuditLogSink.MeasureArgLength(value)));
+            var keyDisplay = McpBoundedText.ForDisplay(key);
+            keys.Add(keyDisplay.Text);
+            lengths.Add(new KeyValuePair<string, int>(keyDisplay.Text, AuditLogSink.MeasureArgLength(value)));
         }
 
         JsonNode? echo = null;

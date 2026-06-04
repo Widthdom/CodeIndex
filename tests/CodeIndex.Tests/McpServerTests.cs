@@ -7303,6 +7303,58 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_UnknownArgumentName_TruncatesDisplay_Issue3117()
+    {
+        var argumentName = new string('x', McpBoundedText.MaxDiagnosticDisplayChars + 25);
+        var display = McpBoundedText.ForDisplay(argumentName);
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "index",
+                ["arguments"] = new JsonObject
+                {
+                    ["path"] = ".",
+                    [argumentName] = true,
+                },
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+        Assert.DoesNotContain(argumentName, response.ToJsonString(), StringComparison.Ordinal);
+        var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains($"Unknown argument '{display.Text}' for tool 'index'.", text);
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(display.Text, structured["unknown_argument"]!.GetValue<string>());
+        Assert.Equal(argumentName.Length, structured["unknown_argument_length"]!.GetValue<int>());
+        Assert.True(structured["unknown_argument_truncated"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public void SanitizeArgs_TruncatesArgumentKeysForAuditAndTelemetry_Issue3117()
+    {
+        var argumentName = new string('k', McpBoundedText.MaxDiagnosticDisplayChars + 1);
+        var display = McpBoundedText.ForDisplay(argumentName);
+        var args = new JsonObject
+        {
+            [argumentName] = "value",
+        };
+
+        var (keys, lengths, valuesEcho) = McpServer.SanitizeArgs(args, includeValues: false);
+
+        Assert.Equal([display.Text], keys);
+        var length = Assert.Single(lengths);
+        Assert.Equal(display.Text, length.Key);
+        Assert.Equal("value".Length, length.Value);
+        Assert.Null(valuesEcho);
+    }
+
+    [Fact]
     public void ToolsCall_Index_WhenDbLockHeld_ReturnsBusyError()
     {
         var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_lock_fixture_{Guid.NewGuid():N}");

@@ -510,23 +510,25 @@ public partial class McpServer
 
         var allowed = GetAllowedToolArguments(toolName);
         if (allowed.Count == 0)
-            return obj.Count == 0 ? null : new JsonObject
-            {
-                ["message"] = $"Tool '{toolName}' does not accept arguments.",
-                ["tool"] = toolName,
-                ["unknown_argument"] = obj.First().Key,
-            };
+            return obj.Count == 0 ? null : AddUnknownArgumentData(
+                new JsonObject
+                {
+                    ["message"] = $"Tool '{toolName}' does not accept arguments.",
+                    ["tool"] = toolName,
+                },
+                obj.First().Key);
 
         foreach (var property in obj)
         {
             if (!allowed.Contains(property.Key))
             {
-                return new JsonObject
-                {
-                    ["message"] = $"Unknown argument '{property.Key}' for tool '{toolName}'.",
-                    ["tool"] = toolName,
-                    ["unknown_argument"] = property.Key,
-                };
+                return AddUnknownArgumentData(
+                    new JsonObject
+                    {
+                        ["message"] = $"Unknown argument '{McpBoundedText.ForDisplay(property.Key).Text}' for tool '{toolName}'.",
+                        ["tool"] = toolName,
+                    },
+                    property.Key);
             }
 
         }
@@ -566,6 +568,14 @@ public partial class McpServer
         }
 
         return null;
+    }
+
+    private static JsonObject AddUnknownArgumentData(JsonObject error, string argumentName)
+    {
+        var display = McpBoundedText.ForDisplay(argumentName);
+        error["unknown_argument"] = display.Text;
+        display.AddMetadata(error, "unknown_argument");
+        return error;
     }
 
     private static JsonObject? ValidateToolArgumentTypes(string toolName, JsonObject args)
