@@ -38,6 +38,25 @@ public class ReleaseWorkflowTests
         Assert.Contains("for asset in \"$binary_name\" \"$native_asset\"", workflow);
     }
 
+    // Issue #3077: the Homebrew formula installs from the same self-contained
+    // release archives as install.sh, so it must place SQLitePCLRaw's native
+    // e_sqlite3 library beside cdidx and run a SQLite-touching smoke test.
+    // Issue #3077 対応: Homebrew formula は install.sh と同じ self-contained
+    // release archive から導入するため、SQLitePCLRaw の native e_sqlite3
+    // ライブラリを cdidx の隣へ配置し、SQLite に触る smoke test を実行する必要がある。
+    [Fact]
+    public void ReleaseWorkflow_HomebrewFormulaInstallsNativeSqliteAssetAndTouchesSqlite()
+    {
+        var workflow = File.ReadAllText(Path.Combine(GetRepositoryRoot(), ".github", "workflows", "release.yml"));
+
+        Assert.Contains("native_sqlite_asset = OS.mac? ? \"libe_sqlite3.dylib\" : \"libe_sqlite3.so\"", workflow);
+        Assert.Contains("bin.install native_sqlite_asset", workflow);
+        Assert.Contains("assert_predicate bin/native_sqlite_asset, :exist?", workflow);
+        Assert.Contains("(testpath/\"Sample.cs\").write", workflow);
+        Assert.Contains("system \"#{bin}/cdidx\", testpath.to_s", workflow);
+        Assert.Contains("shell_output(\"#{bin}/cdidx status --json\")", workflow);
+    }
+
     // Issue #1553: releases must ship a CycloneDX SBOM so enterprise consumers
     // (SOC2/FedRAMP reviewers, Snyk/Trivy/Grype scanners) can verify transitive
     // dependencies and bundled SQLitePCLRaw native assets without re-deriving

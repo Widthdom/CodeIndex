@@ -1017,12 +1017,19 @@ jobs:
             def install
               bin.install "cdidx"
               bin.install "version.json"
+              native_sqlite_asset = OS.mac? ? "libe_sqlite3.dylib" : "libe_sqlite3.so"
+              bin.install native_sqlite_asset
               prefix.install "LICENSE", "COMMERCIAL_LICENSE.md", "INTEGRATION_POLICY.md", "TRADEMARKS.md"
               prefix.install "LICENSES" if File.directory?("LICENSES")
             end
 
             test do
+              native_sqlite_asset = OS.mac? ? "libe_sqlite3.dylib" : "libe_sqlite3.so"
+              assert_predicate bin/native_sqlite_asset, :exist?
               assert_match "cdidx v#{version}", shell_output("#{bin}/cdidx --version")
+              (testpath/"Sample.cs").write "class Sample { static void Main() { } }\n"
+              system "#{bin}/cdidx", testpath.to_s
+              assert_match "\"files\":", shell_output("#{bin}/cdidx status --json")
             end
           end
           EOF
