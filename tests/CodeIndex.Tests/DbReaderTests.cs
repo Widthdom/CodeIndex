@@ -74,6 +74,10 @@ public class DbReaderTests : IDisposable
     [Fact]
     public void GetStatus_ExposesOperationalMetrics()
     {
+        var expectedFreshenedAt = DateTime.Parse(
+            "2026-05-31T00:00:00.0000000Z",
+            System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.RoundtripKind);
         _writer.SetMeta(DbContext.LastIndexRunModeMetaKey, "incremental");
         _writer.SetMeta(DbContext.LastIndexRunStartedAtMetaKey, "2026-05-31T00:00:00.0000000Z");
         _writer.SetMeta(DbContext.LastIndexRunDurationMsMetaKey, "1234");
@@ -95,6 +99,7 @@ public class DbReaderTests : IDisposable
         Assert.True(status.Process.WorkingSetBytes > 0);
         Assert.NotNull(status.LastIndexRun);
         Assert.Equal("incremental", status.LastIndexRun.Mode);
+        Assert.Equal(expectedFreshenedAt, status.LastWorkspaceFreshenedAt);
         Assert.Equal(1234, status.LastIndexRun.DurationMs);
         Assert.Equal(3, status.LastIndexRun.FilesScanned);
         Assert.Equal(64, status.LastIndexRun.PeakMemoryMb);

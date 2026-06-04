@@ -202,8 +202,9 @@ The documented `status --json` trust contract covers these fields:
 <tr><td><code>unknown_extension_file_path_limit</code></td><td><code>path_case_sensitive</code></td><td><code>data_dir</code></td><td><code>data_dir_source</code></td></tr>
 <tr><td><code>data_dir_mode</code></td><td><code>mac_profile</code></td><td><code>db_size_bytes</code></td><td><code>wal_size_bytes</code></td></tr>
 <tr><td><code>db_pragma_settings</code></td><td><code>symbols_by_language</code></td><td><code>process</code></td><td><code>last_index_run</code></td></tr>
-<tr><td><code>hooks</code></td><td><code>stale_after_seconds</code></td><td><code>index_age_seconds</code></td><td><code>degraded_reason</code></td></tr>
-<tr><td><code>recommended_action</code></td><td><code>alternative_action</code></td><td><code>mcp_session</code></td><td><code>extractors</code></td></tr>
+<tr><td><code>last_workspace_freshened_at</code></td><td><code>hooks</code></td><td><code>stale_after_seconds</code></td><td><code>index_age_seconds</code></td></tr>
+<tr><td><code>degraded_reason</code></td><td><code>recommended_action</code></td><td><code>alternative_action</code></td><td><code>mcp_session</code></td></tr>
+<tr><td><code>extractors</code></td><td></td><td></td><td></td></tr>
 </tbody>
 </table>
 
@@ -217,7 +218,7 @@ After a current full-repository scan, `unknown_extension_file_count` reports how
 
 For MCP `status`, `mcp_session` is session-scoped diagnostic data rather than persisted index state. It includes `log_level`, `roots`, optional `client_info`, and optional `client_capabilities`.
 
-`process` is captured at status-call time and includes heap, GC collection, and working-set counters. `last_index_run` is persisted by successful CLI and MCP index runs with the run mode, duration, file counts, byte count, row-change counts, and optional peak-memory summary from CLI `--memory-trace`.
+`process` is captured at status-call time and includes heap, GC collection, and working-set counters. `last_index_run` is persisted by successful CLI and MCP index runs with the run mode, duration, file counts, byte count, row-change counts, and optional peak-memory summary from CLI `--memory-trace`. `last_workspace_freshened_at` is the latest successful index/update run timestamp and can be newer than `indexed_at` when a partial or no-op update confirms freshness without rewriting indexed file rows.
 
 `hotspot_family_degraded_reason` uses these values:
 
@@ -492,12 +493,15 @@ shell completion script、Homebrew install、.NET global-tool install は削除�
 <tr><td><code>unknown_extension_file_path_limit</code></td><td><code>path_case_sensitive</code></td><td><code>data_dir</code></td><td><code>data_dir_source</code></td></tr>
 <tr><td><code>data_dir_mode</code></td><td><code>mac_profile</code></td><td><code>db_size_bytes</code></td><td><code>wal_size_bytes</code></td></tr>
 <tr><td><code>db_pragma_settings</code></td><td><code>symbols_by_language</code></td><td><code>process</code></td><td><code>last_index_run</code></td></tr>
-<tr><td><code>hooks</code></td><td><code>stale_after_seconds</code></td><td><code>index_age_seconds</code></td><td><code>degraded_reason</code></td></tr>
-<tr><td><code>recommended_action</code></td><td><code>alternative_action</code></td><td><code>mcp_session</code></td><td><code>extractors</code></td></tr>
+<tr><td><code>last_workspace_freshened_at</code></td><td><code>hooks</code></td><td><code>stale_after_seconds</code></td><td><code>index_age_seconds</code></td></tr>
+<tr><td><code>degraded_reason</code></td><td><code>recommended_action</code></td><td><code>alternative_action</code></td><td><code>mcp_session</code></td></tr>
+<tr><td><code>extractors</code></td><td></td><td></td><td></td></tr>
 </tbody>
 </table>
 
 readiness field のいずれかが degraded の場合、`degraded_root_cause` は primary の安定コードを示し、`readiness_degradations[]` は degraded な各 field と `root_cause`、人間向け `degraded_reason`、`recommended_action`、`alternative_action` を列挙します。`issues_table_available` は物理 table の有無を表し、`file_issues` 行が現在の index generation に対して current かどうかは `file_issues_data_current` を使って判定します。
+
+`process` は status 呼び出し時点で取得され、heap、GC collection、working-set counters を含みます。`last_index_run` は成功した CLI / MCP index 実行の mode、duration、file count、byte count、row-change count、CLI `--memory-trace` 由来の optional peak-memory summary を永続化します。`last_workspace_freshened_at` は最後に成功した index/update 実行時刻で、partial / no-op update が indexed file row を書き換えずに鮮度だけ確認した場合は `indexed_at` より新しくなることがあります。
 
 現行の全体 scan 後、`unknown_extension_file_count` は未知の非空拡張子で skip された件数を返し、`unknown_extension_files` は `unknown_extension_file_path_limit` 件までの path sample、`unknown_extension_files_truncated` は sample より多くの path があることを示します。
 

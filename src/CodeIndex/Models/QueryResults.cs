@@ -534,6 +534,17 @@ public class StatusResult
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public long? UnknownExtensionFilePathLimit { get; set; }
     public DateTime? IndexedAt { get; set; }
+    /// <summary>
+    /// Timestamp of the most recent successful index/update run that freshened workspace
+    /// state, including partial and no-op updates. This can be newer than <see cref="IndexedAt"/>,
+    /// which is derived from indexed file rows and may not move when an update only confirms
+    /// freshness without rewriting file rows (#3238).
+    /// partial / no-op update も含め、workspace 鮮度を最後に確認・更新した成功 index 実行時刻。
+    /// file row 由来の IndexedAt より新しい場合がある。
+    /// </summary>
+    [JsonPropertyName("last_workspace_freshened_at")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public DateTime? LastWorkspaceFreshenedAt { get; set; }
     public DateTime? LatestModified { get; set; }
     public string? ProjectRoot { get; set; }
     [JsonPropertyName("data_dir")]

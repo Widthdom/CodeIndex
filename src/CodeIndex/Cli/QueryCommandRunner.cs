@@ -3190,6 +3190,8 @@ public static class QueryCommandRunner
                 Console.WriteLine(ConsoleUi.FormatSummaryLine("Refs", $"{status.References:N0}"));
                 if (status.IndexedAt != null)
                     Console.WriteLine(ConsoleUi.FormatSummaryLine("Indexed", $"{status.IndexedAt:O}"));
+                if (status.LastWorkspaceFreshenedAt != null)
+                    Console.WriteLine(ConsoleUi.FormatSummaryLine("Freshened", $"{status.LastWorkspaceFreshenedAt:O}"));
                 if (status.LatestModified != null)
                     Console.WriteLine(ConsoleUi.FormatSummaryLine("Source", $"{status.LatestModified:O}"));
                 if (status.GitHead != null)
