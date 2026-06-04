@@ -1186,7 +1186,7 @@ same source location.
 | `--category <category>` | `suggestions` | Filter local suggestion history by suggestion category. |
 | `--agent <name>` | `suggestions` | Filter local suggestion history by recorded agent/tool name when present. |
 | `--format <json\|markdown\|issue-drafts>` | `suggestions export` | Choose export format. JSON is the default, markdown is intended for human triage, and issue-drafts emits issue-ready draft objects. |
-| `--open-issues <path>` | `suggestions export --format issue-drafts` | Preflight drafts against an open-issues JSON file such as `gh issue list --state open --json number,title,labels,url`. |
+| `--open-issues <path>` | `suggestions export --format issue-drafts` | Preflight drafts against an open-issues JSON file such as `gh issue list --state open --json number,title,labels,url`. Inputs are capped at 8 MiB and 32 JSON nesting levels. |
 | `--check` | `status` | Verify that `.cdidx/codeindex.db` exactly matches the current indexable workspace by comparing DB file paths/checksums against a fresh filesystem scan. Matching indexes exit `0`; stale indexes exit `5`. |
 | `--dry-run` | `index` | Scan files and report what would change without writing to the database |
 | `--limit <n>` | Query commands | Max results (default: 20, max: 10000; `map` uses it per section) |
@@ -3408,7 +3408,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--category <category>` | `suggestions` | ローカル提案履歴を提案カテゴリで絞り込みます。 |
 | `--agent <name>` | `suggestions` | 記録されている場合、ローカル提案履歴をエージェント / ツール名で絞り込みます。 |
 | `--format <json\|markdown\|issue-drafts>` | `suggestions export` | エクスポート形式を選びます。既定は JSON、markdown は人間の triage 共有向け、issue-drafts は Issue 作成用の draft object を出力します。 |
-| `--open-issues <path>` | `suggestions export --format issue-drafts` | `gh issue list --state open --json number,title,labels,url` などの open issue JSON と照合して draft を事前重複確認します。 |
+| `--open-issues <path>` | `suggestions export --format issue-drafts` | `gh issue list --state open --json number,title,labels,url` などの open issue JSON と照合して draft を事前重複確認します。入力は 8 MiB、JSON ネスト 32 段までに制限されます。 |
 | `--check` | `status` | DB のファイル path/checksum と現在の index 対象 workspace を比較し、`.cdidx/codeindex.db` が完全一致するか確認。完全一致なら終了コード `0`、stale なら `5` |
 | `--dry-run` | `index` | DB に書き込まず、どの変更が発生するかだけを走査して報告 |
 | `--limit <n>` | クエリ系 | 最大結果数（デフォルト: 20、最大: 10000。`map` では各セクションごとの件数） |

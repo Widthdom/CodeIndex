@@ -7,6 +7,9 @@ namespace CodeIndex.Cli;
 
 internal sealed class IssueDuplicatePreflight
 {
+    internal const int MaxOpenIssuesJsonBytes = 8 * 1024 * 1024;
+    internal const int MaxOpenIssuesJsonDepth = 32;
+
     private static readonly HashSet<string> StopTitleTokens = new(StringComparer.OrdinalIgnoreCase)
     {
         "ai",
@@ -49,7 +52,17 @@ internal sealed class IssueDuplicatePreflight
         try
         {
             var fullPath = Path.GetFullPath(path);
-            var root = JsonNode.Parse(File.ReadAllText(fullPath));
+            var json = DataDirectorySecurity.ReadTextWithinLimit(fullPath, MaxOpenIssuesJsonBytes);
+            if (json == null)
+            {
+                preflight = new IssueDuplicatePreflight(false, null, []);
+                error = $"--open-issues file '{path}' exceeds maximum supported size of {MaxOpenIssuesJsonBytes} bytes.";
+                return false;
+            }
+
+            var root = JsonNode.Parse(
+                json,
+                documentOptions: new JsonDocumentOptions { MaxDepth = MaxOpenIssuesJsonDepth });
             preflight = new IssueDuplicatePreflight(true, fullPath, ParseOpenIssues(root));
             return true;
         }
