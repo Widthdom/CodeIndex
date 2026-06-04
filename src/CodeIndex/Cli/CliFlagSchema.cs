@@ -121,6 +121,7 @@ internal static class CliFlagSchema
     private static readonly string[] EntrypointConfidenceCommands = ["map"];
     private static readonly string[] MapSectionCommands = ["map"];
     private static readonly string[] DependencyCycleCommands = ["deps"];
+    private static readonly string[] LanguagesFilterCommands = ["languages"];
 
     // `--exact` is the legacy shorthand that every name-resolution command accepts.
     // `--exact` は名前解決系の全コマンドで受け付けるレガシー shorthand。
@@ -154,7 +155,7 @@ internal static class CliFlagSchema
     [
         "index", "backfill-fold", "optimize", "search", "definition", "goto", "references", "callers", "callees",
         "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status",
-        "validate", "deps", "impact", "unused", "hotspots", "db", "vacuum", "report", "batch", "mcp",
+        "validate", "deps", "impact", "unused", "hotspots", "languages", "db", "vacuum", "report", "batch", "mcp",
     ];
 
     private static readonly string[] WorkspaceDbCommands = ["deps"];
@@ -163,14 +164,14 @@ internal static class CliFlagSchema
     [
         "index", "search", "definition", "goto", "references", "callers", "callees",
         "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status",
-        "validate", "deps", "impact", "unused", "hotspots", "batch",
+        "validate", "deps", "impact", "unused", "hotspots", "languages", "batch",
     ];
 
     private static readonly string[] ReadOnlyDbCommands =
     [
         "search", "definition", "goto", "references", "callers", "callees",
         "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status",
-        "validate", "deps", "impact", "unused", "hotspots",
+        "validate", "deps", "impact", "unused", "hotspots", "languages",
     ];
 
     private static readonly string[] JsonCommands =
@@ -239,6 +240,8 @@ internal static class CliFlagSchema
             new() { Name = "--min-entrypoint-confidence", ValuePlaceholder = "<0.0..1.0>", Description = "Map: omit entrypoint candidates below this confidence", Commands = Set(EntrypointConfidenceCommands) },
             new() { Name = "--sections", ValuePlaceholder = "<tree,languages,hotspots,metrics>", Description = "Map: comma-separated response sections to include", Commands = Set(MapSectionCommands) },
             new() { Name = "--cycles", Description = "Deps: return dependency cycles instead of edge rows", Commands = Set(DependencyCycleCommands) },
+            new() { Name = "--indexed-only", Description = "Languages: list only languages present in the current index", Commands = Set(LanguagesFilterCommands) },
+            new() { Name = "--capability", ValuePlaceholder = "<graph|symbols|references>", Description = "Languages: filter by language capability", Commands = Set(LanguagesFilterCommands) },
             new() { Name = "--query", ValuePlaceholder = "<query>", Description = "Literal query", Commands = Set(QueryCommands) },
             new() { Name = "--body", Description = "Include body", Commands = Set(BodyCommands) },
             new() { Name = "--exact", Description = "Backward-compatible exact shorthand", Commands = Set(ExactCommands) },
