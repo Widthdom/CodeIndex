@@ -155,6 +155,38 @@ public class McpAuditLogTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_UnknownTool_TruncatesAuditToolName_Issue3118()
+    {
+        using var sink = new AuditLogSink(_auditPath, AuditLogSink.DefaultMaxBytes, includeValues: false);
+        using var server = CreateServer(sink);
+        var toolName = new string('u', McpBoundedText.MaxToolNameChars + 25);
+        var display = McpBoundedText.ForDisplay(toolName, McpBoundedText.MaxToolNameChars);
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = toolName,
+                ["arguments"] = new JsonObject
+                {
+                    ["x"] = 1,
+                },
+            },
+        };
+
+        var response = server.HandleMessage(request)!;
+
+        Assert.Equal(-32602, response["error"]!["code"]!.GetValue<int>());
+        var rawLog = File.ReadAllText(_auditPath);
+        Assert.DoesNotContain(toolName, rawLog, StringComparison.Ordinal);
+        var record = ReadOnlyRecord();
+        Assert.Equal(display.Text, record.GetProperty("tool").GetString());
+        Assert.Equal(-32602, record.GetProperty("error_code").GetInt32());
+    }
+
+    [Fact]
     public void ToolsCall_IncludeValues_EchoesArgValuesIntoRecord()
     {
         using var sink = new AuditLogSink(_auditPath, AuditLogSink.DefaultMaxBytes, includeValues: true);

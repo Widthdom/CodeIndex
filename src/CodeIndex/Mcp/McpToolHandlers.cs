@@ -2511,13 +2511,14 @@ public partial class McpServer
             {
                 truncated = true;
                 cascadeStartedAtIndex ??= requestIndex;
-                truncatedQueries.Add(new JsonObject
+                var truncatedEntry = new JsonObject
                 {
                     ["request_index"] = requestIndex,
-                    ["tool"] = toolName,
                     ["args_summary"] = BuildArgsSummary(toolArgs),
                     ["reason"] = "response_byte_limit_exceeded",
-                });
+                };
+                AddToolDisplayData(truncatedEntry, toolName);
+                truncatedQueries.Add(truncatedEntry);
                 return false;
             }
 
@@ -2533,13 +2534,13 @@ public partial class McpServer
             var entry = new JsonObject
             {
                 ["request_index"] = requestIndex,
-                ["tool"] = toolName,
                 ["ok"] = false,
                 ["correlation_id"] = CurrentCorrelationContext.Value?.CorrelationId,
                 ["args_summary"] = BuildArgsSummary(toolArgs),
                 ["elapsed_ms"] = slotStopwatch.ElapsedMilliseconds,
                 ["error"] = errorMessage,
             };
+            AddToolDisplayData(entry, toolName);
             if (code.HasValue)
                 entry["code"] = code.Value;
             // #1581: batch_query slot errors also carry the canonical envelope so clients
@@ -2627,6 +2628,14 @@ public partial class McpServer
                 AppendSlotError(requestIndex, toolName, toolArgs, slotStopwatch, message,
                     category: McpErrorEnvelope.CategoryMissingParameter,
                     suggestion: "Each batch_query slot must include a string `tool` field.",
+                    retrySafe: false);
+                continue;
+            }
+            if (toolName.Length > McpBoundedText.MaxToolNameChars)
+            {
+                AppendSlotError(requestIndex, toolName, toolArgs, slotStopwatch, BuildUnknownToolMessage(toolName),
+                    category: McpErrorEnvelope.CategoryToolUnknown,
+                    suggestion: "Call tools/list to see the tool catalog. Slot tool names are case-sensitive.",
                     retrySafe: false);
                 continue;
             }
@@ -2743,7 +2752,7 @@ public partial class McpServer
 
                 if (response == null)
                 {
-                    AppendSlotError(requestIndex, toolName, toolArgs, slotStopwatch, $"Unknown tool: {toolName}",
+                    AppendSlotError(requestIndex, toolName, toolArgs, slotStopwatch, BuildUnknownToolMessage(toolName),
                         category: McpErrorEnvelope.CategoryToolUnknown,
                         suggestion: "Call tools/list to see the tool catalog. Slot tool names are case-sensitive.",
                         retrySafe: false);
@@ -2781,13 +2790,13 @@ public partial class McpServer
                 var entry = new JsonObject
                 {
                     ["request_index"] = requestIndex,
-                    ["tool"] = toolName,
                     ["ok"] = true,
                     ["correlation_id"] = CurrentCorrelationContext.Value?.CorrelationId,
                     ["args_summary"] = BuildArgsSummary(toolArgs),
                     ["elapsed_ms"] = slotStopwatch.ElapsedMilliseconds,
                     ["result"] = structured?.DeepClone(),
                 };
+                AddToolDisplayData(entry, toolName);
                 TryAppendResult(entry, toolName, toolArgs, requestIndex, successfulSlot: true);
                 successCount++;
             }

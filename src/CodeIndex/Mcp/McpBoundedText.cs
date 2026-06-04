@@ -19,6 +19,7 @@ internal static class McpBoundedText
 {
     internal const int MaxScalarArgumentChars = 512;
     internal const int MaxDiagnosticDisplayChars = 128;
+    internal const int MaxToolNameChars = 128;
 
     internal static BoundedMcpText ForDisplay(string value, int maxChars = MaxDiagnosticDisplayChars)
     {

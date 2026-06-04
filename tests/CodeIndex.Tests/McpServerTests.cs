@@ -529,6 +529,63 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public async Task ProcessLineAsync_UnknownToolName_TruncatesTelemetry_Issue3118()
+    {
+        using var writer = new StringWriter();
+        using var error = new StringWriter();
+        var toolName = new string('l', McpBoundedText.MaxToolNameChars + 25);
+        var display = McpBoundedText.ForDisplay(toolName, McpBoundedText.MaxToolNameChars);
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 123,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = toolName,
+                ["arguments"] = new JsonObject
+                {
+                    ["x"] = 1,
+                },
+            },
+        };
+
+        await Task.Run(() =>
+        {
+            lock (TestConsoleLock.Gate)
+            {
+                var previousError = Console.Error;
+                try
+                {
+                    Console.SetError(error);
+#pragma warning disable xUnit1031
+                    _server.ProcessLineAsync(request.ToJsonString(), writer).GetAwaiter().GetResult();
+#pragma warning restore xUnit1031
+                }
+                finally
+                {
+                    Console.SetError(previousError);
+                }
+            }
+        });
+
+        Assert.DoesNotContain(toolName, writer.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(toolName, error.ToString(), StringComparison.Ordinal);
+        var line = error.ToString()
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Single(l => l.Contains("\"event\":\"mcp.tool.invocation\"", StringComparison.Ordinal));
+        var jsonStart = line.IndexOf('{');
+        using var document = JsonDocument.Parse(line[jsonStart..]);
+        var root = document.RootElement;
+        Assert.Equal("mcp.tool.invocation", root.GetProperty("event").GetString());
+        Assert.Equal(display.Text, root.GetProperty("tool").GetString());
+        Assert.Equal(toolName.Length, root.GetProperty("tool_length").GetInt32());
+        Assert.True(root.GetProperty("tool_truncated").GetBoolean());
+        Assert.Equal("error", root.GetProperty("status").GetString());
+        Assert.Equal(-32602, root.GetProperty("error_code").GetInt32());
+    }
+
+    [Fact]
     public async Task ProcessLineAsync_FallbackErrorIncludesCorrelationData()
     {
         using var writer = new StringWriter();
@@ -6969,6 +7026,50 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_BatchQuery_UnknownToolName_TruncatesDisplay_Issue3118()
+    {
+        var toolName = new string('b', McpBoundedText.MaxToolNameChars + 25);
+        var display = McpBoundedText.ForDisplay(toolName, McpBoundedText.MaxToolNameChars);
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "batch_query",
+                ["arguments"] = new JsonObject
+                {
+                    ["queries"] = new JsonArray
+                    {
+                        new JsonObject
+                        {
+                            ["tool"] = toolName,
+                            ["arguments"] = new JsonObject
+                            {
+                                ["x"] = 1,
+                            },
+                        },
+                    },
+                },
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        Assert.DoesNotContain(toolName, response.ToJsonString(), StringComparison.Ordinal);
+        var result = response["result"]!;
+        var structured = result["structuredContent"]!;
+        Assert.True(structured["partial_failure"]!.GetValue<bool>());
+        var slot = Assert.Single(structured["results"]!.AsArray())!;
+        Assert.False(slot["ok"]!.GetValue<bool>());
+        Assert.Equal(display.Text, slot["tool"]!.GetValue<string>());
+        Assert.Equal(toolName.Length, slot["tool_length"]!.GetValue<int>());
+        Assert.True(slot["tool_truncated"]!.GetValue<bool>());
+        Assert.Equal($"Unknown tool: {display.Text}", slot["error"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void ToolsCall_BatchQuery_SanitizesSlotExceptionMessage_Issue2849()
     {
         const string secret = "SECRET_BATCH_SLOT_2849";
@@ -7333,6 +7434,37 @@ public class McpServerTests : IDisposable
         Assert.Equal(display.Text, structured["unknown_argument"]!.GetValue<string>());
         Assert.Equal(argumentName.Length, structured["unknown_argument_length"]!.GetValue<int>());
         Assert.True(structured["unknown_argument_truncated"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public void ToolsCall_UnknownToolName_TruncatesDisplay_Issue3118()
+    {
+        var toolName = new string('t', McpBoundedText.MaxToolNameChars + 25);
+        var display = McpBoundedText.ForDisplay(toolName, McpBoundedText.MaxToolNameChars);
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = toolName,
+                ["arguments"] = new JsonObject
+                {
+                    ["x"] = 1,
+                },
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal(-32602, response["error"]!["code"]!.GetValue<int>());
+        Assert.DoesNotContain(toolName, response.ToJsonString(), StringComparison.Ordinal);
+        Assert.Equal($"Unknown tool: {display.Text}", response["error"]!["message"]!.GetValue<string>());
+        var data = response["error"]!["data"]!;
+        Assert.Equal(display.Text, data["tool"]!.GetValue<string>());
+        Assert.Equal(toolName.Length, data["tool_length"]!.GetValue<int>());
+        Assert.True(data["tool_truncated"]!.GetValue<bool>());
     }
 
     [Fact]

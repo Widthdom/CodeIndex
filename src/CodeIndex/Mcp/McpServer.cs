@@ -2253,6 +2253,7 @@ public partial class McpServer : IDisposable
             TryEmitAudit("(missing)", id, args, missingNameResponse, DateTimeOffset.UtcNow, 0.0, errorType: "missing_tool_name");
             return missingNameResponse;
         }
+        var toolNameTooLong = toolName.Length > McpBoundedText.MaxToolNameChars;
 
         // Per-deployment enablement gate (#1561). Disabled known tools return `-32601 method
         // not found` so clients can branch on a structured JSON-RPC code; truly unknown names
@@ -2291,7 +2292,11 @@ public partial class McpServer : IDisposable
         JsonNode response;
         try
         {
-            if (ValidateToolArguments(toolName, args) is JsonObject argumentError)
+            if (toolNameTooLong)
+            {
+                response = CreateUnknownToolErrorResponse(hasId: true, id: id, toolName);
+            }
+            else if (ValidateToolArguments(toolName, args) is JsonObject argumentError)
             {
                 metricsError = "invalid_argument";
                 if (argumentError["jsonrpc_invalid_params"] is JsonValue invalidParamsMarker
@@ -2366,11 +2371,7 @@ public partial class McpServer : IDisposable
                         "index" => await ExecuteIndexAsync(id, args, progressToken).ConfigureAwait(false),
                         "backfill_fold" => ExecuteBackfillFold(id, args, progressToken),
                         "suggest_improvement" => await ExecuteSuggestImprovementAsync(id, args).ConfigureAwait(false),
-                        _ => CreateErrorResponse(hasId: true, id: id, code: -32602, message: $"Unknown tool: {toolName}",
-                            category: McpErrorEnvelope.CategoryToolUnknown,
-                            suggestion: "Call tools/list to enumerate the available tool names for this server. Tool name match is case-sensitive.",
-                            retrySafe: false,
-                            extraData: new JsonObject { ["tool"] = toolName }),
+                        _ => CreateUnknownToolErrorResponse(hasId: true, id: id, toolName),
                     };
                 }
             }
@@ -2403,11 +2404,7 @@ public partial class McpServer : IDisposable
                 category: classification.Category,
                 suggestion: classification.Suggestion,
                 retrySafe: classification.RetrySafe,
-                extraData: new JsonObject
-                {
-                    ["tool"] = toolName,
-                    ["exception_type"] = ex.GetType().Name,
-                });
+                extraData: BuildToolExceptionData(toolName, ex.GetType().Name));
         }
         finally
         {
@@ -2444,6 +2441,7 @@ public partial class McpServer : IDisposable
         var (errorCode, observedErrorType) = ExtractErrorCode(response);
         var resultCount = ExtractResultCount(response);
         var (argKeys, argLengths, _) = SanitizeArgs(args, includeValues: false);
+        var toolDisplay = BoundToolNameForDisplay(toolName);
         var argsObject = new JsonObject();
         foreach (var pair in argLengths)
             argsObject[pair.Key] = pair.Value;
@@ -2452,7 +2450,7 @@ public partial class McpServer : IDisposable
         {
             ["event"] = "mcp.tool.invocation",
             ["timestamp"] = startedAt.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
-            ["tool"] = toolName,
+            ["tool"] = toolDisplay.Text,
             ["request_id"] = context?.RequestId,
             ["correlation_id"] = context?.CorrelationId,
             ["elapsed_ms"] = Math.Round(elapsedMs, 3),
@@ -2463,6 +2461,7 @@ public partial class McpServer : IDisposable
             ["arg_keys"] = JsonSerializer.SerializeToNode(argKeys, _jsonOptions),
             ["arg_lengths"] = argsObject,
         };
+        toolDisplay.AddMetadata(evt, "tool");
         DeferFrameLog(() => WriteMcpLogLine(evt.ToJsonString(_jsonOptions)));
     }
 
@@ -2534,9 +2533,10 @@ public partial class McpServer : IDisposable
             var (errorCode, observedErrorType) = ExtractErrorCode(response);
             var resultCount = ExtractResultCount(response);
             var (argKeys, argLengths, argValuesEcho) = SanitizeArgs(args, _auditLog.IncludeValues);
+            var toolDisplay = BoundToolNameForDisplay(toolName);
             var evt = new AuditLogSink.AuditEvent(
                 Timestamp: startedAt,
-                Tool: toolName,
+                Tool: toolDisplay.Text,
                 CallerName: _clientName,
                 CallerVersion: _clientVersion,
                 RequestId: SerializeRequestId(id),
@@ -2703,7 +2703,7 @@ public partial class McpServer : IDisposable
         $"[cdidx-mcp] Error writing response: {detail}. The request was handled but the client connection may already be closed.";
 
     internal static string BuildToolErrorLog(string toolName, string detail) =>
-        $"[cdidx-mcp] Tool error ({toolName}): {detail}. Fix the tool arguments, refresh the index if needed, then retry.";
+        $"[cdidx-mcp] Tool error ({BoundToolNameForDisplay(toolName).Text}): {detail}. Fix the tool arguments, refresh the index if needed, then retry.";
 
     // Stderr log emitted when the rate limiter denies a tool call. Mirrors the JSON-RPC
     // `-32000` payload (tool + caller + retry_after_ms) so operators tailing the MCP log
@@ -2711,7 +2711,7 @@ public partial class McpServer : IDisposable
     // レート制限で拒否されたツール呼び出しを stderr に記録する。配線上の JSON-RPC `-32000`
     // ペイロードと内容を揃え、運用側がログ追跡から状況把握できるようにする（#1560）。
     internal static string BuildRateLimitedLog(string toolName, string caller, long retryAfterMs) =>
-        $"[cdidx-mcp] Rate limit exceeded: tool='{toolName}', caller='{caller}', retry_after_ms={retryAfterMs}. Increase {RateLimiterOptions.RpsEnvVar} / {RateLimiterOptions.BurstEnvVar} on the server, or back off and retry.";
+        $"[cdidx-mcp] Rate limit exceeded: tool='{BoundToolNameForDisplay(toolName).Text}', caller='{caller}', retry_after_ms={retryAfterMs}. Increase {RateLimiterOptions.RpsEnvVar} / {RateLimiterOptions.BurstEnvVar} on the server, or back off and retry.";
 
     internal static string BuildCallerSwapRejectionLog(string current, string attempted) =>
         $"[cdidx-mcp] Ignoring re-initialize with new clientInfo identity '{attempted}': retaining original caller '{current}' so rate-limit buckets cannot be reset mid-session.";
@@ -2757,11 +2757,12 @@ public partial class McpServer : IDisposable
     // #1530 で封じた ex.Message 漏れを再現させずに失敗詳細をクライアントへ届ける。
     internal static string BuildSanitizedToolErrorMessage(string toolName, Exception ex)
     {
+        var toolDisplay = BoundToolNameForDisplay(toolName).Text;
         if (!IsUnsafeDebugEnabled())
-            return $"Tool '{toolName}' failed. See cdidx server stderr for details.";
+            return $"Tool '{toolDisplay}' failed. See cdidx server stderr for details.";
         if (ex is CodeIndexException codeIndexEx)
-            return $"Error executing {toolName} ({ex.GetType().Name}) [{codeIndexEx.Code}/{codeIndexEx.Category}]{BuildPathFragment(codeIndexEx)}{BuildHintFragment(codeIndexEx)}. See cdidx server stderr for details.";
-        return $"Error executing {toolName} ({ex.GetType().Name}). See cdidx server stderr for details.";
+            return $"Error executing {toolDisplay} ({ex.GetType().Name}) [{codeIndexEx.Code}/{codeIndexEx.Category}]{BuildPathFragment(codeIndexEx)}{BuildHintFragment(codeIndexEx)}. See cdidx server stderr for details.";
+        return $"Error executing {toolDisplay} ({ex.GetType().Name}). See cdidx server stderr for details.";
     }
 
     // Wire-safe error body for the JSON-RPC loop catch-all. Same rationale as
@@ -2965,6 +2966,49 @@ public partial class McpServer : IDisposable
     private static JsonObject CreateErrorResponse(JsonNode? id, int code, string message,
         string category, string suggestion, bool retrySafe, JsonObject? extraData = null)
         => CreateErrorResponse(id is not null, id, code, message, category, suggestion, retrySafe, extraData);
+
+    private static BoundedMcpText BoundToolNameForDisplay(string toolName)
+        => McpBoundedText.ForDisplay(toolName, McpBoundedText.MaxToolNameChars);
+
+    private static void AddToolDisplayData(JsonObject target, string? toolName)
+    {
+        if (toolName is null)
+        {
+            target["tool"] = null;
+            return;
+        }
+
+        var display = BoundToolNameForDisplay(toolName);
+        target["tool"] = display.Text;
+        display.AddMetadata(target, "tool");
+    }
+
+    internal static string BuildUnknownToolMessage(string toolName)
+        => $"Unknown tool: {BoundToolNameForDisplay(toolName).Text}";
+
+    private static JsonObject BuildUnknownToolData(string toolName)
+    {
+        var data = new JsonObject();
+        AddToolDisplayData(data, toolName);
+        return data;
+    }
+
+    private static JsonObject BuildToolExceptionData(string toolName, string exceptionType)
+    {
+        var data = new JsonObject
+        {
+            ["exception_type"] = exceptionType,
+        };
+        AddToolDisplayData(data, toolName);
+        return data;
+    }
+
+    private static JsonObject CreateUnknownToolErrorResponse(bool hasId, JsonNode? id, string toolName)
+        => CreateErrorResponse(hasId: hasId, id: id, code: -32602, message: BuildUnknownToolMessage(toolName),
+            category: McpErrorEnvelope.CategoryToolUnknown,
+            suggestion: "Call tools/list to enumerate the available tool names for this server. Tool name match is case-sensitive.",
+            retrySafe: false,
+            extraData: BuildUnknownToolData(toolName));
 
     // Issue #1581: every MCP error response carries a structured `data` envelope
     // (`category` / `suggestion` / `retry_safe`) so clients can branch on a stable
