@@ -183,6 +183,7 @@ public class ExtractorPluginRegistryTests
                     Assert.Equal("pattern", diagnostic.Kind);
                     Assert.Equal("error", diagnostic.Severity);
                     Assert.EndsWith(".yaml", diagnostic.Path);
+                    Assert.DoesNotContain(projectRoot, diagnostic.Path, StringComparison.Ordinal);
                 });
             }
             finally
@@ -226,6 +227,36 @@ public class ExtractorPluginRegistryTests
                 ExtractorPluginRegistry.ResetForTests();
                 TestProjectHelper.DeleteDirectory(projectRoot);
                 TestProjectHelper.DeleteDirectory(cwdRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void LoadPatternConfigs_SanitizesRejectedPathAndReason_3243()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_sanitized_pattern");
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                WritePatternConfig(
+                    projectRoot,
+                    "broken.yaml",
+                    "language: \"toydsl\"\nextensions:\n  - extension: \".toy\"\npatterns:\n  - kind: \"class\"\n    regex: \"(?<name>\"\n");
+
+                ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(projectRoot);
+                var diagnostic = Assert.Single(ExtractorPluginRegistry.GetStatusSnapshot().Diagnostics!);
+
+                Assert.Equal(".cdidx/patterns/broken.yaml", diagnostic.Path);
+                Assert.DoesNotContain(projectRoot, diagnostic.Path, StringComparison.Ordinal);
+                Assert.Contains("invalid regex", diagnostic.Message, StringComparison.Ordinal);
+                Assert.DoesNotContain("(?<name>", diagnostic.Message, StringComparison.Ordinal);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(projectRoot);
             }
         }
     }

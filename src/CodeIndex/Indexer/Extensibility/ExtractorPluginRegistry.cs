@@ -375,7 +375,7 @@ public static class ExtractorPluginRegistry
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            ReportPatternDirectoryRejected(directory, ex.Message);
+            ReportPatternDirectoryRejected(directory, "could not enumerate pattern directory");
             yield break;
         }
 
@@ -414,7 +414,7 @@ public static class ExtractorPluginRegistry
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            ReportPatternDirectoryRejected(directory, ex.Message);
+            ReportPatternDirectoryRejected(directory, "could not inspect pattern directory");
             return true;
         }
     }
@@ -481,9 +481,9 @@ public static class ExtractorPluginRegistry
                             RegexOptions.Compiled | RegexOptions.CultureInvariant,
                             PatternRegexTimeout);
                     }
-                    catch (ArgumentException ex)
+                    catch (ArgumentException)
                     {
-                        ReportPatternConfigRejected(path, $"invalid regex for kind '{pendingKind}': {ex.Message}");
+                        ReportPatternConfigRejected(path, $"invalid regex for kind '{DiagnosticSanitizer.ForMessage(pendingKind)}'");
                         return;
                     }
 
@@ -505,15 +505,15 @@ public static class ExtractorPluginRegistry
                 ReportPatternConfigSkipped(path, "missing language or regex patterns");
             }
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            ReportPatternConfigRejected(path, ex.Message);
+            ReportPatternConfigRejected(path, "could not parse pattern config");
         }
     }
 
     private static void ReportPatternConfigRejected(string path, string reason)
     {
-        Console.Error.WriteLine($"[cdidx] Skipped pattern config '{path}': {reason}.");
+        Console.Error.WriteLine($"[cdidx] Skipped pattern config '{DiagnosticSanitizer.ForPath(path)}': {DiagnosticSanitizer.ForMessage(reason)}.");
         RecordDiagnostic(
             "pattern",
             path,
@@ -525,7 +525,7 @@ public static class ExtractorPluginRegistry
 
     private static void ReportPatternConfigSkipped(string path, string reason)
     {
-        Console.Error.WriteLine($"[cdidx] Skipped pattern config '{path}': {reason}.");
+        Console.Error.WriteLine($"[cdidx] Skipped pattern config '{DiagnosticSanitizer.ForPath(path)}': {DiagnosticSanitizer.ForMessage(reason)}.");
         RecordDiagnostic(
             "pattern",
             path,
@@ -537,7 +537,7 @@ public static class ExtractorPluginRegistry
 
     private static void ReportPatternDirectoryRejected(string path, string reason)
     {
-        Console.Error.WriteLine($"[cdidx] Skipped pattern directory '{path}': {reason}.");
+        Console.Error.WriteLine($"[cdidx] Skipped pattern directory '{DiagnosticSanitizer.ForPath(path)}': {DiagnosticSanitizer.ForMessage(reason)}.");
         RecordDiagnostic(
             "pattern_directory",
             path,
