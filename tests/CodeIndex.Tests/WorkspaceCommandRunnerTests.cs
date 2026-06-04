@@ -107,6 +107,53 @@ public class WorkspaceCommandRunnerTests
     }
 
     [Fact]
+    public void WorkspaceManifestLoader_Load_RejectsRootedMemberPath()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_manifest_rooted_member");
+        try
+        {
+            var manifestPath = Path.Combine(root, "cdidx.workspace.json");
+            var absoluteMember = Path.Combine(root, "src", "A");
+            File.WriteAllText(manifestPath, $$"""
+                {
+                  "members": [{{JsonSerializer.Serialize(absoluteMember)}}]
+                }
+                """);
+
+            var ex = Assert.Throws<InvalidDataException>(() => WorkspaceManifestLoader.Load(manifestPath));
+
+            Assert.Contains("member path must be relative", ex.Message);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
+    public void WorkspaceManifestLoader_Load_RejectsEscapingMemberPath()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_manifest_escaping_member");
+        try
+        {
+            var manifestPath = Path.Combine(root, "cdidx.workspace.json");
+            File.WriteAllText(manifestPath, """
+                {
+                  "members": ["../outside"]
+                }
+                """);
+
+            var ex = Assert.Throws<InvalidDataException>(() => WorkspaceManifestLoader.Load(manifestPath));
+
+            Assert.Contains("member path escapes the manifest root", ex.Message);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
     public void WorkspaceManifestLoader_Load_AcceptsUtf8BomManifest()
     {
         var root = TestProjectHelper.CreateTempProject("cdidx_workspace_manifest_bom");

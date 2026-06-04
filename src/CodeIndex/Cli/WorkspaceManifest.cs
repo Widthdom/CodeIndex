@@ -77,7 +77,7 @@ internal static class WorkspaceManifestLoader
 
         var members = rawMembers.Select(member =>
         {
-            var fullMember = Path.GetFullPath(Path.Combine(root, member));
+            var fullMember = ResolveMemberPath(root, member);
             var dbPath = string.Equals(strategy, "single", StringComparison.OrdinalIgnoreCase)
                 ? Path.Combine(root, ".cdidx", dbName)
                 : Path.Combine(fullMember, ".cdidx", dbName);
@@ -114,5 +114,31 @@ internal static class WorkspaceManifestLoader
         }
 
         return members;
+    }
+
+    private static string ResolveMemberPath(string root, string member)
+    {
+        if (Path.IsPathRooted(member))
+            throw new InvalidDataException($"Workspace manifest member path must be relative: {member}");
+
+        var fullMember = Path.GetFullPath(Path.Combine(root, member));
+        if (!IsSameOrDescendant(root, fullMember))
+            throw new InvalidDataException($"Workspace manifest member path escapes the manifest root: {member}");
+
+        return fullMember;
+    }
+
+    private static bool IsSameOrDescendant(string root, string path)
+    {
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        var normalizedRoot = Path.GetFullPath(root);
+        var normalizedPath = Path.GetFullPath(path);
+        if (string.Equals(normalizedRoot, normalizedPath, comparison))
+            return true;
+
+        var rootWithSeparator = Path.EndsInDirectorySeparator(normalizedRoot)
+            ? normalizedRoot
+            : normalizedRoot + Path.DirectorySeparatorChar;
+        return normalizedPath.StartsWith(rootWithSeparator, comparison);
     }
 }
