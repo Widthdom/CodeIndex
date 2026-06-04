@@ -431,6 +431,49 @@ public sealed class InstallScriptTests : IDisposable
     }
 
     [Fact]
+    public void ResolveVersion_LatestLookupResponseTooLarge_FailsBeforeShellParsing()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            """
+            curl() {
+                local output_path=""
+                while [ $# -gt 0 ]; do
+                    case "$1" in
+                        -o)
+                            output_path="$2"
+                            shift 2
+                            ;;
+                        -w)
+                            shift 2
+                            ;;
+                        *)
+                            shift
+                            ;;
+                    esac
+                done
+
+                printf '%65537s' '' > "$output_path"
+                printf '%s' '{"tag_name":"v9.9.9"}' >> "$output_path"
+                printf '200'
+                return 0
+            }
+
+            resolve_version ""
+            """);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("Fetching latest release version", stdout);
+        Assert.Contains("GitHub API response exceeded the 65536 byte limit before shell parsing", stderr);
+        Assert.Contains("HTTP 200", stderr);
+        Assert.Contains("explicit version", stderr);
+        Assert.DoesNotContain("Could not determine latest version", stderr);
+        Assert.DoesNotContain("Version: v9.9.9", stdout);
+    }
+
+    [Fact]
     public void ResolveVersion_ForbiddenLatestLookup_PrintsProxyAndVersionPinHints()
     {
         if (OperatingSystem.IsWindows())

@@ -80,6 +80,7 @@ MANIFEST_REQUIRED_VERSION="1.24.6"
 GITHUB_BASE_URL="${CDIDX_GITHUB_BASE_URL:-https://github.com}"
 GITHUB_API_BASE_URL="${CDIDX_GITHUB_API_BASE_URL:-https://api.github.com}"
 CURL_STDERR_SAMPLE_BYTES=8192
+LATEST_RELEASE_RESPONSE_MAX_BYTES=65536
 REQUIRE_ATTESTATION="${CDIDX_REQUIRE_ATTESTATION:-0}"
 STRICT_VERIFY="${CDIDX_STRICT_VERIFY:-0}"
 RELEASE_GPG_FINGERPRINT="${CDIDX_RELEASE_GPG_FINGERPRINT:-}"
@@ -691,11 +692,22 @@ fetch_latest_release_version() {
         rm -f "$response_file"
         return 1
     fi
+    local explicit_version_examples
+    explicit_version_examples="rerun the installer with an explicit version (for example: 'curl -fsSL https://raw.githubusercontent.com/${REPO}/vX.Y.Z/install.sh | bash -s -- vX.Y.Z', or 'bash ./install.sh vX.Y.Z' from a checkout)"
+    local api_response_bytes
+    if ! api_response_bytes="$(file_size_bytes "$response_file")"; then
+        rm -f "$response_file"
+        report_error "Failed to inspect ${api_label} response size while fetching ${api_url}."
+        return 1
+    fi
+    if [ "${api_response_bytes:-0}" -gt "$LATEST_RELEASE_RESPONSE_MAX_BYTES" ]; then
+        rm -f "$response_file"
+        report_error "${api_label} response exceeded the ${LATEST_RELEASE_RESPONSE_MAX_BYTES} byte limit before shell parsing while fetching ${api_url} (HTTP ${http_code}). ${explicit_version_examples} to skip the latest-release API call."
+        return 1
+    fi
     local api_response
     api_response="$(cat "$response_file")"
     rm -f "$response_file"
-    local explicit_version_examples
-    explicit_version_examples="rerun the installer with an explicit version (for example: 'curl -fsSL https://raw.githubusercontent.com/${REPO}/vX.Y.Z/install.sh | bash -s -- vX.Y.Z', or 'bash ./install.sh vX.Y.Z' from a checkout)"
 
     case "$http_code" in
         200) ;;
