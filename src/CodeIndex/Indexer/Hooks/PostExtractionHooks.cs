@@ -28,8 +28,10 @@ public sealed class PostExtractionHookRunner : IDisposable
 {
     public const string CallbackBudgetEnvironmentVariable = "CDIDX_HOOK_CALLBACK_BUDGET_MS";
     public const string DiscoveryLimitEnvironmentVariable = "CDIDX_HOOK_DISCOVERY_MAX_DLLS";
+    public const string DiscoveryMaxBytesEnvironmentVariable = "CDIDX_HOOK_DISCOVERY_MAX_BYTES";
     public static readonly TimeSpan DefaultCallbackBudget = TimeSpan.FromSeconds(5);
     internal const int DefaultDiscoveryLimit = 128;
+    internal const long DefaultDiscoveryMaxBytes = 64 * 1024 * 1024;
 
     private readonly List<LoadedPostExtractionHook> hooks;
     private readonly ConcurrentQueue<PostExtractionHookDiagnostic> diagnostics = new();
@@ -38,6 +40,7 @@ public sealed class PostExtractionHookRunner : IDisposable
     private bool disposed;
     internal static Func<TimeSpan>? CallbackBudgetForTesting { get; set; }
     internal static Func<int>? DiscoveryLimitForTesting { get; set; }
+    internal static Func<long>? DiscoveryMaxBytesForTesting { get; set; }
 
     private PostExtractionHookRunner(List<LoadedPostExtractionHook> hooks, TimeSpan callbackBudget)
     {
@@ -56,11 +59,15 @@ public sealed class PostExtractionHookRunner : IDisposable
         if (string.IsNullOrWhiteSpace(hooksDirectory) || !Directory.Exists(hooksDirectory))
             return runner;
 
+        var maxAssemblyBytes = ResolveDiscoveryMaxBytes();
         foreach (var dllPath in EnumerateHookAssemblyPaths(hooksDirectory, runner, ResolveDiscoveryLimit()))
         {
             Assembly assembly;
             try
             {
+                if (!HookAssemblyCandidateIsWithinBudget(dllPath, runner, maxAssemblyBytes))
+                    continue;
+
                 var loadContext = new AssemblyLoadContext($"cdidx-hook:{Path.GetFileNameWithoutExtension(dllPath)}", isCollectible: true);
                 assembly = loadContext.LoadFromAssemblyPath(Path.GetFullPath(dllPath));
             }
@@ -149,6 +156,55 @@ public sealed class PostExtractionHookRunner : IDisposable
                 $"Failed to enumerate hook directory: {ex.Message}"));
             return null;
         }
+    }
+
+    private static bool HookAssemblyCandidateIsWithinBudget(
+        string dllPath,
+        PostExtractionHookRunner runner,
+        long maxAssemblyBytes)
+    {
+        FileInfo fileInfo;
+        try
+        {
+            fileInfo = new FileInfo(dllPath);
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            runner.diagnostics.Enqueue(new PostExtractionHookDiagnostic(
+                dllPath,
+                null,
+                $"Hook assembly skipped: could not inspect file ({ex.Message})."));
+            return false;
+        }
+
+        if (!fileInfo.Exists)
+        {
+            runner.diagnostics.Enqueue(new PostExtractionHookDiagnostic(
+                dllPath,
+                null,
+                "Hook assembly skipped: file does not exist."));
+            return false;
+        }
+
+        if ((fileInfo.Attributes & FileAttributes.Directory) != 0)
+        {
+            runner.diagnostics.Enqueue(new PostExtractionHookDiagnostic(
+                dllPath,
+                null,
+                "Hook assembly skipped: path is a directory."));
+            return false;
+        }
+
+        if (fileInfo.Length > maxAssemblyBytes)
+        {
+            runner.diagnostics.Enqueue(new PostExtractionHookDiagnostic(
+                dllPath,
+                null,
+                $"Hook assembly skipped: file is too large ({fileInfo.Length} bytes; maximum {maxAssemblyBytes})."));
+            return false;
+        }
+
+        return true;
     }
 
     private static bool TryMoveNextHookFile(
@@ -290,6 +346,20 @@ public sealed class PostExtractionHookRunner : IDisposable
 
     private static int NormalizeDiscoveryLimit(int value)
         => value <= 0 ? DefaultDiscoveryLimit : value;
+
+    private static long ResolveDiscoveryMaxBytes()
+    {
+        if (DiscoveryMaxBytesForTesting != null)
+            return NormalizeDiscoveryMaxBytes(DiscoveryMaxBytesForTesting());
+
+        var raw = Environment.GetEnvironmentVariable(DiscoveryMaxBytesEnvironmentVariable);
+        return long.TryParse(raw, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var value)
+            ? NormalizeDiscoveryMaxBytes(value)
+            : DefaultDiscoveryMaxBytes;
+    }
+
+    private static long NormalizeDiscoveryMaxBytes(long value)
+        => value <= 0 ? DefaultDiscoveryMaxBytes : value;
 
     private static TimeSpan NormalizeCallbackBudgetMilliseconds(long milliseconds)
         => milliseconds <= 0
