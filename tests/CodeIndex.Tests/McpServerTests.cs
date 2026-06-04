@@ -1092,6 +1092,52 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void NegotiateProtocolVersion_TruncatesUnsupportedRequestedVersion_Issue3119()
+    {
+        var requested = new string('v', McpBoundedText.MaxProtocolVersionChars + 25);
+        var display = McpBoundedText.ForDisplay(requested, McpBoundedText.MaxProtocolVersionChars);
+        var initializeParams = new JsonObject
+        {
+            ["protocolVersion"] = requested,
+        };
+
+        var negotiated = McpServer.NegotiateProtocolVersion(initializeParams, out var requestedVersion);
+
+        Assert.Null(negotiated);
+        Assert.NotNull(requestedVersion);
+        Assert.Equal(display.Text, requestedVersion.Value.Text);
+        Assert.Equal(requested.Length, requestedVersion.Value.OriginalLength);
+        Assert.True(requestedVersion.Value.Truncated);
+    }
+
+    [Fact]
+    public void Initialize_UnsupportedProtocolVersion_TruncatesDiagnostics_Issue3119()
+    {
+        var requested = new string('p', McpBoundedText.MaxProtocolVersionChars + 25);
+        var display = McpBoundedText.ForDisplay(requested, McpBoundedText.MaxProtocolVersionChars);
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "initialize",
+            ["params"] = new JsonObject
+            {
+                ["protocolVersion"] = requested,
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal(-32602, response["error"]!["code"]!.GetValue<int>());
+        Assert.DoesNotContain(requested, response.ToJsonString(), StringComparison.Ordinal);
+        Assert.Contains(display.Text, response["error"]!["message"]!.GetValue<string>());
+        var data = response["error"]!["data"]!;
+        Assert.Equal(display.Text, data["requestedVersion"]!.GetValue<string>());
+        Assert.Equal(requested.Length, data["requestedVersion_length"]!.GetValue<int>());
+        Assert.True(data["requestedVersion_truncated"]!.GetValue<bool>());
+    }
+
+    [Fact]
     public void Initialize_NullId_PreservesNullResponseId()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":null,"method":"initialize","params":{}}""")!;
@@ -1858,6 +1904,44 @@ public class McpServerTests : IDisposable
         }
 
         Assert.Contains("Unsupported MCP protocolVersion", writer.ToString());
+        Assert.Contains("Rejecting initialize", error.ToString());
+    }
+
+    [Fact]
+    public async Task ProcessLineAsync_UnsupportedProtocol_TruncatesErrorLog_Issue3119()
+    {
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
+        using var writer = new StringWriter();
+        using var error = new StringWriter();
+        var requested = new string('q', McpBoundedText.MaxProtocolVersionChars + 25);
+        var display = McpBoundedText.ForDisplay(requested, McpBoundedText.MaxProtocolVersionChars);
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "initialize",
+            ["params"] = new JsonObject
+            {
+                ["protocolVersion"] = requested,
+            },
+        };
+        var previousError = Console.Error;
+        Console.SetError(error);
+        try
+        {
+            await server.ProcessLineAsync(
+                request.ToJsonString(),
+                new AssertingTextWriter(writer, () => Assert.Equal(string.Empty, error.ToString())));
+        }
+        finally
+        {
+            Console.SetError(previousError);
+        }
+
+        Assert.DoesNotContain(requested, writer.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(requested, error.ToString(), StringComparison.Ordinal);
+        Assert.Contains(display.Text, writer.ToString());
+        Assert.Contains(display.Text, error.ToString());
         Assert.Contains("Rejecting initialize", error.ToString());
     }
 

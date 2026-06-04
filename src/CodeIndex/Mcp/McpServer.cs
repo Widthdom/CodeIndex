@@ -2105,7 +2105,7 @@ public partial class McpServer : IDisposable
         return version == null ? name : $"{name}/{version}";
     }
 
-    internal static string? NegotiateProtocolVersion(JsonNode? initializeParams, out string? requestedVersion)
+    internal static string? NegotiateProtocolVersion(JsonNode? initializeParams, out BoundedMcpText? requestedVersion)
     {
         requestedVersion = null;
         if (initializeParams is JsonObject obj
@@ -2114,7 +2114,7 @@ public partial class McpServer : IDisposable
             && value.TryGetValue<string>(out var versionString)
             && !string.IsNullOrWhiteSpace(versionString))
         {
-            requestedVersion = versionString;
+            requestedVersion = BoundProtocolVersionForDisplay(versionString);
             foreach (var supported in SupportedProtocolVersions)
             {
                 if (string.Equals(supported, versionString, StringComparison.Ordinal))
@@ -2129,7 +2129,7 @@ public partial class McpServer : IDisposable
         return ProtocolVersion;
     }
 
-    private static JsonObject CreateUnsupportedProtocolError(JsonNode? id, string? requestedVersion)
+    private static JsonObject CreateUnsupportedProtocolError(JsonNode? id, BoundedMcpText? requestedVersion)
     {
         var supportedArray = new JsonArray();
         foreach (var supported in SupportedProtocolVersions)
@@ -2146,7 +2146,10 @@ public partial class McpServer : IDisposable
             ["supportedVersions"] = supportedArray
         };
         if (requestedVersion != null)
-            extra["requestedVersion"] = requestedVersion;
+        {
+            extra["requestedVersion"] = requestedVersion.Value.Text;
+            requestedVersion.Value.AddMetadata(extra, "requestedVersion");
+        }
 
         var data = McpErrorEnvelope.BuildData(
             McpErrorEnvelope.CategoryInvalidArgument,
@@ -2170,18 +2173,29 @@ public partial class McpServer : IDisposable
     }
 
     internal static string BuildUnsupportedProtocolMessage(string? requestedVersion)
+        => BuildUnsupportedProtocolMessage(BoundProtocolVersionForDisplay(requestedVersion));
+
+    private static string BuildUnsupportedProtocolMessage(BoundedMcpText? requestedVersion)
     {
         var supported = string.Join(", ", SupportedProtocolVersions);
-        var requested = string.IsNullOrEmpty(requestedVersion) ? "(unspecified)" : requestedVersion;
+        var requested = requestedVersion?.Text ?? "(unspecified)";
         return $"Unsupported MCP protocolVersion '{requested}'. Server supports: {supported}.";
     }
 
     internal static string BuildUnsupportedProtocolLog(string? requestedVersion)
+        => BuildUnsupportedProtocolLog(BoundProtocolVersionForDisplay(requestedVersion));
+
+    private static string BuildUnsupportedProtocolLog(BoundedMcpText? requestedVersion)
     {
         var supported = string.Join(", ", SupportedProtocolVersions);
-        var requested = string.IsNullOrEmpty(requestedVersion) ? "(unspecified)" : requestedVersion;
+        var requested = requestedVersion?.Text ?? "(unspecified)";
         return $"[cdidx-mcp] Rejecting initialize: client requested protocolVersion '{requested}', server supports {supported}. Upgrade the server or pin a supported version on the client.";
     }
+
+    private static BoundedMcpText? BoundProtocolVersionForDisplay(string? requestedVersion)
+        => string.IsNullOrEmpty(requestedVersion)
+            ? null
+            : McpBoundedText.ForDisplay(requestedVersion, McpBoundedText.MaxProtocolVersionChars);
 
     /// <summary>
     /// Build a structured `-32000` JSON-RPC error for a rate-limited tool call. Surfacing
