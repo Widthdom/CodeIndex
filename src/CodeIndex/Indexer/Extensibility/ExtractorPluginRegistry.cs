@@ -25,6 +25,7 @@ public static class ExtractorPluginRegistry
     private static readonly object Gate = new();
     private static readonly Dictionary<string, ISymbolExtractor> SymbolExtractors = new(StringComparer.Ordinal);
     private static readonly Dictionary<string, IReferenceExtractor> ReferenceExtractors = new(StringComparer.Ordinal);
+    private static readonly HashSet<string> LoadedPluginAssemblyPaths = new(StringComparer.OrdinalIgnoreCase);
     private static readonly HashSet<string> LoadedPatternConfigPaths = new(StringComparer.OrdinalIgnoreCase);
     private static readonly List<ExtractorRegistryDiagnostic> Diagnostics = [];
     private const int DiagnosticLimit = 20;
@@ -126,6 +127,7 @@ public static class ExtractorPluginRegistry
         {
             SymbolExtractors.Clear();
             ReferenceExtractors.Clear();
+            LoadedPluginAssemblyPaths.Clear();
             LoadedPatternConfigPaths.Clear();
             Diagnostics.Clear();
             pluginAssemblyCount = 0;
@@ -143,6 +145,7 @@ public static class ExtractorPluginRegistry
         {
             SymbolExtractors.Clear();
             ReferenceExtractors.Clear();
+            LoadedPluginAssemblyPaths.Clear();
             LoadedPatternConfigPaths.Clear();
             Diagnostics.Clear();
             pluginAssemblyCount = 0;
@@ -157,6 +160,9 @@ public static class ExtractorPluginRegistry
     internal static IReadOnlyList<string> EnumeratePluginAssemblyPathsForTests()
         => EnumeratePluginAssemblyPaths().ToArray();
 
+    internal static IReadOnlyList<string> EnumeratePluginAssemblyPathsForTests(string? projectRoot)
+        => EnumeratePluginAssemblyPaths(EnumeratePluginDirectories(projectRoot)).ToArray();
+
     internal static IReadOnlyList<string> EnumeratePluginAssemblyPathsForTests(IReadOnlyList<string> directories)
         => EnumeratePluginAssemblyPaths(directories).ToArray();
 
@@ -166,12 +172,22 @@ public static class ExtractorPluginRegistry
     internal static void LoadPluginForTests(string pluginPath)
         => TryLoadPlugin(pluginPath);
 
+    internal static void LoadPluginsForProjectRoot(string? projectRoot)
+    {
+        EnsurePluginsLoaded();
+        if (string.IsNullOrWhiteSpace(projectRoot) || !WorkspacePluginsTrusted())
+            return;
+
+        LoadPluginAssemblies(EnumerateWorkspacePluginDirectories(Path.GetFullPath(projectRoot)));
+    }
+
     internal static void LoadPatternConfigsForProjectRoot(string? projectRoot)
     {
         EnsurePluginsLoaded();
         if (string.IsNullOrWhiteSpace(projectRoot))
             return;
 
+        LoadPluginsForProjectRoot(projectRoot);
         foreach (var patternPath in EnumeratePatternConfigPaths(Path.GetFullPath(projectRoot)))
             TryLoadPatternConfig(patternPath);
     }
@@ -204,10 +220,7 @@ public static class ExtractorPluginRegistry
             if (pluginsLoaded)
                 return;
 
-            LoadPluginAssemblies(EnumeratePluginDirectories());
-            foreach (var patternPath in EnumeratePatternConfigPaths(Environment.CurrentDirectory))
-                TryLoadPatternConfig(patternPath);
-
+            LoadPluginAssemblies(EnumeratePluginDirectories(projectRoot: null));
             pluginsLoaded = true;
         }
     }
@@ -220,7 +233,7 @@ public static class ExtractorPluginRegistry
     }
 
     private static IEnumerable<string> EnumeratePluginAssemblyPaths()
-        => EnumeratePluginAssemblyPaths(EnumeratePluginDirectories());
+        => EnumeratePluginAssemblyPaths(EnumeratePluginDirectories(projectRoot: null));
 
     private static IEnumerable<string> EnumeratePluginAssemblyPaths(IEnumerable<string> directories)
     {
@@ -291,14 +304,22 @@ public static class ExtractorPluginRegistry
         }
     }
 
-    private static IEnumerable<string> EnumeratePluginDirectories()
+    private static IEnumerable<string> EnumeratePluginDirectories(string? projectRoot)
     {
-        if (WorkspacePluginsTrusted())
-            yield return Path.Combine(Environment.CurrentDirectory, ".cdidx", "plugins");
+        if (WorkspacePluginsTrusted() && !string.IsNullOrWhiteSpace(projectRoot))
+        {
+            foreach (var directory in EnumerateWorkspacePluginDirectories(Path.GetFullPath(projectRoot)))
+                yield return directory;
+        }
 
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         if (!string.IsNullOrWhiteSpace(home))
             yield return Path.Combine(home, ".cdidx", "plugins");
+    }
+
+    private static IEnumerable<string> EnumerateWorkspacePluginDirectories(string projectRoot)
+    {
+        yield return Path.Combine(projectRoot, ".cdidx", "plugins");
     }
 
     private static IEnumerable<string> EnumeratePatternConfigPaths(string workspaceRoot, bool includeUserDirectory = true)
@@ -817,6 +838,12 @@ public static class ExtractorPluginRegistry
         try
         {
             fullPath = Path.GetFullPath(pluginPath);
+            lock (Gate)
+            {
+                if (!LoadedPluginAssemblyPaths.Add(fullPath))
+                    return;
+            }
+
             if (!PluginAssemblyCandidateIsWithinBudget(fullPath))
                 return;
 
