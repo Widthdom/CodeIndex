@@ -8121,6 +8121,58 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_Index_WhenDbLockInfoTooDeep_ReturnsBusyWithoutHolderDetails_Issue3043()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_deep_lock_fixture_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(fixtureDir);
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_index_deep_lock_{Guid.NewGuid():N}.db");
+        var lockPath = McpIndexRunLock.ResolveLockPath(dbPath);
+        Directory.CreateDirectory(Path.GetDirectoryName(lockPath)!);
+        var infoPath = lockPath + ".info";
+        var info = new StringBuilder($$"""{"pid":{{Environment.ProcessId}},"since":"2026-01-02T03:04:05.0000000+00:00","extra":""");
+        AppendNestedObject(info, McpIndexRunLock.MaxInfoJsonDepth + 1);
+        info.Append('}');
+        File.WriteAllText(infoPath, info.ToString());
+        using var heldLock = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        using var server = new McpServer(dbPath, ConsoleUi.LoadVersion(), dbPathExplicit: true);
+        try
+        {
+            var request = new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = 1,
+                ["method"] = "tools/call",
+                ["params"] = new JsonObject
+                {
+                    ["name"] = "index",
+                    ["arguments"] = new JsonObject
+                    {
+                        ["path"] = fixtureDir
+                    }
+                }
+            };
+
+            var response = server.HandleMessage(request)!;
+
+            Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+            var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+            Assert.Contains("index already running on this DB", text);
+            Assert.Contains("holder metadata unavailable", text);
+            Assert.DoesNotContain($"pid {Environment.ProcessId}", text);
+        }
+        finally
+        {
+            heldLock.Dispose();
+            File.Delete(infoPath);
+            File.Delete(lockPath);
+            if (Directory.Exists(fixtureDir))
+                Directory.Delete(fixtureDir, recursive: true);
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
     public void ToolsCall_Index_NonexistentDir_ReturnsError()
     {
         // Use a path within CWD that doesn't exist / CWD内の存在しないパスを使用
