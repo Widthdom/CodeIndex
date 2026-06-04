@@ -1866,6 +1866,34 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void BuildSanitizedIndexFileFailureMessage_OmitsRawExceptionMessage_Issue3202()
+    {
+        var message = McpServer.BuildSanitizedIndexFileFailureMessageForTesting(
+            "index_file",
+            nameof(InvalidOperationException),
+            out var truncated);
+
+        Assert.Equal("File indexing failed during index_file (InvalidOperationException). See cdidx server stderr for details.", message);
+        Assert.False(truncated);
+        Assert.DoesNotContain("SECRET_LITERAL", message);
+        Assert.DoesNotContain("/private/path", message);
+    }
+
+    [Fact]
+    public void SanitizeMcpIndexFailureMessage_CapsAndCollapsesText_Issue3202()
+    {
+        var raw = "first line\nsecond\tline " + new string('x', McpServer.MaxMcpIndexFailureMessageLength + 100);
+
+        var message = McpServer.SanitizeMcpIndexFailureMessageForTesting(raw, out var truncated);
+
+        Assert.True(truncated);
+        Assert.True(message.Length <= McpServer.MaxMcpIndexFailureMessageLength);
+        Assert.EndsWith("...(truncated)", message);
+        Assert.DoesNotContain("\n", message);
+        Assert.DoesNotContain("\t", message);
+    }
+
+    [Fact]
     public void ToolsCall_ReusesDbContextAcrossInvocations()
     {
         // #1494: every MCP tool call used to construct a fresh DbContext (and reopen the
@@ -7491,6 +7519,9 @@ public class McpServerTests : IDisposable
             Assert.Equal(".gitignore", failure!["path"]!.GetValue<string>());
             Assert.Equal("scan", failure["stage"]!.GetValue<string>());
             Assert.Equal(nameof(FileIndexer.ScanError), failure["exception_type"]!.GetValue<string>());
+            Assert.False(failure["message_truncated"]!.GetValue<bool>());
+            Assert.DoesNotContain(fixtureDir, failure["message"]!.GetValue<string>());
+            Assert.DoesNotContain("\n", failure["message"]!.GetValue<string>());
 
             using var failedDb = new DbContext(dbPath);
             var failedUserVersion = failedDb.GetUserVersion();
@@ -7673,6 +7704,37 @@ public class McpServerTests : IDisposable
         verifyDb.TryMigrateForRead();
         var reader = new DbReader(verifyDb.Connection);
         Assert.True(reader._foldReady);
+    }
+
+    [Fact]
+    public void ToolsCall_BackfillFold_ExceptionUsesSanitizedToolError_Issue3201()
+    {
+        var previousDebug = Environment.GetEnvironmentVariable(McpServer.DebugEnvironmentVariable);
+        try
+        {
+            Environment.SetEnvironmentVariable(McpServer.DebugEnvironmentVariable, null);
+            DbWriter.FoldBackfillRowUpdatedForTesting = () =>
+                throw new InvalidOperationException("SECRET_BACKFILL_LITERAL from /private/path");
+
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"backfill_fold","arguments":{}}}""")!;
+            var response = _server.HandleMessage(request)!;
+
+            Assert.True(response["result"]!["isError"]!.GetValue<bool>(), response.ToJsonString());
+            var text = response["result"]!["content"]!.AsArray()[0]!["text"]!.GetValue<string>();
+            Assert.Equal("Tool 'backfill_fold' failed. See cdidx server stderr for details.", text);
+            Assert.DoesNotContain("SECRET_BACKFILL_LITERAL", response.ToJsonString());
+            Assert.DoesNotContain("/private/path", response.ToJsonString());
+
+            var structured = response["result"]!["structuredContent"]!;
+            Assert.Equal("internal_error", structured["category"]!.GetValue<string>());
+            Assert.Equal("backfill_fold", structured["tool"]!.GetValue<string>());
+            Assert.Equal(nameof(InvalidOperationException), structured["exception_type"]!.GetValue<string>());
+        }
+        finally
+        {
+            DbWriter.FoldBackfillRowUpdatedForTesting = null;
+            Environment.SetEnvironmentVariable(McpServer.DebugEnvironmentVariable, previousDebug);
+        }
     }
 
     [Fact]

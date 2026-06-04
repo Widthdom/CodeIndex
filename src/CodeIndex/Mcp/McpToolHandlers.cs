@@ -25,6 +25,7 @@ public partial class McpServer
     private const string BatchQueryResponseByteLimitEnvVar = "CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES";
     internal const int MaxMcpArrayFilterCount = 100;
     internal const int MaxMcpArrayFilterStringLength = 4096;
+    internal const int MaxMcpIndexFailureMessageLength = 512;
 
     // --- Tool implementations / ツール実装 ---
 
@@ -3923,13 +3924,15 @@ public partial class McpServer
                     ["stage"] = failure.Stage,
                     ["exception_type"] = failure.ExceptionType,
                     ["message"] = failure.Message,
+                    ["message_truncated"] = failure.MessageTruncated,
                 });
             }
             structured["failed_count"] = failures.Count;
             structured["failures"] = failureArray;
             if (failures.Count > 50)
                 structured["failures_truncated"] = failures.Count - 50;
-            GlobalToolLog.Error($"mcp_index_file_failures count={failures.Count} first_path='{failures[0].Path}' first_error='{failures[0].ExceptionType}: {failures[0].Message}'");
+            GlobalToolLog.Error(
+                $"mcp_index_file_failures count={failures.Count} first_path={QuoteMcpIndexFailureLogValue(failures[0].Path)} first_error={QuoteMcpIndexFailureLogValue($"{failures[0].ExceptionType}: {failures[0].Message}")}");
         }
         if (!sqlGraphContractReadyAfter)
         {
@@ -3952,17 +3955,97 @@ public partial class McpServer
     private static IndexFileFailure BuildIndexFileFailure(string projectPath, string filePath, Exception ex, string stage)
     {
         var relativePath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectPath, filePath));
-        return new IndexFileFailure(relativePath, stage, ex.GetType().Name, ex.Message);
+        var message = BuildSanitizedIndexFileFailureMessage(stage, ex.GetType().Name, out var messageTruncated);
+        return new IndexFileFailure(relativePath, stage, ex.GetType().Name, message, messageTruncated);
     }
 
-    private static IndexFileFailure BuildScanFailure(FileIndexer.ScanError error) =>
-        new(
+    private static IndexFileFailure BuildScanFailure(FileIndexer.ScanError error)
+    {
+        var message = SanitizeAndCapMcpIndexFailureMessage(error.Message, out var messageTruncated);
+        return new IndexFileFailure(
             FileIndexer.NormalizePathSeparators(error.Path),
             "scan",
             nameof(FileIndexer.ScanError),
-            error.Message);
+            message,
+            messageTruncated);
+    }
 
-    private sealed record IndexFileFailure(string Path, string Stage, string ExceptionType, string Message);
+    internal static string BuildSanitizedIndexFileFailureMessageForTesting(string stage, string exceptionType, out bool messageTruncated) =>
+        BuildSanitizedIndexFileFailureMessage(stage, exceptionType, out messageTruncated);
+
+    internal static string SanitizeMcpIndexFailureMessageForTesting(string message, out bool messageTruncated) =>
+        SanitizeAndCapMcpIndexFailureMessage(message, out messageTruncated);
+
+    private static string BuildSanitizedIndexFileFailureMessage(string stage, string exceptionType, out bool messageTruncated)
+    {
+        var safeStage = SanitizeMcpIndexFailureToken(stage, "unknown_stage");
+        var safeExceptionType = SanitizeMcpIndexFailureToken(exceptionType, "Exception");
+        return SanitizeAndCapMcpIndexFailureMessage(
+            $"File indexing failed during {safeStage} ({safeExceptionType}). See cdidx server stderr for details.",
+            out messageTruncated);
+    }
+
+    private static string SanitizeMcpIndexFailureToken(string? value, string fallback)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return fallback;
+
+        var builder = new StringBuilder(value.Length);
+        foreach (var ch in value)
+        {
+            if (char.IsAsciiLetterOrDigit(ch) || ch is '_' or '-' or '.')
+                builder.Append(ch);
+        }
+
+        return builder.Length == 0 ? fallback : builder.ToString();
+    }
+
+    private static string SanitizeAndCapMcpIndexFailureMessage(string? message, out bool messageTruncated)
+    {
+        var collapsed = CollapseMcpIndexFailureWhitespace(string.IsNullOrWhiteSpace(message)
+            ? "File indexing failed. See cdidx server stderr for details."
+            : message);
+        const string suffix = "...(truncated)";
+        if (collapsed.Length <= MaxMcpIndexFailureMessageLength)
+        {
+            messageTruncated = false;
+            return collapsed;
+        }
+
+        messageTruncated = true;
+        return collapsed[..(MaxMcpIndexFailureMessageLength - suffix.Length)] + suffix;
+    }
+
+    private static string CollapseMcpIndexFailureWhitespace(string value)
+    {
+        var builder = new StringBuilder(value.Length);
+        var lastWasSpace = false;
+        foreach (var ch in value)
+        {
+            if (ch is '\r' or '\n' or '\t' || char.IsControl(ch))
+            {
+                if (!lastWasSpace)
+                {
+                    builder.Append(' ');
+                    lastWasSpace = true;
+                }
+                continue;
+            }
+
+            builder.Append(ch);
+            lastWasSpace = ch == ' ';
+        }
+
+        return builder.ToString().Trim();
+    }
+
+    private static string QuoteMcpIndexFailureLogValue(string value)
+    {
+        var message = SanitizeAndCapMcpIndexFailureMessage(value, out _);
+        return JsonSerializer.Serialize(message);
+    }
+
+    private sealed record IndexFileFailure(string Path, string Stage, string ExceptionType, string Message, bool MessageTruncated);
 
     private JsonNode ExecuteBackfillFold(JsonNode? id, JsonNode? args, JsonNode? progressToken = null)
     {
@@ -4066,7 +4149,21 @@ public partial class McpServer
         }
         catch (Exception ex)
         {
-            return CreateToolErrorResponse(id, $"Failed to backfill folded-name columns: {ex.Message}");
+            DeferFrameLog(() =>
+            {
+                WriteMcpLogLine(BuildToolErrorLog("backfill_fold", ex.Message));
+                Database.DbDebug.DumpToStderr(ex);
+            });
+            var classification = McpErrorEnvelope.ClassifyException(ex);
+            return CreateToolErrorResponse(id, BuildSanitizedToolErrorMessage("backfill_fold", ex),
+                category: classification.Category,
+                suggestion: classification.Suggestion,
+                retrySafe: classification.RetrySafe,
+                extraData: new JsonObject
+                {
+                    ["tool"] = "backfill_fold",
+                    ["exception_type"] = ex.GetType().Name,
+                });
         }
     }
 

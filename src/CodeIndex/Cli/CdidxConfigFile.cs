@@ -5,16 +5,17 @@ using CodeIndex.Indexer;
 namespace CodeIndex.Cli;
 
 /// <summary>
-/// Project-local configuration file (`.cdidxrc.json`) loader (#1571). Walks upward from a
-/// starting directory looking for the first `.cdidxrc.json`, validates its schema, and
+/// Project-local configuration file (`.cdidx/config.json` / `.cdidxrc.json`) loader (#1571).
+/// Walks upward from a starting directory looking for the first supported config file,
+/// validates its schema, and
 /// materializes recognized keys as process environment variables so the existing env-var
 /// consumers (debug, metrics, MCP tool/rate-limit gates, persistent log) pick them up
 /// without further changes. A real environment variable always wins over a config-file
 /// value, which yields the documented precedence: CLI &gt; env &gt; config file &gt; defaults.
 /// Secrets (`CDIDX_GITHUB_TOKEN`, `CDIDX_MCP_AUTH_TOKEN`, `CDIDX_MCP_HTTP_TOKEN`) are
 /// intentionally NOT loadable from the config file to keep tokens out of version control.
-/// プロジェクトローカル設定ファイル `.cdidxrc.json` のローダー (#1571)。指定ディレクトリから
-/// 上方向に走査して最初に見つかった `.cdidxrc.json` をスキーマ検証し、認識済みキーを
+/// プロジェクトローカル設定ファイル `.cdidx/config.json` / `.cdidxrc.json` のローダー (#1571)。
+/// 指定ディレクトリから上方向に走査して最初に見つかった対応 config file をスキーマ検証し、認識済みキーを
 /// プロセス環境変数として展開する。既存の env-var 消費側（debug / metrics / MCP ツール ＆
 /// レート制限ゲート / 永続ログ）は追加変更なしに継承する。実際の環境変数は常に config
 /// ファイル値より優先し、結果として「CLI &gt; env &gt; config file &gt; 既定」の優先順位を満たす。
@@ -28,6 +29,9 @@ internal static class CdidxConfigFile
     internal const string DisableEnvVar = "CDIDX_DISABLE_CONFIG_FILE";
     internal const string ConfigSourceEnvironmentVariablePrefix = "CDIDX_CONFIG_SOURCE__";
     internal const int MaxConfigFileBytes = 64 * 1024;
+    internal const int MaxConfigJsonDepth = 32;
+    internal const int MaxConfigStringArrayItems = 128;
+    internal const int MaxConfigStringArrayItemChars = 256;
 
     private static readonly IReadOnlyList<string> KnownTopLevelKeys = new[]
     {
@@ -102,6 +106,7 @@ internal static class CdidxConfigFile
             {
                 CommentHandling = JsonCommentHandling.Skip,
                 AllowTrailingCommas = true,
+                MaxDepth = MaxConfigJsonDepth,
             });
         }
         catch (JsonException ex)
@@ -159,7 +164,7 @@ internal static class CdidxConfigFile
 
         if (root.TryGetProperty("metrics_path", out var metrics))
         {
-            if (!TryReadString(metrics, "metrics_path", path, out var value, out var err))
+            if (!TryReadWorkspaceOutputPath(metrics, "metrics_path", path, out var value, out var err))
                 return new LoadResult(Path: path, Error: err);
             pending.Add(("CDIDX_METRICS", value!));
         }
@@ -174,7 +179,7 @@ internal static class CdidxConfigFile
 
         if (root.TryGetProperty("global_tool_log_dir", out var logDir))
         {
-            if (!TryReadString(logDir, "global_tool_log_dir", path, out var value, out var err))
+            if (!TryReadWorkspaceOutputPath(logDir, "global_tool_log_dir", path, out var value, out var err))
                 return new LoadResult(Path: path, Error: err);
             pending.Add(("CDIDX_GLOBAL_TOOL_LOG_DIR", value!));
         }
@@ -406,6 +411,19 @@ internal static class CdidxConfigFile
         return null;
     }
 
+    private static string ResolveConfigWorkspaceRoot(string configPath)
+    {
+        var fullConfigPath = Path.GetFullPath(configPath);
+        var configDirectory = Path.GetDirectoryName(fullConfigPath) ?? Path.GetFullPath(".");
+        if (string.Equals(Path.GetFileName(configDirectory), ".cdidx", StringComparison.Ordinal)
+            && string.Equals(Path.GetFileName(fullConfigPath), "config.json", StringComparison.Ordinal))
+        {
+            return Path.GetDirectoryName(configDirectory) ?? configDirectory;
+        }
+
+        return configDirectory;
+    }
+
     internal static int RunValidate(string[] args, JsonSerializerOptions jsonOptions)
     {
         if (args.Length > 0)
@@ -516,6 +534,64 @@ internal static class CdidxConfigFile
         return true;
     }
 
+    private static bool TryReadWorkspaceOutputPath(JsonElement element, string key, string path, out string? value, out string? error)
+    {
+        value = null;
+        error = null;
+        if (!TryReadString(element, key, path, out var raw, out error))
+            return false;
+
+        var workspaceRoot = ResolveConfigWorkspaceRoot(path);
+        if (!TryResolveWorkspaceOutputPath(raw!, workspaceRoot, out value, out var pathError))
+        {
+            error = pathError;
+            return false;
+        }
+
+        return true;
+
+        bool TryResolveWorkspaceOutputPath(string rawPath, string root, out string? resolved, out string? pathError)
+        {
+            resolved = null;
+            pathError = null;
+            try
+            {
+                var normalizedRoot = NormalizeBoundaryPath(Path.GetFullPath(root));
+                var fullPath = Path.IsPathRooted(rawPath)
+                    ? Path.GetFullPath(rawPath)
+                    : Path.GetFullPath(Path.Combine(normalizedRoot, rawPath));
+                var normalizedPath = NormalizeBoundaryPath(fullPath);
+
+                if (!PathCasing.IsPathEqualOrParent(normalizedRoot, normalizedPath))
+                {
+                    pathError = $"[cdidx] {path}: `{key}` must resolve inside the config workspace root `{normalizedRoot}`.";
+                    return false;
+                }
+
+                resolved = fullPath;
+                return true;
+            }
+            catch (Exception ex) when (ex is ArgumentException
+                                           or IOException
+                                           or NotSupportedException
+                                           or PathTooLongException
+                                           or UnauthorizedAccessException)
+            {
+                pathError = $"[cdidx] {path}: `{key}` path is invalid: {ex.Message}";
+                return false;
+            }
+        }
+    }
+
+    private static string NormalizeBoundaryPath(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        var root = Path.GetPathRoot(fullPath);
+        if (!string.IsNullOrEmpty(root) && string.Equals(fullPath, root, StringComparison.Ordinal))
+            return fullPath;
+        return fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+    }
+
     private static bool TryReadStringArray(JsonElement element, string key, string path, out string[]? value, out string? error)
     {
         value = null;
@@ -525,7 +601,14 @@ internal static class CdidxConfigFile
             error = $"[cdidx] {path}: `{key}` must be an array of strings.";
             return false;
         }
-        var collected = new List<string>(element.GetArrayLength());
+        var arrayLength = element.GetArrayLength();
+        if (arrayLength > MaxConfigStringArrayItems)
+        {
+            error = $"[cdidx] {path}: `{key}` must contain <= {MaxConfigStringArrayItems} items.";
+            return false;
+        }
+
+        var collected = new List<string>(arrayLength);
         foreach (var item in element.EnumerateArray())
         {
             if (item.ValueKind != JsonValueKind.String)
@@ -533,7 +616,12 @@ internal static class CdidxConfigFile
                 error = $"[cdidx] {path}: `{key}` must contain only strings.";
                 return false;
             }
-            var raw = item.GetString();
+            var raw = item.GetString() ?? string.Empty;
+            if (raw.Length > MaxConfigStringArrayItemChars)
+            {
+                error = $"[cdidx] {path}: `{key}` items must be <= {MaxConfigStringArrayItemChars} characters.";
+                return false;
+            }
             if (string.IsNullOrWhiteSpace(raw))
                 continue;
             collected.Add(raw);
