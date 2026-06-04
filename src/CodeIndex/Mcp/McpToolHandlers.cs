@@ -1180,6 +1180,7 @@ public partial class McpServer
                 return CreateToolResult(id, "No results found.", payload);
             }
 
+            var queryContext = SearchSnippetFormatter.PrepareQueryContext(query);
             var structured = new JsonObject
             {
                 ["query"] = query,
@@ -1189,7 +1190,7 @@ public partial class McpServer
                 ["maxLineWidth"] = maxLineWidth,
                 ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
-                ["results"] = ToJsonArray(SearchSnippetFormatter.ToCompactResults(results, query, snippetLines, exact, maxLineWidth, exposeLiteralHighlights: exact))
+                ["results"] = ToJsonArray(SearchSnippetFormatter.ToCompactResults(results, queryContext, snippetLines, exact, maxLineWidth, exposeLiteralHighlights: exact))
             };
             AddSearchStabilityMetadata(structured, reader, cursor, results);
             AddResultEnvelope(structured, results.Count, truncated ? null : results.Count, truncated);
