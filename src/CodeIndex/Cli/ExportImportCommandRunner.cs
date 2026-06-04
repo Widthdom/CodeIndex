@@ -12,6 +12,8 @@ internal static class ExportImportCommandRunner
 {
     private const string ManifestEntryName = "manifest.json";
     private const string DatabaseEntryName = "codeindex.db";
+    internal const int MaxImportManifestBytes = 64 * 1024;
+    internal const int MaxImportManifestJsonDepth = 16;
     internal const long MaxImportDatabaseBytes = 8L * 1024 * 1024 * 1024;
     private const int ImportCopyBufferSize = 81920;
     private static readonly DateTimeOffset DeterministicZipTimestamp = new(1980, 1, 1, 0, 0, 0, TimeSpan.Zero);
@@ -349,21 +351,81 @@ internal static class ExportImportCommandRunner
 
     private static bool TryReadManifest(ZipArchiveEntry manifestEntry, JsonSerializerOptions jsonOptions, out ExportManifest manifest, out string message)
     {
+        if (!TryValidateManifestEntrySize(manifestEntry, out message))
+        {
+            manifest = null!;
+            return false;
+        }
+
         try
         {
             using var stream = manifestEntry.Open();
-            manifest = JsonSerializer.Deserialize<ExportManifest>(stream, jsonOptions)
-                ?? throw new JsonException("manifest.json did not contain an object");
+            using var manifestBytes = new MemoryStream((int)Math.Min(Math.Max(manifestEntry.Length, 0), MaxImportManifestBytes));
+            CopyToWithLimit(stream, manifestBytes, MaxImportManifestBytes, ManifestEntryName);
+            manifestBytes.Position = 0;
+            var parsedManifest = JsonSerializer.Deserialize<ExportManifest>(manifestBytes, CreateImportManifestJsonOptions(jsonOptions));
+            if (parsedManifest == null)
+            {
+                manifest = null!;
+                message = "manifest.json did not contain an object";
+                return false;
+            }
+
+            manifest = parsedManifest;
             message = string.Empty;
             return true;
         }
-        catch (Exception ex) when (ex is JsonException or NotSupportedException)
+        catch (InvalidDataException ex)
         {
             manifest = null!;
             message = ex.Message;
             return false;
         }
+        catch (JsonException ex)
+        {
+            manifest = null!;
+            message = IsJsonDepthLimitException(ex)
+                ? $"manifest.json exceeds the JSON depth limit of {MaxImportManifestJsonDepth}"
+                : "manifest.json is not valid export manifest JSON";
+            return false;
+        }
+        catch (NotSupportedException)
+        {
+            manifest = null!;
+            message = "manifest.json contains unsupported export manifest JSON";
+            return false;
+        }
     }
+
+    private static bool TryValidateManifestEntrySize(ZipArchiveEntry manifestEntry, out string message)
+    {
+        if (manifestEntry.Length < 0 || manifestEntry.CompressedLength < 0)
+        {
+            message = "archive manifest.json size metadata is invalid";
+            return false;
+        }
+
+        if (manifestEntry.Length > MaxImportManifestBytes)
+        {
+            message = $"archive manifest.json is too large: {ConsoleUi.FormatBytes(manifestEntry.Length)} uncompressed exceeds the import limit of {ConsoleUi.FormatBytes(MaxImportManifestBytes)}";
+            return false;
+        }
+
+        if (manifestEntry.CompressedLength > MaxImportManifestBytes)
+        {
+            message = $"archive manifest.json is too large: {ConsoleUi.FormatBytes(manifestEntry.CompressedLength)} compressed exceeds the import limit of {ConsoleUi.FormatBytes(MaxImportManifestBytes)}";
+            return false;
+        }
+
+        message = string.Empty;
+        return true;
+    }
+
+    private static JsonSerializerOptions CreateImportManifestJsonOptions(JsonSerializerOptions jsonOptions)
+        => new(jsonOptions) { MaxDepth = MaxImportManifestJsonDepth };
+
+    private static bool IsJsonDepthLimitException(JsonException ex)
+        => ex.Message.Contains("depth", StringComparison.OrdinalIgnoreCase);
 
     private static bool TryValidateManifestHeader(ExportManifest manifest, out string message)
     {
@@ -464,6 +526,9 @@ internal static class ExportImportCommandRunner
     }
 
     internal static long CopyToWithLimit(Stream source, Stream target, long maxBytes)
+        => CopyToWithLimit(source, target, maxBytes, DatabaseEntryName);
+
+    private static long CopyToWithLimit(Stream source, Stream target, long maxBytes, string entryName)
     {
         var buffer = new byte[ImportCopyBufferSize];
         long totalBytes = 0;
@@ -471,7 +536,7 @@ internal static class ExportImportCommandRunner
         while ((bytesRead = source.Read(buffer, 0, buffer.Length)) > 0)
         {
             if (totalBytes > maxBytes - bytesRead)
-                throw new InvalidDataException($"archive codeindex.db exceeds the import limit of {ConsoleUi.FormatBytes(maxBytes)}.");
+                throw new InvalidDataException($"archive {entryName} exceeds the import limit of {ConsoleUi.FormatBytes(maxBytes)}.");
 
             target.Write(buffer, 0, bytesRead);
             totalBytes += bytesRead;

@@ -1,3 +1,4 @@
+using System.IO.Compression;
 using System.Text.Json;
 using CodeIndex.Cli;
 
@@ -5,6 +6,66 @@ namespace CodeIndex.Tests;
 
 public class ExportImportCommandRunnerTests
 {
+    [Fact]
+    public void RunImport_RejectsOversizedManifestBeforeDatabaseEntry()
+    {
+        var workDir = Path.Combine(Path.GetTempPath(), $"cdidx_manifest_size_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(workDir);
+        try
+        {
+            var manifest = new string(' ', ExportImportCommandRunner.MaxImportManifestBytes + 1);
+            var archivePath = CreateArchiveWithManifest(workDir, manifest);
+            var dbPath = Path.Combine(workDir, "codeindex.db");
+
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
+                ExportImportCommandRunner.RunImport([archivePath, "--db", dbPath], new JsonSerializerOptions()));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains("archive manifest is invalid: archive manifest.json is too large", stderr);
+            Assert.DoesNotContain("archive is missing codeindex.db", stderr);
+            Assert.False(File.Exists(dbPath));
+        }
+        finally
+        {
+            Directory.Delete(workDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void RunImport_RejectsDeepManifestBeforeDatabaseEntry()
+    {
+        var workDir = Path.Combine(Path.GetTempPath(), $"cdidx_manifest_depth_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(workDir);
+        try
+        {
+            var depth = ExportImportCommandRunner.MaxImportManifestJsonDepth + 4;
+            var manifest =
+                "{\"format_version\":\"1\",\"cdidx_version\":\"test\",\"user_version\":0,\"database_sha256\":\"" +
+                new string('0', 64) +
+                "\",\"nested\":" +
+                string.Concat(Enumerable.Repeat("{\"x\":", depth)) +
+                "0" +
+                new string('}', depth) +
+                "}";
+            var archivePath = CreateArchiveWithManifest(workDir, manifest);
+            var dbPath = Path.Combine(workDir, "codeindex.db");
+
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
+                ExportImportCommandRunner.RunImport([archivePath, "--db", dbPath], new JsonSerializerOptions()));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains($"manifest.json exceeds the JSON depth limit of {ExportImportCommandRunner.MaxImportManifestJsonDepth}", stderr);
+            Assert.DoesNotContain("archive is missing codeindex.db", stderr);
+            Assert.False(File.Exists(dbPath));
+        }
+        finally
+        {
+            Directory.Delete(workDir, recursive: true);
+        }
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData("-wal")]
@@ -205,5 +266,15 @@ public class ExportImportCommandRunnerTests
 
         Assert.Equal(4, copied);
         Assert.Equal([1, 2, 3, 4], target.ToArray());
+    }
+
+    private static string CreateArchiveWithManifest(string workDir, string manifest)
+    {
+        var archivePath = Path.Combine(workDir, "codeindex.cdidx.zip");
+        using var archive = ZipFile.Open(archivePath, ZipArchiveMode.Create);
+        var entry = archive.CreateEntry("manifest.json");
+        using var writer = new StreamWriter(entry.Open());
+        writer.Write(manifest);
+        return archivePath;
     }
 }
