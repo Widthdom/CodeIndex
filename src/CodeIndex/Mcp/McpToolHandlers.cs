@@ -4066,7 +4066,21 @@ public partial class McpServer
         }
         catch (Exception ex)
         {
-            return CreateToolErrorResponse(id, $"Failed to backfill folded-name columns: {ex.Message}");
+            DeferFrameLog(() =>
+            {
+                WriteMcpLogLine(BuildToolErrorLog("backfill_fold", ex.Message));
+                Database.DbDebug.DumpToStderr(ex);
+            });
+            var classification = McpErrorEnvelope.ClassifyException(ex);
+            return CreateToolErrorResponse(id, BuildSanitizedToolErrorMessage("backfill_fold", ex),
+                category: classification.Category,
+                suggestion: classification.Suggestion,
+                retrySafe: classification.RetrySafe,
+                extraData: new JsonObject
+                {
+                    ["tool"] = "backfill_fold",
+                    ["exception_type"] = ex.GetType().Name,
+                });
         }
     }
 

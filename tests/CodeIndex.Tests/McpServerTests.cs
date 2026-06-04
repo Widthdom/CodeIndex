@@ -7676,6 +7676,37 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_BackfillFold_ExceptionUsesSanitizedToolError_Issue3201()
+    {
+        var previousDebug = Environment.GetEnvironmentVariable(McpServer.DebugEnvironmentVariable);
+        try
+        {
+            Environment.SetEnvironmentVariable(McpServer.DebugEnvironmentVariable, null);
+            DbWriter.FoldBackfillRowUpdatedForTesting = () =>
+                throw new InvalidOperationException("SECRET_BACKFILL_LITERAL from /private/path");
+
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"backfill_fold","arguments":{}}}""")!;
+            var response = _server.HandleMessage(request)!;
+
+            Assert.True(response["result"]!["isError"]!.GetValue<bool>(), response.ToJsonString());
+            var text = response["result"]!["content"]!.AsArray()[0]!["text"]!.GetValue<string>();
+            Assert.Equal("Tool 'backfill_fold' failed. See cdidx server stderr for details.", text);
+            Assert.DoesNotContain("SECRET_BACKFILL_LITERAL", response.ToJsonString());
+            Assert.DoesNotContain("/private/path", response.ToJsonString());
+
+            var structured = response["result"]!["structuredContent"]!;
+            Assert.Equal("internal_error", structured["category"]!.GetValue<string>());
+            Assert.Equal("backfill_fold", structured["tool"]!.GetValue<string>());
+            Assert.Equal(nameof(InvalidOperationException), structured["exception_type"]!.GetValue<string>());
+        }
+        finally
+        {
+            DbWriter.FoldBackfillRowUpdatedForTesting = null;
+            Environment.SetEnvironmentVariable(McpServer.DebugEnvironmentVariable, previousDebug);
+        }
+    }
+
+    [Fact]
     public void ToolsCall_BackfillFold_DryRunDoesNotWrite()
     {
         var writer = new DbWriter(_db.Connection);
