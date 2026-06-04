@@ -44,6 +44,15 @@ public sealed record McpAuthenticationResult(McpCallerIdentity? Identity, string
     public static McpAuthenticationResult Deny(string reason) => new(null, reason);
 }
 
+internal static class McpAuthenticationLimits
+{
+    internal const int MaxTokenCharacters = 4096;
+    internal const string OversizedTokenFailureReason = "auth token mismatch";
+
+    internal static bool IsTokenOversized(string? token)
+        => token is { Length: > MaxTokenCharacters };
+}
+
 /// <summary>
 /// Per-request authentication strategy for the MCP server. Implementations look at the
 /// incoming JSON-RPC request envelope and produce an identity or a failure reason. The
@@ -97,19 +106,22 @@ public sealed class LocalStdioAuthenticator : IMcpAuthenticator
 /// <see cref="CryptographicOperations.FixedTimeEquals(System.ReadOnlySpan{byte}, System.ReadOnlySpan{byte})"/>;
 /// equal-length inputs keep the compare on its constant-time path and the hash step erases
 /// the length-leak that the raw-byte form would otherwise have (FixedTimeEquals short-circuits
-/// on length mismatch). The hash-and-compare runs unconditionally — even on a missing token —
-/// so callers cannot distinguish "missing", "wrong length", and "wrong value" by timing.
-/// Identity is <c>stdio-token</c> / <c>token</c>. Notifications skip the check upstream because
-/// they produce no response and cannot be acted on.
+/// on length mismatch). Tokens over the shared cap are denied before hashing so hostile
+/// clients cannot force unbounded hashing work. For in-cap inputs, the hash-and-compare runs
+/// unconditionally — even on a missing token — so callers cannot distinguish "missing",
+/// "wrong length", and "wrong value" by timing. Identity is <c>stdio-token</c> /
+/// <c>token</c>. Notifications skip the check upstream because they produce no response and
+/// cannot be acted on.
 /// トークン認証 authenticator。各 JSON-RPC リクエストは <c>params.auth.token</c> に
 /// 一致するトークンを含む必要がある。期待トークンは固定長 (SHA-256 32 バイト) のダイジェスト
 /// として保持し、提示トークンも同じ長さにハッシュしてから
 /// <see cref="CryptographicOperations.FixedTimeEquals(System.ReadOnlySpan{byte}, System.ReadOnlySpan{byte})"/>
 /// で比較する。これにより比較は常に等長で定数時間パスに留まり、生バイト比較なら漏れる長さ情報も
-/// ハッシュ段階で隠れる (FixedTimeEquals は長さ不一致で即 return する)。ハッシュ＋比較は
-/// トークン未提示でも必ず走らせるため、呼び出し元は「未提示」「長さ違い」「値違い」を時間差で
-/// 区別できない。アイデンティティは <c>stdio-token</c> / <c>token</c>。通知は応答が
-/// 無く副作用も持たないので呼び出し側でチェック前にスキップされる。
+/// ハッシュ段階で隠れる (FixedTimeEquals は長さ不一致で即 return する)。共通上限を超える token は
+/// hash 前に拒否し、悪意あるクライアントが無制限の hash 処理を強制できないようにする。上限内の
+/// 入力では、トークン未提示でも必ずハッシュ＋比較を走らせるため、呼び出し元は「未提示」
+/// 「長さ違い」「値違い」を時間差で区別できない。アイデンティティは <c>stdio-token</c> /
+/// <c>token</c>。通知は応答が無く副作用も持たないので呼び出し側でチェック前にスキップされる。
 /// </summary>
 public sealed class TokenMcpAuthenticator : IMcpAuthenticator
 {
@@ -124,6 +136,8 @@ public sealed class TokenMcpAuthenticator : IMcpAuthenticator
     {
         if (string.IsNullOrEmpty(expectedToken))
             throw new ArgumentException("Token must not be empty", nameof(expectedToken));
+        if (McpAuthenticationLimits.IsTokenOversized(expectedToken))
+            throw new ArgumentException($"Token must not exceed {McpAuthenticationLimits.MaxTokenCharacters} characters.", nameof(expectedToken));
         _expectedTokenHash = SHA256.HashData(Encoding.UTF8.GetBytes(expectedToken));
     }
 
@@ -147,12 +161,15 @@ public sealed class TokenMcpAuthenticator : IMcpAuthenticator
             presented = null;
         }
 
-        // Always hash and constant-time compare — even when no token was presented — so the
-        // missing / wrong-length / wrong-value branches all take the same path. Choosing the
-        // stderr `Deny` reason after the compare runs keeps the timing uniform; the wire
-        // response is "Unauthorized" either way.
-        // トークン未提示でも必ずハッシュ＋定数時間比較を走らせる。Deny 理由の選択は比較後に
-        // 行い、stderr 用文字列だけ分岐させる（ワイヤ応答は常に "Unauthorized"）。
+        if (McpAuthenticationLimits.IsTokenOversized(presented))
+            return McpAuthenticationResult.Deny(McpAuthenticationLimits.OversizedTokenFailureReason);
+
+        // For in-cap inputs, always hash and constant-time compare — even when no token was
+        // presented — so the missing / wrong-length / wrong-value branches all take the same
+        // path. Choosing the stderr `Deny` reason after the compare runs keeps the timing
+        // uniform; the wire response is "Unauthorized" either way.
+        // 上限内の入力では、トークン未提示でも必ずハッシュ＋定数時間比較を走らせる。Deny 理由の
+        // 選択は比較後に行い、stderr 用文字列だけ分岐させる（ワイヤ応答は常に "Unauthorized"）。
         var presentedHash = SHA256.HashData(Encoding.UTF8.GetBytes(presented ?? string.Empty));
         var matches = CryptographicOperations.FixedTimeEquals(presentedHash, _expectedTokenHash);
 

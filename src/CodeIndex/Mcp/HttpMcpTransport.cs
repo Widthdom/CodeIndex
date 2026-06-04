@@ -30,6 +30,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     internal const int DefaultMaxQueuedRequests = 64;
     internal const string MaxRequestBodyBytesEnvVar = "CDIDX_MCP_HTTP_MAX_REQUEST_BYTES";
     internal const string MaxQueueDepthEnvVar = "CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH";
+    private const string BearerPrefix = "Bearer ";
 
     private static readonly JsonDocumentOptions HttpProbeJsonDocumentOptions = new()
     {
@@ -84,6 +85,8 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             FullMode = BoundedChannelFullMode.Wait,
             AllowSynchronousContinuations = false,
         });
+        if (McpAuthenticationLimits.IsTokenOversized(bearerToken))
+            throw new ArgumentException($"Token must not exceed {McpAuthenticationLimits.MaxTokenCharacters.ToString(CultureInfo.InvariantCulture)} characters.", nameof(bearerToken));
         _listener = new HttpListener();
         _listener.Prefixes.Add(prefix);
         _listener.Start();
@@ -523,10 +526,9 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         {
             request.AuthOutcome = "missing";
         }
-        else if (header.Length >= "Bearer ".Length && header.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+        else if (TryExtractBearerToken(header, out var provided))
         {
-            var provided = header.Substring("Bearer ".Length).Trim();
-            if (HashEqualsConfiguredToken(provided))
+            if (provided is not null && HashEqualsConfiguredToken(provided))
             {
                 request.AuthOutcome = "ok";
                 return true;
@@ -548,6 +550,20 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         await RespondAsync(context, (int)HttpStatusCode.Unauthorized, "Missing or invalid bearer token.\n").ConfigureAwait(false);
         LogRequest(request, (int)HttpStatusCode.Unauthorized);
         return false;
+    }
+
+    private static bool TryExtractBearerToken(string header, out string? token)
+    {
+        token = null;
+        if (header.Length < BearerPrefix.Length || !header.StartsWith(BearerPrefix, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var candidate = header.AsSpan(BearerPrefix.Length).Trim();
+        if (candidate.Length > McpAuthenticationLimits.MaxTokenCharacters)
+            return true;
+
+        token = candidate.ToString();
+        return true;
     }
 
     private static async Task RespondAsync(HttpListenerContext context, int statusCode, string body)

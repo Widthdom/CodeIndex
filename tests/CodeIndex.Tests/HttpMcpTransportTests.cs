@@ -535,6 +535,28 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
+    public async Task HttpTransport_BearerToken_RejectsOversizedHeaderBeforeHashing()
+    {
+        var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: "token", requestLogger: records.Enqueue);
+
+        using var client = new HttpClient();
+        using var request = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
+        {
+            Content = new StringContent("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", Encoding.UTF8, "application/json"),
+        };
+        request.Headers.TryAddWithoutValidation(
+            "Authorization",
+            "Bearer " + new string('x', McpAuthenticationLimits.MaxTokenCharacters + 1));
+
+        using var response = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        var record = Assert.Single(await WaitForRequestLogRecordsAsync(records, 1));
+        Assert.Equal("wrong-token", record.AuthOutcome);
+    }
+
+    [Fact]
     public async Task HttpTransport_BearerToken_RejectsSameLengthWrongToken()
     {
         // Same-length wrong token: covers the constant-time-compare branch *after* the SHA-256
