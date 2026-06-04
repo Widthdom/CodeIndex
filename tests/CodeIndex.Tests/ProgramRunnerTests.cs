@@ -249,6 +249,53 @@ public class ProgramRunnerTests
     }
 
     [Fact]
+    public void Run_QueryTraceStderr_BoundsPathArraysAndValues_Issue3123()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("query-trace-bounds");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "public class App { public void Needle() { } }");
+            var longPath = new string('p', ProgramRunner.QueryTraceValueMaxChars) + "TAIL_ISSUE_3123";
+            var args = new List<string>
+            {
+                "search",
+                "Needle",
+                "--db",
+                dbPath,
+                "--trace=stderr",
+                "--count",
+            };
+            for (var i = 0; i < ProgramRunner.QueryTraceArrayMaxItems + 3; i++)
+            {
+                args.Add("--path");
+                args.Add(i == 0 ? longPath : $"src/{i}.cs");
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                args.ToArray(),
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("0", stdout.Trim());
+            var traceLine = stderr.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries).Single(line => line.StartsWith('{'));
+            using var document = JsonDocument.Parse(traceLine);
+            var parameters = document.RootElement.GetProperty("parameters");
+            Assert.Equal(ProgramRunner.QueryTraceArrayMaxItems, parameters.GetProperty("path").GetArrayLength());
+            Assert.True(parameters.GetProperty("path_truncated").GetBoolean());
+            Assert.Equal(ProgramRunner.QueryTraceArrayMaxItems + 3, parameters.GetProperty("path_original_count").GetInt32());
+            Assert.True(parameters.GetProperty("path_value_truncated").GetBoolean());
+            Assert.Contains($"original length {longPath.Length} chars", parameters.GetProperty("path")[0].GetString());
+            Assert.DoesNotContain("TAIL_ISSUE_3123", traceLine);
+            Assert.DoesNotContain(dbPath, traceLine);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_QueryDefaultEnvironmentParseError_TruncatesRawValue_Issue3110()
     {
         var prefix = new string('9', ConsoleUi.DefaultDiagnosticValueCharLimit);

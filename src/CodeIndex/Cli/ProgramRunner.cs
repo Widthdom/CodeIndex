@@ -17,6 +17,8 @@ namespace CodeIndex.Cli;
 internal static class ProgramRunner
 {
     private const int RetainedQueryTraceFileCount = 30;
+    internal const int QueryTraceValueMaxChars = 128;
+    internal const int QueryTraceArrayMaxItems = 8;
     internal const string QuietEnvironmentVariable = "CDIDX_QUIET";
     private const string InstallerScriptUrlTemplate = "https://raw.githubusercontent.com/Widthdom/CodeIndex/{0}/install.sh";
     private const long MaxInstallerScriptBytes = 1024 * 1024;
@@ -1869,7 +1871,7 @@ internal static class ProgramRunner
             }
             if (rawValue is not ("none" or "stderr" or "file"))
             {
-                error = $"Error: --trace must be one of `none`, `stderr`, or `file`, got `{rawValue}`.";
+                error = $"Error: --trace must be one of `none`, `stderr`, or `file`, got `{ConsoleUi.FormatBoundedValue(rawValue)}`.";
                 return false;
             }
             traceMode = rawValue;
@@ -1978,17 +1980,17 @@ internal static class ProgramRunner
                 case "--json":
                     parameters["json"] = true;
                     if (!string.IsNullOrWhiteSpace(value))
-                        parameters["json_format"] = value;
+                        AddQueryTraceString(parameters, "json_format", value);
                     break;
                 case "--count":
                     parameters["count"] = true;
                     break;
                 case "--lang" when !string.IsNullOrWhiteSpace(value):
-                    parameters["lang"] = value;
+                    AddQueryTraceString(parameters, "lang", value);
                     break;
                 case "--limit" when !string.IsNullOrWhiteSpace(value):
                 case "--top" when !string.IsNullOrWhiteSpace(value):
-                    parameters["limit"] = value;
+                    AddQueryTraceString(parameters, "limit", value);
                     break;
                 case "--path" when !string.IsNullOrWhiteSpace(value):
                     paths.Add(value);
@@ -1998,11 +2000,45 @@ internal static class ProgramRunner
                     break;
             }
         }
-        if (paths.Count > 0)
-            parameters["path"] = new JsonArray(paths.Select(path => JsonValue.Create(path)).ToArray());
-        if (excludePaths.Count > 0)
-            parameters["exclude_path"] = new JsonArray(excludePaths.Select(path => JsonValue.Create(path)).ToArray());
+        AddQueryTraceArray(parameters, "path", paths);
+        AddQueryTraceArray(parameters, "exclude_path", excludePaths);
         return parameters;
+    }
+
+    private static void AddQueryTraceString(JsonObject parameters, string name, string value)
+    {
+        var bounded = ConsoleUi.BoundDisplayText(value, QueryTraceValueMaxChars);
+        parameters[name] = bounded.Text;
+        if (bounded.Truncated)
+        {
+            parameters[$"{name}_truncated"] = true;
+            parameters[$"{name}_original_length"] = bounded.OriginalLength;
+        }
+    }
+
+    private static void AddQueryTraceArray(JsonObject parameters, string name, List<string> values)
+    {
+        if (values.Count == 0)
+            return;
+
+        var array = new JsonArray();
+        var valueTruncated = false;
+        foreach (var value in values.Take(QueryTraceArrayMaxItems))
+        {
+            var bounded = ConsoleUi.BoundDisplayText(value, QueryTraceValueMaxChars);
+            valueTruncated |= bounded.Truncated;
+            array.Add(JsonValue.Create(bounded.Text));
+        }
+
+        parameters[name] = array;
+        if (values.Count > QueryTraceArrayMaxItems)
+        {
+            parameters[$"{name}_truncated"] = true;
+            parameters[$"{name}_original_count"] = values.Count;
+        }
+
+        if (valueTruncated)
+            parameters[$"{name}_value_truncated"] = true;
     }
 
     private sealed class QueryTraceOutputCapture : TextWriter
