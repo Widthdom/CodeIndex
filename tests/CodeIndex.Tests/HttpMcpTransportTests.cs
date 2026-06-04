@@ -193,6 +193,20 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
+    public async Task HttpTransport_RequestLogger_TooDeepJsonRpcIdReturnsNull_Issue3014()
+    {
+        var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath, requestLogger: records.Enqueue);
+
+        using var response = await harness.PostJsonAsync(BuildNestedJsonRpcRequest(McpServer.MaxJsonDepth + 1));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var snapshot = await WaitForRequestLogRecordsAsync(records, 1);
+        var record = Assert.Single(snapshot, record => record.Method == "POST");
+        Assert.Null(record.RequestId);
+    }
+
+    [Fact]
     public async Task HttpTransport_TwoSequentialRequests_ShareWarmServer()
     {
         // Issue #1558: AI clients should be able to keep a single MCP server warm across
@@ -814,6 +828,14 @@ public class HttpMcpTransportTests : IDisposable
     private static string BuildNestedJsonRpcResponse(int nestedObjectCount)
     {
         var builder = new StringBuilder("""{"jsonrpc":"2.0","id":1,"result":""");
+        AppendNestedObject(builder, nestedObjectCount);
+        builder.Append('}');
+        return builder.ToString();
+    }
+
+    private static string BuildNestedJsonRpcRequest(int nestedObjectCount)
+    {
+        var builder = new StringBuilder("""{"jsonrpc":"2.0","id":1,"method":"ping","params":""");
         AppendNestedObject(builder, nestedObjectCount);
         builder.Append('}');
         return builder.ToString();
