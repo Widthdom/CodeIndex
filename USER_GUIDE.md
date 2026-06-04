@@ -305,11 +305,16 @@ can use `jq -s '.'` or pass `--json=array` to `search` to emit the result set as
 one JSON array. Add `--pretty` with `--json` to indent single-document JSON
 responses; for `search`, use `--json=array --pretty` when the result set itself
 should be indented because default `search --json` stays newline-delimited.
+For AI-oriented bounded payloads, `map`, `inspect`, and `outline` accept
+`--compact`. It implies JSON output, caps list sections to 5 items by default
+(or the explicit `--limit` / `--top` value), and adds `compact`,
+`compact_limit`, and `truncation.sections.*` metadata.
 
 ```bash
 cdidx search authenticate --json          # ndjson stream, one result per line
 cdidx search authenticate --json=array    # single JSON array
 cdidx inspect QueryCommandRunner --json --pretty
+cdidx map --compact                       # capped JSON with truncation metadata
 ```
 
 For `cdidx find --count --json`, `files` is the canonical matched-file count.
@@ -1164,6 +1169,7 @@ same source location.
 | `--db <path>` | All commands except `languages`; for `mcp`, only `--db` is supported | Database file path. `index` defaults to `<projectPath>/.cdidx/codeindex.db`; query commands default to `.cdidx/codeindex.db` in the current directory. Query commands without `--db` keep trusting that default `.cdidx/codeindex.db` sibling path, so moving or renaming the current repo does not leave stale workspace metadata behind. For explicit query DBs, workspace metadata such as `project_root`, `git_head`, and `git_is_dirty` comes from the persisted `indexed_project_root` stored in that DB when available. Legacy explicit DBs created before that metadata existed may return those fields as `null` / absent until you rerun `cdidx index <projectPath> --db <path>` or a scoped update that actually commits at least one file delete/update against the intended project, even if the explicit path itself looks like `.../.cdidx/codeindex.db`. |
 | `--json` | All commands except `mcp` | JSON output (for AI/machine use). `search --json` writes newline-delimited result objects followed by a final `{"done":true,"count":N,"interrupted":false}` sentinel, including zero-result output, so stream consumers can detect clean completion. |
 | `--pretty` | JSON-capable commands except `mcp` | Pretty-print JSON output with indentation. Default `search --json` remains newline-delimited; use `search --json=array --pretty` for an indented search result array. |
+| `--compact` | `map`, `inspect`, `outline` | Emit AI-oriented compact JSON with capped list sections and `truncation.sections.*` metadata. The default cap is 5 unless `--limit` / `--top` is supplied. |
 | `--status <all\|submitted\|unsubmitted>` | `suggestions` | Filter local suggestion history by GitHub submission state. |
 | `--language <lang>` / `--lang <lang>` | `suggestions` | Filter local suggestion history by recorded target language. |
 | `--category <category>` | `suggestions` | Filter local suggestion history by suggestion category. |
@@ -2506,11 +2512,16 @@ newline-delimited JSON (ndjson) として出力し、最後に `{"done":true,...
 単一 document の JSON 応答をインデント付きで出力します。`search` の result set を
 整形したい場合は、既定の `search --json` が newline-delimited のまま保たれるため
 `--json=array --pretty` を使います。
+AI 向けに上限付き payload が必要な場合、`map`、`inspect`、`outline` は
+`--compact` に対応しています。これは JSON 出力を暗黙に有効化し、list section を
+既定 5 件（明示した `--limit` / `--top` があればその値）に cap し、
+`compact`、`compact_limit`、`truncation.sections.*` metadata を追加します。
 
 ```bash
 cdidx search authenticate --json          # ndjson stream、1 行 1 result
 cdidx search authenticate --json=array    # 単一 JSON array
 cdidx inspect QueryCommandRunner --json --pretty
+cdidx map --compact                       # truncation metadata 付きの cap 済み JSON
 ```
 
 ## Editor / index portability
@@ -3367,6 +3378,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--db <path>` | `languages` を除く全コマンド。`mcp` は `--db` のみ対応 | DBファイルパス。`index` のデフォルトは `<projectPath>/.cdidx/codeindex.db`、クエリ系コマンドのデフォルトはカレントディレクトリの `.cdidx/codeindex.db`。`--db` を付けない query は、その既定の `.cdidx/codeindex.db` sibling path を引き続き正とするため、カレント repo を move/rename しても古い workspace metadata を引きずらない。明示指定 query DB の `project_root`、`git_head`、`git_is_dirty` などの workspace metadata は、利用可能な場合はその DB に保存された `indexed_project_root` から解決される。保存前の古い explicit DB では、意図した project に対して `cdidx index <projectPath> --db <path>`、または少なくとも 1 件の file delete/update を実際に commit する scoped update を一度実行するまで、これらの項目が `null` / 未出力になることがあり、明示パス自体が `.../.cdidx/codeindex.db` でも同じ。 |
 | `--json` | `mcp` を除く全コマンド | JSON出力（AI/機械向け） |
 | `--pretty` | `mcp` を除く JSON 対応コマンド | JSON 出力をインデント付きで整形。既定の `search --json` は newline-delimited のまま維持されるため、検索結果配列を整形したい場合は `search --json=array --pretty` を使う。 |
+| `--compact` | `map`、`inspect`、`outline` | list section を cap した AI 向け compact JSON を出力し、`truncation.sections.*` metadata を含める。既定 cap は 5 件で、`--limit` / `--top` 指定時はその値を使う。 |
 | `--status <all\|submitted\|unsubmitted>` | `suggestions` | ローカル提案履歴を GitHub 送信状態で絞り込みます。 |
 | `--language <lang>` / `--lang <lang>` | `suggestions` | ローカル提案履歴を記録済み対象言語で絞り込みます。 |
 | `--category <category>` | `suggestions` | ローカル提案履歴を提案カテゴリで絞り込みます。 |

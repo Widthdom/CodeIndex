@@ -180,6 +180,8 @@ internal static class CliFlagSchema
         "validate", "deps", "impact", "unused", "hotspots", "languages", "db", "report",
     ];
 
+    private static readonly string[] CompactJsonCommands = ["map", "inspect", "outline"];
+
     private static readonly string[] FormatCommands =
     [
         "search", "definition", "references", "callers", "callees", "find", "validate", "deps",
@@ -208,6 +210,7 @@ internal static class CliFlagSchema
             new() { Name = "--data-dir", ValuePlaceholder = "<dir>", Description = "Directory containing codeindex.db; overrides CDIDX_DATA_DIR/XDG/workspace defaults", Commands = Set(DataDirCommands) },
             new() { Name = "--json", Description = "JSON output; search also accepts --json=array for a single JSON array", Commands = Set(JsonCommands) },
             new() { Name = "--pretty", Description = "Pretty-print JSON output with indentation", Commands = Set(JsonCommands) },
+            new() { Name = "--compact", Description = "AI-oriented compact JSON with capped list sections and truncation metadata", Commands = Set(CompactJsonCommands) },
             new() { Name = "--format", ValuePlaceholder = "<text|json|count|compact|csv|tsv|lsp|qf|sarif>", Description = "Standard output format for token budgets, editor integrations, and CI", Commands = Set(FormatCommands) },
             new() { Name = "--quiet", ShortName = "-q", Description = "Suppress informational stderr output; errors still print", Commands = Set(AllCommands.ToArray()) },
             new() { Name = "--silent", Description = "Alias for --quiet", Commands = Set(AllCommands.ToArray()) },
