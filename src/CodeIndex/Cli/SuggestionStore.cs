@@ -1054,7 +1054,10 @@ public class SuggestionStore
         {
             var backupPath = _filePath + ".bak";
             if (File.Exists(LongPath.EnsureWindowsPrefix(_filePath)))
+            {
                 File.Move(LongPath.EnsureWindowsPrefix(_filePath), LongPath.EnsureWindowsPrefix(backupPath), overwrite: true);
+                DataDirectorySecurity.ApplyPrivateFileMode(backupPath);
+            }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

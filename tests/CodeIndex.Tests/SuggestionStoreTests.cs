@@ -766,6 +766,28 @@ public class SuggestionStoreTests : IDisposable
     }
 
     [Fact]
+    public void CorruptFile_OnPosixHardensBackupFileMode()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var filePath = Path.Combine(_tempDir, "suggestions-codeindex.json");
+        var backupPath = filePath + ".bak";
+        File.WriteAllText(filePath, "{corrupt json[[[");
+#pragma warning disable CA1416
+        File.SetUnixFileMode(
+            filePath,
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
+#pragma warning restore CA1416
+
+        var all = _store.LoadAll();
+
+        Assert.Empty(all);
+        Assert.True(File.Exists(backupPath), "Corrupt file should be preserved as .bak");
+        AssertPrivateFileMode(backupPath);
+    }
+
+    [Fact]
     public void ZeroByteFile_IsPreservedAsBackup()
     {
         var filePath = Path.Combine(_tempDir, "suggestions-codeindex.json");
