@@ -726,6 +726,45 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void Initialize_ClientInfo_TruncatesSessionStatusAndCallerIdentity_Issue3120()
+    {
+        var name = new string('n', McpBoundedText.MaxClientInfoChars + 25);
+        var version = new string('v', McpBoundedText.MaxClientInfoChars + 25);
+        var nameDisplay = McpBoundedText.ForDisplay(name, McpBoundedText.MaxClientInfoChars);
+        var versionDisplay = McpBoundedText.ForDisplay(version, McpBoundedText.MaxClientInfoChars);
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "initialize",
+            ["params"] = new JsonObject
+            {
+                ["clientInfo"] = new JsonObject
+                {
+                    ["name"] = name,
+                    ["version"] = version,
+                },
+            },
+        };
+
+        _server.HandleMessage(request);
+
+        Assert.Equal($"{nameDisplay.Text}/{versionDisplay.Text}", _server.CurrentCaller);
+        var status = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
+        var response = _server.HandleMessage(status)!;
+
+        Assert.DoesNotContain(name, response.ToJsonString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(version, response.ToJsonString(), StringComparison.Ordinal);
+        var clientInfo = response["result"]!["structuredContent"]!["mcp_session"]!["client_info"]!;
+        Assert.Equal(nameDisplay.Text, clientInfo["name"]!.GetValue<string>());
+        Assert.Equal(name.Length, clientInfo["name_length"]!.GetValue<int>());
+        Assert.True(clientInfo["name_truncated"]!.GetValue<bool>());
+        Assert.Equal(versionDisplay.Text, clientInfo["version"]!.GetValue<string>());
+        Assert.Equal(version.Length, clientInfo["version_length"]!.GetValue<int>());
+        Assert.True(clientInfo["version_truncated"]!.GetValue<bool>());
+    }
+
+    [Fact]
     public void LoggingSetLevel_UpdatesSessionLogLevel()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"logging/setLevel","params":{"level":"emergency"}}""")!;
@@ -11288,6 +11327,22 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void BuildCallerSwapRejectionLog_TruncatesClientInfoIdentities_Issue3120()
+    {
+        var current = new string('c', McpBoundedText.MaxClientIdentityChars + 25);
+        var attempted = new string('a', McpBoundedText.MaxClientIdentityChars + 25);
+        var currentDisplay = McpBoundedText.ForDisplay(current, McpBoundedText.MaxClientIdentityChars);
+        var attemptedDisplay = McpBoundedText.ForDisplay(attempted, McpBoundedText.MaxClientIdentityChars);
+
+        var log = McpServer.BuildCallerSwapRejectionLog(current, attempted);
+
+        Assert.DoesNotContain(current, log, StringComparison.Ordinal);
+        Assert.DoesNotContain(attempted, log, StringComparison.Ordinal);
+        Assert.Contains(currentDisplay.Text, log);
+        Assert.Contains(attemptedDisplay.Text, log);
+    }
+
+    [Fact]
     public void BatchQuery_RejectsNestedBatchQuerySlots()
     {
         // batch_query slots that themselves request `batch_query` are rejected before
@@ -11483,6 +11538,24 @@ public class McpServerTests : IDisposable
         Assert.Equal("status", data["tool"]!.GetValue<string>());
         // Canonical envelope added / canonical envelope を併載
         AssertEnvelope(data, "rate_limited", expectedRetrySafe: true);
+    }
+
+    [Fact]
+    public void RateLimited_ErrorAndLog_TruncatesCallerIdentity_Issue3120()
+    {
+        var caller = new string('r', McpBoundedText.MaxClientIdentityChars + 25);
+        var display = McpBoundedText.ForDisplay(caller, McpBoundedText.MaxClientIdentityChars);
+
+        var response = McpServer.CreateRateLimitedErrorResponse(null, "status", caller, retryAfterMs: 123);
+        var log = McpServer.BuildRateLimitedLog("status", caller, retryAfterMs: 123);
+
+        Assert.DoesNotContain(caller, response.ToJsonString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(caller, log, StringComparison.Ordinal);
+        var data = response["error"]!["data"]!;
+        Assert.Equal(display.Text, data["caller"]!.GetValue<string>());
+        Assert.Equal(caller.Length, data["caller_length"]!.GetValue<int>());
+        Assert.True(data["caller_truncated"]!.GetValue<bool>());
+        Assert.Contains(display.Text, log);
     }
 
     [Fact]

@@ -68,6 +68,46 @@ public class McpAuditLogTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_Ping_TruncatesClientInfoCallerFields_Issue3120()
+    {
+        using var sink = new AuditLogSink(_auditPath, AuditLogSink.DefaultMaxBytes, includeValues: false);
+        using var server = CreateServer(sink);
+        var name = new string('n', McpBoundedText.MaxClientInfoChars + 25);
+        var version = new string('v', McpBoundedText.MaxClientInfoChars + 25);
+        var nameDisplay = McpBoundedText.ForDisplay(name, McpBoundedText.MaxClientInfoChars);
+        var versionDisplay = McpBoundedText.ForDisplay(version, McpBoundedText.MaxClientInfoChars);
+        var init = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "initialize",
+            ["params"] = new JsonObject
+            {
+                ["clientInfo"] = new JsonObject
+                {
+                    ["name"] = name,
+                    ["version"] = version,
+                },
+            },
+        };
+        _ = server.HandleMessage(init);
+
+        var ping = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"ping","arguments":{}}}""")!;
+        _ = server.HandleMessage(ping);
+
+        var rawLog = File.ReadAllText(_auditPath);
+        Assert.DoesNotContain(name, rawLog, StringComparison.Ordinal);
+        Assert.DoesNotContain(version, rawLog, StringComparison.Ordinal);
+        var record = ReadOnlyRecord();
+        Assert.Equal(nameDisplay.Text, record.GetProperty("caller").GetString());
+        Assert.Equal(name.Length, record.GetProperty("caller_length").GetInt32());
+        Assert.True(record.GetProperty("caller_truncated").GetBoolean());
+        Assert.Equal(versionDisplay.Text, record.GetProperty("caller_version").GetString());
+        Assert.Equal(version.Length, record.GetProperty("caller_version_length").GetInt32());
+        Assert.True(record.GetProperty("caller_version_truncated").GetBoolean());
+    }
+
+    [Fact]
     public void ToolsCall_MissingToolName_StillEmitsAuditRecord()
     {
         using var sink = new AuditLogSink(_auditPath, AuditLogSink.DefaultMaxBytes, includeValues: false);

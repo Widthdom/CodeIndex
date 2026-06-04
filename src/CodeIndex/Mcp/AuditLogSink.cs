@@ -214,8 +214,16 @@ internal sealed class AuditLogSink : IDisposable
             jw.WriteString("tool", evt.Tool);
             if (evt.CallerName is { } caller)
                 jw.WriteString("caller", caller);
+            if (evt.CallerNameLength is { } callerLength)
+                jw.WriteNumber("caller_length", callerLength);
+            if (evt.CallerNameTruncated)
+                jw.WriteBoolean("caller_truncated", true);
             if (evt.CallerVersion is { } callerVersion)
                 jw.WriteString("caller_version", callerVersion);
+            if (evt.CallerVersionLength is { } callerVersionLength)
+                jw.WriteNumber("caller_version_length", callerVersionLength);
+            if (evt.CallerVersionTruncated)
+                jw.WriteBoolean("caller_version_truncated", true);
             if (evt.RequestId is { } reqId)
                 jw.WriteString("request_id", reqId);
 
@@ -278,5 +286,9 @@ internal sealed class AuditLogSink : IDisposable
         int? ResultCount,
         double ElapsedMs,
         int ErrorCode,
-        string? ErrorType);
+        string? ErrorType,
+        int? CallerNameLength = null,
+        bool CallerNameTruncated = false,
+        int? CallerVersionLength = null,
+        bool CallerVersionTruncated = false);
 }

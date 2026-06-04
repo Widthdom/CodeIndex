@@ -2148,10 +2148,16 @@ public partial class McpServer
         if (_clientName is not null || _clientVersion is not null)
         {
             var clientInfo = new JsonObject();
-            if (_clientName is not null)
+            if (_clientNameDisplay is not null)
+            {
                 clientInfo["name"] = _clientName;
-            if (_clientVersion is not null)
+                _clientNameDisplay.Value.AddMetadata(clientInfo, "name");
+            }
+            if (_clientVersionDisplay is not null)
+            {
                 clientInfo["version"] = _clientVersion;
+                _clientVersionDisplay.Value.AddMetadata(clientInfo, "version");
+            }
             session["client_info"] = clientInfo;
         }
         if (_clientCapabilities is not null)

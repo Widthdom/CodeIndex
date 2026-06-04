@@ -109,6 +109,8 @@ public partial class McpServer : IDisposable
     // にする。`initialize` 毎に上書きすることで再接続時に caller identity が追随する。
     private string? _clientName;
     private string? _clientVersion;
+    private BoundedMcpText? _clientNameDisplay;
+    private BoundedMcpText? _clientVersionDisplay;
     private JsonNode? _clientCapabilities;
     private JsonArray _clientRoots = [];
     private string _mcpLogLevel = "info";
@@ -1801,13 +1803,17 @@ public partial class McpServer : IDisposable
         // 再接続が前回のクライアント名/version を引き継がないようにするため。
         _clientName = null;
         _clientVersion = null;
+        _clientNameDisplay = null;
+        _clientVersionDisplay = null;
         if (initializeParams is not JsonObject obj)
             return;
         _clientRootsStale = true;
         if (obj["clientInfo"] is not JsonObject info)
             return;
-        _clientName = TryReadStringMember(info, "name");
-        _clientVersion = TryReadStringMember(info, "version");
+        _clientNameDisplay = TryReadBoundedClientInfoMember(info, "name");
+        _clientVersionDisplay = TryReadBoundedClientInfoMember(info, "version");
+        _clientName = _clientNameDisplay?.Text;
+        _clientVersion = _clientVersionDisplay?.Text;
     }
 
     private void CaptureClientSession(JsonNode? initializeParams)
@@ -1853,8 +1859,14 @@ public partial class McpServer : IDisposable
         if (!obj.TryGetPropertyValue(key, out var node))
             return null;
         if (node is JsonValue value && value.TryGetValue<string>(out var s) && !string.IsNullOrWhiteSpace(s))
-            return s;
+            return s.Trim();
         return null;
+    }
+
+    private static BoundedMcpText? TryReadBoundedClientInfoMember(JsonObject obj, string key)
+    {
+        var value = TryReadStringMember(obj, key);
+        return value is null ? null : BoundClientInfoForDisplay(value);
     }
 
     private JsonNode HandleResourcesList(JsonNode? id, JsonNode? listParams)
@@ -2086,22 +2098,10 @@ public partial class McpServer : IDisposable
         if (obj["clientInfo"] is not JsonObject clientInfo)
             return "unknown";
 
-        string? Read(string key)
-        {
-            if (clientInfo.TryGetPropertyValue(key, out var node)
-                && node is JsonValue value
-                && value.TryGetValue<string>(out var s)
-                && !string.IsNullOrWhiteSpace(s))
-            {
-                return s.Trim();
-            }
-            return null;
-        }
-
-        var name = Read("name");
+        var name = TryReadBoundedClientInfoMember(clientInfo, "name")?.Text;
         if (name == null)
             return "unknown";
-        var version = Read("version");
+        var version = TryReadBoundedClientInfoMember(clientInfo, "version")?.Text;
         return version == null ? name : $"{name}/{version}";
     }
 
@@ -2197,6 +2197,12 @@ public partial class McpServer : IDisposable
             ? null
             : McpBoundedText.ForDisplay(requestedVersion, McpBoundedText.MaxProtocolVersionChars);
 
+    private static BoundedMcpText BoundClientInfoForDisplay(string value)
+        => McpBoundedText.ForDisplay(value, McpBoundedText.MaxClientInfoChars);
+
+    private static BoundedMcpText BoundClientIdentityForDisplay(string value)
+        => McpBoundedText.ForDisplay(value, McpBoundedText.MaxClientIdentityChars);
+
     /// <summary>
     /// Build a structured `-32000` JSON-RPC error for a rate-limited tool call. Surfacing
     /// the limit category in `error.data.error_category` (alongside `tool`, `caller`, and
@@ -2208,6 +2214,7 @@ public partial class McpServer : IDisposable
     /// </summary>
     internal static JsonObject CreateRateLimitedErrorResponse(JsonNode? id, string tool, string caller, long retryAfterMs)
     {
+        var callerDisplay = BoundClientIdentityForDisplay(caller);
         // #1560 contract preserved: `error_category`, `tool`, `caller`, `retry_after_ms`.
         // #1581 adds the canonical envelope (`category`, `suggestion`, `retry_safe`) alongside.
         // #1560 の契約（`error_category`, `tool`, `caller`, `retry_after_ms`）を維持しつつ、
@@ -2216,9 +2223,10 @@ public partial class McpServer : IDisposable
         {
             ["error_category"] = "rate_limited",
             ["tool"] = tool,
-            ["caller"] = caller,
+            ["caller"] = callerDisplay.Text,
             ["retry_after_ms"] = retryAfterMs,
         };
+        callerDisplay.AddMetadata(extraData, "caller");
         var data = McpErrorEnvelope.BuildData(
             category: McpErrorEnvelope.CategoryRateLimited,
             suggestion: $"Back off for at least {retryAfterMs} ms before retrying this tool, or raise {RateLimiterOptions.RpsEnvVar} / {RateLimiterOptions.BurstEnvVar} on the server.",
@@ -2560,7 +2568,11 @@ public partial class McpServer : IDisposable
                 ResultCount: resultCount,
                 ElapsedMs: elapsedMs,
                 ErrorCode: errorCode,
-                ErrorType: errorType ?? observedErrorType);
+                ErrorType: errorType ?? observedErrorType,
+                CallerNameLength: _clientNameDisplay?.Truncated == true ? _clientNameDisplay.Value.OriginalLength : null,
+                CallerNameTruncated: _clientNameDisplay?.Truncated == true,
+                CallerVersionLength: _clientVersionDisplay?.Truncated == true ? _clientVersionDisplay.Value.OriginalLength : null,
+                CallerVersionTruncated: _clientVersionDisplay?.Truncated == true);
             _auditLog.Record(evt);
         }
         catch
@@ -2725,10 +2737,10 @@ public partial class McpServer : IDisposable
     // レート制限で拒否されたツール呼び出しを stderr に記録する。配線上の JSON-RPC `-32000`
     // ペイロードと内容を揃え、運用側がログ追跡から状況把握できるようにする（#1560）。
     internal static string BuildRateLimitedLog(string toolName, string caller, long retryAfterMs) =>
-        $"[cdidx-mcp] Rate limit exceeded: tool='{BoundToolNameForDisplay(toolName).Text}', caller='{caller}', retry_after_ms={retryAfterMs}. Increase {RateLimiterOptions.RpsEnvVar} / {RateLimiterOptions.BurstEnvVar} on the server, or back off and retry.";
+        $"[cdidx-mcp] Rate limit exceeded: tool='{BoundToolNameForDisplay(toolName).Text}', caller='{BoundClientIdentityForDisplay(caller).Text}', retry_after_ms={retryAfterMs}. Increase {RateLimiterOptions.RpsEnvVar} / {RateLimiterOptions.BurstEnvVar} on the server, or back off and retry.";
 
     internal static string BuildCallerSwapRejectionLog(string current, string attempted) =>
-        $"[cdidx-mcp] Ignoring re-initialize with new clientInfo identity '{attempted}': retaining original caller '{current}' so rate-limit buckets cannot be reset mid-session.";
+        $"[cdidx-mcp] Ignoring re-initialize with new clientInfo identity '{BoundClientIdentityForDisplay(attempted).Text}': retaining original caller '{BoundClientIdentityForDisplay(current).Text}' so rate-limit buckets cannot be reset mid-session.";
 
     internal static string BuildUnknownNotificationLog(string method) =>
         $"[cdidx-mcp] Ignoring unknown notification: {method}";
