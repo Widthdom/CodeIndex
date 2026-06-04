@@ -1276,7 +1276,7 @@ public static partial class ReferenceExtractor
             return;
         }
 
-        foreach (Match lambda in CSharpLambdaRegex.Matches(preparedLine))
+        foreach (Match lambda in BoundedRegex.EnumerateMatches(CSharpLambdaRegex, preparedLine))
         {
             var body = lambda.Groups["body"].Value;
             if (string.IsNullOrWhiteSpace(body))
@@ -1308,7 +1308,7 @@ public static partial class ReferenceExtractor
     private static HashSet<string> CollectCSharpLambdaParameterNames(string parameterText)
     {
         var names = new HashSet<string>(StringComparer.Ordinal);
-        foreach (Match match in Regex.Matches(parameterText, CSharpIdentifierPattern))
+        foreach (Match match in BoundedRegex.EnumerateMatches(parameterText, CSharpIdentifierPattern))
         {
             var name = NormalizeAtPrefixedIdentifier(match.Value);
             if (!IsIgnoredCallName("csharp", name))
@@ -1322,7 +1322,7 @@ public static partial class ReferenceExtractor
     {
         index = -1;
         var normalizedName = NormalizeAtPrefixedIdentifier(name);
-        foreach (Match match in Regex.Matches(text, CSharpIdentifierPattern))
+        foreach (Match match in BoundedRegex.EnumerateMatches(text, CSharpIdentifierPattern))
         {
             if (string.Equals(NormalizeAtPrefixedIdentifier(match.Value), normalizedName, StringComparison.Ordinal))
             {

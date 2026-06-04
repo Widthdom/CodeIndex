@@ -21,4 +21,15 @@ public sealed class BoundedRegexTests
     {
         Assert.Equal(RuntimeSafety.RegexMatchTimeout, BoundedRegex.DefaultMatchTimeout);
     }
+
+    [Fact]
+    public void EnumerateMatches_InstanceRegexTimeout_ReturnsEmpty()
+    {
+        var regex = new BoundedRegex("(a+)+$", default, TimeSpan.FromMilliseconds(1));
+        var input = new string('a', 10_000) + "!";
+
+        var matches = BoundedRegex.EnumerateMatches(regex, input);
+
+        Assert.Empty(matches);
+    }
 }
