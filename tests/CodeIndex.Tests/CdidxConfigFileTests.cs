@@ -128,6 +128,29 @@ public class CdidxConfigFileTests
         finally { TestProjectHelper.DeleteDirectory(dir); }
     }
 
+    [Fact]
+    public void LoadAndApply_ProjectConfigJsonRejectsExcessiveJsonDepth()
+    {
+        var dir = CreateTempDir();
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(dir, ".cdidx"));
+            var nesting = CdidxConfigFile.MaxConfigJsonDepth + 2;
+            File.WriteAllText(
+                Path.Combine(dir, ".cdidx", "config.json"),
+                """{ "search": { "limit": """ + new string('[', nesting) + "1" + new string(']', nesting) + " } }");
+
+            var env = new TestEnvironment();
+            var result = CdidxConfigFile.LoadAndApply(dir, env.Read, env.Write);
+
+            Assert.True(result.Failed);
+            Assert.Contains("Invalid JSON", result.Error);
+            Assert.Contains("depth", result.Error!.ToLowerInvariant());
+            Assert.Empty(env.Writes);
+        }
+        finally { TestProjectHelper.DeleteDirectory(dir); }
+    }
+
     [Theory]
     [InlineData("""{ "search": { "limit": 0 } }""", "positive integer")]
     [InlineData("""{ "search": { "snippet_lines": -1 } }""", "positive integer")]

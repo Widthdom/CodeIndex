@@ -1454,11 +1454,11 @@ Persistent lifecycle logs are written to the first available directory in this o
 
 Run `cdidx status --log-path` to print the active log directory without opening the index database. Add `--json` to receive `{"log_path":"..."}`. Set `CDIDX_DISABLE_PERSISTENT_LOG=1` to disable persistent lifecycle logs.
 
-### Project-local configuration file (`.cdidxrc.json`)
+### Project-local configuration file (`.cdidx/config.json` / `.cdidxrc.json`)
 
-You can check a `.cdidxrc.json` file into a repository to set per-project defaults instead of relying on shell-profile or CI env vars (#1571). On startup `cdidx` walks upward from the current working directory looking for the first `.cdidxrc.json`, validates its schema, and materializes recognized keys as process environment variables — so every existing env-var consumer picks them up without further changes.
+You can check a `.cdidx/config.json` or `.cdidxrc.json` file into a repository to set per-project defaults instead of relying on shell-profile or CI env vars (#1571). On startup `cdidx` walks upward from the current working directory looking for the first project config file, validates its schema, and materializes recognized keys as process environment variables — so every existing env-var consumer picks them up without further changes.
 
-Precedence is **CLI flag > environment variable > config file > built-in default**. A config-file value is applied only when the matching env var is not already set in the process, so a value the user already exported in the shell or CI always wins. A malformed file (invalid JSON, unknown key, wrong type) is a hard error: cdidx exits `1` with the file path and the offending field; set `CDIDX_DISABLE_CONFIG_FILE=1` to bypass the file entirely.
+Precedence is **CLI flag > environment variable > config file > built-in default**. A config-file value is applied only when the matching env var is not already set in the process, so a value the user already exported in the shell or CI always wins. Config JSON is bounded to 64 KiB and a conservative nesting depth before schema validation. A malformed file (invalid JSON, unknown key, wrong type, or excessive nesting) is a hard error: cdidx exits `1` with the file path and the offending field; set `CDIDX_DISABLE_CONFIG_FILE=1` to bypass the file entirely.
 
 Secrets are intentionally **not** loadable from the file: `CDIDX_GITHUB_TOKEN`, `CDIDX_MCP_AUTH_TOKEN`, and `CDIDX_MCP_HTTP_TOKEN` are env-only so tokens never get checked into version control.
 
@@ -3650,11 +3650,11 @@ MCP のレスポンスサイズ上限は、環境変数 override で guard が�
 
 有効なログディレクトリだけを確認したい場合は `cdidx status --log-path` を実行してください。このコマンドは index database を開きません。`--json` を付けると `{"log_path":"..."}` を返します。永続 lifecycle log を無効化するには `CDIDX_DISABLE_PERSISTENT_LOG=1` を設定します。
 
-### プロジェクト固有の設定ファイル (`.cdidxrc.json`)
+### プロジェクト固有の設定ファイル (`.cdidx/config.json` / `.cdidxrc.json`)
 
-シェルプロファイルや CI の環境変数に頼らず、プロジェクトごとの既定値を `.cdidxrc.json` ファイルとしてリポジトリにチェックインできます (#1571)。`cdidx` は起動時にカレントディレクトリから上方向に最初の `.cdidxrc.json` を探索し、スキーマを検証してから既知のキーをプロセス環境変数として注入します。これにより、既存の環境変数コンシューマはコード変更なしに同じ値を受け取れます。
+シェルプロファイルや CI の環境変数に頼らず、プロジェクトごとの既定値を `.cdidx/config.json` または `.cdidxrc.json` ファイルとしてリポジトリにチェックインできます (#1571)。`cdidx` は起動時にカレントディレクトリから上方向に最初のプロジェクト設定ファイルを探索し、スキーマを検証してから既知のキーをプロセス環境変数として注入します。これにより、既存の環境変数コンシューマはコード変更なしに同じ値を受け取れます。
 
-優先順位は **CLI フラグ > 環境変数 > 設定ファイル > 組み込み既定値** です。設定ファイル由来の値は、対応する環境変数がプロセスで未設定の場合にのみ適用されるため、シェルや CI で既に export されている値が常に優先されます。不正なファイル（無効な JSON、未知のキー、型違い）は hard error として扱われ、cdidx はファイルパスと該当フィールドを示して終了コード `1` で終了します。完全にバイパスしたい場合は `CDIDX_DISABLE_CONFIG_FILE=1` を設定してください。
+優先順位は **CLI フラグ > 環境変数 > 設定ファイル > 組み込み既定値** です。設定ファイル由来の値は、対応する環境変数がプロセスで未設定の場合にのみ適用されるため、シェルや CI で既に export されている値が常に優先されます。設定 JSON はスキーマ検証前に 64 KiB と保守的なネスト深度の上限で検査されます。不正なファイル（無効な JSON、未知のキー、型違い、過度なネスト）は hard error として扱われ、cdidx はファイルパスと該当フィールドを示して終了コード `1` で終了します。完全にバイパスしたい場合は `CDIDX_DISABLE_CONFIG_FILE=1` を設定してください。
 
 シークレットは意図的に**ファイルから読み込めません**。`CDIDX_GITHUB_TOKEN` / `CDIDX_MCP_AUTH_TOKEN` / `CDIDX_MCP_HTTP_TOKEN` は環境変数専用としており、トークンがバージョン管理に混入するのを防ぎます。
 
