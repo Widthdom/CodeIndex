@@ -249,6 +249,26 @@ public class ProgramRunnerTests
     }
 
     [Fact]
+    public void Run_QueryDefaultEnvironmentParseError_TruncatesRawValue_Issue3110()
+    {
+        var prefix = new string('9', ConsoleUi.DefaultDiagnosticValueCharLimit);
+        const string tail = "TAIL_ISSUE_3110";
+        var raw = prefix + tail;
+        using var env = EnvironmentVariableScope.Capture(QueryCommandRunner.DefaultLimitEnvironmentVariable);
+        env.Set(QueryCommandRunner.DefaultLimitEnvironmentVariable, raw);
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["search", "Needle"],
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Empty(stdout);
+        Assert.Contains(QueryCommandRunner.DefaultLimitEnvironmentVariable, stderr);
+        Assert.Contains($"original length {raw.Length} chars", stderr);
+        Assert.DoesNotContain(tail, stderr);
+    }
+
+    [Fact]
     public void Run_QueryTraceFile_AppendsDailyJsonl()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("query-trace-file");
