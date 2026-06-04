@@ -2383,11 +2383,15 @@ public static class QueryCommandRunner
                 return CommandExitCodes.Success;
             }
 
-            var results = reader.ListFiles(options.Query, options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since);
+            var results = reader.ListFiles(options.Query, options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, orderBySize: options.RawBytes);
             if (results.Count == 0)
             {
                 if (options.Json)
-                    Console.WriteLine(BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "files", queryOptions: options).ToJsonString(jsonOptions));
+                {
+                    Console.WriteLine(options.JsonOutputFormat == JsonOutputFormatArray
+                        ? "[]"
+                        : BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "files", queryOptions: options).ToJsonString(jsonOptions));
+                }
                 else if (!options.Json)
                 {
                     Console.Error.WriteLine(BuildZeroResultLine("No files found", options));
@@ -2399,8 +2403,16 @@ public static class QueryCommandRunner
 
             if (options.Json)
             {
-                foreach (var r in results)
-                    Console.WriteLine(JsonSerializer.Serialize(r, CliJsonSerializerContextFactory.Create(jsonOptions).FileResult));
+                var context = CliJsonSerializerContextFactory.Create(jsonOptions);
+                if (options.JsonOutputFormat == JsonOutputFormatArray)
+                {
+                    Console.WriteLine(JsonSerializer.Serialize(results, context.ListFileResult));
+                }
+                else
+                {
+                    foreach (var r in results)
+                        Console.WriteLine(JsonSerializer.Serialize(r, context.FileResult));
+                }
             }
             else
             {
@@ -7215,11 +7227,14 @@ public static class QueryCommandRunner
                 : arg;
             if (arg.StartsWith("--check=", StringComparison.Ordinal) && supported.Contains("--check"))
                 normalizedArg = "--check";
-            if (normalizedArg == "--json" && !string.Equals(arg, "--json", StringComparison.Ordinal) && commandName != "search")
+            if (normalizedArg == "--json"
+                && !string.Equals(arg, "--json", StringComparison.Ordinal)
+                && commandName != "search"
+                && commandName != "files")
             {
                 CommandErrorWriter.Write(
-                    "--json=<format> is only supported by 'search'.",
-                    "use plain `--json` here, or rerun search with `--json=array`.",
+                    "--json=<format> is only supported by 'search' and 'files'.",
+                    "use plain `--json` here, or rerun search/files with `--json=array`.",
                     GetUsageLineOrThrow(commandName));
                 return true;
             }

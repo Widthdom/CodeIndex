@@ -422,6 +422,7 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(List<DefinitionResult>))]
 [JsonSerializable(typeof(List<FileDependencyResult>))]
 [JsonSerializable(typeof(List<FileIssue>))]
+[JsonSerializable(typeof(List<FileResult>))]
 [JsonSerializable(typeof(List<GroupedSymbolHotspotJsonResult>))]
 [JsonSerializable(typeof(List<int>))]
 [JsonSerializable(typeof(List<ImpactCycleResult>))]
