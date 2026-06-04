@@ -192,6 +192,33 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
+    public void HttpTransport_RequestLogFieldLimiter_CapsMetadataFields()
+    {
+        var longValue = new string('x', HttpMcpTransport.MaxRequestLogFieldCharacters + 100);
+
+        var limited = HttpMcpTransport.LimitRequestLogField(longValue);
+
+        Assert.NotNull(limited);
+        Assert.Equal(HttpMcpTransport.MaxRequestLogFieldCharacters, limited.Length);
+        Assert.EndsWith(HttpMcpTransport.RequestLogTruncationMarker, limited, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task HttpTransport_RequestLogger_CapsLongPathBeforeLogging()
+    {
+        var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath, requestLogger: records.Enqueue);
+
+        using var client = new HttpClient();
+        using var response = await client.GetAsync(new Uri(new Uri(harness.Endpoint), new string('p', HttpMcpTransport.MaxRequestLogFieldCharacters + 100)));
+
+        Assert.Equal(HttpStatusCode.MethodNotAllowed, response.StatusCode);
+        var record = Assert.Single(await WaitForRequestLogRecordsAsync(records, 1));
+        Assert.Equal(HttpMcpTransport.MaxRequestLogFieldCharacters, record.Path.Length);
+        Assert.EndsWith(HttpMcpTransport.RequestLogTruncationMarker, record.Path, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task HttpTransport_TwoSequentialRequests_ShareWarmServer()
     {
         // Issue #1558: AI clients should be able to keep a single MCP server warm across

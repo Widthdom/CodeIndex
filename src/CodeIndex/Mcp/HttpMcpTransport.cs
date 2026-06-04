@@ -28,6 +28,8 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
 {
     internal const int DefaultMaxRequestBodyBytes = 1_000_000;
     internal const int DefaultMaxQueuedRequests = 64;
+    internal const int MaxRequestLogFieldCharacters = 256;
+    internal const string RequestLogTruncationMarker = "...<truncated>";
     internal const string MaxRequestBodyBytesEnvVar = "CDIDX_MCP_HTTP_MAX_REQUEST_BYTES";
     internal const string MaxQueueDepthEnvVar = "CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH";
     private const string BearerPrefix = "Bearer ";
@@ -759,9 +761,18 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         return new PendingRequest(
             context,
             Guid.NewGuid().ToString("N"),
-            remotePeer,
-            context.Request.HttpMethod,
-            context.Request.Url?.AbsolutePath ?? "/");
+            LimitRequestLogField(remotePeer) ?? "<unknown>",
+            LimitRequestLogField(context.Request.HttpMethod) ?? string.Empty,
+            LimitRequestLogField(context.Request.Url?.AbsolutePath ?? "/") ?? "/");
+    }
+
+    internal static string? LimitRequestLogField(string? value)
+    {
+        if (value is null || value.Length <= MaxRequestLogFieldCharacters)
+            return value;
+
+        return value.Substring(0, MaxRequestLogFieldCharacters - RequestLogTruncationMarker.Length)
+            + RequestLogTruncationMarker;
     }
 
     private void LogRequest(PendingRequest request, int statusCode)

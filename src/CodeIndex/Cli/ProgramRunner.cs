@@ -2529,10 +2529,11 @@ internal static class ProgramRunner
 
     private static string FormatLogValue(string? value)
     {
-        if (string.IsNullOrEmpty(value))
+        var limited = HttpMcpTransport.LimitRequestLogField(value);
+        if (string.IsNullOrEmpty(limited))
             return "-";
 
-        return value
+        return limited
             .Replace('\\', '/')
             .Replace('\r', '_')
             .Replace('\n', '_')
