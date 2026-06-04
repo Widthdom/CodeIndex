@@ -728,6 +728,28 @@ public class ProgramCliTests
         Assert.Equal("title_exact", preflight.GetProperty("matches")[0].GetProperty("reason").GetString());
     }
 
+    [Fact]
+    public void Suggestions_ExportIssueDraftsRejectsOversizedOpenIssuesPreflight()
+    {
+        using var fixture = SuggestionFixture.Create();
+        fixture.Add(
+            "security",
+            "csharp",
+            "Issue draft export should reject oversized duplicate preflight files",
+            submitted: false,
+            sampledTitle: "Reject oversized duplicate preflight files");
+        var openIssuesPath = fixture.WriteOpenIssuesJson(new string(' ', SuggestionsCommandRunner.MaxOpenIssuesJsonBytes + 1));
+
+        var (exitCode, stdout, stderr) = RunCliInSubprocess([
+            "suggestions", "export", "--db", fixture.DbPath, "--format", "issue-drafts", "--open-issues", openIssuesPath
+        ]);
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("--open-issues file", stderr);
+        Assert.Contains("exceeds maximum supported size", stderr);
+    }
+
     private static (int ExitCode, string StdOut, string StdErr) RunCliInSubprocess(string[] args, IReadOnlyDictionary<string, string?>? environment = null)
     {
         var psi = new System.Diagnostics.ProcessStartInfo
