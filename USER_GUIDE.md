@@ -854,6 +854,10 @@ Guard-aware search filters primary `search` matches by nearby literal guards:
 appears in the selected line window, while `--reject-before` / `--reject-after`
 drop matches when the guard query appears. JSON search results include
 `guard_evidence` for required guards that matched.
+Guarded searches inspect a bounded candidate set before pagination; if a guarded
+query is too broad to satisfy the requested page within that budget, CLI and MCP
+return a validation error. Narrow with more specific query text, `--lang`,
+`--path`, `--exclude-tests`, or a smaller MCP cursor offset.
 The MCP `search` tool exposes the same mode as camelCase arguments:
 `requireBefore`, `requireAfter`, `rejectBefore`, `rejectAfter`, and
 `guardWindow`.
@@ -3058,6 +3062,9 @@ guard-aware search は primary の `search` 一致を近傍の literal guard で
 `--require-before` / `--require-after` は指定行窓内に guard query がある場合だけ残し、
 `--reject-before` / `--reject-after` は guard query がある一致を落とします。JSON の検索結果には
 一致した required guard の `guard_evidence` が含まれます。
+guard filter を使う検索は pagination 前に上限付きの候補集合だけを調べます。その budget 内で
+要求ページを満たせないほど query が広い場合、CLI/MCP は validation error を返します。
+query text、`--lang`、`--path`、`--exclude-tests` で絞り込むか、MCP cursor の offset を小さくしてください。
 MCP `search` tool では同じ mode を camelCase 引数 `requireBefore`, `requireAfter`,
 `rejectBefore`, `rejectAfter`, `guardWindow` で指定できます。
 
