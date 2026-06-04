@@ -28,6 +28,7 @@ internal static class CdidxConfigFile
     internal const string DisableEnvVar = "CDIDX_DISABLE_CONFIG_FILE";
     internal const string ConfigSourceEnvironmentVariablePrefix = "CDIDX_CONFIG_SOURCE__";
     internal const int MaxConfigFileBytes = 64 * 1024;
+    internal const int MaxConfigJsonDepth = 32;
 
     private static readonly IReadOnlyList<string> KnownTopLevelKeys = new[]
     {
@@ -102,6 +103,7 @@ internal static class CdidxConfigFile
             {
                 CommentHandling = JsonCommentHandling.Skip,
                 AllowTrailingCommas = true,
+                MaxDepth = MaxConfigJsonDepth,
             });
         }
         catch (JsonException ex)

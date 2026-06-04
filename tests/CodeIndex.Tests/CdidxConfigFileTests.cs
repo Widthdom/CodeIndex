@@ -252,6 +252,28 @@ public class CdidxConfigFileTests
     }
 
     [Fact]
+    public void LoadAndApply_ExcessiveJsonDepth_ReturnsError()
+    {
+        var dir = CreateTempDir();
+        try
+        {
+            var nesting = CdidxConfigFile.MaxConfigJsonDepth + 2;
+            File.WriteAllText(
+                Path.Combine(dir, ".cdidxrc.json"),
+                """{ "debug": """ + new string('[', nesting) + """"1"""" + new string(']', nesting) + " }");
+
+            var env = new TestEnvironment();
+            var result = CdidxConfigFile.LoadAndApply(dir, env.Read, env.Write);
+
+            Assert.True(result.Failed);
+            Assert.Contains("Invalid JSON", result.Error);
+            Assert.Contains("depth", result.Error!.ToLowerInvariant());
+            Assert.Empty(env.Writes);
+        }
+        finally { TestProjectHelper.DeleteDirectory(dir); }
+    }
+
+    [Fact]
     public void LoadAndApply_UnknownTopLevelKey_ReturnsError()
     {
         var dir = CreateTempDir();
