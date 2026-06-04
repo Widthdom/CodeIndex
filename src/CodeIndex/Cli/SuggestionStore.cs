@@ -46,7 +46,7 @@ public class SuggestionStore
     private static readonly TimeSpan RedactionRegexTimeout = TimeSpan.FromSeconds(1);
     private static readonly Regex s_awsAccessKeyRegex = new(@"\bAKIA[0-9A-Z]{16}\b", RegexOptions.Compiled | RegexOptions.CultureInvariant, RedactionRegexTimeout);
     private static readonly Regex s_bearerTokenRegex = new(@"\bBearer\s+[A-Za-z0-9._~+/=-]{16,}\b", RegexOptions.Compiled | RegexOptions.CultureInvariant, RedactionRegexTimeout);
-    private static readonly Regex s_namedSecretRegex = new(@"(?i)\b(password|secret|token|api[-_]?key|access[-_]?key)=([^&\s]+)", RegexOptions.Compiled | RegexOptions.CultureInvariant, RedactionRegexTimeout);
+    private static readonly Regex s_namedSecretRegex = new(@"(?i)(^|[^\p{L}\p{N}_-])(?<name>[\p{L}\p{N}_-]*(?:password|passwd|pwd|secret|token|api[-_]?key|access[-_]?key|credential)[\p{L}\p{N}_-]*)=(?<value>[^&\s]+)", RegexOptions.Compiled | RegexOptions.CultureInvariant, RedactionRegexTimeout);
     private static readonly Regex s_highEntropyTokenRegex = new(@"\b(?=[A-Za-z0-9._~+/=-]{32,}\b)(?=.*[A-Z])(?=.*[a-z])(?=.*\d)[A-Za-z0-9._~+/=-]+\b", RegexOptions.Compiled | RegexOptions.CultureInvariant, RedactionRegexTimeout);
 
     private static readonly HashSet<string> s_dedupStopWords = new(StringComparer.Ordinal)
@@ -178,7 +178,8 @@ public class SuggestionStore
         string? UpstreamUrl,
         string? SubmissionError = null,
         string? DuplicateOfHash = null,
-        double? DuplicateScore = null);
+        double? DuplicateScore = null,
+        string? StoredHash = null);
 
     /// <summary>
     /// Result of a GitHub submission attempt.
@@ -285,7 +286,8 @@ public class SuggestionStore
                 reservation.UpstreamUrl,
                 null,
                 reservation.DuplicateOfHash,
-                reservation.DuplicateScore);
+                reservation.DuplicateScore,
+                reservation.Hash);
         }
 
         SubmitAttemptResult submitResult;
@@ -313,7 +315,8 @@ public class SuggestionStore
                     reservation.UpstreamUrl,
                     null,
                     reservation.DuplicateOfHash,
-                    reservation.DuplicateScore);
+                    reservation.DuplicateScore,
+                    reservation.Hash);
             }
 
             var issueUrl = submitResult.IssueUrl;
@@ -329,7 +332,8 @@ public class SuggestionStore
                 issueUrl ?? found.UpstreamUrl,
                 submitResult.Error,
                 reservation.DuplicateOfHash,
-                reservation.DuplicateScore);
+                reservation.DuplicateScore,
+                found.Hash);
         });
     }
 
@@ -877,6 +881,9 @@ public class SuggestionStore
         McpClientName = record.McpClientName,
         McpClientVersion = record.McpClientVersion,
         ToolInvocationContext = record.ToolInvocationContext,
+        SampledTitle = record.SampledTitle,
+        SampledTags = record.SampledTags?.ToArray(),
+        EvidencePaths = record.EvidencePaths?.ToArray(),
         UpstreamIssueNumber = record.UpstreamIssueNumber,
         UpstreamUrl = record.UpstreamUrl,
         LastSyncedAt = record.LastSyncedAt,
@@ -917,7 +924,7 @@ public class SuggestionStore
             redacted = s_namedSecretRegex.Replace(redacted, match =>
             {
                 types.Add("credential");
-                return $"{match.Groups[1].Value}={RedactedCredential}";
+                return $"{match.Groups[1].Value}{match.Groups["name"].Value}={RedactedCredential}";
             });
             redacted = s_highEntropyTokenRegex.Replace(redacted, match =>
             {

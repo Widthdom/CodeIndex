@@ -4413,13 +4413,14 @@ public partial class McpServer
         }
 
         var result = await store.TryAddAndSubmitAsync(record, githubCallback).ConfigureAwait(false);
+        var storedHash = result.StoredHash ?? hash;
 
         if (!result.IsNew)
         {
             var dupPayload = new JsonObject
             {
                 ["status"] = "duplicate",
-                ["hash"] = hash,
+                ["hash"] = storedHash,
                 ["message"] = result.AlreadySubmitted
                     ? "This suggestion has already been recorded and submitted."
                     : result.UpstreamUrl != null
@@ -4448,7 +4449,7 @@ public partial class McpServer
         var payload = new JsonObject
         {
             ["status"] = "recorded",
-            ["hash"] = hash,
+            ["hash"] = storedHash,
             ["category"] = category,
             ["language"] = language,
             ["stored_locally"] = true,

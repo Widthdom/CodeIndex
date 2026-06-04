@@ -10707,6 +10707,40 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void SuggestImprovement_RedactedDescriptionReturnsStoredHash()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_GITHUB_TOKEN");
+        env.Set("CDIDX_GITHUB_TOKEN", null);
+        var secret = $"secret-{Guid.NewGuid():N}";
+        var description = $"MCP redaction hash regression api_key={secret}";
+        var json = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "suggest_improvement",
+                ["arguments"] = new JsonObject
+                {
+                    ["category"] = "other",
+                    ["description"] = description,
+                }
+            }
+        };
+
+        var response = _server.HandleMessage((JsonNode)json)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        var responseHash = structured["hash"]!.GetValue<string>();
+        var stored = new SuggestionStore(Path.GetDirectoryName(_dbPath)!, Path.GetFileNameWithoutExtension(_dbPath)).LoadAll()
+            .Single(s => s.Hash == responseHash);
+        Assert.Equal(stored.Hash, responseHash);
+        Assert.Contains("api_key=[REDACTED:credential]", stored.Description);
+        Assert.DoesNotContain(secret, stored.Description);
+    }
+
+    [Fact]
     public void SuggestImprovement_RejectsNonRelativeEvidencePath()
     {
         var uniqueDesc = $"Evidence path validation regression {Guid.NewGuid():N}";
