@@ -53,6 +53,7 @@ internal static class GitHubIssueReporter
     internal const int MaxScrubInputLength = 16 * 1024;
     internal const int MaxGitHubApiErrorBodyBytes = 4 * 1024;
     internal const int MaxGitHubApiResponseBodyBytes = 256 * 1024;
+    internal const int MaxGitHubApiResponseJsonDepth = 16;
     private const int MaxGitHubApiErrorDetailLength = 500;
     private const string CodeExampleRemovedText = "[code example removed]";
     private const string ScrubInputTruncatedText = "\n[truncated]";
@@ -732,8 +733,13 @@ internal static class GitHubIssueReporter
             content,
             MaxGitHubApiResponseBodyBytes,
             cancellationToken).ConfigureAwait(false);
-        return JsonNode.Parse(Encoding.UTF8.GetString(payload));
+        return ParseGitHubApiResponseJson(Encoding.UTF8.GetString(payload));
     }
+
+    internal static JsonNode? ParseGitHubApiResponseJson(string json)
+        => JsonNode.Parse(
+            json,
+            documentOptions: new JsonDocumentOptions { MaxDepth = MaxGitHubApiResponseJsonDepth });
 
     private static bool IsRecoverableGitHubApiResponseException(Exception ex)
         => ex is JsonException or InvalidDataException;
@@ -763,7 +769,7 @@ internal static class GitHubIssueReporter
         redactedJson = errorBody;
         try
         {
-            var node = JsonNode.Parse(errorBody);
+            var node = ParseGitHubApiResponseJson(errorBody);
             if (node == null || !RedactSensitiveJsonFields(node))
                 return false;
 

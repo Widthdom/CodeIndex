@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Net;
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using CodeIndex.Cli;
 using CodeIndex.Models;
@@ -882,6 +883,28 @@ public class GitHubIssueReporterTests : IDisposable
     }
 
     [Fact]
+    public async Task ReadGitHubApiResponseJsonAsync_RejectsJsonOverDepthLimit()
+    {
+        using var content = MakeJsonContent(MakeDeepObjectJson(GitHubIssueReporter.MaxGitHubApiResponseJsonDepth + 8));
+
+        await Assert.ThrowsAnyAsync<JsonException>(
+            () => GitHubIssueReporter.ReadGitHubApiResponseJsonAsync(content, CancellationToken.None));
+    }
+
+    [Fact]
+    public void BuildApiErrorDetail_DeepJsonUsesRegexFallbackWithoutLeakingSecret()
+    {
+        var errorBody = "{\"token\":\"value-that-must-not-leak\",\"nested\":"
+            + MakeDeepObjectJson(GitHubIssueReporter.MaxGitHubApiResponseJsonDepth + 8)
+            + "}";
+
+        var detail = GitHubIssueReporter.BuildApiErrorDetail(500, errorBody);
+
+        Assert.DoesNotContain("value-that-must-not-leak", detail);
+        Assert.Contains("[redacted]", detail);
+    }
+
+    [Fact]
     public async Task TryCreateIssueDetailedAsync_UserCancellation_Propagates()
     {
         _env.Set("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
@@ -1061,6 +1084,17 @@ public class GitHubIssueReporterTests : IDisposable
 
     private static StringContent MakeJsonContent(string json) =>
         new(json, Encoding.UTF8, "application/json");
+
+    private static string MakeDeepObjectJson(int depth)
+    {
+        var builder = new StringBuilder();
+        for (var i = 0; i < depth; i++)
+            builder.Append("{\"x\":");
+        builder.Append('0');
+        for (var i = 0; i < depth; i++)
+            builder.Append('}');
+        return builder.ToString();
+    }
 
     public void Dispose()
     {
