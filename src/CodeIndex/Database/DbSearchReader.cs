@@ -113,6 +113,7 @@ public partial class DbReader
         var normalizedQuery = rawQuery ? query : NormalizeLiteralSearchQuery(query, lang);
         var coverageTokens = exact ? new List<string>() : GetSearchCoverageTokens(normalizedQuery, rawQuery);
         var hasGuardFilters = guardFilters is { Count: > 0 };
+        var exactSubstringBoost = !exact && !rawQuery && IsPunctuationHeavyLiteralQuery(query);
         using var cmd = _conn.CreateCommand();
         string sql;
 
@@ -153,7 +154,7 @@ public partial class DbReader
         if (since != null && _fileColumns.Contains("modified"))
             sql += " AND f.modified >= @since";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        sql += $" ORDER BY {GetSearchOrderSql(coverageTokens.Count)}";
+        sql += $" ORDER BY {GetSearchOrderSql(coverageTokens.Count, exactSubstringBoost)}";
         if (!hasGuardFilters)
             sql += " LIMIT @limit";
         if (cursor is { } && !hasGuardFilters)
@@ -386,7 +387,7 @@ public partial class DbReader
             sql += " AND f.modified >= @since";
 
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        sql += $" ORDER BY {GetSearchOrderSql(coverageTokens.Count)}";
+        sql += $" ORDER BY {GetSearchOrderSql(coverageTokens.Count, exactSubstringBoost: false)}";
 
         cmd.CommandText = sql;
         if (exact)
@@ -1038,10 +1039,46 @@ public partial class DbReader
         }
     }
 
-    private static string GetSearchOrderSql(int coverageTokenCount)
+    private static string GetSearchOrderSql(int coverageTokenCount, bool exactSubstringBoost)
     {
         var coverageOrder = GetSearchCoverageOrderSql(coverageTokenCount);
-        return $"{PathBucketOrder}, {ExactSymbolMatchOrder}, {PrefixSymbolMatchOrder}, {SearchVisibilityOrder}, {PathTextMatchOrder}, {ChunkTextMatchOrder}, {ChunkStructuredFieldOrder}, {ChunkSymbolKindOrder}, {ChunkSymbolDepthOrder}, {coverageOrder}rank, f.modified DESC, f.path, c.id ASC";
+        var exactSubstringOrder = exactSubstringBoost
+            ? $"CASE WHEN instr({GetExactSearchTextSql("c.content", "f.lang")}, {GetExactSearchTextSql("@rankingQuery", "f.lang")}) > 0 THEN 0 ELSE 1 END, "
+            : string.Empty;
+        return $"{PathBucketOrder}, {exactSubstringOrder}{ExactSymbolMatchOrder}, {PrefixSymbolMatchOrder}, {SearchVisibilityOrder}, {PathTextMatchOrder}, {ChunkTextMatchOrder}, {ChunkStructuredFieldOrder}, {ChunkSymbolKindOrder}, {ChunkSymbolDepthOrder}, {coverageOrder}rank, f.modified DESC, f.path, c.id ASC";
+    }
+
+    private static bool IsPunctuationHeavyLiteralQuery(string query)
+    {
+        var trimmed = query.Trim();
+        if (trimmed.Length == 0 || !trimmed.Any(char.IsLetterOrDigit))
+            return false;
+
+        var tokens = trimmed.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        var punctuationCount = trimmed.Count(IsCodePunctuation);
+        return punctuationCount >= 2 || tokens.Any(IsStandaloneCodeOperatorToken);
+    }
+
+    private static bool IsStandaloneCodeOperatorToken(string token)
+        => token.Length > 0
+            && token.All(ch => !char.IsLetterOrDigit(ch) && !char.IsWhiteSpace(ch) && ch != '_')
+            && token.Any(IsCodePunctuation);
+
+    private static bool IsCodePunctuation(char ch)
+    {
+        if (char.IsLetterOrDigit(ch) || char.IsWhiteSpace(ch) || ch == '_')
+            return false;
+
+        return ch is '.'
+            or ':' or ';' or ','
+            or '=' or '$' or '@' or '#'
+            or '%' or '^' or '&' or '|'
+            or '!' or '?' or '+' or '-'
+            or '*' or '/' or '\\'
+            or '<' or '>'
+            or '(' or ')' or '[' or ']'
+            or '{' or '}'
+            or '"' or '\'' or '`' or '~';
     }
 
     private static string GetSearchCoverageOrderSql(int coverageTokenCount)
