@@ -2001,6 +2001,58 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunFiles_JsonArray_EmitsSingleArray_Issue2993()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_files_json_array");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(
+                ["--db", dbPath, "--json=array"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var files = document.RootElement.EnumerateArray().ToArray();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            var file = Assert.Single(files);
+            Assert.Equal("src/app.cs", file.GetProperty("path").GetString());
+            Assert.Equal("csharp", file.GetProperty("lang").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunFiles_JsonArray_ZeroResultsEmitsEmptyArray_Issue2993()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_files_json_array_zero");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(
+                ["missing", "--db", dbPath, "--json=array"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Empty(document.RootElement.EnumerateArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunStatus_ReadOnlyFlagOpensImmutableUriAndReportsModeFields()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_status_readonly");
