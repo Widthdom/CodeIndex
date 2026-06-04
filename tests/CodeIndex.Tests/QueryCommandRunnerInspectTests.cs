@@ -110,6 +110,111 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunInspect_ParseFields_ImplyJsonAndCanonicalizeAliases_Issue3056()
+    {
+        var options = QueryCommandRunner.ParseArgs(
+            ["--fields", "body,refs,nearby-symbols"],
+            jsonDefault: false,
+            validateDefaultSnippetLines: false,
+            validateDefaultMaxLineWidth: false);
+
+        Assert.True(options.Json);
+        Assert.True(options.IncludeBody);
+        Assert.Equal(["definitions", "references", "nearby_symbols"], options.InspectFields);
+        Assert.Null(options.ParseError);
+    }
+
+    [Fact]
+    public void RunInspect_FieldsJson_EmitsOnlySelectedTopLevelGroups_Issue3056()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_fields_json");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Target.cs",
+                "csharp",
+                """
+                public class Target
+                {
+                    public void Compute() { }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["Target", "--db", dbPath, "--fields", "definitions,file"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var selectedFields = json.GetProperty("selected_fields").EnumerateArray().Select(item => item.GetString()).ToList();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(["definitions", "file"], selectedFields);
+            Assert.True(json.TryGetProperty("api_version", out _));
+            Assert.True(json.TryGetProperty("query", out _));
+            Assert.True(json.TryGetProperty("definitions", out _));
+            Assert.True(json.TryGetProperty("file", out _));
+            Assert.False(json.TryGetProperty("nearby_symbols", out _));
+            Assert.False(json.TryGetProperty("references", out _));
+            Assert.False(json.TryGetProperty("callers", out _));
+            Assert.False(json.TryGetProperty("callees", out _));
+            Assert.False(json.TryGetProperty("graph_supported", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunInspect_BodyOnlyJson_EmitsDefinitionBodiesOnly_Issue3056()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_body_only_json");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Target.cs",
+                "csharp",
+                """
+                public class Target
+                {
+                    public int Compute()
+                    {
+                        return 42;
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["Compute", "--db", dbPath, "--body-only"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var selectedFields = json.GetProperty("selected_fields").EnumerateArray().Select(item => item.GetString()).ToList();
+            var definition = json.GetProperty("definitions").EnumerateArray().Single();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(["definitions"], selectedFields);
+            Assert.Contains("return 42;", definition.GetProperty("body_content").GetString(), StringComparison.Ordinal);
+            Assert.False(json.TryGetProperty("file", out _));
+            Assert.False(json.TryGetProperty("references", out _));
+            Assert.False(json.TryGetProperty("callers", out _));
+            Assert.False(json.TryGetProperty("callees", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunOutline_IndentsByContainerDepth()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_depth");

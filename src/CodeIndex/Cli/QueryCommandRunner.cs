@@ -43,6 +43,8 @@ public static class QueryCommandRunner
     internal const int MaxSymbolQueryNames = 256;
     internal const int MaxMapSectionsCsvLength = 256;
     internal const int MaxMapSectionsCsvEntries = 16;
+    internal const int MaxInspectFieldsCsvLength = 256;
+    internal const int MaxInspectFieldsCsvEntries = 16;
     internal const int MaxStatusCheckScopesCsvLength = 256;
     internal const int MaxStatusCheckScopesCsvEntries = 16;
     internal const int MaxVisibilityFilterCsvLength = 256;
@@ -116,6 +118,7 @@ public static class QueryCommandRunner
         "--format",
         "--min-entrypoint-confidence",
         "--sections",
+        "--fields",
     ];
     private sealed record StatusReadinessField(
         string FieldName,
@@ -223,6 +226,7 @@ public static class QueryCommandRunner
         "--immutable",
         "--pretty",
         "--compact",
+        "--body-only",
     ];
     private const string OutputFormatText = "text";
     private const string OutputFormatJson = "json";
@@ -2812,6 +2816,102 @@ public static class QueryCommandRunner
         };
     }
 
+    private static void ApplyInspectFieldSelection(JsonObject payload, QueryCommandOptions options, JsonSerializerOptions jsonOptions)
+    {
+        if (options.InspectFields == null)
+            return;
+
+        payload["selected_fields"] = JsonSerializer.SerializeToNode(options.InspectFields, CliJsonSerializerContextFactory.Create(jsonOptions).ListString);
+        var keep = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "api_version",
+            "query",
+            "selected_fields",
+        };
+
+        foreach (var field in options.InspectFields)
+            AddInspectFieldProperties(keep, field);
+
+        if (options.Compact)
+        {
+            keep.Add("compact");
+            keep.Add("compact_limit");
+            keep.Add("truncation");
+            FilterInspectCompactTruncationSections(payload, options.InspectFields);
+        }
+
+        foreach (var propertyName in payload.Select(property => property.Key).Where(key => !keep.Contains(key)).ToList())
+            payload.Remove(propertyName);
+    }
+
+    private static void AddInspectFieldProperties(HashSet<string> keep, string field)
+    {
+        switch (field)
+        {
+            case "file":
+                keep.Add("file");
+                break;
+            case "workspace":
+                keep.Add("workspace_indexed_at");
+                keep.Add("workspace_latest_modified");
+                keep.Add("project_root");
+                keep.Add("git_head");
+                keep.Add("git_is_dirty");
+                keep.Add("indexed_head_commit");
+                keep.Add("worktree_head_changed");
+                break;
+            case "graph":
+                keep.Add("graph_language");
+                keep.Add("graph_supported");
+                keep.Add("graph_support_reason");
+                keep.Add("graph_degraded");
+                keep.Add("unsupported_symbol_kind");
+                keep.Add("graph_table_available");
+                keep.Add("sql_graph_contract_ready");
+                keep.Add("sql_graph_contract_degraded_reason");
+                keep.Add("exact_zero_hint");
+                keep.Add("exact_index_available");
+                keep.Add("degraded");
+                keep.Add("degraded_reason");
+                break;
+            case "definitions":
+                keep.Add("definitions");
+                break;
+            case "nearby_symbols":
+                keep.Add("nearby_symbols");
+                break;
+            case "references":
+                keep.Add("references");
+                break;
+            case "callers":
+                keep.Add("callers");
+                break;
+            case "callees":
+                keep.Add("callees");
+                break;
+        }
+    }
+
+    private static void FilterInspectCompactTruncationSections(JsonObject payload, IReadOnlyCollection<string> inspectFields)
+    {
+        if (!payload.TryGetPropertyValue("truncation", out var truncationNode)
+            || truncationNode is not JsonObject truncation
+            || !truncation.TryGetPropertyValue("sections", out var sectionsNode)
+            || sectionsNode is not JsonObject sections)
+        {
+            return;
+        }
+
+        var keepSections = inspectFields
+            .Where(IsInspectListField)
+            .ToHashSet(StringComparer.Ordinal);
+        foreach (var sectionName in sections.Select(section => section.Key).Where(section => !keepSections.Contains(section)).ToList())
+            sections.Remove(sectionName);
+    }
+
+    private static bool IsInspectListField(string field)
+        => field is "definitions" or "nearby_symbols" or "references" or "callers" or "callees";
+
     public static int RunInspect(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var previewOptionError = ValidatePreviewOptions("inspect", cmdArgs, allowMaxLineWidth: true, allowFocusOptions: false);
@@ -2889,6 +2989,7 @@ public static class QueryCommandRunner
                 AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
                 if (compactTruncation != null)
                     AddCompactJsonFields(payload, compactLimit, compactTruncation);
+                ApplyInspectFieldSelection(payload, options, jsonOptions);
                 Console.WriteLine(payload.ToJsonString(jsonOptions));
             }
             else
@@ -5239,6 +5340,7 @@ public static class QueryCommandRunner
         bool profile = false;
         int? slowQueryMs = null;
         bool compact = false;
+        List<string>? inspectFields = null;
         double minEntrypointConfidence = 0;
         string? statusExplainField = null;
         bool statusLogPath = false;
@@ -5375,6 +5477,12 @@ public static class QueryCommandRunner
                     break;
                 case "--compact":
                     compact = true;
+                    json = true;
+                    outputFormat = OutputFormatJson;
+                    break;
+                case "--body-only":
+                    includeBody = true;
+                    inspectFields = ["definitions"];
                     json = true;
                     outputFormat = OutputFormatJson;
                     break;
@@ -5564,6 +5672,20 @@ public static class QueryCommandRunner
                     }
                     else
                         AddParseError(sectionsError!);
+                    break;
+                case "--fields":
+                    if (TryReadStringOptionValue(args, ref i, "--fields", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var fieldsValue, out var fieldsError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--fields", fieldsValue!);
+                        inspectFields = ParseInspectFields(fieldsValue!, AddParseError, out var includeBodyFromFields);
+                        includeBody |= includeBodyFromFields;
+                        json = true;
+                        outputFormat = OutputFormatJson;
+                    }
+                    else
+                    {
+                        AddParseError(fieldsError!);
+                    }
                     break;
                 case "--fts":
                     rawFts = true;
@@ -6042,6 +6164,7 @@ public static class QueryCommandRunner
             Profile = profile,
             SlowQueryMs = slowQueryMs,
             Compact = compact,
+            InspectFields = inspectFields,
             MinEntrypointConfidence = minEntrypointConfidence,
             StatusExplainField = statusExplainField,
             StatusLogPath = statusLogPath,
@@ -6083,6 +6206,80 @@ public static class QueryCommandRunner
         if (sections.Count == 0)
             addParseError("Error: --sections cannot be empty. Use one or more of tree, languages, hotspots, metrics.");
         return sections.Distinct(StringComparer.Ordinal).ToList();
+    }
+
+    private static List<string>? ParseInspectFields(string rawValue, Action<string> addParseError, out bool includeBody)
+    {
+        includeBody = false;
+        var fields = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var all = false;
+
+        if (!ValidateCsvBounds("--fields", rawValue, MaxInspectFieldsCsvLength, MaxInspectFieldsCsvEntries, addParseError))
+            return fields;
+
+        foreach (var rawField in rawValue.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var field = rawField.ToLowerInvariant().Replace('-', '_');
+            string canonical;
+            switch (field)
+            {
+                case "all":
+                    all = true;
+                    continue;
+                case "file":
+                    canonical = "file";
+                    break;
+                case "metadata":
+                case "workspace":
+                    canonical = "workspace";
+                    break;
+                case "graph":
+                case "trust":
+                    canonical = "graph";
+                    break;
+                case "definition":
+                case "definitions":
+                case "defs":
+                    canonical = "definitions";
+                    break;
+                case "body":
+                    canonical = "definitions";
+                    includeBody = true;
+                    break;
+                case "nearby":
+                case "nearby_symbols":
+                case "nearbysymbols":
+                    canonical = "nearby_symbols";
+                    break;
+                case "reference":
+                case "references":
+                case "refs":
+                    canonical = "references";
+                    break;
+                case "caller":
+                case "callers":
+                    canonical = "callers";
+                    break;
+                case "callee":
+                case "callees":
+                    canonical = "callees";
+                    break;
+                default:
+                    addParseError($"Error: unsupported --fields value '{rawField}'. Use one or more of all, file, workspace, graph, definitions, body, nearby_symbols, references, callers, callees.");
+                    continue;
+            }
+
+            if (seen.Add(canonical))
+                fields.Add(canonical);
+        }
+
+        if (all && fields.Count > 0)
+            addParseError("Error: --fields all cannot be combined with specific field names.");
+        if (!all && fields.Count == 0)
+            addParseError("Error: --fields requires at least one field name.");
+
+        return all ? null : fields;
     }
 
     private static bool ValidateCsvBounds(
@@ -8799,6 +8996,7 @@ public sealed class QueryCommandOptions
     public bool Profile { get; init; }
     public int? SlowQueryMs { get; init; }
     public bool Compact { get; init; }
+    public List<string>? InspectFields { get; init; }
     public double MinEntrypointConfidence { get; init; }
     public string? StatusExplainField { get; init; }
     public bool StatusLogPath { get; init; }
