@@ -208,6 +208,9 @@ public static class ExtractorPluginRegistry
                 TryLoadPatternConfig(patternPath);
             directory = Directory.GetParent(directory)?.FullName ?? string.Empty;
         }
+
+        foreach (var patternPath in EnumerateUserPatternConfigPaths())
+            TryLoadPatternConfig(patternPath);
     }
 
     private static void EnsurePluginsLoaded()
@@ -334,6 +337,12 @@ public static class ExtractorPluginRegistry
         if (!includeUserDirectory)
             yield break;
 
+        foreach (var path in EnumerateUserPatternConfigPaths())
+            yield return path;
+    }
+
+    private static IEnumerable<string> EnumerateUserPatternConfigPaths()
+    {
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         if (!string.IsNullOrWhiteSpace(home))
         {
