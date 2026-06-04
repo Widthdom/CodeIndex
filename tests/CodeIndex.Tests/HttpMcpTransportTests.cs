@@ -219,6 +219,25 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
+    public async Task HttpTransport_RequestLogger_CapsLongJsonRpcIdBeforeLogging()
+    {
+        var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath, requestLogger: records.Enqueue);
+        var oversizedId = new string('i', HttpMcpTransport.MaxRequestLogFieldCharacters + 100);
+        var body = """{"jsonrpc":"2.0","id":"""
+            + JsonSerializer.Serialize(oversizedId)
+            + ""","method":"ping"}""";
+
+        using var response = await harness.PostJsonAsync(body);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var record = Assert.Single(await WaitForRequestLogRecordsAsync(records, 1));
+        Assert.NotNull(record.RequestId);
+        Assert.Equal(HttpMcpTransport.MaxRequestLogFieldCharacters, record.RequestId.Length);
+        Assert.EndsWith(HttpMcpTransport.RequestLogTruncationMarker, record.RequestId, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task HttpTransport_TwoSequentialRequests_ShareWarmServer()
     {
         // Issue #1558: AI clients should be able to keep a single MCP server warm across

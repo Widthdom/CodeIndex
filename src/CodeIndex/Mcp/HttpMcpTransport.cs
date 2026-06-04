@@ -811,12 +811,13 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             if (!doc.RootElement.TryGetProperty("id", out var id))
                 return null;
 
-            return id.ValueKind switch
+            var requestId = id.ValueKind switch
             {
                 JsonValueKind.String => id.GetString(),
                 JsonValueKind.Number => id.GetRawText(),
                 _ => id.GetRawText(),
             };
+            return LimitRequestLogField(requestId);
         }
         catch (JsonException)
         {
