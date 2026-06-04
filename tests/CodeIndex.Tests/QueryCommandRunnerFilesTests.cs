@@ -853,16 +853,23 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunStatus_Explain_RejectsJsonMode()
+    public void RunStatus_ExplainJson_PrintsMachineReadableDescription()
     {
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
             ["--explain", "fold_ready", "--json"],
             _jsonOptions));
 
-        Assert.Equal(CommandExitCodes.UsageError, exitCode);
-        Assert.Equal(string.Empty, stdout);
-        Assert.Contains("cannot be combined with --json", stderr);
-        Assert.Contains("status --json", stderr);
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        var json = document.RootElement;
+        Assert.Equal("1", json.GetProperty("api_version").GetString());
+        Assert.Equal("fold_ready", json.GetProperty("field").GetString());
+        Assert.Equal("Unicode exact-name fold contract", json.GetProperty("label").GetString());
+        Assert.Contains("Unicode NFKC", json.GetProperty("ready").GetString());
+        Assert.Contains("ASCII COLLATE NOCASE", json.GetProperty("degraded").GetString());
+        Assert.Contains("cdidx backfill-fold", json.GetProperty("remediation").GetString());
+        Assert.Contains("fold_ready", json.GetProperty("known_fields").EnumerateArray().Select(item => item.GetString()));
     }
 
     [Theory]
