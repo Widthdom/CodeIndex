@@ -574,6 +574,7 @@ public partial class DbReader
             UnknownExtensionFilesTruncated = unknownExtensionFilesTruncated,
             UnknownExtensionFilePathLimit = unknownExtensionFilePathLimit,
             IndexedAt = freshness.IndexedAt,
+            LastWorkspaceFreshenedAt = lastIndexRun?.StartedAt ?? indexedHeadTimestamp,
             LatestModified = freshness.LatestModified,
             IndexedHeadSha = indexedHeadSha,
             IndexedHeadBranch = indexedHeadBranch,

@@ -3455,11 +3455,7 @@ public static class QueryCommandRunner
         if (options.StatusExplainField != null)
         {
             if (options.Json)
-            {
-                Console.Error.WriteLine("Error: status --explain is human-readable only and cannot be combined with --json.");
-                Console.Error.WriteLine("Hint: omit --json, or use plain `status --json` to read machine-oriented readiness fields.");
-                return CommandExitCodes.UsageError;
-            }
+                return WriteStatusReadinessExplanationJson(options.StatusExplainField);
             return WriteStatusReadinessExplanation(options.StatusExplainField);
         }
 
@@ -3564,6 +3560,8 @@ public static class QueryCommandRunner
                 Console.WriteLine(ConsoleUi.FormatSummaryLine("Refs", $"{status.References:N0}"));
                 if (status.IndexedAt != null)
                     Console.WriteLine(ConsoleUi.FormatSummaryLine("Indexed", $"{status.IndexedAt:O}"));
+                if (status.LastWorkspaceFreshenedAt != null)
+                    Console.WriteLine(ConsoleUi.FormatSummaryLine("Freshened", $"{status.LastWorkspaceFreshenedAt:O}"));
                 if (status.LatestModified != null)
                     Console.WriteLine(ConsoleUi.FormatSummaryLine("Source", $"{status.LatestModified:O}"));
                 if (status.GitHead != null)
@@ -7747,6 +7745,34 @@ public static class QueryCommandRunner
         Console.WriteLine($"Ready: {field.ReadyText}");
         Console.WriteLine($"Degraded: {field.DegradedText}");
         Console.WriteLine($"Remediation: {field.Remediation}");
+        return CommandExitCodes.Success;
+    }
+
+    private static int WriteStatusReadinessExplanationJson(string fieldName)
+    {
+        var field = FindStatusReadinessField(fieldName);
+        if (field == null)
+        {
+            Console.Error.WriteLine($"Error: unknown status readiness field `{fieldName}`.");
+            Console.Error.WriteLine($"Hint: use one of: {string.Join(", ", StatusReadinessFields.Select(f => f.FieldName))}.");
+            return CommandExitCodes.UsageError;
+        }
+
+        var knownFields = new JsonArray();
+        foreach (var knownField in StatusReadinessFields)
+            knownFields.Add(knownField.FieldName);
+
+        var payload = new JsonObject
+        {
+            ["api_version"] = JsonOutputContract.ApiVersion,
+            ["field"] = field.FieldName,
+            ["label"] = field.Label,
+            ["ready"] = field.ReadyText,
+            ["degraded"] = field.DegradedText,
+            ["remediation"] = field.Remediation,
+            ["known_fields"] = knownFields,
+        };
+        Console.WriteLine(payload.ToJsonString());
         return CommandExitCodes.Success;
     }
 

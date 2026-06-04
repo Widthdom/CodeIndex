@@ -27,7 +27,11 @@ public sealed record PostExtractionHookDiagnostic(
 public sealed class PostExtractionHookRunner : IDisposable
 {
     public const string CallbackBudgetEnvironmentVariable = "CDIDX_HOOK_CALLBACK_BUDGET_MS";
+    public const string DiscoveryLimitEnvironmentVariable = "CDIDX_HOOK_DISCOVERY_MAX_DLLS";
+    public const string DiscoveryMaxBytesEnvironmentVariable = "CDIDX_HOOK_DISCOVERY_MAX_BYTES";
     public static readonly TimeSpan DefaultCallbackBudget = TimeSpan.FromSeconds(5);
+    internal const int DefaultDiscoveryLimit = 128;
+    internal const long DefaultDiscoveryMaxBytes = 64 * 1024 * 1024;
 
     private readonly List<LoadedPostExtractionHook> hooks;
     private readonly ConcurrentQueue<PostExtractionHookDiagnostic> diagnostics = new();
@@ -35,6 +39,8 @@ public sealed class PostExtractionHookRunner : IDisposable
     private readonly TimeSpan callbackBudget;
     private bool disposed;
     internal static Func<TimeSpan>? CallbackBudgetForTesting { get; set; }
+    internal static Func<int>? DiscoveryLimitForTesting { get; set; }
+    internal static Func<long>? DiscoveryMaxBytesForTesting { get; set; }
 
     private PostExtractionHookRunner(List<LoadedPostExtractionHook> hooks, TimeSpan callbackBudget)
     {
@@ -53,11 +59,15 @@ public sealed class PostExtractionHookRunner : IDisposable
         if (string.IsNullOrWhiteSpace(hooksDirectory) || !Directory.Exists(hooksDirectory))
             return runner;
 
-        foreach (var dllPath in Directory.EnumerateFiles(hooksDirectory, "*.dll").OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
+        var maxAssemblyBytes = ResolveDiscoveryMaxBytes();
+        foreach (var dllPath in EnumerateHookAssemblyPaths(hooksDirectory, runner, ResolveDiscoveryLimit()))
         {
             Assembly assembly;
             try
             {
+                if (!HookAssemblyCandidateIsWithinBudget(dllPath, runner, maxAssemblyBytes))
+                    continue;
+
                 var loadContext = new AssemblyLoadContext($"cdidx-hook:{Path.GetFileNameWithoutExtension(dllPath)}", isCollectible: true);
                 assembly = loadContext.LoadFromAssemblyPath(Path.GetFullPath(dllPath));
             }
@@ -101,6 +111,125 @@ public sealed class PostExtractionHookRunner : IDisposable
         }
 
         return runner;
+    }
+
+    private static IReadOnlyList<string> EnumerateHookAssemblyPaths(
+        string hooksDirectory,
+        PostExtractionHookRunner runner,
+        int discoveryLimit)
+    {
+        using var enumerator = TryEnumerateHookFiles(hooksDirectory, runner);
+        if (enumerator == null)
+            return [];
+
+        var candidates = new List<string>(Math.Min(discoveryLimit, 128));
+        while (TryMoveNextHookFile(hooksDirectory, enumerator, runner, out var dllPath))
+        {
+            if (candidates.Count >= discoveryLimit)
+            {
+                runner.diagnostics.Enqueue(new PostExtractionHookDiagnostic(
+                    hooksDirectory,
+                    null,
+                    $"Hook discovery skipped remaining assemblies after the {discoveryLimit} DLL candidate limit."));
+                break;
+            }
+
+            candidates.Add(dllPath);
+        }
+
+        return candidates
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static IEnumerator<string>? TryEnumerateHookFiles(string hooksDirectory, PostExtractionHookRunner runner)
+    {
+        try
+        {
+            return Directory.EnumerateFiles(hooksDirectory, "*.dll", SearchOption.TopDirectoryOnly).GetEnumerator();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            runner.diagnostics.Enqueue(new PostExtractionHookDiagnostic(
+                hooksDirectory,
+                null,
+                $"Failed to enumerate hook directory: {ex.Message}"));
+            return null;
+        }
+    }
+
+    private static bool HookAssemblyCandidateIsWithinBudget(
+        string dllPath,
+        PostExtractionHookRunner runner,
+        long maxAssemblyBytes)
+    {
+        FileInfo fileInfo;
+        try
+        {
+            fileInfo = new FileInfo(dllPath);
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            runner.diagnostics.Enqueue(new PostExtractionHookDiagnostic(
+                dllPath,
+                null,
+                $"Hook assembly skipped: could not inspect file ({ex.Message})."));
+            return false;
+        }
+
+        if (!fileInfo.Exists)
+        {
+            runner.diagnostics.Enqueue(new PostExtractionHookDiagnostic(
+                dllPath,
+                null,
+                "Hook assembly skipped: file does not exist."));
+            return false;
+        }
+
+        if ((fileInfo.Attributes & FileAttributes.Directory) != 0)
+        {
+            runner.diagnostics.Enqueue(new PostExtractionHookDiagnostic(
+                dllPath,
+                null,
+                "Hook assembly skipped: path is a directory."));
+            return false;
+        }
+
+        if (fileInfo.Length > maxAssemblyBytes)
+        {
+            runner.diagnostics.Enqueue(new PostExtractionHookDiagnostic(
+                dllPath,
+                null,
+                $"Hook assembly skipped: file is too large ({fileInfo.Length} bytes; maximum {maxAssemblyBytes})."));
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool TryMoveNextHookFile(
+        string hooksDirectory,
+        IEnumerator<string> enumerator,
+        PostExtractionHookRunner runner,
+        out string dllPath)
+    {
+        dllPath = string.Empty;
+        try
+        {
+            if (!enumerator.MoveNext())
+                return false;
+
+            dllPath = enumerator.Current;
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            runner.diagnostics.Enqueue(new PostExtractionHookDiagnostic(
+                hooksDirectory,
+                null,
+                $"Failed to enumerate hook directory: {ex.Message}"));
+            return false;
+        }
     }
 
     public IReadOnlyList<PostExtractionHookInfo> Hooks => hooks.Select(hook => hook.Info).ToList();
@@ -203,6 +332,34 @@ public sealed class PostExtractionHookRunner : IDisposable
             ? NormalizeCallbackBudgetMilliseconds(milliseconds)
             : DefaultCallbackBudget;
     }
+
+    private static int ResolveDiscoveryLimit()
+    {
+        if (DiscoveryLimitForTesting != null)
+            return NormalizeDiscoveryLimit(DiscoveryLimitForTesting());
+
+        var raw = Environment.GetEnvironmentVariable(DiscoveryLimitEnvironmentVariable);
+        return int.TryParse(raw, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var value)
+            ? NormalizeDiscoveryLimit(value)
+            : DefaultDiscoveryLimit;
+    }
+
+    private static int NormalizeDiscoveryLimit(int value)
+        => value <= 0 ? DefaultDiscoveryLimit : value;
+
+    private static long ResolveDiscoveryMaxBytes()
+    {
+        if (DiscoveryMaxBytesForTesting != null)
+            return NormalizeDiscoveryMaxBytes(DiscoveryMaxBytesForTesting());
+
+        var raw = Environment.GetEnvironmentVariable(DiscoveryMaxBytesEnvironmentVariable);
+        return long.TryParse(raw, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var value)
+            ? NormalizeDiscoveryMaxBytes(value)
+            : DefaultDiscoveryMaxBytes;
+    }
+
+    private static long NormalizeDiscoveryMaxBytes(long value)
+        => value <= 0 ? DefaultDiscoveryMaxBytes : value;
 
     private static TimeSpan NormalizeCallbackBudgetMilliseconds(long milliseconds)
         => milliseconds <= 0
