@@ -52,6 +52,7 @@ internal static class GitHubIssueReporter
     internal const int MaxGitHubIssueTitleLength = 255;
     internal const int MaxScrubInputLength = 16 * 1024;
     internal const int MaxGitHubApiErrorBodyBytes = 4 * 1024;
+    internal const int MaxGitHubApiResponseBodyBytes = 256 * 1024;
     private const int MaxGitHubApiErrorDetailLength = 500;
     private const string CodeExampleRemovedText = "[code example removed]";
     private const string ScrubInputTruncatedText = "\n[truncated]";
@@ -256,8 +257,16 @@ internal static class GitHubIssueReporter
         if (!response.IsSuccessStatusCode)
             return null;
 
-        var responseJson = await response.Content.ReadAsStringAsync(cancellationToken);
-        var node = JsonNode.Parse(responseJson);
+        JsonNode? node;
+        try
+        {
+            node = await ReadGitHubApiResponseJsonAsync(response.Content, cancellationToken);
+        }
+        catch (Exception ex) when (IsRecoverableGitHubApiResponseException(ex))
+        {
+            return null;
+        }
+
         var items = node?["items"] as JsonArray;
         if (items == null || items.Count == 0)
             return null;
@@ -292,8 +301,17 @@ internal static class GitHubIssueReporter
                 if (!response.IsSuccessStatusCode)
                     return null;
 
-                var responseJson = await response.Content.ReadAsStringAsync(cancellationToken);
-                var items = JsonNode.Parse(responseJson) as JsonArray;
+                JsonNode? node;
+                try
+                {
+                    node = await ReadGitHubApiResponseJsonAsync(response.Content, cancellationToken);
+                }
+                catch (Exception ex) when (IsRecoverableGitHubApiResponseException(ex))
+                {
+                    return null;
+                }
+
+                var items = node as JsonArray;
                 if (items == null || items.Count == 0)
                     break;
 
@@ -462,8 +480,7 @@ internal static class GitHubIssueReporter
         }
 
         // Parse response to extract the issue URL / レスポンスを解析して Issue URL を抽出
-        var responseJson = await response.Content.ReadAsStringAsync(cancellationToken);
-        var responseNode = JsonNode.Parse(responseJson);
+        var responseNode = await ReadGitHubApiResponseJsonAsync(response.Content, cancellationToken);
         var issueUrl = responseNode?["html_url"]?.GetValue<string>();
         return issueUrl != null
             ? SuggestionStore.SubmitAttemptResult.Success(issueUrl)
@@ -708,6 +725,18 @@ internal static class GitHubIssueReporter
             ? body + ApiErrorBodyTruncatedText
             : body;
     }
+
+    internal static async Task<JsonNode?> ReadGitHubApiResponseJsonAsync(HttpContent content, CancellationToken cancellationToken)
+    {
+        var payload = await BoundedHttpContentReader.ReadAsByteArrayAsync(
+            content,
+            MaxGitHubApiResponseBodyBytes,
+            cancellationToken).ConfigureAwait(false);
+        return JsonNode.Parse(Encoding.UTF8.GetString(payload));
+    }
+
+    private static bool IsRecoverableGitHubApiResponseException(Exception ex)
+        => ex is JsonException or InvalidDataException;
 
     private static string SanitizeApiErrorBody(string errorBody)
     {

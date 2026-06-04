@@ -695,6 +695,44 @@ public class GitHubIssueReporterTests : IDisposable
     }
 
     [Fact]
+    public async Task TryCreateIssueDetailedAsync_CreateSuccessBodyOverLimit_ReturnsDiagnosticError()
+    {
+        _env.Set("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
+
+        var handler = new RecordingHandler();
+        handler.AddResponse(req => req.Method == HttpMethod.Get && req.RequestUri!.AbsolutePath == "/search/issues",
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = MakeJsonContent("""{ "total_count": 0, "items": [] }"""),
+            });
+        handler.AddResponse(req => req.Method == HttpMethod.Get && req.RequestUri!.AbsolutePath == "/repos/widthdom/CodeIndex/issues",
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = MakeJsonContent("[]"),
+            });
+        handler.AddResponse(req => req.Method == HttpMethod.Post && req.RequestUri!.AbsolutePath.Contains("/issues"),
+            new HttpResponseMessage(HttpStatusCode.Created)
+            {
+                Content = new ByteArrayContent(new byte[GitHubIssueReporter.MaxGitHubApiResponseBodyBytes + 1]),
+            });
+        using var mockClient = new HttpClient(handler);
+        GitHubIssueReporter.s_httpClientOverride = mockClient;
+        try
+        {
+            var record = MakeRecordWithKnownHash();
+            var result = await GitHubIssueReporter.TryCreateIssueDetailedAsync(record, "1.0.0-test");
+
+            Assert.Null(result.IssueUrl);
+            Assert.Contains("InvalidDataException", result.Error);
+            Assert.Contains("HTTP response body exceeded", result.Error);
+        }
+        finally
+        {
+            GitHubIssueReporter.s_httpClientOverride = null;
+        }
+    }
+
+    [Fact]
     public async Task TryCreateIssueAsync_SearchApiFails_StillAttemptsCreate()
     {
         // Search-API failure (e.g. 5xx or rate limited) must not block a
@@ -830,6 +868,17 @@ public class GitHubIssueReporterTests : IDisposable
 
         Assert.True(stream.BytesRead <= GitHubIssueReporter.MaxGitHubApiErrorBodyBytes + 1);
         Assert.EndsWith(" [response body truncated]", result);
+    }
+
+    [Fact]
+    public async Task ReadGitHubApiResponseJsonAsync_RejectsBodyOverLimit()
+    {
+        using var content = new ByteArrayContent(new byte[GitHubIssueReporter.MaxGitHubApiResponseBodyBytes + 1]);
+
+        var ex = await Assert.ThrowsAsync<InvalidDataException>(
+            () => GitHubIssueReporter.ReadGitHubApiResponseJsonAsync(content, CancellationToken.None));
+
+        Assert.Contains("HTTP response body exceeded", ex.Message);
     }
 
     [Fact]
