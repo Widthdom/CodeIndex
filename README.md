@@ -63,6 +63,8 @@ cdidx search "handleRequest"
 cdidx definition UserService
 cdidx search "Handle" --project MyApp
 cdidx search "File.ReadAllText" --exact-substring --reject-before "Length" --guard-window 8
+cdidx search --list-recipes
+cdidx search --recipe risky-code --json
 cdidx validate
 cdidx mcp
 cdidx lsp --db .cdidx/codeindex.db
@@ -158,7 +160,7 @@ downgrading `cdidx`.
 
 | Area | What cdidx provides |
 |---|---|
-| Search surfaces | CLI-first output for humans and machines; full-text, symbol, reference, caller/callee, dependency, map, inspect, and excerpt commands. `search`, `definition`, `references`, `callers`, `callees`, `find`, and `validate` support `--format count|compact|csv|tsv|lsp|qf|sarif` for token-budgeted agents, scripts, editors, and CI reports. `cdidx lsp --db .cdidx/codeindex.db` starts a read-only stdio Language Server Protocol shim for LSP-native editors. |
+| Search surfaces | CLI-first output for humans and machines; full-text, reusable search audit recipes, symbol, reference, caller/callee, dependency, map, inspect, and excerpt commands. `search`, `definition`, `references`, `callers`, `callees`, `find`, and `validate` support `--format count|compact|csv|tsv|lsp|qf|sarif` for token-budgeted agents, scripts, editors, and CI reports. `cdidx lsp --db .cdidx/codeindex.db` starts a read-only stdio Language Server Protocol shim for LSP-native editors. |
 | Validation diagnostics | `validate --json` and MCP `validate` annotate `replacement_char` rows with `origin` (`source_literal` or `decode_replacement`) and `severity` so agents can separate intentional U+FFFD literals from likely encoding damage. |
 | Definition and impact diagnostics | `definition --json` includes C# `disambiguator` hints for overloads, partial types, and extension receivers when indexed metadata can distinguish them. `impact --json` and MCP `impact_analysis` include `impact_failure_chain` and `suggestion_type` for zero-result routing; `impact --strict` exits non-zero when resolution or graph preconditions are unmet. |
 | Ranking and filters | Public/exported symbol matches rank ahead of protected, internal, and private matches. Use `--no-visibility-rank` for legacy order, and `--visibility` / `--exclude-visibility` with `symbols`, `definition`, `unused`, and `hotspots`. Query defaults can be adjusted with `CDIDX_DEFAULT_LIMIT`, `CDIDX_DEFAULT_SNIPPET_LINES`, and `CDIDX_DEFAULT_MAX_LINE_WIDTH`; explicit CLI flags still win. |
@@ -361,6 +363,8 @@ cdidx search "handleRequest"
 cdidx definition UserService
 cdidx search "Handle" --project MyApp
 cdidx search "File.ReadAllText" --exact-substring --reject-before "Length" --guard-window 8
+cdidx search --list-recipes
+cdidx search --recipe risky-code --json
 cdidx validate
 cdidx mcp
 cdidx lsp --db .cdidx/codeindex.db
@@ -443,7 +447,7 @@ upgrade / downgrade 後はインストール済み補完 script を再生成し�
 
 | 分野 | 内容 |
 |---|---|
-| 検索面 | CLI-first の人間向け / 機械処理向け出力。全文検索、シンボル、参照、caller/callee、依存関係、map、inspect、excerpt コマンドを提供します。`search`、`definition`、`references`、`callers`、`callees`、`find`、`validate` は `--format count|compact|csv|tsv|lsp|qf|sarif` をサポートし、token-budgeted agent、script、editor、CI report でも使いやすい出力にできます。`cdidx lsp --db .cdidx/codeindex.db` は LSP-native editor 向けの read-only stdio Language Server Protocol shim を起動します。 |
+| 検索面 | CLI-first の人間向け / 機械処理向け出力。全文検索、再利用可能な search audit recipe、シンボル、参照、caller/callee、依存関係、map、inspect、excerpt コマンドを提供します。`search`、`definition`、`references`、`callers`、`callees`、`find`、`validate` は `--format count|compact|csv|tsv|lsp|qf|sarif` をサポートし、token-budgeted agent、script、editor、CI report でも使いやすい出力にできます。`cdidx lsp --db .cdidx/codeindex.db` は LSP-native editor 向けの read-only stdio Language Server Protocol shim を起動します。 |
 | validation 診断 | `validate --json` と MCP `validate` は `replacement_char` 行に `origin` (`source_literal` / `decode_replacement`) と `severity` を付け、意図的な U+FFFD literal とエンコーディング破損の可能性を agent が分離できるようにします。 |
 | definition / impact 診断 | `definition --json` は C# overload、partial type、extension receiver を区別できる場合に `disambiguator` を返します。`impact --json` と MCP `impact_analysis` は 0 件時の経路判断用に `impact_failure_chain` と `suggestion_type` を返し、`impact --strict` は解決または graph の前提条件が満たされない場合に非 0 で終了します。 |
 | 順位と filter | public/exported なシンボル一致を protected、internal、private より優先します。従来順は `--no-visibility-rank`、可視性の include / exclude は `symbols`、`definition`、`unused`、`hotspots` の `--visibility` / `--exclude-visibility` で指定できます。query 既定値は `CDIDX_DEFAULT_LIMIT`、`CDIDX_DEFAULT_SNIPPET_LINES`、`CDIDX_DEFAULT_MAX_LINE_WIDTH` で調整でき、明示 CLI flag が常に優先されます。 |

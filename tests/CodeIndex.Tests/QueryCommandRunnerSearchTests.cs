@@ -214,6 +214,86 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_ListRecipesJsonIncludesBuiltInAuditMetadata_Issue3144()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["--list-recipes", "--json"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        var root = document.RootElement;
+        var recipe = root
+            .GetProperty("recipes")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "risky-code");
+        var query = recipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "raw-diagnostic-echo");
+
+        Assert.Equal(1, root.GetProperty("count").GetInt32());
+        Assert.Contains(recipe.GetProperty("recommended_labels").EnumerateArray(), label => label.GetString() == "audit");
+        Assert.Equal("ex.Message", query.GetProperty("query").GetString());
+        Assert.True(query.GetProperty("exact_substring").GetBoolean());
+        Assert.Contains("redaction", query.GetProperty("description").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("False positives", query.GetProperty("false_positive_guidance").GetString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void RunSearch_RecipeJsonRunsBuiltInQueries_Issue3144()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_recipe_json");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                """
+                using System.Text.Json;
+
+                public sealed class App
+                {
+                    public void Run(Exception ex, CancellationToken token)
+                    {
+                        JsonDocument.Parse("{}");
+                        reader.ReadToEnd();
+                        Console.WriteLine(ex.Message);
+                        _ = CancellationToken.None;
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "risky-code", "--db", dbPath, "--lang", "csharp", "--limit", "2", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            var unboundedJsonParse = root
+                .GetProperty("queries")
+                .EnumerateArray()
+                .Single(item => item.GetProperty("name").GetString() == "unbounded-json-parse");
+
+            Assert.Equal("risky-code", root.GetProperty("recipe").GetProperty("name").GetString());
+            Assert.Equal(5, root.GetProperty("query_count").GetInt32());
+            Assert.True(root.GetProperty("result_count").GetInt32() >= 4);
+            Assert.Equal(1, unboundedJsonParse.GetProperty("count").GetInt32());
+            Assert.Equal("JsonDocument.Parse", unboundedJsonParse.GetProperty("query").GetString());
+            Assert.Equal("src/app.cs", unboundedJsonParse.GetProperty("results")[0].GetProperty("path").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_ProfileEmitsSqlPhasesAndQueryPlan_Issue1643()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_profile");

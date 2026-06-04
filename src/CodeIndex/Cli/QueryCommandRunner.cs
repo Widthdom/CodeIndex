@@ -103,6 +103,7 @@ public static class QueryCommandRunner
         "--max-hops",
         "--depth",
         "--query",
+        "--recipe",
         "--group-by",
         "--focus-line",
         "--focus-column",
@@ -218,6 +219,7 @@ public static class QueryCommandRunner
         "--bytes",
         "--profile",
         "--check-updates",
+        "--list-recipes",
         "--read-only",
         "--immutable",
     ];
@@ -451,6 +453,48 @@ public static class QueryCommandRunner
             Console.Error.WriteLine(exactError);
             return CommandExitCodes.UsageError;
         }
+        if (options.ListRecipes)
+        {
+            if (options.Query != null || options.RecipeName != null || options.ExtraNames.Count > 0)
+            {
+                WriteUsageError(
+                    "--list-recipes cannot be combined with a query, --recipe, or extra positional arguments.",
+                    GetUsageLineOrThrow("search"),
+                    "Run `cdidx search --list-recipes` to list built-in audit recipes.");
+                return CommandExitCodes.UsageError;
+            }
+
+            return WriteSearchRecipeList(options, jsonOptions);
+        }
+        if (options.RecipeName != null)
+        {
+            if (options.Query != null || options.ExtraNames.Count > 0)
+            {
+                WriteUsageError(
+                    "--recipe expands into its own curated query set and cannot be combined with a search query.",
+                    GetUsageLineOrThrow("search"),
+                    "Remove the positional query, or run a plain `cdidx search <query>` without --recipe.");
+                return CommandExitCodes.UsageError;
+            }
+            if (options.CountOnly)
+            {
+                WriteUsageError(
+                    "--count is not supported with --recipe.",
+                    GetUsageLineOrThrow("search"),
+                    "Use `cdidx search --recipe <name> --json` for per-query result counts.");
+                return CommandExitCodes.UsageError;
+            }
+            if (options.Prefix)
+            {
+                WriteUsageError(
+                    "--prefix is not supported with --recipe because each recipe query defines its own match mode.",
+                    GetUsageLineOrThrow("search"),
+                    "Remove --prefix, or run the individual query from the recipe list yourself.");
+                return CommandExitCodes.UsageError;
+            }
+
+            return RunSearchRecipe(options, jsonOptions, exact);
+        }
         if (exact && options.Prefix)
         {
             WriteValidationError(
@@ -640,15 +684,141 @@ public static class QueryCommandRunner
         });
     }
 
-    private static List<SearchDisplayRow> BuildSearchDisplayRows(List<SearchResult> results, QueryCommandOptions options, bool exact)
+    private static int WriteSearchRecipeList(QueryCommandOptions options, JsonSerializerOptions jsonOptions)
+    {
+        var recipes = SearchAuditRecipes.All
+            .Select(ToSearchRecipeListItem)
+            .ToList();
+        if (options.Json)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(
+                new SearchRecipeListJsonResult(JsonOutputContract.ApiVersion, recipes.Count, recipes),
+                CliJsonSerializerContextFactory.Create(jsonOptions).SearchRecipeListJsonResult));
+            return CommandExitCodes.Success;
+        }
+
+        foreach (var recipe in recipes)
+        {
+            Console.WriteLine($"{recipe.Name}: {recipe.Description}");
+            Console.WriteLine($"  labels: {string.Join(", ", recipe.RecommendedLabels)}");
+            foreach (var query in recipe.Queries)
+            {
+                var mode = query.ExactSubstring ? "exact-substring" : "fts";
+                Console.WriteLine($"  - {query.Name}: {query.Query} ({mode})");
+                Console.WriteLine($"    {query.Description}");
+                Console.WriteLine($"    false positives: {query.FalsePositiveGuidance}");
+            }
+        }
+
+        return CommandExitCodes.Success;
+    }
+
+    private static int RunSearchRecipe(QueryCommandOptions options, JsonSerializerOptions jsonOptions, bool userExact)
+    {
+        if (!SearchAuditRecipes.TryGet(options.RecipeName!, out var recipe))
+        {
+            var available = string.Join(", ", SearchAuditRecipes.All.Select(r => r.Name));
+            WriteUsageError(
+                $"unknown search recipe '{options.RecipeName}'.",
+                GetUsageLineOrThrow("search"),
+                $"Use `cdidx search --list-recipes` to see available recipes: {available}.");
+            return CommandExitCodes.UsageError;
+        }
+
+        return WithDb(options, jsonOptions, reader =>
+        {
+            var queryResults = new List<SearchRecipeQueryResultJsonResult>();
+            var total = 0;
+            foreach (var recipeQuery in recipe.Queries)
+            {
+                var exact = userExact || recipeQuery.ExactSubstring;
+                var results = reader.Search(
+                    recipeQuery.Query,
+                    options.Limit,
+                    options.Lang,
+                    false,
+                    options.PathPatterns,
+                    options.ExcludePaths,
+                    options.ExcludeTests,
+                    !options.NoDedup,
+                    options.Since,
+                    exact,
+                    false,
+                    !options.NoVisibilityRank,
+                    guardFilters: options.GuardFilters,
+                    guardWindow: options.GuardWindow);
+                var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query);
+                total += rows.Count;
+                queryResults.Add(new SearchRecipeQueryResultJsonResult(
+                    recipeQuery.Name,
+                    recipeQuery.Query,
+                    recipeQuery.Description,
+                    recipeQuery.RecommendedLabels,
+                    recipeQuery.FalsePositiveGuidance,
+                    exact,
+                    rows.Count,
+                    rows.Select(row => row.Compact).ToList()));
+            }
+
+            if (options.Json)
+            {
+                Console.WriteLine(JsonSerializer.Serialize(
+                    new SearchRecipeRunJsonResult(
+                        JsonOutputContract.ApiVersion,
+                        ToSearchRecipeListItem(recipe),
+                        recipe.Queries.Count,
+                        total,
+                        queryResults),
+                    CliJsonSerializerContextFactory.Create(jsonOptions).SearchRecipeRunJsonResult));
+                return CommandExitCodes.Success;
+            }
+
+            Console.WriteLine($"Recipe: {recipe.Name}");
+            Console.WriteLine(recipe.Description);
+            Console.WriteLine();
+            foreach (var queryResult in queryResults)
+            {
+                Console.WriteLine($"[{queryResult.Name}] {queryResult.Query}");
+                Console.WriteLine(queryResult.Description);
+                Console.WriteLine($"labels: {string.Join(", ", queryResult.RecommendedLabels)}");
+                Console.WriteLine($"false positives: {queryResult.FalsePositiveGuidance}");
+                Console.WriteLine($"results: {queryResult.Count}");
+                foreach (var result in queryResult.Results)
+                {
+                    Console.WriteLine($"{result.Path}:{result.ChunkStartLine}-{result.ChunkEndLine}");
+                    foreach (var line in result.Snippet.Split('\n', StringSplitOptions.None))
+                        Console.WriteLine($"  {line}");
+                }
+                Console.WriteLine();
+            }
+
+            Console.Error.WriteLine($"({total} recipe results across {recipe.Queries.Count} queries)");
+            return CommandExitCodes.Success;
+        });
+    }
+
+    private static SearchRecipeListItemJsonResult ToSearchRecipeListItem(SearchAuditRecipe recipe) => new(
+        recipe.Name,
+        recipe.Description,
+        recipe.RecommendedLabels,
+        recipe.Queries.Select(query => new SearchRecipeQueryListItemJsonResult(
+            query.Name,
+            query.Query,
+            query.Description,
+            query.RecommendedLabels,
+            query.FalsePositiveGuidance,
+            query.ExactSubstring)).ToList());
+
+    private static List<SearchDisplayRow> BuildSearchDisplayRows(List<SearchResult> results, QueryCommandOptions options, bool exact, string? queryOverride = null)
     {
         var rows = new List<SearchDisplayRow>(results.Count);
         var seenMatchLocations = !exact || options.NoDedup ? null : new HashSet<string>(StringComparer.Ordinal);
+        var displayQuery = queryOverride ?? options.Query!;
         foreach (var result in results)
         {
             var compact = SearchSnippetFormatter.ToCompactResult(
                 result,
-                options.Query!,
+                displayQuery,
                 options.SnippetLines,
                 exact,
                 options.MaxLineWidth,
@@ -5145,6 +5315,8 @@ public static class QueryCommandRunner
         bool impactDeprecatedDepthUsed = false;
         List<string>? mapSections = null;
         bool dependencyCycles = false;
+        string? recipeName = null;
+        bool listRecipes = false;
 
         void AddParseError(string error)
         {
@@ -5361,6 +5533,18 @@ public static class QueryCommandRunner
                     }
                     else
                         AddParseError(queryError!);
+                    break;
+                case "--recipe":
+                    if (TryReadStringOptionValue(args, ref i, "--recipe", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var recipeValue, out var recipeError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--recipe", recipeValue!);
+                        recipeName = recipeValue;
+                    }
+                    else
+                        AddParseError(recipeError!);
+                    break;
+                case "--list-recipes":
+                    listRecipes = true;
                     break;
                 case "--require-before":
                     if (TryReadStringOptionValue(args, ref i, "--require-before", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var requireBeforeValue, out var requireBeforeError))
@@ -5933,6 +6117,8 @@ public static class QueryCommandRunner
             ExtraNames = extraNames,
             MapSections = mapSections,
             DependencyCycles = dependencyCycles,
+            RecipeName = recipeName,
+            ListRecipes = listRecipes,
             ParseError = parseErrors == null ? null : string.Join(Environment.NewLine, parseErrors),
         };
     }
@@ -8279,6 +8465,7 @@ public static class QueryCommandRunner
         ["--top"] = "pass a positive integer, e.g. `--top 20` (alias for `--limit`, default 20).",
         ["--lang"] = "pass a language identifier, e.g. `--lang csharp`. Run `cdidx languages` for the supported set.",
         ["--query"] = "pass a search literal, e.g. `--query \"authenticate\"`. Use the `--query` form when the literal starts with `-`.",
+        ["--recipe"] = "pass a built-in audit recipe name, e.g. `--recipe risky-code`; run `cdidx search --list-recipes` to list available recipes.",
         ["--kind"] = "pass a kind identifier, e.g. `--kind function`. definition/symbols/hotspots/unused take a symbol kind; references/callers/callees take a reference kind such as `call`, `instantiate`, or `subscribe`. Run the command's `--help` for the kind list.",
         ["--visibility"] = "pass one or more of public, protected, internal, private, e.g. `--visibility public,internal`.",
         ["--exclude-visibility"] = "pass one or more of public, protected, internal, private to exclude, e.g. `--exclude-visibility private`.",
@@ -8688,5 +8875,7 @@ public sealed class QueryCommandOptions
     public List<string> ExtraNames { get; init; } = [];
     public List<string>? MapSections { get; init; }
     public bool DependencyCycles { get; init; }
+    public string? RecipeName { get; init; }
+    public bool ListRecipes { get; init; }
     public string? ParseError { get; init; }
 }
