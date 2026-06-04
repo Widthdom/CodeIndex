@@ -1866,6 +1866,34 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void BuildSanitizedIndexFileFailureMessage_OmitsRawExceptionMessage_Issue3202()
+    {
+        var message = McpServer.BuildSanitizedIndexFileFailureMessageForTesting(
+            "index_file",
+            nameof(InvalidOperationException),
+            out var truncated);
+
+        Assert.Equal("File indexing failed during index_file (InvalidOperationException). See cdidx server stderr for details.", message);
+        Assert.False(truncated);
+        Assert.DoesNotContain("SECRET_LITERAL", message);
+        Assert.DoesNotContain("/private/path", message);
+    }
+
+    [Fact]
+    public void SanitizeMcpIndexFailureMessage_CapsAndCollapsesText_Issue3202()
+    {
+        var raw = "first line\nsecond\tline " + new string('x', McpServer.MaxMcpIndexFailureMessageLength + 100);
+
+        var message = McpServer.SanitizeMcpIndexFailureMessageForTesting(raw, out var truncated);
+
+        Assert.True(truncated);
+        Assert.True(message.Length <= McpServer.MaxMcpIndexFailureMessageLength);
+        Assert.EndsWith("...(truncated)", message);
+        Assert.DoesNotContain("\n", message);
+        Assert.DoesNotContain("\t", message);
+    }
+
+    [Fact]
     public void ToolsCall_ReusesDbContextAcrossInvocations()
     {
         // #1494: every MCP tool call used to construct a fresh DbContext (and reopen the
@@ -7491,6 +7519,9 @@ public class McpServerTests : IDisposable
             Assert.Equal(".gitignore", failure!["path"]!.GetValue<string>());
             Assert.Equal("scan", failure["stage"]!.GetValue<string>());
             Assert.Equal(nameof(FileIndexer.ScanError), failure["exception_type"]!.GetValue<string>());
+            Assert.False(failure["message_truncated"]!.GetValue<bool>());
+            Assert.DoesNotContain(fixtureDir, failure["message"]!.GetValue<string>());
+            Assert.DoesNotContain("\n", failure["message"]!.GetValue<string>());
 
             using var failedDb = new DbContext(dbPath);
             var failedUserVersion = failedDb.GetUserVersion();
