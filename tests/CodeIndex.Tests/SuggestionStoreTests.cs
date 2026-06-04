@@ -356,6 +356,24 @@ public class SuggestionStoreTests : IDisposable
     }
 
     [Fact]
+    public void TryAdd_TruncatesLargeSensitiveFieldsBeforePersistence()
+    {
+        var tailSecret = "tail-secret-value-should-not-survive";
+        var record = MakeRecord(
+            "other",
+            null,
+            "api_key=" + new string('a', SuggestionStore.RedactionFieldLengthLimit) + tailSecret);
+
+        Assert.True(_store.TryAdd(record));
+
+        var stored = Assert.Single(_store.LoadAll());
+        Assert.Contains("api_key=[REDACTED:credential]", stored.Description);
+        Assert.Contains(SuggestionStore.RedactionTruncationMarker, stored.Description);
+        Assert.DoesNotContain(tailSecret, stored.Description);
+        Assert.True(stored.Description.Length < record.Description.Length);
+    }
+
+    [Fact]
     public void TryAddAndSubmit_Success_StampsAttemptStateAndClearsError()
     {
         var record = MakeRecord("other", null, "Submission succeeds");

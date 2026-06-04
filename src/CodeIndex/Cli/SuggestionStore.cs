@@ -40,10 +40,14 @@ public class SuggestionStore
     private const string RedactedBearerToken = "[REDACTED:bearer_token]";
     private const string RedactedCredential = "[REDACTED:credential]";
     private const string RedactedHighEntropyToken = "[REDACTED:high_entropy_token]";
-    private static readonly Regex s_awsAccessKeyRegex = new(@"\bAKIA[0-9A-Z]{16}\b", RegexOptions.Compiled | RegexOptions.CultureInvariant);
-    private static readonly Regex s_bearerTokenRegex = new(@"\bBearer\s+[A-Za-z0-9._~+/=-]{16,}\b", RegexOptions.Compiled | RegexOptions.CultureInvariant);
-    private static readonly Regex s_namedSecretRegex = new(@"(?i)\b(password|secret|token|api[-_]?key|access[-_]?key)=([^&\s]{1,200})", RegexOptions.Compiled | RegexOptions.CultureInvariant);
-    private static readonly Regex s_highEntropyTokenRegex = new(@"\b(?=[A-Za-z0-9._~+/=-]{32,}\b)(?=.*[A-Z])(?=.*[a-z])(?=.*\d)[A-Za-z0-9._~+/=-]+\b", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private const string RedactedRegexTimeout = "[REDACTED:redaction_timeout]";
+    internal const int RedactionFieldLengthLimit = 32768;
+    internal const string RedactionTruncationMarker = "[REDACTED:truncated]";
+    private static readonly TimeSpan RedactionRegexTimeout = TimeSpan.FromSeconds(1);
+    private static readonly Regex s_awsAccessKeyRegex = new(@"\bAKIA[0-9A-Z]{16}\b", RegexOptions.Compiled | RegexOptions.CultureInvariant, RedactionRegexTimeout);
+    private static readonly Regex s_bearerTokenRegex = new(@"\bBearer\s+[A-Za-z0-9._~+/=-]{16,}\b", RegexOptions.Compiled | RegexOptions.CultureInvariant, RedactionRegexTimeout);
+    private static readonly Regex s_namedSecretRegex = new(@"(?i)\b(password|secret|token|api[-_]?key|access[-_]?key)=([^&\s]+)", RegexOptions.Compiled | RegexOptions.CultureInvariant, RedactionRegexTimeout);
+    private static readonly Regex s_highEntropyTokenRegex = new(@"\b(?=[A-Za-z0-9._~+/=-]{32,}\b)(?=.*[A-Z])(?=.*[a-z])(?=.*\d)[A-Za-z0-9._~+/=-]+\b", RegexOptions.Compiled | RegexOptions.CultureInvariant, RedactionRegexTimeout);
 
     private static readonly HashSet<string> s_dedupStopWords = new(StringComparer.Ordinal)
     {
@@ -890,31 +894,48 @@ public class SuggestionStore
     internal static string RedactSensitiveText(string text, out IReadOnlyCollection<string> redactedTypes)
     {
         var types = new SortedSet<string>(StringComparer.Ordinal);
-        var redacted = s_awsAccessKeyRegex.Replace(text, match =>
+        var truncated = false;
+        if (text.Length > RedactionFieldLengthLimit)
         {
-            types.Add("aws_access_key");
-            return RedactedAwsAccessKey;
-        });
-        redacted = s_bearerTokenRegex.Replace(redacted, match =>
-        {
-            types.Add("bearer_token");
-            return RedactedBearerToken;
-        });
-        redacted = s_namedSecretRegex.Replace(redacted, match =>
-        {
-            types.Add("credential");
-            return $"{match.Groups[1].Value}={RedactedCredential}";
-        });
-        redacted = s_highEntropyTokenRegex.Replace(redacted, match =>
-        {
-            if (match.Value.StartsWith("[REDACTED:", StringComparison.Ordinal))
-                return match.Value;
-            types.Add("high_entropy_token");
-            return RedactedHighEntropyToken;
-        });
+            text = text[..RedactionFieldLengthLimit];
+            truncated = true;
+            types.Add("truncated");
+        }
 
-        redactedTypes = types;
-        return redacted;
+        try
+        {
+            var redacted = s_awsAccessKeyRegex.Replace(text, match =>
+            {
+                types.Add("aws_access_key");
+                return RedactedAwsAccessKey;
+            });
+            redacted = s_bearerTokenRegex.Replace(redacted, match =>
+            {
+                types.Add("bearer_token");
+                return RedactedBearerToken;
+            });
+            redacted = s_namedSecretRegex.Replace(redacted, match =>
+            {
+                types.Add("credential");
+                return $"{match.Groups[1].Value}={RedactedCredential}";
+            });
+            redacted = s_highEntropyTokenRegex.Replace(redacted, match =>
+            {
+                if (match.Value.StartsWith("[REDACTED:", StringComparison.Ordinal))
+                    return match.Value;
+                types.Add("high_entropy_token");
+                return RedactedHighEntropyToken;
+            });
+
+            redactedTypes = types;
+            return truncated ? redacted + RedactionTruncationMarker : redacted;
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            types.Add("redaction_timeout");
+            redactedTypes = types;
+            return RedactedRegexTimeout;
+        }
     }
 
     private static SuggestionRecord RedactRecordForPersistence(SuggestionRecord record)
