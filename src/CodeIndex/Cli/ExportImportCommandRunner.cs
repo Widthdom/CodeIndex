@@ -558,13 +558,15 @@ internal static class ExportImportCommandRunner
         cmd.ExecuteNonQuery();
     }
 
-    private static void CreateDatabaseSnapshot(string sourceDbPath, string snapshotPath)
+    internal static void CreateDatabaseSnapshot(string sourceDbPath, string snapshotPath)
     {
         using var source = new SqliteConnection(CreateUnpooledConnectionString(sourceDbPath));
         using var destination = new SqliteConnection(CreateUnpooledConnectionString(snapshotPath));
         source.Open();
         destination.Open();
+        DataDirectorySecurity.ApplyPrivateFileMode(snapshotPath);
         source.BackupDatabase(destination);
+        DataDirectorySecurity.ApplyPrivateFileMode(snapshotPath);
     }
 
     private static string CreateUnpooledConnectionString(string dbPath)

@@ -156,6 +156,29 @@ public class ExportImportCommandRunnerTests
     }
 
     [Fact]
+    public void CreateDatabaseSnapshot_AppliesPrivateFileMode()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = TestProjectHelper.CreateTempProject("export_snapshot_mode");
+        try
+        {
+            var sourceDbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var snapshotPath = Path.Combine(projectRoot, "snapshot.db");
+
+            ExportImportCommandRunner.CreateDatabaseSnapshot(sourceDbPath, snapshotPath);
+
+            var mode = File.GetUnixFileMode(snapshotPath) & DataDirectorySecurity.PermissionBits;
+            Assert.Equal(DataDirectorySecurity.PrivateFileMode, mode);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunExportCtags_FailureOmitsRawExceptionMessage()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("ctags_error_sanitize");
