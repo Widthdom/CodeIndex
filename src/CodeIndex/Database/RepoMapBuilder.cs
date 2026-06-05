@@ -96,9 +96,11 @@ internal sealed class RepoMapBuilder
         // file stats / workspace freshness / entrypoint 取得が同じ WAL snapshot から返る
         // ようにする。
         using var txn = _conn.BeginTransaction(deferred: true);
-        var fileStats = GetFileStats(lang, pathPatterns, excludePathPatterns, excludeTests);
-        ApplyJavaModuleGrouping(fileStats, LoadJavaModuleDescriptors());
-        var aggregate = BuildAggregate(fileStats);
+        var javaModuleDescriptors = LoadJavaModuleDescriptors();
+        var aggregate = BuildAggregate(
+            EnumerateFileStats(lang, pathPatterns, excludePathPatterns, excludeTests),
+            Math.Max(limit, 0),
+            javaModuleDescriptors);
         var freshness = getFreshness();
         var result = new RepoMapResult
         {
@@ -112,18 +114,18 @@ internal sealed class RepoMapBuilder
             WorkspaceLatestModified = freshness.LatestModified,
             Languages = BuildLanguageResults(aggregate.Languages, limit),
             Modules = BuildModuleResults(aggregate.Modules, limit),
-            TopFiles = BuildTopFileResults(aggregate.FileSummaries, limit),
-            LargestFiles = BuildLargestFileResults(aggregate.FileSummaries, limit),
-            SymbolRichFiles = BuildSymbolRichFileResults(aggregate.FileSummaries, limit),
-            ReferenceRichFiles = BuildReferenceRichFileResults(aggregate.FileSummaries, limit),
-            Entrypoints = GetEntrypoints(fileStats, limit, lang, pathPatterns, excludePathPatterns, excludeTests, minEntrypointConfidence),
+            TopFiles = aggregate.TopFiles,
+            LargestFiles = BuildLargestFileResults(aggregate.LargestFiles),
+            SymbolRichFiles = BuildSymbolRichFileResults(aggregate.SymbolRichFiles),
+            ReferenceRichFiles = BuildReferenceRichFileResults(aggregate.ReferenceRichFiles),
+            Entrypoints = GetEntrypoints(aggregate.EntrypointFallbacks, limit, lang, pathPatterns, excludePathPatterns, excludeTests, minEntrypointConfidence),
             GraphTableAvailable = _hasReferencesTable,
         };
         txn.Commit();
         return result;
     }
 
-    private List<RepoFileStat> GetFileStats(string? lang, IReadOnlyList<string>? pathPatterns,
+    private IEnumerable<RepoFileStat> EnumerateFileStats(string? lang, IReadOnlyList<string>? pathPatterns,
         IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
     {
         using var cmd = _conn.CreateCommand();
@@ -150,11 +152,10 @@ internal sealed class RepoMapBuilder
             cmd.Parameters.AddWithValue("@lang", lang);
         DbReader.AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
 
-        var results = new List<RepoFileStat>();
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
         {
-            results.Add(new RepoFileStat
+            yield return new RepoFileStat
             {
                 Path = reader.GetString(0),
                 Lang = DbReader.GetNullableString(reader, 1),
@@ -165,27 +166,38 @@ internal sealed class RepoMapBuilder
                 Checksum = DbReader.GetNullableString(reader, 6),
                 Modified = DbReader.GetNullableDateTime(reader, 7),
                 IndexedAt = DbReader.GetNullableDateTime(reader, 8),
-            });
+            };
         }
-
-        return results;
     }
 
-    private static RepoMapAggregate BuildAggregate(IReadOnlyList<RepoFileStat> fileStats)
+    private static RepoMapAggregate BuildAggregate(
+        IEnumerable<RepoFileStat> fileStats,
+        int limit,
+        IReadOnlyDictionary<string, string> moduleByDescriptorPath)
     {
         var languages = new Dictionary<string, RepoLanguageResult>(StringComparer.Ordinal);
         var modules = new Dictionary<string, RepoModuleResult>(StringComparer.Ordinal);
-        var fileSummaries = new List<RepoFileSummaryResult>(fileStats.Count);
         var aggregate = new RepoMapAggregate
         {
-            FileCount = fileStats.Count,
             Languages = languages,
             Modules = modules,
-            FileSummaries = fileSummaries,
+            TopFiles = [],
+            LargestFiles = [],
+            SymbolRichFiles = [],
+            ReferenceRichFiles = [],
+            EntrypointFallbacks = [],
         };
 
         foreach (var file in fileStats)
         {
+            aggregate.FileCount++;
+            if (moduleByDescriptorPath.Count > 0 && string.Equals(file.Lang, "java", StringComparison.OrdinalIgnoreCase))
+            {
+                var owningModuleName = ResolveOwningJavaModuleName(file.Path, moduleByDescriptorPath);
+                if (!string.IsNullOrWhiteSpace(owningModuleName))
+                    file.ModuleName = owningModuleName;
+            }
+
             aggregate.TotalLines += file.Lines;
             aggregate.TotalSymbols += file.SymbolCount;
             aggregate.TotalReferences += file.ReferenceCount;
@@ -209,7 +221,29 @@ internal sealed class RepoMapBuilder
             }
 
             AddFileStats(module, file);
-            fileSummaries.Add(CreateScoredFileSummary(file));
+
+            var scoredSummary = CreateScoredFileSummary(file);
+            AddBounded(aggregate.TopFiles, scoredSummary, limit, CompareTopFiles);
+            AddBounded(aggregate.LargestFiles, scoredSummary, limit, CompareLargestFiles);
+            AddBounded(aggregate.SymbolRichFiles, scoredSummary, limit, CompareSymbolRichFiles);
+            AddBounded(aggregate.ReferenceRichFiles, scoredSummary, limit, CompareReferenceRichFiles);
+
+            var fallback = ScoreEntrypointFileFallback(file.Path, file.Lang, file.SymbolCount, file.ReferenceCount);
+            if (fallback.Score > 0)
+            {
+                aggregate.EntrypointFallbacks.Add(new RepoEntrypointResult
+                {
+                    Path = file.Path,
+                    Lang = file.Lang,
+                    Kind = "file",
+                    Name = Path.GetFileName(file.Path),
+                    Line = 1,
+                    Score = fallback.Score,
+                    MatchType = fallback.MatchType,
+                    Confidence = fallback.Confidence,
+                    HintRank = fallback.HintRank,
+                });
+            }
         }
 
         return aggregate;
@@ -235,51 +269,85 @@ internal sealed class RepoMapBuilder
             .ToList();
     }
 
-    private static List<RepoFileSummaryResult> BuildTopFileResults(IReadOnlyList<RepoFileSummaryResult> fileSummaries, int limit)
+    private static List<RepoFileSummaryResult> BuildLargestFileResults(IReadOnlyList<RepoFileSummaryResult> fileSummaries)
+        => fileSummaries.Select(CopyUnscoredFileSummary).ToList();
+
+    private static List<RepoFileSummaryResult> BuildSymbolRichFileResults(IReadOnlyList<RepoFileSummaryResult> fileSummaries)
+        => fileSummaries.Select(CopyUnscoredFileSummary).ToList();
+
+    private static List<RepoFileSummaryResult> BuildReferenceRichFileResults(IReadOnlyList<RepoFileSummaryResult> fileSummaries)
+        => fileSummaries.Select(CopyUnscoredFileSummary).ToList();
+
+    private static void AddBounded<T>(List<T> items, T candidate, int limit, Comparison<T> comparison)
     {
-        return fileSummaries
-            .OrderByDescending(file => file.Score)
-            .ThenByDescending(file => file.ReferenceCount)
-            .ThenByDescending(file => file.SymbolCount)
-            .ThenByDescending(file => file.Lines)
-            .ThenBy(file => file.Path)
-            .Take(limit)
-            .ToList();
+        if (limit <= 0)
+            return;
+
+        var index = items.BinarySearch(candidate, Comparer<T>.Create(comparison));
+        if (index < 0)
+            index = ~index;
+        if (index >= limit)
+            return;
+
+        items.Insert(index, candidate);
+        if (items.Count > limit)
+            items.RemoveAt(items.Count - 1);
     }
 
-    private static List<RepoFileSummaryResult> BuildLargestFileResults(IReadOnlyList<RepoFileSummaryResult> fileSummaries, int limit)
+    private static int CompareTopFiles(RepoFileSummaryResult left, RepoFileSummaryResult right)
     {
-        return fileSummaries
-            .OrderByDescending(file => file.Lines)
-            .ThenByDescending(file => file.Size)
-            .ThenBy(file => file.Path)
-            .Take(limit)
-            .Select(CopyUnscoredFileSummary)
-            .ToList();
+        var score = (right.Score ?? 0).CompareTo(left.Score ?? 0);
+        if (score != 0)
+            return score;
+        var references = right.ReferenceCount.CompareTo(left.ReferenceCount);
+        if (references != 0)
+            return references;
+        var symbols = right.SymbolCount.CompareTo(left.SymbolCount);
+        if (symbols != 0)
+            return symbols;
+        var lines = right.Lines.CompareTo(left.Lines);
+        if (lines != 0)
+            return lines;
+        return string.Compare(left.Path, right.Path, StringComparison.Ordinal);
     }
 
-    private static List<RepoFileSummaryResult> BuildSymbolRichFileResults(IReadOnlyList<RepoFileSummaryResult> fileSummaries, int limit)
+    private static int CompareLargestFiles(RepoFileSummaryResult left, RepoFileSummaryResult right)
     {
-        return fileSummaries
-            .OrderByDescending(file => file.SymbolCount)
-            .ThenByDescending(file => file.ReferenceCount)
-            .ThenByDescending(file => file.Lines)
-            .ThenBy(file => file.Path)
-            .Take(limit)
-            .Select(CopyUnscoredFileSummary)
-            .ToList();
+        var lines = right.Lines.CompareTo(left.Lines);
+        if (lines != 0)
+            return lines;
+        var size = right.Size.CompareTo(left.Size);
+        if (size != 0)
+            return size;
+        return string.Compare(left.Path, right.Path, StringComparison.Ordinal);
     }
 
-    private static List<RepoFileSummaryResult> BuildReferenceRichFileResults(IReadOnlyList<RepoFileSummaryResult> fileSummaries, int limit)
+    private static int CompareSymbolRichFiles(RepoFileSummaryResult left, RepoFileSummaryResult right)
     {
-        return fileSummaries
-            .OrderByDescending(file => file.ReferenceCount)
-            .ThenByDescending(file => file.SymbolCount)
-            .ThenByDescending(file => file.Lines)
-            .ThenBy(file => file.Path)
-            .Take(limit)
-            .Select(CopyUnscoredFileSummary)
-            .ToList();
+        var symbols = right.SymbolCount.CompareTo(left.SymbolCount);
+        if (symbols != 0)
+            return symbols;
+        var references = right.ReferenceCount.CompareTo(left.ReferenceCount);
+        if (references != 0)
+            return references;
+        var lines = right.Lines.CompareTo(left.Lines);
+        if (lines != 0)
+            return lines;
+        return string.Compare(left.Path, right.Path, StringComparison.Ordinal);
+    }
+
+    private static int CompareReferenceRichFiles(RepoFileSummaryResult left, RepoFileSummaryResult right)
+    {
+        var references = right.ReferenceCount.CompareTo(left.ReferenceCount);
+        if (references != 0)
+            return references;
+        var symbols = right.SymbolCount.CompareTo(left.SymbolCount);
+        if (symbols != 0)
+            return symbols;
+        var lines = right.Lines.CompareTo(left.Lines);
+        if (lines != 0)
+            return lines;
+        return string.Compare(left.Path, right.Path, StringComparison.Ordinal);
     }
 
     private static void AddFileStats(RepoLanguageResult target, RepoFileStat file)
@@ -338,23 +406,7 @@ internal sealed class RepoMapBuilder
         return moduleByDescriptorPath;
     }
 
-    private static void ApplyJavaModuleGrouping(List<RepoFileStat> fileStats, IReadOnlyDictionary<string, string> moduleByDescriptorPath)
-    {
-        if (moduleByDescriptorPath.Count == 0)
-            return;
-
-        foreach (var file in fileStats)
-        {
-            if (!string.Equals(file.Lang, "java", StringComparison.OrdinalIgnoreCase))
-                continue;
-
-            var owningModuleName = ResolveOwningJavaModuleName(file.Path, moduleByDescriptorPath);
-            if (!string.IsNullOrWhiteSpace(owningModuleName))
-                file.ModuleName = owningModuleName;
-        }
-    }
-
-    private List<RepoEntrypointResult> GetEntrypoints(IReadOnlyList<RepoFileStat> fileStats, int limit,
+    private List<RepoEntrypointResult> GetEntrypoints(IReadOnlyList<RepoEntrypointResult> fallbackEntrypoints, int limit,
         string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests,
         double minConfidence)
     {
@@ -408,27 +460,11 @@ internal sealed class RepoMapBuilder
             .Select(result => result.Path)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var file in fileStats)
+        foreach (var fallback in fallbackEntrypoints)
         {
-            if (filesWithEntrypoints.Contains(file.Path))
+            if (filesWithEntrypoints.Contains(fallback.Path))
                 continue;
-
-            var match = ScoreEntrypointFileFallback(file.Path, file.Lang, file.SymbolCount, file.ReferenceCount);
-            if (match.Score <= 0)
-                continue;
-
-            results.Add(new RepoEntrypointResult
-            {
-                Path = file.Path,
-                Lang = file.Lang,
-                Kind = "file",
-                Name = Path.GetFileName(file.Path),
-                Line = 1,
-                Score = match.Score,
-                MatchType = match.MatchType,
-                Confidence = match.Confidence,
-                HintRank = match.HintRank,
-            });
+            results.Add(fallback);
         }
 
         ApplyEntrypointAmbiguityPenalty(results);
@@ -661,7 +697,7 @@ internal sealed class RepoMapBuilder
 
     private sealed class RepoMapAggregate
     {
-        public int FileCount { get; init; }
+        public int FileCount { get; set; }
         public long TotalLines { get; set; }
         public long TotalSymbols { get; set; }
         public long TotalReferences { get; set; }
@@ -669,6 +705,10 @@ internal sealed class RepoMapBuilder
         public DateTime? LatestModified { get; set; }
         public required Dictionary<string, RepoLanguageResult> Languages { get; init; }
         public required Dictionary<string, RepoModuleResult> Modules { get; init; }
-        public required List<RepoFileSummaryResult> FileSummaries { get; init; }
+        public required List<RepoFileSummaryResult> TopFiles { get; init; }
+        public required List<RepoFileSummaryResult> LargestFiles { get; init; }
+        public required List<RepoFileSummaryResult> SymbolRichFiles { get; init; }
+        public required List<RepoFileSummaryResult> ReferenceRichFiles { get; init; }
+        public required List<RepoEntrypointResult> EntrypointFallbacks { get; init; }
     }
 }
