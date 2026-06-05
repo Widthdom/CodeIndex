@@ -425,11 +425,13 @@ GPG 検証が成功した後にこの fingerprint の設定も必須です。
 
 ### Validate
 
-`cdidx validate [--db <path>] [--json] [--verbose] [--kind <kind>] [--path <glob>]`
+`cdidx validate [--db <path>] [--json[=array]] [--verbose] [--limit <n>|--top <n>] [--kind <kind>] [--severity <info|warning|error>] [--path <glob>]`
 は、index 済みファイルの replacement character (`U+FFFD`)、BOM、NUL byte、
 混在改行、UTF-16 BOM、非 UTF-8 らしい内容などを報告します。validation finding は
 出力で報告され、それ自体では command failure になりません。DB を読めない場合や
-引数が不正な場合は non-zero で終了します。機械処理には `--json` を使えます。
+引数が不正な場合は non-zero で終了します。`--severity warning` を使うと、
+意図的な U+FFFD literal などの informational finding を除外できます。
+機械処理には `--json` を使え、配列だけが必要な pipeline では `--json=array` を使えます。
 
 ### シェル補完
 

@@ -75,10 +75,14 @@ internal static class CliFlagSchema
     private static readonly string[] LimitCapableCommands =
     [
         "search", "definition", "goto", "references", "callers", "callees", "symbols",
-        "files", "find", "map", "inspect", "deps", "impact", "unused", "hotspots",
+        "files", "find", "map", "inspect", "deps", "impact", "unused", "hotspots", "validate",
     ];
 
-    private static readonly string[] LangCapableCommands = LimitCapableCommands;
+    private static readonly string[] LangCapableCommands =
+    [
+        "search", "definition", "goto", "references", "callers", "callees", "symbols",
+        "files", "find", "map", "inspect", "deps", "impact", "unused", "hotspots",
+    ];
 
     private static readonly string[] PathFilterCommands =
     [
@@ -107,6 +111,7 @@ internal static class CliFlagSchema
     [
         "definition", "goto", "references", "callers", "callees", "symbols", "unused", "hotspots", "validate",
     ];
+    private static readonly string[] SeverityCommands = ["validate"];
     private static readonly string[] VisibilityCommands =
     [
         "definition", "symbols", "unused", "hotspots",
@@ -208,7 +213,7 @@ internal static class CliFlagSchema
             new() { Name = "--immutable", Description = "Alias for --read-only", Commands = Set(ReadOnlyDbCommands) },
             new() { Name = "--workspace-db", ValuePlaceholder = "<path>", Description = "Additional workspace member database path for dependency aggregation", Commands = Set(WorkspaceDbCommands) },
             new() { Name = "--data-dir", ValuePlaceholder = "<dir>", Description = "Directory containing codeindex.db; overrides CDIDX_DATA_DIR/XDG/workspace defaults", Commands = Set(DataDirCommands) },
-            new() { Name = "--json", Description = "JSON output; search/files also accept --json=array for a single JSON array", Commands = Set(JsonCommands) },
+            new() { Name = "--json", Description = "JSON output; search/files/validate also accept --json=array for a single JSON array", Commands = Set(JsonCommands) },
             new() { Name = "--format", ValuePlaceholder = "<text|json|count|compact|csv|tsv|lsp|qf|sarif>", Description = "Standard output format for token budgets, editor integrations, and CI", Commands = Set(FormatCommands) },
             new() { Name = "--quiet", ShortName = "-q", Description = "Suppress informational stderr output; errors still print", Commands = Set(AllCommands.ToArray()) },
             new() { Name = "--silent", Description = "Alias for --quiet", Commands = Set(AllCommands.ToArray()) },
@@ -227,6 +232,7 @@ internal static class CliFlagSchema
             new() { Name = "--exclude-tests", Description = "Exclude tests", Commands = Set(ExcludeFilterCommands) },
             new() { Name = "--include-generated", Description = "Include generated files", Commands = Set(ExcludeFilterCommands) },
             new() { Name = "--kind", ValuePlaceholder = "<kind>", Description = "Filter by kind", Commands = Set(KindCommands) },
+            new() { Name = "--severity", ValuePlaceholder = "<info|warning|error>", Description = "Validate: filter validation issues by severity", Commands = Set(SeverityCommands) },
             new() { Name = "--visibility", ValuePlaceholder = "<visibility[,visibility]>", Description = "Filter by symbol visibility", Commands = Set(VisibilityCommands) },
             new() { Name = "--exclude-visibility", ValuePlaceholder = "<visibility[,visibility]>", Description = "Exclude symbol visibility", Commands = Set(VisibilityCommands) },
             new() { Name = "--by-bucket", Description = "Unused: include per-bucket grouped result arrays in JSON output", Commands = Set(ByBucketCommands) },
