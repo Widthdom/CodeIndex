@@ -15339,6 +15339,44 @@ public partial class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "./public-api" && r.ReferenceKind == "reference" && r.Line == 16);
     }
 
+    [Fact]
+    public void Extract_TypeScriptNamespaceImportQualifiedUsage_ManyAliasesAcrossManyLines()
+    {
+        var imports = string.Join(
+            "\n",
+            Enumerable.Range(0, 12).Select(index => $"import * as Api{index} from \"./api{index}\";"));
+        var calls = string.Join(
+            "\n",
+            Enumerable.Range(0, 12).Select(index => $"    Api{index}.Client.connect();"));
+        var content = $$"""
+            {{imports}}
+
+            export function render() {
+            {{calls}}
+                Api1Extra.Client.connect();
+                OtherApi1.Client.connect();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        for (var index = 0; index < 12; index++)
+        {
+            var expectedLine = 15 + index;
+            Assert.Contains(references, r =>
+                r.SymbolName == $"./api{index}"
+                && r.ReferenceKind == "reference"
+                && r.Line == expectedLine
+                && r.ContainerName == "render");
+        }
+
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "./api1"
+            && r.ReferenceKind == "reference"
+            && r.Line is 27 or 28);
+    }
+
 
 
 

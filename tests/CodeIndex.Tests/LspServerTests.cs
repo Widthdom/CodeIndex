@@ -84,6 +84,28 @@ public class LspServerTests
     }
 
     [Fact]
+    public void HandleMessage_TooDeepJson_ReturnsParseError_Issue3021()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_depth");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+
+            var response = server.HandleMessage(BuildNestedLspRequest(LspServer.MaxJsonDepth + 1));
+
+            Assert.NotNull(response);
+            Assert.Equal(-32700, response!["error"]!["code"]!.GetValue<int>());
+            Assert.Null(response["id"]);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_MalformedJsonFrame_WritesParseErrorAndContinues()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_malformed_json");
@@ -665,6 +687,20 @@ public class LspServerTests
     {
         var lines = source.Split('\n');
         return lines[line].IndexOf(value, StringComparison.Ordinal);
+    }
+
+    private static string BuildNestedLspRequest(int nestedObjectCount)
+    {
+        var builder = new StringBuilder("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":""");
+        for (var i = 0; i < nestedObjectCount; i++)
+            builder.Append("""{"next":""");
+
+        builder.Append('0');
+
+        for (var i = 0; i < nestedObjectCount; i++)
+            builder.Append('}');
+        builder.Append('}');
+        return builder.ToString();
     }
 
     private static void MarkGraphReady(string dbPath)

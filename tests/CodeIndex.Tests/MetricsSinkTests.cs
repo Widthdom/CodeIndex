@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using CodeIndex.Cli;
 
@@ -297,6 +298,78 @@ public class MetricsSinkTests
         Assert.Equal(1.234, root.GetProperty("wal_checkpoint_ms").GetDouble());
         Assert.Equal(42, root.GetProperty("files_indexed").GetInt32());
         Assert.False(root.TryGetProperty("error", out _));
+    }
+
+    [Fact]
+    public void SerializeEvent_TruncatesOversizedStringFieldsAndWritesMetadata()
+    {
+        var oversizedTool = new string('t', MetricsSink.MaxStringFieldChars + 11);
+        var oversizedSource = new string('s', MetricsSink.MaxStringFieldChars + 12);
+        var oversizedLanguage = new string('l', MetricsSink.MaxStringFieldChars + 13);
+        var oversizedError = new string('e', MetricsSink.MaxStringFieldChars + 14);
+        var evt = new MetricsEvent(
+            Timestamp: new DateTimeOffset(2026, 5, 16, 0, 0, 0, TimeSpan.Zero),
+            Tool: oversizedTool,
+            Source: oversizedSource,
+            ElapsedMs: 1.25,
+            ExitCode: 1,
+            Language: oversizedLanguage,
+            Error: oversizedError);
+
+        var json = MetricsSink.SerializeEvent(evt);
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+
+        Assert.Equal(MetricsSink.MaxStringFieldChars, root.GetProperty("tool").GetString()!.Length);
+        Assert.Equal(oversizedTool.Length, root.GetProperty("tool_length").GetInt32());
+        Assert.True(root.GetProperty("tool_truncated").GetBoolean());
+        Assert.Equal(MetricsSink.MaxStringFieldChars, root.GetProperty("source").GetString()!.Length);
+        Assert.Equal(oversizedSource.Length, root.GetProperty("source_length").GetInt32());
+        Assert.True(root.GetProperty("source_truncated").GetBoolean());
+        Assert.Equal(MetricsSink.MaxStringFieldChars, root.GetProperty("language").GetString()!.Length);
+        Assert.Equal(oversizedLanguage.Length, root.GetProperty("language_length").GetInt32());
+        Assert.True(root.GetProperty("language_truncated").GetBoolean());
+        Assert.Equal(MetricsSink.MaxStringFieldChars, root.GetProperty("error").GetString()!.Length);
+        Assert.Equal(oversizedError.Length, root.GetProperty("error_length").GetInt32());
+        Assert.True(root.GetProperty("error_truncated").GetBoolean());
+    }
+
+    [Fact]
+    public void Record_OversizedEscapedEventWritesSingleBoundedJsonlLine()
+    {
+        var metricsPath = Path.Combine(Path.GetTempPath(), $"cdidx_metrics_bounded_{Guid.NewGuid():N}.jsonl");
+        try
+        {
+            using var session = MetricsSink.TryStartForTesting(metricsPath, maxBytes: 1024 * 1024);
+            Assert.NotNull(session);
+            var oversizedEscaped = new string('\u0001', 50_000);
+
+            MetricsSink.Record(new MetricsEvent(
+                Timestamp: new DateTimeOffset(2026, 5, 16, 0, 0, 0, TimeSpan.Zero),
+                Tool: oversizedEscaped,
+                Source: oversizedEscaped,
+                ElapsedMs: 1.0,
+                ExitCode: 1,
+                Language: oversizedEscaped,
+                Error: oversizedEscaped));
+
+            var line = Assert.Single(File.ReadAllLines(metricsPath));
+            Assert.True(
+                Encoding.UTF8.GetByteCount(line) <= MetricsSink.MaxSerializedEventBytes,
+                $"Metrics event was {Encoding.UTF8.GetByteCount(line)} bytes.");
+            using var doc = JsonDocument.Parse(line);
+            var root = doc.RootElement;
+            Assert.True(root.GetProperty("tool_truncated").GetBoolean());
+            Assert.True(root.GetProperty("source_truncated").GetBoolean());
+            Assert.True(root.GetProperty("language_truncated").GetBoolean());
+            Assert.True(root.GetProperty("error_truncated").GetBoolean());
+            Assert.Equal(oversizedEscaped.Length, root.GetProperty("error_length").GetInt32());
+        }
+        finally
+        {
+            if (File.Exists(metricsPath))
+                File.Delete(metricsPath);
+        }
     }
 
     private static (int ExitCode, string Stdout, string Stderr) CaptureConsole(Func<int> action)

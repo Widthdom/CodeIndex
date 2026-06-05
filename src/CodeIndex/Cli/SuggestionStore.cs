@@ -40,10 +40,14 @@ public class SuggestionStore
     private const string RedactedBearerToken = "[REDACTED:bearer_token]";
     private const string RedactedCredential = "[REDACTED:credential]";
     private const string RedactedHighEntropyToken = "[REDACTED:high_entropy_token]";
-    private static readonly Regex s_awsAccessKeyRegex = new(@"\bAKIA[0-9A-Z]{16}\b", RegexOptions.Compiled | RegexOptions.CultureInvariant);
-    private static readonly Regex s_bearerTokenRegex = new(@"\bBearer\s+[A-Za-z0-9._~+/=-]{16,}\b", RegexOptions.Compiled | RegexOptions.CultureInvariant);
-    private static readonly Regex s_namedSecretRegex = new(@"(?i)\b(password|secret)=([^&\s]{1,200})", RegexOptions.Compiled | RegexOptions.CultureInvariant);
-    private static readonly Regex s_highEntropyTokenRegex = new(@"\b(?=[A-Za-z0-9._~+/=-]{32,}\b)(?=.*[A-Z])(?=.*[a-z])(?=.*\d)[A-Za-z0-9._~+/=-]+\b", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private const string RedactedRegexTimeout = "[REDACTED:redaction_timeout]";
+    internal const int RedactionFieldLengthLimit = 32768;
+    internal const string RedactionTruncationMarker = "[REDACTED:truncated]";
+    private static readonly TimeSpan RedactionRegexTimeout = TimeSpan.FromSeconds(1);
+    private static readonly Regex s_awsAccessKeyRegex = new(@"\bAKIA[0-9A-Z]{16}\b", RegexOptions.Compiled | RegexOptions.CultureInvariant, RedactionRegexTimeout);
+    private static readonly Regex s_bearerTokenRegex = new(@"\bBearer\s+[A-Za-z0-9._~+/=-]{16,}\b", RegexOptions.Compiled | RegexOptions.CultureInvariant, RedactionRegexTimeout);
+    private static readonly Regex s_namedSecretRegex = new(@"(?i)(^|[^\p{L}\p{N}_-])(?<name>[\p{L}\p{N}_-]*(?:password|passwd|pwd|secret|token|api[-_]?key|access[-_]?key|credential)[\p{L}\p{N}_-]*)=(?<value>[^&\s]+)", RegexOptions.Compiled | RegexOptions.CultureInvariant, RedactionRegexTimeout);
+    private static readonly Regex s_highEntropyTokenRegex = new(@"\b(?=[A-Za-z0-9._~+/=-]{32,}\b)(?=.*[A-Z])(?=.*[a-z])(?=.*\d)[A-Za-z0-9._~+/=-]+\b", RegexOptions.Compiled | RegexOptions.CultureInvariant, RedactionRegexTimeout);
 
     private static readonly HashSet<string> s_dedupStopWords = new(StringComparer.Ordinal)
     {
@@ -174,7 +178,8 @@ public class SuggestionStore
         string? UpstreamUrl,
         string? SubmissionError = null,
         string? DuplicateOfHash = null,
-        double? DuplicateScore = null);
+        double? DuplicateScore = null,
+        string? StoredHash = null);
 
     /// <summary>
     /// Result of a GitHub submission attempt.
@@ -281,7 +286,8 @@ public class SuggestionStore
                 reservation.UpstreamUrl,
                 null,
                 reservation.DuplicateOfHash,
-                reservation.DuplicateScore);
+                reservation.DuplicateScore,
+                reservation.Hash);
         }
 
         SubmitAttemptResult submitResult;
@@ -309,7 +315,8 @@ public class SuggestionStore
                     reservation.UpstreamUrl,
                     null,
                     reservation.DuplicateOfHash,
-                    reservation.DuplicateScore);
+                    reservation.DuplicateScore,
+                    reservation.Hash);
             }
 
             var issueUrl = submitResult.IssueUrl;
@@ -325,7 +332,8 @@ public class SuggestionStore
                 issueUrl ?? found.UpstreamUrl,
                 submitResult.Error,
                 reservation.DuplicateOfHash,
-                reservation.DuplicateScore);
+                reservation.DuplicateScore,
+                found.Hash);
         });
     }
 
@@ -819,9 +827,19 @@ public class SuggestionStore
     {
         var dir = Path.GetDirectoryName(_archivePath);
         if (!string.IsNullOrEmpty(dir))
-            Directory.CreateDirectory(dir);
+            DataDirectorySecurity.CreatePrivateDirectory(dir);
 
-        using var stream = new FileStream(_archivePath, FileMode.Append, FileAccess.Write, FileShare.Read);
+        var options = new FileStreamOptions
+        {
+            Mode = FileMode.Append,
+            Access = FileAccess.Write,
+            Share = FileShare.Read,
+        };
+        if (!OperatingSystem.IsWindows())
+            options.UnixCreateMode = DataDirectorySecurity.PrivateFileMode;
+
+        using var stream = new FileStream(_archivePath, options);
+        DataDirectorySecurity.ApplyPrivateFileMode(_archivePath);
         using var writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
         foreach (var record in records)
             writer.WriteLine(JsonSerializer.Serialize(record, s_jsonOptions));
@@ -873,6 +891,9 @@ public class SuggestionStore
         McpClientName = record.McpClientName,
         McpClientVersion = record.McpClientVersion,
         ToolInvocationContext = record.ToolInvocationContext,
+        SampledTitle = record.SampledTitle,
+        SampledTags = record.SampledTags?.ToArray(),
+        EvidencePaths = record.EvidencePaths?.ToArray(),
         UpstreamIssueNumber = record.UpstreamIssueNumber,
         UpstreamUrl = record.UpstreamUrl,
         LastSyncedAt = record.LastSyncedAt,
@@ -890,31 +911,48 @@ public class SuggestionStore
     internal static string RedactSensitiveText(string text, out IReadOnlyCollection<string> redactedTypes)
     {
         var types = new SortedSet<string>(StringComparer.Ordinal);
-        var redacted = s_awsAccessKeyRegex.Replace(text, match =>
+        var truncated = false;
+        if (text.Length > RedactionFieldLengthLimit)
         {
-            types.Add("aws_access_key");
-            return RedactedAwsAccessKey;
-        });
-        redacted = s_bearerTokenRegex.Replace(redacted, match =>
-        {
-            types.Add("bearer_token");
-            return RedactedBearerToken;
-        });
-        redacted = s_namedSecretRegex.Replace(redacted, match =>
-        {
-            types.Add("credential");
-            return $"{match.Groups[1].Value}={RedactedCredential}";
-        });
-        redacted = s_highEntropyTokenRegex.Replace(redacted, match =>
-        {
-            if (match.Value.StartsWith("[REDACTED:", StringComparison.Ordinal))
-                return match.Value;
-            types.Add("high_entropy_token");
-            return RedactedHighEntropyToken;
-        });
+            text = text[..RedactionFieldLengthLimit];
+            truncated = true;
+            types.Add("truncated");
+        }
 
-        redactedTypes = types;
-        return redacted;
+        try
+        {
+            var redacted = s_awsAccessKeyRegex.Replace(text, match =>
+            {
+                types.Add("aws_access_key");
+                return RedactedAwsAccessKey;
+            });
+            redacted = s_bearerTokenRegex.Replace(redacted, match =>
+            {
+                types.Add("bearer_token");
+                return RedactedBearerToken;
+            });
+            redacted = s_namedSecretRegex.Replace(redacted, match =>
+            {
+                types.Add("credential");
+                return $"{match.Groups[1].Value}{match.Groups["name"].Value}={RedactedCredential}";
+            });
+            redacted = s_highEntropyTokenRegex.Replace(redacted, match =>
+            {
+                if (match.Value.StartsWith("[REDACTED:", StringComparison.Ordinal))
+                    return match.Value;
+                types.Add("high_entropy_token");
+                return RedactedHighEntropyToken;
+            });
+
+            redactedTypes = types;
+            return truncated ? redacted + RedactionTruncationMarker : redacted;
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            types.Add("redaction_timeout");
+            redactedTypes = types;
+            return RedactedRegexTimeout;
+        }
     }
 
     private static SuggestionRecord RedactRecordForPersistence(SuggestionRecord record)
@@ -922,7 +960,16 @@ public class SuggestionStore
         var redactedDescription = RedactNullable(record.Description, out var descriptionTypes) ?? string.Empty;
         var redactedContext = RedactNullable(record.Context, out var contextTypes);
         var redactedToolInvocationContext = RedactNullable(record.ToolInvocationContext, out var toolInvocationTypes);
-        var allTypes = descriptionTypes.Concat(contextTypes).Concat(toolInvocationTypes).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+        var redactedSampledTitle = RedactNullable(record.SampledTitle, out var sampledTitleTypes);
+        var redactedSampledTags = RedactArray(record.SampledTags, out var sampledTagTypes);
+        var allTypes = descriptionTypes
+            .Concat(contextTypes)
+            .Concat(toolInvocationTypes)
+            .Concat(sampledTitleTypes)
+            .Concat(sampledTagTypes)
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
 
         if (allTypes.Length == 0)
             return record;
@@ -932,8 +979,31 @@ public class SuggestionStore
         copy.Description = redactedDescription;
         copy.Context = redactedContext;
         copy.ToolInvocationContext = redactedToolInvocationContext;
+        copy.SampledTitle = redactedSampledTitle;
+        copy.SampledTags = redactedSampledTags;
         copy.Hash = ComputeHash(copy.Category, copy.Language, copy.Description);
         return copy;
+    }
+
+    private static string[]? RedactArray(string[]? values, out IReadOnlyCollection<string> redactedTypes)
+    {
+        if (values == null)
+        {
+            redactedTypes = Array.Empty<string>();
+            return null;
+        }
+
+        var types = new SortedSet<string>(StringComparer.Ordinal);
+        var redacted = new string[values.Length];
+        for (var i = 0; i < values.Length; i++)
+        {
+            redacted[i] = RedactSensitiveText(values[i] ?? string.Empty, out var valueTypes);
+            foreach (var type in valueTypes)
+                types.Add(type);
+        }
+
+        redactedTypes = types;
+        return redacted;
     }
 
     private static string? RedactNullable(string? value, out IReadOnlyCollection<string> redactedTypes)
@@ -1044,7 +1114,10 @@ public class SuggestionStore
         {
             var backupPath = _filePath + ".bak";
             if (File.Exists(LongPath.EnsureWindowsPrefix(_filePath)))
+            {
                 File.Move(LongPath.EnsureWindowsPrefix(_filePath), LongPath.EnsureWindowsPrefix(backupPath), overwrite: true);
+                DataDirectorySecurity.ApplyPrivateFileMode(backupPath);
+            }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

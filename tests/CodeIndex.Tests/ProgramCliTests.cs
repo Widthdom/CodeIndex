@@ -749,6 +749,31 @@ public class ProgramCliTests
     }
 
     [Fact]
+    public void Suggestions_ExportIssueDraftsRedactsSensitiveSampledTitle()
+    {
+        using var fixture = SuggestionFixture.Create();
+        var secret = $"issue-draft-secret-{Guid.NewGuid():N}";
+        fixture.Add(
+            "output_format",
+            "csharp",
+            "Issue draft export should redact sampled metadata",
+            submitted: false,
+            sampledTitle: $"Leaked api_key={secret}");
+        var openIssuesPath = fixture.WriteOpenIssuesJson("[]");
+
+        var (exitCode, stdout, stderr) = RunCliInSubprocess([
+            "suggestions", "export", "--db", fixture.DbPath, "--format", "issue-drafts", "--open-issues", openIssuesPath
+        ]);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.DoesNotContain(secret, stdout);
+        using var doc = JsonDocument.Parse(stdout);
+        var title = doc.RootElement.GetProperty("drafts")[0].GetProperty("title").GetString();
+        Assert.Contains("REDACTED:credential", title!);
+    }
+
+    [Fact]
     public void Suggestions_ExportIssueDraftsRejectsOversizedOpenIssuesPreflight()
     {
         using var fixture = SuggestionFixture.Create();
