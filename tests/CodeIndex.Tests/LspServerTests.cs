@@ -325,6 +325,41 @@ public class LspServerTests
     }
 
     [Fact]
+    public void HandleMessage_WorkspaceSymbol_RejectsOversizedQuery_Issue3128()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_workspace_symbol_long_query");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var oversizedQuery = new string('q', QueryLimits.MaxQueryLength + 1);
+            var request = JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0",
+                id = 3128,
+                method = "workspace/symbol",
+                @params = new
+                {
+                    query = oversizedQuery,
+                },
+            });
+
+            var response = server.HandleMessage(request);
+
+            Assert.NotNull(response);
+            var error = response!["error"]!;
+            Assert.Equal(-32602, error["code"]!.GetValue<int>());
+            Assert.Equal("Invalid params", error["message"]!.GetValue<string>());
+            Assert.DoesNotContain(oversizedQuery, response.ToJsonString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_MalformedJsonFrame_WritesParseErrorAndContinues()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_malformed_json");

@@ -196,6 +196,9 @@ internal sealed class LspServer : IDisposable
     private JsonArray WorkspaceSymbol(JsonElement root)
     {
         var query = GetString(root, "params", "query");
+        if (query != null && query.Length > QueryLimits.MaxQueryLength)
+            throw new ArgumentException(QueryLimits.FormatQueryTooLongError());
+
         var symbols = _reader.SearchSymbols(query, DefaultLimit);
         var array = new JsonArray();
         foreach (var symbol in symbols)
