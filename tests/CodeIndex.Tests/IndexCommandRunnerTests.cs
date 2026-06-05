@@ -1424,6 +1424,19 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void ParseArgs_DebounceFlag_RejectsValueAboveMaximum_Issue3173()
+    {
+        var oversized = $"{IndexWatchRunner.MaxDebounceMs + 1}";
+
+        var options = IndexCommandRunner.ParseArgs([".", "--watch", "--debounce", oversized]);
+
+        Assert.True(options.Watch);
+        Assert.Null(options.WatchDebounceMs);
+        Assert.Contains("--debounce", options.ParseError);
+        Assert.Contains($"{IndexWatchRunner.MaxDebounceMs}", options.ParseError);
+    }
+
+    [Fact]
     public void ParseArgs_DebounceFlag_InvalidValue_IsIgnored()
     {
         var originalErr = Console.Error;

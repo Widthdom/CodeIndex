@@ -397,7 +397,7 @@ be audited whenever the matching help text changes.
 | Search snippet lines | `8` (`--snippet-lines`, max `20`) | CLI help and search runner |
 | Max line width | `512` (`--max-line-width`, `0` disables) | `LineWidthFormatter.DefaultMaxLineWidth` |
 | Index max file size | `4MiB` unless `CDIDX_MAX_FILE_BYTES` is set | index runner help |
-| Watch debounce | `500` ms (`--debounce`) | index watch runner |
+| Watch debounce | `500` ms (`--debounce`), max `60000` ms | index watch runner |
 | Status stale-after hint | `24h`, overridden by `--stale-after`, `CDIDX_STALE_AFTER`, or `.cdidxrc.json`; max `30d` | status runner |
 | Color mode | `auto`, overridden by `--color`, `CLICOLOR_FORCE`, `NO_COLOR`, or `CLICOLOR=0` | `ConsoleUi` |
 | ANSI palette | `basic` fallback, auto-upgraded from terminal hints unless overridden | `ConsoleUi` |
@@ -2662,7 +2662,7 @@ render できます。
 | Max line width | `512`（`--max-line-width`、`0` で無効） | `LineWidthFormatter.DefaultMaxLineWidth` |
 | Index max file size | `CDIDX_MAX_FILE_BYTES` 未設定時は `4MiB` | index runner help |
 | Index completion notification | `auto`（interactive terminal は bell、redirected output は none）。`--notify` / `CDIDX_NOTIFY` で上書き | index runner help |
-| Watch debounce | `500` ms（`--debounce`） | index watch runner |
+| Watch debounce | `500` ms（`--debounce`）、最大 `60000` ms | index watch runner |
 | Status stale-after hint | `24h`。`--stale-after` / `CDIDX_STALE_AFTER` / `.cdidxrc.json` で上書き、最大 `30d` | status runner |
 | Color mode | `auto`。`--color` / `CLICOLOR_FORCE` / `NO_COLOR` / `CLICOLOR=0` で上書き | `ConsoleUi` |
 | ANSI palette | `basic` fallback。terminal hints で自動昇格、または明示上書き | `ConsoleUi` |

@@ -128,7 +128,10 @@ public static partial class IndexCommandRunner
                 case "--debounce" when i + 1 < args.Length:
                     if (int.TryParse(args[i + 1], System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsedDebounce) && parsedDebounce >= 0)
                     {
-                        watchDebounceMs = parsedDebounce;
+                        if (parsedDebounce <= IndexWatchRunner.MaxDebounceMs)
+                            watchDebounceMs = parsedDebounce;
+                        else
+                            parseError ??= $"--debounce must be less than or equal to {IndexWatchRunner.MaxDebounceMs} ms, got '{args[i + 1]}'";
                         i++;
                     }
                     else

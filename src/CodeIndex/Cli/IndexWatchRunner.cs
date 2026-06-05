@@ -15,6 +15,7 @@ namespace CodeIndex.Cli;
 internal static class IndexWatchRunner
 {
     internal const int DefaultDebounceMs = 500;
+    internal const int MaxDebounceMs = 60_000;
     private const int InternalBufferSize = 64 * 1024;
     private const int PollIntervalMs = 50;
 

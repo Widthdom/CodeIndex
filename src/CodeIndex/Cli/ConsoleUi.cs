@@ -948,7 +948,7 @@ public static class ConsoleUi
         Console.WriteLine("                              Update only files changed between two git refs (useful after branch switches)");
         Console.WriteLine("  --files <path> [path ...]  Update only the specified files; old rename/delete paths are not purged unless also listed");
         WriteHelpLine("  --watch                    After the initial scan, stay running and reindex on file changes (FileSystemWatcher / inotify / FSEvents); rejects --commits / --changed-between / --files / --dry-run");
-        Console.WriteLine("  --debounce <ms>            Watch only: coalesce bursts of file events into one update after <ms> of quiet (default: 500)");
+        Console.WriteLine($"  --debounce <ms>            Watch only: coalesce bursts of file events into one update after <ms> of quiet (default: {IndexWatchRunner.DefaultDebounceMs}, max {IndexWatchRunner.MaxDebounceMs})");
         Console.WriteLine("  --optimize                 index only: optimize the existing FTS5 table for this project's DB without scanning files");
         WriteHelpLine("  --color <when>             Color output: `auto` (default), `always`, or `never`; flag wins over `CLICOLOR_FORCE` / `NO_COLOR` / `CLICOLOR` env vars, which win over TTY auto-detect");
         WriteHelpLine("  --palette <name>           ANSI palette: `basic` (8-color, default fallback), `256`, or `truecolor`; flag wins over `CDIDX_COLOR_PALETTE` env var, which wins over `COLORTERM` / `TERM` auto-detect");
