@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.Loader;
+using CodeIndex.Diagnostics;
 using CodeIndex.Models;
 
 namespace CodeIndex.Indexer.Hooks;
@@ -23,6 +24,11 @@ public sealed record PostExtractionHookDiagnostic(
     string Message,
     string? Callback = null,
     long? DurationMs = null);
+
+public sealed record PostExtractionHookDiscoverySnapshot(
+    IReadOnlyList<PostExtractionHookInfo> Hooks,
+    IReadOnlyList<PostExtractionHookDiagnostic> Diagnostics,
+    TimeSpan CallbackBudget);
 
 public sealed class PostExtractionHookRunner : IDisposable
 {
@@ -51,6 +57,30 @@ public sealed class PostExtractionHookRunner : IDisposable
     public static PostExtractionHookRunner DiscoverDefault()
         => Discover(GetDefaultHooksDirectory());
 
+    public static PostExtractionHookDiscoverySnapshot DiscoverDefaultMetadata()
+        => DiscoverMetadata(GetDefaultHooksDirectory());
+
+    public static PostExtractionHookDiscoverySnapshot DiscoverMetadata(string? hooksDirectory)
+    {
+        var loaded = new List<LoadedPostExtractionHook>();
+        var runner = new PostExtractionHookRunner(loaded, ResolveCallbackBudget());
+        if (string.IsNullOrWhiteSpace(hooksDirectory) || !Directory.Exists(hooksDirectory))
+            return new PostExtractionHookDiscoverySnapshot([], runner.Diagnostics, runner.CallbackBudget);
+
+        var hooks = EnumerateHookAssemblyPaths(hooksDirectory, runner, ResolveDiscoveryLimit())
+            .Select(dllPath =>
+            {
+                var fullPath = Path.GetFullPath(dllPath);
+                return new PostExtractionHookInfo(
+                    Path.GetFileNameWithoutExtension(fullPath),
+                    DiagnosticSanitizer.ForPath(fullPath),
+                    string.Empty);
+            })
+            .ToArray();
+
+        return new PostExtractionHookDiscoverySnapshot(hooks, runner.Diagnostics, runner.CallbackBudget);
+    }
+
     public static PostExtractionHookRunner Discover(string? hooksDirectory)
     {
         var loaded = new List<LoadedPostExtractionHook>();
@@ -71,9 +101,9 @@ public sealed class PostExtractionHookRunner : IDisposable
                 var loadContext = new AssemblyLoadContext($"cdidx-hook:{Path.GetFileNameWithoutExtension(dllPath)}", isCollectible: true);
                 assembly = loadContext.LoadFromAssemblyPath(Path.GetFullPath(dllPath));
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                runner.diagnostics.Enqueue(new PostExtractionHookDiagnostic(dllPath, null, $"Failed to load hook assembly: {ex.Message}"));
+                runner.EnqueueDiagnostic(dllPath, null, "Failed to load hook assembly.");
                 continue;
             }
 
@@ -82,9 +112,9 @@ public sealed class PostExtractionHookRunner : IDisposable
             {
                 types = assembly.GetTypes();
             }
-            catch (ReflectionTypeLoadException ex)
+            catch (ReflectionTypeLoadException)
             {
-                runner.diagnostics.Enqueue(new PostExtractionHookDiagnostic(dllPath, null, $"Failed to inspect hook assembly: {ex.Message}"));
+                runner.EnqueueDiagnostic(dllPath, null, "Failed to inspect hook assembly.");
                 continue;
             }
 
@@ -103,9 +133,9 @@ public sealed class PostExtractionHookRunner : IDisposable
                         new PostExtractionHookInfo(type.Name, Path.GetFullPath(dllPath), type.FullName ?? type.Name),
                         AssemblyLoadContext.GetLoadContext(type.Assembly)));
                 }
-                catch (Exception ex)
+                catch (Exception)
                 {
-                    runner.diagnostics.Enqueue(new PostExtractionHookDiagnostic(dllPath, type.FullName, $"Failed to instantiate hook: {ex.Message}"));
+                    runner.EnqueueDiagnostic(dllPath, type.FullName, "Failed to instantiate hook.");
                 }
             }
         }
@@ -127,10 +157,10 @@ public sealed class PostExtractionHookRunner : IDisposable
         {
             if (candidates.Count >= discoveryLimit)
             {
-                runner.diagnostics.Enqueue(new PostExtractionHookDiagnostic(
+                runner.EnqueueDiagnostic(
                     hooksDirectory,
                     null,
-                    $"Hook discovery skipped remaining assemblies after the {discoveryLimit} DLL candidate limit."));
+                    $"Hook discovery skipped remaining assemblies after the {discoveryLimit} DLL candidate limit.");
                 break;
             }
 
@@ -150,10 +180,10 @@ public sealed class PostExtractionHookRunner : IDisposable
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            runner.diagnostics.Enqueue(new PostExtractionHookDiagnostic(
+            runner.EnqueueDiagnostic(
                 hooksDirectory,
                 null,
-                $"Failed to enumerate hook directory: {ex.Message}"));
+                "Failed to enumerate hook directory.");
             return null;
         }
     }
@@ -170,37 +200,37 @@ public sealed class PostExtractionHookRunner : IDisposable
         }
         catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException)
         {
-            runner.diagnostics.Enqueue(new PostExtractionHookDiagnostic(
+            runner.EnqueueDiagnostic(
                 dllPath,
                 null,
-                $"Hook assembly skipped: could not inspect file ({ex.Message})."));
+                "Hook assembly skipped: could not inspect file.");
             return false;
         }
 
         if (!fileInfo.Exists)
         {
-            runner.diagnostics.Enqueue(new PostExtractionHookDiagnostic(
+            runner.EnqueueDiagnostic(
                 dllPath,
                 null,
-                "Hook assembly skipped: file does not exist."));
+                "Hook assembly skipped: file does not exist.");
             return false;
         }
 
         if ((fileInfo.Attributes & FileAttributes.Directory) != 0)
         {
-            runner.diagnostics.Enqueue(new PostExtractionHookDiagnostic(
+            runner.EnqueueDiagnostic(
                 dllPath,
                 null,
-                "Hook assembly skipped: path is a directory."));
+                "Hook assembly skipped: path is a directory.");
             return false;
         }
 
         if (fileInfo.Length > maxAssemblyBytes)
         {
-            runner.diagnostics.Enqueue(new PostExtractionHookDiagnostic(
+            runner.EnqueueDiagnostic(
                 dllPath,
                 null,
-                $"Hook assembly skipped: file is too large ({fileInfo.Length} bytes; maximum {maxAssemblyBytes})."));
+                $"Hook assembly skipped: file is too large ({fileInfo.Length} bytes; maximum {maxAssemblyBytes}).");
             return false;
         }
 
@@ -224,10 +254,10 @@ public sealed class PostExtractionHookRunner : IDisposable
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            runner.diagnostics.Enqueue(new PostExtractionHookDiagnostic(
+            runner.EnqueueDiagnostic(
                 hooksDirectory,
                 null,
-                $"Failed to enumerate hook directory: {ex.Message}"));
+                "Failed to enumerate hook directory.");
             return false;
         }
     }
@@ -299,27 +329,42 @@ public sealed class PostExtractionHookRunner : IDisposable
                 stopwatch.ElapsedMilliseconds,
                 (long)Math.Ceiling(callbackBudget.TotalMilliseconds));
             disabledHooks.TryAdd(hook.Info.TypeName, 0);
-            diagnostics.Enqueue(new PostExtractionHookDiagnostic(
+            EnqueueDiagnostic(
                 hook.Info.AssemblyPath,
                 hook.Info.TypeName,
                 $"{callback} exceeded the {callbackBudget.TotalMilliseconds:0} ms callback budget; hook disabled for this index run.",
                 callback,
-                timeoutDurationMs));
+                timeoutDurationMs);
             return false;
         }
 
         stopwatch.Stop();
         if (failure != null)
         {
-            diagnostics.Enqueue(new PostExtractionHookDiagnostic(
+            EnqueueDiagnostic(
                 hook.Info.AssemblyPath,
                 hook.Info.TypeName,
-                $"{callback} failed: {failure.Message}",
+                $"{callback} failed.",
                 callback,
-                stopwatch.ElapsedMilliseconds));
+                stopwatch.ElapsedMilliseconds);
         }
 
         return true;
+    }
+
+    private void EnqueueDiagnostic(
+        string assemblyPath,
+        string? typeName,
+        string message,
+        string? callback = null,
+        long? durationMs = null)
+    {
+        diagnostics.Enqueue(new PostExtractionHookDiagnostic(
+            DiagnosticSanitizer.ForPath(assemblyPath),
+            DiagnosticSanitizer.ForOptionalLabel(typeName),
+            DiagnosticSanitizer.ForMessage(message),
+            DiagnosticSanitizer.ForOptionalLabel(callback),
+            durationMs));
     }
 
     private static TimeSpan ResolveCallbackBudget()

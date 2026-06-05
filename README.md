@@ -63,10 +63,18 @@ cdidx search "handleRequest"
 cdidx definition UserService
 cdidx search "Handle" --project MyApp
 cdidx search "File.ReadAllText" --exact-substring --reject-before "Length" --guard-window 8
+cdidx search --list-recipes
+cdidx search --recipe risky-code --json
+cdidx search --recipe risky-code --format issue-drafts --open-issues open-issues.json
 cdidx validate
 cdidx mcp
 cdidx lsp --db .cdidx/codeindex.db
 ```
+
+Recipe runs support text, `--json` / `--format json`, and
+`--format issue-drafts`; `--list-recipes` supports text or JSON. Other search
+export formats and `--json=array` are rejected for recipe modes because recipe
+output is grouped by query or list metadata.
 
 Custom language loops can stay out of tree: put extension aliases in
 `.cdidx-langmap.yaml`, put regex symbol patterns in `.cdidx/patterns/*.yaml`,
@@ -158,7 +166,7 @@ downgrading `cdidx`.
 
 | Area | What cdidx provides |
 |---|---|
-| Search surfaces | CLI-first output for humans and machines; full-text, symbol, reference, caller/callee, dependency, map, inspect, and excerpt commands. `search`, `definition`, `references`, `callers`, `callees`, `find`, and `validate` support `--format count|compact|csv|tsv|lsp|qf|sarif` for token-budgeted agents, scripts, editors, and CI reports. `cdidx lsp --db .cdidx/codeindex.db` starts a read-only stdio Language Server Protocol shim for LSP-native editors. |
+| Search surfaces | CLI-first output for humans and machines; full-text, reusable search audit recipes, symbol, reference, caller/callee, dependency, map, inspect, and excerpt commands. Search recipes can also emit issue-draft JSON with labels, evidence paths, and duplicate preflight. `search`, `definition`, `references`, `callers`, `callees`, `find`, and `validate` support `--format count|compact|csv|tsv|lsp|qf|sarif` for token-budgeted agents, scripts, editors, and CI reports. `cdidx lsp --db .cdidx/codeindex.db` starts a read-only stdio Language Server Protocol shim for LSP-native editors. |
 | Validation diagnostics | `validate --json` and MCP `validate` annotate `replacement_char` rows with `origin` (`source_literal` or `decode_replacement`) and `severity` so agents can separate intentional U+FFFD literals from likely encoding damage. |
 | Definition and impact diagnostics | `definition --json` includes C# `disambiguator` hints for overloads, partial types, and extension receivers when indexed metadata can distinguish them. `impact --json` and MCP `impact_analysis` include `impact_failure_chain` and `suggestion_type` for zero-result routing; `impact --strict` exits non-zero when resolution or graph preconditions are unmet. |
 | Ranking and filters | Public/exported symbol matches rank ahead of protected, internal, and private matches. Use `--no-visibility-rank` for legacy order, and `--visibility` / `--exclude-visibility` with `symbols`, `definition`, `unused`, and `hotspots`. Query defaults can be adjusted with `CDIDX_DEFAULT_LIMIT`, `CDIDX_DEFAULT_SNIPPET_LINES`, and `CDIDX_DEFAULT_MAX_LINE_WIDTH`; explicit CLI flags still win. |
@@ -212,9 +220,9 @@ When any readiness field is degraded, `degraded_root_cause` identifies the prima
 
 After a current full-repository scan, `unknown_extension_file_count` reports how many skipped files had unmapped non-empty extensions, while `unknown_extension_files` lists up to `unknown_extension_file_path_limit` paths and `unknown_extension_files_truncated` marks when more paths exist.
 
-`extractors` reports runtime extractor plugin and pattern-config diagnostics, including loaded counts, skipped file counts, and a bounded diagnostics list for load failures.
+`extractors` reports runtime extractor plugin and pattern-config diagnostics, including loaded counts, skipped file counts, and a bounded diagnostics list for load failures. Diagnostic paths and messages are sanitized before they are surfaced.
 
-`hooks[]` includes `callback_budget_ms`. `CDIDX_HOOK_CALLBACK_BUDGET_MS` bounds each post-extraction hook callback in milliseconds (default: 5000); callbacks that exceed the budget emit index warnings, drop timed-out mutations, and disable that hook for the current index run.
+`hooks[]` includes metadata-only hook candidates and `callback_budget_ms`; `status` does not load hook assemblies. `CDIDX_HOOK_CALLBACK_BUDGET_MS` bounds each post-extraction hook callback in milliseconds (default: 5000); callbacks that exceed the budget emit sanitized index warnings, drop timed-out mutations, and disable that hook for the current index run.
 
 For MCP `status`, `mcp_session` is session-scoped diagnostic data rather than persisted index state. It includes `log_level`, `roots`, optional `client_info`, and optional `client_capabilities`.
 
@@ -362,10 +370,18 @@ cdidx search "handleRequest"
 cdidx definition UserService
 cdidx search "Handle" --project MyApp
 cdidx search "File.ReadAllText" --exact-substring --reject-before "Length" --guard-window 8
+cdidx search --list-recipes
+cdidx search --recipe risky-code --json
+cdidx search --recipe risky-code --format issue-drafts --open-issues open-issues.json
 cdidx validate
 cdidx mcp
 cdidx lsp --db .cdidx/codeindex.db
 ```
+
+recipe run が対応する形式は text、`--json` / `--format json`、
+`--format issue-drafts` です。`--list-recipes` は text または JSON に対応します。
+その他の search export format と `--json=array` は、recipe output が query または
+list metadata ごとに grouped されるため usage error で拒否します。
 
 カスタム言語の開発ループは out-of-tree で回せます。拡張子 alias は
 `.cdidx-langmap.yaml`、regex シンボルパターンは `.cdidx/patterns/*.yaml` に置き、
@@ -446,7 +462,7 @@ upgrade / downgrade 後はインストール済み補完 script を再生成し�
 
 | 分野 | 内容 |
 |---|---|
-| 検索面 | CLI-first の人間向け / 機械処理向け出力。全文検索、シンボル、参照、caller/callee、依存関係、map、inspect、excerpt コマンドを提供します。`search`、`definition`、`references`、`callers`、`callees`、`find`、`validate` は `--format count|compact|csv|tsv|lsp|qf|sarif` をサポートし、token-budgeted agent、script、editor、CI report でも使いやすい出力にできます。`cdidx lsp --db .cdidx/codeindex.db` は LSP-native editor 向けの read-only stdio Language Server Protocol shim を起動します。 |
+| 検索面 | CLI-first の人間向け / 機械処理向け出力。全文検索、再利用可能な search audit recipe、シンボル、参照、caller/callee、依存関係、map、inspect、excerpt コマンドを提供します。Search recipe は label、evidence path、duplicate preflight 付きの issue-draft JSON も出力できます。`search`、`definition`、`references`、`callers`、`callees`、`find`、`validate` は `--format count|compact|csv|tsv|lsp|qf|sarif` をサポートし、token-budgeted agent、script、editor、CI report でも使いやすい出力にできます。`cdidx lsp --db .cdidx/codeindex.db` は LSP-native editor 向けの read-only stdio Language Server Protocol shim を起動します。 |
 | validation 診断 | `validate --json` と MCP `validate` は `replacement_char` 行に `origin` (`source_literal` / `decode_replacement`) と `severity` を付け、意図的な U+FFFD literal とエンコーディング破損の可能性を agent が分離できるようにします。 |
 | definition / impact 診断 | `definition --json` は C# overload、partial type、extension receiver を区別できる場合に `disambiguator` を返します。`impact --json` と MCP `impact_analysis` は 0 件時の経路判断用に `impact_failure_chain` と `suggestion_type` を返し、`impact --strict` は解決または graph の前提条件が満たされない場合に非 0 で終了します。 |
 | 順位と filter | public/exported なシンボル一致を protected、internal、private より優先します。従来順は `--no-visibility-rank`、可視性の include / exclude は `symbols`、`definition`、`unused`、`hotspots` の `--visibility` / `--exclude-visibility` で指定できます。query 既定値は `CDIDX_DEFAULT_LIMIT`、`CDIDX_DEFAULT_SNIPPET_LINES`、`CDIDX_DEFAULT_MAX_LINE_WIDTH` で調整でき、明示 CLI flag が常に優先されます。 |
@@ -507,9 +523,9 @@ readiness field のいずれかが degraded の場合、`degraded_root_cause` �
 
 現行の全体 scan 後、`unknown_extension_file_count` は未知の非空拡張子で skip された件数を返し、`unknown_extension_files` は `unknown_extension_file_path_limit` 件までの path sample、`unknown_extension_files_truncated` は sample より多くの path があることを示します。
 
-`extractors` は extractor plugin と pattern config の runtime 診断で、読み込み済み件数、skip されたファイル数、読み込み失敗の上限付き diagnostics list を含みます。
+`extractors` は extractor plugin と pattern config の runtime 診断で、読み込み済み件数、skip されたファイル数、読み込み失敗の上限付き diagnostics list を含みます。diagnostic の path と message は表面化前に sanitization されます。
 
-`hooks[]` は `callback_budget_ms` を含みます。`CDIDX_HOOK_CALLBACK_BUDGET_MS` は post-extraction hook callback ごとの上限ミリ秒を指定します（既定値: 5000）。上限を超えた callback は index warning を出し、timeout した変更を捨て、その index run 中は該当 hook を無効化します。
+`hooks[]` は metadata-only の hook candidate と `callback_budget_ms` を含み、`status` は hook assembly を読み込みません。`CDIDX_HOOK_CALLBACK_BUDGET_MS` は post-extraction hook callback ごとの上限ミリ秒を指定します（既定値: 5000）。上限を超えた callback は sanitized index warning を出し、timeout した変更を捨て、その index run 中は該当 hook を無効化します。
 
 MCP `status` の `mcp_session` は永続化された index 状態ではなく、セッション単位の診断情報です。`log_level`、`roots`、任意の `client_info`、任意の `client_capabilities` を含みます。
 

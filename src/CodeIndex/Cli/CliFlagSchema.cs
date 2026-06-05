@@ -126,6 +126,7 @@ internal static class CliFlagSchema
     private static readonly string[] RawKindsCommands = ["callers", "callees"];
     private static readonly string[] RankByCommands = ["callers", "callees"];
     private static readonly string[] ByBucketCommands = ["unused"];
+    private static readonly string[] UnusedFilterCommands = ["unused"];
     private static readonly string[] AllResultCommands = ["goto"];
 
     private static readonly string[] SinceCommands = ["search", "definition", "symbols", "files"];
@@ -220,7 +221,7 @@ internal static class CliFlagSchema
             new() { Name = "--workspace-db", ValuePlaceholder = "<path>", Description = "Additional workspace member database path for dependency aggregation", Commands = Set(WorkspaceDbCommands) },
             new() { Name = "--data-dir", ValuePlaceholder = "<dir>", Description = "Directory containing codeindex.db; overrides CDIDX_DATA_DIR/XDG/workspace defaults", Commands = Set(DataDirCommands) },
             new() { Name = "--json", Description = "JSON output; search/files/validate also accept --json=array for a single JSON array", Commands = Set(JsonCommands) },
-            new() { Name = "--format", ValuePlaceholder = "<text|json|count|compact|csv|tsv|lsp|qf|sarif>", Description = "Standard output format for token budgets, editor integrations, and CI", Commands = Set(FormatCommands) },
+            new() { Name = "--format", ValuePlaceholder = "<text|json|count|compact|csv|tsv|lsp|qf|sarif|issue-drafts>", Description = "Standard output format for token budgets, editor integrations, and CI; search recipes also accept issue-drafts", Commands = Set(FormatCommands) },
             new() { Name = "--quiet", ShortName = "-q", Description = "Suppress informational stderr output; errors still print", Commands = Set(AllCommands.ToArray()), TopLevel = true },
             new() { Name = "--silent", Description = "Alias for --quiet", Commands = Set(AllCommands.ToArray()), TopLevel = true },
             new() { Name = "--color", ValuePlaceholder = "<auto|always|never>", Description = "Color output mode", Commands = Set(), TopLevel = true },
@@ -251,6 +252,8 @@ internal static class CliFlagSchema
             new() { Name = "--visibility", ValuePlaceholder = "<visibility[,visibility]>", Description = "Filter by symbol visibility", Commands = Set(VisibilityCommands) },
             new() { Name = "--exclude-visibility", ValuePlaceholder = "<visibility[,visibility]>", Description = "Exclude symbol visibility", Commands = Set(VisibilityCommands) },
             new() { Name = "--by-bucket", Description = "Unused: include per-bucket grouped result arrays in JSON output", Commands = Set(ByBucketCommands) },
+            new() { Name = "--bucket", ValuePlaceholder = "<bucket>", Description = "Unused: return only one confidence bucket", Commands = Set(UnusedFilterCommands) },
+            new() { Name = "--min-confidence", ValuePlaceholder = "<medium|low>", Description = "Unused: return symbols at or above this confidence", Commands = Set(UnusedFilterCommands) },
             new() { Name = "--all", Description = "goto: return all matching LSP locations instead of requiring a single target", Commands = Set(AllResultCommands) },
             new() { Name = "--rank-by", ValuePlaceholder = "<weighted|count|kind>", Description = "Rank callers/callees by weighted structural score, raw count, or kind bucket", Commands = Set(RankByCommands) },
             new() { Name = "--raw-kinds", Description = "Show raw reference kinds instead of logical graph kinds", Commands = Set(RawKindsCommands) },
@@ -265,6 +268,9 @@ internal static class CliFlagSchema
             new() { Name = "--indexed-only", Description = "Languages: list only languages present in the current index", Commands = Set(LanguagesFilterCommands) },
             new() { Name = "--capability", ValuePlaceholder = "<graph|symbols|references>", Description = "Languages: filter by language capability", Commands = Set(LanguagesFilterCommands) },
             new() { Name = "--query", ValuePlaceholder = "<query>", Description = "Literal query", Commands = Set(QueryCommands) },
+            new() { Name = "--recipe", ValuePlaceholder = "<name>", Description = "Search: run a built-in audit recipe query set", Commands = Set("search") },
+            new() { Name = "--list-recipes", Description = "Search: list built-in audit recipes", Commands = Set("search") },
+            new() { Name = "--open-issues", ValuePlaceholder = "<path>", Description = "Search: preflight issue drafts against open issue JSON", Commands = Set("search") },
             new() { Name = "--body", Description = "Include body", Commands = Set(BodyCommands) },
             new() { Name = "--exact", Description = "Backward-compatible exact shorthand", Commands = Set(ExactCommands) },
             new() { Name = "--regex", Description = "Use regular expression matching", Commands = Set("find") },

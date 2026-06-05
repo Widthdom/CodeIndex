@@ -62,7 +62,7 @@ internal static class DartReferenceExtractor
 
         void EmitSingleMatch(Regex regex, string referenceKind)
         {
-            var match = regex.Match(preparedLine);
+            var match = BoundedRegex.Match(regex, preparedLine);
             if (!match.Success)
                 return;
 
@@ -76,13 +76,13 @@ internal static class DartReferenceExtractor
                 return;
 
             var names = match.Groups["names"];
-            foreach (Match name in Regex.Matches(names.Value, @"[A-Za-z_]\w*"))
+            foreach (Match name in BoundedRegex.EnumerateMatches(names.Value, @"[A-Za-z_]\w*"))
                 Add(name.Value, names.Index + name.Index, "mixin_in");
         }
 
         void EmitNamedConstructorCalls()
         {
-            foreach (Match match in NamedConstructorCallRegex.Matches(preparedLine))
+            foreach (Match match in BoundedRegex.EnumerateMatches(NamedConstructorCallRegex, preparedLine))
             {
                 var name = match.Groups["name"];
                 Add(name.Value, name.Index, "named_ctor_call");
