@@ -9,7 +9,7 @@ namespace CodeIndex.Cli;
 
 internal static class SuggestionsCommandRunner
 {
-    private const string Usage = "Usage: cdidx suggestions <list|show|export> [id] [--db <path>] [--json] [--status <all|draft|submitted_pending_triage|open_in_upstream|resolved_in_upstream|wont_fix|duplicate|superseded|submitted|unsubmitted>] [--language <lang>] [--category <category>] [--since <datetime>] [--agent <name>] [--format <json|markdown|issue-drafts>] [--open-issues <path>]";
+    private const string Usage = "Usage: cdidx suggestions <list|show|export> [id] [--db <path>] [--json] [--status <all|draft|submitted_pending_triage|open_in_upstream|resolved_in_upstream|wont_fix|duplicate|superseded|submitted|unsubmitted>] [--language <lang>] [--category <category>] [--since <datetime>] [--agent <name>] [--limit <n>] [--offset <n>] [--format <json|markdown|issue-drafts>] [--open-issues <path>]";
     internal const int MaxOpenIssuesJsonBytes = IssueDuplicatePreflight.MaxOpenIssuesJsonBytes;
     internal const int MaxOpenIssuesJsonDepth = IssueDuplicatePreflight.MaxOpenIssuesJsonDepth;
 
@@ -31,18 +31,23 @@ internal static class SuggestionsCommandRunner
         }
         if (options.OpenIssuesPath != null && (verb != "export" || options.ExportFormat != "issue-drafts"))
             return WriteUsageError("--open-issues can only be used with `suggestions export --format issue-drafts`.");
+        if (verb == "show" && options.HasPagination)
+            return WriteUsageError("--limit and --offset can only be used with `suggestions list` or `suggestions export`.");
 
         var store = CreateStore(options.DbPath);
         var records = ApplyFilters(store.LoadAll(), options)
             .OrderByDescending(s => s.CreatedAt)
             .ThenBy(s => s.Hash, StringComparer.Ordinal)
             .ToList();
+        var outputRecords = verb is "list" or "export"
+            ? ApplyOutputPage(records, options)
+            : records;
 
         return verb switch
         {
-            "list" => RunList(records, options, jsonOptions),
+            "list" => RunList(outputRecords, options, jsonOptions),
             "show" => RunShow(records, options, jsonOptions),
-            "export" => RunExport(records, options, jsonOptions),
+            "export" => RunExport(outputRecords, options, jsonOptions),
             _ => WriteUsageError($"Unknown suggestions subcommand: {verb}")
         };
     }
@@ -202,6 +207,19 @@ internal static class SuggestionsCommandRunner
                 continue;
             yield return record;
         }
+    }
+
+    private static List<SuggestionRecord> ApplyOutputPage(List<SuggestionRecord> records, Options options)
+    {
+        if (options.Offset == 0 && options.Limit == null)
+            return records;
+
+        var page = records.AsEnumerable();
+        if (options.Offset > 0)
+            page = page.Skip(options.Offset);
+        if (options.Limit.HasValue)
+            page = page.Take(options.Limit.Value);
+        return page.ToList();
     }
 
     private static SuggestionRecord? ResolveById(List<SuggestionRecord> records, string id)
@@ -546,6 +564,33 @@ internal static class SuggestionsCommandRunner
                     }
                     options.Agent = agent;
                     break;
+                case "--limit":
+                    if (!TryReadValue(args, ref i, "--limit", out var limit, out var limitError))
+                    {
+                        options.Error = limitError;
+                        return options;
+                    }
+                    if (!TryParseNonNegativeInt("--limit", limit, out var parsedLimit, out var parsedLimitError))
+                    {
+                        options.Error = parsedLimitError;
+                        return options;
+                    }
+                    options.Limit = parsedLimit;
+                    break;
+                case "--offset":
+                    if (!TryReadValue(args, ref i, "--offset", out var offset, out var offsetError))
+                    {
+                        options.Error = offsetError;
+                        return options;
+                    }
+                    if (!TryParseNonNegativeInt("--offset", offset, out var parsedOffset, out var parsedOffsetError))
+                    {
+                        options.Error = parsedOffsetError;
+                        return options;
+                    }
+                    options.Offset = parsedOffset;
+                    options.OffsetSpecified = true;
+                    break;
                 case "--since":
                     if (!TryReadValue(args, ref i, "--since", out var since, out var sinceError))
                     {
@@ -588,6 +633,27 @@ internal static class SuggestionsCommandRunner
                         options.Category = arg["--category=".Length..];
                     else if (arg.StartsWith("--agent=", StringComparison.Ordinal))
                         options.Agent = arg["--agent=".Length..];
+                    else if (arg.StartsWith("--limit=", StringComparison.Ordinal))
+                    {
+                        var inlineLimit = arg["--limit=".Length..];
+                        if (!TryParseNonNegativeInt("--limit", inlineLimit, out var parsedInlineLimit, out var parsedInlineLimitError))
+                            options.Error = parsedInlineLimitError;
+                        else
+                            options.Limit = parsedInlineLimit;
+                    }
+                    else if (arg.StartsWith("--offset=", StringComparison.Ordinal))
+                    {
+                        var inlineOffset = arg["--offset=".Length..];
+                        if (!TryParseNonNegativeInt("--offset", inlineOffset, out var parsedInlineOffset, out var parsedInlineOffsetError))
+                        {
+                            options.Error = parsedInlineOffsetError;
+                        }
+                        else
+                        {
+                            options.Offset = parsedInlineOffset;
+                            options.OffsetSpecified = true;
+                        }
+                    }
                     else if (arg.StartsWith("--format=", StringComparison.Ordinal))
                         options.ExportFormat = arg["--format=".Length..];
                     else if (arg.StartsWith("--open-issues=", StringComparison.Ordinal))
@@ -624,6 +690,19 @@ internal static class SuggestionsCommandRunner
 
     private static bool IsValidExportFormat(string format) => format is "json" or "markdown" or "issue-drafts";
 
+    private static bool TryParseNonNegativeInt(string option, string rawValue, out int value, out string? error)
+    {
+        if (int.TryParse(rawValue, NumberStyles.None, CultureInfo.InvariantCulture, out value) && value >= 0)
+        {
+            error = null;
+            return true;
+        }
+
+        value = 0;
+        error = $"Error: {option} must be a non-negative integer.";
+        return false;
+    }
+
     private static bool TryReadValue(string[] args, ref int i, string option, out string value, out string? error)
     {
         value = string.Empty;
@@ -648,9 +727,13 @@ internal static class SuggestionsCommandRunner
         public string? Language { get; set; }
         public string? Category { get; set; }
         public string? Agent { get; set; }
+        public int? Limit { get; set; }
+        public int Offset { get; set; }
+        public bool OffsetSpecified { get; set; }
         public string? OpenIssuesPath { get; set; }
         public DateTimeOffset? Since { get; set; }
         public string? Error { get; set; }
+        public bool HasPagination => Limit.HasValue || OffsetSpecified;
     }
 }
 

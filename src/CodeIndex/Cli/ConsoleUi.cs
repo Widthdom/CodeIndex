@@ -104,7 +104,7 @@ public static class ConsoleUi
         ("deps", "cdidx deps [--db <path>] [--json] [--format <dot|graphml|json-graph|edgelist>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--reverse] [--cycles]"),
         ("unused", "cdidx unused [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--kind <kind>] [--bucket <bucket>] [--min-confidence <medium|low>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count]"),
         ("hotspots", "cdidx hotspots [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--group-by <symbol|file|statement>] [--group-by-name]"),
-        ("suggestions", "cdidx suggestions <list|show|export> [id] [--db <path>] [--json] [--status <all|submitted|unsubmitted>] [--language <lang>] [--category <category>] [--since <datetime>] [--agent <name>] [--format <json|markdown|issue-drafts>] [--open-issues <path>]"),
+        ("suggestions", "cdidx suggestions <list|show|export> [id] [--db <path>] [--json] [--status <all|submitted|unsubmitted>] [--language <lang>] [--category <category>] [--since <datetime>] [--agent <name>] [--limit <n>] [--offset <n>] [--format <json|markdown|issue-drafts>] [--open-issues <path>]"),
         ("export", "cdidx export <archive> [--db <path>] [--json]"),
         ("export", "cdidx export ctags [--output <path>] [--db <path>]"),
         ("import", "cdidx import <archive> [--db <path>] [--prune-paths] [--json]"),
@@ -1327,7 +1327,7 @@ public static class ConsoleUi
     [
         "index", "backfill-fold", "optimize", "search", "definition", "goto", "references", "callers", "callees",
         "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status", "validate-config",
-        "validate", "deps", "impact", "unused", "hotspots", "languages", "batch", "mcp", "completions", "db", "vacuum", "report", "license", "upgrade",
+        "validate", "deps", "impact", "unused", "hotspots", "suggestions", "languages", "batch", "mcp", "completions", "db", "vacuum", "report", "license", "upgrade",
     ];
 
     /// <summary>
@@ -1394,7 +1394,7 @@ public static class ConsoleUi
     // generic catch-all となるよう揃える。テストもこの並びを前提にしている。
     private static readonly string[] EnumeratedCompletionCommands =
     [
-        "find", "excerpt", "references", "inspect", "hotspots", "status", "validate-config", "db", "report", "search",
+        "find", "excerpt", "references", "inspect", "hotspots", "status", "validate-config", "db", "report", "suggestions", "search",
     ];
 
     // Generic-branch representative set: union of completion flags from these commands populates
@@ -1430,7 +1430,7 @@ public static class ConsoleUi
         sb.Append("    fi\n");
         sb.Append("\n");
         sb.Append("    case \"$prev\" in\n");
-        sb.Append("        --db|--path|--exclude-path|--output|-o|--metrics) COMPREPLY=($(compgen -f -- \"$cur\")) ;;\n");
+        sb.Append("        --db|--path|--exclude-path|--open-issues|--output|-o|--metrics) COMPREPLY=($(compgen -f -- \"$cur\")) ;;\n");
         sb.Append("        --color) COMPREPLY=($(compgen -W \"auto always never\" -- \"$cur\")) ;;\n");
         sb.Append("        --palette) COMPREPLY=($(compgen -W \"basic 256 truecolor\" -- \"$cur\")) ;;\n");
         sb.Append("        --log-format) COMPREPLY=($(compgen -W \"text json\" -- \"$cur\")) ;;\n");
@@ -1737,7 +1737,7 @@ public static class ConsoleUi
         sb.AppendLine("        [System.Management.Automation.CompletionResult]::new($value, $value, $kind, $value)");
         sb.AppendLine("    }");
         sb.AppendLine("    switch ($prev) {");
-        sb.AppendLine("        { $_ -in @('--db', '--path', '--exclude-path', '--output', '-o', '--metrics') } {");
+        sb.AppendLine("        { $_ -in @('--db', '--path', '--exclude-path', '--open-issues', '--output', '-o', '--metrics') } {");
         sb.AppendLine("            Get-ChildItem -Name \"$wordToComplete*\" -ErrorAction SilentlyContinue | ForEach-Object { New-CdidxCompletion $_ 'ProviderItem' }");
         sb.AppendLine("            return");
         sb.AppendLine("        }");

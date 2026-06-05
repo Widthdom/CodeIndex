@@ -636,6 +636,27 @@ public class ProgramCliTests
     }
 
     [Fact]
+    public void Suggestions_ListJsonSupportsLimitAndOffset()
+    {
+        using var fixture = SuggestionFixture.Create();
+        fixture.Add("symbol_extraction", "csharp", "Oldest suggestion", submitted: false);
+        var middle = fixture.Add("language_support", "rust", "Middle suggestion", submitted: false);
+        fixture.Add("output_format", "python", "Newest suggestion", submitted: false);
+
+        var (exitCode, stdout, stderr) = RunCliInSubprocess([
+            "suggestions", "list", "--db", fixture.DbPath, "--json", "--limit", "1", "--offset", "1"
+        ]);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        var lines = stdout.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        Assert.Single(lines);
+        using var doc = JsonDocument.Parse(lines[0]);
+        Assert.Equal(middle.Hash, doc.RootElement.GetProperty("id").GetString());
+        Assert.Equal("Middle suggestion", doc.RootElement.GetProperty("title").GetString());
+    }
+
+    [Fact]
     public void Suggestions_ShowJsonResolvesShortId()
     {
         using var fixture = SuggestionFixture.Create();
@@ -652,6 +673,21 @@ public class ProgramCliTests
         Assert.Equal(0, doc.RootElement.GetProperty("submit_attempt_count").GetInt32());
         Assert.False(doc.RootElement.TryGetProperty("last_submit_attempt", out _));
         Assert.False(doc.RootElement.TryGetProperty("last_submit_error", out _));
+    }
+
+    [Fact]
+    public void Suggestions_ShowRejectsPaginationFlags()
+    {
+        using var fixture = SuggestionFixture.Create();
+        var record = fixture.Add("output_format", "python", "JSON export needed", submitted: true);
+
+        var (exitCode, stdout, stderr) = RunCliInSubprocess([
+            "suggestions", "show", record.Hash[..12], "--db", fixture.DbPath, "--limit", "1"
+        ]);
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("--limit and --offset can only be used", stderr);
     }
 
     [Fact]
@@ -676,6 +712,42 @@ public class ProgramCliTests
         Assert.Equal(2, doc.RootElement.GetProperty("submit_attempt_count").GetInt32());
         Assert.Equal(attemptedAt, doc.RootElement.GetProperty("last_submit_attempt").GetDateTime());
         Assert.Equal("API 422: validation failed", doc.RootElement.GetProperty("last_submit_error").GetString());
+    }
+
+    [Fact]
+    public void Suggestions_ExportJsonSupportsLimitAndOffset()
+    {
+        using var fixture = SuggestionFixture.Create();
+        var oldest = fixture.Add("symbol_extraction", "csharp", "Oldest export", submitted: false);
+        var middle = fixture.Add("language_support", "rust", "Middle export", submitted: false);
+        fixture.Add("output_format", "python", "Newest export", submitted: false);
+
+        var (exitCode, stdout, stderr) = RunCliInSubprocess([
+            "suggestions", "export", "--db", fixture.DbPath, "--format", "json", "--limit=2", "--offset=1"
+        ]);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var doc = JsonDocument.Parse(stdout);
+        Assert.Equal(2, doc.RootElement.GetProperty("count").GetInt32());
+        var suggestions = doc.RootElement.GetProperty("suggestions");
+        Assert.Equal(middle.Hash, suggestions[0].GetProperty("id").GetString());
+        Assert.Equal(oldest.Hash, suggestions[1].GetProperty("id").GetString());
+    }
+
+    [Fact]
+    public void Suggestions_ListRejectsInvalidLimit()
+    {
+        using var fixture = SuggestionFixture.Create();
+        fixture.Add("output_format", "python", "JSON export needed", submitted: false);
+
+        var (exitCode, stdout, stderr) = RunCliInSubprocess([
+            "suggestions", "list", "--db", fixture.DbPath, "--limit", "many"
+        ]);
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("--limit must be a non-negative integer", stderr);
     }
 
     [Fact]

@@ -283,8 +283,10 @@ public class McpAuditLogTests : IDisposable
             },
         };
 
-        _ = server.HandleMessage(request);
+        var response = server.HandleMessage(request)!;
 
+        Assert.False(response.AsObject().ContainsKey("error"));
+        Assert.NotNull(response["result"]);
         var rawLog = File.ReadAllText(_auditPath);
         Assert.DoesNotContain(argumentName, rawLog, StringComparison.Ordinal);
         var record = ReadOnlyRecord();
@@ -460,14 +462,12 @@ public class McpAuditLogTests : IDisposable
     }
 
     [Fact]
-    public void ToolsCall_TruncatesAuditRequestId_Issue3237()
+    public void ToolsCall_MaxLengthRequestId_PreservesAuditRequestId_Issue3237()
     {
         using var sink = new AuditLogSink(_auditPath, AuditLogSink.DefaultMaxBytes, includeValues: false);
         using var server = CreateServer(sink);
         var id = new string('r', McpServer.MaxRequestIdCharacterCount);
         var serializedId = JsonSerializer.Serialize(id);
-        Assert.True(serializedId.Length > AuditLogSink.MaxRequestIdChars);
-        var display = McpBoundedText.ForDisplay(serializedId, AuditLogSink.MaxRequestIdChars);
         var request = new JsonObject
         {
             ["jsonrpc"] = "2.0",
@@ -480,14 +480,16 @@ public class McpAuditLogTests : IDisposable
             },
         };
 
-        _ = server.HandleMessage(request);
+        var response = server.HandleMessage(request)!;
 
+        Assert.False(response.AsObject().ContainsKey("error"));
+        Assert.NotNull(response["result"]);
         var rawLog = File.ReadAllText(_auditPath);
-        Assert.DoesNotContain(id, rawLog, StringComparison.Ordinal);
+        Assert.DoesNotContain("request_id_truncated", rawLog, StringComparison.Ordinal);
         var record = ReadOnlyRecord();
-        Assert.Equal(display.Text, record.GetProperty("request_id").GetString());
-        Assert.Equal(serializedId.Length, record.GetProperty("request_id_length").GetInt32());
-        Assert.True(record.GetProperty("request_id_truncated").GetBoolean());
+        Assert.Equal(serializedId, record.GetProperty("request_id").GetString());
+        Assert.False(record.TryGetProperty("request_id_length", out _));
+        Assert.False(record.TryGetProperty("request_id_truncated", out _));
     }
 
     [Fact]

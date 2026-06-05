@@ -61,7 +61,7 @@ internal static class CliFlagSchema
     [
         "index", "backfill-fold", "optimize", "search", "definition", "goto", "references", "callers", "callees",
         "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status", "validate-config",
-        "validate", "deps", "impact", "unused", "hotspots", "languages", "batch", "mcp", "completions", "db", "vacuum", "report", "license", "upgrade",
+        "validate", "deps", "impact", "unused", "hotspots", "suggestions", "languages", "batch", "mcp", "completions", "db", "vacuum", "report", "license", "upgrade",
     ];
 
     // Commands that accept the `--` end-of-options marker so a user can pass a literal
@@ -129,7 +129,7 @@ internal static class CliFlagSchema
     private static readonly string[] UnusedFilterCommands = ["unused"];
     private static readonly string[] AllResultCommands = ["goto"];
 
-    private static readonly string[] SinceCommands = ["search", "definition", "symbols", "files"];
+    private static readonly string[] SinceCommands = ["search", "definition", "symbols", "files", "suggestions"];
     private static readonly string[] ByteFormatCommands = ["files", "map"];
     private static readonly string[] EntrypointConfidenceCommands = ["map"];
     private static readonly string[] MapSectionCommands = ["map"];
@@ -169,7 +169,7 @@ internal static class CliFlagSchema
     [
         "index", "backfill-fold", "optimize", "search", "definition", "goto", "references", "callers", "callees",
         "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status",
-        "validate", "deps", "impact", "unused", "hotspots", "languages", "db", "vacuum", "report", "batch", "mcp",
+        "validate", "deps", "impact", "unused", "hotspots", "suggestions", "languages", "db", "vacuum", "report", "batch", "mcp",
     ];
 
     private static readonly string[] WorkspaceDbCommands = ["deps"];
@@ -192,14 +192,14 @@ internal static class CliFlagSchema
     [
         "index", "backfill-fold", "optimize", "vacuum", "search", "definition", "goto", "references", "callers", "callees",
         "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status",
-        "validate", "deps", "impact", "unused", "hotspots", "languages", "db", "report",
+        "validate", "deps", "impact", "unused", "hotspots", "suggestions", "languages", "db", "report",
     ];
 
     private static readonly string[] CompactJsonCommands = ["map", "inspect", "outline"];
 
     private static readonly string[] FormatCommands =
     [
-        "search", "definition", "references", "callers", "callees", "find", "validate", "deps",
+        "search", "definition", "references", "callers", "callees", "find", "validate", "deps", "suggestions",
     ];
 
     private static readonly string[] ProfileCommands =
@@ -226,7 +226,7 @@ internal static class CliFlagSchema
             new() { Name = "--json", Description = "JSON output; search/files/validate also accept --json=array for a single JSON array", Commands = Set(JsonCommands) },
             new() { Name = "--pretty", Description = "Pretty-print JSON output with indentation", Commands = Set(JsonCommands), TopLevel = true },
             new() { Name = "--compact", Description = "AI-oriented compact JSON with capped list sections and truncation metadata", Commands = Set(CompactJsonCommands) },
-            new() { Name = "--format", ValuePlaceholder = "<text|json|count|compact|csv|tsv|lsp|qf|sarif|issue-drafts>", Description = "Standard output format for token budgets, editor integrations, and CI; search recipes also accept issue-drafts", Commands = Set(FormatCommands) },
+            new() { Name = "--format", ValuePlaceholder = "<text|json|count|compact|csv|tsv|lsp|qf|sarif|markdown|issue-drafts>", Description = "Standard output format for token budgets, editor integrations, and CI; search recipes and suggestions export also accept issue-drafts", Commands = Set(FormatCommands) },
             new() { Name = "--quiet", ShortName = "-q", Description = "Suppress informational stderr output; errors still print", Commands = Set(AllCommands.ToArray()), TopLevel = true },
             new() { Name = "--silent", Description = "Alias for --quiet", Commands = Set(AllCommands.ToArray()), TopLevel = true },
             new() { Name = "--color", ValuePlaceholder = "<auto|always|never>", Description = "Color output mode", Commands = Set(), TopLevel = true },
@@ -243,9 +243,11 @@ internal static class CliFlagSchema
             new() { Name = "--notify", ValuePlaceholder = "<auto|bell|osc9|desktop|none>", Description = "Signal long index completion; desktop currently emits OSC 9 terminal notification", Commands = Set("index") },
             new() { Name = "--slow-query-ms", ValuePlaceholder = "<n>", Description = "Log profiled SQL statements at or above this millisecond threshold", Commands = Set(ProfileCommands) },
             new() { Name = "--trace", ValuePlaceholder = "<none|stderr|file>", Description = "Emit one structured JSON query trace line to stderr or a daily log file", Commands = Set(TraceCommands) },
-            new() { Name = "--limit", ValuePlaceholder = "<n>", Description = "Max results", Commands = Set(LimitCapableCommands) },
+            new() { Name = "--limit", ValuePlaceholder = "<n>", Description = "Max results", Commands = Set(LimitCapableCommands.Concat(new[] { "suggestions" }).ToArray()) },
             new() { Name = "--top", ValuePlaceholder = "<n>", Description = "Max results", Commands = Set(LimitCapableCommands) },
+            new() { Name = "--offset", ValuePlaceholder = "<n>", Description = "Suggestions: skip this many filtered rows before output", Commands = Set("suggestions") },
             new() { Name = "--lang", ValuePlaceholder = "<lang>", Description = "Filter by language", Commands = Set(LangCapableCommands) },
+            new() { Name = "--language", ValuePlaceholder = "<lang>", Description = "Suggestions: filter by language", Commands = Set("suggestions") },
             new() { Name = "--path", ValuePlaceholder = "<glob>", Description = "Path filter", Commands = Set(PathFilterCommands) },
             new() { Name = "--project", ValuePlaceholder = "<name|path>", Description = "Filter to a .sln/.csproj project", Commands = Set(PathFilterCommands.Concat(new[] { "index" }).ToArray()) },
             new() { Name = "--solution", ValuePlaceholder = "<path>", Description = "Solution file used to resolve --project", Commands = Set(PathFilterCommands.Concat(new[] { "index" }).ToArray()) },
@@ -275,7 +277,10 @@ internal static class CliFlagSchema
             new() { Name = "--query", ValuePlaceholder = "<query>", Description = "Literal query", Commands = Set(QueryCommands) },
             new() { Name = "--recipe", ValuePlaceholder = "<name>", Description = "Search: run a built-in audit recipe query set", Commands = Set("search") },
             new() { Name = "--list-recipes", Description = "Search: list built-in audit recipes", Commands = Set("search") },
-            new() { Name = "--open-issues", ValuePlaceholder = "<path>", Description = "Search: preflight issue drafts against open issue JSON", Commands = Set("search") },
+            new() { Name = "--open-issues", ValuePlaceholder = "<path>", Description = "Preflight issue drafts against open issue JSON", Commands = Set("search", "suggestions") },
+            new() { Name = "--status", ValuePlaceholder = "<status>", Description = "Suggestions: filter by suggestion status", Commands = Set("suggestions") },
+            new() { Name = "--category", ValuePlaceholder = "<category>", Description = "Suggestions: filter by category", Commands = Set("suggestions") },
+            new() { Name = "--agent", ValuePlaceholder = "<agent>", Description = "Suggestions: filter by agent", Commands = Set("suggestions") },
             new() { Name = "--body", Description = "Include body", Commands = Set(BodyCommands) },
             new() { Name = "--fields", ValuePlaceholder = "<file,workspace,graph,definitions,body,nearby_symbols,references,callers,callees,all>", Description = "Inspect: select top-level JSON evidence groups", Commands = Set(InspectFieldCommands) },
             new() { Name = "--body-only", Description = "Inspect: JSON shorthand for --body --fields definitions", Commands = Set(InspectFieldCommands) },

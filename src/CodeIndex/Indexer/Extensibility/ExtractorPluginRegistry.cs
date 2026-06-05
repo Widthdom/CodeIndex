@@ -17,6 +17,7 @@ public static class ExtractorPluginRegistry
     internal const int MaxPatternRulesPerConfig = 128;
     internal const int MaxPatternRulesTotal = 128;
     internal const int MaxPatternRegexLength = 4096;
+    internal const int MaxPatternConfigCandidatesPerDirectory = 128;
     internal const int MaxPluginAssemblyCandidatesPerDirectory = 128;
     internal const int MaxPluginAssemblyCandidatesTotal = 256;
     internal const long MaxPluginAssemblyBytes = 64 * 1024 * 1024;
@@ -27,6 +28,7 @@ public static class ExtractorPluginRegistry
     private static readonly Dictionary<string, IReferenceExtractor> ReferenceExtractors = new(StringComparer.Ordinal);
     private static readonly HashSet<string> LoadedPluginAssemblyPaths = new(StringComparer.OrdinalIgnoreCase);
     private static readonly HashSet<string> LoadedPatternConfigPaths = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly IReadOnlyList<string> PatternConfigSearchPatterns = ["*.yaml", "*.yml"];
     private static readonly List<ExtractorRegistryDiagnostic> Diagnostics = [];
     private const int DiagnosticLimit = 20;
     private static int pluginAssemblyCount;
@@ -165,6 +167,9 @@ public static class ExtractorPluginRegistry
 
     internal static IReadOnlyList<string> EnumeratePluginAssemblyPathsForTests(IReadOnlyList<string> directories)
         => EnumeratePluginAssemblyPaths(directories).ToArray();
+
+    internal static IReadOnlyList<string> EnumeratePatternConfigPathsFromDirectoryForTests(string directory)
+        => EnumeratePatternConfigPathsFromDirectory(directory, workspaceRoot: null).ToArray();
 
     internal static void LoadPluginAssembliesForTests(IReadOnlyList<string> directories)
         => LoadPluginAssemblies(directories);
@@ -360,27 +365,58 @@ public static class ExtractorPluginRegistry
         if (!Directory.Exists(directory) || !PatternDirectoryIsSafe(directory, workspaceRoot))
             yield break;
 
-        foreach (var path in EnumeratePatternFiles(directory, "*.yaml"))
-            yield return path;
-        foreach (var path in EnumeratePatternFiles(directory, "*.yml"))
-            yield return path;
+        var directoryCandidates = 0;
+        foreach (var searchPattern in PatternConfigSearchPatterns)
+        {
+            using var enumerator = TryEnumeratePatternFiles(directory, searchPattern);
+            if (enumerator == null)
+                continue;
+
+            while (TryMoveNextPatternFile(directory, enumerator, out var path))
+            {
+                if (directoryCandidates >= MaxPatternConfigCandidatesPerDirectory)
+                {
+                    ReportPatternDirectorySkipped(
+                        directory,
+                        $"too many pattern config candidates (maximum {MaxPatternConfigCandidatesPerDirectory} per directory)");
+                    yield break;
+                }
+
+                directoryCandidates++;
+                yield return path;
+            }
+        }
     }
 
-    private static IEnumerable<string> EnumeratePatternFiles(string directory, string searchPattern)
+    private static IEnumerator<string>? TryEnumeratePatternFiles(string directory, string searchPattern)
     {
-        string[] paths;
         try
         {
-            paths = Directory.GetFiles(directory, searchPattern, SearchOption.TopDirectoryOnly);
+            return Directory.EnumerateFiles(directory, searchPattern, SearchOption.TopDirectoryOnly).GetEnumerator();
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             ReportPatternDirectoryRejected(directory, "could not enumerate pattern directory");
-            yield break;
+            return null;
         }
+    }
 
-        foreach (var path in paths)
-            yield return path;
+    private static bool TryMoveNextPatternFile(string directory, IEnumerator<string> enumerator, out string patternPath)
+    {
+        patternPath = string.Empty;
+        try
+        {
+            if (!enumerator.MoveNext())
+                return false;
+
+            patternPath = enumerator.Current;
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            ReportPatternDirectoryRejected(directory, "could not enumerate pattern directory");
+            return false;
+        }
     }
 
     private static bool PatternDirectoryIsSafe(string directory, string? workspaceRoot)
@@ -546,6 +582,18 @@ public static class ExtractorPluginRegistry
             typeName: null,
             severity: "error",
             $"Pattern directory skipped: {reason}",
+            countsAsSkippedFile: false);
+    }
+
+    private static void ReportPatternDirectorySkipped(string path, string reason)
+    {
+        Console.Error.WriteLine($"[cdidx] Skipped pattern directory '{DiagnosticSanitizer.ForPath(path)}': {DiagnosticSanitizer.ForMessage(reason)}.");
+        RecordDiagnostic(
+            "pattern_directory",
+            path,
+            typeName: null,
+            severity: "skipped",
+            $"Pattern directory skipped: {reason}.",
             countsAsSkippedFile: false);
     }
 

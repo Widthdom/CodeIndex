@@ -81,8 +81,9 @@ Custom language loops can stay out of tree: put extension aliases in
 and run `cdidx test-extractor --language <lang> --file <path> --json` to test
 an extractor fixture without building a full index. `test-extractor` source and
 `--expect-symbols` files are capped at 4 MiB each. Pattern sidecars are
-limited to regular files under non-symlink pattern directories, size/count
-bounded per file and per process, and regex matches are time-limited. See
+limited to regular files under non-symlink pattern directories, discovery is
+capped per directory, size/count is bounded per file and per process, and regex
+matches are time-limited. See
 [Custom Language Extraction](DEVELOPER_GUIDE.md#custom-language-extraction).
 
 After the first command, use these cues and follow-up commands:
@@ -218,7 +219,7 @@ The documented `status --json` trust contract covers these fields:
 
 When any readiness field is degraded, `degraded_root_cause` identifies the primary stable code and `readiness_degradations[]` lists every degraded field with `root_cause`, human `degraded_reason`, `recommended_action`, and `alternative_action`. `issues_table_available` reports physical table presence; use `file_issues_data_current` to decide whether `file_issues` rows are current for the index generation.
 
-After a current full-repository scan, `unknown_extension_file_count` reports how many skipped files had unmapped non-empty extensions, while `unknown_extension_files` lists up to `unknown_extension_file_path_limit` paths and `unknown_extension_files_truncated` marks when more paths exist.
+After a current full-repository scan, `unknown_extension_file_count` reports how many skipped files had unmapped non-empty extensions, while `unknown_extension_files` lists a path sample capped by `unknown_extension_file_path_limit` items and the decoded-character budget. `unknown_extension_files_truncated` marks when more paths existed than were emitted for either cap; `unknown_extension_file_path_limit` is the item cap, not a guarantee that the sample always reaches that count.
 
 `extractors` reports runtime extractor plugin and pattern-config diagnostics, including loaded counts, skipped file counts, and a bounded diagnostics list for load failures. Diagnostic paths and messages are sanitized before they are surfaced.
 
@@ -388,7 +389,7 @@ list metadata ごとに grouped されるため usage error で拒否します�
 `cdidx test-extractor --language <lang> --file <path> --json` で full index を作らずに
 extractor fixture を確認できます。`test-extractor` の source と `--expect-symbols`
 ファイルはそれぞれ 4 MiB に制限されます。pattern sidecar は symlink ではない pattern directory
-配下の通常ファイルだけが対象で、size / count は file 単位と process 単位で制限され、
+配下の通常ファイルだけが対象で、探索候補数は directory 単位、size / count は file 単位と process 単位で制限され、
 regex match には timeout が付きます。詳細は
 [Custom Language Extraction](DEVELOPER_GUIDE.md#custom-language-extraction) を参照してください。
 

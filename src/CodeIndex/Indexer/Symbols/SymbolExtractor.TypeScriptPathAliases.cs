@@ -9,6 +9,13 @@ public static partial class SymbolExtractor
     private const int MaxTypeScriptPathAliasTotalConfigBytes = 512 * 1024;
     private const int MaxTypeScriptPathAliasExtendsDepth = 8;
     private const int MaxTypeScriptPathAliasConfigJsonDepth = 32;
+    private const int MaxTypeScriptPathAliasRules = 1024;
+    private const int MaxTypeScriptPathAliasTargetsPerRule = 32;
+    private const int MaxTypeScriptPathAliasTotalTargets = 2048;
+    private const int MaxTypeScriptPathAliasPatternLength = 512;
+    private const int MaxTypeScriptPathAliasTargetLength = 1024;
+    private const int MaxTypeScriptPathAliasModuleSpecifierLength = 4096;
+    private const int MaxTypeScriptPathAliasSubstitutedTargetLength = 4096;
     private static readonly object TypeScriptPathAliasWarningLock = new();
     private static readonly HashSet<string> TypeScriptPathAliasReportedWarnings = new(StringComparer.Ordinal);
     private static readonly JsonDocumentOptions TypeScriptPathAliasConfigJsonOptions = new()
@@ -18,7 +25,7 @@ public static partial class SymbolExtractor
         MaxDepth = MaxTypeScriptPathAliasConfigJsonDepth,
     };
 
-    private sealed record TypeScriptPathAliasConfig(string ProjectDirectory, string BaseDirectory, bool HasBaseUrl, IReadOnlyList<TypeScriptPathAliasRule> Rules);
+    private sealed record TypeScriptPathAliasConfig(string ConfigPath, string ProjectDirectory, string BaseDirectory, bool HasBaseUrl, IReadOnlyList<TypeScriptPathAliasRule> Rules);
 
     private sealed record TypeScriptPathAliasRule(string Pattern, string BaseDirectory, IReadOnlyList<string> Targets);
 
@@ -40,6 +47,13 @@ public static partial class SymbolExtractor
         if (config == null)
             return moduleName;
 
+        if (moduleName.Length > MaxTypeScriptPathAliasModuleSpecifierLength)
+        {
+            ReportTypeScriptPathAliasWarningOnce(
+                $"Skipped TypeScript path alias resolution in config {config.ConfigPath} for module specifiers longer than {MaxTypeScriptPathAliasModuleSpecifierLength} characters.");
+            return moduleName;
+        }
+
         foreach (var rule in config.Rules)
         {
             if (!TryMatchTypeScriptPathAliasPattern(rule.Pattern, moduleName, out var wildcard))
@@ -47,9 +61,13 @@ public static partial class SymbolExtractor
 
             foreach (var target in rule.Targets)
             {
-                var substituted = target.Contains('*', StringComparison.Ordinal)
-                    ? target.Replace("*", wildcard, StringComparison.Ordinal)
-                    : target;
+                if (!TrySubstituteTypeScriptPathAliasTarget(target, wildcard, out var substituted))
+                {
+                    ReportTypeScriptPathAliasWarningOnce(
+                        $"Skipped TypeScript path alias target substitution in config {config.ConfigPath} longer than {MaxTypeScriptPathAliasSubstitutedTargetLength} characters.");
+                    continue;
+                }
+
                 var candidate = Path.IsPathRooted(substituted)
                     ? substituted
                     : Path.Combine(rule.BaseDirectory, substituted);
@@ -173,30 +191,92 @@ public static partial class SymbolExtractor
                     && pathsElement.ValueKind == JsonValueKind.Object)
                 {
                     rules.Clear();
+                    var totalTargets = 0;
+                    var rulesTruncated = false;
+                    var targetsTruncated = false;
+                    var ignoredLongPattern = false;
+                    var ignoredLongTarget = false;
                     foreach (var property in pathsElement.EnumerateObject())
                     {
+                        if (rules.Count >= MaxTypeScriptPathAliasRules)
+                        {
+                            rulesTruncated = true;
+                            break;
+                        }
+
+                        if (totalTargets >= MaxTypeScriptPathAliasTotalTargets)
+                        {
+                            targetsTruncated = true;
+                            break;
+                        }
+
                         if (property.Value.ValueKind != JsonValueKind.Array)
                             continue;
+
+                        if (property.Name.Length > MaxTypeScriptPathAliasPatternLength)
+                        {
+                            ignoredLongPattern = true;
+                            continue;
+                        }
 
                         var targets = new List<string>();
                         foreach (var item in property.Value.EnumerateArray())
                         {
+                            if (targets.Count >= MaxTypeScriptPathAliasTargetsPerRule
+                                || totalTargets >= MaxTypeScriptPathAliasTotalTargets)
+                            {
+                                targetsTruncated = true;
+                                break;
+                            }
+
                             if (item.ValueKind == JsonValueKind.String
                                 && !string.IsNullOrWhiteSpace(item.GetString()))
                             {
-                                targets.Add(item.GetString()!);
+                                var target = item.GetString()!;
+                                if (target.Length > MaxTypeScriptPathAliasTargetLength)
+                                {
+                                    ignoredLongTarget = true;
+                                    continue;
+                                }
+
+                                targets.Add(target);
+                                totalTargets++;
                             }
                         }
 
                         if (targets.Count > 0)
                             rules.Add(new TypeScriptPathAliasRule(property.Name, baseDirectory, targets));
                     }
+
+                    if (rulesTruncated)
+                    {
+                        ReportTypeScriptPathAliasWarningOnce(
+                            $"Truncated TypeScript path alias rules in config {configPath} to {MaxTypeScriptPathAliasRules} entries.");
+                    }
+
+                    if (targetsTruncated)
+                    {
+                        ReportTypeScriptPathAliasWarningOnce(
+                            $"Truncated TypeScript path alias targets in config {configPath} to {MaxTypeScriptPathAliasTotalTargets} total entries and {MaxTypeScriptPathAliasTargetsPerRule} entries per rule.");
+                    }
+
+                    if (ignoredLongPattern)
+                    {
+                        ReportTypeScriptPathAliasWarningOnce(
+                            $"Ignored TypeScript path alias rules in config {configPath} with patterns longer than {MaxTypeScriptPathAliasPatternLength} characters.");
+                    }
+
+                    if (ignoredLongTarget)
+                    {
+                        ReportTypeScriptPathAliasWarningOnce(
+                            $"Ignored TypeScript path alias targets in config {configPath} longer than {MaxTypeScriptPathAliasTargetLength} characters.");
+                    }
                 }
             }
 
             return rules.Count == 0 && !hasBaseUrl
                 ? null
-                : new TypeScriptPathAliasConfig(configDirectory, baseDirectory, hasBaseUrl, SortTypeScriptPathAliasRules(rules));
+                : new TypeScriptPathAliasConfig(configPath, configDirectory, baseDirectory, hasBaseUrl, SortTypeScriptPathAliasRules(rules));
         }
     }
 
@@ -333,6 +413,24 @@ public static partial class SymbolExtractor
         }
 
         wildcard = moduleName.Substring(prefix.Length, moduleName.Length - prefix.Length - suffix.Length);
+        return true;
+    }
+
+    private static bool TrySubstituteTypeScriptPathAliasTarget(string target, string wildcard, out string substituted)
+    {
+        substituted = string.Empty;
+        var starCount = target.Count(static ch => ch == '*');
+        if (starCount == 0)
+        {
+            substituted = target;
+            return true;
+        }
+
+        var substitutedLength = (long)target.Length - starCount + (long)wildcard.Length * starCount;
+        if (substitutedLength > MaxTypeScriptPathAliasSubstitutedTargetLength)
+            return false;
+
+        substituted = target.Replace("*", wildcard, StringComparison.Ordinal);
         return true;
     }
 

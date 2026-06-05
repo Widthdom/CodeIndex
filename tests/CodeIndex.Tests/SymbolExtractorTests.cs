@@ -18194,6 +18194,187 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScript_ExcessiveTsconfigPathAliasRulesTruncatesWithWarning()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("tsconfig_alias_many_rules_symbols");
+        try
+        {
+            var maxRules = GetSymbolExtractorIntConstant("MaxTypeScriptPathAliasRules");
+            var paths = new StringBuilder();
+            for (var i = 0; i < maxRules; i++)
+            {
+                if (i > 0)
+                    paths.Append(',');
+                paths.Append('"').Append("@skip").Append(i).Append("/*").Append("\":[\"missing").Append(i).Append("/*\"]");
+            }
+
+            paths.Append(",\"@hit/*\":[\"src/*\"]");
+
+            WriteFile(
+                projectRoot,
+                "tsconfig.json",
+                "{\"compilerOptions\":{\"baseUrl\":\".\",\"paths\":{" + paths + "}}}");
+            WriteFile(projectRoot, "src/Button.ts", "export const Button = 1;\n");
+            var sourcePath = WriteFile(projectRoot, "src/main.ts", "import { Button } from \"@hit/Button\";\n");
+
+            List<SymbolRecord> symbols = [];
+            var stderr = ConsoleCapture.CaptureError(() =>
+                symbols = SymbolExtractor.Extract(1, "typescript", File.ReadAllText(sourcePath), sourcePath));
+
+            Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "@hit/Button");
+            Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "src/Button.ts");
+            Assert.Contains("Truncated TypeScript path alias rules", stderr, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Extract_TypeScript_ExcessiveTsconfigPathAliasTargetsTruncatesWithWarning()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("tsconfig_alias_many_targets_symbols");
+        try
+        {
+            var maxTargets = GetSymbolExtractorIntConstant("MaxTypeScriptPathAliasTargetsPerRule");
+            var targets = new StringBuilder();
+            for (var i = 0; i < maxTargets; i++)
+            {
+                if (i > 0)
+                    targets.Append(',');
+                targets.Append('"').Append("missing").Append(i).Append("/*").Append('"');
+            }
+
+            targets.Append(",\"src/*\"");
+
+            WriteFile(
+                projectRoot,
+                "tsconfig.json",
+                "{\"compilerOptions\":{\"baseUrl\":\".\",\"paths\":{\"@hit/*\":[" + targets + "]}}}");
+            WriteFile(projectRoot, "src/Button.ts", "export const Button = 1;\n");
+            var sourcePath = WriteFile(projectRoot, "src/main.ts", "import { Button } from \"@hit/Button\";\n");
+
+            List<SymbolRecord> symbols = [];
+            var stderr = ConsoleCapture.CaptureError(() =>
+                symbols = SymbolExtractor.Extract(1, "typescript", File.ReadAllText(sourcePath), sourcePath));
+
+            Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "@hit/Button");
+            Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "src/Button.ts");
+            Assert.Contains("Truncated TypeScript path alias targets", stderr, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Extract_TypeScript_OverlongTsconfigPathAliasStringsAreIgnoredWithBoundedWarning()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("tsconfig_alias_long_strings_symbols");
+        try
+        {
+            var maxPatternLength = GetSymbolExtractorIntConstant("MaxTypeScriptPathAliasPatternLength");
+            var maxTargetLength = GetSymbolExtractorIntConstant("MaxTypeScriptPathAliasTargetLength");
+            var longPatternPrefix = "@" + new string('a', maxPatternLength);
+            var longPattern = longPatternPrefix + "/*";
+            var longTarget = "src/" + new string('b', maxTargetLength + 1) + "/*";
+            WriteFile(
+                projectRoot,
+                "tsconfig.json",
+                "{\"compilerOptions\":{\"baseUrl\":\".\",\"paths\":{\""
+                + longPattern
+                + "\":[\"src/*\"],\"@longtarget/*\":[\""
+                + longTarget
+                + "\"]}}}");
+            WriteFile(projectRoot, "src/Button.ts", "export const Button = 1;\n");
+            var sourcePath = WriteFile(projectRoot, "src/main.ts", """
+                import { Button } from "__LONG_PATTERN__/Button";
+                import { Other } from "@longtarget/Other";
+                """.Replace("__LONG_PATTERN__", longPatternPrefix, StringComparison.Ordinal));
+
+            List<SymbolRecord> symbols = [];
+            var stderr = ConsoleCapture.CaptureError(() =>
+                symbols = SymbolExtractor.Extract(1, "typescript", File.ReadAllText(sourcePath), sourcePath));
+
+            Assert.Contains(symbols, s => s.Kind == "import" && s.Name == longPatternPrefix + "/Button");
+            Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "src/Button.ts");
+            Assert.Contains("Ignored TypeScript path alias rules", stderr, StringComparison.Ordinal);
+            Assert.Contains("Ignored TypeScript path alias targets", stderr, StringComparison.Ordinal);
+            Assert.DoesNotContain(longPattern, stderr, StringComparison.Ordinal);
+            Assert.DoesNotContain(longTarget, stderr, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Extract_TypeScript_OverlongPathAliasModuleSpecifierSkipsResolutionWithBoundedWarning()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("tsconfig_alias_long_module_symbols");
+        try
+        {
+            var maxModuleSpecifierLength = GetSymbolExtractorIntConstant("MaxTypeScriptPathAliasModuleSpecifierLength");
+            var longModuleName = "@/" + new string('a', maxModuleSpecifierLength + 1);
+            WriteFile(
+                projectRoot,
+                "tsconfig.json",
+                "{\"compilerOptions\":{\"baseUrl\":\".\",\"paths\":{\"@/*\":[\"src/*\"]}}}");
+            var sourcePath = WriteFile(projectRoot, "src/main.ts", "import value from \"" + longModuleName + "\";\n");
+
+            List<SymbolRecord> symbols = [];
+            var stderr = ConsoleCapture.CaptureError(() =>
+                symbols = SymbolExtractor.Extract(1, "typescript", File.ReadAllText(sourcePath), sourcePath));
+
+            Assert.Contains(symbols, s => s.Kind == "import" && s.Name == longModuleName);
+            Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name.StartsWith("src/", StringComparison.Ordinal));
+            Assert.Contains("Skipped TypeScript path alias resolution", stderr, StringComparison.Ordinal);
+            Assert.DoesNotContain(longModuleName, stderr, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Extract_TypeScript_OverlongPathAliasSubstitutionSkipsCandidateWithBoundedWarning()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("tsconfig_alias_long_substitution_symbols");
+        try
+        {
+            var maxTargetLength = GetSymbolExtractorIntConstant("MaxTypeScriptPathAliasTargetLength");
+            var maxSubstitutedTargetLength = GetSymbolExtractorIntConstant("MaxTypeScriptPathAliasSubstitutedTargetLength");
+            var wildcard = new string('a', (maxSubstitutedTargetLength / maxTargetLength) + 2);
+            var longSubstitutingTarget = new string('*', maxTargetLength);
+            WriteFile(
+                projectRoot,
+                "tsconfig.json",
+                "{\"compilerOptions\":{\"baseUrl\":\".\",\"paths\":{\"@/*\":[\""
+                + longSubstitutingTarget
+                + "\",\"src/*\"]}}}");
+            WriteFile(projectRoot, "src/" + wildcard + ".ts", "export const value = 1;\n");
+            var sourcePath = WriteFile(projectRoot, "src/main.ts", "import { value } from \"@/" + wildcard + "\";\n");
+
+            List<SymbolRecord> symbols = [];
+            var stderr = ConsoleCapture.CaptureError(() =>
+                symbols = SymbolExtractor.Extract(1, "typescript", File.ReadAllText(sourcePath), sourcePath));
+
+            Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "src/" + wildcard + ".ts");
+            Assert.Contains("Skipped TypeScript path alias target substitution", stderr, StringComparison.Ordinal);
+            Assert.DoesNotContain(longSubstitutingTarget, stderr, StringComparison.Ordinal);
+            Assert.DoesNotContain(wildcard, stderr, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Extract_JavaScript_ResolvesJsconfigPathAliasImportsAndKeepsMissesLiteral()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("jsconfig_alias_symbols");
@@ -18224,6 +18405,13 @@ public partial class SymbolExtractorTests
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
+    }
+
+    private static int GetSymbolExtractorIntConstant(string name)
+    {
+        var field = typeof(SymbolExtractor).GetField(name, BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(field);
+        return Assert.IsType<int>(field.GetRawConstantValue());
     }
 
     private static bool IsSymbolRegexOwnerType(Type type) =>

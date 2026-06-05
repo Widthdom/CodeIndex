@@ -259,7 +259,7 @@ public class CliFlagSchemaTests
     // ConsoleUi 側の EnumeratedCompletionCommands に対応する一覧。
     private static readonly string[] EnumeratedBashBranches =
     [
-        "find", "excerpt", "references", "inspect", "hotspots", "status", "db", "report", "search",
+        "find", "excerpt", "references", "inspect", "hotspots", "status", "db", "report", "suggestions", "search",
     ];
 
     private static IReadOnlyList<string> GetConsoleUiCommands()

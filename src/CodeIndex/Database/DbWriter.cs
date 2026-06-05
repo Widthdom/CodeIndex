@@ -2135,9 +2135,9 @@ public class DbWriter
     {
         ArgumentNullException.ThrowIfNull(paths);
 
-        var sample = paths
-            .Take(DbContext.UnknownExtensionFilePathSampleLimit)
-            .ToArray();
+        var sample = JsonStringListCodec.TakeSerializableSample(
+            paths,
+            DbContext.UnknownExtensionFilePathSampleLimit);
         SetMeta(
             DbContext.UnknownExtensionFileCountMetaKey,
             paths.Count.ToString(System.Globalization.CultureInfo.InvariantCulture));
@@ -2146,7 +2146,7 @@ public class DbWriter
             JsonStringListCodec.Serialize(sample));
         SetMeta(
             DbContext.UnknownExtensionFilesTruncatedMetaKey,
-            (paths.Count > sample.Length).ToString(System.Globalization.CultureInfo.InvariantCulture));
+            (paths.Count > sample.Count).ToString(System.Globalization.CultureInfo.InvariantCulture));
         SetMeta(
             DbContext.UnknownExtensionFilePathLimitMetaKey,
             DbContext.UnknownExtensionFilePathSampleLimit.ToString(System.Globalization.CultureInfo.InvariantCulture));

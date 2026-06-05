@@ -703,7 +703,7 @@ public class ConsoleUiTests
     {
         var output = ConsoleUi.GetCompletionScript("bash");
 
-        Assert.Contains("--db|--path|--exclude-path|--output|-o|--metrics) COMPREPLY=($(compgen -f -- \"$cur\"))", output);
+        Assert.Contains("--db|--path|--exclude-path|--open-issues|--output|-o|--metrics) COMPREPLY=($(compgen -f -- \"$cur\"))", output);
         Assert.Contains("--lang) COMPREPLY=($(compgen -W \"", output);
         Assert.Contains("csharp", output);
         Assert.Contains("python", output);
@@ -900,8 +900,8 @@ public class ConsoleUiTests
         var bashScript = ConsoleUi.GetCompletionScript("bash");
         var zshScript = ConsoleUi.GetCompletionScript("zsh");
         var fishScript = ConsoleUi.GetCompletionScript("fish");
-        var bashReport = ExtractBashSubcommandFlags(bashScript, "report", "search");
-        var zshReport = ExtractZshSubcommandFlags(zshScript, "report", "search");
+        var bashReport = ExtractBashSubcommandFlags(bashScript, "report", "suggestions");
+        var zshReport = ExtractZshSubcommandFlags(zshScript, "report", "suggestions");
         var fishReport = ExtractFishSubcommandFlags(fishScript, "report");
 
         // --help is universal in bash but is not enumerated by the zsh/fish scripts.
@@ -915,8 +915,8 @@ public class ConsoleUiTests
         Assert.Equal(expected, zshReport);
         Assert.Equal(expected, fishReport);
 
-        Assert.Contains("-o", ExtractBetween(bashScript, "[ \"$cmd\" = \"report\" ]; then", "[ \"$cmd\" = \"search\" ]; then"));
-        Assert.Contains("'-o[Output bundle path]:file:_files'", ExtractBetween(zshScript, "[[ $subcmd == report ]]; then", "[[ $subcmd == search ]]; then"));
+        Assert.Contains("-o", ExtractBetween(bashScript, "[ \"$cmd\" = \"report\" ]; then", "[ \"$cmd\" = \"suggestions\" ]; then"));
+        Assert.Contains("'-o[Output bundle path]:file:_files'", ExtractBetween(zshScript, "[[ $subcmd == report ]]; then", "[[ $subcmd == suggestions ]]; then"));
         Assert.Contains("-l output -s o -r", fishScript);
     }
 

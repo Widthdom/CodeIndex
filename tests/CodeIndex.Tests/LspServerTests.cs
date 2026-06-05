@@ -106,6 +106,68 @@ public class LspServerTests
     }
 
     [Fact]
+    public void HandleMessage_UnknownMethod_TruncatesMethodName_Issue3127()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_unknown_method");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var method = new string('m', LspServer.MaxLspFrameBytes - 4096) + "UNBOUNDED_SENTINEL";
+            var request = JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0",
+                id = 1,
+                method,
+            });
+
+            var response = server.HandleMessage(request);
+
+            Assert.NotNull(response);
+            var error = response!["error"]!;
+            Assert.Equal(-32601, error["code"]!.GetValue<int>());
+            var message = error["message"]!.GetValue<string>();
+            Assert.StartsWith("Method not found: ", message, StringComparison.Ordinal);
+            Assert.EndsWith("...", message, StringComparison.Ordinal);
+            Assert.DoesNotContain("UNBOUNDED_SENTINEL", message, StringComparison.Ordinal);
+            Assert.True(message.Length <= "Method not found: ".Length + LspServer.MaxUnknownMethodDiagnosticChars + "...".Length);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void HandleMessage_UnknownMethod_PreservesSlashDelimitedMethodName_Issue3127()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_unknown_method_slash");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var request = JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0",
+                id = 1,
+                method = "textDocument/hover",
+            });
+
+            var response = server.HandleMessage(request);
+
+            Assert.NotNull(response);
+            Assert.Equal(-32601, response!["error"]!["code"]!.GetValue<int>());
+            Assert.Equal("Method not found: textDocument/hover", response["error"]!["message"]!.GetValue<string>());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void HandleMessage_InvalidParams_ReturnsStableErrorMessage_Issue3200()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_invalid_params");
