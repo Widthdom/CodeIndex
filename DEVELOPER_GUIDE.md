@@ -133,8 +133,8 @@ git status --short -- '**/packages.lock.json'
 Large command and extractor files have a tracked decomposition plan in
 [docs/large-file-decomposition-plan.md](docs/large-file-decomposition-plan.md).
 Use that plan when splitting `QueryCommandRunner`, `SymbolExtractor`,
-`McpToolHandlers`, or `FileIndexer` ownership boundaries so behavior changes
-remain reviewable and testable.
+`LanguageReferenceExtractionSupport`, `McpToolHandlers`, or `FileIndexer`
+ownership boundaries so behavior changes remain reviewable and testable.
 
 ### Workspaces
 
@@ -2210,8 +2210,9 @@ git status --short -- '**/packages.lock.json'
 大きな command / extractor file については
 [docs/large-file-decomposition-plan.md](docs/large-file-decomposition-plan.md)
 に追跡可能な分割計画があります。`QueryCommandRunner`、`SymbolExtractor`、
-`McpToolHandlers`、`FileIndexer` の ownership boundary を分けるときは、
-挙動変更を review しやすく test しやすい単位に保つため、この計画を使ってください。
+`LanguageReferenceExtractionSupport`、`McpToolHandlers`、`FileIndexer` の
+ownership boundary を分けるときは、挙動変更を review しやすく test しやすい単位に
+保つため、この計画を使ってください。
 
 ### ワークスペース
 
