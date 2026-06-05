@@ -1980,6 +1980,9 @@ IDs must be bounded JSON-RPC scalar values: strings are capped at 256
 characters, integer IDs must fit in `Int64`, and non-scalar IDs are rejected as
 invalid requests before response IDs are cloned. `workspace/symbol` query
 strings are capped at 1000 characters before symbol search runs.
+`textDocument/documentSymbol` returns at most 1000 indexed symbols, truncates
+each `detail` string to 512 characters with `...`, and stops adding symbols
+before the result array exceeds 524288 JSON bytes.
 
 Tool results include structured JSON in `structuredContent` plus a short text summary in `content`, so AI tools can parse typed data without scraping large text blocks.
 
@@ -4254,6 +4257,8 @@ request ID は bounded な JSON-RPC scalar value に限定され、string は 25
 integer ID は `Int64` に収まるものだけを受理し、non-scalar ID は response ID を複製する前に
 invalid request として拒否します。
 `workspace/symbol` の query string は symbol search を実行する前に 1000 文字で上限をかけます。
+`textDocument/documentSymbol` は最大 1000 件の indexed symbol を返し、各 `detail` string を
+`...` 付きの 512 文字に切り詰め、result array が 524288 JSON bytes を超える前に symbol 追加を止めます。
 
 ツール結果は `structuredContent` に構造化JSON、`content` に短い要約テキストを返すため、AIツールは巨大なテキストをパースせずに型付きデータを扱えます。
 

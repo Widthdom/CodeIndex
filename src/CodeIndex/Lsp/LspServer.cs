@@ -21,6 +21,9 @@ internal sealed class LspServer : IDisposable
     internal const int MaxTextDocumentUriChars = McpBoundedText.MaxResourceUriChars;
     internal const int MaxJsonDepth = 32;
     internal const int MaxRequestIdStringChars = 256;
+    internal const int MaxDocumentSymbols = 1000;
+    internal const int MaxDocumentSymbolDetailChars = 512;
+    internal const int MaxDocumentSymbolResponseBytes = 512 * 1024;
     internal const int MaxUnknownMethodDiagnosticChars = 240;
     private const int JsonRpcInvalidParamsCode = -32602;
     private const int JsonRpcInternalErrorCode = -32603;
@@ -213,10 +216,20 @@ internal sealed class LspServer : IDisposable
         if (indexedPath == null)
             return [];
 
-        var symbols = _reader.SearchSymbols((string?)null, 1000, pathPatterns: [indexedPath]);
+        var symbols = _reader.SearchSymbols((string?)null, MaxDocumentSymbols, pathPatterns: [indexedPath]);
         var array = new JsonArray();
+        var responseBytes = 2;
         foreach (var symbol in symbols.OrderBy(s => s.StartLine).ThenBy(s => s.Name, StringComparer.Ordinal))
-            array.Add(ToDocumentSymbol(symbol));
+        {
+            var item = ToDocumentSymbol(symbol);
+            var itemBytes = Encoding.UTF8.GetByteCount(item.ToJsonString(_jsonOptions));
+            var separatorBytes = array.Count == 0 ? 0 : 1;
+            if (responseBytes + separatorBytes + itemBytes > MaxDocumentSymbolResponseBytes)
+                break;
+
+            responseBytes += separatorBytes + itemBytes;
+            array.Add(item);
+        }
         return array;
     }
 
@@ -493,8 +506,15 @@ internal sealed class LspServer : IDisposable
         ["kind"] = SymbolKind(symbol.Kind),
         ["range"] = ToRange(symbol.StartLine, 1, symbol.EndLine, 1),
         ["selectionRange"] = ToRange(symbol.Line, 1, symbol.Line, 1),
-        ["detail"] = symbol.Signature,
+        ["detail"] = TruncateDocumentSymbolDetail(symbol.Signature),
     };
+
+    private static string? TruncateDocumentSymbolDetail(string? detail)
+    {
+        if (detail == null || detail.Length <= MaxDocumentSymbolDetailChars)
+            return detail;
+        return detail[..(MaxDocumentSymbolDetailChars - "...".Length)] + "...";
+    }
 
     private JsonObject ToLocation(string path, int startLine, int startColumn, int endLine, int endColumn) => new()
     {

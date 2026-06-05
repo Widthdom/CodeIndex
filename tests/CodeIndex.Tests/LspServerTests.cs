@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using CodeIndex.Cli;
@@ -560,6 +561,61 @@ public class LspServerTests
             Assert.Equal("Invalid params", message);
             Assert.True(message.Length < 120);
             Assert.DoesNotContain(oversizedUri, message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void HandleMessage_DocumentSymbol_TruncatesDetailsAndCapsResponse_Issue3130()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_document_symbol_budget");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var sourcePath = Path.Combine(projectRoot, "large.cs");
+            var parameters = string.Join(", ", Enumerable.Range(0, 90).Select(i => $"int argument{i:D2}"));
+            var source = new StringBuilder("class LargeSymbols\n{\n");
+            for (var i = 0; i < LspServer.MaxDocumentSymbols; i++)
+                source.Append("    void Method").Append(i.ToString("D4", CultureInfo.InvariantCulture)).Append('(').Append(parameters).Append(") { }\n");
+            source.Append("}\n");
+
+            File.WriteAllText(sourcePath, source.ToString());
+            TestProjectHelper.InsertIndexedFile(dbPath, "large.cs", "csharp", source.ToString());
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var request = JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0",
+                id = 3130,
+                method = "textDocument/documentSymbol",
+                @params = new
+                {
+                    textDocument = new { uri = new Uri(sourcePath).AbsoluteUri },
+                },
+            });
+
+            var response = server.HandleMessage(request);
+
+            Assert.NotNull(response);
+            var symbols = response!["result"]!.AsArray();
+            Assert.NotEmpty(symbols);
+            Assert.True(symbols.Count < LspServer.MaxDocumentSymbols);
+            Assert.True(Encoding.UTF8.GetByteCount(symbols.ToJsonString()) <= LspServer.MaxDocumentSymbolResponseBytes);
+            Assert.Contains(symbols, symbol =>
+            {
+                var detail = symbol?["detail"]?.GetValue<string>();
+                return detail is { Length: <= LspServer.MaxDocumentSymbolDetailChars }
+                    && detail.EndsWith("...", StringComparison.Ordinal);
+            });
+            Assert.All(symbols, symbol =>
+            {
+                var detail = symbol?["detail"]?.GetValue<string>();
+                if (detail != null)
+                    Assert.True(detail.Length <= LspServer.MaxDocumentSymbolDetailChars);
+            });
         }
         finally
         {
