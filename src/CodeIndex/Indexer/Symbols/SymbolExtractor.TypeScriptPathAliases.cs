@@ -8,8 +8,15 @@ public static partial class SymbolExtractor
     private const int MaxTypeScriptPathAliasConfigBytes = 256 * 1024;
     private const int MaxTypeScriptPathAliasTotalConfigBytes = 512 * 1024;
     private const int MaxTypeScriptPathAliasExtendsDepth = 8;
+    private const int MaxTypeScriptPathAliasConfigJsonDepth = 32;
     private static readonly object TypeScriptPathAliasWarningLock = new();
     private static readonly HashSet<string> TypeScriptPathAliasReportedWarnings = new(StringComparer.Ordinal);
+    private static readonly JsonDocumentOptions TypeScriptPathAliasConfigJsonOptions = new()
+    {
+        AllowTrailingCommas = true,
+        CommentHandling = JsonCommentHandling.Skip,
+        MaxDepth = MaxTypeScriptPathAliasConfigJsonDepth,
+    };
 
     private sealed record TypeScriptPathAliasConfig(string ProjectDirectory, string BaseDirectory, bool HasBaseUrl, IReadOnlyList<TypeScriptPathAliasRule> Rules);
 
@@ -125,7 +132,13 @@ public static partial class SymbolExtractor
 
             document = JsonDocument.Parse(
                 configText,
-                new JsonDocumentOptions { AllowTrailingCommas = true, CommentHandling = JsonCommentHandling.Skip });
+                TypeScriptPathAliasConfigJsonOptions);
+        }
+        catch (JsonException)
+        {
+            ReportTypeScriptPathAliasWarningOnce(
+                $"Skipped TypeScript path alias config {configPath} because it could not be parsed as JSON within the {MaxTypeScriptPathAliasConfigJsonDepth}-level depth limit.");
+            return null;
         }
         catch
         {

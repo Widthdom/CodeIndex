@@ -2616,10 +2616,71 @@ public partial class McpServer : IDisposable
         DeferFrameLog(() => WriteMcpLogLine(evt.ToJsonString(_jsonOptions)));
     }
 
-    private static JsonNode? TryReadProgressToken(JsonNode? callParams)
+    private JsonNode? TryReadProgressToken(JsonNode? callParams)
     {
         var token = callParams?["_meta"]?["progressToken"];
-        return token is null ? null : JsonNode.Parse(token.ToJsonString());
+        if (token is null)
+            return null;
+
+        if (!IsSupportedProgressToken(token))
+            return null;
+
+        return TryMeasureJsonUtf8BytesWithinLimit(token, _jsonOptions, McpBoundedText.MaxProgressTokenJsonBytes, out _)
+            ? token.DeepClone()
+            : null;
+    }
+
+    private static bool IsSupportedProgressToken(JsonNode token)
+    {
+        var nodeCount = 0;
+        return IsSupportedProgressToken(token, depth: 0, ref nodeCount);
+    }
+
+    private static bool IsSupportedProgressToken(JsonNode token, int depth, ref int nodeCount)
+    {
+        if (depth > McpBoundedText.MaxProgressTokenDepth)
+            return false;
+
+        nodeCount++;
+        if (nodeCount > McpBoundedText.MaxProgressTokenNodeCount)
+            return false;
+
+        return token switch
+        {
+            JsonValue value => IsSupportedProgressTokenScalar(value),
+            JsonObject obj => IsSupportedProgressTokenObject(obj, depth, ref nodeCount),
+            _ => false,
+        };
+    }
+
+    private static bool IsSupportedProgressTokenScalar(JsonValue value)
+        => value.GetValueKind() switch
+        {
+            JsonValueKind.String => value.TryGetValue<string>(out var text)
+                && text.Length <= McpBoundedText.MaxProgressTokenStringChars,
+            JsonValueKind.Number or JsonValueKind.True or JsonValueKind.False => true,
+            _ => false,
+        };
+
+    private static bool IsSupportedProgressTokenObject(JsonObject obj, int depth, ref int nodeCount)
+    {
+        foreach (var pair in obj)
+        {
+            if (pair.Key.Length > McpBoundedText.MaxProgressTokenPropertyNameChars)
+                return false;
+            if (pair.Value is null)
+            {
+                nodeCount++;
+                if (nodeCount > McpBoundedText.MaxProgressTokenNodeCount)
+                    return false;
+                continue;
+            }
+
+            if (!IsSupportedProgressToken(pair.Value, depth + 1, ref nodeCount))
+                return false;
+        }
+
+        return true;
     }
 
     private void EmitProgressNotification(JsonNode? progressToken, long progress, long? total, string? message = null)
@@ -2629,7 +2690,7 @@ public partial class McpServer : IDisposable
 
         var parameters = new JsonObject
         {
-            ["progressToken"] = JsonNode.Parse(progressToken.ToJsonString()),
+            ["progressToken"] = progressToken.DeepClone(),
             ["progress"] = progress,
         };
         if (total.HasValue)

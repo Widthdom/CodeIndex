@@ -47,10 +47,10 @@ public class CliFlagSchemaTests
     }
 
     [Fact]
-    public void EveryFlag_AppliesToAtLeastOneCommand()
+    public void EveryFlag_HasCommandOrTopLevelScope()
     {
         foreach (var flag in CliFlagSchema.All)
-            Assert.NotEmpty(flag.Commands);
+            Assert.True(flag.Commands.Count > 0 || flag.TopLevel, $"{flag.Name} must apply to a command or top-level scope.");
     }
 
     [Fact]
@@ -111,6 +111,30 @@ public class CliFlagSchemaTests
         // `--exact-substring` は search で primary、他の name コマンドではパーサ受理のみ。
         Assert.Contains("--exact-substring", CliFlagSchema.GetAcceptedFlagNamesForCommand("definition"));
         Assert.DoesNotContain(CliFlagSchema.GetCompletionFlagsForCommand("definition"), f => f.Name == "--exact-substring");
+    }
+
+    [Fact]
+    public void TopLevelGlobalSchema_IncludesLogFlagsAndMatchesProgramRunnerParserSets()
+    {
+        var topLevel = CliFlagSchema.GetTopLevelGlobalOptionNames(includeLogOptions: true);
+        Assert.Contains("--log-format", topLevel);
+        Assert.Contains("--log-retain-count", topLevel);
+        Assert.Contains("--log-max-size-mb", topLevel);
+        Assert.Contains("--quiet", topLevel);
+        Assert.Contains("-q", topLevel);
+
+        var valueNames = CliFlagSchema.GetTopLevelValueOptionNames();
+        Assert.Contains("--log-format", valueNames);
+        Assert.Contains("--log-retain-count", valueNames);
+        Assert.Contains("--log-max-size-mb", valueNames);
+
+        var nonLog = CliFlagSchema.GetTopLevelGlobalOptionNames(includeLogOptions: false);
+        Assert.DoesNotContain("--log-format", nonLog);
+        Assert.DoesNotContain("--log-retain-count", nonLog);
+        Assert.DoesNotContain("--log-max-size-mb", nonLog);
+
+        Assert.Equal(valueNames, GetProgramRunnerStringSet("TopLevelValueOptionNames"));
+        Assert.Equal(nonLog, GetProgramRunnerStringSet("NonLogGlobalOptionNames"));
     }
 
     [Fact]
@@ -243,6 +267,15 @@ public class CliFlagSchemaTests
         var field = typeof(ConsoleUi).GetField("Commands", BindingFlags.NonPublic | BindingFlags.Static);
         Assert.NotNull(field);
         var value = (string[]?)field!.GetValue(null);
+        Assert.NotNull(value);
+        return value!;
+    }
+
+    private static HashSet<string> GetProgramRunnerStringSet(string fieldName)
+    {
+        var field = typeof(ProgramRunner).GetField(fieldName, BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(field);
+        var value = (HashSet<string>?)field!.GetValue(null);
         Assert.NotNull(value);
         return value!;
     }
