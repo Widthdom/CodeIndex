@@ -51,6 +51,30 @@ public class LspServerTests
     }
 
     [Fact]
+    public void TryReadMessage_RejectsHeaderCountOverMax_Issue3230()
+    {
+        var headers = Enumerable.Range(0, LspServer.MaxLspHeaderCount)
+            .Select(i => $"X-{i}: value");
+        var bytes = Encoding.UTF8.GetBytes(string.Join("\r\n", headers) + "\r\nContent-Length: 2\r\n\r\n{}");
+        using var stream = new MemoryStream(bytes);
+
+        Assert.False(LspServer.TryReadMessage(stream, out var actual));
+        Assert.Equal(string.Empty, actual);
+    }
+
+    [Fact]
+    public void TryReadMessage_RejectsAggregateHeaderBytesOverMax_Issue3230()
+    {
+        var maxLineHeader = "X-" + new string('A', LspServer.MaxLspHeaderLineBytes - 2);
+        var headers = Enumerable.Repeat(maxLineHeader, (LspServer.MaxLspHeaderBytes / LspServer.MaxLspHeaderLineBytes) + 1);
+        var bytes = Encoding.UTF8.GetBytes(string.Join("\r\n", headers) + "\r\nContent-Length: 2\r\n\r\n{}");
+        using var stream = new MemoryStream(bytes);
+
+        Assert.False(LspServer.TryReadMessage(stream, out var actual));
+        Assert.Equal(string.Empty, actual);
+    }
+
+    [Fact]
     public void TryReadMessage_RejectsFrameOverMaxLength()
     {
         var bytes = Encoding.UTF8.GetBytes($"Content-Length: {LspServer.MaxLspFrameBytes + 1}\r\n\r\n");

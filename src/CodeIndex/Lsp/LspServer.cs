@@ -15,6 +15,8 @@ internal sealed class LspServer : IDisposable
     private const int DefaultLimit = 50;
     internal const int MaxLspFrameBytes = 8 * 1024 * 1024;
     internal const int MaxLspHeaderLineBytes = 8 * 1024;
+    internal const int MaxLspHeaderCount = 64;
+    internal const int MaxLspHeaderBytes = 64 * 1024;
     internal const int MaxPositionDocumentBytes = 4 * 1024 * 1024;
     internal const int MaxTextDocumentUriChars = McpBoundedText.MaxResourceUriChars;
     internal const int MaxJsonDepth = 32;
@@ -568,6 +570,8 @@ internal sealed class LspServer : IDisposable
     {
         payload = string.Empty;
         var contentLength = -1;
+        var headerCount = 0;
+        var headerBytes = 0;
         while (true)
         {
             var line = ReadAsciiLine(input);
@@ -575,6 +579,10 @@ internal sealed class LspServer : IDisposable
                 return false;
             if (line.Length == 0)
                 break;
+            headerCount++;
+            headerBytes += line.Length;
+            if (headerCount > MaxLspHeaderCount || headerBytes > MaxLspHeaderBytes)
+                return false;
             var colon = line.IndexOf(':');
             if (colon <= 0)
                 continue;

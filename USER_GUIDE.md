@@ -1972,7 +1972,9 @@ server over stdio. It reuses the existing CodeIndex database and exposes
 launch an arbitrary LSP command but do not speak MCP.
 Incoming `textDocument.uri` values are rejected before URI parsing when they
 exceed 4096 characters, matching the MCP resource URI limit and keeping error
-responses bounded.
+responses bounded. LSP frame parsing also rejects more than 64 header lines,
+more than 65536 aggregate header bytes, any one header line above 8192 bytes,
+or a body above 8388608 bytes before reading the message body.
 
 Tool results include structured JSON in `structuredContent` plus a short text summary in `content`, so AI tools can parse typed data without scraping large text blocks.
 
@@ -4239,6 +4241,8 @@ cdidxには**MCP（Model Context Protocol）サーバー**が組み込まれて�
 `textDocument/definition`、`textDocument/references` を公開します。
 受信した `textDocument.uri` は 4096 文字を超える場合、URI parse の前に拒否されます。
 これは MCP resource URI の上限と揃えており、エラー応答が過大にならないようにします。
+LSP frame parsing は、message body を読む前に 64 行を超える header、合計 65536 bytes を
+超える header、8192 bytes を超える単一 header 行、8388608 bytes を超える body を拒否します。
 
 ツール結果は `structuredContent` に構造化JSON、`content` に短い要約テキストを返すため、AIツールは巨大なテキストをパースせずに型付きデータを扱えます。
 
