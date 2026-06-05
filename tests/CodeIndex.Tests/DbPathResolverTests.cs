@@ -37,6 +37,19 @@ public class DbPathResolverTests
     }
 
     [Fact]
+    public void BuildSqliteConnectionString_FileUriKeepsSemicolonPayloadInDataSource_Issue3220()
+    {
+        const string uri = "file:///tmp/codeindex.db?immutable=1;Mode=ReadWriteCreate;Cache=Shared";
+
+        var connectionString = DbPathResolver.BuildSqliteConnectionString(uri, SqliteOpenMode.ReadOnly);
+        var parsed = new SqliteConnectionStringBuilder(connectionString);
+
+        Assert.Equal(uri, parsed.DataSource);
+        Assert.Equal(SqliteOpenMode.ReadOnly, parsed.Mode);
+        Assert.NotEqual(SqliteOpenMode.ReadWriteCreate, parsed.Mode);
+    }
+
+    [Fact]
     public void ResolveForIndex_PrefersExplicitDataDirWhenDbPathMissing()
     {
         var projectPath = Path.Combine(Path.DirectorySeparatorChar.ToString(), "tmp", "sample-project");

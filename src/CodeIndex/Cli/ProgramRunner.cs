@@ -39,6 +39,7 @@ internal static class ProgramRunner
         "--metrics",
         "--debug-unsafe",
         "--strict-version",
+        "--pretty",
     };
     private static readonly HashSet<string> TopLevelValueOptionNames = new(StringComparer.Ordinal)
     {
@@ -132,6 +133,8 @@ internal static class ProgramRunner
             CommandErrorWriter.Write(StripErrorPrefix(strictVersionError), "use `--strict-version` without a value.");
             return CommandExitCodes.InvalidArgument;
         }
+        if (TryConsumePrettyJsonFlag(ref args))
+            jsonOptions = new JsonSerializerOptions(jsonOptions) { WriteIndented = true };
         using var jsonAnsiScope = ConsoleUi.SuppressAnsiForJsonOutput(ContainsJsonOutputFlag(args));
 
         var commandStopwatch = Stopwatch.StartNew();
@@ -930,6 +933,46 @@ internal static class ProgramRunner
         return quiet;
     }
 
+    internal static bool TryConsumePrettyJsonFlag(ref string[] args)
+    {
+        if (args.Length == 0)
+            return false;
+
+        var kept = new List<string>(args.Length);
+        var pretty = false;
+        var passthrough = false;
+        for (var i = 0; i < args.Length; i++)
+        {
+            var arg = args[i];
+            if (passthrough)
+            {
+                kept.Add(arg);
+                continue;
+            }
+            if (arg == "--")
+            {
+                passthrough = true;
+                kept.Add(arg);
+                continue;
+            }
+            if (ShouldPreserveQueryCommandToken(args, i))
+            {
+                kept.Add(arg);
+                continue;
+            }
+            if (arg == "--pretty")
+            {
+                pretty = true;
+                continue;
+            }
+
+            kept.Add(arg);
+        }
+
+        args = kept.ToArray();
+        return pretty;
+    }
+
     internal static bool TryConsumeGlobalLogFlags(ref string[] args, out string error)
     {
         error = string.Empty;
@@ -1596,8 +1639,7 @@ internal static class ProgramRunner
         if (pinPath == null)
             return CommandExitCodes.Success;
 
-        string required;
-        if (!TryReadWorkspaceVersionPin(pinPath, out required, out var warning))
+        if (!TryReadWorkspaceVersionPin(pinPath, out var required, out var warning))
         {
             Console.Error.WriteLine(warning);
             return CommandExitCodes.Success;
@@ -2572,10 +2614,11 @@ internal static class ProgramRunner
 
     private static string FormatLogValue(string? value)
     {
-        if (string.IsNullOrEmpty(value))
+        var limited = HttpMcpTransport.LimitRequestLogField(value);
+        if (string.IsNullOrEmpty(limited))
             return "-";
 
-        return value
+        return limited
             .Replace('\\', '/')
             .Replace('\r', '_')
             .Replace('\n', '_')
@@ -2587,7 +2630,7 @@ internal static class ProgramRunner
     {
         Console.Error.WriteLine("Usage: cdidx mcp [--db <path>] [--transport stdio|http] [--http-listen <host:port>] [--audit-log <path>] [--audit-log-include-values] [--audit-log-max-bytes <n>] [--suggestion-dedup-threshold <0..1>]");
         Console.Error.WriteLine("Note: --json is not supported; MCP requests and responses are JSON-RPC over the selected transport.");
-        Console.Error.WriteLine($"HTTP limits: {HttpMcpTransport.MaxRequestBodyBytesEnvVar}=<bytes> (1..{HttpMcpTransport.MaxConfiguredRequestBodyBytes.ToString(CultureInfo.InvariantCulture)}, default {HttpMcpTransport.DefaultMaxRequestBodyBytes.ToString(CultureInfo.InvariantCulture)}), {HttpMcpTransport.MaxQueueDepthEnvVar}=<n> (1..{HttpMcpTransport.MaxConfiguredQueuedRequests.ToString(CultureInfo.InvariantCulture)}, default {HttpMcpTransport.DefaultMaxQueuedRequests.ToString(CultureInfo.InvariantCulture)}).");
+        Console.Error.WriteLine($"HTTP limits: {HttpMcpTransport.MaxRequestBodyBytesEnvVar}=<bytes> (1..{HttpMcpTransport.MaxConfiguredRequestBodyBytes.ToString(CultureInfo.InvariantCulture)}, default {HttpMcpTransport.DefaultMaxRequestBodyBytes.ToString(CultureInfo.InvariantCulture)}), {HttpMcpTransport.MaxQueueDepthEnvVar}=<n> (1..{HttpMcpTransport.MaxConfiguredQueuedRequests.ToString(CultureInfo.InvariantCulture)}, default {HttpMcpTransport.DefaultMaxQueuedRequests.ToString(CultureInfo.InvariantCulture)}), {HttpMcpTransport.MaxConcurrentHandlersEnvVar}=<n> (1..{HttpMcpTransport.MaxConfiguredConcurrentHandlers.ToString(CultureInfo.InvariantCulture)}, default {HttpMcpTransport.DefaultMaxConcurrentHandlers.ToString(CultureInfo.InvariantCulture)}), {HttpMcpTransport.MaxEventStreamsEnvVar}=<n> (1..{HttpMcpTransport.MaxConfiguredEventStreams.ToString(CultureInfo.InvariantCulture)}, default {HttpMcpTransport.DefaultMaxEventStreams.ToString(CultureInfo.InvariantCulture)}).");
     }
 
     internal static bool TryConsumeSuggestionDedupThresholdFlag(ref string[] args, out string error)

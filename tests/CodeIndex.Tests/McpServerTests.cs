@@ -1715,6 +1715,14 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void TokenAuthenticator_OversizedTokenInCtor_RejectedBeforeHashing()
+    {
+        var oversized = new string('x', McpAuthenticationLimits.MaxTokenCharacters + 1);
+
+        Assert.Throws<ArgumentException>(() => new TokenMcpAuthenticator(oversized));
+    }
+
+    [Fact]
     public void McpAuthenticatorFactory_NoEnv_ReturnsLocalStdio()
     {
         // FromEnvironment() must default to permissive stdio when the env var is unset or
@@ -1852,6 +1860,24 @@ public class McpServerTests : IDisposable
         ((JsonObject)sameLenResp["error"]!["data"]!).Remove("request_id");
         Assert.Equal(shortResp.ToJsonString(), sameLenResp.ToJsonString());
         Assert.Equal(-32001, shortResp["error"]!["code"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void TokenAuthenticator_OversizedPresentedToken_ReturnsUnauthorized()
+    {
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion(), false,
+            new TokenMcpAuthenticator("s3cret"));
+        var oversized = new string('x', McpAuthenticationLimits.MaxTokenCharacters + 1);
+        var request = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"ping","params":{"auth":{"token":"""
+            + JsonSerializer.Serialize(oversized)
+            + "}}}")!;
+
+        var response = server.HandleMessage(request)!;
+
+        Assert.Null(response["result"]);
+        Assert.Equal(-32001, response["error"]!["code"]!.GetValue<int>());
+        Assert.Equal("Unauthorized", response["error"]!["message"]!.GetValue<string>());
     }
 
     [Fact]

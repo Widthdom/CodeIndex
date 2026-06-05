@@ -291,6 +291,17 @@ public static class DbPathResolver
         return true;
     }
 
+    internal static string BuildSqliteConnectionString(string dbPath, SqliteOpenMode? mode = null)
+    {
+        var builder = new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+        };
+        if (mode.HasValue)
+            builder.Mode = mode.Value;
+        return builder.ConnectionString;
+    }
+
     private static string? TryReadIndexedProjectRoot(string dbPath)
         => TryReadMetaString(dbPath, CodeIndex.Database.DbContext.IndexedProjectRootMetaKey);
 
@@ -412,15 +423,7 @@ public static class DbPathResolver
 
     private static SqliteConnection OpenMetadataConnection(string dbPath)
     {
-        if (dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase) && UriRequestsReadOnly(dbPath))
-            return new SqliteConnection($"Data Source={dbPath}");
-
-        var builder = new SqliteConnectionStringBuilder
-        {
-            DataSource = dbPath,
-            Mode = SqliteOpenMode.ReadOnly,
-        };
-        return new SqliteConnection(builder.ConnectionString);
+        return new SqliteConnection(BuildSqliteConnectionString(dbPath, SqliteOpenMode.ReadOnly));
     }
 
     public static bool UriRequestsReadOnly(string uriText)

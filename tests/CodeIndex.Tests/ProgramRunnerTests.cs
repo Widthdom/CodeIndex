@@ -89,6 +89,80 @@ public class ProgramRunnerTests
     }
 
     [Fact]
+    public void RunLanguages_PrettyJson_IndentsOutput_Issue2996()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["languages", "--json", "--pretty"],
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Empty(stderr);
+        Assert.Contains(Environment.NewLine + "  \"languages\": [", stdout);
+        using var document = JsonDocument.Parse(stdout);
+        Assert.True(document.RootElement.TryGetProperty("languages", out _));
+    }
+
+    [Fact]
+    public void RunSearch_FirstQueryLiteralMatchingPrettyFlag_IsNotConsumed_Issue2996()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_pretty_query_literal");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "README.md",
+                "markdown",
+                "--pretty appears here\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["search", "--pretty", "--db", dbPath, "--path", "README.md", "--count", "--exact-substring"],
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("1" + Environment.NewLine, stdout);
+            Assert.Empty(stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_NdjsonWithPretty_KeepsOneJsonValuePerLine_Issue2996()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_pretty_ndjson");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                "class App { void Needle() {} }\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["search", "Needle", "--db", dbPath, "--json", "--pretty"],
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Empty(stderr);
+            var lines = stdout.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+            Assert.Equal(2, lines.Length);
+            foreach (var line in lines)
+            {
+                Assert.False(line.StartsWith(" ", StringComparison.Ordinal));
+                using var _ = JsonDocument.Parse(line);
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_TestExtractor_PrintsIsolatedSymbols()
     {
         lock (TestConsoleLock.Gate)

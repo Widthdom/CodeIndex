@@ -252,7 +252,7 @@ public class DbContext : IDisposable
             {
                 try
                 {
-                    _connection = new SqliteConnection($"Data Source={dbPath}");
+                    _connection = new SqliteConnection(DbPathResolver.BuildSqliteConnectionString(dbPath, SqliteOpenMode.ReadOnly));
                     _connection.Open();
                     Execute("PRAGMA busy_timeout=5000");
                     ApplyConnectionPerformancePragmas();

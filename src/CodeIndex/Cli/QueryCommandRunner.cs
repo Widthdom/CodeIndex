@@ -21,6 +21,7 @@ public static class QueryCommandRunner
 {
     internal const int DefaultQueryLimit = 20;
     internal const int DefaultMapLimit = 10;
+    internal const int DefaultCompactSectionLimit = 5;
     internal const int DefaultImpactLimit = 50;
     internal const int BatchMaxLineChars = 1024 * 1024;
     internal const int BatchMaxArgumentCount = 256;
@@ -51,6 +52,8 @@ public static class QueryCommandRunner
     internal const int MaxSymbolQueryNames = 256;
     internal const int MaxMapSectionsCsvLength = 256;
     internal const int MaxMapSectionsCsvEntries = 16;
+    internal const int MaxInspectFieldsCsvLength = 256;
+    internal const int MaxInspectFieldsCsvEntries = 16;
     internal const int MaxStatusCheckScopesCsvLength = 256;
     internal const int MaxStatusCheckScopesCsvEntries = 16;
     internal const int MaxVisibilityFilterCsvLength = 256;
@@ -129,6 +132,7 @@ public static class QueryCommandRunner
         "--format",
         "--min-entrypoint-confidence",
         "--sections",
+        "--fields",
     ];
     private sealed record StatusReadinessField(
         string FieldName,
@@ -235,6 +239,9 @@ public static class QueryCommandRunner
         "--list-recipes",
         "--read-only",
         "--immutable",
+        "--pretty",
+        "--compact",
+        "--body-only",
     ];
     private const string OutputFormatText = "text";
     private const string OutputFormatJson = "json";
@@ -589,6 +596,7 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
 
         var exactSubstringHint = SearchQueryAdvisor.BuildExactSubstringHint(options.Query, options.RawFts, exact, options.Prefix);
+        var ndjsonOptions = options.JsonOutputFormat == JsonOutputFormatNdjson ? GetCompactJsonOptions(jsonOptions) : jsonOptions;
         int? jsonDoneCount = null;
         return WithDb(options, jsonOptions, reader =>
         {
@@ -640,7 +648,7 @@ public static class QueryCommandRunner
                     }
                     else
                     {
-                        Console.WriteLine(BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "results", query: options.Query, ftsQueryDiagnostics: ftsQueryDiagnostics, queryOptions: options, exactSubstringHint: exactSubstringHint).ToJsonString(jsonOptions));
+                        Console.WriteLine(BuildJsonZeroResultPayload(reader, ndjsonOptions, resultsKey: "results", query: options.Query, ftsQueryDiagnostics: ftsQueryDiagnostics, queryOptions: options, exactSubstringHint: exactSubstringHint).ToJsonString(ndjsonOptions));
                         jsonDoneCount = 0;
                     }
                 }
@@ -669,7 +677,7 @@ public static class QueryCommandRunner
                     }
                     else
                     {
-                        Console.WriteLine(BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "results", query: options.Query, ftsQueryDiagnostics: ftsQueryDiagnostics, queryOptions: options, exactSubstringHint: exactSubstringHint).ToJsonString(jsonOptions));
+                        Console.WriteLine(BuildJsonZeroResultPayload(reader, ndjsonOptions, resultsKey: "results", query: options.Query, ftsQueryDiagnostics: ftsQueryDiagnostics, queryOptions: options, exactSubstringHint: exactSubstringHint).ToJsonString(ndjsonOptions));
                         jsonDoneCount = 0;
                     }
                 }
@@ -722,7 +730,7 @@ public static class QueryCommandRunner
                     foreach (var result in compactResults)
                         Console.WriteLine(JsonSerializer.Serialize(
                             result,
-                            CliJsonSerializerContextFactory.Create(jsonOptions).CompactSearchResult));
+                            CliJsonSerializerContextFactory.Create(ndjsonOptions).CompactSearchResult));
                     jsonDoneCount = compactResults.Length;
                 }
             }
@@ -745,7 +753,7 @@ public static class QueryCommandRunner
         }, exitCode =>
         {
             if (options.Json && options.JsonOutputFormat == JsonOutputFormatNdjson && jsonDoneCount.HasValue)
-                WriteJsonStreamDone(jsonDoneCount.Value, jsonOptions);
+                WriteJsonStreamDone(jsonDoneCount.Value, ndjsonOptions);
         });
     }
 
@@ -1112,6 +1120,9 @@ public static class QueryCommandRunner
         => Console.WriteLine(JsonSerializer.Serialize(
             new JsonStreamDoneResult(Done: true, Count: count, Interrupted: false),
             CliJsonSerializerContextFactory.Create(jsonOptions).JsonStreamDoneResult));
+
+    private static JsonSerializerOptions GetCompactJsonOptions(JsonSerializerOptions jsonOptions)
+        => jsonOptions.WriteIndented ? new JsonSerializerOptions(jsonOptions) { WriteIndented = false } : jsonOptions;
 
     public static void AttachLspLocations(IEnumerable<DefinitionResult> results)
     {
@@ -2969,10 +2980,13 @@ public static class QueryCommandRunner
 
         return WithDb(options, jsonOptions, reader =>
         {
-            var map = reader.GetRepoMap(options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.MinEntrypointConfidence);
+            var compactLimit = GetCompactSectionLimit(options);
+            var mapLimit = options.Compact ? GetCompactSourceLimit(compactLimit) : options.Limit;
+            var map = reader.GetRepoMap(mapLimit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.MinEntrypointConfidence);
             WorkspaceMetadataEnricher.Enrich(map, options.DbPath, options.DbPathExplicit);
             if (options.ContextAfterExplicit)
                 ApplyRepoMapDepth(map, options.ContextAfter);
+            var compactTruncation = options.Compact ? ApplyRepoMapCompactCaps(map, compactLimit, options) : null;
 
             // Return not-found only when a narrowing filter is active and produces zero files.
             // Unfiltered empty indexes return success (valid state for health probes).
@@ -2983,7 +2997,8 @@ public static class QueryCommandRunner
             {
                 if (options.Json)
                 {
-                    Console.WriteLine(JsonSerializer.Serialize(map, CliJsonSerializerContextFactory.Create(jsonOptions).RepoMapResult));
+                    var payload = BuildRepoMapJsonPayload(map, options, jsonOptions, compactTruncation);
+                    Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
                 else
                 {
@@ -2994,7 +3009,7 @@ public static class QueryCommandRunner
 
             if (options.Json)
             {
-                var payload = BuildRepoMapJsonPayload(map, options, jsonOptions);
+                var payload = BuildRepoMapJsonPayload(map, options, jsonOptions, compactTruncation);
                 Console.WriteLine(payload.ToJsonString(jsonOptions));
             }
             else
@@ -3053,13 +3068,15 @@ public static class QueryCommandRunner
     private static int GetPathDepth(string path)
         => string.IsNullOrEmpty(path) ? 0 : path.Split('/', StringSplitOptions.RemoveEmptyEntries).Length;
 
-    private static JsonObject BuildRepoMapJsonPayload(RepoMapResult map, QueryCommandOptions options, JsonSerializerOptions jsonOptions)
+    private static JsonObject BuildRepoMapJsonPayload(RepoMapResult map, QueryCommandOptions options, JsonSerializerOptions jsonOptions, JsonObject? compactTruncation = null)
     {
         var payload = JsonSerializer.SerializeToNode(map, CliJsonSerializerContextFactory.Create(jsonOptions).RepoMapResult)!.AsObject();
         if (options.MapSections == null)
         {
             if (options.ContextAfterExplicit)
                 payload["depth"] = options.ContextAfter;
+            if (options.Compact && compactTruncation != null)
+                AddCompactJsonFields(payload, GetCompactSectionLimit(options), compactTruncation);
             return payload;
         }
 
@@ -3100,8 +3117,182 @@ public static class QueryCommandRunner
         payload["sections"] = new JsonArray(options.MapSections.Select(section => JsonValue.Create(section)).ToArray<JsonNode?>());
         if (options.ContextAfterExplicit)
             payload["depth"] = options.ContextAfter;
+        if (options.Compact && compactTruncation != null)
+            AddCompactJsonFields(payload, GetCompactSectionLimit(options), compactTruncation);
         return payload;
     }
+
+    private static int GetCompactSectionLimit(QueryCommandOptions options)
+        => options.LimitExplicit ? options.Limit : DefaultCompactSectionLimit;
+
+    private static int GetCompactSourceLimit(int compactLimit)
+    {
+        var sourceLimit = compactLimit + 1;
+        return NumericFlagUpperBounds.TryGetValue("--limit", out var maxLimit)
+            ? Math.Min(sourceLimit, maxLimit)
+            : sourceLimit;
+    }
+
+    private static JsonObject ApplyRepoMapCompactCaps(RepoMapResult map, int sectionLimit, QueryCommandOptions options)
+    {
+        var sections = new JsonObject();
+        if (MapSectionEnabled(options, "languages"))
+            TruncateCompactSection(map.Languages, sectionLimit, sections, "languages");
+        if (MapSectionEnabled(options, "tree"))
+            TruncateCompactSection(map.Modules, sectionLimit, sections, "modules");
+        if (MapSectionEnabled(options, "hotspots"))
+        {
+            TruncateCompactSection(map.TopFiles, sectionLimit, sections, "top_files");
+            TruncateCompactSection(map.SymbolRichFiles, sectionLimit, sections, "symbol_rich_files");
+            TruncateCompactSection(map.ReferenceRichFiles, sectionLimit, sections, "reference_rich_files");
+            TruncateCompactSection(map.Entrypoints, sectionLimit, sections, "entrypoints");
+        }
+        if (MapSectionEnabled(options, "metrics"))
+            TruncateCompactSection(map.LargestFiles, sectionLimit, sections, "largest_files");
+        return BuildCompactTruncationMetadata(sectionLimit, sections);
+    }
+
+    private static JsonObject ApplySymbolAnalysisCompactCaps(SymbolAnalysisResult analysis, int sectionLimit)
+    {
+        var sections = new JsonObject();
+        TruncateCompactSection(analysis.Definitions, sectionLimit, sections, "definitions");
+        TruncateCompactSection(analysis.NearbySymbols, sectionLimit, sections, "nearby_symbols");
+        TruncateCompactSection(analysis.References, sectionLimit, sections, "references");
+        TruncateCompactSection(analysis.Callers, sectionLimit, sections, "callers");
+        TruncateCompactSection(analysis.Callees, sectionLimit, sections, "callees");
+        return BuildCompactTruncationMetadata(sectionLimit, sections);
+    }
+
+    private static JsonObject ApplyOutlineCompactCaps(OutlineResult outline, int sectionLimit)
+    {
+        var sections = new JsonObject();
+        TruncateCompactSection(outline.Symbols, sectionLimit, sections, "symbols");
+        return BuildCompactTruncationMetadata(sectionLimit, sections);
+    }
+
+    private static JsonObject BuildCompactTruncationMetadata(int sectionLimit, JsonObject sections)
+        => new()
+        {
+            ["section_limit"] = sectionLimit,
+            ["sections"] = sections,
+        };
+
+    private static void AddCompactJsonFields(JsonObject payload, int compactLimit, JsonObject truncation)
+    {
+        payload["compact"] = true;
+        payload["compact_limit"] = compactLimit;
+        payload["truncation"] = truncation;
+    }
+
+    private static void TruncateCompactSection<T>(List<T> items, int sectionLimit, JsonObject sections, string sectionName)
+    {
+        var sourceCount = items.Count;
+        if (sourceCount > sectionLimit)
+            items.RemoveRange(sectionLimit, sourceCount - sectionLimit);
+
+        sections[sectionName] = new JsonObject
+        {
+            ["returned"] = items.Count,
+            ["source_count"] = sourceCount,
+            ["truncated"] = sourceCount > sectionLimit,
+        };
+    }
+
+    private static void ApplyInspectFieldSelection(JsonObject payload, QueryCommandOptions options, JsonSerializerOptions jsonOptions)
+    {
+        if (options.InspectFields == null)
+            return;
+
+        payload["selected_fields"] = JsonSerializer.SerializeToNode(options.InspectFields, CliJsonSerializerContextFactory.Create(jsonOptions).ListString);
+        var keep = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "api_version",
+            "query",
+            "selected_fields",
+        };
+
+        foreach (var field in options.InspectFields)
+            AddInspectFieldProperties(keep, field);
+
+        if (options.Compact)
+        {
+            keep.Add("compact");
+            keep.Add("compact_limit");
+            keep.Add("truncation");
+            FilterInspectCompactTruncationSections(payload, options.InspectFields);
+        }
+
+        foreach (var propertyName in payload.Select(property => property.Key).Where(key => !keep.Contains(key)).ToList())
+            payload.Remove(propertyName);
+    }
+
+    private static void AddInspectFieldProperties(HashSet<string> keep, string field)
+    {
+        switch (field)
+        {
+            case "file":
+                keep.Add("file");
+                break;
+            case "workspace":
+                keep.Add("workspace_indexed_at");
+                keep.Add("workspace_latest_modified");
+                keep.Add("project_root");
+                keep.Add("git_head");
+                keep.Add("git_is_dirty");
+                keep.Add("indexed_head_commit");
+                keep.Add("worktree_head_changed");
+                break;
+            case "graph":
+                keep.Add("graph_language");
+                keep.Add("graph_supported");
+                keep.Add("graph_support_reason");
+                keep.Add("graph_degraded");
+                keep.Add("unsupported_symbol_kind");
+                keep.Add("graph_table_available");
+                keep.Add("sql_graph_contract_ready");
+                keep.Add("sql_graph_contract_degraded_reason");
+                keep.Add("exact_zero_hint");
+                keep.Add("exact_index_available");
+                keep.Add("degraded");
+                keep.Add("degraded_reason");
+                break;
+            case "definitions":
+                keep.Add("definitions");
+                break;
+            case "nearby_symbols":
+                keep.Add("nearby_symbols");
+                break;
+            case "references":
+                keep.Add("references");
+                break;
+            case "callers":
+                keep.Add("callers");
+                break;
+            case "callees":
+                keep.Add("callees");
+                break;
+        }
+    }
+
+    private static void FilterInspectCompactTruncationSections(JsonObject payload, IReadOnlyCollection<string> inspectFields)
+    {
+        if (!payload.TryGetPropertyValue("truncation", out var truncationNode)
+            || truncationNode is not JsonObject truncation
+            || !truncation.TryGetPropertyValue("sections", out var sectionsNode)
+            || sectionsNode is not JsonObject sections)
+        {
+            return;
+        }
+
+        var keepSections = inspectFields
+            .Where(IsInspectListField)
+            .ToHashSet(StringComparer.Ordinal);
+        foreach (var sectionName in sections.Select(section => section.Key).Where(section => !keepSections.Contains(section)).ToList())
+            sections.Remove(sectionName);
+    }
+
+    private static bool IsInspectListField(string field)
+        => field is "definitions" or "nearby_symbols" or "references" or "callers" or "callees";
 
     public static int RunInspect(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
@@ -3148,7 +3339,9 @@ public static class QueryCommandRunner
 
         return WithDb(options, jsonOptions, reader =>
         {
-            var analysis = reader.AnalyzeSymbol(options.Query, options.Limit, options.Lang, options.IncludeBody, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.MaxLineWidth);
+            var compactLimit = GetCompactSectionLimit(options);
+            var inspectLimit = options.Compact ? GetCompactSourceLimit(compactLimit) : options.Limit;
+            var analysis = reader.AnalyzeSymbol(options.Query, inspectLimit, options.Lang, options.IncludeBody, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.MaxLineWidth);
             var sqlGraphSignal = NarrowSqlGraphContractSignal(
                 reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests),
                 DbReader.IsSqlLanguage(options.Lang)
@@ -3173,8 +3366,12 @@ public static class QueryCommandRunner
             WriteSqlGraphContractWarningIfNeeded(options.Json, sqlGraphSignal, reader, options);
             if (options.Json)
             {
+                var compactTruncation = options.Compact ? ApplySymbolAnalysisCompactCaps(analysis, compactLimit) : null;
                 var payload = JsonSerializer.SerializeToNode(analysis, CliJsonSerializerContextFactory.Create(jsonOptions).SymbolAnalysisResult)!.AsObject();
                 AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
+                if (compactTruncation != null)
+                    AddCompactJsonFields(payload, compactLimit, compactTruncation);
+                ApplyInspectFieldSelection(payload, options, jsonOptions);
                 Console.WriteLine(payload.ToJsonString(jsonOptions));
             }
             else
@@ -3267,7 +3464,18 @@ public static class QueryCommandRunner
 
             if (options.Json)
             {
-                Console.WriteLine(JsonSerializer.Serialize(outline, CliJsonSerializerContextFactory.Create(jsonOptions).OutlineResult));
+                if (options.Compact)
+                {
+                    var compactLimit = GetCompactSectionLimit(options);
+                    var compactTruncation = ApplyOutlineCompactCaps(outline, compactLimit);
+                    var payload = JsonSerializer.SerializeToNode(outline, CliJsonSerializerContextFactory.Create(jsonOptions).OutlineResult)!.AsObject();
+                    AddCompactJsonFields(payload, compactLimit, compactTruncation);
+                    Console.WriteLine(payload.ToJsonString(jsonOptions));
+                }
+                else
+                {
+                    Console.WriteLine(JsonSerializer.Serialize(outline, CliJsonSerializerContextFactory.Create(jsonOptions).OutlineResult));
+                }
             }
             else
             {
@@ -5599,6 +5807,8 @@ public static class QueryCommandRunner
         bool verbose = false;
         bool profile = false;
         int? slowQueryMs = null;
+        bool compact = false;
+        List<string>? inspectFields = null;
         double minEntrypointConfidence = 0;
         string? statusExplainField = null;
         bool statusLogPath = false;
@@ -5735,6 +5945,19 @@ public static class QueryCommandRunner
                 case "--read-only":
                 case "--immutable":
                     readOnly = true;
+                    break;
+                case "--pretty":
+                    break;
+                case "--compact":
+                    compact = true;
+                    json = true;
+                    outputFormat = OutputFormatJson;
+                    break;
+                case "--body-only":
+                    includeBody = true;
+                    inspectFields = ["definitions"];
+                    json = true;
+                    outputFormat = OutputFormatJson;
                     break;
                 case "--workspace-db":
                     if (TryReadStringOptionValue(args, ref i, "--workspace-db", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var workspaceDbPath, out var workspaceDbError))
@@ -5997,6 +6220,20 @@ public static class QueryCommandRunner
                     }
                     else
                         AddParseError(sectionsError!);
+                    break;
+                case "--fields":
+                    if (TryReadStringOptionValue(args, ref i, "--fields", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var fieldsValue, out var fieldsError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--fields", fieldsValue!);
+                        inspectFields = ParseInspectFields(fieldsValue!, AddParseError, out var includeBodyFromFields);
+                        includeBody |= includeBodyFromFields;
+                        json = true;
+                        outputFormat = OutputFormatJson;
+                    }
+                    else
+                    {
+                        AddParseError(fieldsError!);
+                    }
                     break;
                 case "--fts":
                     rawFts = true;
@@ -6424,6 +6661,7 @@ public static class QueryCommandRunner
             JsonOutputFormat = jsonOutputFormat,
             OutputFormat = outputFormat,
             Limit = limit,
+            LimitExplicit = limitExplicit,
             Lang = lang,
             Kind = kind,
             UnusedBucket = unusedBucket,
@@ -6476,6 +6714,8 @@ public static class QueryCommandRunner
             Verbose = verbose,
             Profile = profile,
             SlowQueryMs = slowQueryMs,
+            Compact = compact,
+            InspectFields = inspectFields,
             MinEntrypointConfidence = minEntrypointConfidence,
             StatusExplainField = statusExplainField,
             StatusLogPath = statusLogPath,
@@ -6522,6 +6762,80 @@ public static class QueryCommandRunner
         if (sections.Count == 0)
             addParseError("Error: --sections cannot be empty. Use one or more of tree, languages, hotspots, metrics.");
         return sections.Distinct(StringComparer.Ordinal).ToList();
+    }
+
+    private static List<string>? ParseInspectFields(string rawValue, Action<string> addParseError, out bool includeBody)
+    {
+        includeBody = false;
+        var fields = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var all = false;
+
+        if (!ValidateCsvBounds("--fields", rawValue, MaxInspectFieldsCsvLength, MaxInspectFieldsCsvEntries, addParseError))
+            return fields;
+
+        foreach (var rawField in rawValue.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var field = rawField.ToLowerInvariant().Replace('-', '_');
+            string canonical;
+            switch (field)
+            {
+                case "all":
+                    all = true;
+                    continue;
+                case "file":
+                    canonical = "file";
+                    break;
+                case "metadata":
+                case "workspace":
+                    canonical = "workspace";
+                    break;
+                case "graph":
+                case "trust":
+                    canonical = "graph";
+                    break;
+                case "definition":
+                case "definitions":
+                case "defs":
+                    canonical = "definitions";
+                    break;
+                case "body":
+                    canonical = "definitions";
+                    includeBody = true;
+                    break;
+                case "nearby":
+                case "nearby_symbols":
+                case "nearbysymbols":
+                    canonical = "nearby_symbols";
+                    break;
+                case "reference":
+                case "references":
+                case "refs":
+                    canonical = "references";
+                    break;
+                case "caller":
+                case "callers":
+                    canonical = "callers";
+                    break;
+                case "callee":
+                case "callees":
+                    canonical = "callees";
+                    break;
+                default:
+                    addParseError($"Error: unsupported --fields value '{rawField}'. Use one or more of all, file, workspace, graph, definitions, body, nearby_symbols, references, callers, callees.");
+                    continue;
+            }
+
+            if (seen.Add(canonical))
+                fields.Add(canonical);
+        }
+
+        if (all && fields.Count > 0)
+            addParseError("Error: --fields all cannot be combined with specific field names.");
+        if (!all && fields.Count == 0)
+            addParseError("Error: --fields requires at least one field name.");
+
+        return all ? null : fields;
     }
 
     private static bool ValidateCsvBounds(
@@ -9275,6 +9589,7 @@ public sealed class QueryCommandOptions
     public string JsonOutputFormat { get; init; } = "ndjson";
     public string OutputFormat { get; init; } = "text";
     public int Limit { get; init; } = 20;
+    public bool LimitExplicit { get; init; }
     public string? Lang { get; init; }
     public string? Kind { get; init; }
     public string? UnusedBucket { get; init; }
@@ -9327,6 +9642,8 @@ public sealed class QueryCommandOptions
     public bool Verbose { get; init; }
     public bool Profile { get; init; }
     public int? SlowQueryMs { get; init; }
+    public bool Compact { get; init; }
+    public List<string>? InspectFields { get; init; }
     public double MinEntrypointConfidence { get; init; }
     public string? StatusExplainField { get; init; }
     public bool StatusLogPath { get; init; }
