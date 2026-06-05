@@ -179,7 +179,7 @@ internal static class ExportImportCommandRunner
         var snapshotPath = Path.Combine(Path.GetTempPath(), $"codeindex-export-{Guid.NewGuid():N}.db");
         try
         {
-            var outputDirectory = Path.GetDirectoryName(Path.GetFullPath(outputPath));
+            var outputDirectory = Path.GetDirectoryName(fullOutputPath);
             if (!string.IsNullOrWhiteSpace(outputDirectory))
                 Directory.CreateDirectory(outputDirectory);
 
@@ -192,12 +192,12 @@ internal static class ExportImportCommandRunner
             }
             SqliteConnection.ClearAllPools();
             manifest = manifest with { DatabaseSha256 = ComputeSha256(snapshotPath) };
-            WriteExportArchiveFile(outputPath, snapshotPath, manifest, jsonOptions);
+            WriteExportArchiveFile(fullOutputPath, snapshotPath, manifest, jsonOptions);
 
             if (wantsJson)
-                Console.WriteLine(JsonSerializer.Serialize(new ExportArchiveResult("1", Path.GetFullPath(outputPath), fullSourceDbPath), jsonOptions));
+                Console.WriteLine(JsonSerializer.Serialize(new ExportArchiveResult("1", fullOutputPath, fullSourceDbPath), jsonOptions));
             else
-                Console.WriteLine($"Exported CodeIndex archive to {outputPath}");
+                Console.WriteLine($"Exported CodeIndex archive to {fullOutputPath}");
             return CommandExitCodes.Success;
         }
         catch (Exception ex)
@@ -254,11 +254,11 @@ internal static class ExportImportCommandRunner
         {
             using var db = new DbContext(normalizedDbPath);
             db.TryMigrateForRead();
-            var outputDirectory = Path.GetDirectoryName(Path.GetFullPath(outputPath));
+            var outputDirectory = Path.GetDirectoryName(fullOutputPath);
             if (!string.IsNullOrWhiteSpace(outputDirectory))
                 Directory.CreateDirectory(outputDirectory);
 
-            WriteCtagsFile(outputPath, writer =>
+            WriteCtagsFile(fullOutputPath, writer =>
             {
                 writer.WriteLine("!_TAG_FILE_FORMAT\t2\t/extended format/");
                 writer.WriteLine("!_TAG_FILE_SORTED\t1\t/0=unsorted, 1=sorted, 2=foldcase/");
@@ -281,7 +281,7 @@ internal static class ExportImportCommandRunner
                 }
             });
 
-            Console.WriteLine($"Exported ctags to {outputPath}");
+            Console.WriteLine($"Exported ctags to {fullOutputPath}");
             return CommandExitCodes.Success;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SqliteException)
@@ -312,8 +312,9 @@ internal static class ExportImportCommandRunner
 
     internal static void WriteExportArchiveFile(string outputPath, string snapshotPath, ExportManifest manifest, JsonSerializerOptions jsonOptions)
     {
+        var fullOutputPath = Path.GetFullPath(outputPath);
         AtomicFileWriter.Write(
-            outputPath,
+            fullOutputPath,
             stream =>
             {
                 using var archive = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true);
@@ -330,8 +331,9 @@ internal static class ExportImportCommandRunner
     {
         ArgumentNullException.ThrowIfNull(writeContents);
 
+        var fullOutputPath = Path.GetFullPath(outputPath);
         AtomicFileWriter.Write(
-            outputPath,
+            fullOutputPath,
             stream =>
             {
                 using var writer = new StreamWriter(

@@ -4,6 +4,7 @@ using CodeIndex.Cli;
 
 namespace CodeIndex.Tests;
 
+[Collection("SQLite pool sensitive")]
 public class ExportImportCommandRunnerTests
 {
     [Fact]
@@ -156,6 +157,34 @@ public class ExportImportCommandRunnerTests
     }
 
     [Fact]
+    public void RunExportArchive_RelativeOutputReportsAndWritesFullPath_Issue3138()
+    {
+        var originalDirectory = Environment.CurrentDirectory;
+        var projectRoot = TestProjectHelper.CreateTempProject("export_archive_full_output");
+        try
+        {
+            Directory.SetCurrentDirectory(projectRoot);
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var expectedOutput = Path.GetFullPath("codeindex.cdidx.zip");
+            var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
+
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
+                ExportImportCommandRunner.RunExport(["codeindex.cdidx.zip", "--db", dbPath, "--json"], jsonOptions, "test"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(File.Exists(expectedOutput));
+            using var document = JsonDocument.Parse(stdout);
+            Assert.Equal(expectedOutput, document.RootElement.GetProperty("archive_path").GetString());
+        }
+        finally
+        {
+            Directory.SetCurrentDirectory(originalDirectory);
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void CreateDatabaseSnapshot_AppliesPrivateFileMode()
     {
         if (OperatingSystem.IsWindows())
@@ -262,6 +291,35 @@ public class ExportImportCommandRunnerTests
         finally
         {
             Directory.Delete(workDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void WriteCtagsFile_RelativeOutputUsesInitialFullPathWhenCurrentDirectoryChanges_Issue3138()
+    {
+        var originalDirectory = Environment.CurrentDirectory;
+        var workDir = TestProjectHelper.CreateTempProject("ctags_full_output");
+        var driftDir = TestProjectHelper.CreateTempProject("ctags_full_output_drift");
+        try
+        {
+            Directory.SetCurrentDirectory(workDir);
+
+            ExportImportCommandRunner.WriteCtagsFile(
+                "tags",
+                writer =>
+                {
+                    Directory.SetCurrentDirectory(driftDir);
+                    writer.WriteLine("!_TAG_FILE_FORMAT\t2\t/extended format/");
+                });
+
+            Assert.True(File.Exists(Path.Combine(workDir, "tags")));
+            Assert.False(File.Exists(Path.Combine(driftDir, "tags")));
+        }
+        finally
+        {
+            Directory.SetCurrentDirectory(originalDirectory);
+            TestProjectHelper.DeleteDirectory(workDir);
+            TestProjectHelper.DeleteDirectory(driftDir);
         }
     }
 
