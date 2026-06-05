@@ -270,6 +270,93 @@ public class ReportCommandRunnerTests
     }
 
     [Fact]
+    public void BuildSchemaSummary_CapsTableEntries_Issue3146()
+    {
+        var workDir = CreateWorkDir();
+        var dbPath = Path.Combine(workDir, "many-tables.db");
+        try
+        {
+            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
+            {
+                connection.Open();
+                for (var i = 0; i < ReportCommandRunner.MaxSchemaTables + 3; i++)
+                {
+                    using var cmd = connection.CreateCommand();
+                    cmd.CommandText = $"CREATE TABLE {QuoteIdentifier($"table_{i:D3}")}(value INTEGER)";
+                    cmd.ExecuteNonQuery();
+                }
+            }
+
+            var (schemaText, tables, _, dbIncluded) = ReportCommandRunner.BuildSchemaSummary(dbPath);
+
+            Assert.True(dbIncluded);
+            Assert.Equal(ReportCommandRunner.MaxSchemaTables, tables.Count);
+            Assert.Contains($"tables  : {ReportCommandRunner.MaxSchemaTables} (capped; additional tables omitted)", schemaText);
+            Assert.Contains($"limits  : table entries <= {ReportCommandRunner.MaxSchemaTables}", schemaText);
+            Assert.Contains("table_063 | 0", schemaText);
+            Assert.DoesNotContain("table_064 |", schemaText);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            TryDeleteDirectory(workDir);
+        }
+    }
+
+    [Fact]
+    public void BuildSchemaSummary_CapsDisplayedTableNamesAndRowCountScans_Issue3146()
+    {
+        var workDir = CreateWorkDir();
+        var dbPath = Path.Combine(workDir, "large-table.db");
+        var longName = "table_" + new string('a', ReportCommandRunner.MaxSchemaTableNameDisplayChars + 20);
+        try
+        {
+            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
+            {
+                connection.Open();
+                using (var createCmd = connection.CreateCommand())
+                {
+                    createCmd.CommandText = $"CREATE TABLE {QuoteIdentifier(longName)}(value INTEGER)";
+                    createCmd.ExecuteNonQuery();
+                }
+
+                using var transaction = connection.BeginTransaction();
+                using var insertCmd = connection.CreateCommand();
+                insertCmd.Transaction = transaction;
+                insertCmd.CommandText = $"INSERT INTO {QuoteIdentifier(longName)}(value) VALUES ($value)";
+                var valueParameter = insertCmd.CreateParameter();
+                valueParameter.ParameterName = "$value";
+                insertCmd.Parameters.Add(valueParameter);
+
+                for (var i = 0; i < ReportCommandRunner.MaxSchemaRowCountScanRows + 5; i++)
+                {
+                    valueParameter.Value = i;
+                    insertCmd.ExecuteNonQuery();
+                }
+
+                transaction.Commit();
+            }
+
+            var (schemaText, tables, _, dbIncluded) = ReportCommandRunner.BuildSchemaSummary(dbPath);
+            var table = Assert.Single(tables);
+
+            Assert.True(dbIncluded);
+            Assert.Equal(ReportCommandRunner.MaxSchemaRowCountScanRows, table.RowCount);
+            Assert.True(table.RowCountTruncated);
+            Assert.True(table.Name.Length <= ReportCommandRunner.MaxSchemaTableNameDisplayChars);
+            Assert.Contains("[truncated]", table.Name);
+            Assert.Contains($">={ReportCommandRunner.MaxSchemaRowCountScanRows}", schemaText);
+            Assert.DoesNotContain(longName, schemaText);
+            Assert.DoesNotContain((ReportCommandRunner.MaxSchemaRowCountScanRows + 5).ToString(), schemaText);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            TryDeleteDirectory(workDir);
+        }
+    }
+
+    [Fact]
     public void Run_WithLogDirOverride_IncludesRedactedTail()
     {
         var workDir = CreateWorkDir();
@@ -551,6 +638,8 @@ public class ReportCommandRunnerTests
         Directory.CreateDirectory(path);
         return path;
     }
+
+    private static string QuoteIdentifier(string value) => "\"" + value.Replace("\"", "\"\"") + "\"";
 
     private static void TryDeleteDirectory(string path)
     {
