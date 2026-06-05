@@ -119,12 +119,13 @@ public static class DbCommandRunner
             var issues = result.Rows;
             var ok = issues.Count == 1 && string.Equals(issues[0], "ok", StringComparison.Ordinal);
             var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
+            var displayDbPath = DbPathResolver.FormatDbPathForDisplay(dbPath);
 
             if (options.Json)
             {
                 Console.WriteLine(JsonSerializer.Serialize(
                     new DbIntegrityCheckJsonResult(
-                        Path.GetFullPath(isUri ? dbPath : dbPath),
+                        displayDbPath,
                         ok,
                         ok ? new List<string>() : issues,
                         result.Truncated,
@@ -137,7 +138,7 @@ public static class DbCommandRunner
             else
             {
                 Console.WriteLine("Integrity check");
-                Console.WriteLine($"  database: {Path.GetFullPath(isUri ? dbPath : dbPath)}");
+                Console.WriteLine($"  database: {displayDbPath}");
                 Console.WriteLine($"  result  : {(ok ? "ok" : "corrupted")}");
                 if (!ok)
                 {
@@ -174,7 +175,7 @@ public static class DbCommandRunner
         try
         {
             var schema = ReadSchema(dbPath);
-            var fullPath = Path.GetFullPath(isUri ? dbPath : dbPath);
+            var fullPath = DbPathResolver.FormatDbPathForDisplay(dbPath);
             if (options.Json)
             {
                 var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
@@ -255,7 +256,7 @@ public static class DbCommandRunner
         try
         {
             var result = PruneOrphans(dbPath, apply: options.PruneApply);
-            var fullPath = Path.GetFullPath(isUri ? dbPath : dbPath);
+            var fullPath = DbPathResolver.FormatDbPathForDisplay(dbPath);
             if (options.Json)
             {
                 var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);

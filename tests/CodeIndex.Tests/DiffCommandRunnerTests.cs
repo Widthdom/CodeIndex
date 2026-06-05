@@ -60,6 +60,49 @@ public class DiffCommandRunnerTests
     }
 
     [Fact]
+    public void Run_JsonFileUrisReportOriginalUriPaths_Issue3221()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_diff_uri_json");
+        try
+        {
+            var dbPath = SeedDb(root, includeExtraFile: false);
+            var dbUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+
+            var (exitCode, output) = RunWithCapturedOut([dbUri, dbUri, "--json"]);
+
+            Assert.Equal(0, exitCode);
+            using var document = JsonDocument.Parse(output);
+            Assert.Equal(dbUri, document.RootElement.GetProperty("left_db").GetString());
+            Assert.Equal(dbUri, document.RootElement.GetProperty("right_db").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
+    public void Run_TextFileUrisReportOriginalUriPaths_Issue3221()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_diff_uri_text");
+        try
+        {
+            var dbPath = SeedDb(root, includeExtraFile: false);
+            var dbUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+
+            var (exitCode, output) = RunWithCapturedOut([dbUri, dbUri]);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains($"left   : {dbUri}", output);
+            Assert.Contains($"right  : {dbUri}", output);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
     public void Run_LimitZeroStillDetectsDatabaseDrift_Issue2885()
     {
         var leftRoot = TestProjectHelper.CreateTempProject("cdidx_diff_limit_zero_left");

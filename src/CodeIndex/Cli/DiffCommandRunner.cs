@@ -667,11 +667,10 @@ public static class DiffCommandRunner
 
     private static DiffDbHeader ReadHeader(string dbPath)
     {
-        var isUri = dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase);
         using var connection = OpenReadOnlyConnection(dbPath);
 
         return new DiffDbHeader(
-            Path.GetFullPath(isUri ? dbPath : dbPath),
+            DbPathResolver.FormatDbPathForDisplay(dbPath),
             ExecuteLong(connection, "PRAGMA user_version"),
             ExecuteCountIfTableExists(connection, "files"),
             ExecuteCountIfTableExists(connection, "symbols"),

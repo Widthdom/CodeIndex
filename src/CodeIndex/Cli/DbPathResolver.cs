@@ -431,6 +431,9 @@ public static class DbPathResolver
     public static bool UriRequestsReadOnly(string uriText)
         => SqliteFileUri.RequestsReadOnly(uriText);
 
+    internal static string FormatDbPathForDisplay(string dbPath)
+        => SqliteFileUri.StartsWithFileScheme(dbPath) ? dbPath : Path.GetFullPath(dbPath);
+
     private static bool PathsEqual(string left, string right)
         => PathCasing.PathsEqual(left, right);
 

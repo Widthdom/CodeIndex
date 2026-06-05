@@ -167,6 +167,54 @@ public class DbCommandRunnerTests
     }
 
     [Fact]
+    public void Run_IntegrityCheck_FileUriJsonReportsUriWithoutPathNormalization_Issue3221()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_uri_display_{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var db = new DbContext(dbPath))
+                db.InitializeSchema();
+            SqliteConnection.ClearAllPools();
+
+            var dbUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+            var (exitCode, json) = RunAndCaptureJson(["--integrity-check", "--db", dbUri, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(dbUri, json.GetProperty("db_path").GetString());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void Run_Schema_FileUriHumanOutputReportsUriWithoutPathNormalization_Issue3221()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_uri_schema_display_{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var db = new DbContext(dbPath))
+                db.InitializeSchema();
+            SqliteConnection.ClearAllPools();
+
+            var dbUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+            var (exitCode, stdout, _) = RunAndCaptureStreams(["schema", "--db", dbUri]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains($"database    : {dbUri}", stdout);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
     public void Run_MissingDb_JsonShapeIncludesHint()
     {
         var missingDb = Path.Combine(Path.GetTempPath(), $"cdidx_db_missing_{Guid.NewGuid():N}.db");
