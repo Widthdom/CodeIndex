@@ -1445,6 +1445,14 @@ public class ConsoleUiTests
     }
 
     [Fact]
+    public void FindClosestMatch_OversizedInput_ReturnsNull()
+    {
+        var input = new string('x', ConsoleUi.MaxSuggestionInputCharLength + 1);
+
+        Assert.Null(ConsoleUi.FindClosestMatch(input, new[] { "search" }));
+    }
+
+    [Fact]
     public void FindClosestMatches_ReturnsRankedSuggestions()
     {
         var candidates = new[] { "added", "changed", "fixed", "removed", "security", "docs" };
@@ -1461,6 +1469,16 @@ public class ConsoleUiTests
         var candidates = new[] { "added", "changed" };
 
         var matches = ConsoleUi.FindClosestMatches("absolutelynotrelated", candidates);
+
+        Assert.Empty(matches);
+    }
+
+    [Fact]
+    public void FindClosestMatches_OversizedInput_ReturnsEmpty()
+    {
+        var input = new string('x', ConsoleUi.MaxSuggestionInputCharLength + 1);
+
+        var matches = ConsoleUi.FindClosestMatches(input, new[] { "added", "changed" });
 
         Assert.Empty(matches);
     }
