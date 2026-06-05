@@ -1334,6 +1334,68 @@ public class McpServerTests : IDisposable
         Assert.Equal("Parameter \"path\" cannot be empty or whitespace-only", blank);
     }
 
+    [Theory]
+    [InlineData("outline")]
+    [InlineData("excerpt")]
+    [InlineData("index")]
+    public void ToolCall_RequiredPath_RejectsNonStringType_Issue3186(string toolName)
+    {
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = toolName,
+                ["arguments"] = BuildRequiredPathArguments(toolName, new JsonArray { "src/app.cs" }),
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        var error = response["error"]!;
+        Assert.Equal(-32602, error["code"]!.GetValue<int>());
+        Assert.Contains("Invalid type for argument 'path'", error["message"]!.GetValue<string>());
+        Assert.Equal("path", error["data"]!["parameter"]!.GetValue<string>());
+    }
+
+    [Theory]
+    [InlineData("outline", "../outside.cs", "`..` path traversal")]
+    [InlineData("excerpt", "/tmp/outside.cs", "workspace-relative")]
+    [InlineData("index", "C:/outside", "workspace-relative")]
+    [InlineData("outline", "TOO_LONG", "must be no longer than")]
+    public void ToolCall_RequiredPath_RejectsInvalidPathValues_Issue3186(
+        string toolName,
+        string pathValue,
+        string expectedText)
+    {
+        if (pathValue == "TOO_LONG")
+            pathValue = new string('a', QueryCommandRunner.MaxQueryPathFilterLength + 1);
+
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = toolName,
+                ["arguments"] = BuildRequiredPathArguments(toolName, pathValue),
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        var result = response["result"]!;
+        Assert.True(result["isError"]!.GetValue<bool>(), response.ToJsonString());
+        var text = result["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains(expectedText, text, StringComparison.Ordinal);
+        Assert.DoesNotContain("file not found in index", text, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Directory not found", text, StringComparison.Ordinal);
+        Assert.Equal(McpErrorEnvelope.CategoryInvalidArgument, result["structuredContent"]!["category"]!.GetValue<string>());
+    }
+
     [Fact]
     public void ToolCall_FindInFilePath_DistinguishesMissingFromWhitespace()
     {
@@ -3334,7 +3396,7 @@ public class McpServerTests : IDisposable
         Assert.True(result["isError"]!.GetValue<bool>());
         var text = result["content"]![0]!["text"]!.GetValue<string>();
         Assert.DoesNotContain("Unknown argument 'maxFileBytes'", text, StringComparison.Ordinal);
-        Assert.Contains("Path must be within the current working directory", text, StringComparison.Ordinal);
+        Assert.Contains("Parameter \"path\" must be workspace-relative", text, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -13025,6 +13087,20 @@ public class McpServerTests : IDisposable
         RaiseConsoleCancelKeyPress();
 
         Assert.False(cts.IsCancellationRequested);
+    }
+
+    private static JsonObject BuildRequiredPathArguments(string toolName, string pathValue)
+        => BuildRequiredPathArguments(toolName, JsonValue.Create(pathValue)!);
+
+    private static JsonObject BuildRequiredPathArguments(string toolName, JsonNode pathValue)
+    {
+        var arguments = new JsonObject
+        {
+            ["path"] = pathValue,
+        };
+        if (toolName == "excerpt")
+            arguments["startLine"] = 1;
+        return arguments;
     }
 
     private string CallToolAndReadErrorMessage(string toolName, JsonObject arguments)

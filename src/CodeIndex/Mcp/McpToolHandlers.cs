@@ -1070,6 +1070,36 @@ public partial class McpServer
         return true;
     }
 
+    private static bool TryReadRequiredPathParameter(JsonNode? args, string propertyName, out string value, out string? error)
+    {
+        if (!TryReadRequiredStringParameter(args, propertyName, out value, out error))
+            return false;
+
+        if (value.Length > MaxMcpArrayFilterStringLength)
+        {
+            error = $"Parameter \"{propertyName}\" must be no longer than {MaxMcpArrayFilterStringLength} characters.";
+            return false;
+        }
+
+        var normalized = value.Replace("\\", "/", StringComparison.Ordinal);
+        if (value.IndexOf("\0", StringComparison.Ordinal) >= 0
+            || normalized.StartsWith("/", StringComparison.Ordinal)
+            || HasWindowsDrivePrefix(normalized)
+            || normalized.Split(new[] { '/' }, StringSplitOptions.None).Any(segment => segment == ".."))
+        {
+            error = $"Parameter \"{propertyName}\" must be workspace-relative and must not contain NUL bytes or `..` path traversal segments.";
+            return false;
+        }
+
+        error = null;
+        return true;
+    }
+
+    private static bool HasWindowsDrivePrefix(string path)
+        => path.Length >= 2
+            && path[1] == ':'
+            && ((path[0] >= 'A' && path[0] <= 'Z') || (path[0] >= 'a' && path[0] <= 'z'));
+
     private static bool HasBlankPathFilter(JsonNode? args)
     {
         var node = args?["path"];
@@ -2275,7 +2305,7 @@ public partial class McpServer
 
     private JsonNode ExecuteOutline(JsonNode? id, JsonNode? args)
     {
-        if (!TryReadRequiredStringParameter(args, "path", out var path, out var requiredError))
+        if (!TryReadRequiredPathParameter(args, "path", out var path, out var requiredError))
             return CreateToolErrorResponse(id, requiredError!);
 
         return WithDbReader(id, args, reader =>
@@ -2299,7 +2329,7 @@ public partial class McpServer
 
     private JsonNode ExecuteExcerpt(JsonNode? id, JsonNode? args)
     {
-        if (!TryReadRequiredStringParameter(args, "path", out var path, out var requiredError))
+        if (!TryReadRequiredPathParameter(args, "path", out var path, out var requiredError))
             return CreateToolErrorResponse(id, requiredError!);
 
         var startLine = args?["startLine"]?.GetValue<int>();
@@ -3652,7 +3682,7 @@ public partial class McpServer
 
     private async Task<JsonNode> ExecuteIndexAsync(JsonNode? id, JsonNode? args, JsonNode? progressToken = null)
     {
-        if (!TryReadRequiredStringParameter(args, "path", out var path, out var requiredError))
+        if (!TryReadRequiredPathParameter(args, "path", out var path, out var requiredError))
             return CreateToolErrorResponse(id, requiredError!);
 
         var rebuild = args?["rebuild"]?.GetValue<bool>() ?? false;
