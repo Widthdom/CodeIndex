@@ -346,6 +346,43 @@ public class LspServerTests
     }
 
     [Fact]
+    public void HandleMessage_DocumentSymbol_RejectsOversizedTextDocumentUri_Issue3129()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_document_symbol_long_uri");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var oversizedUri = "file:///" + new string('a', LspServer.MaxTextDocumentUriChars);
+            var request = JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0",
+                id = 3129,
+                method = "textDocument/documentSymbol",
+                @params = new
+                {
+                    textDocument = new { uri = oversizedUri },
+                },
+            });
+
+            var response = server.HandleMessage(request);
+
+            Assert.NotNull(response);
+            var error = response!["error"]!;
+            Assert.Equal(-32602, error["code"]!.GetValue<int>());
+            var message = error["message"]!.GetValue<string>();
+            Assert.Equal("Invalid params", message);
+            Assert.True(message.Length < 120);
+            Assert.DoesNotContain(oversizedUri, message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void HandleMessage_Definition_ReturnsLocationForTokenAtPosition()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_definition");

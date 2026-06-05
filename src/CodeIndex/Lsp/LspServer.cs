@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using CodeIndex.Cli;
 using CodeIndex.Database;
+using CodeIndex.Mcp;
 using CodeIndex.Models;
 
 namespace CodeIndex.Lsp;
@@ -15,6 +16,7 @@ internal sealed class LspServer : IDisposable
     internal const int MaxLspFrameBytes = 8 * 1024 * 1024;
     internal const int MaxLspHeaderLineBytes = 8 * 1024;
     internal const int MaxPositionDocumentBytes = 4 * 1024 * 1024;
+    internal const int MaxTextDocumentUriChars = McpBoundedText.MaxResourceUriChars;
     internal const int MaxJsonDepth = 32;
     private const int JsonRpcInvalidParamsCode = -32602;
     private const int JsonRpcInternalErrorCode = -32603;
@@ -480,6 +482,9 @@ internal sealed class LspServer : IDisposable
         var uri = GetString(root, "params", "textDocument", "uri");
         if (string.IsNullOrWhiteSpace(uri))
             throw new ArgumentException("textDocument.uri is required.");
+        if (uri.Length > MaxTextDocumentUriChars)
+            throw new ArgumentException(
+                $"textDocument.uri is too long. Max length is {MaxTextDocumentUriChars} characters; actual length is {uri.Length}.");
         return UriToPath(uri);
     }
 
