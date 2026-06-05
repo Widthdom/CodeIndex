@@ -6649,7 +6649,14 @@ public static class QueryCommandRunner
             AddParseError(defaultMaxLineWidthError);
 
         var dbResolution = DbPathResolver.ResolveForQuery(Environment.CurrentDirectory, dbPath, dataDir);
-        var resolvedDbPath = readOnly ? DbContext.ToReadOnlyUri(dbResolution.DbPath) : dbResolution.DbPath;
+        var resolvedDbPath = dbResolution.DbPath;
+        if (readOnly)
+        {
+            var canAppendReadOnlyFlags = !SqliteFileUri.StartsWithFileScheme(resolvedDbPath) ||
+                SqliteFileUri.TryValidateBounds(resolvedDbPath, out _);
+            if (canAppendReadOnlyFlags)
+                resolvedDbPath = DbContext.ToReadOnlyUri(resolvedDbPath);
+        }
 
         return new QueryCommandOptions
         {
@@ -7248,8 +7255,9 @@ public static class QueryCommandRunner
             {
                 if (!DbPathResolver.TryNormalizeDbPath(dbPath, out fileExistsPath, out var parseError))
                 {
-                    Console.Error.WriteLine($"Error [{CommandErrorCodes.DbError}]: invalid --db file URI: {parseError?.Message ?? dbPath}");
-                    Console.Error.WriteLine($"Hint: pass a valid SQLite file URI such as `file:///absolute/path/to/codeindex.db?immutable=1`; the --db value resolved to: {dbPath}");
+                    var boundedDbPath = SqliteFileUri.TruncateDiagnosticValue(dbPath);
+                    Console.Error.WriteLine($"Error [{CommandErrorCodes.DbError}]: invalid --db file URI: {SqliteFileUri.FormatParseError(parseError)}");
+                    Console.Error.WriteLine($"Hint: pass a valid SQLite file URI such as `file:///absolute/path/to/codeindex.db?immutable=1`; the --db value resolved to: {boundedDbPath}");
                     GlobalToolLog.Error($"invalid_db_file_uri db={FormatLogValue(dbPath)} exception={FormatLogValue(parseError?.ToString() ?? "<unknown>")}");
                     return CommandExitCodes.DatabaseError;
                 }
@@ -7442,7 +7450,7 @@ public static class QueryCommandRunner
         if (string.IsNullOrEmpty(value))
             return "<empty>";
 
-        return value
+        return SqliteFileUri.TruncateDiagnosticValue(value)
             .Replace("\\", "/", StringComparison.Ordinal)
             .Replace("\r", " ", StringComparison.Ordinal)
             .Replace("\n", " ", StringComparison.Ordinal)

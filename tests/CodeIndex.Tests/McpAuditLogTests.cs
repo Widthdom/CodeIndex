@@ -460,12 +460,14 @@ public class McpAuditLogTests : IDisposable
     }
 
     [Fact]
-    public void ToolsCall_MaxValidRequestId_EmitsAuditRecord_Issue3307()
+    public void ToolsCall_TruncatesAuditRequestId_Issue3237()
     {
         using var sink = new AuditLogSink(_auditPath, AuditLogSink.DefaultMaxBytes, includeValues: false);
         using var server = CreateServer(sink);
         var id = new string('r', McpServer.MaxRequestIdCharacterCount);
         var serializedId = JsonSerializer.Serialize(id);
+        Assert.True(serializedId.Length > AuditLogSink.MaxRequestIdChars);
+        var display = McpBoundedText.ForDisplay(serializedId, AuditLogSink.MaxRequestIdChars);
         var request = new JsonObject
         {
             ["jsonrpc"] = "2.0",
@@ -480,10 +482,12 @@ public class McpAuditLogTests : IDisposable
 
         _ = server.HandleMessage(request);
 
+        var rawLog = File.ReadAllText(_auditPath);
+        Assert.DoesNotContain(id, rawLog, StringComparison.Ordinal);
         var record = ReadOnlyRecord();
-        Assert.Equal(serializedId, record.GetProperty("request_id").GetString());
-        Assert.False(record.TryGetProperty("request_id_length", out _));
-        Assert.False(record.TryGetProperty("request_id_truncated", out _));
+        Assert.Equal(display.Text, record.GetProperty("request_id").GetString());
+        Assert.Equal(serializedId.Length, record.GetProperty("request_id_length").GetInt32());
+        Assert.True(record.GetProperty("request_id_truncated").GetBoolean());
     }
 
     [Fact]
