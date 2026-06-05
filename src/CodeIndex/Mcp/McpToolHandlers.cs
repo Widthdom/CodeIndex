@@ -23,8 +23,8 @@ public partial class McpServer
     internal const int MaxBatchQueryResponseByteLimit = 10 * 1024 * 1024;
     private const int DefaultExcerptOutputByteLimit = MaxLineByteLength;
     private const string BatchQueryResponseByteLimitEnvVar = "CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES";
-    internal const int MaxMcpArrayFilterCount = 100;
-    internal const int MaxMcpArrayFilterStringLength = 4096;
+    internal const int MaxMcpArrayFilterCount = QueryCommandRunner.MaxQueryPathFilterCount;
+    internal const int MaxMcpArrayFilterStringLength = QueryCommandRunner.MaxQueryPathFilterLength;
     private static readonly HashSet<string> BoundedEnumLikeScalarArguments = new(StringComparer.Ordinal)
     {
         "category",

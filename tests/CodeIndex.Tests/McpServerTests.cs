@@ -3381,8 +3381,14 @@ public class McpServerTests : IDisposable
         Assert.Equal(200, searchProperties["limit"]!["maximum"]!.GetValue<int>());
 
         var pathStringSchema = searchProperties["path"]!["oneOf"]!.AsArray()[0]!;
-        Assert.Equal(4096, pathStringSchema["maxLength"]!.GetValue<int>());
+        Assert.Equal(QueryCommandRunner.MaxQueryPathFilterLength, pathStringSchema["maxLength"]!.GetValue<int>());
         Assert.NotNull(pathStringSchema["pattern"]);
+        var pathArraySchema = searchProperties["path"]!["oneOf"]!.AsArray()[1]!;
+        Assert.Equal(QueryCommandRunner.MaxQueryPathFilterCount, pathArraySchema["maxItems"]!.GetValue<int>());
+        Assert.Equal(QueryCommandRunner.MaxQueryPathFilterLength, pathArraySchema["items"]!["maxLength"]!.GetValue<int>());
+        var excludePathsSchema = searchProperties["excludePaths"]!;
+        Assert.Equal(QueryCommandRunner.MaxQueryPathFilterCount, excludePathsSchema["maxItems"]!.GetValue<int>());
+        Assert.Equal(QueryCommandRunner.MaxQueryPathFilterLength, excludePathsSchema["items"]!["maxLength"]!.GetValue<int>());
 
         var referencesTool = tools.First(t => t!["name"]!.GetValue<string>() == "references")!;
         var kindEnum = referencesTool["inputSchema"]!["properties"]!["kind"]!["enum"]!.AsArray()
@@ -3390,6 +3396,11 @@ public class McpServerTests : IDisposable
             .ToArray();
         Assert.Contains("call", kindEnum);
         Assert.Contains("type_reference", kindEnum);
+
+        var mapTool = tools.First(t => t!["name"]!.GetValue<string>() == "map")!;
+        var sectionsSchema = mapTool["inputSchema"]!["properties"]!["sections"]!;
+        Assert.Equal(QueryCommandRunner.MaxQueryPathFilterCount, sectionsSchema["maxItems"]!.GetValue<int>());
+        Assert.Equal(QueryCommandRunner.MaxQueryPathFilterLength, sectionsSchema["items"]!["maxLength"]!.GetValue<int>());
     }
 
     [Theory]
@@ -7943,6 +7954,70 @@ public class McpServerTests : IDisposable
         var structured = response["result"]!["structuredContent"]!;
         Assert.Equal(McpErrorEnvelope.CategoryInvalidArgument, structured["category"]!.GetValue<string>());
         Assert.Equal(1, structured["invalid_count"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsCall_PathListArgumentsUseCliBounds_Issue3182()
+    {
+        Assert.Equal(QueryCommandRunner.MaxQueryPathFilterCount, McpServer.MaxMcpArrayFilterCount);
+        Assert.Equal(QueryCommandRunner.MaxQueryPathFilterLength, McpServer.MaxMcpArrayFilterStringLength);
+
+        var tooManyPaths = new JsonArray();
+        for (var i = 0; i < QueryCommandRunner.MaxQueryPathFilterCount + 1; i++)
+            tooManyPaths.Add($"src/{i}.cs");
+        AssertListError(
+            "search",
+            new JsonObject
+            {
+                ["query"] = "App",
+                ["path"] = tooManyPaths,
+            },
+            "path must contain at most",
+            expectedInvalidCount: 1);
+
+        AssertListError(
+            "search",
+            new JsonObject
+            {
+                ["query"] = "App",
+                ["excludePaths"] = new JsonArray { new string('a', QueryCommandRunner.MaxQueryPathFilterLength + 1) },
+            },
+            $"Entries must be non-empty strings no longer than {QueryCommandRunner.MaxQueryPathFilterLength} characters.",
+            expectedInvalidCount: 1);
+
+        AssertListError(
+            "map",
+            new JsonObject
+            {
+                ["sections"] = new JsonArray { 42 },
+            },
+            "sections contains 1 invalid entry",
+            expectedInvalidCount: 1);
+
+        void AssertListError(string toolName, JsonObject arguments, string expectedText, int expectedInvalidCount)
+        {
+            var request = new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = 1,
+                ["method"] = "tools/call",
+                ["params"] = new JsonObject
+                {
+                    ["name"] = toolName,
+                    ["arguments"] = arguments,
+                },
+            };
+
+            var response = _server.HandleMessage(request)!;
+
+            var result = response["result"]!;
+            Assert.True(result["isError"]!.GetValue<bool>(), response.ToJsonString());
+            var text = result["content"]![0]!["text"]!.GetValue<string>();
+            Assert.Contains(expectedText, text);
+            var structured = result["structuredContent"]!;
+            Assert.Equal(McpErrorEnvelope.CategoryInvalidArgument, structured["category"]!.GetValue<string>());
+            Assert.Equal(expectedInvalidCount, structured["invalid_count"]!.GetValue<int>());
+        }
     }
 
     [Fact]
