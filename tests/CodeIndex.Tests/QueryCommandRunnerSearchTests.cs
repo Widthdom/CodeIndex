@@ -1546,6 +1546,70 @@ jobs:
         Assert.Contains("Did you mean: --path?", stderr);
     }
 
+    [Fact]
+    public void RunSearch_InvalidSnippetFocus_TruncatesOversizedValue()
+    {
+        var value = new string('x', ConsoleUi.DefaultDiagnosticValueCharLimit + 1);
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["foo", "--snippet-focus", value],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("invalid --snippet-focus value", stderr);
+        Assert.Contains("<truncated; original length", stderr);
+        Assert.DoesNotContain(value, stderr);
+    }
+
+    [Fact]
+    public void RunSearch_InvalidLimit_TruncatesOversizedValue()
+    {
+        var value = new string('x', ConsoleUi.DefaultDiagnosticValueCharLimit + 1);
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["foo", "--limit", value],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("--limit requires an integer", stderr);
+        Assert.Contains("<truncated; original length", stderr);
+        Assert.DoesNotContain(value, stderr);
+    }
+
+    [Fact]
+    public void RunSearch_InvalidJsonFormat_TruncatesOversizedInlineValue()
+    {
+        var value = new string('x', ConsoleUi.DefaultDiagnosticValueCharLimit + 1);
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["foo", "--json=" + value],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("--json format must be one of ndjson or array", stderr);
+        Assert.Contains("<truncated; original length", stderr);
+        Assert.DoesNotContain(value, stderr);
+    }
+
+    [Fact]
+    public void RunSearch_InvalidFormat_TruncatesOversizedValue()
+    {
+        var value = new string('x', ConsoleUi.DefaultDiagnosticValueCharLimit + 1);
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["foo", "--format", value],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("--format must be one of", stderr);
+        Assert.Contains("<truncated; original length", stderr);
+        Assert.DoesNotContain(value, stderr);
+    }
+
     // `find` previously emitted only the raw `Error: unsupported option for find: --paht`
     // line — round-2 fix routes the unknown token through the same suggester so users see
     // `Did you mean: --path?`. Covers both the separated and inline `=value` forms.

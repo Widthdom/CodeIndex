@@ -65,7 +65,10 @@ public static class HookCommandRunner
                     break;
                 default:
                     if (args[i].StartsWith("-", StringComparison.Ordinal))
-                        Console.Error.WriteLine($"Warning: unknown option '{args[i]}' (ignored) / 不明なオプション '{args[i]}'（無視されます）");
+                    {
+                        var displayValue = ConsoleUi.FormatBoundedValue(args[i]);
+                        Console.Error.WriteLine($"Warning: unknown option '{displayValue}' (ignored) / 不明なオプション '{displayValue}'（無視されます）");
+                    }
                     else if (command == null)
                         command = args[i];
                     else
@@ -137,7 +140,7 @@ public static class HookCommandRunner
     {
         if (!options.Json)
             PrintUsage();
-        return WriteResult(options.Json, jsonOptions, "error", $"unknown hooks command: {options.Command}", projectPath, null, null, CommandExitCodes.UsageError);
+        return WriteResult(options.Json, jsonOptions, "error", $"unknown hooks command: {ConsoleUi.FormatBoundedValue(options.Command)}", projectPath, null, null, CommandExitCodes.UsageError);
     }
 
     private static bool IsManagedHook(string content)

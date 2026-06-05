@@ -140,18 +140,39 @@ public static class ConsoleUi
         if (value == null)
             return new BoundedDisplayText("<null>", Truncated: false, OriginalLength: 0);
 
-        if (value.Length <= maxChars)
-            return new BoundedDisplayText(value, Truncated: false, value.Length);
+        var displayValue = FlattenDiagnosticControlChars(value);
+        if (displayValue.Length <= maxChars)
+            return new BoundedDisplayText(displayValue, Truncated: false, value.Length);
 
         var marker = string.Create(CultureInfo.InvariantCulture, $"... <truncated; original length {value.Length} chars>");
         var text = maxChars == 0
             ? marker.TrimStart('.', ' ')
-            : value[..maxChars] + marker;
+            : displayValue[..maxChars] + marker;
         return new BoundedDisplayText(text, Truncated: true, value.Length);
     }
 
     internal static string FormatBoundedValue(string? value, int maxChars = DefaultDiagnosticValueCharLimit)
         => BoundDisplayText(value, maxChars).Text;
+
+    private static string FlattenDiagnosticControlChars(string value)
+    {
+        for (var i = 0; i < value.Length; i++)
+        {
+            if (char.IsControl(value[i]))
+            {
+                var chars = value.ToCharArray();
+                for (var j = i; j < chars.Length; j++)
+                {
+                    if (char.IsControl(chars[j]))
+                        chars[j] = ' ';
+                }
+
+                return new string(chars);
+            }
+        }
+
+        return value;
+    }
 
     private const int SpinnerFrameDelayMs = 100;
     private const int SpinnerStopDelayMs = 20;

@@ -293,7 +293,7 @@ public static class QueryCommandRunner
                 continue;
             }
 
-            Console.Error.WriteLine($"Error: {arg} is not supported for batch.");
+            Console.Error.WriteLine($"Error: {ConsoleUi.FormatBoundedValue(arg)} is not supported for batch.");
             Console.Error.WriteLine($"Usage: {ConsoleUi.GetUsageLine("batch")}");
             return CommandExitCodes.UsageError;
         }
@@ -2882,32 +2882,32 @@ public static class QueryCommandRunner
                     i++;
                 }
                 if ((arg == "--limit" || arg == "--top") && (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var limit) || limit <= 0))
-                    return BuildPositiveIntegerError("--limit", value, arg);
+                    return BuildPositiveIntegerError("--limit", ConsoleUi.FormatBoundedValue(value), arg);
                 if ((arg == "--limit" || arg == "--top")
                     && int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var limitCeil)
                     && NumericFlagUpperBounds.TryGetValue("--limit", out var limitMax)
                     && limitCeil > limitMax)
-                    return BuildPositiveIntegerUpperBoundError("--limit", value, limitMax);
+                    return BuildPositiveIntegerUpperBoundError("--limit", ConsoleUi.FormatBoundedValue(value), limitMax);
                 if (arg == "--max-line-width" && (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var widthValue) || widthValue < 0))
-                    return BuildNonNegativeIntegerError(arg, value);
+                    return BuildNonNegativeIntegerError(arg, ConsoleUi.FormatBoundedValue(value));
                 if (arg == "--max-line-width" && int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var widthCeil) && widthCeil > LineWidthFormatter.MaxAllowedLineWidth)
-                    return BuildNonNegativeIntegerUpperBoundError("--max-line-width", value, LineWidthFormatter.MaxAllowedLineWidth);
+                    return BuildNonNegativeIntegerUpperBoundError("--max-line-width", ConsoleUi.FormatBoundedValue(value), LineWidthFormatter.MaxAllowedLineWidth);
                 if ((arg == "--before" || arg == "--after") && (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var context) || context < 0))
-                    return BuildNonNegativeIntegerError(arg, value);
+                    return BuildNonNegativeIntegerError(arg, ConsoleUi.FormatBoundedValue(value));
                 if ((arg == "--before" || arg == "--after")
                     && int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var contextCeil)
                     && NumericFlagUpperBounds.TryGetValue(arg, out var contextMax)
                     && contextCeil > contextMax)
-                    return BuildNonNegativeIntegerUpperBoundError(arg, value, contextMax);
+                    return BuildNonNegativeIntegerUpperBoundError(arg, ConsoleUi.FormatBoundedValue(value), contextMax);
                 if (arg == "--snippet-lines" && (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var snippetLines) || snippetLines <= 0))
-                    return BuildPositiveIntegerError(arg, value, arg);
+                    return BuildPositiveIntegerError(arg, ConsoleUi.FormatBoundedValue(value), arg);
                 if (arg == "--snippet-lines"
                     && int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var snippetLinesCeil)
                     && NumericFlagUpperBounds.TryGetValue(arg, out var snippetLinesMax)
                     && snippetLinesCeil > snippetLinesMax)
-                    return BuildPositiveIntegerUpperBoundError(arg, value, snippetLinesMax);
+                    return BuildPositiveIntegerUpperBoundError(arg, ConsoleUi.FormatBoundedValue(value), snippetLinesMax);
                 if ((arg == "--focus-line" || arg == "--focus-column") && (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var focus) || focus <= 0))
-                    return BuildPositiveIntegerError(arg, value, arg);
+                    return BuildPositiveIntegerError(arg, ConsoleUi.FormatBoundedValue(value), arg);
                 if (arg == "--query")
                 {
                     queryCount++;
@@ -2922,7 +2922,7 @@ public static class QueryCommandRunner
 
             if (rawArg.StartsWith('-'))
             {
-                var error = $"Error: unsupported option for find: {rawArg}";
+                var error = $"Error: unsupported option for find: {ConsoleUi.FormatBoundedValue(rawArg)}";
                 // Suggest the closest accepted find flag for typos like `--paht` → `--path`
                 // (#1582). Strip any inline `=value` portion before matching, since the prefix
                 // might not have been a recognized value-taking option (TrySplitInlineOptionValue
@@ -4579,7 +4579,7 @@ public static class QueryCommandRunner
             case OutputFormatJsonGraph:
                 return true;
             default:
-                error = $"Error: deps --format must be one of edgelist, dot, graphml, or json-graph; got '{rawFormat}'.";
+                error = $"Error: deps --format must be one of edgelist, dot, graphml, or json-graph; got '{ConsoleUi.FormatBoundedValue(rawFormat)}'.";
                 return false;
         }
     }
@@ -5990,7 +5990,7 @@ public static class QueryCommandRunner
                         statusCheckScopes.Add(scope);
                         break;
                     default:
-                        AddParseError($"Error: unsupported --check scope '{rawScope}'. Use one or more of workspace, fold, graph, issues, hotspot, csharp, sql, newer.");
+                        AddParseError($"Error: unsupported --check scope '{ConsoleUi.FormatBoundedValue(rawScope)}'. Use one or more of workspace, fold, graph, issues, hotspot, csharp, sql, newer.");
                         break;
                 }
             }
@@ -6010,7 +6010,8 @@ public static class QueryCommandRunner
         {
             if (seenSingleValueOptions.Add(canonicalName))
                 return;
-            Console.Error.WriteLine($"Warning: {canonicalName} specified more than once; the rightmost CLI value '{newValue}' takes precedence over earlier CLI values and any environment/config default.");
+            var displayValue = ConsoleUi.FormatBoundedValue(newValue);
+            Console.Error.WriteLine($"Warning: {canonicalName} specified more than once; the rightmost CLI value '{displayValue}' takes precedence over earlier CLI values and any environment/config default.");
         }
 
         for (int i = 0; i < args.Length; i++)
@@ -6100,7 +6101,7 @@ public static class QueryCommandRunner
                     }
                     else
                     {
-                        AddParseError($"Error: --json format must be one of ndjson or array, got '{inlineValue}'. Hint: use `--json` or `--json=ndjson` for newline-delimited JSON, or `--json=array` for a single JSON array.");
+                        AddParseError($"Error: --json format must be one of ndjson or array, got '{ConsoleUi.FormatBoundedValue(inlineValue)}'. Hint: use `--json` or `--json=ndjson` for newline-delimited JSON, or `--json=array` for a single JSON array.");
                     }
                     break;
                 case "--indexed-only":
@@ -6117,7 +6118,7 @@ public static class QueryCommandRunner
                     }
                     else
                     {
-                        AddParseError($"Error: unsupported --capability value '{capabilityValue}'. Use graph, symbols, or references.");
+                        AddParseError($"Error: unsupported --capability value '{ConsoleUi.FormatBoundedValue(capabilityValue)}'. Use graph, symbols, or references.");
                     }
                     break;
                 case "--format":
@@ -6142,7 +6143,7 @@ public static class QueryCommandRunner
                             var allowedFormats = allowIssueDraftsFormat
                                 ? "text, json, count, compact, csv, tsv, lsp, qf, sarif, or issue-drafts"
                                 : "text, json, count, compact, csv, tsv, lsp, qf, or sarif";
-                            AddParseError($"Error: --format must be one of {allowedFormats}; got '{formatValue}'.");
+                            AddParseError($"Error: --format must be one of {allowedFormats}; got '{ConsoleUi.FormatBoundedValue(formatValue)}'.");
                         }
                     }
                     else
@@ -6454,7 +6455,7 @@ public static class QueryCommandRunner
                         minEntrypointConfidence = parsedMinEntrypointConfidence;
                     }
                     else
-                        AddParseError($"Error: --min-entrypoint-confidence must be a number from 0.0 through 1.0; got '{minEntrypointConfidenceValue}'.");
+                        AddParseError($"Error: --min-entrypoint-confidence must be a number from 0.0 through 1.0; got '{ConsoleUi.FormatBoundedValue(minEntrypointConfidenceValue)}'.");
                     break;
                 case "--check":
                     if (allowStatusCheck)
@@ -6540,7 +6541,7 @@ public static class QueryCommandRunner
                     }
                     else
                     {
-                        AddParseError($"Error: unsupported option: {currentArg}. Use `--` before a query literal that starts with `-`.");
+                        AddParseError($"Error: unsupported option: {ConsoleUi.FormatBoundedValue(currentArg)}. Use `--` before a query literal that starts with `-`.");
                     }
                     break;
                 case "--path":
@@ -6588,7 +6589,7 @@ public static class QueryCommandRunner
                         since = parsedSince;
                     }
                     else
-                        AddParseError($"Error: could not parse --since value '{sinceValue}' as a date/time. Use ISO 8601 format (e.g. 2024-01-01 or 2024-01-01T00:00:00Z).");
+                        AddParseError($"Error: could not parse --since value '{ConsoleUi.FormatBoundedValue(sinceValue)}' as a date/time. Use ISO 8601 format (e.g. 2024-01-01 or 2024-01-01T00:00:00Z).");
                     break;
                 case "--start":
                 case "--start-line":
@@ -6701,7 +6702,7 @@ public static class QueryCommandRunner
                     }
                     else
                     {
-                        AddParseError($"Error: invalid --snippet-focus value '{snippetFocusValue}'. Use leftmost, quality, or proximity.");
+                        AddParseError($"Error: invalid --snippet-focus value '{ConsoleUi.FormatBoundedValue(snippetFocusValue)}'. Use leftmost, quality, or proximity.");
                     }
                     break;
                 case "--max-line-width":
@@ -6719,7 +6720,7 @@ public static class QueryCommandRunner
                 default:
                     if (args[i].StartsWith('-'))
                     {
-                        AddParseError($"Error: unsupported option: {args[i]}. Use `--` before a query literal that starts with `-`.");
+                        AddParseError($"Error: unsupported option: {ConsoleUi.FormatBoundedValue(args[i])}. Use `--` before a query literal that starts with `-`.");
                         break;
                     }
                     else if (query == null)
@@ -6873,7 +6874,7 @@ public static class QueryCommandRunner
                     sections.Add(section);
                     break;
                 default:
-                    addParseError($"Error: --sections contains unsupported section '{rawSection}'. Use one or more of tree, languages, hotspots, metrics.");
+                    addParseError($"Error: --sections contains unsupported section '{ConsoleUi.FormatBoundedValue(rawSection)}'. Use one or more of tree, languages, hotspots, metrics.");
                     break;
             }
         }
@@ -6941,7 +6942,7 @@ public static class QueryCommandRunner
                     canonical = "callees";
                     break;
                 default:
-                    addParseError($"Error: unsupported --fields value '{rawField}'. Use one or more of all, file, workspace, graph, definitions, body, nearby_symbols, references, callers, callees.");
+                    addParseError($"Error: unsupported --fields value '{ConsoleUi.FormatBoundedValue(rawField)}'. Use one or more of all, file, workspace, graph, definitions, body, nearby_symbols, references, callers, callees.");
                     continue;
             }
 
@@ -7066,7 +7067,7 @@ public static class QueryCommandRunner
     {
         if (TryFindUnsupportedBracketGlob(pattern, out var reason))
         {
-            addParseError($"Error: {optionName} '{pattern}' is not a valid glob: {reason}. Hint: escape '[' or ']' with a backslash when matching literal path characters, or use only '*' and '?' wildcards.");
+            addParseError($"Error: {optionName} '{ConsoleUi.FormatBoundedValue(pattern)}' is not a valid glob: {reason}. Hint: escape '[' or ']' with a backslash when matching literal path characters, or use only '*' and '?' wildcards.");
         }
     }
 
@@ -7174,7 +7175,7 @@ public static class QueryCommandRunner
                 groupBy = HotspotsGroupedByNameKind;
                 return true;
             default:
-                error = $"Error: unsupported hotspots --group-by value '{requestedGroupBy}'. Use symbol, file, or statement.";
+                error = $"Error: unsupported hotspots --group-by value '{ConsoleUi.FormatBoundedValue(requestedGroupBy)}'. Use symbol, file, or statement.";
                 return false;
         }
     }
@@ -7237,7 +7238,7 @@ public static class QueryCommandRunner
                 unit = TimeSpan.FromDays(1);
                 break;
             default:
-                error = $"Error: could not parse stale-after value '{value}'. Use a positive duration with m, h, or d suffix (e.g. 30m, 2h, 7d).";
+                error = $"Error: could not parse stale-after value '{ConsoleUi.FormatBoundedValue(value)}'. Use a positive duration with m, h, or d suffix (e.g. 30m, 2h, 7d).";
                 return false;
         }
 
@@ -7245,20 +7246,20 @@ public static class QueryCommandRunner
             !double.IsFinite(number) ||
             number <= 0)
         {
-            error = $"Error: could not parse stale-after value '{value}'. Use a positive duration with m, h, or d suffix (e.g. 30m, 2h, 7d).";
+            error = $"Error: could not parse stale-after value '{ConsoleUi.FormatBoundedValue(value)}'. Use a positive duration with m, h, or d suffix (e.g. 30m, 2h, 7d).";
             return false;
         }
 
         var ticks = number * unit.Ticks;
         if (ticks > TimeSpan.MaxValue.Ticks)
         {
-            error = $"Error: stale-after value '{value}' is too large.";
+            error = $"Error: stale-after value '{ConsoleUi.FormatBoundedValue(value)}' is too large.";
             return false;
         }
 
         if (ticks > MaxStaleAfter.Ticks)
         {
-            error = $"Error: stale-after value '{value}' exceeds the maximum {MaxStaleAfterDisplay}.";
+            error = $"Error: stale-after value '{ConsoleUi.FormatBoundedValue(value)}' exceeds the maximum {MaxStaleAfterDisplay}.";
             return false;
         }
 
@@ -7777,7 +7778,7 @@ public static class QueryCommandRunner
         {
             if (!KnownVisibilityFilters.Contains(value))
             {
-                addParseError($"Error: unsupported {optionName} value '{value}'. Use one or more of public, protected, internal, private.");
+                addParseError($"Error: unsupported {optionName} value '{ConsoleUi.FormatBoundedValue(value)}'. Use one or more of public, protected, internal, private.");
                 continue;
             }
 
@@ -7793,7 +7794,7 @@ public static class QueryCommandRunner
             && !alternateAcceptedKinds.Any(kinds => kinds.Contains(options.Kind)))
         {
             CommandErrorWriter.Write(
-                $"invalid --kind value `{options.Kind}`.",
+                $"invalid --kind value `{ConsoleUi.FormatBoundedValue(options.Kind)}`.",
                 $"use one of: {string.Join(", ", acceptedKinds)}.",
                 GetUsageLineOrThrow(commandName));
             return true;
@@ -7813,7 +7814,7 @@ public static class QueryCommandRunner
         if (options.UnusedBucket != null && !IsKnownUnusedBucket(options.UnusedBucket))
         {
             CommandErrorWriter.Write(
-                $"invalid --bucket value `{options.UnusedBucket}`.",
+                $"invalid --bucket value `{ConsoleUi.FormatBoundedValue(options.UnusedBucket)}`.",
                 $"use one of: {string.Join(", ", OrderedUnusedBuckets)}.",
                 GetUsageLineOrThrow("unused"));
             return true;
@@ -7822,7 +7823,7 @@ public static class QueryCommandRunner
         if (options.MinUnusedConfidence != null && !IsKnownUnusedConfidence(options.MinUnusedConfidence))
         {
             CommandErrorWriter.Write(
-                $"invalid --min-confidence value `{options.MinUnusedConfidence}`.",
+                $"invalid --min-confidence value `{ConsoleUi.FormatBoundedValue(options.MinUnusedConfidence)}`.",
                 "use one of: medium, low.",
                 GetUsageLineOrThrow("unused"));
             return true;
@@ -7932,11 +7933,12 @@ public static class QueryCommandRunner
             if (eq > 0)
                 nameForSuggestion = nameForSuggestion[..eq];
             var suggestion = ConsoleUi.FindClosestMatch(nameForSuggestion, supported.Where(o => o != "--"));
+            var displayArg = ConsoleUi.FormatBoundedValue(arg);
             var hint = suggestion == null
-                ? $"remove `{arg}` and rerun, or use only the options shown in `{commandName} --help`."
-                : $"Did you mean: {suggestion}? Remove `{arg}` and rerun, or use `{suggestion}` if that is what you meant.";
+                ? $"remove `{displayArg}` and rerun, or use only the options shown in `{commandName} --help`."
+                : $"Did you mean: {suggestion}? Remove `{displayArg}` and rerun, or use `{suggestion}` if that is what you meant.";
             CommandErrorWriter.Write(
-                $"{arg} is not supported for {commandName}.",
+                $"{displayArg} is not supported for {commandName}.",
                 hint,
                 GetUsageLineOrThrow(commandName));
             return true;
@@ -8952,11 +8954,11 @@ public static class QueryCommandRunner
 
         if (AllValidKinds.Contains(kind))
         {
-            Console.Error.WriteLine($"WARN: '{kind}' is a symbol kind, but --kind on '{command}' filters by reference kind ({string.Join(", ", acceptedKinds)}). Use symbols/definition/hotspots/unused to filter by symbol kind.");
+            Console.Error.WriteLine($"WARN: '{ConsoleUi.FormatBoundedValue(kind)}' is a symbol kind, but --kind on '{command}' filters by reference kind ({string.Join(", ", acceptedKinds)}). Use symbols/definition/hotspots/unused to filter by symbol kind.");
             return;
         }
 
-        Console.Error.WriteLine($"Hint: '{kind}' is not a known reference kind for '{command}'. Available reference kinds: {string.Join(", ", acceptedKinds)}");
+        Console.Error.WriteLine($"Hint: '{ConsoleUi.FormatBoundedValue(kind)}' is not a known reference kind for '{command}'. Available reference kinds: {string.Join(", ", acceptedKinds)}");
         var suggestion = ConsoleUi.FindClosestMatch(kind, acceptedKinds);
         if (suggestion != null)
             Console.Error.WriteLine($"Did you mean: --kind {suggestion}?");
@@ -9452,7 +9454,7 @@ public static class QueryCommandRunner
         if (string.Equals(optionName, "--max-line-width", StringComparison.Ordinal))
             return TryParseNonNegativeInt(rawValue, optionName, out value, out error, displayRawValue);
 
-        displayRawValue ??= rawValue;
+        displayRawValue ??= ConsoleUi.FormatBoundedValue(rawValue);
         if (!int.TryParse(rawValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out value) || value <= 0)
         {
             value = 0;
@@ -9473,7 +9475,7 @@ public static class QueryCommandRunner
 
     private static bool TryParseNonNegativeInt(string rawValue, string optionName, out int value, out string? error, string? displayRawValue = null)
     {
-        displayRawValue ??= rawValue;
+        displayRawValue ??= ConsoleUi.FormatBoundedValue(rawValue);
         if (!int.TryParse(rawValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out value) || value < 0)
         {
             value = 0;

@@ -100,6 +100,22 @@ public partial class QueryCommandRunnerTests
         Assert.Equal(0, options.MaxLineWidth);
     }
 
+    [Fact]
+    public void ParseArgs_InvalidPathGlob_FlattensControlCharacters_Issue3092()
+    {
+        var value = "src/[bad\nforged\tvalue";
+
+        var options = QueryCommandRunner.ParseArgs(
+            ["RunSearch", "--path", value],
+            jsonDefault: false,
+            allowNamedQuery: true,
+            validateDefaultSnippetLines: false,
+            validateDefaultMaxLineWidth: false);
+
+        Assert.Contains("--path 'src/[bad forged value' is not a valid glob", options.ParseError);
+        Assert.DoesNotContain(value, options.ParseError);
+    }
+
     [Theory]
     [InlineData("count")]
     [InlineData("compact")]
@@ -314,6 +330,16 @@ public partial class QueryCommandRunnerTests
     {
         Assert.False(QueryCommandRunner.TryParseStaleAfter(value, out _, out var error));
         Assert.Contains(QueryCommandRunner.MaxStaleAfterDisplay, error);
+    }
+
+    [Fact]
+    public void TryParseStaleAfter_MaxDuration_FlattensControlCharacters_Issue3092()
+    {
+        var value = "31d\n\t";
+
+        Assert.False(QueryCommandRunner.TryParseStaleAfter(value, out _, out var error));
+        Assert.Contains("stale-after value '31d  '", error);
+        Assert.DoesNotContain(value, error);
     }
 
     [Fact]
@@ -1584,6 +1610,35 @@ public partial class QueryCommandRunnerTests
         Assert.Contains($"SQLite file URI query length exceeds {SqliteFileUri.MaxQueryLength}", stderr);
         Assert.Contains("...(truncated,", stderr);
         Assert.DoesNotContain(new string('a', SqliteFileUri.MaxDiagnosticValueLength + 1), stderr);
+    }
+
+    [Fact]
+    public void RunBatch_UnsupportedOptionTruncatesOversizedToken()
+    {
+        var token = "--" + new string('x', ConsoleUi.DefaultDiagnosticValueCharLimit + 1);
+
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunBatch(
+            [token],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("is not supported for batch", stderr);
+        Assert.Contains("<truncated; original length", stderr);
+        Assert.DoesNotContain(token, stderr);
+    }
+
+    [Fact]
+    public void RunBatch_UnsupportedOptionFlattensMultilineToken()
+    {
+        var token = "--bad\nforged\tvalue";
+
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunBatch(
+            [token],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("--bad forged value is not supported for batch", stderr);
+        Assert.DoesNotContain(token, stderr);
     }
 
     [Fact]

@@ -66,6 +66,19 @@ public class HookCommandRunnerTests
     }
 
     [Fact]
+    public void Hooks_UnknownOption_TruncatesOversizedToken()
+    {
+        var token = "--" + new string('x', ConsoleUi.DefaultDiagnosticValueCharLimit + 20);
+
+        var (exitCode, _, stderr) = RunHooksAndCaptureStreams([token]);
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("unknown option", stderr);
+        Assert.Contains("<truncated; original length", stderr);
+        Assert.DoesNotContain(token, stderr);
+    }
+
+    [Fact]
     public void Hooks_Install_ChainsExistingPreCommitHook()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("hook_chain");

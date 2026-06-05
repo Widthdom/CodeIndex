@@ -41,6 +41,37 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunMap_ParseInvalidMinEntrypointConfidence_TruncatesOversizedValue()
+    {
+        var value = new string('x', ConsoleUi.DefaultDiagnosticValueCharLimit + 1);
+
+        var options = QueryCommandRunner.ParseArgs(
+            ["--min-entrypoint-confidence", value],
+            jsonDefault: false,
+            validateDefaultSnippetLines: false,
+            validateDefaultMaxLineWidth: false);
+
+        Assert.Contains("--min-entrypoint-confidence must be a number", options.ParseError);
+        Assert.Contains("<truncated; original length", options.ParseError);
+        Assert.DoesNotContain(value, options.ParseError);
+    }
+
+    [Fact]
+    public void RunMap_ParseInvalidSections_FlattensControlCharacters_Issue3092()
+    {
+        var value = "tree,bad\nforged\tvalue";
+
+        var options = QueryCommandRunner.ParseArgs(
+            ["--sections", value],
+            jsonDefault: false,
+            validateDefaultSnippetLines: false,
+            validateDefaultMaxLineWidth: false);
+
+        Assert.Contains("--sections contains unsupported section 'bad forged value'", options.ParseError);
+        Assert.DoesNotContain("bad\nforged\tvalue", options.ParseError);
+    }
+
+    [Fact]
     public void RunMap_CompactJson_CapsSectionsAndReportsTruncation_Issue3009()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_map_compact");

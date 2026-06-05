@@ -9,6 +9,21 @@ namespace CodeIndex.Tests;
 public partial class QueryCommandRunnerTests
 {
     [Fact]
+    public void RunDeps_InvalidFormat_FlattensControlCharacters_Issue3092()
+    {
+        var value = "bad\nforged\tvalue";
+
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            ["--format", value],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("deps --format must be one of", stderr);
+        Assert.Contains("bad forged value", stderr);
+        Assert.DoesNotContain(value, stderr);
+    }
+
+    [Fact]
     public void RunReferences_AllowsExcludePathValueThatLooksLikePreviewOption()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_references_preview_like_exclude_path_value");

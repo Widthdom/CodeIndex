@@ -1484,6 +1484,25 @@ public class ConsoleUiTests
     }
 
     [Fact]
+    public void FormatBoundedValue_FlattensControlCharacters()
+    {
+        var formatted = ConsoleUi.FormatBoundedValue("bad\r\nline\t\u001b[31m");
+
+        Assert.Equal("bad  line  [31m", formatted);
+    }
+
+    [Fact]
+    public void FormatBoundedValue_TruncatedValueFlattensControlCharacters()
+    {
+        var value = new string('a', ConsoleUi.DefaultDiagnosticValueCharLimit - 1) + "\nzzz";
+
+        var formatted = ConsoleUi.FormatBoundedValue(value);
+
+        Assert.DoesNotContain("\n", formatted);
+        Assert.Contains("<truncated; original length", formatted);
+    }
+
+    [Fact]
     public void FindClosestMatches_ZeroMaxResults_ReturnsEmpty()
     {
         var candidates = new[] { "added", "changed" };

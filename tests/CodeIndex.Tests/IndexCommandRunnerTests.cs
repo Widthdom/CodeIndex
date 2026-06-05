@@ -525,6 +525,18 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void ParseArgs_UnknownIndexOption_TruncatesOversizedToken()
+    {
+        var token = "--" + new string('x', ConsoleUi.DefaultDiagnosticValueCharLimit + 20);
+
+        var options = IndexCommandRunner.ParseArgs([".", token]);
+
+        Assert.Contains("unknown option", options.ParseError);
+        Assert.Contains("<truncated; original length", options.ParseError);
+        Assert.DoesNotContain(token, options.ParseError);
+    }
+
+    [Fact]
     public void ParseArgs_ForceFlag_SetsForce()
     {
         var options = IndexCommandRunner.ParseArgs([".", "--force"]);
@@ -1520,6 +1532,32 @@ public class IndexCommandRunnerTests
 
                 Assert.True(options.MaxFileSizeBytes is null or > 0);
                 Assert.Contains("invalid --max-file-bytes value", stderr.ToString());
+            }
+            finally
+            {
+                Console.SetError(originalErr);
+            }
+        }
+    }
+
+    [Fact]
+    public void ParseArgs_MaxFileBytesInvalidValue_TruncatesOversizedValue()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalErr = Console.Error;
+            using var stderr = new StringWriter();
+            var value = new string('x', ConsoleUi.DefaultDiagnosticValueCharLimit + 1);
+            try
+            {
+                Console.SetError(stderr);
+
+                _ = IndexCommandRunner.ParseArgs([".", "--max-file-bytes", value]);
+
+                var warning = stderr.ToString();
+                Assert.Contains("invalid --max-file-bytes value", warning);
+                Assert.Contains("<truncated; original length", warning);
+                Assert.DoesNotContain(value, warning);
             }
             finally
             {
