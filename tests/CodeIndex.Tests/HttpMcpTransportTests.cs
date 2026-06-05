@@ -211,7 +211,8 @@ public class HttpMcpTransportTests : IDisposable
         await using var harness = await McpHttpHarness.StartAsync(_dbPath, requestLogger: records.Enqueue);
 
         using var client = new HttpClient();
-        using var response = await client.GetAsync(new Uri(new Uri(harness.Endpoint), new string('p', HttpMcpTransport.MaxRequestLogFieldCharacters + 100)));
+        var longPath = string.Join('/', Enumerable.Repeat("segment", 50));
+        using var response = await client.GetAsync(new Uri(new Uri(harness.Endpoint), longPath));
 
         Assert.Equal(HttpStatusCode.MethodNotAllowed, response.StatusCode);
         var record = Assert.Single(await WaitForRequestLogRecordsAsync(records, 1));
