@@ -144,6 +144,34 @@ public sealed class DbSearchReaderIssueTests : IDisposable
         Assert.Equal("public void Setup() { TinyGuardMarker(); }", evidence.Text);
     }
 
+    [Fact]
+    public void Search_GuardFiltersShareSameFocusWindowAcrossFilters_Issue3084()
+    {
+        InsertIndexedFile(
+            "src/guard-cache.cs",
+            "csharp",
+            """
+            public void First() { FirstGuardMarker(); }
+            public void Second() { SecondGuardMarker(); }
+            public void Run() { CachedWindowNeedle(); }
+            """);
+
+        var results = _reader.Search(
+            "CachedWindowNeedle",
+            exact: true,
+            pathPatterns: ["src/guard-cache.cs"],
+            limit: 1,
+            guardFilters:
+            [
+                new SearchGuardFilter(SearchGuardRole.Require, SearchGuardDirection.Before, "FirstGuardMarker"),
+                new SearchGuardFilter(SearchGuardRole.Require, SearchGuardDirection.Before, "SecondGuardMarker"),
+            ],
+            guardWindow: 2);
+
+        var result = Assert.Single(results);
+        Assert.Equal([1, 2], result.GuardEvidence!.Select(evidence => evidence.Line).ToArray());
+    }
+
     private void InsertIndexedFile(string path, string lang, string content, DateTime? modified = null)
     {
         var normalized = content.Replace("\r\n", "\n");

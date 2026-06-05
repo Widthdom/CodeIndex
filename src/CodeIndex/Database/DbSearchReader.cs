@@ -22,6 +22,7 @@ public partial class DbReader
     internal const int MaxGuardedSearchCandidates = 1000;
     private const int MinGuardedSearchCandidates = 200;
     private const int GuardedSearchOverFetchFactor = 50;
+    private const int MaxSearchGuardLineWindowCacheEntries = 256;
 
     /// <summary>
     /// Sanitize user input for FTS5 MATCH by quoting each token as a phrase.
@@ -490,6 +491,7 @@ public partial class DbReader
     {
         guardWindow = Math.Clamp(guardWindow, 0, MaxSearchGuardWindow);
         var filtered = new List<SearchResult>(results.Count);
+        var lineWindowCache = new Dictionary<SearchGuardLineWindowKey, SortedDictionary<int, string>>();
         foreach (var result in results)
         {
             foreach (var (focusLine, focusText) in FindPrimarySearchMatchLines(result, primaryMatchContext))
@@ -498,7 +500,7 @@ public partial class DbReader
                 var keep = true;
                 foreach (var filter in guardFilters)
                 {
-                    var match = FindGuardEvidence(result.Path, focusLine, filter, guardWindow, primaryMatchContext.GetEffectiveLang(result));
+                    var match = FindGuardEvidence(result.Path, focusLine, filter, guardWindow, primaryMatchContext.GetEffectiveLang(result), lineWindowCache);
                     var matched = match != null;
                     if (filter.Role == SearchGuardRole.Require && !matched)
                     {
@@ -596,7 +598,13 @@ public partial class DbReader
             .ToArray();
     }
 
-    private SearchGuardEvidence? FindGuardEvidence(string path, int focusLine, SearchGuardFilter filter, int guardWindow, string? lang)
+    private SearchGuardEvidence? FindGuardEvidence(
+        string path,
+        int focusLine,
+        SearchGuardFilter filter,
+        int guardWindow,
+        string? lang,
+        Dictionary<SearchGuardLineWindowKey, SortedDictionary<int, string>> lineWindowCache)
     {
         var windowStart = filter.Direction == SearchGuardDirection.Before
             ? Math.Max(1, focusLine - guardWindow)
@@ -608,7 +616,7 @@ public partial class DbReader
         if (windowEnd < windowStart)
             return null;
 
-        var lineWindow = ReadLineWindow(path, windowStart, windowEnd);
+        var lineWindow = ReadLineWindow(path, windowStart, windowEnd, lineWindowCache);
         if (lineWindow.Count == 0)
             return null;
 
@@ -635,6 +643,22 @@ public partial class DbReader
         }
 
         return null;
+    }
+
+    private SortedDictionary<int, string> ReadLineWindow(
+        string path,
+        int startLine,
+        int endLine,
+        Dictionary<SearchGuardLineWindowKey, SortedDictionary<int, string>> lineWindowCache)
+    {
+        var key = new SearchGuardLineWindowKey(path, startLine, endLine);
+        if (lineWindowCache.TryGetValue(key, out var cached))
+            return cached;
+
+        var lineWindow = ReadLineWindow(path, startLine, endLine);
+        if (lineWindowCache.Count < MaxSearchGuardLineWindowCacheEntries)
+            lineWindowCache[key] = lineWindow;
+        return lineWindow;
     }
 
     private SortedDictionary<int, string> ReadLineWindow(string path, int startLine, int endLine)
@@ -670,6 +694,8 @@ public partial class DbReader
 
         return linesByNumber;
     }
+
+    private readonly record struct SearchGuardLineWindowKey(string Path, int StartLine, int EndLine);
 
     private static List<SearchResult> PageGuardedSearchResults(List<SearchResult> results, int limit, SearchCursor? cursor)
     {
