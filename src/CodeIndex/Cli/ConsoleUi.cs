@@ -937,7 +937,7 @@ public static class ConsoleUi
         Console.WriteLine("  --duration-format <format> Index elapsed time format: `auto` (default), `seconds`, or `hms`; JSON keeps raw elapsed_ms");
         WriteHelpLine("  --notify <mode>           Long index completion signal: auto, bell, osc9, desktop, or none (also honors CDIDX_NOTIFY; quiet/json suppress it)");
         WriteHelpLine("  --max-file-bytes <bytes>  Index only files up to this size (default: 4MiB; also honors CDIDX_MAX_FILE_BYTES; accepts K/M/G suffixes)");
-        WriteHelpLine("  --max-symbols-per-file <n> Skip file content, symbols, and references when one file emits too many symbols (default: 5000)");
+        WriteHelpLine("  --max-symbols-per-file <n> Skip file content, symbols, and references when one file emits too many symbols (default: 5000; max: 50000)");
         WriteHelpLine("  --parallelism <n>         Full-scan extraction workers (default: CPU count capped at 16; also honors CDIDX_INDEX_PARALLELISM)");
         WriteHelpLine("  --follow-symlinks <mode>  Directory symlink policy: none (default), internal, or all");
         WriteHelpLine("  --include-symbol-kind <kind>[,<kind>]  Keep only matching symbol kinds during indexing");

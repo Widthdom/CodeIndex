@@ -159,10 +159,10 @@ public static partial class IndexCommandRunner
                     maxFileSizeBytes = ParseMaxFileBytes(option["--max-file-bytes=".Length..], maxFileSizeBytes);
                     break;
                 case "--max-symbols-per-file" when i + 1 < args.Length:
-                    maxSymbolsPerFile = ParseMaxSymbolsPerFile(args[++i], maxSymbolsPerFile, "--max-symbols-per-file");
+                    maxSymbolsPerFile = ParseMaxSymbolsPerFile(args[++i], maxSymbolsPerFile, "--max-symbols-per-file", ref parseError);
                     break;
                 case var option when option.StartsWith("--max-symbols-per-file=", StringComparison.Ordinal):
-                    maxSymbolsPerFile = ParseMaxSymbolsPerFile(option["--max-symbols-per-file=".Length..], maxSymbolsPerFile, "--max-symbols-per-file");
+                    maxSymbolsPerFile = ParseMaxSymbolsPerFile(option["--max-symbols-per-file=".Length..], maxSymbolsPerFile, "--max-symbols-per-file", ref parseError);
                     break;
                 case "--parallelism" when i + 1 < args.Length:
                     parallelism = ParseIndexParallelism(args[++i], parallelism, "--parallelism");
@@ -482,10 +482,16 @@ public static partial class IndexCommandRunner
         return fallback;
     }
 
-    private static int ParseMaxSymbolsPerFile(string value, int fallback, string source)
+    private static int ParseMaxSymbolsPerFile(string value, int fallback, string source, ref string? parseError)
     {
         if (int.TryParse(value, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsed) && parsed > 0)
-            return parsed;
+        {
+            if (parsed <= MaxSymbolsPerFileLimit)
+                return parsed;
+
+            parseError ??= $"{source} must be less than or equal to {MaxSymbolsPerFileLimit}";
+            return fallback;
+        }
 
         Console.Error.WriteLine($"Warning: invalid {source} value '{value}' (ignored; use a positive integer) / 不正な {source} 値 '{value}'（無視。正の整数を指定）");
         return fallback;

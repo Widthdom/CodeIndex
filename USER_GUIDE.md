@@ -397,6 +397,7 @@ be audited whenever the matching help text changes.
 | Search snippet lines | `8` (`--snippet-lines`, max `20`) | CLI help and search runner |
 | Max line width | `512` (`--max-line-width`, `0` disables) | `LineWidthFormatter.DefaultMaxLineWidth` |
 | Index max file size | `4MiB` unless `CDIDX_MAX_FILE_BYTES` is set | index runner help |
+| Index max symbols per file | `5000` (`--max-symbols-per-file`), max `50000` | index runner help |
 | Watch debounce | `500` ms (`--debounce`), max `60000` ms | index watch runner |
 | Status stale-after hint | `24h`, overridden by `--stale-after`, `CDIDX_STALE_AFTER`, or `.cdidxrc.json`; max `30d` | status runner |
 | Color mode | `auto`, overridden by `--color`, `CLICOLOR_FORCE`, `NO_COLOR`, or `CLICOLOR=0` | `ConsoleUi` |
@@ -1265,6 +1266,7 @@ same source location.
 | `--force` | `index` | Bypass the per-database index lock. Only use when you are sure no other `cdidx index` is active against the same DB; concurrent runs may corrupt the schema. |
 | `--duration-format <auto\|seconds\|hms>` | `index` | Choose human elapsed-time display for index summaries. `auto` (default) uses unit labels; `seconds` emits decimal seconds; `hms` keeps `HH:MM:SS`. JSON always keeps raw `elapsed_ms`. |
 | `--max-file-bytes <bytes>` | `index` | Override the per-file indexing limit for this run. Defaults to 4MiB, or `CDIDX_MAX_FILE_BYTES` when set. Values accept raw bytes or `K` / `M` / `G` suffixes such as `50M`. |
+| `--max-symbols-per-file <n>` | `index` | Skip file content, symbols, and references when one file emits too many symbols. Defaults to `5000`; values above `50000` are rejected. |
 | `--parallelism <n>` | `index` | Set full-scan extraction worker count. Defaults to CPU count capped at 16, or `CDIDX_INDEX_PARALLELISM` when set. SQLite writes stay single-consumer. |
 | `--watch` | `index` | After the initial scan completes, stay running and reindex incrementally as files change (FileSystemWatcher / inotify / FSEvents). Rejects `--commits`, `--changed-between`, `--files`, and `--dry-run` because the loop already drives continuous incremental updates. |
 | `--debounce <ms>` | `index` (watch only) | Coalesce bursts of file events into a single update after `<ms>` of quiet (non-negative integer; default: 500). Invalid values emit a warning and are ignored. |
@@ -2661,6 +2663,7 @@ render できます。
 | Search snippet lines | `8`（`--snippet-lines`、最大 `20`） | CLI help と search runner |
 | Max line width | `512`（`--max-line-width`、`0` で無効） | `LineWidthFormatter.DefaultMaxLineWidth` |
 | Index max file size | `CDIDX_MAX_FILE_BYTES` 未設定時は `4MiB` | index runner help |
+| Index max symbols per file | `5000`（`--max-symbols-per-file`）、最大 `50000` | index runner help |
 | Index completion notification | `auto`（interactive terminal は bell、redirected output は none）。`--notify` / `CDIDX_NOTIFY` で上書き | index runner help |
 | Watch debounce | `500` ms（`--debounce`）、最大 `60000` ms | index watch runner |
 | Status stale-after hint | `24h`。`--stale-after` / `CDIDX_STALE_AFTER` / `.cdidxrc.json` で上書き、最大 `30d` | status runner |

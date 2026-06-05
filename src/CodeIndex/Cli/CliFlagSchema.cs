@@ -334,7 +334,7 @@ internal static class CliFlagSchema
             new() { Name = "--force", Description = "Bypass the per-database index lock", Commands = Set("index") },
             new() { Name = "--duration-format", ValuePlaceholder = "<auto|seconds|hms>", Description = "Index elapsed time display format", Commands = Set("index") },
             new() { Name = "--max-file-bytes", ValuePlaceholder = "<bytes>", Description = "Override the per-file indexing size limit", Commands = Set("index") },
-            new() { Name = "--max-symbols-per-file", ValuePlaceholder = "<n>", Description = "Skip file content, symbols, and references when one file emits too many symbols", Commands = Set("index") },
+            new() { Name = "--max-symbols-per-file", ValuePlaceholder = "<n>", Description = "Skip file content, symbols, and references when one file emits too many symbols (max 50000)", Commands = Set("index") },
             new() { Name = "--parallelism", ValuePlaceholder = "<n>", Description = "Full-scan extraction worker count (default: CPU count capped at 16; also honors CDIDX_INDEX_PARALLELISM)", Commands = Set("index") },
             new() { Name = "--memory-trace", Description = "Include phase memory samples in index JSON output", Commands = Set("index") },
             new() { Name = "--commits", ValuePlaceholder = "<commit-ref>", Description = "Update files changed in given git commits", Commands = Set("index") },

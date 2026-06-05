@@ -1488,6 +1488,25 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void ParseArgs_MaxSymbolsPerFileFlag_AcceptsMaximum_Issue3172()
+    {
+        var options = IndexCommandRunner.ParseArgs([".", "--max-symbols-per-file", $"{IndexCommandRunner.MaxSymbolsPerFileLimit}"]);
+
+        Assert.Equal(IndexCommandRunner.MaxSymbolsPerFileLimit, options.MaxSymbolsPerFile);
+        Assert.Null(options.ParseError);
+    }
+
+    [Fact]
+    public void ParseArgs_MaxSymbolsPerFileFlag_RejectsValueAboveMaximum_Issue3172()
+    {
+        var aboveMaximum = $"{IndexCommandRunner.MaxSymbolsPerFileLimit + 1}";
+        var options = IndexCommandRunner.ParseArgs([".", $"--max-symbols-per-file={aboveMaximum}"]);
+
+        Assert.Equal(IndexCommandRunner.DefaultMaxSymbolsPerFile, options.MaxSymbolsPerFile);
+        Assert.Contains("--max-symbols-per-file must be less than or equal to 50000", options.ParseError);
+    }
+
+    [Fact]
     public void ParseArgs_MaxFileBytesInvalidValue_IsIgnored()
     {
         lock (TestConsoleLock.Gate)
