@@ -25,6 +25,7 @@ internal sealed class LspServer : IDisposable
     internal const int MaxDocumentSymbolDetailChars = 512;
     internal const int MaxDocumentSymbolResponseBytes = 512 * 1024;
     internal const int MaxPositionLineChars = 16 * 1024;
+    internal const int MaxDocumentPathFallbackCandidates = 32;
     internal const int MaxUnknownMethodDiagnosticChars = 240;
     private const int JsonRpcInvalidParamsCode = -32602;
     private const int JsonRpcInternalErrorCode = -32603;
@@ -453,7 +454,7 @@ internal sealed class LspServer : IDisposable
         if (string.IsNullOrEmpty(fileName))
             return null;
 
-        var files = _reader.ListFiles(fileName, 1000);
+        var files = _reader.ListFiles(fileName, MaxDocumentPathFallbackCandidates);
         var matches = files
             .Where(file => MatchesDocumentPath(file.Path, documentPath, projectRelativePath))
             .Take(2)

@@ -1985,6 +1985,8 @@ each `detail` string to 512 characters with `...`, and stops adding symbols
 before the result array exceeds 524288 JSON bytes.
 Position-based `definition` and `references` lookups read at most 16384
 characters from the target source line before returning an empty result.
+When exact indexed path resolution misses, LSP document path fallback inspects
+at most 32 basename candidates before treating the document as unresolved.
 
 Tool results include structured JSON in `structuredContent` plus a short text summary in `content`, so AI tools can parse typed data without scraping large text blocks.
 
@@ -4263,6 +4265,8 @@ invalid request として拒否します。
 `...` 付きの 512 文字に切り詰め、result array が 524288 JSON bytes を超える前に symbol 追加を止めます。
 position-based な `definition` / `references` lookup は、対象 source line を最大 16384 文字まで読み、
 超過時は空の result を返します。
+exact indexed path resolution が失敗した場合、LSP document path fallback は最大 32 件の
+basename candidate だけを確認し、見つからなければ unresolved document として扱います。
 
 ツール結果は `structuredContent` に構造化JSON、`content` に短い要約テキストを返すため、AIツールは巨大なテキストをパースせずに型付きデータを扱えます。
 
