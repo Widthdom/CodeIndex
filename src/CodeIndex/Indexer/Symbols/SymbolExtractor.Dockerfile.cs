@@ -6,6 +6,12 @@ namespace CodeIndex.Indexer;
 
 public static partial class SymbolExtractor
 {
+    internal const int DockerfileJsonFormMaxDepth = 8;
+    private static readonly JsonDocumentOptions DockerfileJsonFormDocumentOptions = new()
+    {
+        MaxDepth = DockerfileJsonFormMaxDepth,
+    };
+
     private static void AddDockerfileAdditionalEnvSymbols(
         long fileId,
         string line,
@@ -303,7 +309,7 @@ public static partial class SymbolExtractor
     {
         try
         {
-            using var document = JsonDocument.Parse(body);
+            using var document = JsonDocument.Parse(body, DockerfileJsonFormDocumentOptions);
             if (document.RootElement.ValueKind != JsonValueKind.Array)
                 return;
 
@@ -389,7 +395,7 @@ public static partial class SymbolExtractor
 
         try
         {
-            using var document = JsonDocument.Parse(body);
+            using var document = JsonDocument.Parse(body, DockerfileJsonFormDocumentOptions);
             if (document.RootElement.ValueKind != JsonValueKind.Array)
                 return;
 
@@ -517,7 +523,7 @@ public static partial class SymbolExtractor
 
         try
         {
-            using var document = JsonDocument.Parse(body[jsonStart..]);
+            using var document = JsonDocument.Parse(body[jsonStart..], DockerfileJsonFormDocumentOptions);
             if (document.RootElement.ValueKind != JsonValueKind.Array)
                 return null;
 

@@ -15277,6 +15277,20 @@ public partial class SymbolExtractorTests
         Assert.Single(symbols);
     }
 
+    [Theory]
+    [InlineData("VOLUME ")]
+    [InlineData("SHELL ")]
+    [InlineData("COPY ")]
+    [InlineData("ADD ")]
+    public void Extract_Dockerfile_JsonFormsIgnorePayloadsBeyondParserDepthLimit(string prefix)
+    {
+        var depth = SymbolExtractor.DockerfileJsonFormMaxDepth + 1;
+        var content = prefix + new string('[', depth) + "\"/too-deep\"" + new string(']', depth) + "\n";
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Empty(symbols);
+    }
+
     [Fact]
     public void Extract_Dockerfile_DetectsOnbuildCopyDestinationPathSymbols()
     {
