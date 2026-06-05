@@ -422,13 +422,7 @@ public static class DbCommandRunner
         if (IntegrityCheckRowsForTesting != null)
             return BoundIntegrityRows(IntegrityCheckRowsForTesting());
 
-        var connectionString = dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase)
-            ? $"Data Source={dbPath}"
-            : new SqliteConnectionStringBuilder
-            {
-                DataSource = dbPath,
-                Mode = SqliteOpenMode.ReadOnly,
-            }.ConnectionString;
+        var connectionString = DbPathResolver.BuildSqliteConnectionString(dbPath, SqliteOpenMode.ReadOnly);
 
         using var connection = new SqliteConnection(connectionString);
         connection.Open();
@@ -571,13 +565,9 @@ public static class DbCommandRunner
 
     private static SqliteConnection OpenConnection(string dbPath, bool writable)
     {
-        var connectionString = dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase)
-            ? $"Data Source={dbPath}"
-            : new SqliteConnectionStringBuilder
-            {
-                DataSource = dbPath,
-                Mode = writable ? SqliteOpenMode.ReadWrite : SqliteOpenMode.ReadOnly,
-            }.ConnectionString;
+        var connectionString = DbPathResolver.BuildSqliteConnectionString(
+            dbPath,
+            writable ? SqliteOpenMode.ReadWrite : SqliteOpenMode.ReadOnly);
         var connection = new SqliteConnection(connectionString);
         connection.Open();
         return connection;

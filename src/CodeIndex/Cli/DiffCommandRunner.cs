@@ -626,13 +626,7 @@ public static class DiffCommandRunner
         if (!isUri && !File.Exists(LongPath.EnsureWindowsPrefix(dbPath)))
             throw new IOException($"database not found: {dbPath}");
 
-        var connectionString = isUri
-            ? $"Data Source={dbPath}"
-            : new SqliteConnectionStringBuilder
-            {
-                DataSource = dbPath,
-                Mode = SqliteOpenMode.ReadOnly,
-            }.ConnectionString;
+        var connectionString = DbPathResolver.BuildSqliteConnectionString(dbPath, SqliteOpenMode.ReadOnly);
 
         var connection = new SqliteConnection(connectionString);
         connection.Open();

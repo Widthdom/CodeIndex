@@ -19,6 +19,7 @@ internal static class GlobalToolLog
     internal const string LogMaxSizeMbEnvironmentVariable = "CDIDX_LOG_MAX_SIZE_MB";
     internal const string GlobalToolLogMaxBytesEnvironmentVariable = "CDIDX_GLOBAL_TOOL_LOG_MAX_BYTES";
     private const long DefaultLogMaxSizeBytes = 50L * 1024L * 1024L;
+    internal const int MirroredStderrWriteMaxChars = 8192;
     internal const int MaxLogSizeMb = 1024;
     internal const long MaxLogSizeBytes = MaxLogSizeMb * 1024L * 1024L;
     internal const int RedactionArgumentLengthLimit = 8192;
@@ -720,14 +721,17 @@ internal static class GlobalToolLog
         public override void Write(string? value)
         {
             TryWrite(() => primary.Write(value));
-            TryWrite(() => secondary.Write(value));
+            TryWrite(() => secondary.Write(FormatMirroredWrite(value)));
         }
 
         public override void WriteLine(string? value)
         {
             TryWrite(() => primary.WriteLine(value));
-            TryWrite(() => secondary.WriteLine(value));
+            TryWrite(() => secondary.WriteLine(FormatMirroredWrite(value)));
         }
+
+        private static string? FormatMirroredWrite(string? value)
+            => value == null ? null : ConsoleUi.FormatBoundedValue(value, MirroredStderrWriteMaxChars);
 
         private static void TryWrite(Action write)
         {

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using CodeIndex.Cli;
@@ -282,6 +283,182 @@ public class McpAuditLogTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_IncludeValues_RedactsSecretLikeArgumentValues_Issue3067()
+    {
+        using var sink = new AuditLogSink(_auditPath, AuditLogSink.DefaultMaxBytes, includeValues: true);
+        using var server = CreateServer(sink);
+
+        var token = "ghp_abcdefghijklmnopqrstuvwxyz123456";
+        var unknown = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "does_not_exist",
+                ["arguments"] = new JsonObject
+                {
+                    ["apiToken"] = token,
+                    ["query"] = "https://user:pass@example.test/repo",
+                },
+            },
+        };
+        _ = server.HandleMessage(unknown);
+
+        var rawLog = File.ReadAllText(_auditPath);
+        Assert.DoesNotContain(token, rawLog, StringComparison.Ordinal);
+        Assert.DoesNotContain("user:pass", rawLog, StringComparison.Ordinal);
+
+        var record = ReadOnlyRecord();
+        var values = record.GetProperty("arg_values");
+        Assert.Equal(AuditLogSink.RedactedValue, values.GetProperty("apiToken").GetString());
+        Assert.Equal(AuditLogSink.RedactedValue, values.GetProperty("query").GetString());
+        Assert.True(record.GetProperty("arg_values_redacted").GetBoolean());
+    }
+
+    [Fact]
+    public void ToolsCall_IncludeValues_BudgetsArgumentPayload_Issue3106()
+    {
+        using var sink = new AuditLogSink(_auditPath, AuditLogSink.DefaultMaxBytes, includeValues: true);
+        using var server = CreateServer(sink);
+        var longQuery = new string('q', AuditLogSink.MaxArgValueStringChars + 25);
+        var items = new JsonArray();
+        for (var i = 0; i < AuditLogSink.MaxArgValueArrayItems + 3; i++)
+            items.Add(i);
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "does_not_exist",
+                ["arguments"] = new JsonObject
+                {
+                    ["query"] = longQuery,
+                    ["items"] = items,
+                },
+            },
+        };
+
+        _ = server.HandleMessage(request);
+
+        var rawLog = File.ReadAllText(_auditPath);
+        Assert.DoesNotContain(longQuery, rawLog, StringComparison.Ordinal);
+        var record = ReadOnlyRecord();
+        Assert.True(record.GetProperty("arg_values_truncated").GetBoolean());
+        var reasons = record.GetProperty("arg_values_truncation_reasons").EnumerateArray()
+            .Select(reason => reason.GetString())
+            .ToArray();
+        Assert.Contains("string_length_limit", reasons);
+        Assert.Contains("array_item_count_limit", reasons);
+        var values = record.GetProperty("arg_values");
+        Assert.EndsWith("...", values.GetProperty("query").GetString(), StringComparison.Ordinal);
+        Assert.Equal(AuditLogSink.MaxArgValueArrayItems, values.GetProperty("items").GetArrayLength());
+    }
+
+    [Fact]
+    public void ToolsCall_IncludeValues_ChargesTopLevelArgumentKeysToValueBudget_Issue3106()
+    {
+        using var sink = new AuditLogSink(_auditPath, AuditLogSink.DefaultMaxBytes, includeValues: true);
+        using var server = CreateServer(sink);
+
+        var arguments = new JsonObject();
+        string? lastDisplayKey = null;
+        for (var i = 0; i < 64; i++)
+        {
+            var key = "arg" + i.ToString("D2", CultureInfo.InvariantCulture)
+                + "_" + new string('k', McpBoundedText.MaxDiagnosticDisplayChars + 25);
+            lastDisplayKey = McpBoundedText.ForDisplay(key).Text;
+            arguments[key] = new string('v', 200);
+        }
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "does_not_exist",
+                ["arguments"] = arguments,
+            },
+        };
+
+        _ = server.HandleMessage(request);
+
+        var record = ReadOnlyRecord();
+        Assert.True(record.GetProperty("arg_values_truncated").GetBoolean());
+        Assert.True(record.GetProperty("arg_values_serialized_bytes").GetInt32() <= AuditLogSink.MaxArgValuesSerializedBytes);
+        var reasons = record.GetProperty("arg_values_truncation_reasons").EnumerateArray()
+            .Select(reason => reason.GetString())
+            .ToArray();
+        Assert.Contains("serialized_bytes_limit", reasons);
+        Assert.False(record.GetProperty("arg_values").TryGetProperty(lastDisplayKey!, out _));
+    }
+
+    [Fact]
+    public void ToolsCall_CapsAuditArgumentKeyCount_Issue3237()
+    {
+        using var sink = new AuditLogSink(_auditPath, AuditLogSink.DefaultMaxBytes, includeValues: true);
+        using var server = CreateServer(sink);
+        var arguments = new JsonObject();
+        for (var i = 0; i < AuditLogSink.MaxAuditArgumentCount + 3; i++)
+            arguments[$"arg{i.ToString(CultureInfo.InvariantCulture)}"] = i;
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "does_not_exist",
+                ["arguments"] = arguments,
+            },
+        };
+
+        _ = server.HandleMessage(request);
+
+        var record = ReadOnlyRecord();
+        Assert.Equal(AuditLogSink.MaxAuditArgumentCount, record.GetProperty("arg_keys").GetArrayLength());
+        Assert.True(record.GetProperty("arg_keys_truncated").GetBoolean());
+        Assert.Contains(record.GetProperty("arg_key_truncation_reasons").EnumerateArray(),
+            reason => reason.GetString() == "arg_key_count_limit");
+        Assert.False(record.GetProperty("arg_values").TryGetProperty(
+            $"arg{AuditLogSink.MaxAuditArgumentCount.ToString(CultureInfo.InvariantCulture)}", out _));
+    }
+
+    [Fact]
+    public void ToolsCall_TruncatesAuditRequestId_Issue3237()
+    {
+        using var sink = new AuditLogSink(_auditPath, AuditLogSink.DefaultMaxBytes, includeValues: false);
+        using var server = CreateServer(sink);
+        var id = new string('r', AuditLogSink.MaxRequestIdChars + 25);
+        var serializedId = JsonSerializer.Serialize(id);
+        var display = McpBoundedText.ForDisplay(serializedId, AuditLogSink.MaxRequestIdChars);
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = id,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "ping",
+                ["arguments"] = new JsonObject(),
+            },
+        };
+
+        _ = server.HandleMessage(request);
+
+        var rawLog = File.ReadAllText(_auditPath);
+        Assert.DoesNotContain(id, rawLog, StringComparison.Ordinal);
+        var record = ReadOnlyRecord();
+        Assert.Equal(display.Text, record.GetProperty("request_id").GetString());
+        Assert.Equal(serializedId.Length, record.GetProperty("request_id_length").GetInt32());
+        Assert.True(record.GetProperty("request_id_truncated").GetBoolean());
+    }
+
+    [Fact]
     public void ToolsCall_ValuesOmitted_ByDefault()
     {
         using var sink = new AuditLogSink(_auditPath, AuditLogSink.DefaultMaxBytes, includeValues: false);
@@ -294,6 +471,40 @@ public class McpAuditLogTests : IDisposable
         Assert.False(record.TryGetProperty("arg_values", out _),
             "arg_values must stay absent when include-values is off");
         Assert.Equal(6, record.GetProperty("arg_lengths").GetProperty("query").GetInt32());
+    }
+
+    [Fact]
+    public void ToolsCall_IncludeValues_RedactsLongSecretLikeTopLevelArgumentKey_Issue3067()
+    {
+        using var sink = new AuditLogSink(_auditPath, AuditLogSink.DefaultMaxBytes, includeValues: true);
+        using var server = CreateServer(sink);
+
+        var secret = "top-secret-long-key-value";
+        var secretKey = new string('k', McpBoundedText.MaxDiagnosticDisplayChars + 10) + "Password";
+        var display = McpBoundedText.ForDisplay(secretKey);
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "does_not_exist",
+                ["arguments"] = new JsonObject
+                {
+                    [secretKey] = secret,
+                },
+            },
+        };
+
+        _ = server.HandleMessage(request);
+
+        var rawLog = File.ReadAllText(_auditPath);
+        Assert.DoesNotContain(secret, rawLog, StringComparison.Ordinal);
+        var record = ReadOnlyRecord();
+        Assert.Equal(display.Text, record.GetProperty("arg_keys")[0].GetString());
+        Assert.Equal(AuditLogSink.RedactedValue, record.GetProperty("arg_values").GetProperty(display.Text).GetString());
+        Assert.True(record.GetProperty("arg_values_redacted").GetBoolean());
     }
 
     [Fact]

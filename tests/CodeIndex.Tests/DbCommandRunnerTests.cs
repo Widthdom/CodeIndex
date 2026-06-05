@@ -122,6 +122,27 @@ public class DbCommandRunnerTests
     }
 
     [Fact]
+    public void Run_IntegrityCheck_FileUriSemicolonPayloadDoesNotCreateDatabase_Issue3220()
+    {
+        var missingDb = Path.Combine(Path.GetTempPath(), $"cdidx_db_uri_injection_{Guid.NewGuid():N}.db");
+        var uri = new Uri(missingDb).AbsoluteUri + ";Mode=ReadWriteCreate";
+        try
+        {
+            var (exitCode, _, stderr) = RunAndCaptureStreams(["--integrity-check", "--db", uri]);
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.Contains("failed to run integrity check", stderr);
+            Assert.False(File.Exists(missingDb));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(missingDb))
+                File.Delete(missingDb);
+        }
+    }
+
+    [Fact]
     public void Run_MissingDb_JsonShapeIncludesHint()
     {
         var missingDb = Path.Combine(Path.GetTempPath(), $"cdidx_db_missing_{Guid.NewGuid():N}.db");

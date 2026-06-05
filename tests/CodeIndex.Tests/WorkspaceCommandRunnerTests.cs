@@ -349,6 +349,10 @@ public class WorkspaceCommandRunnerTests
 
             Assert.NotNull(query);
             Assert.Contains("Ignoring active workspace state", stderr);
+            Assert.DoesNotContain(configHome, stderr);
+            Assert.DoesNotContain(ActiveWorkspace.StatePath, stderr);
+            Assert.DoesNotContain("LineNumber", stderr);
+            Assert.Contains("invalid JSON", stderr);
             Assert.Equal(Path.Combine(projectRoot, ".cdidx", "codeindex.db"), query!.DbPath);
             Assert.Equal(DbPathResolver.DataDirSourceWorkspace, query.DataDirSource);
         }
@@ -398,6 +402,36 @@ public class WorkspaceCommandRunnerTests
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
             TestProjectHelper.DeleteDirectory(configHome);
+        }
+    }
+
+    [Fact]
+    public void OversizedActiveWorkspaceEnvironment_DoesNotOverrideQueryResolution_Issue3164()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_active_workspace_env_large_project");
+        try
+        {
+            var raw = new string('a', ActiveWorkspace.MaxEnvironmentPathChars) + "TAIL_ISSUE_3164";
+            using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable);
+            Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, raw);
+
+            DbPathResolution? query = null;
+            var (_, _, stderr) = ConsoleCapture.Capture(() =>
+            {
+                query = DbPathResolver.ResolveForQuery(projectRoot, explicitDbPath: null, explicitDataDir: null);
+                return 0;
+            });
+
+            Assert.NotNull(query);
+            Assert.Contains(ActiveWorkspace.EnvironmentVariable, stderr);
+            Assert.Contains($"value exceeds {ActiveWorkspace.MaxEnvironmentPathChars} characters", stderr);
+            Assert.DoesNotContain("TAIL_ISSUE_3164", stderr);
+            Assert.Equal(Path.Combine(projectRoot, ".cdidx", "codeindex.db"), query!.DbPath);
+            Assert.Equal(DbPathResolver.DataDirSourceWorkspace, query.DataDirSource);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
 

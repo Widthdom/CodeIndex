@@ -2572,7 +2572,15 @@ public partial class McpServer : IDisposable
         var context = CurrentCorrelationContext.Value;
         var (errorCode, observedErrorType) = ExtractErrorCode(response);
         var resultCount = ExtractResultCount(response);
-        var (argKeys, argLengths, argKeyLengths, _) = SanitizeArgs(args, includeValues: false);
+        var (argKeys, argLengths, argKeyLengths, _) = SanitizeArgs(
+            args,
+            includeValues: false,
+            out _,
+            out _,
+            out _,
+            out _,
+            out var argKeysTruncated,
+            out var argKeyTruncationReasons);
         var toolDisplay = BoundToolNameForDisplay(toolName);
         var argsObject = new JsonObject();
         foreach (var pair in argLengths)
@@ -2595,6 +2603,10 @@ public partial class McpServer : IDisposable
         };
         toolDisplay.AddMetadata(evt, "tool");
         AddArgKeyMetadata(evt, argKeyLengths);
+        if (argKeysTruncated)
+            evt["arg_keys_truncated"] = true;
+        if (argKeyTruncationReasons.Count > 0)
+            evt["arg_key_truncation_reasons"] = JsonSerializer.SerializeToNode(argKeyTruncationReasons, _jsonOptions);
         DeferFrameLog(() => WriteMcpLogLine(evt.ToJsonString(_jsonOptions)));
     }
 
@@ -2665,14 +2677,25 @@ public partial class McpServer : IDisposable
         {
             var (errorCode, observedErrorType) = ExtractErrorCode(response);
             var resultCount = ExtractResultCount(response);
-            var (argKeys, argLengths, argKeyLengths, argValuesEcho) = SanitizeArgs(args, _auditLog.IncludeValues);
+            var (argKeys, argLengths, argKeyLengths, argValuesEcho) =
+                SanitizeArgs(args, _auditLog.IncludeValues,
+                    out var argValuesRedacted,
+                    out var argValuesTruncated,
+                    out var argValueTruncationReasons,
+                    out var argValuesSerializedBytes,
+                    out var argKeysTruncated,
+                    out var argKeyTruncationReasons);
             var toolDisplay = BoundToolNameForDisplay(toolName);
+            var requestId = SerializeRequestId(id);
+            BoundedMcpText? requestIdDisplay = requestId is null
+                ? null
+                : McpBoundedText.ForDisplay(requestId, AuditLogSink.MaxRequestIdChars);
             var evt = new AuditLogSink.AuditEvent(
                 Timestamp: startedAt,
                 Tool: toolDisplay.Text,
                 CallerName: _clientName,
                 CallerVersion: _clientVersion,
-                RequestId: SerializeRequestId(id),
+                RequestId: requestIdDisplay?.Text,
                 ArgKeys: argKeys,
                 ArgLengths: argLengths,
                 ArgValues: argValuesEcho,
@@ -2683,6 +2706,14 @@ public partial class McpServer : IDisposable
                 ToolLength: toolDisplay.Truncated ? toolDisplay.OriginalLength : null,
                 ToolTruncated: toolDisplay.Truncated,
                 ArgKeyLengths: argKeyLengths,
+                ArgKeysTruncated: argKeysTruncated,
+                ArgKeyTruncationReasons: argKeyTruncationReasons,
+                ArgValuesRedacted: argValuesRedacted,
+                ArgValuesTruncated: argValuesTruncated,
+                ArgValueTruncationReasons: argValueTruncationReasons,
+                ArgValuesSerializedBytes: argValuesSerializedBytes,
+                RequestIdLength: requestIdDisplay?.Truncated == true ? requestIdDisplay.Value.OriginalLength : null,
+                RequestIdTruncated: requestIdDisplay?.Truncated == true,
                 CallerNameLength: _clientNameDisplay?.Truncated == true ? _clientNameDisplay.Value.OriginalLength : null,
                 CallerNameTruncated: _clientNameDisplay?.Truncated == true,
                 CallerVersionLength: _clientVersionDisplay?.Truncated == true ? _clientVersionDisplay.Value.OriginalLength : null,
@@ -2764,7 +2795,26 @@ public partial class McpServer : IDisposable
     /// </summary>
     internal static (IReadOnlyList<string> Keys, IReadOnlyList<KeyValuePair<string, int>> Lengths, IReadOnlyList<KeyValuePair<string, int>> KeyLengths, JsonNode? ValuesEcho)
         SanitizeArgs(JsonNode? args, bool includeValues)
+        => SanitizeArgs(args, includeValues, out _, out _, out _, out _, out _, out _);
+
+    private static (IReadOnlyList<string> Keys, IReadOnlyList<KeyValuePair<string, int>> Lengths, IReadOnlyList<KeyValuePair<string, int>> KeyLengths, JsonNode? ValuesEcho)
+        SanitizeArgs(
+            JsonNode? args,
+            bool includeValues,
+            out bool argValuesRedacted,
+            out bool argValuesTruncated,
+            out IReadOnlyList<string> argValueTruncationReasons,
+            out int? argValuesSerializedBytes,
+            out bool argKeysTruncated,
+            out IReadOnlyList<string> argKeyTruncationReasons)
     {
+        argValuesRedacted = false;
+        argValuesTruncated = false;
+        argValueTruncationReasons = Array.Empty<string>();
+        argValuesSerializedBytes = null;
+        argKeysTruncated = false;
+        var argKeyReasons = new List<string>();
+        argKeyTruncationReasons = argKeyReasons;
         if (args is not JsonObject argsObj)
             return (Array.Empty<string>(), Array.Empty<KeyValuePair<string, int>>(), Array.Empty<KeyValuePair<string, int>>(), null);
 
@@ -2773,27 +2823,68 @@ public partial class McpServer : IDisposable
         var keyLengths = new List<KeyValuePair<string, int>>();
         var usedKeys = new HashSet<string>(StringComparer.Ordinal);
         JsonObject? echoObject = includeValues ? new JsonObject() : null;
+        AuditLogSink.ArgValueSanitizationState? valueState = includeValues ? new AuditLogSink.ArgValueSanitizationState() : null;
+        var argValueBudgetExhausted = false;
+        var argumentCount = 0;
         foreach (var (key, value) in argsObj)
         {
+            if (argumentCount >= AuditLogSink.MaxAuditArgumentCount)
+            {
+                argKeysTruncated = true;
+                AddUniqueReason(argKeyReasons, "arg_key_count_limit");
+                break;
+            }
+
             var keyDisplay = McpBoundedText.ForDisplay(key);
             var displayKey = MakeUniqueArgumentDisplayKey(key, keyDisplay, usedKeys);
             keys.Add(displayKey);
             lengths.Add(new KeyValuePair<string, int>(displayKey, AuditLogSink.MeasureArgLength(value)));
             if (keyDisplay.Truncated)
+            {
                 keyLengths.Add(new KeyValuePair<string, int>(displayKey, keyDisplay.OriginalLength));
-            if (echoObject is not null)
+                argKeysTruncated = true;
+                AddUniqueReason(argKeyReasons, "arg_key_length_limit");
+            }
+            if (echoObject is not null && !argValueBudgetExhausted)
             {
                 try
                 {
-                    echoObject[displayKey] = value?.DeepClone();
+                    if (!valueState!.TryReservePropertyName(displayKey))
+                    {
+                        argValueBudgetExhausted = true;
+                    }
+                    else
+                    {
+                        echoObject[displayKey] = AuditLogSink.SanitizeArgValue(key, value, valueState);
+                        argValuesRedacted = valueState.Redacted;
+                    }
                 }
                 catch
                 {
                     echoObject = null;
                 }
             }
+            argumentCount++;
         }
+        if (valueState is not null)
+        {
+            argValuesRedacted = valueState.Redacted;
+            argValuesTruncated = valueState.Truncated;
+            argValueTruncationReasons = valueState.TruncationReasons;
+            argValuesSerializedBytes = valueState.SerializedBytes;
+        }
+
         return (keys, lengths, keyLengths, includeValues ? echoObject : null);
+    }
+
+    private static void AddUniqueReason(List<string> reasons, string reason)
+    {
+        foreach (var existing in reasons)
+        {
+            if (StringComparer.Ordinal.Equals(existing, reason))
+                return;
+        }
+        reasons.Add(reason);
     }
 
     private static string MakeUniqueArgumentDisplayKey(string rawKey, BoundedMcpText display, ISet<string> usedKeys)
