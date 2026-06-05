@@ -219,6 +219,22 @@ public class SearchSnippetFormatterTests
     }
 
     [Fact]
+    public void BuildExcerpt_LargeContentMaterializesOnlyRequestedWindow_Issue3087()
+    {
+        var lines = Enumerable.Range(1, 50_000)
+            .Select(i => i == 25_000 ? "call Target()" : $"line {i}");
+        var content = string.Join('\n', lines);
+
+        var excerpt = SearchSnippetFormatter.BuildExcerpt(content, "Target", absoluteStartLine: 1, maxLines: 3);
+
+        Assert.Equal(24_999, excerpt.StartLine);
+        Assert.Equal(25_001, excerpt.EndLine);
+        Assert.Equal(3, excerpt.Lines.Count);
+        Assert.Equal([25_000], excerpt.MatchLines);
+        Assert.Contains("call Target()", excerpt.Lines);
+    }
+
+    [Fact]
     public void ToCompactResults_PreparedQueryContextRemainsLanguageAwareAcrossResults()
     {
         var context = SearchSnippetFormatter.PrepareQueryContext("Foo.Bar");

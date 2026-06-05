@@ -110,8 +110,14 @@ public static class SearchSnippetFormatter
         maxLines = ClampSnippetLines(maxLines);
         maxLineWidth = LineWidthFormatter.ClampMaxLineWidth(maxLineWidth);
 
-        var lines = content.Replace("\r\n", "\n").Split('\n');
-        if (lines.Length == 0)
+        var queryForLanguage = queryContext.ForLanguage(lang);
+        var normalizedQuery = queryForLanguage.NormalizedQuery;
+        var tokens = queryForLanguage.Tokens;
+        var normalizeCSharpVerbatimNames = queryForLanguage.NormalizeCSharpVerbatimNames;
+
+        var matchScan = FindMatchingLineIndexes(content, normalizedQuery, tokens, caseSensitive, normalizeCSharpVerbatimNames);
+        var lineCount = matchScan.LineCount;
+        if (lineCount == 0)
         {
             return new SearchSnippetExcerpt
             {
@@ -120,23 +126,7 @@ public static class SearchSnippetFormatter
             };
         }
 
-        var queryForLanguage = queryContext.ForLanguage(lang);
-        var normalizedQuery = queryForLanguage.NormalizedQuery;
-        var tokens = queryForLanguage.Tokens;
-        var normalizeCSharpVerbatimNames = queryForLanguage.NormalizeCSharpVerbatimNames;
-
-        string[]? normalizedLines = null;
-        int[][]? rawIndexMaps = null;
-        if (normalizeCSharpVerbatimNames)
-        {
-            normalizedLines = new string[lines.Length];
-            rawIndexMaps = new int[lines.Length][];
-            for (int i = 0; i < lines.Length; i++)
-                normalizedLines[i] = CSharpVerbatimNameNormalizer.Normalize(lines[i], out rawIndexMaps[i]);
-        }
-
-        var matchLinesSource = normalizedLines ?? lines;
-        var matchIndexes = FindMatchingLineIndexes(matchLinesSource, normalizedQuery, tokens, caseSensitive);
+        var matchIndexes = matchScan.MatchIndexes;
         var focusStart = matchIndexes.Count > 0 ? matchIndexes[0] : 0;
         var focusEnd = focusStart;
         var includedMatchLineCount = Math.Min(1, matchIndexes.Count);
@@ -156,7 +146,7 @@ public static class SearchSnippetFormatter
         var after = remaining - before;
 
         var start = Math.Max(0, focusStart - before);
-        var end = Math.Min(lines.Length - 1, focusEnd + after);
+        var end = Math.Min(lineCount - 1, focusEnd + after);
         while ((end - start) + 1 < maxLines)
         {
             if (start > 0)
@@ -165,7 +155,7 @@ public static class SearchSnippetFormatter
                 continue;
             }
 
-            if (end < lines.Length - 1)
+            if (end < lineCount - 1)
             {
                 end++;
                 continue;
@@ -180,18 +170,21 @@ public static class SearchSnippetFormatter
         var clampedLines = new List<string>((end - start) + 1);
         var truncatedCharCounts = new List<int>();
         var truncatedLineCount = 0;
+        var snippetLines = ReadSnippetLines(content, start, end, normalizeCSharpVerbatimNames);
 
-        for (int i = start; i <= end; i++)
+        foreach (var snippetLine in snippetLines)
         {
-            var originalLine = lines[i];
+            var i = snippetLine.Index;
+            var originalLine = snippetLine.Text;
+            var isMatch = matchSet.Contains(i);
             ClampedTextResult clamped;
-            if (normalizeCSharpVerbatimNames && matchSet.Contains(i) && normalizedLines != null && rawIndexMaps != null)
+            if (normalizeCSharpVerbatimNames && isMatch && snippetLine.NormalizedText != null && snippetLine.RawIndexMap != null)
             {
-                clamped = ClampNormalizedSnippetLine(originalLine, normalizedLines[i], rawIndexMaps[i], maxLineWidth, normalizedQuery, tokens, caseSensitive, focusMode);
+                clamped = ClampNormalizedSnippetLine(originalLine, snippetLine.NormalizedText, snippetLine.RawIndexMap, maxLineWidth, normalizedQuery, tokens, caseSensitive, focusMode);
             }
             else
             {
-                clamped = ClampSnippetLine(originalLine, maxLineWidth, matchSet.Contains(i) ? normalizedQuery : null, tokens, caseSensitive, focusMode);
+                clamped = ClampSnippetLine(originalLine, maxLineWidth, isMatch ? normalizedQuery : null, tokens, caseSensitive, focusMode);
             }
             clampedLines.Add(clamped.Text);
             if (clamped.Truncated)
@@ -200,18 +193,18 @@ public static class SearchSnippetFormatter
                 truncatedCharCounts.Add(clamped.TruncatedCharCount);
             }
 
-            if (!matchSet.Contains(i))
+            if (!isMatch)
                 continue;
 
             var absoluteLine = absoluteStartLine + i;
             matchLines.Add(absoluteLine);
-            var matchLineForTerms = normalizeCSharpVerbatimNames && normalizedLines != null ? normalizedLines[i] : originalLine;
-            var termOccurrences = normalizeCSharpVerbatimNames && normalizedLines != null && rawIndexMaps != null
-                ? GetMatchedTermOccurrences(normalizedLines[i], absoluteLine, normalizedQuery, tokens, caseSensitive, originalLine, rawIndexMaps[i])
+            var matchLineForTerms = normalizeCSharpVerbatimNames && snippetLine.NormalizedText != null ? snippetLine.NormalizedText : originalLine;
+            var termOccurrences = normalizeCSharpVerbatimNames && snippetLine.NormalizedText != null && snippetLine.RawIndexMap != null
+                ? GetMatchedTermOccurrences(snippetLine.NormalizedText, absoluteLine, normalizedQuery, tokens, caseSensitive, originalLine, snippetLine.RawIndexMap)
                 : GetMatchedTermOccurrences(originalLine, absoluteLine, normalizedQuery, tokens, caseSensitive);
             var literalTermOccurrences = exposeLiteralHighlights
-                ? normalizeCSharpVerbatimNames && normalizedLines != null && rawIndexMaps != null
-                    ? GetMatchedTermOccurrences(normalizedLines[i], absoluteLine, normalizedQuery, [], caseSensitive, originalLine, rawIndexMaps[i])
+                ? normalizeCSharpVerbatimNames && snippetLine.NormalizedText != null && snippetLine.RawIndexMap != null
+                    ? GetMatchedTermOccurrences(snippetLine.NormalizedText, absoluteLine, normalizedQuery, [], caseSensitive, originalLine, snippetLine.RawIndexMap)
                     : GetMatchedTermOccurrences(originalLine, absoluteLine, normalizedQuery, [], caseSensitive)
                 : null;
             highlights.Add(new SearchHighlight
@@ -238,7 +231,7 @@ public static class SearchSnippetFormatter
             ContextBefore = focusStart - start,
             ContextAfter = end - focusEnd,
             TruncatedBefore = start > 0,
-            TruncatedAfter = end < lines.Length - 1,
+            TruncatedAfter = end < lineCount - 1,
             TruncatedLineCount = truncatedLineCount,
             DroppedMatchLineCount = droppedMatchLineCount,
             TruncationContext = new SearchTruncationContext
@@ -432,31 +425,98 @@ public static class SearchSnippetFormatter
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
-    private static List<int> FindMatchingLineIndexes(string[] lines, string query, string[] tokens, bool caseSensitive = false)
+    private static SearchSnippetLineMatchScan FindMatchingLineIndexes(string content, string query, string[] tokens, bool caseSensitive, bool normalizeCSharpVerbatimNames)
     {
         var comparison = caseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
         var matches = new List<int>();
+        var lineCount = 0;
 
         if (!string.IsNullOrWhiteSpace(query))
         {
-            for (int i = 0; i < lines.Length; i++)
+            foreach (var (i, rawLine) in EnumerateContentLines(content))
             {
-                if (lines[i].Contains(query, comparison))
+                lineCount++;
+                var line = normalizeCSharpVerbatimNames ? CSharpVerbatimNameNormalizer.Normalize(rawLine) : rawLine;
+                if (line.Contains(query, comparison))
                     matches.Add(i);
             }
         }
+        else
+        {
+            lineCount = CountContentLines(content);
+        }
 
         if (matches.Count > 0 || tokens.Length == 0)
-            return matches;
+            return new SearchSnippetLineMatchScan(matches, lineCount);
 
-        for (int i = 0; i < lines.Length; i++)
+        matches.Clear();
+        lineCount = 0;
+        foreach (var (i, rawLine) in EnumerateContentLines(content))
         {
-            if (tokens.Any(token => lines[i].Contains(token, comparison)))
+            lineCount++;
+            var line = normalizeCSharpVerbatimNames ? CSharpVerbatimNameNormalizer.Normalize(rawLine) : rawLine;
+            if (tokens.Any(token => line.Contains(token, comparison)))
                 matches.Add(i);
         }
 
-        return matches;
+        return new SearchSnippetLineMatchScan(matches, lineCount);
     }
+
+    private static List<SearchSnippetLine> ReadSnippetLines(string content, int start, int end, bool normalizeCSharpVerbatimNames)
+    {
+        var lines = new List<SearchSnippetLine>((end - start) + 1);
+        foreach (var (index, rawLine) in EnumerateContentLines(content))
+        {
+            if (index < start)
+                continue;
+            if (index > end)
+                break;
+
+            if (normalizeCSharpVerbatimNames)
+            {
+                var normalized = CSharpVerbatimNameNormalizer.Normalize(rawLine, out var rawIndexMap);
+                lines.Add(new SearchSnippetLine(index, rawLine, normalized, rawIndexMap));
+            }
+            else
+            {
+                lines.Add(new SearchSnippetLine(index, rawLine, null, null));
+            }
+        }
+
+        return lines;
+    }
+
+    private static int CountContentLines(string content)
+    {
+        var count = 0;
+        foreach (var _ in EnumerateContentLines(content))
+            count++;
+        return count;
+    }
+
+    private static IEnumerable<(int Index, string Text)> EnumerateContentLines(string content)
+    {
+        var lineStart = 0;
+        var lineIndex = 0;
+        for (var i = 0; i < content.Length; i++)
+        {
+            if (content[i] != '\n')
+                continue;
+
+            var lineEnd = i;
+            if (lineEnd > lineStart && content[lineEnd - 1] == '\r')
+                lineEnd--;
+            yield return (lineIndex, content[lineStart..lineEnd]);
+            lineIndex++;
+            lineStart = i + 1;
+        }
+
+        yield return (lineIndex, content[lineStart..]);
+    }
+
+    private sealed record SearchSnippetLineMatchScan(List<int> MatchIndexes, int LineCount);
+
+    private sealed record SearchSnippetLine(int Index, string Text, string? NormalizedText, int[]? RawIndexMap);
 
     private static List<SearchTermOccurrence> GetMatchedTermOccurrences(string line, int absoluteLine, string query, string[] tokens, bool caseSensitive = false, string? rawLine = null, int[]? rawIndexMap = null)
     {
