@@ -117,6 +117,7 @@ public partial class DbReader
         var normalizedQuery = rawQuery ? query : NormalizeLiteralSearchQuery(query, lang);
         var coverageTokens = exact ? new List<string>() : GetSearchCoverageTokens(normalizedQuery, rawQuery);
         var hasGuardFilters = guardFilters is { Count: > 0 };
+        var searchMatchLineContext = SearchMatchLineContext.Create(query, lang, exact);
         var exactSubstringBoost = !exact && !rawQuery && IsPunctuationHeavyLiteralQuery(query);
         var guardedCandidateLimit = hasGuardFilters ? GetGuardedSearchCandidateLimit(limit, cursor) : 0;
         using var cmd = _conn.CreateCommand();
@@ -226,7 +227,7 @@ public partial class DbReader
         if (guardCandidateLimitReached && results.Count < GetGuardedSearchRequestedPageEnd(limit, cursor))
             throw new SearchGuardCandidateLimitException(guardedCandidateLimit, limit, cursor?.Offset ?? 0);
 
-        AttachSearchEnclosingSymbols(results, query, exact);
+        AttachSearchEnclosingSymbols(results, searchMatchLineContext);
         return hasGuardFilters ? PageGuardedSearchResults(results, limit, cursor) : results;
     }
 
@@ -250,11 +251,11 @@ public partial class DbReader
         return requestedOffset + requestedLimit;
     }
 
-    private void AttachSearchEnclosingSymbols(IReadOnlyList<SearchResult> results, string query, bool caseSensitive)
+    private void AttachSearchEnclosingSymbols(IReadOnlyList<SearchResult> results, SearchMatchLineContext matchLineContext)
     {
         foreach (var result in results)
         {
-            var matchLine = GetFirstSearchMatchLine(result, query, caseSensitive);
+            var matchLine = GetFirstSearchMatchLine(result, matchLineContext);
             if (!matchLine.HasValue)
                 continue;
 
@@ -270,54 +271,82 @@ public partial class DbReader
         }
     }
 
-    private static int? GetFirstSearchMatchLine(SearchResult result, string query, bool caseSensitive)
+    private static int? GetFirstSearchMatchLine(SearchResult result, SearchMatchLineContext context)
     {
-        var lines = result.Content.Replace("\r\n", "\n").Split('\n');
-        if (lines.Length == 0)
-            return null;
+        var prepared = context.ForResult(result);
+        int? firstTokenMatchLine = null;
 
-        var normalizedQuery = ExactSourceSearchNormalizer.Normalize(query.Trim(), result.Lang);
-        var normalizedLines = new string[lines.Length];
-        for (int i = 0; i < lines.Length; i++)
-            normalizedLines[i] = ExactSourceSearchNormalizer.Normalize(lines[i], result.Lang);
+        foreach (var (lineIndex, text) in EnumerateContentLines(result.Content))
+        {
+            var line = prepared.NormalizeLine(text);
+            if (!string.IsNullOrWhiteSpace(prepared.NormalizedQuery) &&
+                line.Contains(prepared.NormalizedQuery, prepared.Comparison))
+            {
+                return result.StartLine + lineIndex;
+            }
 
-        var tokens = query
-            .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
-            .Select(NormalizeSearchSnippetToken)
-            .Where(token => token.Length > 0)
-            .Where(token => token is not "AND" and not "OR" and not "NOT" and not "NEAR")
-            .Select(token => ExactSourceSearchNormalizer.Normalize(token, result.Lang))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
+            if (firstTokenMatchLine.HasValue || prepared.Tokens.Length == 0)
+                continue;
 
-        var matchIndexes = FindSearchMatchingLineIndexes(normalizedLines, normalizedQuery, tokens, caseSensitive);
-        return matchIndexes.Count > 0 ? result.StartLine + matchIndexes[0] : null;
+            if (prepared.Tokens.Any(token => line.Contains(token, prepared.Comparison)))
+                firstTokenMatchLine = result.StartLine + lineIndex;
+        }
+
+        return firstTokenMatchLine;
     }
 
-    private static List<int> FindSearchMatchingLineIndexes(string[] lines, string query, string[] tokens, bool caseSensitive)
+    private sealed class SearchMatchLineContext
     {
-        var comparison = caseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
-        var matches = new List<int>();
+        private readonly string _query;
+        private readonly string? _queryLang;
+        private readonly bool _caseSensitive;
+        private readonly Dictionary<string, SearchMatchLineTerms> _termsByLang = new(StringComparer.OrdinalIgnoreCase);
 
-        if (!string.IsNullOrWhiteSpace(query))
+        private SearchMatchLineContext(string query, string? queryLang, bool caseSensitive)
         {
-            for (int i = 0; i < lines.Length; i++)
-            {
-                if (lines[i].Contains(query, comparison))
-                    matches.Add(i);
-            }
+            _query = query;
+            _queryLang = queryLang;
+            _caseSensitive = caseSensitive;
         }
 
-        if (matches.Count > 0 || tokens.Length == 0)
-            return matches;
+        public static SearchMatchLineContext Create(string query, string? queryLang, bool caseSensitive)
+            => new(query, queryLang, caseSensitive);
 
-        for (int i = 0; i < lines.Length; i++)
+        public SearchMatchLineTerms ForResult(SearchResult result)
         {
-            if (tokens.Any(token => lines[i].Contains(token, comparison)))
-                matches.Add(i);
+            var lang = _queryLang ?? result.Lang;
+            var key = lang ?? string.Empty;
+            if (_termsByLang.TryGetValue(key, out var prepared))
+                return prepared;
+
+            prepared = SearchMatchLineTerms.Create(_query, lang, _caseSensitive);
+            _termsByLang[key] = prepared;
+            return prepared;
+        }
+    }
+
+    private sealed record SearchMatchLineTerms(
+        string NormalizedQuery,
+        string[] Tokens,
+        StringComparison Comparison,
+        string? Lang)
+    {
+        public static SearchMatchLineTerms Create(string query, string? lang, bool caseSensitive)
+        {
+            var normalizedQuery = ExactSourceSearchNormalizer.Normalize(query.Trim(), lang);
+            var tokens = query
+                .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
+                .Select(NormalizeSearchSnippetToken)
+                .Where(token => token.Length > 0)
+                .Where(token => token is not "AND" and not "OR" and not "NOT" and not "NEAR")
+                .Select(token => ExactSourceSearchNormalizer.Normalize(token, lang))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            var comparison = caseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+            return new SearchMatchLineTerms(normalizedQuery, tokens, comparison, lang);
         }
 
-        return matches;
+        public string NormalizeLine(string line) => ExactSourceSearchNormalizer.Normalize(line, Lang);
     }
 
     private static string NormalizeSearchSnippetToken(string token)

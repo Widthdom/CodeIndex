@@ -213,6 +213,36 @@ public class DbReaderTests : IDisposable
         Assert.Single(cursorResults);
     }
 
+    [Fact]
+    public void Search_EnclosingSymbolUsesPreparedMatchLineContext_Issue3086()
+    {
+        var filler = string.Join('\n', Enumerable.Range(1, 2_000).Select(i => $"        // filler {i}"));
+        InsertIndexedFile(
+            "src/enclosing-large.cs",
+            "csharp",
+            $$"""
+            namespace Demo;
+            public class Worker
+            {
+                public void Run()
+                {
+            {{filler}}
+                    EnclosingNeedle();
+                }
+            }
+            """);
+
+        var results = _reader.Search(
+            "EnclosingNeedle",
+            exact: true,
+            pathPatterns: ["src/enclosing-large.cs"],
+            limit: 1);
+
+        var result = Assert.Single(results);
+        Assert.Equal("Run", result.EnclosingSymbolName);
+        Assert.Equal("function", result.EnclosingSymbolKind);
+    }
+
     [Theory]
     [InlineData("rowid:authenticate", "rowid:")]
     [InlineData("title:authenticate", "title:")]
