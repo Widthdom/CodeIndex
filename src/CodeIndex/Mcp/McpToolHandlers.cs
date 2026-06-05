@@ -2830,16 +2830,6 @@ public partial class McpServer
                 continue;
             }
 
-            if (ValidateProjectFilterArguments(toolArgs) is JsonObject projectFilterError)
-            {
-                AppendSlotError(requestIndex, toolName, toolArgs, slotStopwatch, projectFilterError["message"]!.GetValue<string>(),
-                    category: McpErrorEnvelope.CategoryInvalidArgument,
-                    suggestion: "Use a project name or project path from the current workspace, or correct the solution filter.",
-                    retrySafe: false,
-                    extraData: projectFilterError);
-                continue;
-            }
-
             // Honor the per-deployment enablement gate inside batch_query too (#1561). Without
             // this, an operator who disabled a tool through `CDIDX_MCP_TOOLS_ALLOW` /
             // `CDIDX_MCP_TOOLS_DENY` could still reach it by smuggling the name into a batch
@@ -2901,6 +2891,16 @@ public partial class McpServer
             if (!slotDecision.Allowed)
             {
                 AppendRateLimitedSlot(requestIndex, toolName, toolArgs, slotStopwatch, slotDecision.RetryAfterMs);
+                continue;
+            }
+
+            if (ValidateProjectFilterArguments(toolArgs) is JsonObject projectFilterError)
+            {
+                AppendSlotError(requestIndex, toolName, toolArgs, slotStopwatch, projectFilterError["message"]!.GetValue<string>(),
+                    category: McpErrorEnvelope.CategoryInvalidArgument,
+                    suggestion: "Use a project name or project path from the current workspace, or correct the solution filter.",
+                    retrySafe: false,
+                    extraData: projectFilterError);
                 continue;
             }
 

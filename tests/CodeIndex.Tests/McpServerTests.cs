@@ -12375,6 +12375,27 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_RateLimitPrecedesProjectFilterResolution_Issue3160()
+    {
+        InstallRateLimiter(_server, new RateLimiterOptions { RefillTokensPerSecond = 1.0, BurstCapacity = 1.0 });
+
+        var initialize = JsonNode.Parse("""{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"clientInfo":{"name":"client-a","version":"1.2.3"}}}""")!;
+        _server.HandleMessage(initialize);
+
+        var first = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"App"}}}""")!)!;
+        Assert.Null(first["error"]);
+
+        var second = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"search","arguments":{"query":"App","project":"DefinitelyMissingProject3160"}}}""")!)!;
+
+        var error = second["error"]!;
+        Assert.Equal(-32000, error["code"]!.GetValue<int>());
+        Assert.Contains("Rate limit exceeded", error["message"]!.GetValue<string>());
+        Assert.DoesNotContain("Project filter could not be resolved", second.ToJsonString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Initialize_CapturesClientInfoAsCallerIdentity()
     {
         // The caller identity is read from `clientInfo.name` on `initialize` so the
