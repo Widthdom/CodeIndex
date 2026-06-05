@@ -19,6 +19,20 @@ public class MacProfileDetectorTests
     }
 
     [Fact]
+    public void BuildDatabaseHint_AppArmor_TruncatesOversizedProfile_Issue3095()
+    {
+        var profileTail = new string('a', ConsoleUi.DefaultDiagnosticValueCharLimit + 1);
+        var profile = "apparmor:" + profileTail;
+
+        var hint = MacProfileDetector.BuildDatabaseHint(profile);
+
+        Assert.Contains("AppArmor", hint);
+        Assert.Contains("<truncated; original length", hint);
+        Assert.DoesNotContain(profile, hint);
+        Assert.DoesNotContain(profileTail, hint);
+    }
+
+    [Fact]
     public void BuildDatabaseHint_SELinux_NamesAuditTools()
     {
         var hint = MacProfileDetector.BuildDatabaseHint("selinux:user_u:user_r:user_t:s0");
@@ -37,11 +51,41 @@ public class MacProfileDetectorTests
     }
 
     [Fact]
+    public void DetectFromProcAttrs_OverlongAppArmorValueIsCappedBeforeParsing_Issue3095()
+    {
+        var current = new string('a', MacProfileDetector.MaxProcAttrReadChars + 1) + " (enforce)";
+
+        var profile = MacProfileDetector.DetectFromProcAttrs(current, null);
+
+        Assert.Null(profile);
+    }
+
+    [Fact]
     public void DetectFromProcAttrs_SELinuxCurrent_ReturnsContext()
     {
         var profile = MacProfileDetector.DetectFromProcAttrs("user_u:user_r:user_t:s0", null);
 
         Assert.Equal("selinux:user_u:user_r:user_t:s0", profile);
+    }
+
+    [Fact]
+    public void ReadProcAttrFile_CapsReadLength_Issue3095()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"cdidx_proc_attr_{Guid.NewGuid():N}.txt");
+        var content = new string('p', MacProfileDetector.MaxProcAttrReadChars + 100);
+        try
+        {
+            File.WriteAllText(path, content);
+
+            var value = MacProfileDetector.ReadProcAttrFileForTesting(path);
+
+            Assert.Equal(MacProfileDetector.MaxProcAttrReadChars, value.Length);
+            Assert.Equal(new string('p', MacProfileDetector.MaxProcAttrReadChars), value);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
     }
 
     [Theory]
