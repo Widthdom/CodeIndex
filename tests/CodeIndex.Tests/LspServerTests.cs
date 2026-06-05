@@ -114,7 +114,7 @@ public class LspServerTests
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             using var db = new DbContext(dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
-            var method = new string('m', 512) + "UNBOUNDED_SENTINEL";
+            var method = new string('m', LspServer.MaxLspFrameBytes - 4096) + "UNBOUNDED_SENTINEL";
             var request = JsonSerializer.Serialize(new
             {
                 jsonrpc = "2.0",
@@ -131,7 +131,7 @@ public class LspServerTests
             Assert.StartsWith("Method not found: ", message, StringComparison.Ordinal);
             Assert.EndsWith("...", message, StringComparison.Ordinal);
             Assert.DoesNotContain("UNBOUNDED_SENTINEL", message, StringComparison.Ordinal);
-            Assert.True(message.Length <= "Method not found: ".Length + 243);
+            Assert.True(message.Length <= "Method not found: ".Length + LspServer.MaxUnknownMethodDiagnosticChars + "...".Length);
         }
         finally
         {
