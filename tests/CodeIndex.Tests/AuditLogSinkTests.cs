@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using CodeIndex.Cli;
@@ -203,6 +204,97 @@ public class AuditLogSinkTests
         Assert.Contains("array_item_count_limit", state.TruncationReasons);
         Assert.EndsWith("...", sanitized["query"]!.GetValue<string>(), StringComparison.Ordinal);
         Assert.Equal(AuditLogSink.MaxArgValueArrayItems, sanitized["items"]!.AsArray().Count);
+    }
+
+    [Fact]
+    public void SanitizeArgValue_TruncatesNestedObjectKeys_Issue3237()
+    {
+        var rawKey = new string('k', McpBoundedText.MaxDiagnosticDisplayChars + 25);
+        var display = McpBoundedText.ForDisplay(rawKey);
+        var args = new JsonObject
+        {
+            [rawKey] = "value",
+        };
+        var state = new AuditLogSink.ArgValueSanitizationState();
+
+        var sanitized = AuditLogSink.SanitizeArgValue("arguments", args, state)!.AsObject();
+
+        Assert.True(state.Truncated);
+        Assert.Contains("object_property_key_length_limit", state.TruncationReasons);
+        Assert.False(sanitized.ContainsKey(rawKey));
+        Assert.True(sanitized.ContainsKey(display.Text));
+    }
+
+    [Fact]
+    public void SerializeEvent_DropsArgValues_WhenRecordExceedsEventBudget_Issue3237()
+    {
+        var evt = new AuditLogSink.AuditEvent(
+            Timestamp: DateTimeOffset.UtcNow,
+            Tool: "search",
+            CallerName: null,
+            CallerVersion: null,
+            RequestId: null,
+            ArgKeys: new[] { "query" },
+            ArgLengths: new[] { new KeyValuePair<string, int>("query", AuditLogSink.MaxSerializedEventBytes) },
+            ArgValues: new JsonObject
+            {
+                ["query"] = new string('x', AuditLogSink.MaxSerializedEventBytes + 100),
+            },
+            ResultCount: 0,
+            ElapsedMs: 1.0,
+            ErrorCode: 0,
+            ErrorType: null);
+
+        var json = AuditLogSink.SerializeEvent(evt, includeValues: true);
+
+        Assert.True(Encoding.UTF8.GetByteCount(json) <= AuditLogSink.MaxSerializedEventBytes);
+        using var doc = JsonDocument.Parse(json);
+        Assert.False(doc.RootElement.TryGetProperty("arg_values", out _));
+        Assert.True(doc.RootElement.GetProperty("arg_values_truncated").GetBoolean());
+        Assert.Contains(doc.RootElement.GetProperty("arg_values_truncation_reasons").EnumerateArray(),
+            reason => reason.GetString() == "event_size_limit");
+    }
+
+    [Fact]
+    public void SerializeEvent_DropsArgKeyMetadata_WhenRecordExceedsEventBudget_Issue3237()
+    {
+        var keys = new List<string>();
+        var lengths = new List<KeyValuePair<string, int>>();
+        var keyLengths = new List<KeyValuePair<string, int>>();
+        for (var i = 0; i < AuditLogSink.MaxAuditArgumentCount; i++)
+        {
+            var key = "arg" + i.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                + "_" + new string('\u6f22', 512);
+            keys.Add(key);
+            lengths.Add(new KeyValuePair<string, int>(key, i));
+            keyLengths.Add(new KeyValuePair<string, int>(key, key.Length));
+        }
+        var evt = new AuditLogSink.AuditEvent(
+            Timestamp: DateTimeOffset.UtcNow,
+            Tool: "search",
+            CallerName: null,
+            CallerVersion: null,
+            RequestId: null,
+            ArgKeys: keys,
+            ArgLengths: lengths,
+            ArgValues: null,
+            ResultCount: 0,
+            ElapsedMs: 1.0,
+            ErrorCode: 0,
+            ErrorType: null,
+            ArgKeyLengths: keyLengths);
+
+        var json = AuditLogSink.SerializeEvent(evt, includeValues: false);
+
+        Assert.True(Encoding.UTF8.GetByteCount(json) <= AuditLogSink.MaxSerializedEventBytes);
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        Assert.Empty(root.GetProperty("arg_keys").EnumerateArray());
+        Assert.Empty(root.GetProperty("arg_lengths").EnumerateObject());
+        Assert.False(root.TryGetProperty("arg_key_lengths", out _));
+        Assert.True(root.GetProperty("arg_keys_truncated").GetBoolean());
+        Assert.Contains(root.GetProperty("arg_key_truncation_reasons").EnumerateArray(),
+            reason => reason.GetString() == "event_size_limit");
     }
 
     [Fact]

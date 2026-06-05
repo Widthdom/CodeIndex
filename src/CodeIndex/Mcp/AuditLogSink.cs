@@ -38,6 +38,9 @@ internal sealed class AuditLogSink : IDisposable
     internal const int MaxArgValueTotalNodes = 512;
     internal const int MaxArgValueStringChars = 512;
     internal const int MaxArgValuesSerializedBytes = 16 * 1024;
+    internal const int MaxAuditArgumentCount = 64;
+    internal const int MaxRequestIdChars = 256;
+    internal const int MaxSerializedEventBytes = 64 * 1024;
 
     private static readonly Regex SecretValuePattern = new(
         "(?i)(github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9_]{20,}|sk-(?:proj-)?[A-Za-z0-9_-]{20,}|xox[baprs]-[A-Za-z0-9-]{20,}|AKIA[0-9A-Z]{16}|://[^/\\s:@]+:[^/\\s:@]+@|(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|authorization)=[^&\\s]+)",
@@ -216,6 +219,43 @@ internal sealed class AuditLogSink : IDisposable
 
     internal static string SerializeEvent(AuditEvent evt, bool includeValues)
     {
+        var serialized = SerializeEventCore(evt, includeValues);
+        if (Encoding.UTF8.GetByteCount(serialized) <= MaxSerializedEventBytes)
+            return serialized;
+
+        if (includeValues && evt.ArgValues is not null)
+        {
+            var fallback = evt with
+            {
+                ArgValues = null,
+                ArgValuesTruncated = true,
+                ArgValueTruncationReasons = AppendTruncationReason(evt.ArgValueTruncationReasons, "event_size_limit"),
+                ArgValuesSerializedBytes = null,
+            };
+            serialized = SerializeEventCore(fallback, includeValues: false);
+            if (Encoding.UTF8.GetByteCount(serialized) <= MaxSerializedEventBytes)
+                return serialized;
+
+            evt = fallback;
+        }
+
+        var compact = evt with
+        {
+            ArgKeys = Array.Empty<string>(),
+            ArgLengths = Array.Empty<KeyValuePair<string, int>>(),
+            ArgKeyLengths = null,
+            ArgKeysTruncated = true,
+            ArgKeyTruncationReasons = AppendTruncationReason(evt.ArgKeyTruncationReasons, "event_size_limit"),
+        };
+        serialized = SerializeEventCore(compact, includeValues && compact.ArgValues is not null);
+        if (Encoding.UTF8.GetByteCount(serialized) <= MaxSerializedEventBytes)
+            return serialized;
+
+        return serialized;
+    }
+
+    private static string SerializeEventCore(AuditEvent evt, bool includeValues)
+    {
         using var buffer = new MemoryStream();
         using (var jw = new Utf8JsonWriter(buffer, new JsonWriterOptions
         {
@@ -246,6 +286,10 @@ internal sealed class AuditLogSink : IDisposable
                 jw.WriteBoolean("caller_version_truncated", true);
             if (evt.RequestId is { } reqId)
                 jw.WriteString("request_id", reqId);
+            if (evt.RequestIdLength is { } requestIdLength)
+                jw.WriteNumber("request_id_length", requestIdLength);
+            if (evt.RequestIdTruncated)
+                jw.WriteBoolean("request_id_truncated", true);
 
             jw.WritePropertyName("arg_keys");
             jw.WriteStartArray();
@@ -259,6 +303,7 @@ internal sealed class AuditLogSink : IDisposable
                 jw.WriteNumber(kv.Key, kv.Value);
             jw.WriteEndObject();
 
+            var argKeysTruncated = evt.ArgKeysTruncated;
             if (evt.ArgKeyLengths is { Count: > 0 } argKeyLengths)
             {
                 jw.WritePropertyName("arg_key_lengths");
@@ -266,7 +311,17 @@ internal sealed class AuditLogSink : IDisposable
                 foreach (var kv in argKeyLengths)
                     jw.WriteNumber(kv.Key, kv.Value);
                 jw.WriteEndObject();
+                argKeysTruncated = true;
+            }
+            if (argKeysTruncated)
                 jw.WriteBoolean("arg_keys_truncated", true);
+            if (evt.ArgKeyTruncationReasons is { Count: > 0 } argKeyReasons)
+            {
+                jw.WritePropertyName("arg_key_truncation_reasons");
+                jw.WriteStartArray();
+                foreach (var reason in argKeyReasons)
+                    jw.WriteStringValue(reason);
+                jw.WriteEndArray();
             }
 
             if (includeValues && evt.ArgValues is { } values)
@@ -302,6 +357,22 @@ internal sealed class AuditLogSink : IDisposable
             jw.WriteEndObject();
         }
         return Encoding.UTF8.GetString(buffer.ToArray());
+    }
+
+    private static IReadOnlyList<string> AppendTruncationReason(IReadOnlyList<string>? reasons, string reason)
+    {
+        var result = new List<string>();
+        if (reasons is not null)
+        {
+            foreach (var existing in reasons)
+            {
+                if (StringComparer.Ordinal.Equals(existing, reason))
+                    return reasons;
+                result.Add(existing);
+            }
+        }
+        result.Add(reason);
+        return result;
     }
 
     internal static JsonNode? SanitizeArgValue(string key, JsonNode? value, out bool redacted)
@@ -355,6 +426,7 @@ internal sealed class AuditLogSink : IDisposable
             return CreateTruncatedValue();
 
         var clone = new JsonObject();
+        var usedKeys = new HashSet<string>(StringComparer.Ordinal);
         var propertyCount = 0;
         foreach (var (key, value) in obj)
         {
@@ -364,10 +436,15 @@ internal sealed class AuditLogSink : IDisposable
                 break;
             }
 
-            if (!state.TryReservePropertyName(key))
+            var keyDisplay = McpBoundedText.ForDisplay(key);
+            if (keyDisplay.Truncated)
+                state.AddTruncationReason("object_property_key_length_limit");
+            var displayKey = MakeUniqueObjectDisplayKey(key, keyDisplay, usedKeys);
+
+            if (!state.TryReservePropertyName(displayKey))
                 break;
 
-            clone[key] = SanitizeArgValueCore(key, value, state, depth + 1);
+            clone[displayKey] = SanitizeArgValueCore(key, value, state, depth + 1);
             propertyCount++;
         }
         return clone;
@@ -440,6 +517,29 @@ internal sealed class AuditLogSink : IDisposable
 
     private static int EstimatePropertyNameJsonBytes(string key)
         => EstimateStringJsonBytes(key) + 1;
+
+    private static string MakeUniqueObjectDisplayKey(string rawKey, BoundedMcpText display, ISet<string> usedKeys)
+    {
+        if (usedKeys.Add(display.Text))
+            return display.Text;
+
+        var disambiguator = 2;
+        while (true)
+        {
+            var suffix = "#" + disambiguator.ToString(CultureInfo.InvariantCulture);
+            var candidate = ComposeObjectDisplayKeyWithSuffix(rawKey, suffix);
+            if (usedKeys.Add(candidate))
+                return candidate;
+            disambiguator++;
+        }
+    }
+
+    private static string ComposeObjectDisplayKeyWithSuffix(string rawKey, string suffix)
+    {
+        const int maxDisplayTextChars = McpBoundedText.MaxDiagnosticDisplayChars + 3;
+        var maxPrefixChars = Math.Max(0, maxDisplayTextChars - suffix.Length - 3);
+        return McpBoundedText.ForDisplay(rawKey, maxPrefixChars).Text + suffix;
+    }
 
     private static bool IsSecretLikeKey(string key)
     {
@@ -555,10 +655,14 @@ internal sealed class AuditLogSink : IDisposable
         int? ToolLength = null,
         bool ToolTruncated = false,
         IReadOnlyList<KeyValuePair<string, int>>? ArgKeyLengths = null,
+        bool ArgKeysTruncated = false,
+        IReadOnlyList<string>? ArgKeyTruncationReasons = null,
         bool ArgValuesRedacted = false,
         bool ArgValuesTruncated = false,
         IReadOnlyList<string>? ArgValueTruncationReasons = null,
         int? ArgValuesSerializedBytes = null,
+        int? RequestIdLength = null,
+        bool RequestIdTruncated = false,
         int? CallerNameLength = null,
         bool CallerNameTruncated = false,
         int? CallerVersionLength = null,

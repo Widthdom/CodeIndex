@@ -643,6 +643,59 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public async Task ProcessLineAsync_CapsTelemetryArgumentKeyCount_Issue3237()
+    {
+        using var writer = new StringWriter();
+        using var error = new StringWriter();
+        var arguments = new JsonObject();
+        for (var i = 0; i < AuditLogSink.MaxAuditArgumentCount + 3; i++)
+            arguments[$"arg{i}"] = i;
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 123,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "does_not_exist",
+                ["arguments"] = arguments,
+            },
+        };
+
+        await Task.Run(() =>
+        {
+            lock (TestConsoleLock.Gate)
+            {
+                var previousError = Console.Error;
+                try
+                {
+                    Console.SetError(error);
+#pragma warning disable xUnit1031
+                    _server.ProcessLineAsync(request.ToJsonString(), writer).GetAwaiter().GetResult();
+#pragma warning restore xUnit1031
+                }
+                finally
+                {
+                    Console.SetError(previousError);
+                }
+            }
+        });
+
+        var line = error.ToString()
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Single(l => l.Contains("\"event\":\"mcp.tool.invocation\"", StringComparison.Ordinal));
+        var jsonStart = line.IndexOf('{');
+        using var document = JsonDocument.Parse(line[jsonStart..]);
+        var root = document.RootElement;
+        Assert.Equal(AuditLogSink.MaxAuditArgumentCount, root.GetProperty("arg_keys").GetArrayLength());
+        Assert.True(root.GetProperty("arg_keys_truncated").GetBoolean());
+        Assert.Contains(root.GetProperty("arg_key_truncation_reasons").EnumerateArray(),
+            reason => reason.GetString() == "arg_key_count_limit");
+        Assert.DoesNotContain(root.GetProperty("arg_keys").EnumerateArray(),
+            key => key.GetString() == $"arg{AuditLogSink.MaxAuditArgumentCount}");
+    }
+
+    [Fact]
     public async Task ProcessLineAsync_FallbackErrorIncludesCorrelationData()
     {
         using var writer = new StringWriter();

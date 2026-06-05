@@ -1388,7 +1388,12 @@ Each record is a single JSON object on its own line with these fields:
 | `caller` | string (optional) | `initialize.clientInfo.name` from the connected MCP client |
 | `caller_version` | string (optional) | `initialize.clientInfo.version` from the connected MCP client |
 | `request_id` | string (optional) | JSON-encoded JSON-RPC request id, when present |
+| `request_id_length` | number (optional) | Original request id length when `request_id` is truncated |
+| `request_id_truncated` | boolean (optional) | `true` when `request_id` was shortened for the audit record |
 | `arg_keys` | string[] | Ordered list of argument names supplied to the tool |
+| `arg_key_lengths` | object (optional) | Original key lengths for truncated argument names |
+| `arg_keys_truncated` | boolean (optional) | `true` when argument names or the argument-key list were truncated |
+| `arg_key_truncation_reasons` | string[] (optional) | Stable truncation reason codes for argument-key truncation |
 | `arg_lengths` | object | Per-argument length sketch — string→char count, array→element count, object→key count, scalar→0 |
 | `arg_values` | object (optional) | Redacted and budgeted argument payload. Present only when `--audit-log-include-values` is enabled |
 | `arg_values_redacted` | boolean (optional) | `true` when secret-like keys or token patterns were replaced with `[REDACTED]` |
@@ -3599,7 +3604,12 @@ MCP ツールで catch-all まで突き抜けた例外（想定外の SQLite 例
 | `caller` | string（任意） | 接続中クライアントの `initialize.clientInfo.name` |
 | `caller_version` | string（任意） | 接続中クライアントの `initialize.clientInfo.version` |
 | `request_id` | string（任意） | JSON-RPC リクエスト id を JSON エンコードしたもの |
+| `request_id_length` | number（任意） | `request_id` が短縮された場合の元の長さ |
+| `request_id_truncated` | boolean（任意） | audit record 用に `request_id` が短縮された場合に `true` |
 | `arg_keys` | string[] | ツールへ渡された引数名の順序付きリスト |
+| `arg_key_lengths` | object（任意） | 短縮された引数名の元の長さ |
+| `arg_keys_truncated` | boolean（任意） | 引数名または引数キー一覧が短縮された場合に `true` |
+| `arg_key_truncation_reasons` | string[]（任意） | 引数キー truncation の安定した reason code |
 | `arg_lengths` | object | 引数ごとの長さ概算（文字列→文字数、配列→要素数、オブジェクト→キー数、スカラ→0） |
 | `arg_values` | object（任意） | redaction および budget 適用済みの引数本体。`--audit-log-include-values` 指定時のみ付与 |
 | `arg_values_redacted` | boolean（任意） | secret 風のキーまたは token pattern が `[REDACTED]` に置き換えられた場合に `true` |
