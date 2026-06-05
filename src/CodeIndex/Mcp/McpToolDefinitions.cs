@@ -467,11 +467,11 @@ public partial class McpServer
                 "unused_symbols",
                 "Find symbols that are defined but never referenced in the indexed codebase. "
                 + "Useful for dead code detection. Results include confidence buckets so private hits rank ahead of public/exported suspects, and the lowest-confidence bucket is reserved for config-bound properties or C#-style attribute-adjacent reflection surfaces. Only meaningful for languages with reference extraction support. "
-                + "Structured output includes `summary.by_bucket`, `summary.by_confidence`, and `bucket_taxonomy`; bucket values are `likely_unused_private`, `maybe_unused_nonpublic`, `public_or_exported_no_refs`, and `reflection_or_config_suspect`. "
+                + "Structured output includes `summary.by_bucket`, `summary.by_confidence`, and `bucket_taxonomy`; bucket values are `likely_unused_private`, `maybe_unused_nonpublic`, `public_or_exported_no_refs`, and `reflection_or_config_suspect`. Use `bucket` or `minConfidence` to audit a single bucket or confidence class. "
                 + "C# nameof/typeof and direct reflection member-name literals such as GetMethod(\"Foo\") are indexed as references; dynamically constructed reflection names can still require manual review. "
                 + "/ インデックス済みコードベースで定義されているが一度も参照されていないシンボルを検索する。"
                 + "デッドコード検出に有用。private 候補を public/exported suspect より前に返し、最低信頼 bucket は config-bound な property または C# 風 attribute 隣接の reflection surface 用に使う。参照抽出対応言語でのみ意味がある。"
-                + "構造化出力には `summary.by_bucket`、`summary.by_confidence`、`bucket_taxonomy` が含まれ、bucket 値は `likely_unused_private`、`maybe_unused_nonpublic`、`public_or_exported_no_refs`、`reflection_or_config_suspect`。"
+                + "構造化出力には `summary.by_bucket`、`summary.by_confidence`、`bucket_taxonomy` が含まれ、bucket 値は `likely_unused_private`、`maybe_unused_nonpublic`、`public_or_exported_no_refs`、`reflection_or_config_suspect`。`bucket` または `minConfidence` で単一 bucket や confidence class を監査できる。"
                 + "C# の nameof/typeof と GetMethod(\"Foo\") のような直接の reflection member-name literal は参照として index されるが、動的に組み立てた reflection 名は手動確認が必要な場合がある。",
                 new JsonObject
                 {
@@ -481,6 +481,8 @@ public partial class McpServer
                         ["kind"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by symbol kind (function, class, property, interface, enum, struct, event, delegate)" },
                         ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language (recommended: use a graph-supported language)" },
                         ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 50)", ["default"] = QueryCommandRunner.DefaultImpactLimit },
+                        ["bucket"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray("likely_unused_private", "maybe_unused_nonpublic", "public_or_exported_no_refs", "reflection_or_config_suspect"), ["description"] = "Return only one unused-symbol bucket." },
+                        ["minConfidence"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray("medium", "low"), ["description"] = "Return symbols at or above this confidence threshold." },
                         ["path"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Restrict to paths containing this text. Accepts a single string or an array; multiple values are OR'd together." },
                         ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude paths containing any of these texts" },
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude test files (default: false)", ["default"] = false }

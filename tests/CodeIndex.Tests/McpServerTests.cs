@@ -9651,6 +9651,16 @@ public class McpServerTests : IDisposable
         Assert.Equal("UseIOptions", symbols[8]!["name"]!.GetValue<string>());
         Assert.Equal("public_or_exported_no_refs", symbols[8]!["unusedBucket"]!.GetValue<string>());
         Assert.Contains("returned buckets", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+
+        var filteredRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp","path":"unused_fixture.cs","bucket":"likely_unused_private","minConfidence":"medium"}}}""")!;
+        var filteredResponse = _server.HandleMessage(filteredRequest)!;
+        var filteredStructured = filteredResponse["result"]!["structuredContent"]!;
+        var filteredSymbols = filteredStructured["symbols"]!.AsArray();
+
+        Assert.False(filteredResponse["result"]!["isError"]?.GetValue<bool>() ?? false);
+        Assert.Equal(1, filteredStructured["count"]!.GetValue<int>());
+        Assert.Equal("Hidden", filteredSymbols[0]!["name"]!.GetValue<string>());
+        Assert.Equal("likely_unused_private", filteredSymbols[0]!["unusedBucket"]!.GetValue<string>());
     }
 
     [Fact]

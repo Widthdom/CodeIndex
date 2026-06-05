@@ -429,6 +429,7 @@ content.
 ```bash
 cdidx unused --lang csharp --exclude-tests
 cdidx unused --kind function --path src/ --limit 50
+cdidx unused --bucket likely_unused_private --min-confidence medium
 cdidx unused --json --count
 cdidx unused --json --by-bucket
 ```
@@ -438,8 +439,10 @@ confidence. JSON output includes `summary.by_bucket`, `summary.by_confidence`,
 and `bucket_taxonomy` for the `likely_unused_private`,
 `maybe_unused_nonpublic`, `public_or_exported_no_refs`, and
 `reflection_or_config_suspect` buckets; `--by-bucket` also groups returned
-symbols under those bucket keys. Public APIs, framework entrypoints, generated
-hooks, reflection, and configuration-based usage can be false positives. C#
+symbols under those bucket keys. Use `--bucket <name>` to return only one
+bucket, and `--min-confidence <medium|low>` to omit lower-confidence classes.
+Public APIs, framework entrypoints, generated hooks, reflection, and
+configuration-based usage can be false positives. C#
 `nameof(...)`, `typeof(...)`, and direct reflection member-name literals such as
 `GetMethod("Foo")` are indexed, but dynamically constructed names still require
 manual review.
@@ -847,6 +850,9 @@ cdidx search "Run();" --exact-substring                 # case-sensitive exact s
 cdidx search "Foo.Bar" --lang csharp --exact-substring  # Java/Kotlin/C# exact search/find canonicalizes escaped source identifiers
 cdidx search "File.ReadAllText" --exact-substring --reject-before "Length" --guard-window 8  # API calls missing a nearby preceding guard
 cdidx search "FileMode.Create" --exact-substring --require-after "File.Move" --guard-window 12  # require a nearby follow-up action
+cdidx search --list-recipes                             # show reusable audit recipes
+cdidx search --recipe risky-code --json                 # run a curated audit query set and return grouped JSON
+cdidx search --recipe risky-code --format issue-drafts --open-issues open-issues.json  # issue draft JSON with duplicate preflight
 cdidx search "--open-reports" --path README.md --count  # quoted literal that starts with --
 cdidx search --query "--path" --path README.md          # search for an option-looking literal
 ```
@@ -867,6 +873,24 @@ return a validation error. Narrow with more specific query text, `--lang`,
 The MCP `search` tool exposes the same mode as camelCase arguments:
 `requireBefore`, `requireAfter`, `rejectBefore`, `rejectAfter`, and
 `guardWindow`.
+
+Search audit recipes expand one named recipe into multiple curated search
+queries. `--list-recipes` reports the available names, descriptions,
+recommended labels, query text, exact-match mode, and false-positive guidance.
+`--recipe <name>` applies normal search filters such as `--lang`, `--path`,
+`--exclude-path`, `--exclude-tests`, `--limit`, and snippet controls to every
+query in the recipe. With `--json`, recipe runs emit one aggregate JSON payload
+grouped by recipe query instead of the usual newline-delimited search stream.
+Recipe runs support text output, `--json` / `--format json`, and
+`--format issue-drafts`; `--list-recipes` supports text or JSON. Other search
+export formats and `--json=array` are rejected for recipe modes because recipe
+output is grouped by query or list metadata.
+For triage automation, `--format issue-drafts` emits draft issue objects with
+titles, labels, evidence paths, Markdown bodies, and duplicate-preflight
+metadata. `--open-issues <path>` accepts an open-issue JSON list such as
+`gh issue list --state open --json number,title,labels,url`; when omitted,
+the payload still includes `duplicate_preflight.checked: false`. Draft bodies
+include evidence paths and recipe metadata but not source snippets.
 
 ### Debugging queries
 
@@ -1184,6 +1208,9 @@ same source location.
 | `--exclude-visibility <v[,v]>` | `definition`, `symbols`, `unused`, `hotspots` | Exclude symbols with the requested visibility values. Accepts the same comma-separated values and alias expansion as `--visibility`. |
 | `--path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `validate` | Restrict results to glob-style path patterns. `*` and `?` are wildcards. Repeatable; multiple values are OR'd together |
 | `--query <query>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `inspect`, `impact` | Pass a query literal explicitly, useful when the query starts with `-`. Query commands except `find` also accept `-- <query>` as a one-token query escape while continuing to parse later options. |
+| `--recipe <name>` | `search` | Run a reusable audit recipe such as `risky-code`. Normal search filters and snippet controls apply to every recipe query; text, `--json` / `--format json`, and `--format issue-drafts` are supported. |
+| `--list-recipes` | `search` | List available search audit recipes with query text, recommended labels, exact-match mode, and false-positive guidance. |
+| `--open-issues <path>` | `search --recipe <name> --format issue-drafts` | Preflight generated issue drafts against an open-issues JSON file such as `gh issue list --state open --json number,title,labels,url`. |
 | `--exclude-path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | Exclude glob-style path patterns. `*` and `?` are wildcards (repeatable) |
 | `--exclude-tests` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | Exclude likely test files and prefer production code |
 | `--include-generated` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `deps`, `impact`, `unused`, `hotspots` | Include files detected as generated code; generated files are excluded from query results by default |
@@ -2625,6 +2652,7 @@ object ではなく bare issue array を期待する場合は `--json=array` を
 ```bash
 cdidx unused --lang csharp --exclude-tests
 cdidx unused --kind function --path src/ --limit 50
+cdidx unused --bucket likely_unused_private --min-confidence medium
 cdidx unused --json --count
 cdidx unused --json --by-bucket
 ```
@@ -2633,8 +2661,9 @@ cdidx unused --json --by-bucket
 分類します。JSON 出力には `likely_unused_private`、`maybe_unused_nonpublic`、
 `public_or_exported_no_refs`、`reflection_or_config_suspect` bucket 用の
 `summary.by_bucket`、`summary.by_confidence`、`bucket_taxonomy` が含まれます。
-`--by-bucket` は返却された symbols も bucket key ごとに grouped します。Public API、
-framework entrypoint、generated hook、reflection、config 経由の使用は false positive
+`--by-bucket` は返却された symbols も bucket key ごとに grouped します。
+`--bucket <name>` で単一 bucket だけを返し、`--min-confidence <medium|low>` で
+より低い confidence class を除外できます。Public API、framework entrypoint、generated hook、reflection、config 経由の使用は false positive
 になりえます。C# の `nameof(...)`、`typeof(...)`、`GetMethod("Foo")` のような
 直接的な reflection member-name literal は indexed されますが、動的に組み立てられる
 名前は手動確認が必要です。
@@ -3061,6 +3090,9 @@ cdidx search "Run();" --exact-substring                 # 大文字小文字区�
 cdidx search "Foo.Bar" --lang csharp --exact-substring  # Java/Kotlin/C# の exact 検索 / find は escaped source identifier を正規化する
 cdidx search "File.ReadAllText" --exact-substring --reject-before "Length" --guard-window 8  # 直前の guard がない API 呼び出し
 cdidx search "FileMode.Create" --exact-substring --require-after "File.Move" --guard-window 12  # 近傍の後続処理を要求
+cdidx search --list-recipes                             # 再利用可能な audit recipe を表示
+cdidx search --recipe risky-code --json                 # curated audit query set を実行し、grouped JSON を返す
+cdidx search --recipe risky-code --format issue-drafts --open-issues open-issues.json  # duplicate preflight 付き issue draft JSON
 cdidx search "--open-reports" --path README.md --count  # `--` で始まる引用済みリテラル
 cdidx search --query "--path" --path README.md          # オプションに見えるリテラルを検索
 ```
@@ -3078,6 +3110,24 @@ guard filter を使う検索は pagination 前に上限付きの候補集合だ�
 query text、`--lang`、`--path`、`--exclude-tests` で絞り込むか、MCP cursor の offset を小さくしてください。
 MCP `search` tool では同じ mode を camelCase 引数 `requireBefore`, `requireAfter`,
 `rejectBefore`, `rejectAfter`, `guardWindow` で指定できます。
+
+search audit recipe は、名前付き recipe を複数の curated search query に展開します。
+`--list-recipes` は利用可能な名前、説明、推奨 label、query text、exact-match mode、
+false-positive guidance を表示します。`--recipe <name>` は `--lang`、`--path`、
+`--exclude-path`、`--exclude-tests`、`--limit`、snippet control など通常の search filter
+を recipe 内の各 query に適用します。`--json` 併用時、recipe run は通常の
+newline-delimited search stream ではなく、recipe query ごとに grouped された 1 つの
+aggregate JSON payload を出力します。
+recipe run が対応する形式は text output、`--json` / `--format json`、
+`--format issue-drafts` です。`--list-recipes` は text または JSON に対応します。
+その他の search export format と `--json=array` は、recipe output が query または
+list metadata ごとに grouped されるため usage error で拒否します。
+triage automation では `--format issue-drafts` を使うと、title、label、evidence path、
+Markdown body、duplicate-preflight metadata を持つ issue draft object を出力します。
+`--open-issues <path>` は `gh issue list --state open --json number,title,labels,url`
+のような open issue JSON list を受け取り、未指定の場合も payload には
+`duplicate_preflight.checked: false` が含まれます。draft body は evidence path と
+recipe metadata を含みますが、source snippet は含めません。
 
 ### クエリのデバッグ
 
@@ -3391,6 +3441,9 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--exclude-visibility <v[,v]>` | `definition`, `symbols`, `unused`, `hotspots` | 指定した可視性のシンボルを除外する。値と alias 展開は `--visibility` と同じ |
 | `--path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `validate` | glob 形式のパスパターンで結果を絞る。`*` と `?` がワイルドカード。繰り返し指定可（複数値は OR で結合） |
 | `--query <query>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `inspect`, `impact` | クエリを明示的なリテラルとして渡す。クエリが `-` で始まる場合に有用。`find` 以外のクエリ系コマンドでは `-- <query>` も1トークンのクエリエスケープとして受け付け、その後のオプション解析を続ける。 |
+| `--recipe <name>` | `search` | `risky-code` などの再利用可能な audit recipe を実行する。通常の search filter と snippet control は recipe 内の各 query に適用され、text、`--json` / `--format json`、`--format issue-drafts` に対応する。 |
+| `--list-recipes` | `search` | 利用可能な search audit recipe を query text、推奨 label、exact-match mode、false-positive guidance 付きで一覧表示する。 |
+| `--open-issues <path>` | `search --recipe <name> --format issue-drafts` | `gh issue list --state open --json number,title,labels,url` のような open issue JSON file と照合し、生成した issue draft を事前重複確認する。 |
 | `--exclude-path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | glob 形式のパスパターンを除外する。`*` と `?` がワイルドカード。繰り返し指定可 |
 | `--exclude-tests` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | テストらしいパスを除外し、本番コードを優先 |
 | `--include-generated` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `deps`, `impact`, `unused`, `hotspots` | 生成コードとして検出されたファイルを含める。生成ファイルは既定でクエリ結果から除外される |
