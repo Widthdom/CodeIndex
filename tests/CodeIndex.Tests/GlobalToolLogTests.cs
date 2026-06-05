@@ -293,6 +293,46 @@ public class GlobalToolLogTests
         }
     }
 
+    [Fact]
+    public void TryStart_ErrorMirrorTruncatesLargeWrites_Issue3166()
+    {
+        var logRoot = Path.Combine(Path.GetTempPath(), $"cdidx_global_log_large_mirror_{Guid.NewGuid():N}");
+        var originalError = Console.Error;
+        var visibleError = new StringWriter(CultureInfo.InvariantCulture);
+        try
+        {
+            using var env = EnvironmentVariableScope.Capture(
+                "CDIDX_FORCE_GLOBAL_TOOL_LOG",
+                "CDIDX_DISABLE_PERSISTENT_LOG",
+                "CDIDX_GLOBAL_TOOL_LOG_DIR");
+            env.Set("CDIDX_FORCE_GLOBAL_TOOL_LOG", "1");
+            env.Set("CDIDX_DISABLE_PERSISTENT_LOG", null);
+            env.Set("CDIDX_GLOBAL_TOOL_LOG_DIR", logRoot);
+            Console.SetError(visibleError);
+            var prefix = new string('e', GlobalToolLog.MirroredStderrWriteMaxChars);
+            const string tail = "TAIL_ISSUE_3166";
+            var raw = prefix + tail;
+
+            using (var session = GlobalToolLog.TryStartForTesting(["status"], "test"))
+            {
+                Assert.NotNull(session);
+                Console.Error.WriteLine(raw);
+            }
+
+            Assert.Contains(tail, visibleError.ToString());
+            var logPath = Directory.GetFiles(logRoot, "stderr-*.log", SearchOption.TopDirectoryOnly).Single();
+            var log = File.ReadAllText(logPath);
+            Assert.Contains($"original length {raw.Length} chars", log);
+            Assert.DoesNotContain(tail, log);
+        }
+        finally
+        {
+            Console.SetError(originalError);
+            if (Directory.Exists(logRoot))
+                Directory.Delete(logRoot, recursive: true);
+        }
+    }
+
     private static void ThrowForGlobalToolLogTest() =>
         throw new InvalidOperationException("global log stack trace test");
 

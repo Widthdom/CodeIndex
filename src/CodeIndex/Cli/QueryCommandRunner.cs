@@ -9292,7 +9292,7 @@ public static class QueryCommandRunner
             return fallback;
         }
 
-        if (TryParsePositiveInt(raw, optionName, out var value, out var parseError))
+        if (TryParsePositiveInt(raw, optionName, out var value, out var parseError, ConsoleUi.FormatBoundedValue(raw)))
         {
             error = null;
             return value;
@@ -9311,7 +9311,7 @@ public static class QueryCommandRunner
             return fallback;
         }
 
-        if (TryParseNonNegativeInt(raw, optionName, out var value, out var parseError))
+        if (TryParseNonNegativeInt(raw, optionName, out var value, out var parseError, ConsoleUi.FormatBoundedValue(raw)))
         {
             error = null;
             return value;
@@ -9321,21 +9321,22 @@ public static class QueryCommandRunner
         return fallback;
     }
 
-    private static bool TryParsePositiveInt(string rawValue, string optionName, out int value, out string? error)
+    private static bool TryParsePositiveInt(string rawValue, string optionName, out int value, out string? error, string? displayRawValue = null)
     {
         if (string.Equals(optionName, "--max-line-width", StringComparison.Ordinal))
-            return TryParseNonNegativeInt(rawValue, optionName, out value, out error);
+            return TryParseNonNegativeInt(rawValue, optionName, out value, out error, displayRawValue);
 
+        displayRawValue ??= rawValue;
         if (!int.TryParse(rawValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out value) || value <= 0)
         {
             value = 0;
-            error = BuildPositiveIntegerError(optionName, rawValue);
+            error = BuildPositiveIntegerError(optionName, displayRawValue);
             return false;
         }
 
         if (NumericFlagUpperBounds.TryGetValue(optionName, out var maxAllowed) && value > maxAllowed)
         {
-            error = BuildPositiveIntegerUpperBoundError(optionName, rawValue, maxAllowed);
+            error = BuildPositiveIntegerUpperBoundError(optionName, displayRawValue, maxAllowed);
             value = 0;
             return false;
         }
@@ -9344,18 +9345,19 @@ public static class QueryCommandRunner
         return true;
     }
 
-    private static bool TryParseNonNegativeInt(string rawValue, string optionName, out int value, out string? error)
+    private static bool TryParseNonNegativeInt(string rawValue, string optionName, out int value, out string? error, string? displayRawValue = null)
     {
+        displayRawValue ??= rawValue;
         if (!int.TryParse(rawValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out value) || value < 0)
         {
             value = 0;
-            error = BuildNonNegativeIntegerError(optionName, rawValue);
+            error = BuildNonNegativeIntegerError(optionName, displayRawValue);
             return false;
         }
 
         if (NumericFlagUpperBounds.TryGetValue(optionName, out var maxAllowed) && value > maxAllowed)
         {
-            error = BuildNonNegativeIntegerUpperBoundError(optionName, rawValue, maxAllowed);
+            error = BuildNonNegativeIntegerUpperBoundError(optionName, displayRawValue, maxAllowed);
             value = 0;
             return false;
         }

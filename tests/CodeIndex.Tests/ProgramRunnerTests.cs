@@ -299,6 +299,108 @@ public class ProgramRunnerTests
     }
 
     [Fact]
+    public void RunDoctor_TruncatesTerminalEnvironmentValues_Issue3109()
+    {
+        var prefix = new string('c', ConsoleUi.DefaultDiagnosticValueCharLimit);
+        const string tail = "TAIL_ISSUE_3109";
+        var raw = prefix + tail;
+        using var env = EnvironmentVariableScope.Capture("COLUMNS", "NO_COLOR", "TERM", "CDIDX_VISIBLE_LONG_VALUE");
+        env.Set("COLUMNS", raw);
+        env.Set("NO_COLOR", raw);
+        env.Set("TERM", raw);
+        env.Set("CDIDX_VISIBLE_LONG_VALUE", raw);
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["doctor"],
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Empty(stderr);
+        Assert.Contains("terminal:", stdout);
+        Assert.Contains("cdidx_env:", stdout);
+        Assert.Contains($"original length {raw.Length} chars", stdout);
+        Assert.DoesNotContain(tail, stdout);
+    }
+
+    [Fact]
+    public void Run_QueryTraceStderr_BoundsPathArraysAndValues_Issue3123()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("query-trace-bounds");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "public class App { public void Needle() { } }");
+            var longPath = new string('p', ProgramRunner.QueryTraceValueMaxChars) + "TAIL_ISSUE_3123";
+            var args = new List<string>
+            {
+                "search",
+                "Needle",
+                "--db",
+                dbPath,
+                "--trace=stderr",
+                "--count",
+            };
+            for (var i = 0; i < ProgramRunner.QueryTraceArrayMaxItems + 3; i++)
+            {
+                args.Add("--path");
+                args.Add(i == 0 ? longPath : $"src/{i}.cs");
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                args.ToArray(),
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("0", stdout.Trim());
+            var traceLine = stderr.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries).Single(line => line.StartsWith('{'));
+            using var document = JsonDocument.Parse(traceLine);
+            var parameters = document.RootElement.GetProperty("parameters");
+            Assert.Equal(ProgramRunner.QueryTraceArrayMaxItems, parameters.GetProperty("path").GetArrayLength());
+            Assert.True(parameters.GetProperty("path_truncated").GetBoolean());
+            Assert.Equal(ProgramRunner.QueryTraceArrayMaxItems + 3, parameters.GetProperty("path_original_count").GetInt32());
+            Assert.True(parameters.GetProperty("path_value_truncated").GetBoolean());
+            Assert.Contains($"original length {longPath.Length} chars", parameters.GetProperty("path")[0].GetString());
+            Assert.DoesNotContain("TAIL_ISSUE_3123", traceLine);
+            Assert.DoesNotContain(dbPath, traceLine);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_QueryDefaultEnvironmentParseError_TruncatesRawValue_Issue3110()
+    {
+        var prefix = new string('9', ConsoleUi.DefaultDiagnosticValueCharLimit);
+        const string tail = "TAIL_ISSUE_3110";
+        var raw = prefix + tail;
+        using var env = EnvironmentVariableScope.Capture(QueryCommandRunner.DefaultLimitEnvironmentVariable);
+        env.Set(QueryCommandRunner.DefaultLimitEnvironmentVariable, raw);
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["search", "Needle"],
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Empty(stdout);
+        Assert.Contains(QueryCommandRunner.DefaultLimitEnvironmentVariable, stderr);
+        Assert.Contains($"original length {raw.Length} chars", stderr);
+        Assert.DoesNotContain(tail, stderr);
+    }
+
+    [Fact]
+    public void WorkspaceVersionPinReadWarning_SanitizesPathLikeExceptionMessages_Issue3218()
+    {
+        var warning = ProgramRunner.BuildWorkspaceVersionPinReadWarningForTesting(
+            new IOException("could not read /Users/alice/private/repo/.cdidx-version"));
+
+        Assert.Equal("Warning: could not read .cdidx-version: read failed.", warning);
+        Assert.DoesNotContain("/Users/alice", warning);
+        Assert.DoesNotContain("private/repo", warning);
+    }
+
+    [Fact]
     public void Run_QueryTraceFile_AppendsDailyJsonl()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("query-trace-file");
