@@ -31,6 +31,30 @@ internal static class JsonStringListCodec
         return Encoding.UTF8.GetString(buffer.ToArray());
     }
 
+    internal static List<string> TakeSerializableSample(IReadOnlyList<string> values, int maxItems)
+    {
+        ArgumentNullException.ThrowIfNull(values);
+        if (maxItems <= 0)
+            return [];
+
+        var itemLimit = Math.Min(maxItems, MaxArrayItems);
+        var sample = new List<string>(Math.Min(values.Count, itemLimit));
+        var decodedCharacters = 0;
+        foreach (var value in values)
+        {
+            if (sample.Count >= itemLimit)
+                break;
+
+            if (value.Length > MaxDecodedStringCharacters - decodedCharacters)
+                break;
+
+            decodedCharacters += value.Length;
+            sample.Add(value);
+        }
+
+        return sample;
+    }
+
     public static List<string>? Deserialize(string? raw)
         => Deserialize(raw, out _);
 
