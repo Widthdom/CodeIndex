@@ -1,4 +1,5 @@
 using System.Globalization;
+using CodeIndex.Cli;
 
 namespace CodeIndex.Mcp;
 
@@ -222,12 +223,12 @@ internal sealed class RateLimiterOptions
 
         if (!TryParsePositiveDouble(rpsRaw, out var rps))
         {
-            warningSink($"[cdidx-mcp] Ignoring invalid {RpsEnvVar}='{rpsRaw}'. Expected a positive number (tokens per second). Rate limiting stays disabled.");
+            warningSink($"[cdidx-mcp] Ignoring invalid {RpsEnvVar}='{FormatEnvironmentValue(rpsRaw)}'. Expected a positive number (tokens per second). Rate limiting stays disabled.");
             return Disabled;
         }
         if (rps > MaxRefillTokensPerSecond)
         {
-            warningSink($"[cdidx-mcp] Clamping {RpsEnvVar}='{rpsRaw}' to maximum {MaxRefillTokensPerSecond.ToString(CultureInfo.InvariantCulture)} tokens per second.");
+            warningSink($"[cdidx-mcp] Clamping {RpsEnvVar}='{FormatEnvironmentValue(rpsRaw)}' to maximum {MaxRefillTokensPerSecond.ToString(CultureInfo.InvariantCulture)} tokens per second.");
             rps = MaxRefillTokensPerSecond;
         }
 
@@ -243,22 +244,24 @@ internal sealed class RateLimiterOptions
         }
         else if (!TryParsePositiveDouble(burstRaw, out burst))
         {
-            warningSink($"[cdidx-mcp] Ignoring invalid {BurstEnvVar}='{burstRaw}'. Expected a positive number (bucket capacity). Falling back to default burst.");
+            warningSink($"[cdidx-mcp] Ignoring invalid {BurstEnvVar}='{FormatEnvironmentValue(burstRaw)}'. Expected a positive number (bucket capacity). Falling back to default burst.");
             burst = Math.Max(rps, 1.0);
         }
         else if (burst > MaxBurstCapacity)
         {
-            warningSink($"[cdidx-mcp] Clamping {BurstEnvVar}='{burstRaw}' to maximum {MaxBurstCapacity.ToString(CultureInfo.InvariantCulture)} tokens.");
+            warningSink($"[cdidx-mcp] Clamping {BurstEnvVar}='{FormatEnvironmentValue(burstRaw)}' to maximum {MaxBurstCapacity.ToString(CultureInfo.InvariantCulture)} tokens.");
             burst = MaxBurstCapacity;
         }
 
         var bucketIdleTtl = DefaultBucketIdleTtl;
         var bucketIdleRaw = envReader(BucketIdleSecondsEnvVar);
         if (!string.IsNullOrWhiteSpace(bucketIdleRaw) && !TryParsePositiveTimeSpanSeconds(bucketIdleRaw, out bucketIdleTtl))
-            warningSink($"[cdidx-mcp] Ignoring invalid {BucketIdleSecondsEnvVar}='{bucketIdleRaw}'. Expected a positive finite number of seconds. Falling back to the default bucket idle TTL.");
+            warningSink($"[cdidx-mcp] Ignoring invalid {BucketIdleSecondsEnvVar}='{FormatEnvironmentValue(bucketIdleRaw)}'. Expected a positive finite number of seconds. Falling back to the default bucket idle TTL.");
 
         return new RateLimiterOptions { RefillTokensPerSecond = rps, BurstCapacity = burst, BucketIdleTtl = bucketIdleTtl };
     }
+
+    private static string FormatEnvironmentValue(string value) => ConsoleUi.FormatBoundedValue(value);
 
     private static bool TryParsePositiveDouble(string raw, out double value)
     {

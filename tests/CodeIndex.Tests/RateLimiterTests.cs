@@ -1,3 +1,4 @@
+using CodeIndex.Cli;
 using CodeIndex.Mcp;
 
 namespace CodeIndex.Tests;
@@ -308,6 +309,90 @@ public class RateLimiterTests
         Assert.Equal(RateLimiterOptions.MaxRefillTokensPerSecond, opts.BurstCapacity);
         Assert.Single(warnings);
         Assert.Contains("Clamping CDIDX_MCP_RATE_LIMIT_RPS", warnings[0]);
+    }
+
+    [Fact]
+    public void FromEnvironment_OversizedInvalidRps_TruncatesWarning_Issue3090()
+    {
+        var value = new string('x', ConsoleUi.DefaultDiagnosticValueCharLimit + 1);
+        var warnings = new List<string>();
+
+        var opts = RateLimiterOptions.FromEnvironment(
+            key => key == RateLimiterOptions.RpsEnvVar ? value : null,
+            warnings.Add);
+
+        Assert.False(opts.IsEnabled);
+        var warning = Assert.Single(warnings);
+        Assert.Contains("Ignoring invalid CDIDX_MCP_RATE_LIMIT_RPS", warning);
+        Assert.Contains("<truncated; original length", warning);
+        Assert.DoesNotContain(value, warning);
+    }
+
+    [Fact]
+    public void FromEnvironment_MultilineInvalidRps_FlattensWarning_Issue3090()
+    {
+        var value = "bad\nforged\tvalue";
+        var warnings = new List<string>();
+
+        var opts = RateLimiterOptions.FromEnvironment(
+            key => key == RateLimiterOptions.RpsEnvVar ? value : null,
+            warnings.Add);
+
+        Assert.False(opts.IsEnabled);
+        var warning = Assert.Single(warnings);
+        Assert.Contains("bad forged value", warning);
+        Assert.DoesNotContain("\n", warning);
+        Assert.DoesNotContain("\r", warning);
+        Assert.DoesNotContain("\t", warning);
+    }
+
+    [Fact]
+    public void FromEnvironment_OversizedTooLargeRps_TruncatesWarning_Issue3090()
+    {
+        var value = new string('9', ConsoleUi.DefaultDiagnosticValueCharLimit + 1);
+        var warnings = new List<string>();
+
+        var opts = RateLimiterOptions.FromEnvironment(
+            key => key == RateLimiterOptions.RpsEnvVar ? value : null,
+            warnings.Add);
+
+        Assert.True(opts.IsEnabled);
+        Assert.Equal(RateLimiterOptions.MaxRefillTokensPerSecond, opts.RefillTokensPerSecond);
+        var warning = Assert.Single(warnings);
+        Assert.Contains("Clamping CDIDX_MCP_RATE_LIMIT_RPS", warning);
+        Assert.Contains("<truncated; original length", warning);
+        Assert.DoesNotContain(value, warning);
+    }
+
+    [Fact]
+    public void FromEnvironment_OversizedBurstAndBucketIdleValues_TruncateWarnings_Issue3090()
+    {
+        var burstValue = new string('b', ConsoleUi.DefaultDiagnosticValueCharLimit + 1);
+        var bucketIdleValue = new string('i', ConsoleUi.DefaultDiagnosticValueCharLimit + 1);
+        var warnings = new List<string>();
+
+        var opts = RateLimiterOptions.FromEnvironment(
+            key => key switch
+            {
+                RateLimiterOptions.RpsEnvVar => "2",
+                RateLimiterOptions.BurstEnvVar => burstValue,
+                RateLimiterOptions.BucketIdleSecondsEnvVar => bucketIdleValue,
+                _ => null,
+            },
+            warnings.Add);
+
+        Assert.True(opts.IsEnabled);
+        Assert.Equal(2.0, opts.BurstCapacity);
+        Assert.Equal(RateLimiterOptions.DefaultBucketIdleTtl, opts.BucketIdleTtl);
+        Assert.Equal(2, warnings.Count);
+        Assert.Contains(warnings, warning =>
+            warning.Contains("Ignoring invalid CDIDX_MCP_RATE_LIMIT_BURST", StringComparison.Ordinal)
+            && warning.Contains("<truncated; original length", StringComparison.Ordinal)
+            && !warning.Contains(burstValue, StringComparison.Ordinal));
+        Assert.Contains(warnings, warning =>
+            warning.Contains("Ignoring invalid CDIDX_MCP_RATE_LIMIT_BUCKET_IDLE_SECONDS", StringComparison.Ordinal)
+            && warning.Contains("<truncated; original length", StringComparison.Ordinal)
+            && !warning.Contains(bucketIdleValue, StringComparison.Ordinal));
     }
 
     [Fact]
