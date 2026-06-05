@@ -75,7 +75,7 @@ internal static class CliFlagSchema
     private static readonly string[] LimitCapableCommands =
     [
         "search", "definition", "goto", "references", "callers", "callees", "symbols",
-        "files", "find", "map", "inspect", "deps", "impact", "unused", "hotspots", "validate",
+        "files", "find", "map", "inspect", "outline", "deps", "impact", "unused", "hotspots", "validate",
     ];
 
     private static readonly string[] LangCapableCommands =
@@ -151,6 +151,7 @@ internal static class CliFlagSchema
     ];
 
     private static readonly string[] BodyCommands = ["definition", "references", "callers", "callees", "impact", "inspect"];
+    private static readonly string[] InspectFieldCommands = ["inspect"];
 
     private static readonly string[] MaxLineWidthCommands =
     [
@@ -187,6 +188,8 @@ internal static class CliFlagSchema
         "validate", "deps", "impact", "unused", "hotspots", "languages", "db", "report",
     ];
 
+    private static readonly string[] CompactJsonCommands = ["map", "inspect", "outline"];
+
     private static readonly string[] FormatCommands =
     [
         "search", "definition", "references", "callers", "callees", "find", "validate", "deps",
@@ -214,6 +217,8 @@ internal static class CliFlagSchema
             new() { Name = "--workspace-db", ValuePlaceholder = "<path>", Description = "Additional workspace member database path for dependency aggregation", Commands = Set(WorkspaceDbCommands) },
             new() { Name = "--data-dir", ValuePlaceholder = "<dir>", Description = "Directory containing codeindex.db; overrides CDIDX_DATA_DIR/XDG/workspace defaults", Commands = Set(DataDirCommands) },
             new() { Name = "--json", Description = "JSON output; search/files/validate also accept --json=array for a single JSON array", Commands = Set(JsonCommands) },
+            new() { Name = "--pretty", Description = "Pretty-print JSON output with indentation", Commands = Set(JsonCommands) },
+            new() { Name = "--compact", Description = "AI-oriented compact JSON with capped list sections and truncation metadata", Commands = Set(CompactJsonCommands) },
             new() { Name = "--format", ValuePlaceholder = "<text|json|count|compact|csv|tsv|lsp|qf|sarif|issue-drafts>", Description = "Standard output format for token budgets, editor integrations, and CI; search recipes also accept issue-drafts", Commands = Set(FormatCommands) },
             new() { Name = "--quiet", ShortName = "-q", Description = "Suppress informational stderr output; errors still print", Commands = Set(AllCommands.ToArray()) },
             new() { Name = "--silent", Description = "Alias for --quiet", Commands = Set(AllCommands.ToArray()) },
@@ -256,6 +261,8 @@ internal static class CliFlagSchema
             new() { Name = "--list-recipes", Description = "Search: list built-in audit recipes", Commands = Set("search") },
             new() { Name = "--open-issues", ValuePlaceholder = "<path>", Description = "Search: preflight issue drafts against open issue JSON", Commands = Set("search") },
             new() { Name = "--body", Description = "Include body", Commands = Set(BodyCommands) },
+            new() { Name = "--fields", ValuePlaceholder = "<file,workspace,graph,definitions,body,nearby_symbols,references,callers,callees,all>", Description = "Inspect: select top-level JSON evidence groups", Commands = Set(InspectFieldCommands) },
+            new() { Name = "--body-only", Description = "Inspect: JSON shorthand for --body --fields definitions", Commands = Set(InspectFieldCommands) },
             new() { Name = "--exact", Description = "Backward-compatible exact shorthand", Commands = Set(ExactCommands) },
             new() { Name = "--regex", Description = "Use regular expression matching", Commands = Set("find") },
             new() { Name = "--exact-name", Description = "Exact symbol-name equality", Commands = Set(ExactNameCommands), AlsoAcceptedBy = Set("search") },
