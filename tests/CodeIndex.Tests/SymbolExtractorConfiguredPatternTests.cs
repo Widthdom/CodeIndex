@@ -54,6 +54,41 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void EnumeratePatternConfigPathsFromDirectory_CapsCandidatesAcrossExtensionsWithDiagnostic()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_patterns_candidate_cap_{Guid.NewGuid():N}");
+            try
+            {
+                var patternDir = Path.Combine(tempDir, ".cdidx", "patterns");
+                Directory.CreateDirectory(patternDir);
+                for (var i = 0; i < ExtractorPluginRegistry.MaxPatternConfigCandidatesPerDirectory; i++)
+                    File.WriteAllText(Path.Combine(patternDir, $"candidate{i:D3}.yaml"), string.Empty);
+                File.WriteAllText(Path.Combine(patternDir, "overflow.yml"), string.Empty);
+                ExtractorPluginRegistry.ResetForTests();
+
+                IReadOnlyList<string> paths = Array.Empty<string>();
+                var stderr = ConsoleCapture.CaptureError(() =>
+                {
+                    paths = ExtractorPluginRegistry.EnumeratePatternConfigPathsFromDirectoryForTests(patternDir);
+                });
+
+                Assert.Equal(ExtractorPluginRegistry.MaxPatternConfigCandidatesPerDirectory, paths.Count);
+                Assert.DoesNotContain(paths, path => Path.GetFileName(path) == "overflow.yml");
+                Assert.Contains("Skipped pattern directory", stderr, StringComparison.Ordinal);
+                Assert.Contains("too many pattern config candidates", stderr, StringComparison.Ordinal);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                if (Directory.Exists(tempDir))
+                    Directory.Delete(tempDir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public void Extract_ConfiguredPatternYaml_RejectsInvalidRegexWithDiagnostic()
     {
         lock (TestConsoleLock.Gate)
