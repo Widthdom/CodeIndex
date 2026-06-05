@@ -1432,6 +1432,22 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsList_IndexPathSchemaReflectsProjectPathContract_Issue3186()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var tools = response["result"]!["tools"]!.AsArray();
+        var indexTool = tools.First(t => t!["name"]!.GetValue<string>() == "index")!;
+        var pathSchema = indexTool["inputSchema"]!["properties"]!["path"]!;
+
+        Assert.Equal("string", pathSchema["type"]!.GetValue<string>());
+        Assert.Equal(QueryCommandRunner.MaxQueryPathFilterLength, pathSchema["maxLength"]!.GetValue<int>());
+        Assert.DoesNotContain("(?!/)", pathSchema["pattern"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Contains("absolute or relative", pathSchema["description"]!.GetValue<string>(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ToolCall_FindInFilePath_DistinguishesMissingFromWhitespace()
     {
         var missing = CallToolAndReadErrorMessage("find_in_file", new JsonObject { ["query"] = "Run" });

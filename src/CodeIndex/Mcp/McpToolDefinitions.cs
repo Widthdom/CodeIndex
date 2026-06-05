@@ -647,6 +647,13 @@ public partial class McpServer
                 {
                     obj.TryAdd("maxItems", MaxMcpArrayFilterCount);
                 }
+                else if (name == "path" && toolName == "index")
+                {
+                    obj.TryAdd("minLength", 1);
+                    obj.TryAdd("maxLength", MaxMcpArrayFilterStringLength);
+                    obj.TryAdd("pattern", @"^(?!.*\u0000).+$");
+                    AppendConstraintDescription(obj, "May be absolute or relative, but must be non-empty and must not contain NUL bytes.");
+                }
                 else
                 {
                     obj.TryAdd("minLength", 1);
