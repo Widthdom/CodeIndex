@@ -430,33 +430,35 @@ public static class ExtractorPluginRegistry
                     return;
             }
 
-            var configLines = TryReadPatternConfigLines(path);
-            if (configLines == null)
+            var configText = TryReadPatternConfigText(path);
+            if (configText == null)
                 return;
 
             var language = string.Empty;
             var extensions = new List<string>();
             var patterns = new List<ConfiguredSymbolExtractor.PatternRule>();
             string? pendingKind = null;
-            foreach (var rawLine in configLines)
+            var remaining = configText.AsSpan();
+            while (TryReadNextPatternConfigLine(ref remaining, out var rawLine))
             {
                 var line = rawLine.Trim();
-                if (line.Length == 0 || line.StartsWith('#'))
+                if (line.Length == 0 || line[0] == '#')
                     continue;
 
+                var itemLine = TrimPatternConfigListMarker(line);
                 if (TryReadScalar(line, "language", out var value))
                 {
                     language = NormalizePluginLanguage(value);
                 }
-                else if (TryReadScalar(line.TrimStart('-').Trim(), "extension", out value))
+                else if (TryReadScalar(itemLine, "extension", out value))
                 {
                     extensions.Add(NormalizePluginExtension(value) ?? value);
                 }
-                else if (TryReadScalar(line.TrimStart('-').Trim(), "kind", out value))
+                else if (TryReadScalar(itemLine, "kind", out value))
                 {
                     pendingKind = value.Trim();
                 }
-                else if (TryReadScalar(line.TrimStart('-').Trim(), "regex", out value) && pendingKind != null)
+                else if (TryReadScalar(itemLine, "regex", out value) && pendingKind != null)
                 {
                     if (patterns.Count >= MaxPatternRulesPerConfig)
                     {
@@ -573,7 +575,7 @@ public static class ExtractorPluginRegistry
         }
     }
 
-    private static IReadOnlyList<string>? TryReadPatternConfigLines(string path)
+    private static string? TryReadPatternConfigText(string path)
     {
         var fileInfo = new FileInfo(path);
         if (!fileInfo.Exists)
@@ -607,11 +609,38 @@ public static class ExtractorPluginRegistry
         if (bytes == null)
             return null;
 
-        var text = Encoding.UTF8.GetString(bytes);
-        return text
-            .Replace("\r\n", "\n", StringComparison.Ordinal)
-            .Replace('\r', '\n')
-            .Split('\n');
+        return Encoding.UTF8.GetString(bytes);
+    }
+
+    private static bool TryReadNextPatternConfigLine(ref ReadOnlySpan<char> remaining, out ReadOnlySpan<char> line)
+    {
+        if (remaining.IsEmpty)
+        {
+            line = default;
+            return false;
+        }
+
+        var lineBreakIndex = remaining.IndexOfAny('\r', '\n');
+        if (lineBreakIndex < 0)
+        {
+            line = remaining;
+            remaining = default;
+            return true;
+        }
+
+        line = remaining[..lineBreakIndex];
+        var nextIndex = lineBreakIndex + 1;
+        if (remaining[lineBreakIndex] == '\r' && nextIndex < remaining.Length && remaining[nextIndex] == '\n')
+            nextIndex++;
+        remaining = remaining[nextIndex..];
+        return true;
+    }
+
+    private static ReadOnlySpan<char> TrimPatternConfigListMarker(ReadOnlySpan<char> line)
+    {
+        while (!line.IsEmpty && line[0] == '-')
+            line = line[1..];
+        return line.Trim();
     }
 
     private static byte[]? TryReadWindowsPatternConfigBytes(string path)
@@ -831,14 +860,30 @@ public static class ExtractorPluginRegistry
         public uint FileIndexLow;
     }
 
-    private static bool TryReadScalar(string line, string key, out string value)
+    private static bool TryReadScalar(ReadOnlySpan<char> line, string key, out string value)
     {
         value = string.Empty;
-        var prefix = key + ":";
-        if (!line.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        if (line.Length <= key.Length || line[key.Length] != ':')
             return false;
-        value = line[prefix.Length..].Trim().Trim('"', '\'').Replace("\\\\", "\\", StringComparison.Ordinal);
+
+        if (!line.StartsWith(key.AsSpan(), StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var scalar = TrimScalarQuotes(line[(key.Length + 1)..].Trim());
+        if (scalar.IsEmpty)
+            return false;
+
+        value = scalar.ToString().Replace("\\\\", "\\", StringComparison.Ordinal);
         return value.Length > 0;
+    }
+
+    private static ReadOnlySpan<char> TrimScalarQuotes(ReadOnlySpan<char> value)
+    {
+        while (!value.IsEmpty && (value[0] == '"' || value[0] == '\''))
+            value = value[1..];
+        while (!value.IsEmpty && (value[^1] == '"' || value[^1] == '\''))
+            value = value[..^1];
+        return value;
     }
 
     private static void TryLoadPlugin(string pluginPath)
