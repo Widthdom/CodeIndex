@@ -127,7 +127,7 @@ public class McpAuditLogTests : IDisposable
     }
 
     [Fact]
-    public void ToolsCall_OversizedRequestId_IsRejectedBeforeAuditRecord_Issue3104()
+    public void ToolsCall_OversizedRequestId_IsRejectedBeforeAuditRecord_Issue3104_3308()
     {
         using var sink = new AuditLogSink(_auditPath, AuditLogSink.DefaultMaxBytes, includeValues: false);
         using var server = CreateServer(sink);
