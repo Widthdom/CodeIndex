@@ -2892,7 +2892,6 @@ public partial class DbReader
         IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null,
         string? bucketFilter = null, string? minConfidence = null)
     {
-        var referencedNames = LoadReferencedSymbolNames();
         var targetCount = Math.Max(limit, 1);
         var publicFetchBudget = Math.Max(
             targetCount,
@@ -2906,13 +2905,13 @@ public partial class DbReader
             UnusedPublicOverfetchMaximum);
         var publicOrExported = new List<UnusedSymbolResult>(targetCount);
         var chunksByFileId = new Dictionary<long, List<UnusedCandidateChunk>>();
-        var privateLike = CollectUnusedCandidateBucket(targetCount, batchSize, 0, referencedNames, chunksByFileId,
+        var privateLike = CollectUnusedCandidateBucket(targetCount, batchSize, 0, chunksByFileId,
             kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters);
-        var maybeNonPublic = CollectUnusedCandidateBucket(targetCount, batchSize, 1, referencedNames, chunksByFileId,
+        var maybeNonPublic = CollectUnusedCandidateBucket(targetCount, batchSize, 1, chunksByFileId,
             kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters);
-        var reflectionOrConfig = CollectUnusedCandidateBucket(targetCount, batchSize, 3, referencedNames, chunksByFileId,
+        var reflectionOrConfig = CollectUnusedCandidateBucket(targetCount, batchSize, 3, chunksByFileId,
             kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters);
-        CollectPublicUnusedCandidateBucket(targetCount, batchSize, publicFetchBudget, referencedNames, chunksByFileId,
+        CollectPublicUnusedCandidateBucket(targetCount, batchSize, publicFetchBudget, chunksByFileId,
             publicOrExported, reflectionOrConfig, kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters);
 
         var merged = new List<UnusedSymbolResult>(privateLike.Count + maybeNonPublic.Count + publicOrExported.Count + reflectionOrConfig.Count);
@@ -2933,7 +2932,6 @@ public partial class DbReader
         if (targetBuckets.Count == 0)
             return [];
 
-        var referencedNames = LoadReferencedSymbolNames();
         var chunksByFileId = new Dictionary<long, List<UnusedCandidateChunk>>();
         var resultsByBucket = CreateUnusedBucketResultLists();
         const int batchSize = UnusedPublicOverfetchMaximum;
@@ -2950,8 +2948,6 @@ public partial class DbReader
                 offset += batch.Count;
                 foreach (var candidate in batch)
                 {
-                    if (referencedNames.Contains(candidate.Name))
-                        continue;
                     if (HasSameFilePrivateUse(candidate, chunksByFileId))
                         continue;
 
@@ -2971,7 +2967,7 @@ public partial class DbReader
     }
 
     private List<UnusedSymbolResult> CollectUnusedCandidateBucket(int targetCount, int batchSize, int provisionalBucketOrder,
-        HashSet<string> referencedNames, Dictionary<long, List<UnusedCandidateChunk>> chunksByFileId, string? kind, string? lang,
+        Dictionary<long, List<UnusedCandidateChunk>> chunksByFileId, string? kind, string? lang,
         IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests,
         IReadOnlyList<string>? visibilityFilters, IReadOnlyList<string>? excludeVisibilityFilters)
     {
@@ -2987,8 +2983,6 @@ public partial class DbReader
             offset += batch.Count;
             foreach (var candidate in batch)
             {
-                if (referencedNames.Contains(candidate.Name))
-                    continue;
                 if (HasSameFilePrivateUse(candidate, chunksByFileId))
                     continue;
 
@@ -3005,7 +2999,7 @@ public partial class DbReader
     }
 
     private void CollectPublicUnusedCandidateBucket(int targetCount, int batchSize, int candidateBudget,
-        HashSet<string> referencedNames, Dictionary<long, List<UnusedCandidateChunk>> chunksByFileId,
+        Dictionary<long, List<UnusedCandidateChunk>> chunksByFileId,
         List<UnusedSymbolResult> publicOrExported, List<UnusedSymbolResult> reflectionOrConfig, string? kind, string? lang,
         IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests,
         IReadOnlyList<string>? visibilityFilters, IReadOnlyList<string>? excludeVisibilityFilters)
@@ -3023,8 +3017,6 @@ public partial class DbReader
             offset += batch.Count;
             foreach (var candidate in batch)
             {
-                if (referencedNames.Contains(candidate.Name))
-                    continue;
                 if (HasSameFilePrivateUse(candidate, chunksByFileId))
                     continue;
 
@@ -3102,23 +3094,6 @@ public partial class DbReader
         return chunks;
     }
 
-    private HashSet<string> LoadReferencedSymbolNames()
-    {
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = """
-            SELECT DISTINCT symbol_name
-            FROM symbol_references
-            WHERE symbol_name IS NOT NULL
-              AND symbol_name <> ''
-            """;
-
-        var names = new HashSet<string>(StringComparer.Ordinal);
-        using var reader = cmd.ExecuteTrackedReader();
-        while (reader.TrackedRead())
-            names.Add(reader.GetString(0));
-        return names;
-    }
-
     private IEnumerable<UnusedCandidateSymbol> FetchUnusedCandidateSymbols(int fetchLimit, int offset, int provisionalBucketOrder, string? kind, string? lang,
         IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)
     {
@@ -3170,6 +3145,15 @@ public partial class DbReader
             JOIN files f ON s.file_id = f.id
             WHERE s.kind NOT IN ('import', 'namespace')";
         sql += $"\n              AND {BuildAmbiguousCSharpEnumMemberExclusionSql("s", "f", pathPatterns, excludePathPatterns, excludeTests)}";
+        sql += """
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM symbol_references sr
+                  WHERE sr.symbol_name IS NOT NULL
+                    AND sr.symbol_name <> ''
+                    AND sr.symbol_name = s.name
+              )
+            """;
 
         if (lang != null)
             sql += SymbolLanguageFileIdFilter;
@@ -3663,7 +3647,6 @@ public partial class DbReader
         IReadOnlyList<string>? visibilityFilters, IReadOnlyList<string>? excludeVisibilityFilters,
         string? bucketFilter, string? minConfidence)
     {
-        var referencedNames = LoadReferencedSymbolNames();
         var count = 0;
         var paths = new HashSet<string>(StringComparer.Ordinal);
         var chunksByFileId = new Dictionary<long, List<UnusedCandidateChunk>>();
@@ -3681,8 +3664,6 @@ public partial class DbReader
                 offset += batch.Count;
                 foreach (var candidate in batch)
                 {
-                    if (referencedNames.Contains(candidate.Name))
-                        continue;
                     if (HasSameFilePrivateUse(candidate, chunksByFileId))
                         continue;
 
@@ -3705,7 +3686,6 @@ public partial class DbReader
     private QueryCountResult CountUnusedSymbolsWithoutSqlResolver(string? kind, string? lang,
         IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)
     {
-        var referencedNames = LoadReferencedSymbolNames();
         var count = 0;
         var paths = new HashSet<string>(StringComparer.Ordinal);
         var chunksByFileId = new Dictionary<long, List<UnusedCandidateChunk>>();
@@ -3723,8 +3703,6 @@ public partial class DbReader
                 offset += batch.Count;
                 foreach (var candidate in batch)
                 {
-                    if (referencedNames.Contains(candidate.Name))
-                        continue;
                     if (HasSameFilePrivateUse(candidate, chunksByFileId))
                         continue;
 
