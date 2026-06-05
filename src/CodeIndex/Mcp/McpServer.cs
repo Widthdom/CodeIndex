@@ -174,6 +174,8 @@ public partial class McpServer : IDisposable
     private const string SamplingEnabledEnvironmentVariable = "CDIDX_MCP_SAMPLING";
     internal const int MaxJsonDepth = 32;
     internal const int MaxBatchRequestCount = 100;
+    internal const int MaxRequestIdCharacterCount = 128;
+    internal const int MaxRequestIdByteLength = 256;
     // Stdio buffer for the JSON-RPC loop. Sized to fit typical large MCP payloads (e.g. batch_query)
     // in a single read so the StreamReader does not grow from its 1 KB default toward MaxLineCharacterCount.
     // JSON-RPCループのstdioバッファ。大きめのMCPペイロードを1回の読み取りで吸収し、
@@ -968,7 +970,10 @@ public partial class McpServer : IDisposable
             || obj["method"] is not null)
             return false;
 
-        var key = id?.ToJsonString(_jsonOptions) ?? "null";
+        if (!TrySerializeRequestId(id, out var serializedId, out _))
+            return false;
+
+        var key = serializedId ?? "null";
         if (!_pendingClientRequests.TryRemove(key, out var pending))
             return false;
 
@@ -1223,11 +1228,12 @@ public partial class McpServer : IDisposable
         // で例外を投げると、認証ゲート前に -32603 が返ってしまい、未認証呼び出し元に dispatch
         // 内部まで届いた事実が漏れる (#1559)。
         var method = TryGetStringMember(obj, "method");
-        if (!TryGetRequestId(obj, out var hasId, out var id))
-            return CreateErrorResponse(hasId: true, id: null, code: -32600, message: "Invalid request: id must be string, number, or null",
+        if (!TryGetRequestId(obj, out var hasId, out var id, out var idError))
+            return CreateErrorResponse(hasId: true, id: null, code: -32600, message: BuildInvalidRequestIdMessage(idError),
                 category: McpErrorEnvelope.CategoryInvalidRequest,
-                suggestion: "JSON-RPC 2.0 `id` must be a string, integer, or null. Booleans/objects/arrays are not allowed.",
-                retrySafe: false);
+                suggestion: BuildInvalidRequestIdSuggestion(idError),
+                retrySafe: false,
+                extraData: BuildInvalidRequestIdData(idError));
 
         using var correlationScope = hasId && CurrentCorrelationContext.Value is null ? BeginRequestCorrelation(id) : null;
 
@@ -2572,7 +2578,15 @@ public partial class McpServer : IDisposable
         var context = CurrentCorrelationContext.Value;
         var (errorCode, observedErrorType) = ExtractErrorCode(response);
         var resultCount = ExtractResultCount(response);
-        var (argKeys, argLengths, argKeyLengths, _) = SanitizeArgs(args, includeValues: false);
+        var (argKeys, argLengths, argKeyLengths, _) = SanitizeArgs(
+            args,
+            includeValues: false,
+            out _,
+            out _,
+            out _,
+            out _,
+            out var argKeysTruncated,
+            out var argKeyTruncationReasons);
         var toolDisplay = BoundToolNameForDisplay(toolName);
         var argsObject = new JsonObject();
         foreach (var pair in argLengths)
@@ -2595,6 +2609,10 @@ public partial class McpServer : IDisposable
         };
         toolDisplay.AddMetadata(evt, "tool");
         AddArgKeyMetadata(evt, argKeyLengths);
+        if (argKeysTruncated)
+            evt["arg_keys_truncated"] = true;
+        if (argKeyTruncationReasons.Count > 0)
+            evt["arg_key_truncation_reasons"] = JsonSerializer.SerializeToNode(argKeyTruncationReasons, _jsonOptions);
         DeferFrameLog(() => WriteMcpLogLine(evt.ToJsonString(_jsonOptions)));
     }
 
@@ -2665,14 +2683,25 @@ public partial class McpServer : IDisposable
         {
             var (errorCode, observedErrorType) = ExtractErrorCode(response);
             var resultCount = ExtractResultCount(response);
-            var (argKeys, argLengths, argKeyLengths, argValuesEcho) = SanitizeArgs(args, _auditLog.IncludeValues);
+            var (argKeys, argLengths, argKeyLengths, argValuesEcho) =
+                SanitizeArgs(args, _auditLog.IncludeValues,
+                    out var argValuesRedacted,
+                    out var argValuesTruncated,
+                    out var argValueTruncationReasons,
+                    out var argValuesSerializedBytes,
+                    out var argKeysTruncated,
+                    out var argKeyTruncationReasons);
             var toolDisplay = BoundToolNameForDisplay(toolName);
+            var requestId = SerializeRequestId(id);
+            BoundedMcpText? requestIdDisplay = requestId is null
+                ? null
+                : McpBoundedText.ForDisplay(requestId, AuditLogSink.MaxRequestIdChars);
             var evt = new AuditLogSink.AuditEvent(
                 Timestamp: startedAt,
                 Tool: toolDisplay.Text,
                 CallerName: _clientName,
                 CallerVersion: _clientVersion,
-                RequestId: SerializeRequestId(id),
+                RequestId: requestIdDisplay?.Text,
                 ArgKeys: argKeys,
                 ArgLengths: argLengths,
                 ArgValues: argValuesEcho,
@@ -2683,6 +2712,14 @@ public partial class McpServer : IDisposable
                 ToolLength: toolDisplay.Truncated ? toolDisplay.OriginalLength : null,
                 ToolTruncated: toolDisplay.Truncated,
                 ArgKeyLengths: argKeyLengths,
+                ArgKeysTruncated: argKeysTruncated,
+                ArgKeyTruncationReasons: argKeyTruncationReasons,
+                ArgValuesRedacted: argValuesRedacted,
+                ArgValuesTruncated: argValuesTruncated,
+                ArgValueTruncationReasons: argValueTruncationReasons,
+                ArgValuesSerializedBytes: argValuesSerializedBytes,
+                RequestIdLength: requestIdDisplay?.Truncated == true ? requestIdDisplay.Value.OriginalLength : null,
+                RequestIdTruncated: requestIdDisplay?.Truncated == true,
                 CallerNameLength: _clientNameDisplay?.Truncated == true ? _clientNameDisplay.Value.OriginalLength : null,
                 CallerNameTruncated: _clientNameDisplay?.Truncated == true,
                 CallerVersionLength: _clientVersionDisplay?.Truncated == true ? _clientVersionDisplay.Value.OriginalLength : null,
@@ -2764,7 +2801,26 @@ public partial class McpServer : IDisposable
     /// </summary>
     internal static (IReadOnlyList<string> Keys, IReadOnlyList<KeyValuePair<string, int>> Lengths, IReadOnlyList<KeyValuePair<string, int>> KeyLengths, JsonNode? ValuesEcho)
         SanitizeArgs(JsonNode? args, bool includeValues)
+        => SanitizeArgs(args, includeValues, out _, out _, out _, out _, out _, out _);
+
+    private static (IReadOnlyList<string> Keys, IReadOnlyList<KeyValuePair<string, int>> Lengths, IReadOnlyList<KeyValuePair<string, int>> KeyLengths, JsonNode? ValuesEcho)
+        SanitizeArgs(
+            JsonNode? args,
+            bool includeValues,
+            out bool argValuesRedacted,
+            out bool argValuesTruncated,
+            out IReadOnlyList<string> argValueTruncationReasons,
+            out int? argValuesSerializedBytes,
+            out bool argKeysTruncated,
+            out IReadOnlyList<string> argKeyTruncationReasons)
     {
+        argValuesRedacted = false;
+        argValuesTruncated = false;
+        argValueTruncationReasons = Array.Empty<string>();
+        argValuesSerializedBytes = null;
+        argKeysTruncated = false;
+        var argKeyReasons = new List<string>();
+        argKeyTruncationReasons = argKeyReasons;
         if (args is not JsonObject argsObj)
             return (Array.Empty<string>(), Array.Empty<KeyValuePair<string, int>>(), Array.Empty<KeyValuePair<string, int>>(), null);
 
@@ -2773,27 +2829,68 @@ public partial class McpServer : IDisposable
         var keyLengths = new List<KeyValuePair<string, int>>();
         var usedKeys = new HashSet<string>(StringComparer.Ordinal);
         JsonObject? echoObject = includeValues ? new JsonObject() : null;
+        AuditLogSink.ArgValueSanitizationState? valueState = includeValues ? new AuditLogSink.ArgValueSanitizationState() : null;
+        var argValueBudgetExhausted = false;
+        var argumentCount = 0;
         foreach (var (key, value) in argsObj)
         {
+            if (argumentCount >= AuditLogSink.MaxAuditArgumentCount)
+            {
+                argKeysTruncated = true;
+                AddUniqueReason(argKeyReasons, "arg_key_count_limit");
+                break;
+            }
+
             var keyDisplay = McpBoundedText.ForDisplay(key);
             var displayKey = MakeUniqueArgumentDisplayKey(key, keyDisplay, usedKeys);
             keys.Add(displayKey);
             lengths.Add(new KeyValuePair<string, int>(displayKey, AuditLogSink.MeasureArgLength(value)));
             if (keyDisplay.Truncated)
+            {
                 keyLengths.Add(new KeyValuePair<string, int>(displayKey, keyDisplay.OriginalLength));
-            if (echoObject is not null)
+                argKeysTruncated = true;
+                AddUniqueReason(argKeyReasons, "arg_key_length_limit");
+            }
+            if (echoObject is not null && !argValueBudgetExhausted)
             {
                 try
                 {
-                    echoObject[displayKey] = value?.DeepClone();
+                    if (!valueState!.TryReservePropertyName(displayKey))
+                    {
+                        argValueBudgetExhausted = true;
+                    }
+                    else
+                    {
+                        echoObject[displayKey] = AuditLogSink.SanitizeArgValue(key, value, valueState);
+                        argValuesRedacted = valueState.Redacted;
+                    }
                 }
                 catch
                 {
                     echoObject = null;
                 }
             }
+            argumentCount++;
         }
+        if (valueState is not null)
+        {
+            argValuesRedacted = valueState.Redacted;
+            argValuesTruncated = valueState.Truncated;
+            argValueTruncationReasons = valueState.TruncationReasons;
+            argValuesSerializedBytes = valueState.SerializedBytes;
+        }
+
         return (keys, lengths, keyLengths, includeValues ? echoObject : null);
+    }
+
+    private static void AddUniqueReason(List<string> reasons, string reason)
+    {
+        foreach (var existing in reasons)
+        {
+            if (StringComparer.Ordinal.Equals(existing, reason))
+                return;
+        }
+        reasons.Add(reason);
     }
 
     private static string MakeUniqueArgumentDisplayKey(string rawKey, BoundedMcpText display, ISet<string> usedKeys)
@@ -2841,16 +2938,7 @@ public partial class McpServer : IDisposable
 
     private static string? SerializeRequestId(JsonNode? id)
     {
-        if (id is null)
-            return null;
-        try
-        {
-            return id.ToJsonString();
-        }
-        catch
-        {
-            return null;
-        }
+        return TrySerializeRequestId(id, out var serialized, out _) ? serialized : null;
     }
 
     private static string? TryReadStringArg(JsonNode? args, string key)
@@ -3092,8 +3180,19 @@ public partial class McpServer : IDisposable
 
     // --- JSON-RPC helpers / JSON-RPCヘルパー ---
 
-    private static bool TryGetRequestId(JsonObject request, out bool hasId, out JsonNode? id)
+    private enum RequestIdValidationError
     {
+        None,
+        InvalidType,
+        TooLong,
+    }
+
+    private static bool TryGetRequestId(JsonObject request, out bool hasId, out JsonNode? id)
+        => TryGetRequestId(request, out hasId, out id, out _);
+
+    private static bool TryGetRequestId(JsonObject request, out bool hasId, out JsonNode? id, out RequestIdValidationError error)
+    {
+        error = RequestIdValidationError.None;
         hasId = request.TryGetPropertyValue("id", out id);
         if (!hasId)
             return true;
@@ -3101,18 +3200,121 @@ public partial class McpServer : IDisposable
         if (id is null)
             return true;
 
-        if (id is JsonValue)
-        {
-            var serialized = id.ToJsonString();
-            if (serialized.Length == 0)
-                return false;
+        return TrySerializeRequestId(id, out _, out error);
+    }
 
-            var first = serialized[0];
-            return first == '"' || first == '-' || char.IsDigit(first) || first == 'n';
+    private static bool TrySerializeRequestId(JsonNode? id, out string? serialized, out RequestIdValidationError error)
+    {
+        serialized = null;
+        error = RequestIdValidationError.None;
+        if (id is null)
+            return true;
+
+        if (id is not JsonValue value)
+        {
+            error = RequestIdValidationError.InvalidType;
+            return false;
         }
 
-        return false;
+        return TrySerializeRequestIdValue(value, out serialized, out error);
     }
+
+    private static bool TrySerializeRequestIdValue(JsonValue value, out string? serialized, out RequestIdValidationError error)
+    {
+        serialized = null;
+        error = RequestIdValidationError.None;
+        JsonValueKind kind;
+        try
+        {
+            kind = value.GetValueKind();
+        }
+        catch
+        {
+            error = RequestIdValidationError.InvalidType;
+            return false;
+        }
+
+        switch (kind)
+        {
+            case JsonValueKind.String:
+                try
+                {
+                    var requestId = value.GetValue<string>();
+                    if (!IsRequestIdWithinBounds(requestId))
+                    {
+                        error = RequestIdValidationError.TooLong;
+                        return false;
+                    }
+
+                    serialized = JsonSerializer.Serialize(requestId);
+                    return true;
+                }
+                catch
+                {
+                    error = RequestIdValidationError.InvalidType;
+                    return false;
+                }
+
+            case JsonValueKind.Number:
+                try
+                {
+                    serialized = value.TryGetValue<JsonElement>(out var element) && element.ValueKind == JsonValueKind.Number
+                        ? element.GetRawText()
+                        : value.ToJsonString();
+                }
+                catch
+                {
+                    error = RequestIdValidationError.InvalidType;
+                    return false;
+                }
+
+                if (serialized.Length == 0 || !(serialized[0] == '-' || char.IsDigit(serialized[0])))
+                {
+                    error = RequestIdValidationError.InvalidType;
+                    serialized = null;
+                    return false;
+                }
+
+                if (!IsRequestIdWithinBounds(serialized))
+                {
+                    error = RequestIdValidationError.TooLong;
+                    serialized = null;
+                    return false;
+                }
+
+                return true;
+
+            case JsonValueKind.Null:
+                return true;
+
+            default:
+                error = RequestIdValidationError.InvalidType;
+                return false;
+        }
+    }
+
+    private static bool IsRequestIdWithinBounds(string value)
+        => value.Length <= MaxRequestIdCharacterCount
+            && Encoding.UTF8.GetByteCount(value) <= MaxRequestIdByteLength;
+
+    private static string BuildInvalidRequestIdMessage(RequestIdValidationError error)
+        => error == RequestIdValidationError.TooLong
+            ? "Invalid request: id exceeds the request-id length limit"
+            : "Invalid request: id must be string, number, or null";
+
+    private static string BuildInvalidRequestIdSuggestion(RequestIdValidationError error)
+        => error == RequestIdValidationError.TooLong
+            ? $"JSON-RPC 2.0 `id` must be no more than {MaxRequestIdCharacterCount} characters and {MaxRequestIdByteLength} UTF-8 bytes. Use a compact string or number id."
+            : "JSON-RPC 2.0 `id` must be a string, integer, or null. Booleans/objects/arrays are not allowed.";
+
+    private static JsonObject? BuildInvalidRequestIdData(RequestIdValidationError error)
+        => error == RequestIdValidationError.TooLong
+            ? new JsonObject
+            {
+                ["max_request_id_chars"] = MaxRequestIdCharacterCount,
+                ["max_request_id_bytes"] = MaxRequestIdByteLength,
+            }
+            : null;
 
     private static JsonObject CreateSuccessResponse(JsonNode? id, JsonNode result)
         => CreateSuccessResponse(id is not null, id, result);

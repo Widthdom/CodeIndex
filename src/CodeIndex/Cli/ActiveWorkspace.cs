@@ -8,6 +8,7 @@ internal sealed record ActiveWorkspaceState(string Name, string Root, string DbP
 internal static class ActiveWorkspace
 {
     internal const string EnvironmentVariable = "CDIDX_ACTIVE_WORKSPACE";
+    internal const int MaxEnvironmentPathChars = 4096;
     private const int MaxStateBytes = 64 * 1024;
     internal const int MaxStateJsonDepth = 16;
     private static readonly JsonDocumentOptions StateJsonDocumentOptions = new()
@@ -31,7 +32,7 @@ internal static class ActiveWorkspace
     {
         var envPath = Environment.GetEnvironmentVariable(EnvironmentVariable);
         if (!string.IsNullOrWhiteSpace(envPath))
-            return new ActiveWorkspaceState("env", Path.GetDirectoryName(Path.GetFullPath(envPath)) ?? Environment.CurrentDirectory, Path.GetFullPath(envPath));
+            return LoadFromEnvironment(envPath);
 
         var path = StatePath;
         if (!File.Exists(LongPath.EnsureWindowsPrefix(path)))
@@ -42,7 +43,7 @@ internal static class ActiveWorkspace
             var text = DataDirectorySecurity.ReadTextWithinLimit(path, MaxStateBytes, FileShare.ReadWrite);
             if (text is null)
             {
-                WriteLoadWarning(path, $"file exceeds {MaxStateBytes} bytes");
+                WriteLoadWarning("state file", $"file exceeds {MaxStateBytes} bytes");
                 return null;
             }
 
@@ -57,7 +58,7 @@ internal static class ActiveWorkspace
         }
         catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
-            WriteLoadWarning(path, ex.Message);
+            WriteLoadWarning("state file", DescribeLoadFailure(ex));
             return null;
         }
     }
@@ -72,6 +73,35 @@ internal static class ActiveWorkspace
     private static string? ReadString(JsonElement element, string name)
         => element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
 
-    private static void WriteLoadWarning(string path, string reason)
-        => Console.Error.WriteLine($"[cdidx] Ignoring active workspace state at {path}: {reason}");
+    private static ActiveWorkspaceState? LoadFromEnvironment(string envPath)
+    {
+        if (envPath.Length > MaxEnvironmentPathChars)
+        {
+            WriteLoadWarning($"environment variable {EnvironmentVariable}", $"value exceeds {MaxEnvironmentPathChars} characters");
+            return null;
+        }
+
+        try
+        {
+            var fullPath = Path.GetFullPath(envPath);
+            return new ActiveWorkspaceState("env", Path.GetDirectoryName(fullPath) ?? Environment.CurrentDirectory, fullPath);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            WriteLoadWarning($"environment variable {EnvironmentVariable}", DescribeLoadFailure(ex));
+            return null;
+        }
+    }
+
+    private static string DescribeLoadFailure(Exception ex) => ex switch
+    {
+        JsonException => "invalid JSON",
+        UnauthorizedAccessException => "permission denied",
+        ArgumentException or NotSupportedException or PathTooLongException => "invalid path",
+        IOException => "read failed",
+        _ => "load failed",
+    };
+
+    private static void WriteLoadWarning(string source, string reason)
+        => Console.Error.WriteLine($"[cdidx] Ignoring active workspace {source}: {ConsoleUi.FormatBoundedValue(reason)}. Hint: inspect or reset the active workspace configuration.");
 }

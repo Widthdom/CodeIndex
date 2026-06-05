@@ -25,6 +25,65 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunMap_ParseCompact_ImpliesJsonAndPreservesExplicitLimit_Issue3009()
+    {
+        var options = QueryCommandRunner.ParseArgs(
+            ["--compact", "--limit", "3"],
+            jsonDefault: false,
+            validateDefaultSnippetLines: false,
+            validateDefaultMaxLineWidth: false);
+
+        Assert.True(options.Json);
+        Assert.True(options.Compact);
+        Assert.True(options.LimitExplicit);
+        Assert.Equal(3, options.Limit);
+        Assert.Null(options.ParseError);
+    }
+
+    [Fact]
+    public void RunMap_CompactJson_CapsSectionsAndReportsTruncation_Issue3009()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_map_compact");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            for (var i = 0; i < QueryCommandRunner.DefaultCompactSectionLimit + 2; i++)
+            {
+                TestProjectHelper.InsertIndexedFile(
+                    dbPath,
+                    $"src/module{i}/App{i}.cs",
+                    "csharp",
+                    $"namespace Module{i}; public class App{i} {{ public void Run() {{ }} }}\n");
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunMap(
+                ["--db", dbPath, "--compact"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var topFiles = json.GetProperty("top_files").EnumerateArray().ToList();
+            var topFilesTruncation = json
+                .GetProperty("truncation")
+                .GetProperty("sections")
+                .GetProperty("top_files");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(json.GetProperty("compact").GetBoolean());
+            Assert.Equal(QueryCommandRunner.DefaultCompactSectionLimit, json.GetProperty("compact_limit").GetInt32());
+            Assert.Equal(QueryCommandRunner.DefaultCompactSectionLimit, topFiles.Count);
+            Assert.Equal(QueryCommandRunner.DefaultCompactSectionLimit, topFilesTruncation.GetProperty("returned").GetInt32());
+            Assert.Equal(QueryCommandRunner.DefaultCompactSectionLimit + 1, topFilesTruncation.GetProperty("source_count").GetInt32());
+            Assert.True(topFilesTruncation.GetProperty("truncated").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunMap_WithJsonIncludesWorkspaceMetadataForProjectDb()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_map");

@@ -643,6 +643,59 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public async Task ProcessLineAsync_CapsTelemetryArgumentKeyCount_Issue3237()
+    {
+        using var writer = new StringWriter();
+        using var error = new StringWriter();
+        var arguments = new JsonObject();
+        for (var i = 0; i < AuditLogSink.MaxAuditArgumentCount + 3; i++)
+            arguments[$"arg{i}"] = i;
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 123,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "does_not_exist",
+                ["arguments"] = arguments,
+            },
+        };
+
+        await Task.Run(() =>
+        {
+            lock (TestConsoleLock.Gate)
+            {
+                var previousError = Console.Error;
+                try
+                {
+                    Console.SetError(error);
+#pragma warning disable xUnit1031
+                    _server.ProcessLineAsync(request.ToJsonString(), writer).GetAwaiter().GetResult();
+#pragma warning restore xUnit1031
+                }
+                finally
+                {
+                    Console.SetError(previousError);
+                }
+            }
+        });
+
+        var line = error.ToString()
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Single(l => l.Contains("\"event\":\"mcp.tool.invocation\"", StringComparison.Ordinal));
+        var jsonStart = line.IndexOf('{');
+        using var document = JsonDocument.Parse(line[jsonStart..]);
+        var root = document.RootElement;
+        Assert.Equal(AuditLogSink.MaxAuditArgumentCount, root.GetProperty("arg_keys").GetArrayLength());
+        Assert.True(root.GetProperty("arg_keys_truncated").GetBoolean());
+        Assert.Contains(root.GetProperty("arg_key_truncation_reasons").EnumerateArray(),
+            reason => reason.GetString() == "arg_key_count_limit");
+        Assert.DoesNotContain(root.GetProperty("arg_keys").EnumerateArray(),
+            key => key.GetString() == $"arg{AuditLogSink.MaxAuditArgumentCount}");
+    }
+
+    [Fact]
     public async Task ProcessLineAsync_FallbackErrorIncludesCorrelationData()
     {
         using var writer = new StringWriter();
@@ -1662,6 +1715,14 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void TokenAuthenticator_OversizedTokenInCtor_RejectedBeforeHashing()
+    {
+        var oversized = new string('x', McpAuthenticationLimits.MaxTokenCharacters + 1);
+
+        Assert.Throws<ArgumentException>(() => new TokenMcpAuthenticator(oversized));
+    }
+
+    [Fact]
     public void McpAuthenticatorFactory_NoEnv_ReturnsLocalStdio()
     {
         // FromEnvironment() must default to permissive stdio when the env var is unset or
@@ -1799,6 +1860,24 @@ public class McpServerTests : IDisposable
         ((JsonObject)sameLenResp["error"]!["data"]!).Remove("request_id");
         Assert.Equal(shortResp.ToJsonString(), sameLenResp.ToJsonString());
         Assert.Equal(-32001, shortResp["error"]!["code"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void TokenAuthenticator_OversizedPresentedToken_ReturnsUnauthorized()
+    {
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion(), false,
+            new TokenMcpAuthenticator("s3cret"));
+        var oversized = new string('x', McpAuthenticationLimits.MaxTokenCharacters + 1);
+        var request = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"ping","params":{"auth":{"token":"""
+            + JsonSerializer.Serialize(oversized)
+            + "}}}")!;
+
+        var response = server.HandleMessage(request)!;
+
+        Assert.Null(response["result"]);
+        Assert.Equal(-32001, response["error"]!["code"]!.GetValue<int>());
+        Assert.Equal("Unauthorized", response["error"]!["message"]!.GetValue<string>());
     }
 
     [Fact]
@@ -12249,6 +12328,40 @@ public class McpServerTests : IDisposable
         var response = JsonNode.Parse(raw!)!;
         Assert.Equal(-32700, response["error"]!["code"]!.GetValue<int>());
         Assert.Equal("message_too_large", response["error"]!["data"]!["category"]!.GetValue<string>());
+        AssertJsonNullId(response);
+    }
+
+    [Fact]
+    public void ProcessFrame_OversizedStringRequestId_ReturnsInvalidRequestWithNullId_Issue3104()
+    {
+        var oversizedId = new string('x', McpServer.MaxRequestIdCharacterCount + 1);
+        var raw = _server.ProcessFrame("{\"jsonrpc\":\"2.0\",\"id\":\"" + oversizedId + "\",\"method\":\"tools/list\"}");
+
+        Assert.NotNull(raw);
+        Assert.DoesNotContain(oversizedId, raw, StringComparison.Ordinal);
+        var response = JsonNode.Parse(raw!)!;
+        var error = response["error"]!;
+        Assert.Equal(-32600, error["code"]!.GetValue<int>());
+        Assert.Equal("invalid_request", error["data"]!["category"]!.GetValue<string>());
+        Assert.Equal(McpServer.MaxRequestIdCharacterCount, error["data"]!["max_request_id_chars"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxRequestIdByteLength, error["data"]!["max_request_id_bytes"]!.GetValue<int>());
+        AssertJsonNullId(response);
+    }
+
+    [Fact]
+    public void ProcessFrame_OversizedNumericRequestId_ReturnsInvalidRequestWithNullId_Issue3104()
+    {
+        var oversizedId = new string('9', McpServer.MaxRequestIdCharacterCount + 1);
+        var raw = _server.ProcessFrame("{\"jsonrpc\":\"2.0\",\"id\":" + oversizedId + ",\"method\":\"tools/list\"}");
+
+        Assert.NotNull(raw);
+        Assert.DoesNotContain(oversizedId, raw, StringComparison.Ordinal);
+        var response = JsonNode.Parse(raw!)!;
+        var error = response["error"]!;
+        Assert.Equal(-32600, error["code"]!.GetValue<int>());
+        Assert.Equal("invalid_request", error["data"]!["category"]!.GetValue<string>());
+        Assert.Equal(McpServer.MaxRequestIdCharacterCount, error["data"]!["max_request_id_chars"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxRequestIdByteLength, error["data"]!["max_request_id_bytes"]!.GetValue<int>());
         AssertJsonNullId(response);
     }
 

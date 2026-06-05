@@ -193,6 +193,53 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
+    public void HttpTransport_RequestLogFieldLimiter_CapsMetadataFields()
+    {
+        var longValue = new string('x', HttpMcpTransport.MaxRequestLogFieldCharacters + 100);
+
+        var limited = HttpMcpTransport.LimitRequestLogField(longValue);
+
+        Assert.NotNull(limited);
+        Assert.Equal(HttpMcpTransport.MaxRequestLogFieldCharacters, limited.Length);
+        Assert.EndsWith(HttpMcpTransport.RequestLogTruncationMarker, limited, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task HttpTransport_RequestLogger_CapsLongPathBeforeLogging()
+    {
+        var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath, requestLogger: records.Enqueue);
+
+        using var client = new HttpClient();
+        var longPath = string.Join('/', Enumerable.Repeat("segment", 50));
+        using var response = await client.GetAsync(new Uri(new Uri(harness.Endpoint), longPath));
+
+        Assert.Equal(HttpStatusCode.MethodNotAllowed, response.StatusCode);
+        var record = Assert.Single(await WaitForRequestLogRecordsAsync(records, 1));
+        Assert.Equal(HttpMcpTransport.MaxRequestLogFieldCharacters, record.Path.Length);
+        Assert.EndsWith(HttpMcpTransport.RequestLogTruncationMarker, record.Path, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task HttpTransport_RequestLogger_CapsLongJsonRpcIdBeforeLogging()
+    {
+        var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath, requestLogger: records.Enqueue);
+        var oversizedId = new string('i', HttpMcpTransport.MaxRequestLogFieldCharacters + 100);
+        var body = """{"jsonrpc":"2.0","id":"""
+            + JsonSerializer.Serialize(oversizedId)
+            + ""","method":"ping"}""";
+
+        using var response = await harness.PostJsonAsync(body);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var record = Assert.Single(await WaitForRequestLogRecordsAsync(records, 1));
+        Assert.NotNull(record.RequestId);
+        Assert.Equal(HttpMcpTransport.MaxRequestLogFieldCharacters, record.RequestId.Length);
+        Assert.EndsWith(HttpMcpTransport.RequestLogTruncationMarker, record.RequestId, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task HttpTransport_RequestLogger_TooDeepJsonRpcIdReturnsNull_Issue3014()
     {
         var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
@@ -361,8 +408,12 @@ public class HttpMcpTransportTests : IDisposable
 
         Assert.Equal(HttpMcpTransport.DefaultMaxRequestBodyBytes, transport.MaxRequestBodyBytes);
         Assert.Equal(HttpMcpTransport.DefaultMaxQueuedRequests, transport.MaxQueuedRequests);
+        Assert.Equal(HttpMcpTransport.DefaultMaxConcurrentHandlers, transport.MaxConcurrentHandlers);
+        Assert.Equal(HttpMcpTransport.DefaultMaxEventStreams, transport.MaxEventStreams);
         Assert.InRange(transport.MaxRequestBodyBytes, 1, HttpMcpTransport.MaxConfiguredRequestBodyBytes);
         Assert.InRange(transport.MaxQueuedRequests, 1, HttpMcpTransport.MaxConfiguredQueuedRequests);
+        Assert.InRange(transport.MaxConcurrentHandlers, 1, HttpMcpTransport.MaxConfiguredConcurrentHandlers);
+        Assert.InRange(transport.MaxEventStreams, 1, HttpMcpTransport.MaxConfiguredEventStreams);
     }
 
     [Fact]
@@ -370,9 +421,13 @@ public class HttpMcpTransportTests : IDisposable
     {
         using var env = EnvironmentVariableScope.Capture(
             HttpMcpTransport.MaxRequestBodyBytesEnvVar,
-            HttpMcpTransport.MaxQueueDepthEnvVar);
+            HttpMcpTransport.MaxQueueDepthEnvVar,
+            HttpMcpTransport.MaxConcurrentHandlersEnvVar,
+            HttpMcpTransport.MaxEventStreamsEnvVar);
         env.Set(HttpMcpTransport.MaxRequestBodyBytesEnvVar, (2 * 1024 * 1024).ToString(CultureInfo.InvariantCulture));
         env.Set(HttpMcpTransport.MaxQueueDepthEnvVar, "128");
+        env.Set(HttpMcpTransport.MaxConcurrentHandlersEnvVar, "32");
+        env.Set(HttpMcpTransport.MaxEventStreamsEnvVar, "8");
 
         var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
         await using var transport = new HttpMcpTransport(
@@ -383,6 +438,8 @@ public class HttpMcpTransportTests : IDisposable
 
         Assert.Equal(2 * 1024 * 1024, transport.MaxRequestBodyBytes);
         Assert.Equal(128, transport.MaxQueuedRequests);
+        Assert.Equal(32, transport.MaxConcurrentHandlers);
+        Assert.Equal(8, transport.MaxEventStreams);
     }
 
     [Fact]
@@ -470,6 +527,50 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
+    public void HttpTransport_OversizedConcurrentHandlersEnvironment_ThrowsWithRange()
+    {
+        using var env = EnvironmentVariableScope.Capture(HttpMcpTransport.MaxConcurrentHandlersEnvVar);
+        env.Set(
+            HttpMcpTransport.MaxConcurrentHandlersEnvVar,
+            (HttpMcpTransport.MaxConfiguredConcurrentHandlers + 1).ToString(CultureInfo.InvariantCulture));
+
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        var ex = Assert.Throws<FormatException>(() => new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null));
+
+        Assert.Contains(HttpMcpTransport.MaxConcurrentHandlersEnvVar, ex.Message, StringComparison.Ordinal);
+        Assert.Contains(
+            $"between 1 and {HttpMcpTransport.MaxConfiguredConcurrentHandlers.ToString(CultureInfo.InvariantCulture)}",
+            ex.Message,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void HttpTransport_OversizedEventStreamsEnvironment_ThrowsWithRange()
+    {
+        using var env = EnvironmentVariableScope.Capture(HttpMcpTransport.MaxEventStreamsEnvVar);
+        env.Set(
+            HttpMcpTransport.MaxEventStreamsEnvVar,
+            (HttpMcpTransport.MaxConfiguredEventStreams + 1).ToString(CultureInfo.InvariantCulture));
+
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        var ex = Assert.Throws<FormatException>(() => new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null));
+
+        Assert.Contains(HttpMcpTransport.MaxEventStreamsEnvVar, ex.Message, StringComparison.Ordinal);
+        Assert.Contains(
+            $"between 1 and {HttpMcpTransport.MaxConfiguredEventStreams.ToString(CultureInfo.InvariantCulture)}",
+            ex.Message,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void HttpTransport_OversizedExplicitLimitOption_ThrowsWithRange()
     {
         var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
@@ -519,6 +620,30 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
+    public async Task HttpTransport_ConcurrentHandlerLimit_Returns429()
+    {
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        await using var transport = new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null,
+            maxConcurrentHandlers: 1);
+
+        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+        using var events = await client.GetAsync(new Uri(new Uri(listen.Prefix), "events"), HttpCompletionOption.ResponseHeadersRead);
+        Assert.Equal(HttpStatusCode.OK, events.StatusCode);
+        await WaitUntilAsync(() => transport.HasEventStreams, "the first event stream to occupy the only handler slot");
+
+        using var second = await client.PostAsync(
+            listen.Prefix,
+            new StringContent("""{"jsonrpc":"2.0","id":2,"method":"ping"}""", Encoding.UTF8, "application/json"));
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, second.StatusCode);
+        Assert.Contains(second.Headers, header => header.Key == "Retry-After");
+    }
+
+    [Fact]
     public async Task HttpTransport_EventsStream_DoesNotBlockPostRequests()
     {
         await using var harness = await McpHttpHarness.StartAsync(_dbPath);
@@ -535,6 +660,28 @@ public class HttpMcpTransportTests : IDisposable
         var body = await response.Content.ReadAsStringAsync();
         using var doc = JsonDocument.Parse(body);
         Assert.Equal(11, doc.RootElement.GetProperty("id").GetInt32());
+    }
+
+    [Fact]
+    public async Task HttpTransport_EventsStreamLimit_Returns429()
+    {
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        await using var transport = new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null,
+            maxEventStreams: 1);
+
+        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+        using var first = await client.GetAsync(new Uri(new Uri(listen.Prefix), "events"), HttpCompletionOption.ResponseHeadersRead);
+        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+        await WaitUntilAsync(() => transport.EventStreamCount == 1, "the first event stream to fill the stream limit");
+
+        using var second = await client.GetAsync(new Uri(new Uri(listen.Prefix), "events"), HttpCompletionOption.ResponseHeadersRead);
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, second.StatusCode);
+        Assert.Contains(second.Headers, header => header.Key == "Retry-After");
     }
 
     [Fact]
@@ -560,8 +707,6 @@ public class HttpMcpTransportTests : IDisposable
     [Fact]
     public async Task HttpTransport_EventsStream_RemovesDisconnectedStreams()
     {
-        using var env = EnvironmentVariableScope.Capture("CDIDX_MCP_KEEP_ALIVE_INTERVAL_S");
-        env.Set("CDIDX_MCP_KEEP_ALIVE_INTERVAL_S", "1");
         await using var harness = await McpHttpHarness.StartAsync(_dbPath);
 
         using var client = new HttpClient();
@@ -713,6 +858,28 @@ public class HttpMcpTransportTests : IDisposable
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
         Assert.Contains(response.Headers.WwwAuthenticate, h => h.Scheme.Equals("Bearer", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task HttpTransport_BearerToken_RejectsOversizedHeaderBeforeHashing()
+    {
+        var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: "token", requestLogger: records.Enqueue);
+
+        using var client = new HttpClient();
+        using var request = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
+        {
+            Content = new StringContent("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", Encoding.UTF8, "application/json"),
+        };
+        request.Headers.TryAddWithoutValidation(
+            "Authorization",
+            "Bearer " + new string('x', McpAuthenticationLimits.MaxTokenCharacters + 1));
+
+        using var response = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        var record = Assert.Single(await WaitForRequestLogRecordsAsync(records, 1));
+        Assert.Equal("wrong-token", record.AuthOutcome);
     }
 
     [Fact]

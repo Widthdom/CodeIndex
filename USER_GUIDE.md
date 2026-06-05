@@ -302,11 +302,24 @@ Most query commands emit one complete JSON value when `--json` is set. `search
 per line as newline-delimited JSON (ndjson), then a final `{"done":true,...}`
 line. Stream consumers can parse each line as it arrives; array-oriented tools
 can use `jq -s '.'` or pass `--json=array` to `search` to emit the result set as
-one JSON array.
+one JSON array. Add `--pretty` with `--json` to indent single-document JSON
+responses; for `search`, use `--json=array --pretty` when the result set itself
+should be indented because default `search --json` stays newline-delimited.
+For AI-oriented bounded payloads, `map`, `inspect`, and `outline` accept
+`--compact`. It implies JSON output, caps list sections to 5 items by default
+(or the explicit `--limit` / `--top` value), and adds `compact`,
+`compact_limit`, and `truncation.sections.*` metadata.
+For narrower `inspect` evidence, `--fields <csv>` implies JSON and selects
+top-level groups such as `definitions`, `file`, `graph`, `references`,
+`callers`, and `callees`; `--body-only` is shorthand for `--body --fields
+definitions`.
 
 ```bash
 cdidx search authenticate --json          # ndjson stream, one result per line
 cdidx search authenticate --json=array    # single JSON array
+cdidx inspect QueryCommandRunner --json --pretty
+cdidx map --compact                       # capped JSON with truncation metadata
+cdidx inspect Compute --body-only         # definitions with body_content only
 ```
 
 For `cdidx find --count --json`, `files` is the canonical matched-file count.
@@ -1194,6 +1207,10 @@ same source location.
 |---|---|---|
 | `--db <path>` | All commands except `languages`; for `mcp`, only `--db` is supported | Database file path. `index` defaults to `<projectPath>/.cdidx/codeindex.db`; query commands default to `.cdidx/codeindex.db` in the current directory. Query commands without `--db` keep trusting that default `.cdidx/codeindex.db` sibling path, so moving or renaming the current repo does not leave stale workspace metadata behind. For explicit query DBs, workspace metadata such as `project_root`, `git_head`, and `git_is_dirty` comes from the persisted `indexed_project_root` stored in that DB when available. Legacy explicit DBs created before that metadata existed may return those fields as `null` / absent until you rerun `cdidx index <projectPath> --db <path>` or a scoped update that actually commits at least one file delete/update against the intended project, even if the explicit path itself looks like `.../.cdidx/codeindex.db`. |
 | `--json` | All commands except `mcp` | JSON output (for AI/machine use). `search --json` writes newline-delimited result objects followed by a final `{"done":true,"count":N,"interrupted":false}` sentinel, including zero-result output, so stream consumers can detect clean completion. |
+| `--pretty` | JSON-capable commands except `mcp` | Pretty-print JSON output with indentation. Default `search --json` remains newline-delimited; use `search --json=array --pretty` for an indented search result array. |
+| `--compact` | `map`, `inspect`, `outline` | Emit AI-oriented compact JSON with capped list sections and `truncation.sections.*` metadata. The default cap is 5 unless `--limit` / `--top` is supplied. |
+| `--fields <csv>` | `inspect` | Select top-level inspect JSON groups: `file`, `workspace`, `graph`, `definitions`, `body`, `nearby_symbols`, `references`, `callers`, `callees`, or `all`. `body` includes definition bodies and maps to `definitions`. |
+| `--body-only` | `inspect` | Shorthand for `--body --fields definitions`, useful when large audits need implementation text without graph context. |
 | `--status <all\|submitted\|unsubmitted>` | `suggestions` | Filter local suggestion history by GitHub submission state. |
 | `--language <lang>` / `--lang <lang>` | `suggestions` | Filter local suggestion history by recorded target language. |
 | `--category <category>` | `suggestions` | Filter local suggestion history by suggestion category. |
@@ -1405,8 +1422,8 @@ Example output:
 | Flag | Default | Effect |
 |---|---|---|
 | `--audit-log <path>` | (off) | Enable audit emission and write JSONL records to `<path>`. The parent directory is created if missing. |
-| `--audit-log-include-values` | off | Echo the full argument payload into each record. Requires `--audit-log`. Off by default because `query` / `name` arguments may contain literal source snippets or secret-shaped strings. |
-| `--audit-log-max-bytes <n>` | `52428800` (50 MiB) | Size threshold (bytes) at which the active log rotates. Must be ≥ 4096. |
+| `--audit-log-include-values` | off | Echo a redacted copy of the argument payload into each record. Requires `--audit-log`. Off by default because `query` / `name` arguments may contain literal source snippets or secret-shaped strings. |
+| `--audit-log-max-bytes <n>` | `52428800` (50 MiB) | Size threshold (bytes) at which the active log rotates. Must be between 4096 and 1073741824. |
 
 Each record is a single JSON object on its own line with these fields:
 
@@ -1417,9 +1434,19 @@ Each record is a single JSON object on its own line with these fields:
 | `caller` | string (optional) | `initialize.clientInfo.name` from the connected MCP client |
 | `caller_version` | string (optional) | `initialize.clientInfo.version` from the connected MCP client |
 | `request_id` | string (optional) | JSON-encoded JSON-RPC request id, when present |
+| `request_id_length` | number (optional) | Original request id length when `request_id` is truncated |
+| `request_id_truncated` | boolean (optional) | `true` when `request_id` was shortened for the audit record |
 | `arg_keys` | string[] | Ordered list of argument names supplied to the tool |
+| `arg_key_lengths` | object (optional) | Original key lengths for truncated argument names |
+| `arg_keys_truncated` | boolean (optional) | `true` when argument names or the argument-key list were truncated |
+| `arg_key_truncation_reasons` | string[] (optional) | Stable truncation reason codes for argument-key truncation |
 | `arg_lengths` | object | Per-argument length sketch — string→char count, array→element count, object→key count, scalar→0 |
-| `arg_values` | object (optional) | Full argument payload. Present only when `--audit-log-include-values` is enabled |
+| `arg_values` | object (optional) | Redacted and budgeted argument payload. Present only when `--audit-log-include-values` is enabled |
+| `arg_values_redacted` | boolean (optional) | `true` when secret-like keys or token patterns were replaced with `[REDACTED]` |
+| `arg_values_truncated` | boolean (optional) | `true` when include-values output hit a depth, count, string, or byte budget |
+| `arg_values_truncation_reasons` | string[] (optional) | Stable truncation reason codes when `arg_values_truncated` is true |
+| `arg_values_serialized_bytes` | number (optional) | Approximate serialized-byte budget consumed by retained `arg_values` |
+| `arg_values_max_bytes` | number (optional) | Maximum serialized-byte budget for retained `arg_values` |
 | `result_count` | number (optional) | `structuredContent.count` or `structuredContent.results.length` for successful calls; omitted otherwise |
 | `elapsed_ms` | number | Wall-clock duration in milliseconds (3 decimal places) |
 | `error_code` | number | `0` on success, `1` for MCP tool errors (`isError: true`), or the verbatim JSON-RPC error code (e.g. `-32602`) |
@@ -2108,13 +2135,13 @@ For HTTP, `CDIDX_MCP_HTTP_TOKEN` is the preferred bearer secret. If it is
 unset, HTTP falls back to `CDIDX_MCP_AUTH_TOKEN` as the bearer secret, and
 clients still authenticate with `Authorization: Bearer <token>`.
 
-Each HTTP `POST /` carries one JSON-RPC frame in the request body, the matching response is returned in the same HTTP body (`200 OK`, `application/json`), and notifications return `204 No Content`. `GET /events` opens a `text/event-stream` channel for server-to-client frames; the server emits no unsolicited frames unless keep-alive notifications are opted in with `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S`. Accepted keep-alive values are finite seconds from `1` to `300`; invalid or out-of-range values leave keep-alive disabled with a `stderr` warning. The stream is independent and does not block normal POST requests. Non-POST verbs on `/` return `405 Method Not Allowed` with `Allow: POST`. Request bodies are capped at 1,000,000 bytes by default and oversized requests return `413 Payload Too Large`; the pending POST queue is capped at 64 requests by default and full queues return `429 Too Many Requests` with `Retry-After: 1`. Tune those positive-integer limits with `CDIDX_MCP_HTTP_MAX_REQUEST_BYTES` and `CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH`; accepted ranges are `1..16777216` bytes and `1..1024` queued requests. Invalid non-positive or non-numeric values fall back to the defaults, while values above those maximums are rejected before the listener starts. When the persistent lifecycle log is enabled, HTTP mode also writes one `mcp_http_request` record per request with method, path, status, duration, auth outcome, remote peer, correlation id, and JSON-RPC request id when available. Request and response bodies are not logged.
+Each HTTP `POST /` carries one JSON-RPC frame in the request body, the matching response is returned in the same HTTP body (`200 OK`, `application/json`), and notifications return `204 No Content`. `GET /events` opens a `text/event-stream` channel for server-to-client frames; the server emits no unsolicited JSON-RPC frames unless keep-alive notifications are opted in with `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S`. Accepted keep-alive values are finite seconds from `1` to `300`; invalid or out-of-range values leave keep-alive disabled with a `stderr` warning. The stream is independent and does not block normal POST requests. Non-POST verbs on `/` return `405 Method Not Allowed` with `Allow: POST`. Request bodies are capped at 1,000,000 bytes by default and oversized requests return `413 Payload Too Large`; the pending POST queue and accepted handler tasks are capped at 64 by default, and concurrent `/events` streams are capped at 16. Full queues, handler pools, or stream slots return `429 Too Many Requests` with `Retry-After: 1`. Tune those positive-integer limits with `CDIDX_MCP_HTTP_MAX_REQUEST_BYTES`, `CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH`, `CDIDX_MCP_HTTP_MAX_CONCURRENT_HANDLERS`, and `CDIDX_MCP_HTTP_MAX_EVENT_STREAMS`; accepted ranges are `1..16777216` bytes and `1..1024` for each count limit. Invalid non-positive or non-numeric values fall back to the defaults, while values above those maximums are rejected before the listener starts. Idle event streams receive minimal SSE comment heartbeats so disconnected clients release their stream slots. When the persistent lifecycle log is enabled, HTTP mode also writes one `mcp_http_request` record per request with method, path, status, duration, auth outcome, remote peer, correlation id, and JSON-RPC request id when available. Method, path, remote peer, and request id fields are capped at 256 characters with a `...<truncated>` marker. Request and response bodies are not logged.
 
 Security defaults:
 
 - The listener binds to a loopback address (`127.0.0.1`) by default, and the wildcard hosts `+` / `*` are rejected outright.
 - Binding to a non-loopback host (e.g. `0.0.0.0:9000`) is refused unless you set `CDIDX_MCP_HTTP_TOKEN` or `CDIDX_MCP_AUTH_TOKEN` to a shared secret. `CDIDX_MCP_HTTP_TOKEN` wins when both are set. When an HTTP bearer secret is configured, every request must carry `Authorization: Bearer <token>` or the listener returns `401 Unauthorized` with `WWW-Authenticate: Bearer realm="cdidx-mcp"`; HTTP clients do not also need `params.auth.token`.
-- The configured token's SHA-256 digest is precomputed at start-up; per-request authentication only hashes the supplied input and compares against the stored digest in constant time, so neither the configured token's length nor its bytes leak through timing.
+- The configured token's SHA-256 digest is precomputed at start-up; per-request authentication only hashes the supplied input and compares against the stored digest in constant time, so neither the configured token's length nor its bytes leak through timing. Configured and supplied tokens longer than 4096 characters are rejected before hashing.
 
 The stdio transport stays byte-for-byte unchanged, so existing client configs keep working without modification.
 
@@ -2543,11 +2570,25 @@ release changelog を source of truth とします。完全な syntax line は `
 newline-delimited JSON (ndjson) として出力し、最後に `{"done":true,...}` 行を
 出力します。stream consumer は各行を到着順に parse できます。array 前提の tool
 では `jq -s '.'` を使うか、`search` に `--json=array` を渡すと result set を
-1 つの JSON array として出力できます。
+1 つの JSON array として出力できます。`--json` と一緒に `--pretty` を付けると
+単一 document の JSON 応答をインデント付きで出力します。`search` の result set を
+整形したい場合は、既定の `search --json` が newline-delimited のまま保たれるため
+`--json=array --pretty` を使います。
+AI 向けに上限付き payload が必要な場合、`map`、`inspect`、`outline` は
+`--compact` に対応しています。これは JSON 出力を暗黙に有効化し、list section を
+既定 5 件（明示した `--limit` / `--top` があればその値）に cap し、
+`compact`、`compact_limit`、`truncation.sections.*` metadata を追加します。
+`inspect` の証跡をさらに絞りたい場合、`--fields <csv>` は JSON 出力を暗黙に有効化し、
+`definitions`、`file`、`graph`、`references`、`callers`、`callees` などの
+top-level group を選択します。`--body-only` は `--body --fields definitions` の
+shorthand です。
 
 ```bash
 cdidx search authenticate --json          # ndjson stream、1 行 1 result
 cdidx search authenticate --json=array    # 単一 JSON array
+cdidx inspect QueryCommandRunner --json --pretty
+cdidx map --compact                       # truncation metadata 付きの cap 済み JSON
+cdidx inspect Compute --body-only         # body_content 付き definitions のみ
 ```
 
 ## Editor / index portability
@@ -3434,6 +3475,10 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 |---|---|---|
 | `--db <path>` | `languages` を除く全コマンド。`mcp` は `--db` のみ対応 | DBファイルパス。`index` のデフォルトは `<projectPath>/.cdidx/codeindex.db`、クエリ系コマンドのデフォルトはカレントディレクトリの `.cdidx/codeindex.db`。`--db` を付けない query は、その既定の `.cdidx/codeindex.db` sibling path を引き続き正とするため、カレント repo を move/rename しても古い workspace metadata を引きずらない。明示指定 query DB の `project_root`、`git_head`、`git_is_dirty` などの workspace metadata は、利用可能な場合はその DB に保存された `indexed_project_root` から解決される。保存前の古い explicit DB では、意図した project に対して `cdidx index <projectPath> --db <path>`、または少なくとも 1 件の file delete/update を実際に commit する scoped update を一度実行するまで、これらの項目が `null` / 未出力になることがあり、明示パス自体が `.../.cdidx/codeindex.db` でも同じ。 |
 | `--json` | `mcp` を除く全コマンド | JSON出力（AI/機械向け） |
+| `--pretty` | `mcp` を除く JSON 対応コマンド | JSON 出力をインデント付きで整形。既定の `search --json` は newline-delimited のまま維持されるため、検索結果配列を整形したい場合は `search --json=array --pretty` を使う。 |
+| `--compact` | `map`、`inspect`、`outline` | list section を cap した AI 向け compact JSON を出力し、`truncation.sections.*` metadata を含める。既定 cap は 5 件で、`--limit` / `--top` 指定時はその値を使う。 |
+| `--fields <csv>` | `inspect` | inspect JSON の top-level group を選択。`file`、`workspace`、`graph`、`definitions`、`body`、`nearby_symbols`、`references`、`callers`、`callees`、`all` を指定できる。`body` は definition body を含め、`definitions` に対応する。 |
+| `--body-only` | `inspect` | `--body --fields definitions` の shorthand。大規模 audit で graph context なしに実装本文だけが必要な場合に使う。 |
 | `--status <all\|submitted\|unsubmitted>` | `suggestions` | ローカル提案履歴を GitHub 送信状態で絞り込みます。 |
 | `--language <lang>` / `--lang <lang>` | `suggestions` | ローカル提案履歴を記録済み対象言語で絞り込みます。 |
 | `--category <category>` | `suggestions` | ローカル提案履歴を提案カテゴリで絞り込みます。 |
@@ -3643,8 +3688,8 @@ MCP ツールで catch-all まで突き抜けた例外（想定外の SQLite 例
 | フラグ | 既定 | 効果 |
 |---|---|---|
 | `--audit-log <path>` | (無効) | 監査出力を有効化し `<path>` に JSONL を書き出す。親ディレクトリは無ければ自動作成 |
-| `--audit-log-include-values` | off | 引数の値をレコードに含める。`--audit-log` 必須。既定で off なのは `query` / `name` 引数にソース片や secret 風の文字列が入りうるため |
-| `--audit-log-max-bytes <n>` | `52428800` (50 MiB) | ローテーションの閾値（バイト）。最小値は 4096 |
+| `--audit-log-include-values` | off | redaction 済みの引数値をレコードに含める。`--audit-log` 必須。既定で off なのは `query` / `name` 引数にソース片や secret 風の文字列が入りうるため |
+| `--audit-log-max-bytes <n>` | `52428800` (50 MiB) | ローテーションの閾値（バイト）。4096 以上 1073741824 以下 |
 
 各レコードは独立した行に 1 つの JSON オブジェクトとして書き出され、フィールドは次の通りです。
 
@@ -3655,9 +3700,19 @@ MCP ツールで catch-all まで突き抜けた例外（想定外の SQLite 例
 | `caller` | string（任意） | 接続中クライアントの `initialize.clientInfo.name` |
 | `caller_version` | string（任意） | 接続中クライアントの `initialize.clientInfo.version` |
 | `request_id` | string（任意） | JSON-RPC リクエスト id を JSON エンコードしたもの |
+| `request_id_length` | number（任意） | `request_id` が短縮された場合の元の長さ |
+| `request_id_truncated` | boolean（任意） | audit record 用に `request_id` が短縮された場合に `true` |
 | `arg_keys` | string[] | ツールへ渡された引数名の順序付きリスト |
+| `arg_key_lengths` | object（任意） | 短縮された引数名の元の長さ |
+| `arg_keys_truncated` | boolean（任意） | 引数名または引数キー一覧が短縮された場合に `true` |
+| `arg_key_truncation_reasons` | string[]（任意） | 引数キー truncation の安定した reason code |
 | `arg_lengths` | object | 引数ごとの長さ概算（文字列→文字数、配列→要素数、オブジェクト→キー数、スカラ→0） |
-| `arg_values` | object（任意） | 引数本体。`--audit-log-include-values` 指定時のみ付与 |
+| `arg_values` | object（任意） | redaction および budget 適用済みの引数本体。`--audit-log-include-values` 指定時のみ付与 |
+| `arg_values_redacted` | boolean（任意） | secret 風のキーまたは token pattern が `[REDACTED]` に置き換えられた場合に `true` |
+| `arg_values_truncated` | boolean（任意） | include-values 出力が depth / count / string / byte budget に到達した場合に `true` |
+| `arg_values_truncation_reasons` | string[]（任意） | `arg_values_truncated` が true の場合の安定した truncation reason code |
+| `arg_values_serialized_bytes` | number（任意） | 保持された `arg_values` が消費した概算 serialized byte budget |
+| `arg_values_max_bytes` | number（任意） | 保持される `arg_values` の最大 serialized byte budget |
 | `result_count` | number（任意） | 成功時の `structuredContent.count` または `structuredContent.results.length`。それ以外は省略 |
 | `elapsed_ms` | number | ウォールクロック経過ミリ秒（小数 3 桁） |
 | `error_code` | number | 成功=`0`、MCP ツールエラー（`isError: true`）=`1`、JSON-RPC エラー=そのコード（例: `-32000` のレート制限、`-32602` の引数エラー） |
@@ -4320,13 +4375,13 @@ HTTP では `CDIDX_MCP_HTTP_TOKEN` が優先の bearer secret です。未設定
 `CDIDX_MCP_AUTH_TOKEN` を bearer secret として fallback し、クライアントは引き続き
 `Authorization: Bearer <token>` で認証します。
 
-HTTP の `POST /` 1 件が JSON-RPC フレーム 1 件に対応し、応答は同じ HTTP レスポンスのボディに `200 OK` / `application/json` で返ります。通知は `204 No Content` です。`GET /events` はサーバー→クライアントフレーム用の `text/event-stream` channel を開きます。server-initiated frame は `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S` で keep-alive notification を opt-in した場合だけ送信されます。受理される値は有限な `1`〜`300` 秒で、不正値や範囲外の値では `stderr` に警告を出して keep-alive を無効のままにします。この stream は独立しており通常の POST リクエストを塞ぎません。`/` への POST 以外は `405 Method Not Allowed`（`Allow: POST` 付き）です。リクエスト本文は既定で 1,000,000 bytes までに制限され、超過時は `413 Payload Too Large` を返します。保留中 POST queue は既定で 64 件までに制限され、満杯時は `Retry-After: 1` 付きの `429 Too Many Requests` を返します。正の整数の `CDIDX_MCP_HTTP_MAX_REQUEST_BYTES` と `CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH` で調整でき、受理範囲は本文が `1..16777216` bytes、queue が `1..1024` 件です。正でない値や数値でない値は既定にフォールバックし、最大値を超える値は listener 起動前に拒否されます。永続 lifecycle log が有効な場合、HTTP mode はリクエストごとに `mcp_http_request` レコードも出力し、method、path、status、duration、auth outcome、remote peer、correlation id、利用可能な JSON-RPC request id を記録します。リクエスト/レスポンス本文は記録しません。
+HTTP の `POST /` 1 件が JSON-RPC フレーム 1 件に対応し、応答は同じ HTTP レスポンスのボディに `200 OK` / `application/json` で返ります。通知は `204 No Content` です。`GET /events` はサーバー→クライアントフレーム用の `text/event-stream` channel を開きます。server-initiated JSON-RPC frame は `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S` で keep-alive notification を opt-in した場合だけ送信されます。受理される値は有限な `1`〜`300` 秒で、不正値や範囲外の値では `stderr` に警告を出して keep-alive を無効のままにします。この stream は独立しており通常の POST リクエストを塞ぎません。`/` への POST 以外は `405 Method Not Allowed`（`Allow: POST` 付き）です。リクエスト本文は既定で 1,000,000 bytes までに制限され、超過時は `413 Payload Too Large` を返します。保留中 POST queue と受理済み handler task は既定で 64 件まで、同時 `/events` stream は既定で 16 件までに制限されます。queue、handler pool、stream slot が満杯の場合は `Retry-After: 1` 付きの `429 Too Many Requests` を返します。正の整数の `CDIDX_MCP_HTTP_MAX_REQUEST_BYTES`、`CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH`、`CDIDX_MCP_HTTP_MAX_CONCURRENT_HANDLERS`、`CDIDX_MCP_HTTP_MAX_EVENT_STREAMS` で調整でき、受理範囲は本文が `1..16777216` bytes、各件数 limit が `1..1024` 件です。正でない値や数値でない値は既定にフォールバックし、最大値を超える値は listener 起動前に拒否されます。idle event stream には最小限の SSE comment heartbeat を送り、切断済み client の stream slot を解放します。永続 lifecycle log が有効な場合、HTTP mode はリクエストごとに `mcp_http_request` レコードも出力し、method、path、status、duration、auth outcome、remote peer、correlation id、利用可能な JSON-RPC request id を記録します。method、path、remote peer、request id は 256 文字を上限に `...<truncated>` marker 付きで切り詰めます。リクエスト/レスポンス本文は記録しません。
 
 セキュリティ既定:
 
 - listener は既定で loopback アドレス（`127.0.0.1`）のみに bind し、ワイルドカード `+` / `*` は最初から拒否します。
 - 非 loopback ホスト（例: `0.0.0.0:9000`）に bind するには `CDIDX_MCP_HTTP_TOKEN` または `CDIDX_MCP_AUTH_TOKEN` で共有秘密を指定する必要があります。両方が設定されている場合は `CDIDX_MCP_HTTP_TOKEN` が優先されます。HTTP bearer secret が設定されている場合、すべてのリクエストに `Authorization: Bearer <token>` ヘッダーが必要で、欠落・不一致は `401 Unauthorized`（`WWW-Authenticate: Bearer realm="cdidx-mcp"` 付き）です。HTTP クライアントは `params.auth.token` も送る必要はありません。
-- 設定トークンの SHA-256 digest はサーバー起動時に一度だけ計算してメモリ保持し、リクエスト毎の認証では受信トークンのみハッシュ計算して FixedTimeEquals で比較します。設定トークン側はリクエスト毎にハッシュしないため、長さやバイト列が timing から漏れません。
+- 設定トークンの SHA-256 digest はサーバー起動時に一度だけ計算してメモリ保持し、リクエスト毎の認証では受信トークンのみハッシュ計算して FixedTimeEquals で比較します。設定トークン側はリクエスト毎にハッシュしないため、長さやバイト列が timing から漏れません。設定 token と受信 token は 4096 文字を超える場合、hash 前に拒否します。
 
 stdio トランスポートはバイト単位で挙動が変わらないため、既存クライアント設定はそのまま動作します。
 
