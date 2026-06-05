@@ -21,6 +21,7 @@ public static class QueryCommandRunner
 {
     internal const int DefaultQueryLimit = 20;
     internal const int DefaultMapLimit = 10;
+    internal const int DefaultCompactSectionLimit = 5;
     internal const int DefaultImpactLimit = 50;
     internal const int BatchMaxLineChars = 1024 * 1024;
     internal const int BatchMaxArgumentCount = 256;
@@ -51,6 +52,8 @@ public static class QueryCommandRunner
     internal const int MaxSymbolQueryNames = 256;
     internal const int MaxMapSectionsCsvLength = 256;
     internal const int MaxMapSectionsCsvEntries = 16;
+    internal const int MaxInspectFieldsCsvLength = 256;
+    internal const int MaxInspectFieldsCsvEntries = 16;
     internal const int MaxStatusCheckScopesCsvLength = 256;
     internal const int MaxStatusCheckScopesCsvEntries = 16;
     internal const int MaxVisibilityFilterCsvLength = 256;
@@ -90,6 +93,8 @@ public static class QueryCommandRunner
         "--top",
         "--lang",
         "--kind",
+        "--bucket",
+        "--min-confidence",
         "--severity",
         "--visibility",
         "--exclude-visibility",
@@ -113,6 +118,8 @@ public static class QueryCommandRunner
         "--max-hops",
         "--depth",
         "--query",
+        "--recipe",
+        "--open-issues",
         "--group-by",
         "--focus-line",
         "--focus-column",
@@ -125,6 +132,7 @@ public static class QueryCommandRunner
         "--format",
         "--min-entrypoint-confidence",
         "--sections",
+        "--fields",
     ];
     private sealed record StatusReadinessField(
         string FieldName,
@@ -228,8 +236,12 @@ public static class QueryCommandRunner
         "--bytes",
         "--profile",
         "--check-updates",
+        "--list-recipes",
         "--read-only",
         "--immutable",
+        "--pretty",
+        "--compact",
+        "--body-only",
     ];
     private const string OutputFormatText = "text";
     private const string OutputFormatJson = "json";
@@ -240,6 +252,7 @@ public static class QueryCommandRunner
     private const string OutputFormatCompact = "compact";
     private const string OutputFormatCsv = "csv";
     private const string OutputFormatTsv = "tsv";
+    private const string OutputFormatIssueDrafts = "issue-drafts";
     private const string OutputFormatDot = "dot";
     private const string OutputFormatGraphMl = "graphml";
     private const string OutputFormatJsonGraph = "json-graph";
@@ -451,7 +464,7 @@ public static class QueryCommandRunner
             Console.Error.WriteLine(previewOptionError);
             return CommandExitCodes.UsageError;
         }
-        var options = ParseArgs(cmdArgs, jsonDefault: false, allowNamedQuery: true);
+        var options = ParseArgs(cmdArgs, jsonDefault: false, allowNamedQuery: true, allowIssueDraftsFormat: true);
         if (TryWriteUnsupportedOptionError("search", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("search"), options.Query))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "search"))
@@ -460,6 +473,99 @@ public static class QueryCommandRunner
         {
             Console.Error.WriteLine(exactError);
             return CommandExitCodes.UsageError;
+        }
+        if (options.OpenIssuesPath != null && options.OutputFormat != OutputFormatIssueDrafts)
+        {
+            WriteUsageError(
+                "--open-issues can only be used with `cdidx search --recipe <name> --format issue-drafts`.",
+                GetUsageLineOrThrow("search"),
+                "Use an open-issues JSON file from `gh issue list --state open --json number,title,labels,url`.");
+            return CommandExitCodes.UsageError;
+        }
+        if (options.ListRecipes)
+        {
+            if (options.Query != null || options.RecipeName != null || options.ExtraNames.Count > 0)
+            {
+                WriteUsageError(
+                    "--list-recipes cannot be combined with a query, --recipe, or extra positional arguments.",
+                    GetUsageLineOrThrow("search"),
+                    "Run `cdidx search --list-recipes` to list built-in audit recipes.");
+                return CommandExitCodes.UsageError;
+            }
+            if (options.OutputFormat is not OutputFormatText and not OutputFormatJson)
+            {
+                WriteUsageError(
+                    "--format count/compact/csv/tsv/lsp/qf/sarif/issue-drafts is not supported with --list-recipes.",
+                    GetUsageLineOrThrow("search"),
+                    "Use plain text output or `--json` / `--format json` for the recipe list.");
+                return CommandExitCodes.UsageError;
+            }
+            if (options.JsonOutputFormat == JsonOutputFormatArray)
+            {
+                WriteUsageError(
+                    "--json=array is not supported with --list-recipes because recipe-list output is a JSON object.",
+                    GetUsageLineOrThrow("search"),
+                    "Use plain `--json` for the recipe-list object.");
+                return CommandExitCodes.UsageError;
+            }
+
+            return WriteSearchRecipeList(options, jsonOptions);
+        }
+        if (options.OutputFormat == OutputFormatIssueDrafts && options.RecipeName == null)
+        {
+            WriteUsageError(
+                "--format issue-drafts requires --recipe because issue drafts are generated from named audit queries.",
+                GetUsageLineOrThrow("search"),
+                "Run `cdidx search --list-recipes` to choose a recipe, then rerun with `--recipe <name> --format issue-drafts`.");
+            return CommandExitCodes.UsageError;
+        }
+        if (options.RecipeName != null)
+        {
+            if (options.Query != null || options.ExtraNames.Count > 0)
+            {
+                WriteUsageError(
+                    "--recipe expands into its own curated query set and cannot be combined with a search query.",
+                    GetUsageLineOrThrow("search"),
+                    "Remove the positional query, or run a plain `cdidx search <query>` without --recipe.");
+                return CommandExitCodes.UsageError;
+            }
+            if (options.CountOnly)
+            {
+                WriteUsageError(
+                    "--count is not supported with --recipe.",
+                    GetUsageLineOrThrow("search"),
+                    "Use `cdidx search --recipe <name> --json` for per-query result counts.");
+                return CommandExitCodes.UsageError;
+            }
+            if (options.Prefix)
+            {
+                WriteUsageError(
+                    "--prefix is not supported with --recipe because each recipe query defines its own match mode.",
+                    GetUsageLineOrThrow("search"),
+                    "Remove --prefix, or run the individual query from the recipe list yourself.");
+                return CommandExitCodes.UsageError;
+            }
+            if (options.OutputFormat is not OutputFormatText and not OutputFormatJson and not OutputFormatIssueDrafts)
+            {
+                WriteUsageError(
+                    "--format count/compact/csv/tsv/lsp/qf/sarif is not supported with --recipe.",
+                    GetUsageLineOrThrow("search"),
+                    "Use `--json` for grouped recipe results or `--format issue-drafts` for draft exports.");
+                return CommandExitCodes.UsageError;
+            }
+            if (options.JsonOutputFormat == JsonOutputFormatArray)
+            {
+                WriteUsageError(
+                    "--json=array is not supported with --recipe because recipe output is grouped by query.",
+                    GetUsageLineOrThrow("search"),
+                    "Use plain `--json` for the grouped recipe object.");
+                return CommandExitCodes.UsageError;
+            }
+
+            if (options.OutputFormat == OutputFormatIssueDrafts)
+                return RunSearchRecipeIssueDrafts(options, jsonOptions, exact);
+
+            return RunSearchRecipe(options, jsonOptions, exact);
         }
         if (exact && options.Prefix)
         {
@@ -490,6 +596,7 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
 
         var exactSubstringHint = SearchQueryAdvisor.BuildExactSubstringHint(options.Query, options.RawFts, exact, options.Prefix);
+        var ndjsonOptions = options.JsonOutputFormat == JsonOutputFormatNdjson ? GetCompactJsonOptions(jsonOptions) : jsonOptions;
         int? jsonDoneCount = null;
         return WithDb(options, jsonOptions, reader =>
         {
@@ -541,7 +648,7 @@ public static class QueryCommandRunner
                     }
                     else
                     {
-                        Console.WriteLine(BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "results", query: options.Query, ftsQueryDiagnostics: ftsQueryDiagnostics, queryOptions: options, exactSubstringHint: exactSubstringHint).ToJsonString(jsonOptions));
+                        Console.WriteLine(BuildJsonZeroResultPayload(reader, ndjsonOptions, resultsKey: "results", query: options.Query, ftsQueryDiagnostics: ftsQueryDiagnostics, queryOptions: options, exactSubstringHint: exactSubstringHint).ToJsonString(ndjsonOptions));
                         jsonDoneCount = 0;
                     }
                 }
@@ -570,7 +677,7 @@ public static class QueryCommandRunner
                     }
                     else
                     {
-                        Console.WriteLine(BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "results", query: options.Query, ftsQueryDiagnostics: ftsQueryDiagnostics, queryOptions: options, exactSubstringHint: exactSubstringHint).ToJsonString(jsonOptions));
+                        Console.WriteLine(BuildJsonZeroResultPayload(reader, ndjsonOptions, resultsKey: "results", query: options.Query, ftsQueryDiagnostics: ftsQueryDiagnostics, queryOptions: options, exactSubstringHint: exactSubstringHint).ToJsonString(ndjsonOptions));
                         jsonDoneCount = 0;
                     }
                 }
@@ -623,7 +730,7 @@ public static class QueryCommandRunner
                     foreach (var result in compactResults)
                         Console.WriteLine(JsonSerializer.Serialize(
                             result,
-                            CliJsonSerializerContextFactory.Create(jsonOptions).CompactSearchResult));
+                            CliJsonSerializerContextFactory.Create(ndjsonOptions).CompactSearchResult));
                     jsonDoneCount = compactResults.Length;
                 }
             }
@@ -646,19 +753,280 @@ public static class QueryCommandRunner
         }, exitCode =>
         {
             if (options.Json && options.JsonOutputFormat == JsonOutputFormatNdjson && jsonDoneCount.HasValue)
-                WriteJsonStreamDone(jsonDoneCount.Value, jsonOptions);
+                WriteJsonStreamDone(jsonDoneCount.Value, ndjsonOptions);
         });
     }
 
-    private static List<SearchDisplayRow> BuildSearchDisplayRows(List<SearchResult> results, QueryCommandOptions options, bool exact)
+    private static int WriteSearchRecipeList(QueryCommandOptions options, JsonSerializerOptions jsonOptions)
+    {
+        var recipes = SearchAuditRecipes.All
+            .Select(ToSearchRecipeListItem)
+            .ToList();
+        if (options.Json)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(
+                new SearchRecipeListJsonResult(JsonOutputContract.ApiVersion, recipes.Count, recipes),
+                CliJsonSerializerContextFactory.Create(jsonOptions).SearchRecipeListJsonResult));
+            return CommandExitCodes.Success;
+        }
+
+        foreach (var recipe in recipes)
+        {
+            Console.WriteLine($"{recipe.Name}: {recipe.Description}");
+            Console.WriteLine($"  labels: {string.Join(", ", recipe.RecommendedLabels)}");
+            foreach (var query in recipe.Queries)
+            {
+                var mode = query.ExactSubstring ? "exact-substring" : "fts";
+                Console.WriteLine($"  - {query.Name}: {query.Query} ({mode})");
+                Console.WriteLine($"    {query.Description}");
+                Console.WriteLine($"    false positives: {query.FalsePositiveGuidance}");
+            }
+        }
+
+        return CommandExitCodes.Success;
+    }
+
+    private static int RunSearchRecipe(QueryCommandOptions options, JsonSerializerOptions jsonOptions, bool userExact)
+    {
+        if (!SearchAuditRecipes.TryGet(options.RecipeName!, out var recipe))
+        {
+            var available = string.Join(", ", SearchAuditRecipes.All.Select(r => r.Name));
+            WriteUsageError(
+                $"unknown search recipe '{options.RecipeName}'.",
+                GetUsageLineOrThrow("search"),
+                $"Use `cdidx search --list-recipes` to see available recipes: {available}.");
+            return CommandExitCodes.UsageError;
+        }
+
+        return WithDb(options, jsonOptions, reader =>
+        {
+            var queryResults = CollectSearchRecipeQueryResults(reader, recipe, options, userExact, out var total);
+
+            if (options.Json)
+            {
+                Console.WriteLine(JsonSerializer.Serialize(
+                    new SearchRecipeRunJsonResult(
+                        JsonOutputContract.ApiVersion,
+                        ToSearchRecipeListItem(recipe),
+                        recipe.Queries.Count,
+                        total,
+                        queryResults),
+                    CliJsonSerializerContextFactory.Create(jsonOptions).SearchRecipeRunJsonResult));
+                return CommandExitCodes.Success;
+            }
+
+            Console.WriteLine($"Recipe: {recipe.Name}");
+            Console.WriteLine(recipe.Description);
+            Console.WriteLine();
+            foreach (var queryResult in queryResults)
+            {
+                Console.WriteLine($"[{queryResult.Name}] {queryResult.Query}");
+                Console.WriteLine(queryResult.Description);
+                Console.WriteLine($"labels: {string.Join(", ", queryResult.RecommendedLabels)}");
+                Console.WriteLine($"false positives: {queryResult.FalsePositiveGuidance}");
+                Console.WriteLine($"results: {queryResult.Count}");
+                foreach (var result in queryResult.Results)
+                {
+                    Console.WriteLine($"{result.Path}:{result.ChunkStartLine}-{result.ChunkEndLine}");
+                    foreach (var line in result.Snippet.Split('\n', StringSplitOptions.None))
+                        Console.WriteLine($"  {line}");
+                }
+                Console.WriteLine();
+            }
+
+            Console.Error.WriteLine($"({total} recipe results across {recipe.Queries.Count} queries)");
+            return CommandExitCodes.Success;
+        });
+    }
+
+    private static int RunSearchRecipeIssueDrafts(QueryCommandOptions options, JsonSerializerOptions jsonOptions, bool userExact)
+    {
+        if (!SearchAuditRecipes.TryGet(options.RecipeName!, out var recipe))
+        {
+            var available = string.Join(", ", SearchAuditRecipes.All.Select(r => r.Name));
+            WriteUsageError(
+                $"unknown search recipe '{options.RecipeName}'.",
+                GetUsageLineOrThrow("search"),
+                $"Use `cdidx search --list-recipes` to see available recipes: {available}.");
+            return CommandExitCodes.UsageError;
+        }
+        if (!IssueDuplicatePreflight.TryLoad(options.OpenIssuesPath, out var preflight, out var error))
+        {
+            WriteUsageError(
+                error!,
+                GetUsageLineOrThrow("search"),
+                "Pass a readable JSON array from `gh issue list --state open --json number,title,labels,url`.");
+            return CommandExitCodes.UsageError;
+        }
+
+        return WithDb(options, jsonOptions, reader =>
+        {
+            var queryResults = CollectSearchRecipeQueryResults(reader, recipe, options, userExact, out var total);
+            var drafts = queryResults
+                .Where(queryResult => queryResult.Count > 0)
+                .Select(queryResult => ToSearchIssueDraft(recipe, queryResult, preflight))
+                .ToList();
+            Console.WriteLine(JsonSerializer.Serialize(
+                new SearchIssueDraftExportJsonResult(
+                    JsonOutputContract.ApiVersion,
+                    ToSearchRecipeListItem(recipe),
+                    recipe.Queries.Count,
+                    total,
+                    drafts.Count,
+                    new SuggestionIssueDraftPreflightSummaryJsonResult(
+                        preflight.Checked,
+                        preflight.Source,
+                        preflight.OpenIssueCount),
+                    drafts),
+                CliJsonSerializerContextFactory.Create(jsonOptions).SearchIssueDraftExportJsonResult));
+            return CommandExitCodes.Success;
+        });
+    }
+
+    private static List<SearchRecipeQueryResultJsonResult> CollectSearchRecipeQueryResults(
+        DbReader reader,
+        SearchAuditRecipe recipe,
+        QueryCommandOptions options,
+        bool userExact,
+        out int total)
+    {
+        var queryResults = new List<SearchRecipeQueryResultJsonResult>();
+        total = 0;
+        foreach (var recipeQuery in recipe.Queries)
+        {
+            var exact = userExact || recipeQuery.ExactSubstring;
+            var results = reader.Search(
+                recipeQuery.Query,
+                options.Limit,
+                options.Lang,
+                false,
+                options.PathPatterns,
+                options.ExcludePaths,
+                options.ExcludeTests,
+                !options.NoDedup,
+                options.Since,
+                exact,
+                false,
+                !options.NoVisibilityRank,
+                guardFilters: options.GuardFilters,
+                guardWindow: options.GuardWindow);
+            var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query);
+            total += rows.Count;
+            queryResults.Add(new SearchRecipeQueryResultJsonResult(
+                recipeQuery.Name,
+                recipeQuery.Query,
+                recipeQuery.Description,
+                recipeQuery.RecommendedLabels,
+                recipeQuery.FalsePositiveGuidance,
+                exact,
+                rows.Count,
+                rows.Select(row => row.Compact).ToList()));
+        }
+
+        return queryResults;
+    }
+
+    private static SearchIssueDraftJsonResult ToSearchIssueDraft(
+        SearchAuditRecipe recipe,
+        SearchRecipeQueryResultJsonResult queryResult,
+        IssueDuplicatePreflight preflight)
+    {
+        var labels = queryResult.RecommendedLabels
+            .Where(label => !string.IsNullOrWhiteSpace(label))
+            .Select(label => label.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(label => label, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var title = BuildSearchIssueDraftTitle(recipe, queryResult);
+        var evidencePaths = queryResult.Results
+            .Select(result => result.Path)
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Distinct(StringComparer.Ordinal)
+            .Take(10)
+            .ToList();
+        var duplicateMatches = preflight.FindMatches(title, labels);
+        return new SearchIssueDraftJsonResult(
+            $"{recipe.Name}/{queryResult.Name}",
+            title,
+            labels,
+            evidencePaths,
+            BuildSearchIssueDraftBody(recipe, queryResult, evidencePaths),
+            new SearchIssueDraftSourceJsonResult(
+                recipe.Name,
+                queryResult.Name,
+                queryResult.Query,
+                queryResult.Description,
+                queryResult.FalsePositiveGuidance,
+                queryResult.ExactSubstring,
+                queryResult.Count),
+            new SuggestionIssueDraftDuplicatePreflightJsonResult(
+                preflight.Checked,
+                duplicateMatches.Count,
+                duplicateMatches));
+    }
+
+    private static string BuildSearchIssueDraftTitle(SearchAuditRecipe recipe, SearchRecipeQueryResultJsonResult queryResult)
+        => $"Search audit recipe {recipe.Name}: {queryResult.Name}";
+
+    private static string BuildSearchIssueDraftBody(
+        SearchAuditRecipe recipe,
+        SearchRecipeQueryResultJsonResult queryResult,
+        IReadOnlyList<string> evidencePaths)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("## Summary");
+        sb.AppendLine(queryResult.Description);
+        sb.AppendLine();
+        sb.AppendLine("## Recipe");
+        sb.AppendLine(recipe.Name);
+        sb.AppendLine();
+        sb.AppendLine("## Search query");
+        sb.AppendLine(queryResult.Query);
+        sb.AppendLine();
+        sb.AppendLine("## Evidence paths");
+        if (evidencePaths.Count == 0)
+        {
+            sb.AppendLine("N/A");
+        }
+        else
+        {
+            foreach (var path in evidencePaths)
+                sb.AppendLine($"- {path}");
+        }
+        sb.AppendLine();
+        sb.AppendLine("## False-positive guidance");
+        sb.AppendLine(queryResult.FalsePositiveGuidance);
+        sb.AppendLine();
+        sb.AppendLine("## Search metadata");
+        sb.AppendLine($"- draft_id: `{recipe.Name}/{queryResult.Name}`");
+        sb.AppendLine($"- recipe_query: `{queryResult.Name}`");
+        sb.AppendLine($"- result_count: `{queryResult.Count}`");
+        sb.AppendLine($"- exact_substring: `{queryResult.ExactSubstring.ToString().ToLowerInvariant()}`");
+        return sb.ToString().TrimEnd();
+    }
+
+    private static SearchRecipeListItemJsonResult ToSearchRecipeListItem(SearchAuditRecipe recipe) => new(
+        recipe.Name,
+        recipe.Description,
+        recipe.RecommendedLabels,
+        recipe.Queries.Select(query => new SearchRecipeQueryListItemJsonResult(
+            query.Name,
+            query.Query,
+            query.Description,
+            query.RecommendedLabels,
+            query.FalsePositiveGuidance,
+            query.ExactSubstring)).ToList());
+
+    private static List<SearchDisplayRow> BuildSearchDisplayRows(List<SearchResult> results, QueryCommandOptions options, bool exact, string? queryOverride = null)
     {
         var rows = new List<SearchDisplayRow>(results.Count);
         var seenMatchLocations = !exact || options.NoDedup ? null : new HashSet<string>(StringComparer.Ordinal);
+        var displayQuery = queryOverride ?? options.Query!;
         foreach (var result in results)
         {
             var compact = SearchSnippetFormatter.ToCompactResult(
                 result,
-                options.Query!,
+                displayQuery,
                 options.SnippetLines,
                 exact,
                 options.MaxLineWidth,
@@ -752,6 +1120,9 @@ public static class QueryCommandRunner
         => Console.WriteLine(JsonSerializer.Serialize(
             new JsonStreamDoneResult(Done: true, Count: count, Interrupted: false),
             CliJsonSerializerContextFactory.Create(jsonOptions).JsonStreamDoneResult));
+
+    private static JsonSerializerOptions GetCompactJsonOptions(JsonSerializerOptions jsonOptions)
+        => jsonOptions.WriteIndented ? new JsonSerializerOptions(jsonOptions) { WriteIndented = false } : jsonOptions;
 
     public static void AttachLspLocations(IEnumerable<DefinitionResult> results)
     {
@@ -2609,10 +2980,13 @@ public static class QueryCommandRunner
 
         return WithDb(options, jsonOptions, reader =>
         {
-            var map = reader.GetRepoMap(options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.MinEntrypointConfidence);
+            var compactLimit = GetCompactSectionLimit(options);
+            var mapLimit = options.Compact ? GetCompactSourceLimit(compactLimit) : options.Limit;
+            var map = reader.GetRepoMap(mapLimit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.MinEntrypointConfidence);
             WorkspaceMetadataEnricher.Enrich(map, options.DbPath, options.DbPathExplicit);
             if (options.ContextAfterExplicit)
                 ApplyRepoMapDepth(map, options.ContextAfter);
+            var compactTruncation = options.Compact ? ApplyRepoMapCompactCaps(map, compactLimit, options) : null;
 
             // Return not-found only when a narrowing filter is active and produces zero files.
             // Unfiltered empty indexes return success (valid state for health probes).
@@ -2623,7 +2997,8 @@ public static class QueryCommandRunner
             {
                 if (options.Json)
                 {
-                    Console.WriteLine(JsonSerializer.Serialize(map, CliJsonSerializerContextFactory.Create(jsonOptions).RepoMapResult));
+                    var payload = BuildRepoMapJsonPayload(map, options, jsonOptions, compactTruncation);
+                    Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
                 else
                 {
@@ -2634,7 +3009,7 @@ public static class QueryCommandRunner
 
             if (options.Json)
             {
-                var payload = BuildRepoMapJsonPayload(map, options, jsonOptions);
+                var payload = BuildRepoMapJsonPayload(map, options, jsonOptions, compactTruncation);
                 Console.WriteLine(payload.ToJsonString(jsonOptions));
             }
             else
@@ -2693,13 +3068,15 @@ public static class QueryCommandRunner
     private static int GetPathDepth(string path)
         => string.IsNullOrEmpty(path) ? 0 : path.Split('/', StringSplitOptions.RemoveEmptyEntries).Length;
 
-    private static JsonObject BuildRepoMapJsonPayload(RepoMapResult map, QueryCommandOptions options, JsonSerializerOptions jsonOptions)
+    private static JsonObject BuildRepoMapJsonPayload(RepoMapResult map, QueryCommandOptions options, JsonSerializerOptions jsonOptions, JsonObject? compactTruncation = null)
     {
         var payload = JsonSerializer.SerializeToNode(map, CliJsonSerializerContextFactory.Create(jsonOptions).RepoMapResult)!.AsObject();
         if (options.MapSections == null)
         {
             if (options.ContextAfterExplicit)
                 payload["depth"] = options.ContextAfter;
+            if (options.Compact && compactTruncation != null)
+                AddCompactJsonFields(payload, GetCompactSectionLimit(options), compactTruncation);
             return payload;
         }
 
@@ -2740,8 +3117,182 @@ public static class QueryCommandRunner
         payload["sections"] = new JsonArray(options.MapSections.Select(section => JsonValue.Create(section)).ToArray<JsonNode?>());
         if (options.ContextAfterExplicit)
             payload["depth"] = options.ContextAfter;
+        if (options.Compact && compactTruncation != null)
+            AddCompactJsonFields(payload, GetCompactSectionLimit(options), compactTruncation);
         return payload;
     }
+
+    private static int GetCompactSectionLimit(QueryCommandOptions options)
+        => options.LimitExplicit ? options.Limit : DefaultCompactSectionLimit;
+
+    private static int GetCompactSourceLimit(int compactLimit)
+    {
+        var sourceLimit = compactLimit + 1;
+        return NumericFlagUpperBounds.TryGetValue("--limit", out var maxLimit)
+            ? Math.Min(sourceLimit, maxLimit)
+            : sourceLimit;
+    }
+
+    private static JsonObject ApplyRepoMapCompactCaps(RepoMapResult map, int sectionLimit, QueryCommandOptions options)
+    {
+        var sections = new JsonObject();
+        if (MapSectionEnabled(options, "languages"))
+            TruncateCompactSection(map.Languages, sectionLimit, sections, "languages");
+        if (MapSectionEnabled(options, "tree"))
+            TruncateCompactSection(map.Modules, sectionLimit, sections, "modules");
+        if (MapSectionEnabled(options, "hotspots"))
+        {
+            TruncateCompactSection(map.TopFiles, sectionLimit, sections, "top_files");
+            TruncateCompactSection(map.SymbolRichFiles, sectionLimit, sections, "symbol_rich_files");
+            TruncateCompactSection(map.ReferenceRichFiles, sectionLimit, sections, "reference_rich_files");
+            TruncateCompactSection(map.Entrypoints, sectionLimit, sections, "entrypoints");
+        }
+        if (MapSectionEnabled(options, "metrics"))
+            TruncateCompactSection(map.LargestFiles, sectionLimit, sections, "largest_files");
+        return BuildCompactTruncationMetadata(sectionLimit, sections);
+    }
+
+    private static JsonObject ApplySymbolAnalysisCompactCaps(SymbolAnalysisResult analysis, int sectionLimit)
+    {
+        var sections = new JsonObject();
+        TruncateCompactSection(analysis.Definitions, sectionLimit, sections, "definitions");
+        TruncateCompactSection(analysis.NearbySymbols, sectionLimit, sections, "nearby_symbols");
+        TruncateCompactSection(analysis.References, sectionLimit, sections, "references");
+        TruncateCompactSection(analysis.Callers, sectionLimit, sections, "callers");
+        TruncateCompactSection(analysis.Callees, sectionLimit, sections, "callees");
+        return BuildCompactTruncationMetadata(sectionLimit, sections);
+    }
+
+    private static JsonObject ApplyOutlineCompactCaps(OutlineResult outline, int sectionLimit)
+    {
+        var sections = new JsonObject();
+        TruncateCompactSection(outline.Symbols, sectionLimit, sections, "symbols");
+        return BuildCompactTruncationMetadata(sectionLimit, sections);
+    }
+
+    private static JsonObject BuildCompactTruncationMetadata(int sectionLimit, JsonObject sections)
+        => new()
+        {
+            ["section_limit"] = sectionLimit,
+            ["sections"] = sections,
+        };
+
+    private static void AddCompactJsonFields(JsonObject payload, int compactLimit, JsonObject truncation)
+    {
+        payload["compact"] = true;
+        payload["compact_limit"] = compactLimit;
+        payload["truncation"] = truncation;
+    }
+
+    private static void TruncateCompactSection<T>(List<T> items, int sectionLimit, JsonObject sections, string sectionName)
+    {
+        var sourceCount = items.Count;
+        if (sourceCount > sectionLimit)
+            items.RemoveRange(sectionLimit, sourceCount - sectionLimit);
+
+        sections[sectionName] = new JsonObject
+        {
+            ["returned"] = items.Count,
+            ["source_count"] = sourceCount,
+            ["truncated"] = sourceCount > sectionLimit,
+        };
+    }
+
+    private static void ApplyInspectFieldSelection(JsonObject payload, QueryCommandOptions options, JsonSerializerOptions jsonOptions)
+    {
+        if (options.InspectFields == null)
+            return;
+
+        payload["selected_fields"] = JsonSerializer.SerializeToNode(options.InspectFields, CliJsonSerializerContextFactory.Create(jsonOptions).ListString);
+        var keep = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "api_version",
+            "query",
+            "selected_fields",
+        };
+
+        foreach (var field in options.InspectFields)
+            AddInspectFieldProperties(keep, field);
+
+        if (options.Compact)
+        {
+            keep.Add("compact");
+            keep.Add("compact_limit");
+            keep.Add("truncation");
+            FilterInspectCompactTruncationSections(payload, options.InspectFields);
+        }
+
+        foreach (var propertyName in payload.Select(property => property.Key).Where(key => !keep.Contains(key)).ToList())
+            payload.Remove(propertyName);
+    }
+
+    private static void AddInspectFieldProperties(HashSet<string> keep, string field)
+    {
+        switch (field)
+        {
+            case "file":
+                keep.Add("file");
+                break;
+            case "workspace":
+                keep.Add("workspace_indexed_at");
+                keep.Add("workspace_latest_modified");
+                keep.Add("project_root");
+                keep.Add("git_head");
+                keep.Add("git_is_dirty");
+                keep.Add("indexed_head_commit");
+                keep.Add("worktree_head_changed");
+                break;
+            case "graph":
+                keep.Add("graph_language");
+                keep.Add("graph_supported");
+                keep.Add("graph_support_reason");
+                keep.Add("graph_degraded");
+                keep.Add("unsupported_symbol_kind");
+                keep.Add("graph_table_available");
+                keep.Add("sql_graph_contract_ready");
+                keep.Add("sql_graph_contract_degraded_reason");
+                keep.Add("exact_zero_hint");
+                keep.Add("exact_index_available");
+                keep.Add("degraded");
+                keep.Add("degraded_reason");
+                break;
+            case "definitions":
+                keep.Add("definitions");
+                break;
+            case "nearby_symbols":
+                keep.Add("nearby_symbols");
+                break;
+            case "references":
+                keep.Add("references");
+                break;
+            case "callers":
+                keep.Add("callers");
+                break;
+            case "callees":
+                keep.Add("callees");
+                break;
+        }
+    }
+
+    private static void FilterInspectCompactTruncationSections(JsonObject payload, IReadOnlyCollection<string> inspectFields)
+    {
+        if (!payload.TryGetPropertyValue("truncation", out var truncationNode)
+            || truncationNode is not JsonObject truncation
+            || !truncation.TryGetPropertyValue("sections", out var sectionsNode)
+            || sectionsNode is not JsonObject sections)
+        {
+            return;
+        }
+
+        var keepSections = inspectFields
+            .Where(IsInspectListField)
+            .ToHashSet(StringComparer.Ordinal);
+        foreach (var sectionName in sections.Select(section => section.Key).Where(section => !keepSections.Contains(section)).ToList())
+            sections.Remove(sectionName);
+    }
+
+    private static bool IsInspectListField(string field)
+        => field is "definitions" or "nearby_symbols" or "references" or "callers" or "callees";
 
     public static int RunInspect(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
@@ -2788,7 +3339,9 @@ public static class QueryCommandRunner
 
         return WithDb(options, jsonOptions, reader =>
         {
-            var analysis = reader.AnalyzeSymbol(options.Query, options.Limit, options.Lang, options.IncludeBody, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.MaxLineWidth);
+            var compactLimit = GetCompactSectionLimit(options);
+            var inspectLimit = options.Compact ? GetCompactSourceLimit(compactLimit) : options.Limit;
+            var analysis = reader.AnalyzeSymbol(options.Query, inspectLimit, options.Lang, options.IncludeBody, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.MaxLineWidth);
             var sqlGraphSignal = NarrowSqlGraphContractSignal(
                 reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests),
                 DbReader.IsSqlLanguage(options.Lang)
@@ -2813,8 +3366,12 @@ public static class QueryCommandRunner
             WriteSqlGraphContractWarningIfNeeded(options.Json, sqlGraphSignal, reader, options);
             if (options.Json)
             {
+                var compactTruncation = options.Compact ? ApplySymbolAnalysisCompactCaps(analysis, compactLimit) : null;
                 var payload = JsonSerializer.SerializeToNode(analysis, CliJsonSerializerContextFactory.Create(jsonOptions).SymbolAnalysisResult)!.AsObject();
                 AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
+                if (compactTruncation != null)
+                    AddCompactJsonFields(payload, compactLimit, compactTruncation);
+                ApplyInspectFieldSelection(payload, options, jsonOptions);
                 Console.WriteLine(payload.ToJsonString(jsonOptions));
             }
             else
@@ -2907,7 +3464,18 @@ public static class QueryCommandRunner
 
             if (options.Json)
             {
-                Console.WriteLine(JsonSerializer.Serialize(outline, CliJsonSerializerContextFactory.Create(jsonOptions).OutlineResult));
+                if (options.Compact)
+                {
+                    var compactLimit = GetCompactSectionLimit(options);
+                    var compactTruncation = ApplyOutlineCompactCaps(outline, compactLimit);
+                    var payload = JsonSerializer.SerializeToNode(outline, CliJsonSerializerContextFactory.Create(jsonOptions).OutlineResult)!.AsObject();
+                    AddCompactJsonFields(payload, compactLimit, compactTruncation);
+                    Console.WriteLine(payload.ToJsonString(jsonOptions));
+                }
+                else
+                {
+                    Console.WriteLine(JsonSerializer.Serialize(outline, CliJsonSerializerContextFactory.Create(jsonOptions).OutlineResult));
+                }
             }
             else
             {
@@ -4661,6 +5229,8 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteInvalidKindFilterError(options, "unused", KnownSymbolKindFilters))
             return CommandExitCodes.InvalidArgument;
+        if (TryWriteInvalidUnusedFilterError(options))
+            return CommandExitCodes.InvalidArgument;
         if (TryWriteUnexpectedPositionals("unused", options))
             return CommandExitCodes.UsageError;
 
@@ -4678,7 +5248,16 @@ public static class QueryCommandRunner
                 reader.ScopeMayIncludeSqlSymbols(options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests));
             if (options.CountOnly)
             {
-                var countSummary = reader.CountUnusedSymbols(options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters);
+                var countSummary = reader.CountUnusedSymbols(
+                    options.Kind,
+                    options.Lang,
+                    options.PathPatterns,
+                    options.ExcludePaths,
+                    options.ExcludeTests,
+                    visibilityFilters: options.VisibilityFilters,
+                    excludeVisibilityFilters: options.ExcludeVisibilityFilters,
+                    bucketFilter: options.UnusedBucket,
+                    minConfidence: options.MinUnusedConfidence);
                 var effectiveSqlGraphSignal = countSummary.Count == 0
                     ? zeroResultSqlGraphSignal
                     : NarrowSqlGraphContractSignal(
@@ -4710,7 +5289,17 @@ public static class QueryCommandRunner
                 return CommandExitCodes.Success;
             }
 
-            var results = reader.GetUnusedSymbols(options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters);
+            var results = reader.GetUnusedSymbols(
+                options.Limit,
+                options.Kind,
+                options.Lang,
+                options.PathPatterns,
+                options.ExcludePaths,
+                options.ExcludeTests,
+                visibilityFilters: options.VisibilityFilters,
+                excludeVisibilityFilters: options.ExcludeVisibilityFilters,
+                bucketFilter: options.UnusedBucket,
+                minConfidence: options.MinUnusedConfidence);
             var sqlGraphSignal = results.Count == 0
                 ? zeroResultSqlGraphSignal
                 : NarrowSqlGraphContractSignalByLanguages(
@@ -5154,6 +5743,7 @@ public static class QueryCommandRunner
         bool jsonDefault,
         bool allowNamedQuery = false,
         bool allowStatusCheck = false,
+        bool allowIssueDraftsFormat = false,
         bool validateDefaultLimit = true,
         bool validateDefaultSnippetLines = true,
         bool validateDefaultMaxLineWidth = true)
@@ -5165,6 +5755,8 @@ public static class QueryCommandRunner
         int limit = ResolveDefaultPositiveInt(DefaultLimitEnvironmentVariable, DefaultQueryLimit, "--limit", out var defaultLimitError);
         string? lang = null;
         string? kind = null;
+        string? unusedBucket = null;
+        string? minUnusedConfidence = null;
         string? severity = null;
         string? query = null;
         bool rawFts = false;
@@ -5215,6 +5807,8 @@ public static class QueryCommandRunner
         bool verbose = false;
         bool profile = false;
         int? slowQueryMs = null;
+        bool compact = false;
+        List<string>? inspectFields = null;
         double minEntrypointConfidence = 0;
         string? statusExplainField = null;
         bool statusLogPath = false;
@@ -5229,6 +5823,9 @@ public static class QueryCommandRunner
         bool impactDeprecatedDepthUsed = false;
         List<string>? mapSections = null;
         bool dependencyCycles = false;
+        string? recipeName = null;
+        bool listRecipes = false;
+        string? openIssuesPath = null;
         bool languagesIndexedOnly = false;
         var languageCapabilities = new List<string>();
 
@@ -5349,6 +5946,19 @@ public static class QueryCommandRunner
                 case "--immutable":
                     readOnly = true;
                     break;
+                case "--pretty":
+                    break;
+                case "--compact":
+                    compact = true;
+                    json = true;
+                    outputFormat = OutputFormatJson;
+                    break;
+                case "--body-only":
+                    includeBody = true;
+                    inspectFields = ["definitions"];
+                    json = true;
+                    outputFormat = OutputFormatJson;
+                    break;
                 case "--workspace-db":
                     if (TryReadStringOptionValue(args, ref i, "--workspace-db", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var workspaceDbPath, out var workspaceDbError))
                         workspaceDbPaths.Add(workspaceDbPath!);
@@ -5410,9 +6020,17 @@ public static class QueryCommandRunner
                                 parsedOutputFormat != OutputFormatGraphMl)
                                 json = true;
                         }
+                        else if (allowIssueDraftsFormat && string.Equals(formatValue, OutputFormatIssueDrafts, StringComparison.OrdinalIgnoreCase))
+                        {
+                            outputFormat = OutputFormatIssueDrafts;
+                            json = true;
+                        }
                         else
                         {
-                            AddParseError($"Error: --format must be one of text, json, count, compact, csv, tsv, lsp, qf, or sarif; got '{formatValue}'.");
+                            var allowedFormats = allowIssueDraftsFormat
+                                ? "text, json, count, compact, csv, tsv, lsp, qf, sarif, or issue-drafts"
+                                : "text, json, count, compact, csv, tsv, lsp, qf, or sarif";
+                            AddParseError($"Error: --format must be one of {allowedFormats}; got '{formatValue}'.");
                         }
                     }
                     else
@@ -5464,6 +6082,27 @@ public static class QueryCommandRunner
                     }
                     else
                         AddParseError(queryError!);
+                    break;
+                case "--recipe":
+                    if (TryReadStringOptionValue(args, ref i, "--recipe", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var recipeValue, out var recipeError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--recipe", recipeValue!);
+                        recipeName = recipeValue;
+                    }
+                    else
+                        AddParseError(recipeError!);
+                    break;
+                case "--list-recipes":
+                    listRecipes = true;
+                    break;
+                case "--open-issues":
+                    if (TryReadStringOptionValue(args, ref i, "--open-issues", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var openIssuesValue, out var openIssuesError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--open-issues", openIssuesValue!);
+                        openIssuesPath = openIssuesValue;
+                    }
+                    else
+                        AddParseError(openIssuesError!);
                     break;
                 case "--require-before":
                     if (TryReadStringOptionValue(args, ref i, "--require-before", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var requireBeforeValue, out var requireBeforeError))
@@ -5520,6 +6159,24 @@ public static class QueryCommandRunner
                     else
                         AddParseError(kindError!);
                     break;
+                case "--bucket":
+                    if (TryReadStringOptionValue(args, ref i, "--bucket", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var unusedBucketValue, out var unusedBucketError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--bucket", unusedBucketValue!);
+                        unusedBucket = unusedBucketValue?.ToLowerInvariant();
+                    }
+                    else
+                        AddParseError(unusedBucketError!);
+                    break;
+                case "--min-confidence":
+                    if (TryReadStringOptionValue(args, ref i, "--min-confidence", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var minUnusedConfidenceValue, out var minUnusedConfidenceError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--min-confidence", minUnusedConfidenceValue!);
+                        minUnusedConfidence = minUnusedConfidenceValue?.ToLowerInvariant();
+                    }
+                    else
+                        AddParseError(minUnusedConfidenceError!);
+                    break;
                 case "--severity":
                     if (TryReadStringOptionValue(args, ref i, "--severity", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var severityValue, out var severityError))
                     {
@@ -5563,6 +6220,20 @@ public static class QueryCommandRunner
                     }
                     else
                         AddParseError(sectionsError!);
+                    break;
+                case "--fields":
+                    if (TryReadStringOptionValue(args, ref i, "--fields", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var fieldsValue, out var fieldsError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--fields", fieldsValue!);
+                        inspectFields = ParseInspectFields(fieldsValue!, AddParseError, out var includeBodyFromFields);
+                        includeBody |= includeBodyFromFields;
+                        json = true;
+                        outputFormat = OutputFormatJson;
+                    }
+                    else
+                    {
+                        AddParseError(fieldsError!);
+                    }
                     break;
                 case "--fts":
                     rawFts = true;
@@ -5990,8 +6661,11 @@ public static class QueryCommandRunner
             JsonOutputFormat = jsonOutputFormat,
             OutputFormat = outputFormat,
             Limit = limit,
+            LimitExplicit = limitExplicit,
             Lang = lang,
             Kind = kind,
+            UnusedBucket = unusedBucket,
+            MinUnusedConfidence = minUnusedConfidence,
             Severity = severity,
             Query = query,
             RawFts = rawFts,
@@ -6040,6 +6714,8 @@ public static class QueryCommandRunner
             Verbose = verbose,
             Profile = profile,
             SlowQueryMs = slowQueryMs,
+            Compact = compact,
+            InspectFields = inspectFields,
             MinEntrypointConfidence = minEntrypointConfidence,
             StatusExplainField = statusExplainField,
             StatusLogPath = statusLogPath,
@@ -6048,6 +6724,9 @@ public static class QueryCommandRunner
             ExtraNames = extraNames,
             MapSections = mapSections,
             DependencyCycles = dependencyCycles,
+            RecipeName = recipeName,
+            ListRecipes = listRecipes,
+            OpenIssuesPath = openIssuesPath,
             LanguagesIndexedOnly = languagesIndexedOnly,
             LanguageCapabilities = languageCapabilities,
             ParseError = parseErrors == null ? null : string.Join(Environment.NewLine, parseErrors),
@@ -6083,6 +6762,80 @@ public static class QueryCommandRunner
         if (sections.Count == 0)
             addParseError("Error: --sections cannot be empty. Use one or more of tree, languages, hotspots, metrics.");
         return sections.Distinct(StringComparer.Ordinal).ToList();
+    }
+
+    private static List<string>? ParseInspectFields(string rawValue, Action<string> addParseError, out bool includeBody)
+    {
+        includeBody = false;
+        var fields = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var all = false;
+
+        if (!ValidateCsvBounds("--fields", rawValue, MaxInspectFieldsCsvLength, MaxInspectFieldsCsvEntries, addParseError))
+            return fields;
+
+        foreach (var rawField in rawValue.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var field = rawField.ToLowerInvariant().Replace('-', '_');
+            string canonical;
+            switch (field)
+            {
+                case "all":
+                    all = true;
+                    continue;
+                case "file":
+                    canonical = "file";
+                    break;
+                case "metadata":
+                case "workspace":
+                    canonical = "workspace";
+                    break;
+                case "graph":
+                case "trust":
+                    canonical = "graph";
+                    break;
+                case "definition":
+                case "definitions":
+                case "defs":
+                    canonical = "definitions";
+                    break;
+                case "body":
+                    canonical = "definitions";
+                    includeBody = true;
+                    break;
+                case "nearby":
+                case "nearby_symbols":
+                case "nearbysymbols":
+                    canonical = "nearby_symbols";
+                    break;
+                case "reference":
+                case "references":
+                case "refs":
+                    canonical = "references";
+                    break;
+                case "caller":
+                case "callers":
+                    canonical = "callers";
+                    break;
+                case "callee":
+                case "callees":
+                    canonical = "callees";
+                    break;
+                default:
+                    addParseError($"Error: unsupported --fields value '{rawField}'. Use one or more of all, file, workspace, graph, definitions, body, nearby_symbols, references, callers, callees.");
+                    continue;
+            }
+
+            if (seen.Add(canonical))
+                fields.Add(canonical);
+        }
+
+        if (all && fields.Count > 0)
+            addParseError("Error: --fields all cannot be combined with specific field names.");
+        if (!all && fields.Count == 0)
+            addParseError("Error: --fields requires at least one field name.");
+
+        return all ? null : fields;
     }
 
     private static bool ValidateCsvBounds(
@@ -6923,6 +7676,35 @@ public static class QueryCommandRunner
         return false;
     }
 
+    internal static bool IsKnownUnusedBucket(string value)
+        => OrderedUnusedBuckets.Contains(value, StringComparer.Ordinal);
+
+    internal static bool IsKnownUnusedConfidence(string value)
+        => value is "medium" or "low";
+
+    private static bool TryWriteInvalidUnusedFilterError(QueryCommandOptions options)
+    {
+        if (options.UnusedBucket != null && !IsKnownUnusedBucket(options.UnusedBucket))
+        {
+            CommandErrorWriter.Write(
+                $"invalid --bucket value `{options.UnusedBucket}`.",
+                $"use one of: {string.Join(", ", OrderedUnusedBuckets)}.",
+                GetUsageLineOrThrow("unused"));
+            return true;
+        }
+
+        if (options.MinUnusedConfidence != null && !IsKnownUnusedConfidence(options.MinUnusedConfidence))
+        {
+            CommandErrorWriter.Write(
+                $"invalid --min-confidence value `{options.MinUnusedConfidence}`.",
+                "use one of: medium, low.",
+                GetUsageLineOrThrow("unused"));
+            return true;
+        }
+
+        return false;
+    }
+
     private static bool TryWriteUnsupportedOptionError(string commandName, string[] cmdArgs, IEnumerable<string> supportedOptions, string? queryLiteral = null)
     {
         var supported = supportedOptions.ToHashSet(StringComparer.Ordinal);
@@ -7234,6 +8016,10 @@ public static class QueryCommandRunner
             yield return $"lang: {options.Lang}";
         if (options.Kind != null)
             yield return $"kind: {options.Kind}";
+        if (options.UnusedBucket != null)
+            yield return $"bucket: {options.UnusedBucket}";
+        if (options.MinUnusedConfidence != null)
+            yield return $"min-confidence: {options.MinUnusedConfidence}";
         if (options.RankMode != ReferenceRankMode.Weighted)
             yield return $"rank-by: {FormatReferenceRankMode(options.RankMode)}";
         if (options.ExcludeTests)
@@ -7274,6 +8060,10 @@ public static class QueryCommandRunner
             query["lang"] = options.Lang;
         if (options.Kind != null)
             query["kind"] = options.Kind;
+        if (options.UnusedBucket != null)
+            query["bucket"] = options.UnusedBucket;
+        if (options.MinUnusedConfidence != null)
+            query["min_confidence"] = options.MinUnusedConfidence;
         if (options.RankMode != ReferenceRankMode.Weighted)
             query["rank_by"] = FormatReferenceRankMode(options.RankMode);
         if (options.ExcludeTests)
@@ -8443,7 +9233,11 @@ public static class QueryCommandRunner
         ["--top"] = "pass a positive integer, e.g. `--top 20` (alias for `--limit`, default 20).",
         ["--lang"] = "pass a language identifier, e.g. `--lang csharp`. Run `cdidx languages` for the supported set.",
         ["--query"] = "pass a search literal, e.g. `--query \"authenticate\"`. Use the `--query` form when the literal starts with `-`.",
+        ["--recipe"] = "pass a built-in audit recipe name, e.g. `--recipe risky-code`; run `cdidx search --list-recipes` to list available recipes.",
+        ["--open-issues"] = "pass an open-issues JSON file, e.g. `--open-issues open-issues.json`; only valid with `search --recipe <name> --format issue-drafts`.",
         ["--kind"] = "pass a kind identifier, e.g. `--kind function`. definition/symbols/hotspots/unused take a symbol kind; references/callers/callees take a reference kind such as `call`, `instantiate`, or `subscribe`. Run the command's `--help` for the kind list.",
+        ["--bucket"] = "pass one unused-symbol bucket: likely_unused_private, maybe_unused_nonpublic, public_or_exported_no_refs, or reflection_or_config_suspect.",
+        ["--min-confidence"] = "pass one unused-symbol confidence threshold: medium or low.",
         ["--visibility"] = "pass one or more of public, protected, internal, private, e.g. `--visibility public,internal`.",
         ["--exclude-visibility"] = "pass one or more of public, protected, internal, private to exclude, e.g. `--exclude-visibility private`.",
         ["--rank-by"] = "pass `weighted`, `count`, or `kind` (callers/callees only).",
@@ -8795,8 +9589,11 @@ public sealed class QueryCommandOptions
     public string JsonOutputFormat { get; init; } = "ndjson";
     public string OutputFormat { get; init; } = "text";
     public int Limit { get; init; } = 20;
+    public bool LimitExplicit { get; init; }
     public string? Lang { get; init; }
     public string? Kind { get; init; }
+    public string? UnusedBucket { get; init; }
+    public string? MinUnusedConfidence { get; init; }
     public string? Severity { get; init; }
     public List<string> VisibilityFilters { get; init; } = [];
     public List<string> ExcludeVisibilityFilters { get; init; } = [];
@@ -8845,6 +9642,8 @@ public sealed class QueryCommandOptions
     public bool Verbose { get; init; }
     public bool Profile { get; init; }
     public int? SlowQueryMs { get; init; }
+    public bool Compact { get; init; }
+    public List<string>? InspectFields { get; init; }
     public double MinEntrypointConfidence { get; init; }
     public string? StatusExplainField { get; init; }
     public bool StatusLogPath { get; init; }
@@ -8853,6 +9652,9 @@ public sealed class QueryCommandOptions
     public List<string> ExtraNames { get; init; } = [];
     public List<string>? MapSections { get; init; }
     public bool DependencyCycles { get; init; }
+    public string? RecipeName { get; init; }
+    public bool ListRecipes { get; init; }
+    public string? OpenIssuesPath { get; init; }
     public bool LanguagesIndexedOnly { get; init; }
     public List<string> LanguageCapabilities { get; init; } = [];
     public string? ParseError { get; init; }

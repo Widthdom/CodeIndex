@@ -130,6 +130,12 @@ git status --short -- '**/packages.lock.json'
 | DTOs | `Models/FileRecord.cs`, `Models/ChunkRecord.cs`, `Models/SymbolRecord.cs`, `Models/ReferenceRecord.cs` | Records shared by indexing, storage, query, and MCP layers. |
 | Tests | `tests/CodeIndex.Tests/*Tests.cs`, `TestProjectHelper.cs`, `TestConsoleLock.cs` | Focused unit/integration coverage for chunking, extraction, DB reads/writes, CLI behavior, MCP behavior, git helpers, and shared test harness utilities. |
 
+Large command and extractor files have a tracked decomposition plan in
+[docs/large-file-decomposition-plan.md](docs/large-file-decomposition-plan.md).
+Use that plan when splitting `QueryCommandRunner`, `SymbolExtractor`,
+`LanguageReferenceExtractionSupport`, `McpToolHandlers`, or `FileIndexer`
+ownership boundaries so behavior changes remain reviewable and testable.
+
 ### Workspaces
 
 `cdidx.workspace.json` and `.cdidx-workspace.json` declare monorepo members without adding a YAML dependency. Workspace manifests are capped at 64 KiB, 16 JSON nesting levels, and 1024 members. The supported schema is additive: `members` is an array of member paths that must be relative to and resolve under the manifest directory, `index_strategy` is `per_member` or `single`, `default_db_name` is a plain file name that overrides `codeindex.db`, and `shared_ignores` is reserved for shared ignore policy. `cdidx workspace list` and `cdidx workspace status` report member DB paths.
@@ -177,7 +183,7 @@ trust metadata before the dependent rows are written.
 
 Out-of-tree post-extraction hooks can implement `CodeIndex.Indexer.Hooks.IPostExtractionHook` in a `.dll` placed under `~/.config/cdidx/hooks/` (or the directory named by `CDIDX_HOOKS_DIR`). Hook discovery examines at most `CDIDX_HOOK_DISCOVERY_MAX_DLLS` DLL candidates (default: 128), requires each candidate to be no larger than `CDIDX_HOOK_DISCOVERY_MAX_BYTES` bytes (default: 67108864), then loads the bounded candidate set in path order. Each concrete hook type is instantiated with a public parameterless constructor, then called after built-in symbol extraction and again after built-in reference extraction, before rows are persisted. Hooks receive a `FileContext` plus mutable `IList<SymbolRecord>` / `IList<ReferenceRecord>` values, so they can annotate extracted records, add synthetic symbols, or add domain-specific references.
 
-Hook failures are isolated to that hook invocation: assembly load, construction, and callback exceptions are captured as diagnostics and indexing continues. Each callback runs against a scratch copy with a bounded wall-clock budget controlled by `CDIDX_HOOK_CALLBACK_BUDGET_MS` (default: 5000 ms). A timed-out callback contributes no mutations, emits an index warning, and disables that hook for the remainder of the current index run. `status --json` and MCP `status` expose loaded hooks under `hooks` with `name`, `assembly_path`, `type_name`, and `callback_budget_ms` so users can confirm which extensions are active and what timeout is being enforced.
+Hook failures are isolated to that hook invocation: assembly load, construction, and callback exceptions are captured as diagnostics and indexing continues. Each loaded hook runs in an isolated worker process, and callbacks run against scratch copies with a bounded wall-clock budget controlled by `CDIDX_HOOK_CALLBACK_BUDGET_MS` (default: 5000 ms). The first callback budget covers worker startup and callback execution. A timed-out callback kills the worker process tree, contributes no mutations, emits an index warning, and disables that hook for the remainder of the current index run. `status --json` and MCP `status` expose loaded hooks under `hooks` with `name`, `assembly_path`, `type_name`, and `callback_budget_ms` so users can confirm which extensions are active and what timeout is being enforced.
 
 ### Ignore file parsing
 
@@ -1743,10 +1749,15 @@ Piping `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}` into
   extracted but *before* dispatch. The default `LocalStdioAuthenticator`
   is permissive (matches the historical stdio behaviour and tags every
   caller as `stdio` / `local`). Setting `CDIDX_MCP_AUTH_TOKEN` swaps in
-  `TokenMcpAuthenticator`, which requires every responded request to
-  carry a matching `params.auth.token` and compares it in constant time
-  via `CryptographicOperations.FixedTimeEquals`. Failures uniformly
-  return JSON-RPC `-32001 "Unauthorized"` (per #1530 sanitization — the
+  `TokenMcpAuthenticator` for stdio, which requires every responded request
+  to carry a matching `params.auth.token` and compares it in constant time
+  via `CryptographicOperations.FixedTimeEquals`. HTTP does not also use this
+  body-token gate: `ProgramRunner` resolves a bearer secret for the HTTP
+  transport from `CDIDX_MCP_HTTP_TOKEN`, falling back to `CDIDX_MCP_AUTH_TOKEN`
+  when the HTTP-specific variable is unset, and then relies on the
+  `Authorization: Bearer ...` transport check (#3156). For the JSON-RPC
+  body-token gate, failures uniformly return JSON-RPC `-32001 "Unauthorized"`
+  (per #1530 sanitization — the
   wire never distinguishes missing-from-wrong), and `BuildAuthFailureLog`
   emits the detailed reason to stderr. Notifications
   (`notifications/initialized`, `notifications/cancelled`) short-circuit
@@ -1815,11 +1826,18 @@ return `-32600`.
   before they are fully buffered. The
   pending request queue is bounded by `CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH`
   (default: 64, maximum: 1,024); full queues return `429 Too Many Requests`
-  with `Retry-After: 1` instead of retaining unbounded work. Non-positive or
-  non-numeric environment values fall back to defaults, while values above
-  the maximum are rejected before listener startup.
-- SSE stream lifetime is represented by the active stream registry only;
-  completed stream tasks are not retained after that registry entry is removed.
+  with `Retry-After: 1` instead of retaining unbounded work. Accepted context
+  handler tasks are bounded by `CDIDX_MCP_HTTP_MAX_CONCURRENT_HANDLERS`
+  (default: 64, maximum: 1,024), and concurrent `/events` streams are bounded
+  by `CDIDX_MCP_HTTP_MAX_EVENT_STREAMS` (default: 16, maximum: 1,024);
+  saturated limits return `429 Too Many Requests` with `Retry-After: 1`.
+  Non-positive or non-numeric environment values fall back to defaults, while
+  values above the maximum are rejected before listener startup.
+- SSE stream lifetime is represented by the active stream registry and a
+  bounded active-stream counter only. Idle streams receive minimal SSE comment
+  heartbeats so disconnected clients are detected and stream slots are
+  released; completed stream tasks are not retained after the registry entry
+  is removed.
 - `ResolveListenSpec("host:port")` resolves the prefix up-front so the
   CLI can log the bound port to stderr (`Listening on http://...`).
   Port `0` is resolved by probing a temporary `TcpListener`; the
@@ -1828,15 +1846,19 @@ return `-32600`.
   The wildcard hosts `+` / `*` are rejected at parse time.
 - Optional shared-secret auth: when `CDIDX_MCP_HTTP_TOKEN` is set the
   listener requires `Authorization: Bearer <token>` on every request
-  and compares the token in constant time. The CLI refuses to bind to
-  a non-loopback host without a token to keep the MCP catalog off the
-  LAN by default.
+  and compares the token in constant time. If `CDIDX_MCP_HTTP_TOKEN` is unset,
+  HTTP falls back to `CDIDX_MCP_AUTH_TOKEN` as the bearer secret; when both
+  are set, `CDIDX_MCP_HTTP_TOKEN` wins. HTTP clients never need to also send
+  `params.auth.token`. The CLI refuses to bind to a non-loopback host without
+  either token to keep the MCP catalog off the LAN by default. Configured and
+  supplied tokens over 4096 characters are rejected before hashing.
 - Optional request-loop logging: `ProgramRunner` connects `HttpMcpTransport`
   to `GlobalToolLog`, so persistent logging records one `mcp_http_request`
   line per HTTP request when the lifecycle log is enabled. The record includes
   method, path, status, duration, auth outcome, remote peer, correlation id,
-  and JSON-RPC request id when available; it never includes request or response
-  bodies.
+  and JSON-RPC request id when available; caller-controlled method, path,
+  remote peer, and request id values are capped at 256 characters with a
+  `...<truncated>` marker, and it never includes request or response bodies.
 - Cancellation hooks the `CancellationToken` into
   `_listener.Stop()` so `GetContextAsync()` unblocks on shutdown;
   `HttpListenerException` / `ObjectDisposedException` are treated as
@@ -1844,9 +1866,10 @@ return `-32600`.
 
 Wire selection happens in `ProgramRunner.RunMcp`:
 `--transport stdio|http` and `--http-listen <host:port>` are stripped
-from the args before downstream parsing, the bearer token is read from
-`CDIDX_MCP_HTTP_TOKEN`, and the dispatch lands in either the legacy
-stdio path or `RunMcpHttp`. The pluggable seam keeps the JSON-RPC
+from the args before downstream parsing, HTTP bearer-token resolution uses
+`CDIDX_MCP_HTTP_TOKEN` first and `CDIDX_MCP_AUTH_TOKEN` as a fallback, and
+the dispatch lands in either the legacy stdio path or `RunMcpHttp`. The
+pluggable seam keeps the JSON-RPC
 ordering invariant identical across both transports, so the existing
 McpServer test surface (which exercises `ProcessLineAsync`) continues
 to cover the per-method behavior, while `HttpMcpTransportTests` cover
@@ -1999,10 +2022,10 @@ who opens a cloud session, not by a real user after release.
 
 Contract guarantees that downstream consumers can rely on:
 
-- **Field stability.** `timestamp`, `tool`, `arg_keys`, `arg_lengths`, `elapsed_ms`, `error_code` are emitted on every record. `caller`, `caller_version`, `request_id`, `arg_values`, `result_count`, `error` are emitted only when non-null; renaming or repurposing any published field is a breaking change, the same policy as the CLI `--metrics` schema.
+- **Field stability.** `timestamp`, `tool`, `arg_keys`, `arg_lengths`, `elapsed_ms`, `error_code` are emitted on every record. `caller`, `caller_version`, `request_id`, `request_id_length`, `request_id_truncated`, `arg_key_lengths`, `arg_keys_truncated`, `arg_key_truncation_reasons`, `arg_values`, `arg_values_redacted`, `arg_values_truncated`, `arg_values_truncation_reasons`, `arg_values_serialized_bytes`, `arg_values_max_bytes`, `result_count`, `error` are emitted only when non-null or true; renaming or repurposing any published field is a breaking change, the same policy as the CLI `--metrics` schema.
 - **Error code semantics.** `0` = success, `1` = MCP tool error (`isError: true`), negative = the verbatim JSON-RPC error code (e.g. `-32602` for invalid params, `-32603` for internal error). The companion `error` string is one of `jsonrpc_error`, `tool_error`, `missing_tool_name`, or the sanitized exception type name (`McpServer.BuildSanitizedToolErrorMessage` keeps `ex.Message` out of the wire and out of the audit, #1530).
 - **Result count.** `ExtractResultCount` prefers `structuredContent.count` over `structuredContent.results.length`; tool errors and JSON-RPC errors omit the field. Tools that return no count-shaped payload (e.g. `ping`) leave `result_count` absent rather than emitting `0`.
-- **Argument privacy.** `arg_keys` and `arg_lengths` are always recorded so query *shape* is recoverable. `arg_values` is gated behind `--audit-log-include-values` because cdidx queries can carry literal source snippets or secret-shaped strings. The echo is a `DeepClone` so later mutation of the request payload cannot retroactively change the audit trail.
+- **Argument privacy.** `arg_keys` and `arg_lengths` are always recorded so query *shape* is recoverable, but argument-key count and displayed key length are capped and marked with `arg_keys_truncated`. `arg_values` is gated behind `--audit-log-include-values` because cdidx queries can carry literal source snippets or secret-shaped strings. The echo is a sanitized, budgeted clone: secret-like keys and known token patterns are replaced with `[REDACTED]`, and depth, object-property, array-item, total-node, string-length, serialized-byte, and event-byte limits can mark `arg_values_truncated` before values are written.
 - **Caller identity.** `_clientName` / `_clientVersion` are captured from every `initialize.clientInfo` and overwrite on reconnection within the same session, so a long-running MCP loop with multiple `initialize` handshakes attributes records to the *currently connected* client rather than the first one.
 - **Rotation.** Writes go through an open-append-close cycle so external `tail -F` consumers follow rotations and so the file is closed during the rename. When `_bytesWritten >= MaxBytes`, `RotateLocked` drops `<path>.(RotationKeep-1)` (currently `<path>.2`), cascades surviving slots up by one, and moves `<path>` to `<path>.1`. `RotationKeep = 3`, so `<path>.3` is never created — exercised by `AuditLogSinkTests.Record_KeepsAtMostThreeFiles_DropsOldestOnRotationOverflow`.
 - **Best effort.** Serialization failures, IO failures, and rotation failures are swallowed (the audit must not crash the underlying tool call). The constructor still fails fast on impossible paths so the operator sees the misconfiguration before any tool dispatch happens.
@@ -2201,6 +2224,13 @@ git status --short -- '**/packages.lock.json'
 | DTO | `Models/FileRecord.cs`, `Models/ChunkRecord.cs`, `Models/SymbolRecord.cs`, `Models/ReferenceRecord.cs` | indexing、storage、query、MCP layers で共有する record。 |
 | テスト | `tests/CodeIndex.Tests/*Tests.cs`, `TestProjectHelper.cs`, `TestConsoleLock.cs` | chunking、extraction、DB read/write、CLI、MCP、git helper、共有 test harness の focused unit / integration coverage。 |
 
+大きな command / extractor file については
+[docs/large-file-decomposition-plan.md](docs/large-file-decomposition-plan.md)
+に追跡可能な分割計画があります。`QueryCommandRunner`、`SymbolExtractor`、
+`LanguageReferenceExtractionSupport`、`McpToolHandlers`、`FileIndexer` の
+ownership boundary を分けるときは、挙動変更を review しやすく test しやすい単位に
+保つため、この計画を使ってください。
+
 ### ワークスペース
 
 `cdidx.workspace.json` と `.cdidx-workspace.json` は YAML dependency を増やさずに monorepo
@@ -2269,8 +2299,10 @@ hook は `FileContext` と mutable な `IList<SymbolRecord>` / `IList<ReferenceR
 extracted record の annotation、synthetic symbol 追加、domain-specific reference 追加ができます。
 
 assembly load、construction、callback exception は diagnostic として捕捉され、indexing は継続します。
-各 callback は scratch copy 上で実行され、`CDIDX_HOOK_CALLBACK_BUDGET_MS`（既定 5000 ms）の
-wall-clock budget を超えると mutation は捨てられ、index warning を出し、その index run 中は
+各 loaded hook は isolated worker process 内で動き、callback は scratch copy 上で実行され、
+`CDIDX_HOOK_CALLBACK_BUDGET_MS`（既定 5000 ms）の wall-clock budget が適用されます。
+最初の callback budget には worker startup と callback execution が含まれます。budget を超えた callback は
+worker process tree を kill され、mutation は捨てられ、index warning を出し、その index run 中は
 該当 hook が disabled になります。`status --json` と MCP `status` は `hooks` に `name`、
 `assembly_path`、`type_name`、`callback_budget_ms` を公開します。
 
@@ -3462,7 +3494,7 @@ sequenceDiagram
 - `initialize` レスポンスは `protocolVersion`、`capabilities`、`serverInfo.name`、`serverInfo.version`（`ConsoleUi.LoadVersion()` — `version.json` が源）、および AI クライアントにツール選択を案内する長い `instructions` 文字列を返す。レスポンスを書き終えた後、サーバーはセッションごとに 1 回だけ互換性用の `notifications/initialized` ready signal を送るため、サーバー側の ready signal を待つクライアントも optimistic polling なしで進める（#1780）。MCP は `notifications/initialized` を client-to-server 通知としても定義しており、cdidx はその方向も no-op として受理する。非 HTTP transport では、この互換性 signal が唯一の server-origin emission です。HTTP session は `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S` を設定した場合、opt-in の keep-alive notification も `/events` で受け取れる。HTTP transport では out-of-band 通知は接続済みの `/events` SSE stream にだけ配送され、POST のみのクライアントは initialize response だけを受け取り、別通知 frame は受け取らない。
 - advertised capability には `tools`、`resources`、`prompts`、`logging` が含まれる。`logging` は MCP `notifications/message` を示し、`logging/setLevel` は `debug`、`info`、`notice`、`warning`、`error`、`critical`、`alert`、`emergency` を受け付ける。
 - `protocolVersion` は**ハードコードではなく交渉**で決まる（#1554）。サーバーは `McpServer.SupportedProtocolVersions`（新しい順: `2025-03-26`, `2024-11-05`）を保持し、`initialize` パラメータからクライアント要求バージョンを読み取って、対応集合にあればそれを返し（合意）、未指定／非文字列なら既定の最新バージョンに fallback し、対応外なら `error.data` に `requestedVersion` と `supportedVersions` を入れた JSON-RPC `-32602` で拒否する。これにより将来 MCP 仕様が改訂されても、wire format が黙ってずれるのではなく actionable な handshake 失敗として表面化する。配列を新バージョンで更新する際は `ProtocolVersion` を先頭エントリと揃えて意図的に bump する。
-- **認証ミドルウェア**（#1559）。`McpServer` はパース済み JSON-RPC リクエストごとに、メソッド抽出 *後*・dispatch *前* で `IMcpAuthenticator` を呼ぶ。既定の `LocalStdioAuthenticator` は permissive で（従来の stdio 動作を維持し、呼び出し元を `stdio` / `local` でタグ付けする）、`CDIDX_MCP_AUTH_TOKEN` を設定すると `TokenMcpAuthenticator` に切り替わる。`TokenMcpAuthenticator` は応答が必要な全リクエストに対し、`params.auth.token` が一致することを要求し、比較は `CryptographicOperations.FixedTimeEquals` による定数時間比較で行う。失敗は統一された JSON-RPC `-32001 "Unauthorized"` を返し（#1530 の sanitization 方針に従い、ワイヤでは未提示と不一致を区別しない）、`BuildAuthFailureLog` が詳細を stderr に書き出す。通知（`notifications/initialized`、`notifications/cancelled`）は応答もエラーコードも持たないため、ゲート *より前* で short-circuit する。このミドルウェアが将来 transport の差し替え seam になる — ネットワーク listener は別の `IMcpAuthenticator` を提供しつつ、`McpCallerIdentity`（`Source` + `Subject`）の形を保ち、監査ログ（#1562）から再利用できる。
+- **認証ミドルウェア**（#1559）。`McpServer` はパース済み JSON-RPC リクエストごとに、メソッド抽出 *後*・dispatch *前* で `IMcpAuthenticator` を呼ぶ。既定の `LocalStdioAuthenticator` は permissive で（従来の stdio 動作を維持し、呼び出し元を `stdio` / `local` でタグ付けする）、stdio では `CDIDX_MCP_AUTH_TOKEN` を設定すると `TokenMcpAuthenticator` に切り替わる。`TokenMcpAuthenticator` は応答が必要な全リクエストに対し、`params.auth.token` が一致することを要求し、比較は `CryptographicOperations.FixedTimeEquals` による定数時間比較で行う。HTTP はこの body token ゲートを重ねず、`ProgramRunner` が `CDIDX_MCP_HTTP_TOKEN` を優先し、未設定なら `CDIDX_MCP_AUTH_TOKEN` を fallback として bearer secret に解決して、`Authorization: Bearer ...` の transport check に一本化する（#3156）。JSON-RPC body token ゲートの失敗は統一された JSON-RPC `-32001 "Unauthorized"` を返し（#1530 の sanitization 方針に従い、ワイヤでは未提示と不一致を区別しない）、`BuildAuthFailureLog` が詳細を stderr に書き出す。通知（`notifications/initialized`、`notifications/cancelled`）は応答もエラーコードも持たないため、ゲート *より前* で short-circuit する。このミドルウェアが将来 transport の差し替え seam になる — ネットワーク listener は別の `IMcpAuthenticator` を提供しつつ、`McpCallerIdentity`（`Source` + `Subject`）の形を保ち、監査ログ（#1562）から再利用できる。
 
 MCP は独立したシリアライズ戦略（オブジェクトを JSON などの転送形式に変換する方式のこと。CLI の `--json` 側は .NET 標準の `JsonSerializer` に任せる方式、MCP 側は `JsonObject` を手で組み立てる方式と、別の手段を採っている）を採るため、「そもそもバイナリは走るのか?」を確かめる最も頑健なスモークテスト（デプロイや起動直後に行う、基本動作だけを短時間で確認する簡易テストのこと。詳細な正しさではなく「煙が出ていないか＝致命的に壊れていないか」を見るためこの名で呼ばれる）となる — .NET ホスト、`Program.Main`、CLI ルーティング、`ConsoleUi.LoadVersion()` に負荷をかけるが、SQLite には触れない（`search` など MCP の*ツール呼び出し*は SQLite に触れるが、`initialize` 単独では触れない）。
 
@@ -3479,14 +3511,14 @@ MCP は独立したシリアライズ戦略（オブジェクトを JSON など�
 
 `HttpMcpTransport`（同じく #1558）は `System.Net.HttpListener` をラップする:
 
-- HTTP POST 1 件 = JSON-RPC フレーム 1 件で、対応する応答は HTTP レスポンスのボディ（`200 OK` / `application/json; charset=utf-8`）に乗る。通知は `204 No Content`。`GET /events` は将来のサーバー→クライアント frame 用に独立した `text/event-stream` subscription を開く。サーバーは `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S` で keep-alive notification が opt-in された場合を除き、自発的な frame を送信しない。長寿命の event stream は通常の POST リクエストを塞がない。`/` への POST 以外は `405 Method Not Allowed`。空 / 空白のみのボディは stdio の空行と同じ扱いで `204 No Content` を返し、ループは殺さない — クライアントの誤動作で junk フレームに引っかからないため。リクエスト本文は `CDIDX_MCP_HTTP_MAX_REQUEST_BYTES`（既定: 1,000,000 bytes、最大: 16,777,216 bytes）で制限し、超過時は全量を buffer する前に `413 Payload Too Large` を返す。保留中 request queue は `CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH`（既定: 64、最大: 1,024）で制限し、満杯時は無制限に work を保持せず `Retry-After: 1` 付きの `429 Too Many Requests` を返す。正でない値や数値でない環境変数値は既定にフォールバックし、最大値を超える値は listener 起動前に拒否する。
-- SSE stream lifetime は active stream registry だけで表現し、その registry entry が削除された後に完了済み stream task を保持しない。
+- HTTP POST 1 件 = JSON-RPC フレーム 1 件で、対応する応答は HTTP レスポンスのボディ（`200 OK` / `application/json; charset=utf-8`）に乗る。通知は `204 No Content`。`GET /events` は将来のサーバー→クライアント frame 用に独立した `text/event-stream` subscription を開く。サーバーは `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S` で keep-alive notification が opt-in された場合を除き、自発的な frame を送信しない。長寿命の event stream は通常の POST リクエストを塞がない。`/` への POST 以外は `405 Method Not Allowed`。空 / 空白のみのボディは stdio の空行と同じ扱いで `204 No Content` を返し、ループは殺さない — クライアントの誤動作で junk フレームに引っかからないため。リクエスト本文は `CDIDX_MCP_HTTP_MAX_REQUEST_BYTES`（既定: 1,000,000 bytes、最大: 16,777,216 bytes）で制限し、超過時は全量を buffer する前に `413 Payload Too Large` を返す。保留中 request queue は `CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH`（既定: 64、最大: 1,024）、受理済み context handler task は `CDIDX_MCP_HTTP_MAX_CONCURRENT_HANDLERS`（既定: 64、最大: 1,024）、同時 `/events` stream は `CDIDX_MCP_HTTP_MAX_EVENT_STREAMS`（既定: 16、最大: 1,024）で制限し、満杯時は無制限に work を保持せず `Retry-After: 1` 付きの `429 Too Many Requests` を返す。正でない値や数値でない環境変数値は既定にフォールバックし、最大値を超える値は listener 起動前に拒否する。
+- SSE stream lifetime は active stream registry と上限付き active-stream counter だけで表現する。idle stream には最小限の SSE comment heartbeat を送り、切断済み client を検出して stream slot を解放する。その registry entry が削除された後に完了済み stream task を保持しない。
 - `ResolveListenSpec("host:port")` は prefix を事前に解決するため、CLI が stderr に `Listening on http://...` を出せる。ポート `0` は一時 `TcpListener` を probe して空きポートを取得する。probe から `HttpListener.Start()` までの TOCTOU window は、本トランスポートが local-only / single-tenant 想定であるため許容する。ワイルドカードホスト `+` / `*` はパース時点で拒否する。
-- 任意の共有秘密による認証: `CDIDX_MCP_HTTP_TOKEN` が設定されていれば、listener はすべてのリクエストに `Authorization: Bearer <token>` を要求し、定数時間で比較する。トークン未指定で非 loopback ホストへ bind しようとした場合、CLI は MCP カタログを LAN に漏らさないよう既定で拒否する。
-- 任意のリクエストループログ: `ProgramRunner` は `HttpMcpTransport` を `GlobalToolLog` に接続するため、lifecycle log が有効な場合は HTTP リクエストごとに `mcp_http_request` 行を 1 件記録する。記録内容は method、path、status、duration、auth outcome、remote peer、correlation id、利用可能な JSON-RPC request id で、リクエスト/レスポンス本文は含めない。
+- 任意の共有秘密による認証: `CDIDX_MCP_HTTP_TOKEN` が設定されていれば、listener はすべてのリクエストに `Authorization: Bearer <token>` を要求し、定数時間で比較する。`CDIDX_MCP_HTTP_TOKEN` が未設定なら HTTP は `CDIDX_MCP_AUTH_TOKEN` を bearer secret として fallback し、両方が設定されている場合は `CDIDX_MCP_HTTP_TOKEN` を優先する。HTTP クライアントが `params.auth.token` も送る必要はない。どちらのトークンも未指定で非 loopback ホストへ bind しようとした場合、CLI は MCP カタログを LAN に漏らさないよう既定で拒否する。設定 token と受信 token は 4096 文字を超える場合、hash 前に拒否する。
+- 任意のリクエストループログ: `ProgramRunner` は `HttpMcpTransport` を `GlobalToolLog` に接続するため、lifecycle log が有効な場合は HTTP リクエストごとに `mcp_http_request` 行を 1 件記録する。記録内容は method、path、status、duration、auth outcome、remote peer、correlation id、利用可能な JSON-RPC request id で、caller-controlled な method、path、remote peer、request id は 256 文字を上限に `...<truncated>` marker 付きで切り詰める。リクエスト/レスポンス本文は含めない。
 - キャンセルは `_listener.Stop()` に接続するため、シャットダウン時に `GetContextAsync()` が unblock する。`HttpListenerException` / `ObjectDisposedException` は EOS と同じ扱いで MCP ループを stdin クローズと同じ経路で終了させる。
 
-ワイヤー選択は `ProgramRunner.RunMcp` で行う。`--transport stdio|http` と `--http-listen <host:port>` は下流の引数解析より前に取り除かれ、bearer token は `CDIDX_MCP_HTTP_TOKEN` から読み、ディスパッチは旧来の stdio 経路または `RunMcpHttp` に着地する。プラガブルなシームは JSON-RPC 順序不変条件を両トランスポートで同一に保つので、既存の McpServer テスト群（`ProcessLineAsync` を叩く）は引き続きメソッド単位の挙動をカバーし、新トランスポートのワイヤーレベル契約は `HttpMcpTransportTests` がカバーする。
+ワイヤー選択は `ProgramRunner.RunMcp` で行う。`--transport stdio|http` と `--http-listen <host:port>` は下流の引数解析より前に取り除かれ、HTTP bearer token 解決は `CDIDX_MCP_HTTP_TOKEN` を先に見て、未設定なら `CDIDX_MCP_AUTH_TOKEN` に fallback する。ディスパッチは旧来の stdio 経路または `RunMcpHttp` に着地する。プラガブルなシームは JSON-RPC 順序不変条件を両トランスポートで同一に保つので、既存の McpServer テスト群（`ProcessLineAsync` を叩く）は引き続きメソッド単位の挙動をカバーし、新トランスポートのワイヤーレベル契約は `HttpMcpTransportTests` がカバーする。
 
 #### 構造化エラーエンベロープとサーバーコード — issue #1581
 
@@ -3576,10 +3608,10 @@ Cloud セッションは開発ループの中で `dotnet build` にフォール�
 
 下流コンシューマが依存できる契約:
 
-- **フィールドの安定性。** `timestamp`、`tool`、`arg_keys`、`arg_lengths`、`elapsed_ms`、`error_code` は全レコードで出力する。`caller`、`caller_version`、`request_id`、`arg_values`、`result_count`、`error` は値が non-null のときだけ含める。既存フィールドの改名や流用は破壊的変更扱い（CLI `--metrics` と同じ運用）。
+- **フィールドの安定性。** `timestamp`、`tool`、`arg_keys`、`arg_lengths`、`elapsed_ms`、`error_code` は全レコードで出力する。`caller`、`caller_version`、`request_id`、`request_id_length`、`request_id_truncated`、`arg_key_lengths`、`arg_keys_truncated`、`arg_key_truncation_reasons`、`arg_values`、`arg_values_redacted`、`arg_values_truncated`、`arg_values_truncation_reasons`、`arg_values_serialized_bytes`、`arg_values_max_bytes`、`result_count`、`error` は値が non-null または true のときだけ含める。既存フィールドの改名や流用は破壊的変更扱い（CLI `--metrics` と同じ運用）。
 - **エラーコード意味論。** `0`=成功、`1`=MCP ツールエラー (`isError: true`)、負値=JSON-RPC エラーコードそのまま（例: invalid params なら `-32602`、internal error なら `-32603`）。同伴する `error` 文字列は `jsonrpc_error` / `tool_error` / `missing_tool_name` / サニタイズ済み例外型名のいずれか。`McpServer.BuildSanitizedToolErrorMessage` が `ex.Message` をワイヤーと audit から除外している（#1530）。
 - **result count。** `ExtractResultCount` は `structuredContent.count` を優先し、無ければ `structuredContent.results.length`、いずれも無ければ省略する。ツールエラー / JSON-RPC エラー時も省略する（`0` ではなく欠落）。
-- **引数のプライバシー。** `arg_keys` / `arg_lengths` は常に記録するので呼び出しの *形状* は復元できる。`arg_values` は `--audit-log-include-values` に gated（cdidx クエリにはソース片や secret 風文字列が混入しうる）。echo は `DeepClone` で取るので、後段のリクエスト改変が監査記録を遡及的に書き換えることはない。
+- **引数のプライバシー。** `arg_keys` / `arg_lengths` は常に記録するので呼び出しの *形状* は復元できるが、引数キー数と表示キー長は capped され `arg_keys_truncated` で明示される。`arg_values` は `--audit-log-include-values` に gated（cdidx クエリにはソース片や secret 風文字列が混入しうる）。echo は sanitize と budget を適用した clone として作り、secret 風のキーや既知 token pattern は `[REDACTED]` に置換し、depth / object property / array item / total node / string length / serialized byte / event byte の上限に達した場合は値を書き出す前に `arg_values_truncated` を記録する。
 - **呼び出し元の特定。** `_clientName` / `_clientVersion` は `initialize.clientInfo` から毎回キャプチャし、同一セッション内で再 `initialize` があれば上書きされる。複数 handshake が走る長寿命 MCP ループでも、*現在接続中の*クライアントに対して記録が紐付く。
 - **ローテーション。** 1 レコードごとに open-append-close する。外部 `tail -F` の追従と rename 時の close-state 維持のため。`_bytesWritten >= MaxBytes` を超えた時点で `RotateLocked` が `<path>.(RotationKeep-1)`（現在は `<path>.2`）を破棄し、生存スロットを 1 つ古い側へ寄せ、`<path>` を `<path>.1` へ移す。`RotationKeep = 3` なので `<path>.3` は決して生成されない（`AuditLogSinkTests.Record_KeepsAtMostThreeFiles_DropsOldestOnRotationOverflow` で常時検証）。
 - **ベストエフォート。** シリアライズ失敗・IO 失敗・rotation 失敗はすべて握り潰す（監査の失敗で本体ツール呼び出しを壊さない）。一方、構築時の不正パスはコンストラクタが早期失敗させ、ディスパッチ前にオペレーターに気付かせる。

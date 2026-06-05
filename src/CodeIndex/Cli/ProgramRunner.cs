@@ -8,6 +8,7 @@ using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
+using CodeIndex.Indexer.Hooks;
 using CodeIndex.Lsp;
 using CodeIndex.Mcp;
 using Microsoft.Data.Sqlite;
@@ -38,6 +39,7 @@ internal static class ProgramRunner
         "--metrics",
         "--debug-unsafe",
         "--strict-version",
+        "--pretty",
     };
     private static readonly HashSet<string> TopLevelValueOptionNames = new(StringComparer.Ordinal)
     {
@@ -65,6 +67,9 @@ internal static class ProgramRunner
         Action? beforeDispatchForTesting = null,
         CancellationToken cancellationToken = default)
     {
+        if (PostExtractionHookCallbackWorker.TryRunCommand(args, Console.In, Console.Out, Console.Error, out var hookWorkerExitCode))
+            return hookWorkerExitCode;
+
         appVersion ??= ConsoleUi.LoadVersion();
 
         // Load project-local `.cdidxrc.json` before anything else reads env vars so log
@@ -128,6 +133,8 @@ internal static class ProgramRunner
             CommandErrorWriter.Write(StripErrorPrefix(strictVersionError), "use `--strict-version` without a value.");
             return CommandExitCodes.InvalidArgument;
         }
+        if (TryConsumePrettyJsonFlag(ref args))
+            jsonOptions = new JsonSerializerOptions(jsonOptions) { WriteIndented = true };
         using var jsonAnsiScope = ConsoleUi.SuppressAnsiForJsonOutput(ContainsJsonOutputFlag(args));
 
         var commandStopwatch = Stopwatch.StartNew();
@@ -926,6 +933,46 @@ internal static class ProgramRunner
         return quiet;
     }
 
+    internal static bool TryConsumePrettyJsonFlag(ref string[] args)
+    {
+        if (args.Length == 0)
+            return false;
+
+        var kept = new List<string>(args.Length);
+        var pretty = false;
+        var passthrough = false;
+        for (var i = 0; i < args.Length; i++)
+        {
+            var arg = args[i];
+            if (passthrough)
+            {
+                kept.Add(arg);
+                continue;
+            }
+            if (arg == "--")
+            {
+                passthrough = true;
+                kept.Add(arg);
+                continue;
+            }
+            if (ShouldPreserveQueryCommandToken(args, i))
+            {
+                kept.Add(arg);
+                continue;
+            }
+            if (arg == "--pretty")
+            {
+                pretty = true;
+                continue;
+            }
+
+            kept.Add(arg);
+        }
+
+        args = kept.ToArray();
+        return pretty;
+    }
+
     internal static bool TryConsumeGlobalLogFlags(ref string[] args, out string error)
     {
         error = string.Empty;
@@ -1592,8 +1639,7 @@ internal static class ProgramRunner
         if (pinPath == null)
             return CommandExitCodes.Success;
 
-        string required;
-        if (!TryReadWorkspaceVersionPin(pinPath, out required, out var warning))
+        if (!TryReadWorkspaceVersionPin(pinPath, out var required, out var warning))
         {
             Console.Error.WriteLine(warning);
             return CommandExitCodes.Success;
@@ -2151,7 +2197,7 @@ internal static class ProgramRunner
     };
 
     private const string DefaultMcpHttpListen = "127.0.0.1:38080";
-    private const string McpHttpTokenEnvVar = "CDIDX_MCP_HTTP_TOKEN";
+    internal const string McpHttpTokenEnvVar = "CDIDX_MCP_HTTP_TOKEN";
 
     private static int RunLsp(string[] cmdArgs, string appVersion, JsonSerializerOptions jsonOptions)
     {
@@ -2254,16 +2300,20 @@ internal static class ProgramRunner
             if (!TryOpenMcpAuditLog(runOptions.AuditOptions, out auditLog, out exitCode))
                 return exitCode;
 
-            // Pick the authenticator based on `CDIDX_MCP_AUTH_TOKEN` (#1559). When unset the
-            // permissive local-stdio default keeps the historical behaviour; when set every
-            // JSON-RPC request must include a matching `params.auth.token`. The tool-enablement
-            // gate (#1561) is wired automatically by the McpServer ctor via
-            // `McpToolFilter.FromEnvironment()`.
-            // `CDIDX_MCP_AUTH_TOKEN` の有無で authenticator を切り替える (#1559)。未設定なら
-            // permissive な stdio 既定で従来動作を維持し、設定済みなら全 JSON-RPC リクエストに
-            // `params.auth.token` の一致を要求する。ツール有効化ゲート (#1561) は McpServer の
-            // コンストラクタ内部で `McpToolFilter.FromEnvironment()` から自動取得される。
-            var authenticator = Mcp.McpAuthenticatorFactory.FromEnvironment();
+            // Pick the JSON-RPC authenticator for the selected transport. Stdio keeps the
+            // historical `CDIDX_MCP_AUTH_TOKEN` / `params.auth.token` gate (#1559). HTTP uses
+            // its bearer header gate instead, with `CDIDX_MCP_HTTP_TOKEN` taking precedence over
+            // `CDIDX_MCP_AUTH_TOKEN` as a fallback (#3156), so clients never need both header and
+            // body tokens for one HTTP request. The tool-enablement gate (#1561) is wired
+            // automatically by the McpServer ctor via `McpToolFilter.FromEnvironment()`.
+            // 選択済み transport に応じて JSON-RPC authenticator を選ぶ。stdio は従来通り
+            // `CDIDX_MCP_AUTH_TOKEN` / `params.auth.token` ゲートを使う (#1559)。HTTP は bearer
+            // header ゲートへ一本化し、`CDIDX_MCP_HTTP_TOKEN` を優先、未設定なら
+            // `CDIDX_MCP_AUTH_TOKEN` を fallback として使う (#3156)。そのため HTTP では同一
+            // リクエストに header token と body token の両方を要求しない。ツール有効化ゲート
+            // (#1561) は McpServer のコンストラクタ内部で `McpToolFilter.FromEnvironment()`
+            // から自動取得される。
+            var authenticator = CreateMcpAuthenticatorForTransport(runOptions.Transport);
             using var server = new McpServer(runOptions.QueryOptions.DbPath, appVersion, runOptions.QueryOptions.DbPathExplicit, authenticator, auditLog);
             return RunMcpServer(server, runOptions.Transport, runOptions.ListenSpec);
         }
@@ -2429,6 +2479,23 @@ internal static class ProgramRunner
         }
     }
 
+    internal static IMcpAuthenticator CreateMcpAuthenticatorForTransport(string transport)
+        => string.Equals(transport, "http", StringComparison.OrdinalIgnoreCase)
+            ? LocalStdioAuthenticator.Instance
+            : McpAuthenticatorFactory.FromEnvironment();
+
+    internal static string? ResolveMcpHttpBearerTokenFromEnvironment()
+    {
+        var httpToken = NormalizeMcpToken(Environment.GetEnvironmentVariable(McpHttpTokenEnvVar));
+        if (httpToken is not null)
+            return httpToken;
+
+        return NormalizeMcpToken(Environment.GetEnvironmentVariable(McpAuthenticatorFactory.AuthTokenEnvVar));
+    }
+
+    private static string? NormalizeMcpToken(string? token)
+        => string.IsNullOrWhiteSpace(token) ? null : token;
+
     private static int RunMcpHttp(McpServer server, string listenSpec)
     {
         HttpMcpTransport.HttpListenSpec resolved;
@@ -2444,17 +2511,23 @@ internal static class ProgramRunner
         }
 
         // Require a shared-secret bearer token when the user opts into a non-loopback bind so the
-        // MCP catalog is not exposed to the local network unauthenticated. Loopback binds skip the
-        // requirement because they're indistinguishable from the existing stdio threat model.
-        // 非 loopback への bind 時は共有秘密トークンを必須にし、認証なしの LAN 露出を防ぐ。
-        // loopback bind は stdio と同等の脅威モデルとみなしてトークン要件を緩める。
-        var bearerToken = Environment.GetEnvironmentVariable(McpHttpTokenEnvVar);
-        if (string.IsNullOrEmpty(bearerToken))
-            bearerToken = null;
+        // MCP catalog is not exposed to the local network unauthenticated. HTTP resolves that
+        // bearer token from `CDIDX_MCP_HTTP_TOKEN` first, then falls back to the generic
+        // `CDIDX_MCP_AUTH_TOKEN` so setting the generic auth token also protects HTTP without
+        // forcing clients to send both `Authorization` and `params.auth.token` (#3156). Loopback
+        // binds skip the requirement because they're indistinguishable from the existing stdio
+        // threat model when neither token is configured.
+        // 非 loopback への bind 時は共有秘密 bearer token を必須にし、認証なしの LAN 露出を
+        // 防ぐ。HTTP はまず `CDIDX_MCP_HTTP_TOKEN` を使い、未設定なら汎用の
+        // `CDIDX_MCP_AUTH_TOKEN` を bearer token として使うため、汎用 token を設定しただけでも
+        // HTTP は保護され、クライアントに `Authorization` と `params.auth.token` の両方を
+        // 要求しない (#3156)。どちらの token も未設定なら、loopback bind は stdio と同等の脅威
+        // モデルとみなしてトークン要件を緩める。
+        var bearerToken = ResolveMcpHttpBearerTokenFromEnvironment();
 
         if (!resolved.IsLoopback && bearerToken is null)
         {
-            Console.Error.WriteLine($"Error: --transport http refuses to bind to '{resolved.Host}' without a shared secret. Set the `{McpHttpTokenEnvVar}` environment variable or bind to a loopback address.");
+            Console.Error.WriteLine($"Error: --transport http refuses to bind to '{resolved.Host}' without a shared secret. Set the `{McpHttpTokenEnvVar}` or `{McpAuthenticatorFactory.AuthTokenEnvVar}` environment variable, or bind to a loopback address.");
             PrintMcpUsage();
             return CommandExitCodes.UsageError;
         }
@@ -2541,10 +2614,11 @@ internal static class ProgramRunner
 
     private static string FormatLogValue(string? value)
     {
-        if (string.IsNullOrEmpty(value))
+        var limited = HttpMcpTransport.LimitRequestLogField(value);
+        if (string.IsNullOrEmpty(limited))
             return "-";
 
-        return value
+        return limited
             .Replace('\\', '/')
             .Replace('\r', '_')
             .Replace('\n', '_')
@@ -2556,7 +2630,7 @@ internal static class ProgramRunner
     {
         Console.Error.WriteLine("Usage: cdidx mcp [--db <path>] [--transport stdio|http] [--http-listen <host:port>] [--audit-log <path>] [--audit-log-include-values] [--audit-log-max-bytes <n>] [--suggestion-dedup-threshold <0..1>]");
         Console.Error.WriteLine("Note: --json is not supported; MCP requests and responses are JSON-RPC over the selected transport.");
-        Console.Error.WriteLine($"HTTP limits: {HttpMcpTransport.MaxRequestBodyBytesEnvVar}=<bytes> (1..{HttpMcpTransport.MaxConfiguredRequestBodyBytes.ToString(CultureInfo.InvariantCulture)}, default {HttpMcpTransport.DefaultMaxRequestBodyBytes.ToString(CultureInfo.InvariantCulture)}), {HttpMcpTransport.MaxQueueDepthEnvVar}=<n> (1..{HttpMcpTransport.MaxConfiguredQueuedRequests.ToString(CultureInfo.InvariantCulture)}, default {HttpMcpTransport.DefaultMaxQueuedRequests.ToString(CultureInfo.InvariantCulture)}).");
+        Console.Error.WriteLine($"HTTP limits: {HttpMcpTransport.MaxRequestBodyBytesEnvVar}=<bytes> (1..{HttpMcpTransport.MaxConfiguredRequestBodyBytes.ToString(CultureInfo.InvariantCulture)}, default {HttpMcpTransport.DefaultMaxRequestBodyBytes.ToString(CultureInfo.InvariantCulture)}), {HttpMcpTransport.MaxQueueDepthEnvVar}=<n> (1..{HttpMcpTransport.MaxConfiguredQueuedRequests.ToString(CultureInfo.InvariantCulture)}, default {HttpMcpTransport.DefaultMaxQueuedRequests.ToString(CultureInfo.InvariantCulture)}), {HttpMcpTransport.MaxConcurrentHandlersEnvVar}=<n> (1..{HttpMcpTransport.MaxConfiguredConcurrentHandlers.ToString(CultureInfo.InvariantCulture)}, default {HttpMcpTransport.DefaultMaxConcurrentHandlers.ToString(CultureInfo.InvariantCulture)}), {HttpMcpTransport.MaxEventStreamsEnvVar}=<n> (1..{HttpMcpTransport.MaxConfiguredEventStreams.ToString(CultureInfo.InvariantCulture)}, default {HttpMcpTransport.DefaultMaxEventStreams.ToString(CultureInfo.InvariantCulture)}).");
     }
 
     internal static bool TryConsumeSuggestionDedupThresholdFlag(ref string[] args, out string error)
@@ -2833,9 +2907,10 @@ internal static class ProgramRunner
         }
 
         if (!long.TryParse(raw, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsed)
-            || parsed < AuditLogSink.MinMaxBytes)
+            || parsed < AuditLogSink.MinMaxBytes
+            || parsed > AuditLogSink.MaxMaxBytes)
         {
-            error = $"Error: --audit-log-max-bytes must be an integer >= {AuditLogSink.MinMaxBytes}.";
+            error = $"Error: --audit-log-max-bytes must be an integer between {AuditLogSink.MinMaxBytes} and {AuditLogSink.MaxMaxBytes}.";
             return false;
         }
 

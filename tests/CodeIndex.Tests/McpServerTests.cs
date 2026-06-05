@@ -643,6 +643,59 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public async Task ProcessLineAsync_CapsTelemetryArgumentKeyCount_Issue3237()
+    {
+        using var writer = new StringWriter();
+        using var error = new StringWriter();
+        var arguments = new JsonObject();
+        for (var i = 0; i < AuditLogSink.MaxAuditArgumentCount + 3; i++)
+            arguments[$"arg{i}"] = i;
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 123,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "does_not_exist",
+                ["arguments"] = arguments,
+            },
+        };
+
+        await Task.Run(() =>
+        {
+            lock (TestConsoleLock.Gate)
+            {
+                var previousError = Console.Error;
+                try
+                {
+                    Console.SetError(error);
+#pragma warning disable xUnit1031
+                    _server.ProcessLineAsync(request.ToJsonString(), writer).GetAwaiter().GetResult();
+#pragma warning restore xUnit1031
+                }
+                finally
+                {
+                    Console.SetError(previousError);
+                }
+            }
+        });
+
+        var line = error.ToString()
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Single(l => l.Contains("\"event\":\"mcp.tool.invocation\"", StringComparison.Ordinal));
+        var jsonStart = line.IndexOf('{');
+        using var document = JsonDocument.Parse(line[jsonStart..]);
+        var root = document.RootElement;
+        Assert.Equal(AuditLogSink.MaxAuditArgumentCount, root.GetProperty("arg_keys").GetArrayLength());
+        Assert.True(root.GetProperty("arg_keys_truncated").GetBoolean());
+        Assert.Contains(root.GetProperty("arg_key_truncation_reasons").EnumerateArray(),
+            reason => reason.GetString() == "arg_key_count_limit");
+        Assert.DoesNotContain(root.GetProperty("arg_keys").EnumerateArray(),
+            key => key.GetString() == $"arg{AuditLogSink.MaxAuditArgumentCount}");
+    }
+
+    [Fact]
     public async Task ProcessLineAsync_FallbackErrorIncludesCorrelationData()
     {
         using var writer = new StringWriter();
@@ -877,6 +930,21 @@ public class McpServerTests : IDisposable
             .Single(r => r!["name"]!.GetValue<string>() == "src/app.cs")!;
         Assert.Equal("cdidx://file/src/app.cs", resource["uri"]!.GetValue<string>());
         Assert.Equal("text/x-csharp", resource["mimeType"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ResourcesList_DoesNotAdvertiseUrisTooLongToRead_Issue3122()
+    {
+        var longPath = "src/" + new string('x', McpBoundedText.MaxResourceUriChars) + ".cs";
+        InsertIndexedFile(longPath, "csharp", "public class TooLongResource { }");
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"resources/list","params":{}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+
+        var resources = response["result"]!["resources"]!.AsArray();
+        Assert.DoesNotContain(resources, resource => resource!["name"]!.GetValue<string>() == longPath);
+        Assert.All(resources, resource =>
+            Assert.True(resource!["uri"]!.GetValue<string>().Length <= McpBoundedText.MaxResourceUriChars));
     }
 
     [Fact]
@@ -1647,6 +1715,14 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void TokenAuthenticator_OversizedTokenInCtor_RejectedBeforeHashing()
+    {
+        var oversized = new string('x', McpAuthenticationLimits.MaxTokenCharacters + 1);
+
+        Assert.Throws<ArgumentException>(() => new TokenMcpAuthenticator(oversized));
+    }
+
+    [Fact]
     public void McpAuthenticatorFactory_NoEnv_ReturnsLocalStdio()
     {
         // FromEnvironment() must default to permissive stdio when the env var is unset or
@@ -1784,6 +1860,24 @@ public class McpServerTests : IDisposable
         ((JsonObject)sameLenResp["error"]!["data"]!).Remove("request_id");
         Assert.Equal(shortResp.ToJsonString(), sameLenResp.ToJsonString());
         Assert.Equal(-32001, shortResp["error"]!["code"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void TokenAuthenticator_OversizedPresentedToken_ReturnsUnauthorized()
+    {
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion(), false,
+            new TokenMcpAuthenticator("s3cret"));
+        var oversized = new string('x', McpAuthenticationLimits.MaxTokenCharacters + 1);
+        var request = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"ping","params":{"auth":{"token":"""
+            + JsonSerializer.Serialize(oversized)
+            + "}}}")!;
+
+        var response = server.HandleMessage(request)!;
+
+        Assert.Null(response["result"]);
+        Assert.Equal(-32001, response["error"]!["code"]!.GetValue<int>());
+        Assert.Equal("Unauthorized", response["error"]!["message"]!.GetValue<string>());
     }
 
     [Fact]
@@ -9651,6 +9745,16 @@ public class McpServerTests : IDisposable
         Assert.Equal("UseIOptions", symbols[8]!["name"]!.GetValue<string>());
         Assert.Equal("public_or_exported_no_refs", symbols[8]!["unusedBucket"]!.GetValue<string>());
         Assert.Contains("returned buckets", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+
+        var filteredRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp","path":"unused_fixture.cs","bucket":"likely_unused_private","minConfidence":"medium"}}}""")!;
+        var filteredResponse = _server.HandleMessage(filteredRequest)!;
+        var filteredStructured = filteredResponse["result"]!["structuredContent"]!;
+        var filteredSymbols = filteredStructured["symbols"]!.AsArray();
+
+        Assert.False(filteredResponse["result"]!["isError"]?.GetValue<bool>() ?? false);
+        Assert.Equal(1, filteredStructured["count"]!.GetValue<int>());
+        Assert.Equal("Hidden", filteredSymbols[0]!["name"]!.GetValue<string>());
+        Assert.Equal("likely_unused_private", filteredSymbols[0]!["unusedBucket"]!.GetValue<string>());
     }
 
     [Fact]
@@ -12113,6 +12217,25 @@ public class McpServerTests : IDisposable
         Assert.Equal(caller.Length, data["caller_length"]!.GetValue<int>());
         Assert.True(data["caller_truncated"]!.GetValue<bool>());
         Assert.Contains(display.Text, log);
+    }
+
+    [Fact]
+    public void RateLimited_ErrorAndLog_TruncatesToolName_Issue3118()
+    {
+        var tool = new string('t', McpBoundedText.MaxToolNameChars + 25);
+        var display = McpBoundedText.ForDisplay(tool, McpBoundedText.MaxToolNameChars);
+
+        var response = McpServer.CreateRateLimitedErrorResponse(null, tool, "client", retryAfterMs: 123);
+        var log = McpServer.BuildRateLimitedLog(tool, "client", retryAfterMs: 123);
+
+        Assert.DoesNotContain(tool, response.ToJsonString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(tool, log, StringComparison.Ordinal);
+        Assert.Contains(display.Text, response["error"]!["message"]!.GetValue<string>());
+        Assert.Contains(display.Text, log);
+        var data = response["error"]!["data"]!;
+        Assert.Equal(display.Text, data["tool"]!.GetValue<string>());
+        Assert.Equal(tool.Length, data["tool_length"]!.GetValue<int>());
+        Assert.True(data["tool_truncated"]!.GetValue<bool>());
     }
 
     [Fact]

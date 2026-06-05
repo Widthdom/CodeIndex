@@ -45,6 +45,34 @@ public class ProgramRunnerTests
         Assert.True(ProgramRunner.IsProjectPathArg(arg));
     }
 
+    [Fact]
+    public void ResolveMcpHttpBearerTokenFromEnvironment_HttpTokenWinsThenFallsBackToGeneric()
+    {
+        using var env = EnvironmentVariableScope.Capture(
+            ProgramRunner.McpHttpTokenEnvVar,
+            McpAuthenticatorFactory.AuthTokenEnvVar);
+
+        env.Set(ProgramRunner.McpHttpTokenEnvVar, "http-secret");
+        env.Set(McpAuthenticatorFactory.AuthTokenEnvVar, "generic-secret");
+        Assert.Equal("http-secret", ProgramRunner.ResolveMcpHttpBearerTokenFromEnvironment());
+
+        env.Set(ProgramRunner.McpHttpTokenEnvVar, "   ");
+        Assert.Equal("generic-secret", ProgramRunner.ResolveMcpHttpBearerTokenFromEnvironment());
+
+        env.Set(McpAuthenticatorFactory.AuthTokenEnvVar, "\t");
+        Assert.Null(ProgramRunner.ResolveMcpHttpBearerTokenFromEnvironment());
+    }
+
+    [Fact]
+    public void CreateMcpAuthenticatorForTransport_HttpUsesBearerGateInsteadOfBodyTokenGate()
+    {
+        using var env = EnvironmentVariableScope.Capture(McpAuthenticatorFactory.AuthTokenEnvVar);
+        env.Set(McpAuthenticatorFactory.AuthTokenEnvVar, "generic-secret");
+
+        Assert.IsType<TokenMcpAuthenticator>(ProgramRunner.CreateMcpAuthenticatorForTransport("stdio"));
+        Assert.IsType<LocalStdioAuthenticator>(ProgramRunner.CreateMcpAuthenticatorForTransport("http"));
+    }
+
     [Theory]
     [InlineData("--json")]
     [InlineData("--json=array")]
@@ -58,6 +86,80 @@ public class ProgramRunnerTests
     public void ContainsJsonOutputFlag_AfterPassthrough_ReturnsFalse()
     {
         Assert.False(ProgramRunner.ContainsJsonOutputFlag(["search", "--", "--json"]));
+    }
+
+    [Fact]
+    public void RunLanguages_PrettyJson_IndentsOutput_Issue2996()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["languages", "--json", "--pretty"],
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Empty(stderr);
+        Assert.Contains(Environment.NewLine + "  \"languages\": [", stdout);
+        using var document = JsonDocument.Parse(stdout);
+        Assert.True(document.RootElement.TryGetProperty("languages", out _));
+    }
+
+    [Fact]
+    public void RunSearch_FirstQueryLiteralMatchingPrettyFlag_IsNotConsumed_Issue2996()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_pretty_query_literal");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "README.md",
+                "markdown",
+                "--pretty appears here\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["search", "--pretty", "--db", dbPath, "--path", "README.md", "--count", "--exact-substring"],
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("1" + Environment.NewLine, stdout);
+            Assert.Empty(stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_NdjsonWithPretty_KeepsOneJsonValuePerLine_Issue2996()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_pretty_ndjson");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                "class App { void Needle() {} }\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["search", "Needle", "--db", dbPath, "--json", "--pretty"],
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Empty(stderr);
+            var lines = stdout.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+            Assert.Equal(2, lines.Length);
+            foreach (var line in lines)
+            {
+                Assert.False(line.StartsWith(" ", StringComparison.Ordinal));
+                using var _ = JsonDocument.Parse(line);
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
     }
 
     [Fact]
@@ -2184,6 +2286,16 @@ sleep 5
 
         Assert.False(ok);
         Assert.Contains("--audit-log-max-bytes must be an integer", error);
+    }
+
+    [Fact]
+    public void TryConsumeAuditLogFlags_MaxBytesAboveMax_ReturnsError()
+    {
+        var args = new[] { "--audit-log", "/tmp/a.jsonl", "--audit-log-max-bytes", (AuditLogSink.MaxMaxBytes + 1).ToString(CultureInfo.InvariantCulture) };
+        var ok = ProgramRunner.TryConsumeAuditLogFlags(ref args, out _, out var error);
+
+        Assert.False(ok);
+        Assert.Contains(AuditLogSink.MaxMaxBytes.ToString(CultureInfo.InvariantCulture), error);
     }
 
     [Fact]
