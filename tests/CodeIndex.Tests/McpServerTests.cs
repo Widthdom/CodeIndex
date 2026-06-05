@@ -1293,6 +1293,35 @@ public class McpServerTests : IDisposable
     }
 
     [Theory]
+    [InlineData("definition")]
+    [InlineData("symbols")]
+    public void ToolCall_InvalidSince_ReturnsInvalidArgument_Issue3194(string toolName)
+    {
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = toolName,
+                ["arguments"] = new JsonObject
+                {
+                    ["query"] = "App",
+                    ["since"] = "not-a-timestamp",
+                },
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        var result = response["result"]!;
+        Assert.True(result["isError"]!.GetValue<bool>());
+        Assert.Contains("Invalid 'since' timestamp", result["content"]![0]!["text"]!.GetValue<string>());
+        Assert.Equal(McpErrorEnvelope.CategoryInvalidArgument, result["structuredContent"]!["category"]!.GetValue<string>());
+    }
+
+    [Theory]
     [InlineData("outline")]
     [InlineData("excerpt")]
     [InlineData("index")]

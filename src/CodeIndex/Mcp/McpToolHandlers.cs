@@ -1027,6 +1027,28 @@ public partial class McpServer
         return paths.Count == 0 ? null : paths;
     }
 
+    private static bool TryReadSinceArgument(JsonNode? args, out DateTime? since, out string? error)
+    {
+        var sinceStr = args?["since"]?.GetValue<string>();
+        if (sinceStr == null)
+        {
+            since = null;
+            error = null;
+            return true;
+        }
+
+        if (QueryCommandRunner.TryParseIso8601Since(sinceStr, out var parsedSince))
+        {
+            since = parsedSince;
+            error = null;
+            return true;
+        }
+
+        since = null;
+        error = $"Invalid 'since' timestamp: '{sinceStr}'. Use ISO 8601 format (e.g. 2024-01-01 or 2024-01-01T00:00:00Z).";
+        return false;
+    }
+
     private static bool TryReadRequiredStringParameter(JsonNode? args, string propertyName, out string value, out string? error)
     {
         var node = args?[propertyName];
@@ -1147,15 +1169,8 @@ public partial class McpServer
         var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
-        var sinceStr = args?["since"]?.GetValue<string>();
-        DateTime? since = null;
-        if (sinceStr != null)
-        {
-            if (QueryCommandRunner.TryParseIso8601Since(sinceStr, out var parsedSince))
-                since = parsedSince;
-            else
-                return CreateToolErrorResponse(id, $"Invalid 'since' timestamp: '{sinceStr}'. Use ISO 8601 format (e.g. 2024-01-01 or 2024-01-01T00:00:00Z).");
-        }
+        if (!TryReadSinceArgument(args, out var since, out var sinceError))
+            return CreateToolErrorResponse(id, sinceError!);
         var deduplicate = !(args?["noDedup"]?.GetValue<bool>() ?? false);
         var format = ReadResponseFormat(args);
         if (ValidateResponseFormat(format) is string formatError)
@@ -1306,10 +1321,8 @@ public partial class McpServer
         var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
-        var sinceStr = args?["since"]?.GetValue<string>();
-        DateTime? since = null;
-        if (sinceStr != null && QueryCommandRunner.TryParseIso8601Since(sinceStr, out var parsedSince))
-            since = parsedSince;
+        if (!TryReadSinceArgument(args, out var since, out var sinceError))
+            return CreateToolErrorResponse(id, sinceError!);
         if (!TryResolveNameExactArgument(args, "symbols", out var exact, out var exactError))
             return CreateToolErrorResponse(id, exactError!);
 
@@ -1401,10 +1414,8 @@ public partial class McpServer
         var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
-        var sinceStr = args?["since"]?.GetValue<string>();
-        DateTime? since = null;
-        if (sinceStr != null && QueryCommandRunner.TryParseIso8601Since(sinceStr, out var parsedDefSince))
-            since = parsedDefSince;
+        if (!TryReadSinceArgument(args, out var since, out var sinceError))
+            return CreateToolErrorResponse(id, sinceError!);
         if (!TryResolveNameExactArgument(args, "definition", out var exact, out var exactError))
             return CreateToolErrorResponse(id, exactError!);
         var format = ReadResponseFormat(args);
@@ -1766,15 +1777,8 @@ public partial class McpServer
         var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
-        var sinceStr = args?["since"]?.GetValue<string>();
-        DateTime? since = null;
-        if (sinceStr != null)
-        {
-            if (QueryCommandRunner.TryParseIso8601Since(sinceStr, out var parsedSince))
-                since = parsedSince;
-            else
-                return CreateToolErrorResponse(id, $"Invalid 'since' timestamp: '{sinceStr}'. Use ISO 8601 format (e.g. 2024-01-01 or 2024-01-01T00:00:00Z).");
-        }
+        if (!TryReadSinceArgument(args, out var since, out var sinceError))
+            return CreateToolErrorResponse(id, sinceError!);
 
         return WithDbReader(id, args, reader =>
         {
