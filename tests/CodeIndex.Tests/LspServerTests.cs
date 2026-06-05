@@ -204,6 +204,58 @@ public class LspServerTests
     }
 
     [Fact]
+    public void HandleMessage_ObjectRequestId_ReturnsInvalidRequest_Issue3204()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_object_id");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+
+            var response = server.HandleMessage("""{"jsonrpc":"2.0","id":{"nested":1},"method":"initialize"}""");
+
+            Assert.NotNull(response);
+            Assert.Equal(-32600, response!["error"]!["code"]!.GetValue<int>());
+            Assert.Null(response["id"]);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void HandleMessage_OversizedStringRequestId_ReturnsInvalidRequest_Issue3204()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_long_id");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var oversizedId = new string('i', LspServer.MaxRequestIdStringChars + 1);
+            var request = JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0",
+                id = oversizedId,
+                method = "initialize",
+            });
+
+            var response = server.HandleMessage(request);
+
+            Assert.NotNull(response);
+            Assert.Equal(-32600, response!["error"]!["code"]!.GetValue<int>());
+            Assert.Null(response["id"]);
+            Assert.DoesNotContain(oversizedId, response.ToJsonString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void HandleMessage_InvalidParams_ReturnsStableErrorMessage_Issue3200()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_invalid_params");

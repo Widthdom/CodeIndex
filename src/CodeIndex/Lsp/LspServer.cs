@@ -20,6 +20,7 @@ internal sealed class LspServer : IDisposable
     internal const int MaxPositionDocumentBytes = 4 * 1024 * 1024;
     internal const int MaxTextDocumentUriChars = McpBoundedText.MaxResourceUriChars;
     internal const int MaxJsonDepth = 32;
+    internal const int MaxRequestIdStringChars = 256;
     internal const int MaxUnknownMethodDiagnosticChars = 240;
     private const int JsonRpcInvalidParamsCode = -32602;
     private const int JsonRpcInternalErrorCode = -32603;
@@ -89,7 +90,8 @@ internal sealed class LspServer : IDisposable
 
                 var method = root.TryGetProperty("method", out var methodElement) ? methodElement.GetString() : null;
                 hasId = root.TryGetProperty("id", out var idElement);
-                id = hasId ? JsonNode.Parse(idElement.GetRawText(), documentOptions: LspJsonDocumentOptions) : null;
+                if (hasId && !TryCloneRequestId(idElement, out id))
+                    return Error(null, -32600, "Invalid Request");
 
                 if (method == null)
                     return hasId ? Error(id, -32600, "Invalid Request") : null;
@@ -115,6 +117,32 @@ internal sealed class LspServer : IDisposable
             {
                 return hasId ? Error(id, JsonRpcInternalErrorCode, JsonRpcInternalErrorMessage) : null;
             }
+        }
+    }
+
+    private static bool TryCloneRequestId(JsonElement idElement, out JsonNode? id)
+    {
+        id = null;
+        switch (idElement.ValueKind)
+        {
+            case JsonValueKind.String:
+                var value = idElement.GetString();
+                if (value == null || value.Length > MaxRequestIdStringChars)
+                    return false;
+                id = JsonValue.Create(value);
+                return true;
+
+            case JsonValueKind.Number:
+                if (!idElement.TryGetInt64(out var number))
+                    return false;
+                id = JsonValue.Create(number);
+                return true;
+
+            case JsonValueKind.Null:
+                return true;
+
+            default:
+                return false;
         }
     }
 
