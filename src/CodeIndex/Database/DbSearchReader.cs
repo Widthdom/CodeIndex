@@ -219,7 +219,7 @@ public partial class DbReader
             raw.RemoveRange(guardedCandidateLimit, raw.Count - guardedCandidateLimit);
 
         if (hasGuardFilters)
-            raw = FilterBySearchGuards(raw, query, normalizedQuery, rawQuery, exact, lang, guardFilters!, guardWindow);
+            raw = FilterBySearchGuards(raw, SearchPrimaryMatchContext.Create(query, normalizedQuery, rawQuery, exact, lang), guardFilters!, guardWindow);
 
         var results = deduplicate ? DeduplicateOverlappingResults(raw) : raw;
         if (guardCandidateLimitReached && results.Count < GetGuardedSearchRequestedPageEnd(limit, cursor))
@@ -484,11 +484,7 @@ public partial class DbReader
 
     private List<SearchResult> FilterBySearchGuards(
         List<SearchResult> results,
-        string query,
-        string normalizedQuery,
-        bool rawQuery,
-        bool exact,
-        string? lang,
+        SearchPrimaryMatchContext primaryMatchContext,
         IReadOnlyList<SearchGuardFilter> guardFilters,
         int guardWindow)
     {
@@ -496,13 +492,13 @@ public partial class DbReader
         var filtered = new List<SearchResult>(results.Count);
         foreach (var result in results)
         {
-            foreach (var (focusLine, focusText) in FindPrimarySearchMatchLines(result, query, normalizedQuery, rawQuery, exact, lang))
+            foreach (var (focusLine, focusText) in FindPrimarySearchMatchLines(result, primaryMatchContext))
             {
                 var guardEvidence = new List<SearchGuardEvidence>();
                 var keep = true;
                 foreach (var filter in guardFilters)
                 {
-                    var match = FindGuardEvidence(result.Path, focusLine, filter, guardWindow, lang ?? result.Lang);
+                    var match = FindGuardEvidence(result.Path, focusLine, filter, guardWindow, primaryMatchContext.GetEffectiveLang(result));
                     var matched = match != null;
                     if (filter.Role == SearchGuardRole.Require && !matched)
                     {
@@ -540,28 +536,48 @@ public partial class DbReader
         return filtered;
     }
 
-    private static List<(int LineNumber, string Text)> FindPrimarySearchMatchLines(SearchResult result, string query, string normalizedQuery, bool rawQuery, bool exact, string? lang)
+    private static List<(int LineNumber, string Text)> FindPrimarySearchMatchLines(SearchResult result, SearchPrimaryMatchContext context)
     {
-        var terms = BuildPrimarySearchMatchTerms(query, normalizedQuery, rawQuery, exact);
-        var lines = SplitContentLines(result.Content);
-        if (terms.Length == 0)
-            return [(result.StartLine, lines.FirstOrDefault() ?? string.Empty)];
-
-        var normalizeCSharp = string.Equals(lang ?? result.Lang, "csharp", StringComparison.OrdinalIgnoreCase);
-        var comparison = exact ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
-        var requireAllTermsOnLine = !rawQuery && !exact && terms.Length > 1;
-        var matches = new List<(int LineNumber, string Text)>();
-        for (var i = 0; i < lines.Length; i++)
+        if (context.Terms.Length == 0)
         {
-            var line = normalizeCSharp ? CSharpVerbatimNameNormalizer.Normalize(lines[i]) : lines[i];
-            var lineMatches = requireAllTermsOnLine
-                ? terms.All(term => line.Contains(term, comparison))
-                : terms.Any(term => line.Contains(term, comparison));
+            foreach (var (lineIndex, text) in EnumerateContentLines(result.Content))
+                return [(result.StartLine + lineIndex, text)];
+
+            return [(result.StartLine, string.Empty)];
+        }
+
+        var normalizeCSharp = context.ShouldNormalizeCSharp(result);
+        var matches = new List<(int LineNumber, string Text)>();
+        foreach (var (lineIndex, text) in EnumerateContentLines(result.Content))
+        {
+            var line = normalizeCSharp ? CSharpVerbatimNameNormalizer.Normalize(text) : text;
+            var lineMatches = context.RequireAllTermsOnLine
+                ? context.Terms.All(term => line.Contains(term, context.Comparison))
+                : context.Terms.Any(term => line.Contains(term, context.Comparison));
             if (lineMatches)
-                matches.Add((result.StartLine + i, lines[i]));
+                matches.Add((result.StartLine + lineIndex, text));
         }
 
         return matches;
+    }
+
+    private sealed record SearchPrimaryMatchContext(
+        string[] Terms,
+        bool RawQuery,
+        bool Exact,
+        string? QueryLang)
+    {
+        public StringComparison Comparison => Exact ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+
+        public bool RequireAllTermsOnLine => !RawQuery && !Exact && Terms.Length > 1;
+
+        public static SearchPrimaryMatchContext Create(string query, string normalizedQuery, bool rawQuery, bool exact, string? queryLang)
+            => new(BuildPrimarySearchMatchTerms(query, normalizedQuery, rawQuery, exact), rawQuery, exact, queryLang);
+
+        public string? GetEffectiveLang(SearchResult result) => QueryLang ?? result.Lang;
+
+        public bool ShouldNormalizeCSharp(SearchResult result)
+            => string.Equals(GetEffectiveLang(result), "csharp", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string[] BuildPrimarySearchMatchTerms(string query, string normalizedQuery, bool rawQuery, bool exact)
@@ -676,6 +692,26 @@ public partial class DbReader
 
     private static string[] SplitContentLines(string content)
         => content.Replace("\r\n", "\n").Split('\n');
+
+    private static IEnumerable<(int Index, string Text)> EnumerateContentLines(string content)
+    {
+        var lineStart = 0;
+        var lineIndex = 0;
+        for (var i = 0; i < content.Length; i++)
+        {
+            if (content[i] != '\n')
+                continue;
+
+            var lineEnd = i;
+            if (lineEnd > lineStart && content[lineEnd - 1] == '\r')
+                lineEnd--;
+            yield return (lineIndex, content[lineStart..lineEnd]);
+            lineIndex++;
+            lineStart = i + 1;
+        }
+
+        yield return (lineIndex, content[lineStart..]);
+    }
 
     private static string FormatSearchGuardRole(SearchGuardRole role)
         => role == SearchGuardRole.Require ? "require" : "reject";

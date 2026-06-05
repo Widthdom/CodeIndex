@@ -91,6 +91,32 @@ public sealed class DbSearchReaderIssueTests : IDisposable
         Assert.Empty(results);
     }
 
+    [Fact]
+    public void Search_GuardFiltersFocusLargeCandidateWithPreparedPrimaryTerms_Issue3083()
+    {
+        var lines = Enumerable.Range(1, 40_000)
+            .Select(i => i switch
+            {
+                24_999 => "public void Setup() { GuardMarker(); }",
+                25_000 => "public void Run() { Primary Needle(); }",
+                _ => $"// filler {i}",
+            });
+        InsertIndexedFile("src/guard-primary-large.cs", "csharp", string.Join('\n', lines));
+
+        var results = _reader.Search(
+            "Primary Needle",
+            pathPatterns: ["src/guard-primary-large.cs"],
+            limit: 1,
+            guardFilters: [new SearchGuardFilter(SearchGuardRole.Require, SearchGuardDirection.Before, "GuardMarker")],
+            guardWindow: 1);
+
+        var result = Assert.Single(results);
+        Assert.Equal(25_000, result.StartLine);
+        Assert.Equal("public void Run() { Primary Needle(); }", result.Content);
+        var evidence = Assert.Single(result.GuardEvidence!);
+        Assert.Equal(24_999, evidence.Line);
+    }
+
     private void InsertIndexedFile(string path, string lang, string content, DateTime? modified = null)
     {
         var normalized = content.Replace("\r\n", "\n");
