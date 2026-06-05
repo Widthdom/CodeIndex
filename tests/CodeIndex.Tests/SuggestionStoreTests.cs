@@ -820,6 +820,28 @@ public class SuggestionStoreTests : IDisposable
     }
 
     [Fact]
+    public void CorruptFile_OnPosixHardensBackupFileMode()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var filePath = Path.Combine(_tempDir, "suggestions-codeindex.json");
+        var backupPath = filePath + ".bak";
+        File.WriteAllText(filePath, "{corrupt json[[[");
+#pragma warning disable CA1416
+        File.SetUnixFileMode(
+            filePath,
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
+#pragma warning restore CA1416
+
+        var all = _store.LoadAll();
+
+        Assert.Empty(all);
+        Assert.True(File.Exists(backupPath), "Corrupt file should be preserved as .bak");
+        AssertPrivateFileMode(backupPath);
+    }
+
+    [Fact]
     public void ZeroByteFile_IsPreservedAsBackup()
     {
         var filePath = Path.Combine(_tempDir, "suggestions-codeindex.json");
@@ -883,6 +905,24 @@ public class SuggestionStoreTests : IDisposable
         Assert.True(File.Exists(archivePath));
         var archive = File.ReadAllText(archivePath);
         Assert.Contains("Old suggestion", archive);
+    }
+
+    [Fact]
+    public void TryAdd_OnPosixCreatesPrivateArchiveFile()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var clock = new ManualTimeProvider(new DateTimeOffset(2031, 1, 1, 0, 0, 0, TimeSpan.Zero));
+        var store = new SuggestionStore(_tempDir, null, clock);
+        var old = MakeRecord("other", null, "Old suggestion");
+        Assert.True(store.TryAdd(old));
+
+        clock.SetUtcNow(new DateTimeOffset(2032, 2, 5, 0, 0, 0, TimeSpan.Zero));
+        var fresh = MakeRecord("other", null, "Fresh suggestion");
+        Assert.True(store.TryAdd(fresh));
+
+        AssertPrivateFileMode(Path.Combine(_tempDir, "suggestions-codeindex.archive.jsonl"));
     }
 
     [Fact]
@@ -997,6 +1037,15 @@ public class SuggestionStoreTests : IDisposable
             Hash = SuggestionStore.ComputeHash(category, language, description),
             CreatedAt = DateTime.UtcNow,
         };
+    }
+
+    private static void AssertPrivateFileMode(string path)
+    {
+#pragma warning disable CA1416
+        Assert.Equal(
+            DataDirectorySecurity.PrivateFileMode,
+            File.GetUnixFileMode(path) & DataDirectorySecurity.PermissionBits);
+#pragma warning restore CA1416
     }
 
     public void Dispose()

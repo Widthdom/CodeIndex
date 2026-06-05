@@ -1276,7 +1276,7 @@ public static partial class ReferenceExtractor
             return;
         }
 
-        foreach (Match lambda in CSharpLambdaRegex.Matches(preparedLine))
+        foreach (Match lambda in BoundedRegex.EnumerateMatches(CSharpLambdaRegex, preparedLine))
         {
             var body = lambda.Groups["body"].Value;
             if (string.IsNullOrWhiteSpace(body))
@@ -1308,7 +1308,7 @@ public static partial class ReferenceExtractor
     private static HashSet<string> CollectCSharpLambdaParameterNames(string parameterText)
     {
         var names = new HashSet<string>(StringComparer.Ordinal);
-        foreach (Match match in Regex.Matches(parameterText, CSharpIdentifierPattern))
+        foreach (Match match in BoundedRegex.EnumerateMatches(parameterText, CSharpIdentifierPattern))
         {
             var name = NormalizeAtPrefixedIdentifier(match.Value);
             if (!IsIgnoredCallName("csharp", name))
@@ -1322,7 +1322,7 @@ public static partial class ReferenceExtractor
     {
         index = -1;
         var normalizedName = NormalizeAtPrefixedIdentifier(name);
-        foreach (Match match in Regex.Matches(text, CSharpIdentifierPattern))
+        foreach (Match match in BoundedRegex.EnumerateMatches(text, CSharpIdentifierPattern))
         {
             if (string.Equals(NormalizeAtPrefixedIdentifier(match.Value), normalizedName, StringComparison.Ordinal))
             {
@@ -1417,6 +1417,8 @@ public static partial class ReferenceExtractor
         return colon >= 0 && colon + 2 < trimmed.Length ? trimmed[(colon + 2)..] : trimmed;
     }
 
+    private const int MaxPythonLogicalReferenceLineLength = 32_768;
+
     private readonly record struct PythonLogicalHeaderReferenceLine(string Text, int[] PhysicalLines, int[] PhysicalColumns);
 
     private static bool TryBuildPythonLogicalHeaderReferenceLine(
@@ -1442,9 +1444,8 @@ public static partial class ReferenceExtractor
             {
                 if (builder.Length > 0)
                 {
-                    builder.Append(' ');
-                    physicalLines.Add(lineIndex);
-                    physicalColumns.Add(column);
+                    if (!TryAppendPythonLogicalReferenceChar(builder, physicalLines, physicalColumns, ' ', lineIndex, column, out header))
+                        return false;
                 }
 
                 for (var fragmentColumn = column; fragmentColumn < fragmentEndColumn; fragmentColumn++)
@@ -1453,9 +1454,8 @@ public static partial class ReferenceExtractor
                     if (fragmentChar == '\\' && fragmentColumn == fragmentEndColumn - 1)
                         break;
 
-                    builder.Append(fragmentChar);
-                    physicalLines.Add(lineIndex);
-                    physicalColumns.Add(fragmentColumn);
+                    if (!TryAppendPythonLogicalReferenceChar(builder, physicalLines, physicalColumns, fragmentChar, lineIndex, fragmentColumn, out header))
+                        return false;
                 }
             }
 
@@ -1530,9 +1530,8 @@ public static partial class ReferenceExtractor
             {
                 if (builder.Length > 0)
                 {
-                    builder.Append(' ');
-                    physicalLines.Add(lineIndex);
-                    physicalColumns.Add(column);
+                    if (!TryAppendPythonLogicalReferenceChar(builder, physicalLines, physicalColumns, ' ', lineIndex, column, out header))
+                        return false;
                 }
 
                 for (var fragmentColumn = column; fragmentColumn < fragmentEndColumn; fragmentColumn++)
@@ -1541,9 +1540,8 @@ public static partial class ReferenceExtractor
                     if (fragmentChar == '\\' && fragmentColumn == fragmentEndColumn - 1)
                         break;
 
-                    builder.Append(fragmentChar);
-                    physicalLines.Add(lineIndex);
-                    physicalColumns.Add(fragmentColumn);
+                    if (!TryAppendPythonLogicalReferenceChar(builder, physicalLines, physicalColumns, fragmentChar, lineIndex, fragmentColumn, out header))
+                        return false;
                 }
             }
 
@@ -1588,6 +1586,28 @@ public static partial class ReferenceExtractor
 
         header = new PythonLogicalHeaderReferenceLine(builder.ToString(), physicalLines.ToArray(), physicalColumns.ToArray());
         return header.Text.Length > 0;
+    }
+
+    private static bool TryAppendPythonLogicalReferenceChar(
+        StringBuilder builder,
+        List<int> physicalLines,
+        List<int> physicalColumns,
+        char value,
+        int physicalLine,
+        int physicalColumn,
+        out PythonLogicalHeaderReferenceLine header)
+    {
+        if (builder.Length >= MaxPythonLogicalReferenceLineLength)
+        {
+            header = default;
+            return false;
+        }
+
+        builder.Append(value);
+        physicalLines.Add(physicalLine);
+        physicalColumns.Add(physicalColumn);
+        header = default;
+        return true;
     }
 
     private static int FindPythonCommentColumn(string line, int startColumn)

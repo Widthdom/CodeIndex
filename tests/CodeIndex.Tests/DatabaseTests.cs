@@ -27,6 +27,28 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void InsertSymbols_CSharpLongMalformedUsingAliasSignature_DoesNotThrow()
+    {
+        var fileId = UpsertTestFile("src/Alias.cs", checksum: "alias");
+        var signature = "using Alias = " + new string('A', 50_000);
+
+        var exception = Record.Exception(() => _writer.InsertSymbols([
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "import",
+                Name = "Alias",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 1,
+                Signature = signature,
+            },
+        ]));
+
+        Assert.Null(exception);
+    }
+
+    [Fact]
     public void Search_ExactSymbolBoostPrefersChunkContainingSymbol_Issue1977()
     {
         var fileId = InsertSearchFile(

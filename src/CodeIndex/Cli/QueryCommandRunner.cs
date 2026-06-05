@@ -3143,11 +3143,11 @@ public static class QueryCommandRunner
             }
             // Attach runtime metadata / ランタイムメタデータを付加
             status.SymbolKinds = reader.GetSymbolKindCounts();
-            status.GraphSupportedLanguages = ReferenceExtractor.GetSupportedLanguages().OrderBy(l => l).ToList();
             ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(status.ProjectRoot);
+            status.GraphSupportedLanguages = ReferenceExtractor.GetSupportedLanguages().OrderBy(l => l).ToList();
             status.Extractors = ExtractorPluginRegistry.GetStatusSnapshot();
-            using var postExtractionHookRunner = PostExtractionHookRunner.DiscoverDefault();
-            var postExtractionHooks = postExtractionHookRunner.Hooks;
+            var postExtractionHookSnapshot = PostExtractionHookRunner.DiscoverDefaultMetadata();
+            var postExtractionHooks = postExtractionHookSnapshot.Hooks;
             if (postExtractionHooks.Count > 0)
             {
                 status.Hooks = postExtractionHooks
@@ -3156,7 +3156,7 @@ public static class QueryCommandRunner
                         Name = hook.Name,
                         AssemblyPath = hook.AssemblyPath,
                         TypeName = hook.TypeName,
-                        CallbackBudgetMs = (long)Math.Round(postExtractionHookRunner.CallbackBudget.TotalMilliseconds, MidpointRounding.AwayFromZero),
+                        CallbackBudgetMs = (long)Math.Round(postExtractionHookSnapshot.CallbackBudget.TotalMilliseconds, MidpointRounding.AwayFromZero),
                     })
                     .ToList();
             }

@@ -2104,7 +2104,7 @@ internal static partial class SqlReferenceExtractor
         Func<string, bool> shouldIgnoreName,
         string referenceKind)
     {
-        foreach (Match match in QualifiedColumnReferenceRegex.Matches(text))
+        foreach (Match match in BoundedRegex.EnumerateMatches(QualifiedColumnReferenceRegex, text))
         {
             if (IsInsideDoubleQuotedRegion(text, match.Index))
                 continue;
@@ -2159,7 +2159,7 @@ internal static partial class SqlReferenceExtractor
         rawIndex += leafIndex;
         rawName = rawName[leafIndex..].TrimStart();
 
-        var match = Regex.Match(
+        var match = BoundedRegex.Match(
             rawName,
             $"^(?<name>{QuotedIdentifierPattern}|{BareIdentifierPattern})",
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -3121,7 +3121,7 @@ internal static partial class SqlReferenceExtractor
                 pattern.Append(escaped);
         }
 
-        var match = Regex.Match(line, pattern.ToString(), RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        var match = BoundedRegex.Match(line, pattern.ToString(), RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         if (!match.Success)
             return false;
 

@@ -3,6 +3,7 @@ using CodeIndex.Cli;
 using CodeIndex.Indexer;
 using CodeIndex.Models;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace CodeIndex.Database;
 
@@ -35,6 +36,18 @@ public class DbWriter
     private const int DeleteFilesBatchSize = 500;
     private const int MaxSqlVariables = 999;
     private const int SqliteConstraintErrorCode = 19;
+    private static readonly BoundedRegex CSharpExternAliasSignatureRegex = new(
+        @"^\s*extern\s+alias\b",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly BoundedRegex CSharpGlobalUsingSignatureRegex = new(
+        @"^\s*global\s+using\b",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly BoundedRegex CSharpUsingStaticSignatureRegex = new(
+        @"^\s*(?:global\s+)?using\s+static\b",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly BoundedRegex CSharpUsingAliasSignatureRegex = new(
+        @"^\s*(?:global\s+)?using\s+(?<alias>@?\w+)\s*=\s*(?<target>[^;]+?)\s*;",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private int _rowSkipSavepointCounter;
     private long _batchRowsSkipped;
     private int _transactionDepth;
@@ -2361,14 +2374,14 @@ public class DbWriter
         // `extern alias X;` も import 行として現れるがアセンブリ別名でしかなく resolver 側の
         // qualified 索引には載らないので対象外。
         if (signature != null && signature.IndexOf("extern", StringComparison.Ordinal) >= 0
-            && System.Text.RegularExpressions.Regex.IsMatch(signature, @"^\s*extern\s+alias\b"))
+            && CSharpExternAliasSignatureRegex.IsMatch(signature))
         {
             return;
         }
         bool isGlobal = signature != null
-            && System.Text.RegularExpressions.Regex.IsMatch(signature, @"^\s*global\s+using\b");
+            && CSharpGlobalUsingSignatureRegex.IsMatch(signature);
         bool isStatic = signature != null
-            && System.Text.RegularExpressions.Regex.IsMatch(signature, @"^\s*(?:global\s+)?using\s+static\b");
+            && CSharpUsingStaticSignatureRegex.IsMatch(signature);
         // `using static Foo.Bar;` imports the static members of `Foo.Bar` into the file's
         // scope — NOT a namespace that a base clause `class X : Base` could pull from.
         // Drop it so we don't confuse the alias/namespace paths.
@@ -2384,9 +2397,7 @@ public class DbWriter
             // the alias enters the per-file map.
             // SymbolExtractor 側と同じく verbatim 識別子も `@?\w+` で受け、下の正規化で
             // 先頭 `@` を剥がしてから alias map に載せる。
-            var m = System.Text.RegularExpressions.Regex.Match(
-                signature,
-                @"^\s*(?:global\s+)?using\s+(?<alias>@?\w+)\s*=\s*(?<target>[^;]+?)\s*;");
+            var m = CSharpUsingAliasSignatureRegex.Match(signature);
             if (m.Success)
             {
                 aliasName = m.Groups["alias"].Value.Trim();

@@ -64,7 +64,10 @@ public class PostExtractionHookTests
                 runner.OnSymbolsExtracted(context, symbols);
 
                 Assert.Contains(symbols, symbol => symbol.Name == "AppDomainTag");
-                Assert.Contains(runner.Diagnostics, diagnostic => diagnostic.TypeName == typeof(ThrowingPostExtractionHook).FullName);
+                var diagnostic = Assert.Single(
+                    runner.Diagnostics,
+                    diagnostic => diagnostic.TypeName == typeof(ThrowingPostExtractionHook).FullName);
+                Assert.DoesNotContain("boom", diagnostic.Message, StringComparison.Ordinal);
             }
             CollectUnloadedHookAssemblies();
         }
@@ -170,7 +173,8 @@ public class PostExtractionHookTests
                 Assert.Equal(3, runner.Diagnostics.Count);
                 Assert.Contains(
                     runner.Diagnostics,
-                    diagnostic => diagnostic.AssemblyPath == hooksDir
+                    diagnostic => diagnostic.AssemblyPath.EndsWith("hooks", StringComparison.Ordinal)
+                                  && !diagnostic.AssemblyPath.Contains(projectRoot, StringComparison.Ordinal)
                                   && diagnostic.Message.Contains("candidate limit", StringComparison.Ordinal));
                 Assert.Equal(
                     2,
@@ -206,7 +210,8 @@ public class PostExtractionHookTests
 
                 Assert.Empty(runner.Hooks);
                 var diagnostic = Assert.Single(runner.Diagnostics);
-                Assert.Equal(hookPath, diagnostic.AssemblyPath);
+                Assert.EndsWith("oversize.dll", diagnostic.AssemblyPath, StringComparison.Ordinal);
+                Assert.DoesNotContain(projectRoot, diagnostic.AssemblyPath, StringComparison.Ordinal);
                 Assert.Contains("too large", diagnostic.Message, StringComparison.Ordinal);
                 Assert.Contains("maximum 16", diagnostic.Message, StringComparison.Ordinal);
             }
