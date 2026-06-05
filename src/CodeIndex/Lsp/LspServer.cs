@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using CodeIndex.Cli;
 using CodeIndex.Database;
+using CodeIndex.Diagnostics;
 using CodeIndex.Models;
 
 namespace CodeIndex.Lsp;
@@ -95,7 +96,7 @@ internal sealed class LspServer : IDisposable
                     "textDocument/documentSymbol" => Result(id, DocumentSymbol(root)),
                     "textDocument/definition" => Result(id, Definition(root)),
                     "textDocument/references" => Result(id, References(root)),
-                    _ => hasId ? Error(id, -32601, $"Method not found: {method}") : null,
+                    _ => hasId ? Error(id, -32601, $"Method not found: {DiagnosticSanitizer.ForMessage(method)}") : null,
                 };
             }
             catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or JsonException or IOException)

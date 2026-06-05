@@ -106,6 +106,40 @@ public class LspServerTests
     }
 
     [Fact]
+    public void HandleMessage_UnknownMethod_TruncatesMethodName_Issue3127()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_unknown_method");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var method = new string('m', 512) + "UNBOUNDED_SENTINEL";
+            var request = JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0",
+                id = 1,
+                method,
+            });
+
+            var response = server.HandleMessage(request);
+
+            Assert.NotNull(response);
+            var error = response!["error"]!;
+            Assert.Equal(-32601, error["code"]!.GetValue<int>());
+            var message = error["message"]!.GetValue<string>();
+            Assert.StartsWith("Method not found: ", message, StringComparison.Ordinal);
+            Assert.EndsWith("...", message, StringComparison.Ordinal);
+            Assert.DoesNotContain("UNBOUNDED_SENTINEL", message, StringComparison.Ordinal);
+            Assert.True(message.Length <= "Method not found: ".Length + 243);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_MalformedJsonFrame_WritesParseErrorAndContinues()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_malformed_json");
