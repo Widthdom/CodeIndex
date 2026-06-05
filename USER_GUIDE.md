@@ -398,6 +398,7 @@ be audited whenever the matching help text changes.
 | Max line width | `512` (`--max-line-width`, `0` disables) | `LineWidthFormatter.DefaultMaxLineWidth` |
 | Index max file size | `4MiB` unless `CDIDX_MAX_FILE_BYTES` is set | index runner help |
 | Index max symbols per file | `5000` (`--max-symbols-per-file`), max `50000` | index runner help |
+| DB checkpoint name length | max `128` characters | db runner help |
 | Watch debounce | `500` ms (`--debounce`), max `60000` ms | index watch runner |
 | Status stale-after hint | `24h`, overridden by `--stale-after`, `CDIDX_STALE_AFTER`, or `.cdidxrc.json`; max `30d` | status runner |
 | Color mode | `auto`, overridden by `--color`, `CLICOLOR_FORCE`, `NO_COLOR`, or `CLICOLOR=0` | `ConsoleUi` |
@@ -2664,6 +2665,7 @@ render できます。
 | Max line width | `512`（`--max-line-width`、`0` で無効） | `LineWidthFormatter.DefaultMaxLineWidth` |
 | Index max file size | `CDIDX_MAX_FILE_BYTES` 未設定時は `4MiB` | index runner help |
 | Index max symbols per file | `5000`（`--max-symbols-per-file`）、最大 `50000` | index runner help |
+| DB checkpoint name length | 最大 `128` 文字 | db runner help |
 | Index completion notification | `auto`（interactive terminal は bell、redirected output は none）。`--notify` / `CDIDX_NOTIFY` で上書き | index runner help |
 | Watch debounce | `500` ms（`--debounce`）、最大 `60000` ms | index watch runner |
 | Status stale-after hint | `24h`。`--stale-after` / `CDIDX_STALE_AFTER` / `.cdidxrc.json` で上書き、最大 `30d` | status runner |

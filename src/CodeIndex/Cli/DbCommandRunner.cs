@@ -13,6 +13,8 @@ public static class DbCommandRunner
 {
     private const string CheckpointsDirectorySuffix = ".checkpoints";
     private const string AutoCheckpointPrefix = "auto-";
+    internal const int MaxCheckpointNameLength = 128;
+    private const int CheckpointNameDiagnosticTextLimit = 80;
     internal const int CheckpointListEntryLimit = 100;
     internal const int CheckpointFileInspectLimit = 32;
     internal const int IntegrityCheckRowLimit = 100;
@@ -389,7 +391,7 @@ public static class DbCommandRunner
         {
             var checkpointPath = GetCheckpointPath(fullDbPath, options.Name);
             if (!Directory.Exists(checkpointPath))
-                return WriteCommandError(options.Json, jsonOptions, $"checkpoint not found: {options.Name}", CommandExitCodes.NotFound, "Run `cdidx db checkpoints --list` to see available checkpoints.", CommandErrorCodes.DbNotFound);
+                return WriteCommandError(options.Json, jsonOptions, $"checkpoint not found: {FormatCheckpointNameForDiagnostic(options.Name)}", CommandExitCodes.NotFound, "Run `cdidx db checkpoints --list` to see available checkpoints.", CommandErrorCodes.DbNotFound);
 
             var backupPath = RestoreCheckpoint(fullDbPath, options.Name, checkpointPath);
             if (options.Json)
@@ -672,7 +674,7 @@ public static class DbCommandRunner
         var root = GetCheckpointRoot(fullDbPath);
         var checkpointPath = GetCheckpointPath(fullDbPath, name);
         if (Directory.Exists(checkpointPath))
-            throw new InvalidOperationException($"checkpoint already exists: {name}");
+            throw new InvalidOperationException($"checkpoint already exists: {FormatCheckpointNameForDiagnostic(name)}");
 
         DataDirectorySecurity.CreateSensitiveDirectory(root);
         var tempPath = Path.Combine(root, ".tmp-" + name + "-" + Guid.NewGuid().ToString("N"));
@@ -777,7 +779,7 @@ public static class DbCommandRunner
         SqliteConnection.ClearAllPools();
         var checkpointDbPath = Path.Combine(checkpointPath, Path.GetFileName(fullDbPath));
         if (!File.Exists(LongPath.EnsureWindowsPrefix(checkpointDbPath)))
-            throw new InvalidOperationException($"checkpoint is incomplete: {name}");
+            throw new InvalidOperationException($"checkpoint is incomplete: {FormatCheckpointNameForDiagnostic(name)}");
 
         var restoreTempPath = fullDbPath + ".restore-tmp-" + DateTimeOffset.UtcNow.ToString("yyyyMMddHHmmssfff", System.Globalization.CultureInfo.InvariantCulture);
         var backupPath = fullDbPath + ".restore-backup-" + DateTimeOffset.UtcNow.ToString("yyyyMMddHHmmssfff", System.Globalization.CultureInfo.InvariantCulture);
@@ -788,7 +790,7 @@ public static class DbCommandRunner
             CopyIfExists(Path.Combine(checkpointPath, Path.GetFileName(fullDbPath) + "-wal"), Path.Combine(restoreTempPath, Path.GetFileName(fullDbPath) + "-wal"), privateDestination: true);
             CopyIfExists(Path.Combine(checkpointPath, Path.GetFileName(fullDbPath) + "-shm"), Path.Combine(restoreTempPath, Path.GetFileName(fullDbPath) + "-shm"), privateDestination: true);
             if (!File.Exists(LongPath.EnsureWindowsPrefix(Path.Combine(restoreTempPath, Path.GetFileName(fullDbPath)))))
-                throw new InvalidOperationException($"checkpoint staging failed: {name}");
+                throw new InvalidOperationException($"checkpoint staging failed: {FormatCheckpointNameForDiagnostic(name)}");
 
             DataDirectorySecurity.CreateSensitiveDirectory(backupPath);
             MoveIfExists(fullDbPath, Path.Combine(backupPath, Path.GetFileName(fullDbPath)), privateDestination: true);
@@ -822,8 +824,14 @@ public static class DbCommandRunner
             || name.IndexOfAny(InvalidCheckpointNameChars) >= 0
             || name.Contains(Path.DirectorySeparatorChar)
             || (Path.AltDirectorySeparatorChar != '\0' && name.Contains(Path.AltDirectorySeparatorChar)))
-            throw new ArgumentException($"invalid checkpoint name: {name}");
+            throw new ArgumentException($"invalid checkpoint name: {FormatCheckpointNameForDiagnostic(name)}");
+
+        if (name.Length > MaxCheckpointNameLength)
+            throw new ArgumentException($"checkpoint name is too long ({name.Length} characters; max {MaxCheckpointNameLength}): {FormatCheckpointNameForDiagnostic(name)}");
     }
+
+    private static string FormatCheckpointNameForDiagnostic(string name)
+        => ConsoleUi.FormatBoundedValue(name, CheckpointNameDiagnosticTextLimit);
 
     private static string MakeTimestampCheckpointName()
         => DateTimeOffset.UtcNow.ToString("yyyyMMddHHmmssfff", System.Globalization.CultureInfo.InvariantCulture);

@@ -95,7 +95,7 @@ After the first command, use these cues and follow-up commands:
 | Intentional rebuilds | Interactive terminals ask before deleting the DB. Scripts and CI must pass `--yes` or `--force`. |
 | Long-lived DB compaction | Run `cdidx optimize` or `cdidx index <projectPath> --optimize` to compact FTS5 segments immediately. Incremental refreshes also optimize opportunistically. |
 | Pathological generated files | `--max-symbols-per-file <n>` (max 50000) skips indexing file content, symbols, and references when one file emits too many symbols, leaving a `symbol_count_exceeded` issue for audit. |
-| Maintenance rollback | Run `cdidx db checkpoint <name>` before risky DB maintenance and `cdidx db restore <name>` to roll back. `backfill-fold` creates an automatic checkpoint unless `--no-checkpoint` is passed, and interrupted folded-key rewrites resume from remaining rows. |
+| Maintenance rollback | Run `cdidx db checkpoint <name>` (name max 128 chars) before risky DB maintenance and `cdidx db restore <name>` to roll back. `backfill-fold` creates an automatic checkpoint unless `--no-checkpoint` is passed, and interrupted folded-key rewrites resume from remaining rows. |
 | Permission or I/O scan errors | `cdidx` records the scan error, continues other directories, and writes `.cdidx/scan-checkpoint.json` so same-HEAD retries can skip completed directories. |
 
 Output controls:
@@ -402,7 +402,7 @@ regex match には timeout が付きます。詳細は
 | 意図的な再構築 | interactive terminal では既存 DB 削除前に確認を求めます。script / CI では `--yes` または `--force` が必要です。 |
 | 長期間使っている DB の compact | `cdidx optimize` または `cdidx index <projectPath> --optimize` で FTS5 segment をすぐに compact できます。差分更新中も必要に応じて自動 optimize します。 |
 | 病的な generated file | 1 ファイルが過剰な symbol を出す場合、`--max-symbols-per-file <n>`（最大 50000）は file content / symbols / references を保存せず、監査用の `symbol_count_exceeded` issue を残します。 |
-| 保守作業の rollback | risky な DB 保守の前に `cdidx db checkpoint <name>`、戻す場合は `cdidx db restore <name>` を使います。`backfill-fold` は `--no-checkpoint` を渡さない限り自動 checkpoint を作成し、中断された folded-key rewrite は残り行から再開します。 |
+| 保守作業の rollback | risky な DB 保守の前に `cdidx db checkpoint <name>`（name は最大 128 文字）、戻す場合は `cdidx db restore <name>` を使います。`backfill-fold` は `--no-checkpoint` を渡さない限り自動 checkpoint を作成し、中断された folded-key rewrite は残り行から再開します。 |
 | 権限や I/O の scan error | `cdidx` は scan error を記録し、他のディレクトリの走査を続けます。同じ HEAD の再実行では `.cdidx/scan-checkpoint.json` により成功済みディレクトリを読み飛ばせます。 |
 
 出力を整える option:

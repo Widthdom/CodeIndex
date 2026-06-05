@@ -327,6 +327,33 @@ public class DbCommandRunnerTests
     }
 
     [Fact]
+    public void Run_CheckpointRejectsOversizedNameBeforePathConstruction_Issue3124()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_name_cap_{Guid.NewGuid():N}");
+        var dbPath = Path.Combine(root, "codeindex.db");
+        var name = new string('a', DbCommandRunner.MaxCheckpointNameLength + 1);
+        try
+        {
+            Directory.CreateDirectory(root);
+            File.WriteAllText(dbPath, "db");
+
+            var (exitCode, _, stderr) = RunAndCaptureStreams(["checkpoint", name, "--db", dbPath]);
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.Contains($"checkpoint name is too long ({name.Length} characters; max {DbCommandRunner.MaxCheckpointNameLength})", stderr);
+            Assert.Contains("truncated; original length", stderr);
+            Assert.DoesNotContain(name, stderr);
+            Assert.False(Directory.Exists(dbPath + ".checkpoints"));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Run_Checkpoint_OnPosix_WritesPrivateSnapshotPermissions()
     {
         if (OperatingSystem.IsWindows())
