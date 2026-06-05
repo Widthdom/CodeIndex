@@ -270,6 +270,33 @@ public class ReportCommandRunnerTests
     }
 
     [Fact]
+    public void BuildSchemaSummary_FileUriReadsExistingDatabase_Issue3148()
+    {
+        var workDir = CreateWorkDir();
+        var dbPath = Path.Combine(workDir, "codeindex.db");
+        try
+        {
+            using (var db = new DbContext(dbPath))
+                db.InitializeSchema();
+            SqliteConnection.ClearAllPools();
+
+            var dbUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+            var (schemaText, tables, reportedDbPath, dbIncluded) = ReportCommandRunner.BuildSchemaSummary(dbUri);
+
+            Assert.True(dbIncluded);
+            Assert.Equal(Path.GetFullPath(dbPath), reportedDbPath);
+            Assert.Contains(tables, table => table.Name == "files");
+            Assert.Contains("files", schemaText);
+            Assert.DoesNotContain("no SQLite index found", schemaText);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            TryDeleteDirectory(workDir);
+        }
+    }
+
+    [Fact]
     public void BuildSchemaSummary_CapsTableEntries_Issue3146()
     {
         var workDir = CreateWorkDir();
