@@ -1749,10 +1749,15 @@ Piping `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}` into
   extracted but *before* dispatch. The default `LocalStdioAuthenticator`
   is permissive (matches the historical stdio behaviour and tags every
   caller as `stdio` / `local`). Setting `CDIDX_MCP_AUTH_TOKEN` swaps in
-  `TokenMcpAuthenticator`, which requires every responded request to
-  carry a matching `params.auth.token` and compares it in constant time
-  via `CryptographicOperations.FixedTimeEquals`. Failures uniformly
-  return JSON-RPC `-32001 "Unauthorized"` (per #1530 sanitization — the
+  `TokenMcpAuthenticator` for stdio, which requires every responded request
+  to carry a matching `params.auth.token` and compares it in constant time
+  via `CryptographicOperations.FixedTimeEquals`. HTTP does not also use this
+  body-token gate: `ProgramRunner` resolves a bearer secret for the HTTP
+  transport from `CDIDX_MCP_HTTP_TOKEN`, falling back to `CDIDX_MCP_AUTH_TOKEN`
+  when the HTTP-specific variable is unset, and then relies on the
+  `Authorization: Bearer ...` transport check (#3156). For the JSON-RPC
+  body-token gate, failures uniformly return JSON-RPC `-32001 "Unauthorized"`
+  (per #1530 sanitization — the
   wire never distinguishes missing-from-wrong), and `BuildAuthFailureLog`
   emits the detailed reason to stderr. Notifications
   (`notifications/initialized`, `notifications/cancelled`) short-circuit
@@ -1834,9 +1839,11 @@ return `-32600`.
   The wildcard hosts `+` / `*` are rejected at parse time.
 - Optional shared-secret auth: when `CDIDX_MCP_HTTP_TOKEN` is set the
   listener requires `Authorization: Bearer <token>` on every request
-  and compares the token in constant time. The CLI refuses to bind to
-  a non-loopback host without a token to keep the MCP catalog off the
-  LAN by default.
+  and compares the token in constant time. If `CDIDX_MCP_HTTP_TOKEN` is unset,
+  HTTP falls back to `CDIDX_MCP_AUTH_TOKEN` as the bearer secret; when both
+  are set, `CDIDX_MCP_HTTP_TOKEN` wins. HTTP clients never need to also send
+  `params.auth.token`. The CLI refuses to bind to a non-loopback host without
+  either token to keep the MCP catalog off the LAN by default.
 - Optional request-loop logging: `ProgramRunner` connects `HttpMcpTransport`
   to `GlobalToolLog`, so persistent logging records one `mcp_http_request`
   line per HTTP request when the lifecycle log is enabled. The record includes
@@ -1850,9 +1857,10 @@ return `-32600`.
 
 Wire selection happens in `ProgramRunner.RunMcp`:
 `--transport stdio|http` and `--http-listen <host:port>` are stripped
-from the args before downstream parsing, the bearer token is read from
-`CDIDX_MCP_HTTP_TOKEN`, and the dispatch lands in either the legacy
-stdio path or `RunMcpHttp`. The pluggable seam keeps the JSON-RPC
+from the args before downstream parsing, HTTP bearer-token resolution uses
+`CDIDX_MCP_HTTP_TOKEN` first and `CDIDX_MCP_AUTH_TOKEN` as a fallback, and
+the dispatch lands in either the legacy stdio path or `RunMcpHttp`. The
+pluggable seam keeps the JSON-RPC
 ordering invariant identical across both transports, so the existing
 McpServer test surface (which exercises `ProcessLineAsync`) continues
 to cover the per-method behavior, while `HttpMcpTransportTests` cover
@@ -3475,7 +3483,7 @@ sequenceDiagram
 - `initialize` レスポンスは `protocolVersion`、`capabilities`、`serverInfo.name`、`serverInfo.version`（`ConsoleUi.LoadVersion()` — `version.json` が源）、および AI クライアントにツール選択を案内する長い `instructions` 文字列を返す。レスポンスを書き終えた後、サーバーはセッションごとに 1 回だけ互換性用の `notifications/initialized` ready signal を送るため、サーバー側の ready signal を待つクライアントも optimistic polling なしで進める（#1780）。MCP は `notifications/initialized` を client-to-server 通知としても定義しており、cdidx はその方向も no-op として受理する。非 HTTP transport では、この互換性 signal が唯一の server-origin emission です。HTTP session は `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S` を設定した場合、opt-in の keep-alive notification も `/events` で受け取れる。HTTP transport では out-of-band 通知は接続済みの `/events` SSE stream にだけ配送され、POST のみのクライアントは initialize response だけを受け取り、別通知 frame は受け取らない。
 - advertised capability には `tools`、`resources`、`prompts`、`logging` が含まれる。`logging` は MCP `notifications/message` を示し、`logging/setLevel` は `debug`、`info`、`notice`、`warning`、`error`、`critical`、`alert`、`emergency` を受け付ける。
 - `protocolVersion` は**ハードコードではなく交渉**で決まる（#1554）。サーバーは `McpServer.SupportedProtocolVersions`（新しい順: `2025-03-26`, `2024-11-05`）を保持し、`initialize` パラメータからクライアント要求バージョンを読み取って、対応集合にあればそれを返し（合意）、未指定／非文字列なら既定の最新バージョンに fallback し、対応外なら `error.data` に `requestedVersion` と `supportedVersions` を入れた JSON-RPC `-32602` で拒否する。これにより将来 MCP 仕様が改訂されても、wire format が黙ってずれるのではなく actionable な handshake 失敗として表面化する。配列を新バージョンで更新する際は `ProtocolVersion` を先頭エントリと揃えて意図的に bump する。
-- **認証ミドルウェア**（#1559）。`McpServer` はパース済み JSON-RPC リクエストごとに、メソッド抽出 *後*・dispatch *前* で `IMcpAuthenticator` を呼ぶ。既定の `LocalStdioAuthenticator` は permissive で（従来の stdio 動作を維持し、呼び出し元を `stdio` / `local` でタグ付けする）、`CDIDX_MCP_AUTH_TOKEN` を設定すると `TokenMcpAuthenticator` に切り替わる。`TokenMcpAuthenticator` は応答が必要な全リクエストに対し、`params.auth.token` が一致することを要求し、比較は `CryptographicOperations.FixedTimeEquals` による定数時間比較で行う。失敗は統一された JSON-RPC `-32001 "Unauthorized"` を返し（#1530 の sanitization 方針に従い、ワイヤでは未提示と不一致を区別しない）、`BuildAuthFailureLog` が詳細を stderr に書き出す。通知（`notifications/initialized`、`notifications/cancelled`）は応答もエラーコードも持たないため、ゲート *より前* で short-circuit する。このミドルウェアが将来 transport の差し替え seam になる — ネットワーク listener は別の `IMcpAuthenticator` を提供しつつ、`McpCallerIdentity`（`Source` + `Subject`）の形を保ち、監査ログ（#1562）から再利用できる。
+- **認証ミドルウェア**（#1559）。`McpServer` はパース済み JSON-RPC リクエストごとに、メソッド抽出 *後*・dispatch *前* で `IMcpAuthenticator` を呼ぶ。既定の `LocalStdioAuthenticator` は permissive で（従来の stdio 動作を維持し、呼び出し元を `stdio` / `local` でタグ付けする）、stdio では `CDIDX_MCP_AUTH_TOKEN` を設定すると `TokenMcpAuthenticator` に切り替わる。`TokenMcpAuthenticator` は応答が必要な全リクエストに対し、`params.auth.token` が一致することを要求し、比較は `CryptographicOperations.FixedTimeEquals` による定数時間比較で行う。HTTP はこの body token ゲートを重ねず、`ProgramRunner` が `CDIDX_MCP_HTTP_TOKEN` を優先し、未設定なら `CDIDX_MCP_AUTH_TOKEN` を fallback として bearer secret に解決して、`Authorization: Bearer ...` の transport check に一本化する（#3156）。JSON-RPC body token ゲートの失敗は統一された JSON-RPC `-32001 "Unauthorized"` を返し（#1530 の sanitization 方針に従い、ワイヤでは未提示と不一致を区別しない）、`BuildAuthFailureLog` が詳細を stderr に書き出す。通知（`notifications/initialized`、`notifications/cancelled`）は応答もエラーコードも持たないため、ゲート *より前* で short-circuit する。このミドルウェアが将来 transport の差し替え seam になる — ネットワーク listener は別の `IMcpAuthenticator` を提供しつつ、`McpCallerIdentity`（`Source` + `Subject`）の形を保ち、監査ログ（#1562）から再利用できる。
 
 MCP は独立したシリアライズ戦略（オブジェクトを JSON などの転送形式に変換する方式のこと。CLI の `--json` 側は .NET 標準の `JsonSerializer` に任せる方式、MCP 側は `JsonObject` を手で組み立てる方式と、別の手段を採っている）を採るため、「そもそもバイナリは走るのか?」を確かめる最も頑健なスモークテスト（デプロイや起動直後に行う、基本動作だけを短時間で確認する簡易テストのこと。詳細な正しさではなく「煙が出ていないか＝致命的に壊れていないか」を見るためこの名で呼ばれる）となる — .NET ホスト、`Program.Main`、CLI ルーティング、`ConsoleUi.LoadVersion()` に負荷をかけるが、SQLite には触れない（`search` など MCP の*ツール呼び出し*は SQLite に触れるが、`initialize` 単独では触れない）。
 
@@ -3495,11 +3503,11 @@ MCP は独立したシリアライズ戦略（オブジェクトを JSON など�
 - HTTP POST 1 件 = JSON-RPC フレーム 1 件で、対応する応答は HTTP レスポンスのボディ（`200 OK` / `application/json; charset=utf-8`）に乗る。通知は `204 No Content`。`GET /events` は将来のサーバー→クライアント frame 用に独立した `text/event-stream` subscription を開く。サーバーは `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S` で keep-alive notification が opt-in された場合を除き、自発的な frame を送信しない。長寿命の event stream は通常の POST リクエストを塞がない。`/` への POST 以外は `405 Method Not Allowed`。空 / 空白のみのボディは stdio の空行と同じ扱いで `204 No Content` を返し、ループは殺さない — クライアントの誤動作で junk フレームに引っかからないため。リクエスト本文は `CDIDX_MCP_HTTP_MAX_REQUEST_BYTES`（既定: 1,000,000 bytes、最大: 16,777,216 bytes）で制限し、超過時は全量を buffer する前に `413 Payload Too Large` を返す。保留中 request queue は `CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH`（既定: 64、最大: 1,024）で制限し、満杯時は無制限に work を保持せず `Retry-After: 1` 付きの `429 Too Many Requests` を返す。正でない値や数値でない環境変数値は既定にフォールバックし、最大値を超える値は listener 起動前に拒否する。
 - SSE stream lifetime は active stream registry だけで表現し、その registry entry が削除された後に完了済み stream task を保持しない。
 - `ResolveListenSpec("host:port")` は prefix を事前に解決するため、CLI が stderr に `Listening on http://...` を出せる。ポート `0` は一時 `TcpListener` を probe して空きポートを取得する。probe から `HttpListener.Start()` までの TOCTOU window は、本トランスポートが local-only / single-tenant 想定であるため許容する。ワイルドカードホスト `+` / `*` はパース時点で拒否する。
-- 任意の共有秘密による認証: `CDIDX_MCP_HTTP_TOKEN` が設定されていれば、listener はすべてのリクエストに `Authorization: Bearer <token>` を要求し、定数時間で比較する。トークン未指定で非 loopback ホストへ bind しようとした場合、CLI は MCP カタログを LAN に漏らさないよう既定で拒否する。
+- 任意の共有秘密による認証: `CDIDX_MCP_HTTP_TOKEN` が設定されていれば、listener はすべてのリクエストに `Authorization: Bearer <token>` を要求し、定数時間で比較する。`CDIDX_MCP_HTTP_TOKEN` が未設定なら HTTP は `CDIDX_MCP_AUTH_TOKEN` を bearer secret として fallback し、両方が設定されている場合は `CDIDX_MCP_HTTP_TOKEN` を優先する。HTTP クライアントが `params.auth.token` も送る必要はない。どちらのトークンも未指定で非 loopback ホストへ bind しようとした場合、CLI は MCP カタログを LAN に漏らさないよう既定で拒否する。
 - 任意のリクエストループログ: `ProgramRunner` は `HttpMcpTransport` を `GlobalToolLog` に接続するため、lifecycle log が有効な場合は HTTP リクエストごとに `mcp_http_request` 行を 1 件記録する。記録内容は method、path、status、duration、auth outcome、remote peer、correlation id、利用可能な JSON-RPC request id で、リクエスト/レスポンス本文は含めない。
 - キャンセルは `_listener.Stop()` に接続するため、シャットダウン時に `GetContextAsync()` が unblock する。`HttpListenerException` / `ObjectDisposedException` は EOS と同じ扱いで MCP ループを stdin クローズと同じ経路で終了させる。
 
-ワイヤー選択は `ProgramRunner.RunMcp` で行う。`--transport stdio|http` と `--http-listen <host:port>` は下流の引数解析より前に取り除かれ、bearer token は `CDIDX_MCP_HTTP_TOKEN` から読み、ディスパッチは旧来の stdio 経路または `RunMcpHttp` に着地する。プラガブルなシームは JSON-RPC 順序不変条件を両トランスポートで同一に保つので、既存の McpServer テスト群（`ProcessLineAsync` を叩く）は引き続きメソッド単位の挙動をカバーし、新トランスポートのワイヤーレベル契約は `HttpMcpTransportTests` がカバーする。
+ワイヤー選択は `ProgramRunner.RunMcp` で行う。`--transport stdio|http` と `--http-listen <host:port>` は下流の引数解析より前に取り除かれ、HTTP bearer token 解決は `CDIDX_MCP_HTTP_TOKEN` を先に見て、未設定なら `CDIDX_MCP_AUTH_TOKEN` に fallback する。ディスパッチは旧来の stdio 経路または `RunMcpHttp` に着地する。プラガブルなシームは JSON-RPC 順序不変条件を両トランスポートで同一に保つので、既存の McpServer テスト群（`ProcessLineAsync` を叩く）は引き続きメソッド単位の挙動をカバーし、新トランスポートのワイヤーレベル契約は `HttpMcpTransportTests` がカバーする。
 
 #### 構造化エラーエンベロープとサーバーコード — issue #1581
 
