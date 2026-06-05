@@ -1577,6 +1577,9 @@ public partial class DbReader : IDisposable
     }
 
     internal List<IndexedFileSnapshot> GetIndexedFileSnapshots()
+        => EnumerateIndexedFileSnapshots().ToList();
+
+    internal IEnumerable<IndexedFileSnapshot> EnumerateIndexedFileSnapshots()
     {
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = $"""
@@ -1585,11 +1588,9 @@ public partial class DbReader : IDisposable
             ORDER BY f.path
             """;
 
-        var results = new List<IndexedFileSnapshot>();
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
-            results.Add(new IndexedFileSnapshot(reader.GetString(0), GetNullableString(reader, 1), GetNullableInt32(reader, 2)));
-        return results;
+            yield return new IndexedFileSnapshot(reader.GetString(0), GetNullableString(reader, 1), GetNullableInt32(reader, 2));
     }
 
     public QueryCountResult CountListFiles(string? query = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null)

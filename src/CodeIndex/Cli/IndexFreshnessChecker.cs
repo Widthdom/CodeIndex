@@ -19,9 +19,6 @@ internal static class IndexFreshnessChecker
             };
         }
 
-        var indexed = reader.GetIndexedFileSnapshots()
-            .ToDictionary(file => file.Path, StringComparer.Ordinal);
-        var workspace = new Dictionary<string, WorkspaceFileSnapshot>(StringComparer.Ordinal);
         var indexedHeadCommit = reader.GetMetaString(DbContext.IndexedHeadCommitMetaKey);
         var indexedHeadSha = reader.GetMetaString(DbContext.IndexedHeadShaMetaKey);
         var commitScopedFreshHeadSha = reader.GetMetaString(DbContext.CommitScopedFreshHeadShaMetaKey);
@@ -43,7 +40,6 @@ internal static class IndexFreshnessChecker
             && !currentHeadCoveredByCommitRefresh;
         var result = new IndexFreshnessCheckResult
         {
-            IndexedFileCount = indexed.Count,
             IndexedHeadCommit = string.IsNullOrWhiteSpace(indexedHeadCommit) ? null : indexedHeadCommit,
             WorkspaceHeadCommit = string.IsNullOrWhiteSpace(workspaceHeadCommit) ? null : workspaceHeadCommit,
             HeadChanged = headChanged,
@@ -62,12 +58,50 @@ internal static class IndexFreshnessChecker
             AddSample(result.ScanErrors, $"{error.Path}: {error.Message}");
         }
 
-        foreach (var absolutePath in scan.Files.OrderBy(path => path, StringComparer.Ordinal))
+        using var indexedEnumerator = reader.EnumerateIndexedFileSnapshots().GetEnumerator();
+        var hasIndexed = MoveNextIndexed();
+        var skipWorktreePathsLoaded = false;
+        HashSet<string>? skipWorktreePaths = null;
+
+        foreach (var absolutePath in scan.Files.OrderBy(path => FileIndexer.NormalizeIndexPath(Path.GetRelativePath(projectRoot, path)), StringComparer.Ordinal))
         {
             try
             {
                 var (record, _, _, _) = indexer.BuildRecordWithRawBytes(absolutePath);
-                workspace[record.Path] = new WorkspaceFileSnapshot(record.Checksum ?? string.Empty, record.Lines);
+                result.WorkspaceFileCount++;
+                while (hasIndexed && string.Compare(indexedEnumerator.Current.Path, record.Path, StringComparison.Ordinal) < 0)
+                {
+                    AddMissingIndexedPath(indexedEnumerator.Current.Path);
+                    hasIndexed = MoveNextIndexed();
+                }
+
+                if (!hasIndexed || string.Compare(indexedEnumerator.Current.Path, record.Path, StringComparison.Ordinal) > 0)
+                {
+                    result.UnindexedFileCount++;
+                    AddSample(result.UnindexedFiles, record.Path);
+                    continue;
+                }
+
+                var indexedFile = indexedEnumerator.Current;
+                if (string.IsNullOrWhiteSpace(indexedFile.Checksum))
+                {
+                    result.UnverifiableFileCount++;
+                    AddSample(result.UnverifiableFiles, record.Path);
+                    hasIndexed = MoveNextIndexed();
+                    continue;
+                }
+
+                if (!string.Equals(indexedFile.Checksum, record.Checksum ?? string.Empty, StringComparison.OrdinalIgnoreCase)
+                    || (indexedFile.Lines.HasValue && indexedFile.Lines.Value != record.Lines))
+                {
+                    result.ChangedFileCount++;
+                    AddSample(result.ChangedFiles, record.Path);
+                    hasIndexed = MoveNextIndexed();
+                    continue;
+                }
+
+                result.MatchedFileCount++;
+                hasIndexed = MoveNextIndexed();
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
             {
@@ -77,62 +111,10 @@ internal static class IndexFreshnessChecker
             }
         }
 
-        result.WorkspaceFileCount = workspace.Count;
-
-        foreach (var (path, workspaceFile) in workspace.OrderBy(kv => kv.Key, StringComparer.Ordinal))
+        while (hasIndexed)
         {
-            if (!indexed.TryGetValue(path, out var indexedFile))
-            {
-                result.UnindexedFileCount++;
-                AddSample(result.UnindexedFiles, path);
-                continue;
-            }
-
-            if (string.IsNullOrWhiteSpace(indexedFile.Checksum))
-            {
-                result.UnverifiableFileCount++;
-                AddSample(result.UnverifiableFiles, path);
-                continue;
-            }
-
-            if (!string.Equals(indexedFile.Checksum, workspaceFile.Checksum, StringComparison.OrdinalIgnoreCase)
-                || (indexedFile.Lines.HasValue && indexedFile.Lines.Value != workspaceFile.Lines))
-            {
-                result.ChangedFileCount++;
-                AddSample(result.ChangedFiles, path);
-                continue;
-            }
-
-            result.MatchedFileCount++;
-        }
-
-        var missingCandidates = indexed.Keys
-            .Except(workspace.Keys, StringComparer.Ordinal)
-            .OrderBy(path => path, StringComparer.Ordinal)
-            .ToList();
-
-        // Skip-worktree paths are intentionally absent from disk (sparse-checkout cone/non-cone,
-        // partial clone, or manual update-index --skip-worktree). Reclassify them so the freshness
-        // gate stops flagging them as "missing" and rebuilds.
-        // skip-worktree のパスは意図的に worktree から外されている(sparse-checkout cone/non-cone、
-        // partial clone、手動の update-index --skip-worktree)。これらを "missing" から切り分け、
-        // 不要な rebuild トリガーを止める。
-        HashSet<string>? skipWorktreePaths = null;
-        if (missingCandidates.Count > 0)
-            skipWorktreePaths = GitHelper.TryGetSkipWorktreePaths(projectRoot);
-
-        foreach (var path in missingCandidates)
-        {
-            if (skipWorktreePaths != null && skipWorktreePaths.Contains(path))
-            {
-                result.OutsideSparseConeFileCount++;
-                AddSample(result.OutsideSparseConeFiles, path);
-            }
-            else
-            {
-                result.MissingFileCount++;
-                AddSample(result.MissingFiles, path);
-            }
+            AddMissingIndexedPath(indexedEnumerator.Current.Path);
+            hasIndexed = MoveNextIndexed();
         }
 
         result.Checked = result.ScanErrorCount == 0;
@@ -144,6 +126,40 @@ internal static class IndexFreshnessChecker
             && result.UnverifiableFileCount == 0;
         result.Reason = BuildReason(result);
         return result;
+
+        bool MoveNextIndexed()
+        {
+            var moved = indexedEnumerator.MoveNext();
+            if (moved)
+                result.IndexedFileCount++;
+            return moved;
+        }
+
+        void AddMissingIndexedPath(string path)
+        {
+            // Skip-worktree paths are intentionally absent from disk (sparse-checkout cone/non-cone,
+            // partial clone, or manual update-index --skip-worktree). Reclassify them so the freshness
+            // gate stops flagging them as "missing" and rebuilds.
+            // skip-worktree のパスは意図的に worktree から外されている(sparse-checkout cone/non-cone、
+            // partial clone、手動の update-index --skip-worktree)。これらを "missing" から切り分け、
+            // 不要な rebuild トリガーを止める。
+            if (!skipWorktreePathsLoaded)
+            {
+                skipWorktreePaths = GitHelper.TryGetSkipWorktreePaths(projectRoot);
+                skipWorktreePathsLoaded = true;
+            }
+
+            if (skipWorktreePaths != null && skipWorktreePaths.Contains(path))
+            {
+                result.OutsideSparseConeFileCount++;
+                AddSample(result.OutsideSparseConeFiles, path);
+            }
+            else
+            {
+                result.MissingFileCount++;
+                AddSample(result.MissingFiles, path);
+            }
+        }
     }
 
     private static string BuildReason(IndexFreshnessCheckResult result)
@@ -175,6 +191,4 @@ internal static class IndexFreshnessChecker
         if (samples.Count < SampleLimit)
             samples.Add(value);
     }
-
-    private readonly record struct WorkspaceFileSnapshot(string Checksum, int Lines);
 }

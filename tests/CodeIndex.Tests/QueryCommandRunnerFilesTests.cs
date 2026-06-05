@@ -1355,6 +1355,46 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunStatus_CheckJson_MatchesNfcIndexedPathsAfterNfdWorkspaceSort()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_status_check_nfd_path");
+        try
+        {
+            var accentContent = "def accent():\n    return 1\n";
+            var asciiContent = "def ascii_neighbor():\n    return 2\n";
+            var nfdFileName = "e\u0301.py";
+            var nfcFileName = "\u00e9.py";
+            File.WriteAllText(Path.Combine(projectRoot, nfdFileName), accentContent);
+            File.WriteAllText(Path.Combine(projectRoot, "f.py"), asciiContent);
+
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, nfcFileName, "python", accentContent);
+            TestProjectHelper.InsertIndexedFile(dbPath, "f.py", "python", asciiContent);
+            MarkStatusReadinessReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath, "--check", "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var check = document.RootElement.GetProperty("workspace_check");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(document.RootElement.GetProperty("index_matches_workspace").GetBoolean());
+            Assert.Equal("matched", check.GetProperty("reason").GetString());
+            Assert.Equal(2, check.GetProperty("indexed_file_count").GetInt32());
+            Assert.Equal(2, check.GetProperty("workspace_file_count").GetInt32());
+            Assert.Equal(0, check.GetProperty("missing_file_count").GetInt32());
+            Assert.Equal(0, check.GetProperty("unindexed_file_count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunStatus_CheckJson_ReclassifiesSkipWorktreePathsAsOutsideSparseCone()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_status_check_sparse_cone");
