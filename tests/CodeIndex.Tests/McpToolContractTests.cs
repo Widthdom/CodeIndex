@@ -157,6 +157,39 @@ public class McpToolContractTests
         Assert.Equal((true, "integer"), TryGetExpectedJsonType("map", "depth"));
     }
 
+    [Fact]
+    public void ToolsList_OutlineAndValidateDoNotExposeHiddenNoopArguments_Issue3198()
+    {
+        var advertisedSchemas = GetAdvertisedToolSchemas();
+
+        AssertToolArgumentsExactly(advertisedSchemas, "outline", ["path"]);
+        AssertToolArgumentsExactly(advertisedSchemas, "validate", ["kind", "path", "excludePaths", "excludeTests", "project", "solution"]);
+
+        foreach (var toolName in new[] { "outline", "validate" })
+        {
+            var advertised = advertisedSchemas[toolName].Keys.ToHashSet(StringComparer.Ordinal);
+            var allowed = GetAllowedToolArguments(toolName);
+            foreach (var noopArgument in new[] { "limit", "includeImports", "maxLineWidth", "lang" })
+            {
+                Assert.DoesNotContain(noopArgument, advertised);
+                Assert.DoesNotContain(noopArgument, allowed);
+            }
+        }
+
+        static void AssertToolArgumentsExactly(
+            Dictionary<string, Dictionary<string, JsonObject>> advertisedSchemas,
+            string toolName,
+            string[] expectedArguments)
+        {
+            var expected = expectedArguments.ToHashSet(StringComparer.Ordinal);
+            var advertised = advertisedSchemas[toolName].Keys.ToHashSet(StringComparer.Ordinal);
+            var allowed = GetAllowedToolArguments(toolName);
+
+            Assert.Equal(expected.Order(StringComparer.Ordinal), advertised.Order(StringComparer.Ordinal));
+            Assert.Equal(expected.Order(StringComparer.Ordinal), allowed.Order(StringComparer.Ordinal));
+        }
+    }
+
     private static Dictionary<string, Dictionary<string, JsonObject>> GetAdvertisedToolSchemas()
     {
         using var server = new McpServer("unused.db", "test", dbPathExplicit: false, McpToolFilter.AllowAll());
