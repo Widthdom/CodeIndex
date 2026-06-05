@@ -536,11 +536,39 @@ public partial class McpServer
         if (ValidateToolArgumentTypes(toolName, obj) is JsonObject typeError)
             return typeError;
 
+        if (ValidateToolArgumentRanges(toolName, obj) is JsonObject rangeError)
+            return rangeError;
+
         if (ValidateBoundedEnumLikeScalarArguments(toolName, obj) is JsonObject scalarError)
             return scalarError;
 
         return null;
     }
+
+    private static JsonObject? ValidateToolArgumentRanges(string toolName, JsonObject args)
+    {
+        if (args["limit"] is JsonValue limitValue
+            && limitValue.TryGetValue<int>(out var limit)
+            && limit <= 0)
+            return CreateIntegerMinimumArgumentError(toolName, "limit", minimum: 1, actual: limit);
+
+        if (args["offset"] is JsonValue offsetValue
+            && offsetValue.TryGetValue<int>(out var offset)
+            && offset < 0)
+            return CreateIntegerMinimumArgumentError(toolName, "offset", minimum: 0, actual: offset);
+
+        return null;
+    }
+
+    private static JsonObject CreateIntegerMinimumArgumentError(string toolName, string argumentName, int minimum, int actual) => new()
+    {
+        ["message"] = $"Argument '{argumentName}' on tool '{toolName}' must be greater than or equal to {minimum}; got {actual}.",
+        ["tool"] = toolName,
+        ["parameter"] = argumentName,
+        ["minimum"] = minimum,
+        ["actual"] = actual,
+        ["jsonrpc_invalid_params"] = true,
+    };
 
     private static JsonObject? ValidateBoundedEnumLikeScalarArguments(string toolName, JsonObject args)
     {

@@ -3363,6 +3363,41 @@ public class McpServerTests : IDisposable
         Assert.Contains("type_reference", kindEnum);
     }
 
+    [Theory]
+    [InlineData("search", """{"query":"App","limit":0}""", "limit", 1, 0)]
+    [InlineData("definition", """{"query":"App","limit":-1}""", "limit", 1, -1)]
+    [InlineData("references", """{"query":"App","offset":-1}""", "offset", 0, -1)]
+    public void ToolsCall_InvalidLimitOrOffsetBounds_ReturnsInvalidParams_Issue3195(
+        string toolName,
+        string argumentsJson,
+        string parameter,
+        int minimum,
+        int actual)
+    {
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = toolName,
+                ["arguments"] = JsonNode.Parse(argumentsJson),
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        var error = response["error"]!;
+        Assert.Equal(-32602, error["code"]!.GetValue<int>());
+        Assert.Contains($"Argument '{parameter}'", error["message"]!.GetValue<string>());
+        var data = error["data"]!;
+        Assert.Equal(McpErrorEnvelope.CategoryInvalidArgument, data["category"]!.GetValue<string>());
+        Assert.Equal(parameter, data["parameter"]!.GetValue<string>());
+        Assert.Equal(minimum, data["minimum"]!.GetValue<int>());
+        Assert.Equal(actual, data["actual"]!.GetValue<int>());
+    }
+
     [Fact]
     public void ToolCall_WithStructuredContent_DeclaresJsonMimeType()
     {
