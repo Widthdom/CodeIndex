@@ -570,6 +570,7 @@ internal sealed class LspServer : IDisposable
     {
         payload = string.Empty;
         var contentLength = -1;
+        var hasContentLength = false;
         var headerCount = 0;
         var headerBytes = 0;
         while (true)
@@ -590,6 +591,8 @@ internal sealed class LspServer : IDisposable
             var value = line[(colon + 1)..].Trim();
             if (string.Equals(name, "Content-Length", StringComparison.OrdinalIgnoreCase))
             {
+                if (hasContentLength)
+                    return false;
                 if (!int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed)
                     || parsed < 0
                     || parsed > MaxLspFrameBytes)
@@ -597,6 +600,7 @@ internal sealed class LspServer : IDisposable
                     return false;
                 }
 
+                hasContentLength = true;
                 contentLength = parsed;
             }
         }

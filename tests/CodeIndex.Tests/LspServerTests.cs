@@ -84,6 +84,18 @@ public class LspServerTests
         Assert.Equal(string.Empty, actual);
     }
 
+    [Theory]
+    [InlineData("2", "2")]
+    [InlineData("2", "3")]
+    public void TryReadMessage_RejectsDuplicateContentLength_Issue3229(string firstLength, string secondLength)
+    {
+        var bytes = Encoding.UTF8.GetBytes($"Content-Length: {firstLength}\r\nContent-Length: {secondLength}\r\n\r\n{{}}");
+        using var stream = new MemoryStream(bytes);
+
+        Assert.False(LspServer.TryReadMessage(stream, out var actual));
+        Assert.Equal(string.Empty, actual);
+    }
+
     [Fact]
     public void HandleMessage_Initialize_AdvertisesCoreCapabilities()
     {
