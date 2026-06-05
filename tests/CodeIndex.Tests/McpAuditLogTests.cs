@@ -463,12 +463,13 @@ public class McpAuditLogTests : IDisposable
     }
 
     [Fact]
-    public void ToolsCall_MaxLengthRequestId_PreservesAuditRequestId_Issue3237()
+    public void ToolsCall_MaxLengthRequestId_PreservesAuditRequestId_Issue3237_3307()
     {
         using var sink = new AuditLogSink(_auditPath, AuditLogSink.DefaultMaxBytes, includeValues: false);
         using var server = CreateServer(sink);
         var id = new string('r', McpServer.MaxRequestIdCharacterCount);
         var serializedId = JsonSerializer.Serialize(id);
+        Assert.True(serializedId.Length <= AuditLogSink.MaxRequestIdChars);
         var request = new JsonObject
         {
             ["jsonrpc"] = "2.0",
