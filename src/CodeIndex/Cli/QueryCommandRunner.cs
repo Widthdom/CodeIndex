@@ -301,7 +301,7 @@ public static class QueryCommandRunner
         var isUri = dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase);
         if (!isUri && !File.Exists(dbPath))
         {
-            Console.Error.WriteLine($"Error [{CommandErrorCodes.DbNotFound}]: database not found at {Path.GetFullPath(dbPath)}");
+            Console.Error.WriteLine($"Error [{CommandErrorCodes.DbNotFound}]: database not found at {FormatDbDiagnosticValue(Path.GetFullPath(dbPath))}");
             Console.Error.WriteLine("Hint: create or refresh the index with `cdidx index <projectPath>` (or `cdidx .`) and then rerun this command.");
             return CommandExitCodes.DatabaseError;
         }
@@ -7373,7 +7373,7 @@ public static class QueryCommandRunner
             {
                 if (!DbPathResolver.TryNormalizeDbPath(dbPath, out fileExistsPath, out var parseError))
                 {
-                    var boundedDbPath = SqliteFileUri.TruncateDiagnosticValue(dbPath);
+                    var boundedDbPath = FormatDbDiagnosticValue(dbPath);
                     Console.Error.WriteLine($"Error [{CommandErrorCodes.DbError}]: invalid --db file URI: {SqliteFileUri.FormatParseError(parseError)}");
                     Console.Error.WriteLine($"Hint: pass a valid SQLite file URI such as `file:///absolute/path/to/codeindex.db?immutable=1`; the --db value resolved to: {boundedDbPath}");
                     GlobalToolLog.Error($"invalid_db_file_uri db={FormatLogValue(dbPath)} exception={FormatLogValue(parseError?.ToString() ?? "<unknown>")}");
@@ -7385,9 +7385,10 @@ public static class QueryCommandRunner
                 && !File.Exists(LongPath.EnsureWindowsPrefix(fileExistsPath)))
             {
                 var resolvedPath = Path.GetFullPath(fileExistsPath);
-                Console.Error.WriteLine($"Error [{CommandErrorCodes.DbNotFound}]: database not found at {resolvedPath}");
+                var displayPath = FormatDbDiagnosticValue(resolvedPath);
+                Console.Error.WriteLine($"Error [{CommandErrorCodes.DbNotFound}]: database not found at {displayPath}");
                 if (isUri)
-                    Console.Error.WriteLine($"Hint: the --db path resolved to: {resolvedPath}");
+                    Console.Error.WriteLine($"Hint: the --db path resolved to: {displayPath}");
                 Console.Error.WriteLine("Hint: create or refresh the index with `cdidx index <projectPath>` (or `cdidx .`) and then rerun this command.");
                 return CommandExitCodes.DatabaseError;
             }
@@ -7487,7 +7488,7 @@ public static class QueryCommandRunner
 
     private static int WriteInvalidCodeIndexDbError(string dbPath, string? validationReason)
     {
-        Console.Error.WriteLine($"Error [{CommandErrorCodes.DbError}]: {dbPath} does not appear to be a valid CodeIndex database ({validationReason}).");
+        Console.Error.WriteLine($"Error [{CommandErrorCodes.DbError}]: {FormatDbDiagnosticValue(dbPath)} does not appear to be a valid CodeIndex database ({validationReason}).");
         Console.Error.WriteLine("Hint: rebuild with `cdidx index <projectPath> --db <path>` to create a fresh database.");
         return CommandExitCodes.DatabaseError;
     }
@@ -7570,6 +7571,17 @@ public static class QueryCommandRunner
 
         return SqliteFileUri.TruncateDiagnosticValue(value)
             .Replace("\\", "/", StringComparison.Ordinal)
+            .Replace("\r", " ", StringComparison.Ordinal)
+            .Replace("\n", " ", StringComparison.Ordinal)
+            .Replace("\t", " ", StringComparison.Ordinal);
+    }
+
+    private static string FormatDbDiagnosticValue(string? value)
+    {
+        if (string.IsNullOrEmpty(value))
+            return "<empty>";
+
+        return SqliteFileUri.TruncateDiagnosticValue(value)
             .Replace("\r", " ", StringComparison.Ordinal)
             .Replace("\n", " ", StringComparison.Ordinal)
             .Replace("\t", " ", StringComparison.Ordinal);
@@ -7703,7 +7715,7 @@ public static class QueryCommandRunner
         if (File.Exists(LongPath.EnsureWindowsPrefix(options.DbPath)))
             return null;
 
-        return $"Error [{CommandErrorCodes.DbNotFound}]: --db '{options.DbPath}' does not point to an existing database file.";
+        return $"Error [{CommandErrorCodes.DbNotFound}]: --db '{FormatDbDiagnosticValue(options.DbPath)}' does not point to an existing database file.";
     }
 
     private static readonly HashSet<string> KnownSymbolKindFilters = new(StringComparer.Ordinal)

@@ -1642,6 +1642,63 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void WithDb_MissingOversizedPathReturnsBoundedDiagnostics_Issue3093()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue3093_missing_db");
+        try
+        {
+            var missingDbPath = Path.Combine(
+                projectRoot,
+                Path.Combine(Enumerable.Repeat("segment", 40).ToArray()),
+                "codeindex.db");
+            var resolvedPath = Path.GetFullPath(missingDbPath);
+            Assert.True(resolvedPath.Length > SqliteFileUri.MaxDiagnosticValueLength);
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", missingDbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains($"Error [{CommandErrorCodes.DbNotFound}]: --db '", stderr);
+            Assert.Contains("does not point to an existing database file", stderr);
+            Assert.Contains("...(truncated,", stderr);
+            Assert.DoesNotContain(resolvedPath, stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunBatch_MissingOversizedDbPathReturnsBoundedDiagnostics_Issue3093()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue3093_batch_db");
+        try
+        {
+            var missingDbPath = Path.Combine(
+                projectRoot,
+                Path.Combine(Enumerable.Repeat("segment", 40).ToArray()),
+                "codeindex.db");
+            var resolvedPath = Path.GetFullPath(missingDbPath);
+            Assert.True(resolvedPath.Length > SqliteFileUri.MaxDiagnosticValueLength);
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunBatch(
+                ["--db", missingDbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.Contains($"Error [{CommandErrorCodes.DbNotFound}]: database not found at ", stderr);
+            Assert.Contains("...(truncated,", stderr);
+            Assert.DoesNotContain(resolvedPath, stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void WithDb_SqliteCantOpenSurfacesAccessOpenCategory_Issue2072()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue2072_cantopen");
