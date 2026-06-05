@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using CodeIndex.Database;
 using CodeIndex.Cli;
 using CodeIndex.Indexer;
+using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
 
@@ -1000,6 +1001,48 @@ public class FileIndexerTests
         finally
         {
             Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_LoadsProjectRootPatternConfigsBeforeLanguageDetection_3190()
+    {
+        var projectRoot = Path.Combine(Path.GetTempPath(), $"cdidx-pattern-scan-project-{Guid.NewGuid():N}");
+        var cwdRoot = Path.Combine(Path.GetTempPath(), $"cdidx-pattern-scan-cwd-{Guid.NewGuid():N}");
+        lock (TestConsoleLock.Gate)
+        {
+            var originalDirectory = Environment.CurrentDirectory;
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                Directory.CreateDirectory(projectRoot);
+                Directory.CreateDirectory(cwdRoot);
+                WriteFileIndexerPatternConfig(
+                    projectRoot,
+                    "project.yaml",
+                    "language: \"projectdsl\"\nextensions:\n  - extension: \".projecttoy\"\npatterns:\n  - kind: \"class\"\n    regex: \"^project (?<name>\\\\w+)\"\n");
+                WriteFileIndexerPatternConfig(
+                    cwdRoot,
+                    "cwd.yaml",
+                    "language: \"cwddsl\"\nextensions:\n  - extension: \".cwdtoy\"\npatterns:\n  - kind: \"class\"\n    regex: \"^cwd (?<name>\\\\w+)\"\n");
+                File.WriteAllText(Path.Combine(projectRoot, "Project.projecttoy"), "project Widget\n");
+                File.WriteAllText(Path.Combine(projectRoot, "CwdLeak.cwdtoy"), "cwd Widget\n");
+                Environment.CurrentDirectory = cwdRoot;
+
+                var scanned = new FileIndexer(projectRoot).ScanFiles()
+                    .Select(path => Path.GetRelativePath(projectRoot, path).Replace('\\', '/'))
+                    .OrderBy(path => path, StringComparer.Ordinal)
+                    .ToList();
+
+                Assert.Equal([".cdidx/patterns/project.yaml", "Project.projecttoy"], scanned);
+            }
+            finally
+            {
+                Environment.CurrentDirectory = originalDirectory;
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(projectRoot);
+                TestProjectHelper.DeleteDirectory(cwdRoot);
+            }
         }
     }
 
@@ -5278,6 +5321,13 @@ public class FileIndexerTests
     {
         Assert.False(FileIndexer.IsGeneratedCodeFile("src/Foo.cs", "class Foo { }\n"));
         Assert.False(FileIndexer.IsGeneratedCodeFile("src/Foo.cs", "// This file is not auto-generated.\nclass Foo { }\n"));
+    }
+
+    private static void WriteFileIndexerPatternConfig(string projectRoot, string fileName, string content)
+    {
+        var path = Path.Combine(projectRoot, ".cdidx", "patterns", fileName);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, content);
     }
 
     private static int CountFiles(SqliteConnection connection)

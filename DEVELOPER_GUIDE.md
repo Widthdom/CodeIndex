@@ -973,8 +973,8 @@ Runtime diagnostic subcontracts:
 | `hotspot_family_degraded_reason` stable codes | `hotspot_family_support_not_indexed`, `hotspot_family_metadata_stale`, `hotspot_family_disabled_at_index_time`, `partial_family_key_population`, and `hotspot_family_marker_fingerprint_incomplete`. |
 | `partial_family_key_population` | Some indexed symbols still lack family keys and need a rebuild/restamp. |
 | `hotspot_family_marker_fingerprint_incomplete` | Marker fingerprint traversal hit safety caps during the last index run; narrow or ignore generated/vendor marker trees before rebuilding. |
-| `extractors` | Reports runtime extractor plugin and pattern-config health, including loaded plugin assembly and pattern counts, symbol/reference extractor counts, skipped file counts, and a bounded diagnostic list for incompatible or malformed files. |
-| `hooks[]` | Includes `callback_budget_ms`, mirroring the post-extraction callback budget enforced by `CDIDX_HOOK_CALLBACK_BUDGET_MS` (default: 5000 ms). Timed-out callback mutations are discarded because hooks run on a scratch copy before their results are applied. |
+| `extractors` | Reports runtime extractor plugin and pattern-config health, including loaded plugin assembly and pattern counts, symbol/reference extractor counts, skipped file counts, and a bounded diagnostic list for incompatible or malformed files. Diagnostic paths and messages are sanitized before output. |
+| `hooks[]` | Includes metadata-only hook candidates and `callback_budget_ms`, mirroring the post-extraction callback budget enforced by `CDIDX_HOOK_CALLBACK_BUDGET_MS` (default: 5000 ms). `status` does not load hook assemblies; index runs still load hooks and discard timed-out callback mutations because hooks run on a scratch copy before their results are applied. |
 
 `references` already prefixes each human-readable row with `reference_kind`, and `callers` does the same for its grouped caller rows. When one grouped container mixes kinds (for example `call` and `subscribe` on the same event member), the human-readable label joins the distinct kinds with `+` (for example `call+subscribe`) instead of collapsing to a single preferred label, and the reference-kind column widens dynamically to fit the longest label in the batch so mixed rows do not overrun the neighbouring column. JSON output for `callers` and `callees` keeps the scalar `reference_kind` for back-compat (it reports the preferred summary kind `instantiate` > `subscribe` > `MIN(call)`) and adds a sorted `reference_kinds` array plus a `has_mixed_reference_kinds` bool so consumers can detect mixed containers without trusting a single collapsed label. This lets terminal users distinguish `call` / `instantiate` / `subscribe` / mixed without re-running the command with `--json` and lets AI clients answer mixed-kind questions without chasing a second `--exact` query.
 
@@ -1816,11 +1816,14 @@ return `-32600`.
   bodies are treated like a closed stdio line and return `204 No Content`
   *without* killing the loop, so a misbehaving client cannot pin the server
   on a junk frame. Request bodies are capped by
-  `CDIDX_MCP_HTTP_MAX_REQUEST_BYTES` (default: 1,000,000 bytes) and oversized
-  bodies return `413 Payload Too Large` before they are fully buffered. The
+  `CDIDX_MCP_HTTP_MAX_REQUEST_BYTES` (default: 1,000,000 bytes, maximum:
+  16,777,216 bytes) and oversized bodies return `413 Payload Too Large`
+  before they are fully buffered. The
   pending request queue is bounded by `CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH`
-  (default: 64); full queues return `429 Too Many Requests` with
-  `Retry-After: 1` instead of retaining unbounded work.
+  (default: 64, maximum: 1,024); full queues return `429 Too Many Requests`
+  with `Retry-After: 1` instead of retaining unbounded work. Non-positive or
+  non-numeric environment values fall back to defaults, while values above
+  the maximum are rejected before listener startup.
 - SSE stream lifetime is represented by the active stream registry only;
   completed stream tasks are not retained after that registry entry is removed.
 - `ResolveListenSpec("host:port")` resolves the prefix up-front so the
@@ -2960,8 +2963,8 @@ runtime diagnostic subcontract:
 | `hotspot_family_degraded_reason` stable code | `hotspot_family_support_not_indexed`, `hotspot_family_metadata_stale`, `hotspot_family_disabled_at_index_time`, `partial_family_key_population`, `hotspot_family_marker_fingerprint_incomplete`。 |
 | `partial_family_key_population` | 一部の indexed symbol に family key がまだ無く、rebuild / restamp が必要です。 |
 | `hotspot_family_marker_fingerprint_incomplete` | 前回 index run で marker fingerprint traversal が safety cap に当たったことを示します。rebuild 前に generated / vendor marker tree を narrow または ignore してください。 |
-| `extractors` | runtime extractor plugin と pattern-config の health を報告します。loaded plugin assembly / pattern count、symbol/reference extractor count、skipped file count、incompatible / malformed file 用の bounded diagnostic list を含みます。 |
-| `hooks[]` | `callback_budget_ms` を含みます。これは `CDIDX_HOOK_CALLBACK_BUDGET_MS`（既定 5000 ms）が enforce する post-extraction callback budget と対応します。hook は result 適用前の scratch copy 上で動くため、timeout した callback mutation は破棄されます。 |
+| `extractors` | runtime extractor plugin と pattern-config の health を報告します。loaded plugin assembly / pattern count、symbol/reference extractor count、skipped file count、incompatible / malformed file 用の bounded diagnostic list を含みます。diagnostic の path と message は出力前に sanitization されます。 |
+| `hooks[]` | metadata-only の hook candidate と `callback_budget_ms` を含みます。これは `CDIDX_HOOK_CALLBACK_BUDGET_MS`（既定 5000 ms）が enforce する post-extraction callback budget と対応します。`status` は hook assembly を読み込まず、index run は従来どおり hook を読み込んだうえで scratch copy 上の timeout した callback mutation を破棄します。 |
 
 `references` は以前から人間向け出力の各行先頭に `reference_kind` を表示しており、`callers` も grouped caller 行に対して同じタグを出す。1 つの grouped container で kind が混在する場合（例: 同じ event メンバに対する `call` と `subscribe`）は、単一 preferred label へ潰さずに `call+subscribe` のように distinct kind を `+` で連結して表示する。reference-kind 列の幅はバッチ内で最も長いラベルに合わせて動的に広がるため、mixed 行が隣接列を押し出さない。`callers` / `callees` の JSON 出力では、後方互換のため scalar な `reference_kind`（preferred 順 `instantiate` > `subscribe` > `MIN(call)` の要約 kind）を残しつつ、ソート済みの `reference_kinds` 配列と `has_mixed_reference_kinds` bool も追加した。これにより consumer は単一 summary label に騙されずに mixed container を検出できる。端末上でも `call` / `instantiate` / `subscribe` / mixed を `--json` なしで見分けられ、AI クライアントも `--exact` を改めて投げ直さずに mixed-kind の問いに答えられる。
 
@@ -3488,7 +3491,7 @@ MCP は独立したシリアライズ戦略（オブジェクトを JSON など�
 
 `HttpMcpTransport`（同じく #1558）は `System.Net.HttpListener` をラップする:
 
-- HTTP POST 1 件 = JSON-RPC フレーム 1 件で、対応する応答は HTTP レスポンスのボディ（`200 OK` / `application/json; charset=utf-8`）に乗る。通知は `204 No Content`。`GET /events` は将来のサーバー→クライアント frame 用に独立した `text/event-stream` subscription を開く。サーバーは `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S` で keep-alive notification が opt-in された場合を除き、自発的な frame を送信しない。長寿命の event stream は通常の POST リクエストを塞がない。`/` への POST 以外は `405 Method Not Allowed`。空 / 空白のみのボディは stdio の空行と同じ扱いで `204 No Content` を返し、ループは殺さない — クライアントの誤動作で junk フレームに引っかからないため。リクエスト本文は `CDIDX_MCP_HTTP_MAX_REQUEST_BYTES`（既定: 1,000,000 bytes）で制限し、超過時は全量を buffer する前に `413 Payload Too Large` を返す。保留中 request queue は `CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH`（既定: 64）で制限し、満杯時は無制限に work を保持せず `Retry-After: 1` 付きの `429 Too Many Requests` を返す。
+- HTTP POST 1 件 = JSON-RPC フレーム 1 件で、対応する応答は HTTP レスポンスのボディ（`200 OK` / `application/json; charset=utf-8`）に乗る。通知は `204 No Content`。`GET /events` は将来のサーバー→クライアント frame 用に独立した `text/event-stream` subscription を開く。サーバーは `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S` で keep-alive notification が opt-in された場合を除き、自発的な frame を送信しない。長寿命の event stream は通常の POST リクエストを塞がない。`/` への POST 以外は `405 Method Not Allowed`。空 / 空白のみのボディは stdio の空行と同じ扱いで `204 No Content` を返し、ループは殺さない — クライアントの誤動作で junk フレームに引っかからないため。リクエスト本文は `CDIDX_MCP_HTTP_MAX_REQUEST_BYTES`（既定: 1,000,000 bytes、最大: 16,777,216 bytes）で制限し、超過時は全量を buffer する前に `413 Payload Too Large` を返す。保留中 request queue は `CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH`（既定: 64、最大: 1,024）で制限し、満杯時は無制限に work を保持せず `Retry-After: 1` 付きの `429 Too Many Requests` を返す。正でない値や数値でない環境変数値は既定にフォールバックし、最大値を超える値は listener 起動前に拒否する。
 - SSE stream lifetime は active stream registry だけで表現し、その registry entry が削除された後に完了済み stream task を保持しない。
 - `ResolveListenSpec("host:port")` は prefix を事前に解決するため、CLI が stderr に `Listening on http://...` を出せる。ポート `0` は一時 `TcpListener` を probe して空きポートを取得する。probe から `HttpListener.Start()` までの TOCTOU window は、本トランスポートが local-only / single-tenant 想定であるため許容する。ワイルドカードホスト `+` / `*` はパース時点で拒否する。
 - 任意の共有秘密による認証: `CDIDX_MCP_HTTP_TOKEN` が設定されていれば、listener はすべてのリクエストに `Authorization: Bearer <token>` を要求し、定数時間で比較する。トークン未指定で非 loopback ホストへ bind しようとした場合、CLI は MCP カタログを LAN に漏らさないよう既定で拒否する。

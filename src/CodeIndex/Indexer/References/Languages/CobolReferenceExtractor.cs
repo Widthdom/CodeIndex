@@ -165,7 +165,7 @@ internal static class CobolReferenceExtractor
         foreach (var pattern in StatementPatterns)
             EmitMatches(pattern, rawLine, references, seen, fileId, context, lineNumber, container);
 
-        foreach (Match match in CobolPerformRegex.Matches(rawLine))
+        foreach (Match match in BoundedRegex.EnumerateMatches(CobolPerformRegex, rawLine))
         {
             var endName = match.Groups["end"].Value;
             if (!string.IsNullOrWhiteSpace(endName)
@@ -197,7 +197,7 @@ internal static class CobolReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
-        foreach (Match match in pattern.Regex.Matches(rawLine))
+        foreach (Match match in BoundedRegex.EnumerateMatches(pattern.Regex, rawLine))
             EmitNamedReference(references, seen, fileId, match, pattern.ReferenceKind, context, lineNumber, container);
     }
 

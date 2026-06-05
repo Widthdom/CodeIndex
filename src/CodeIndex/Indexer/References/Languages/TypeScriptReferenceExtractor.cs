@@ -1141,23 +1141,56 @@ internal static class TypeScriptReferenceExtractor
                 continue;
             }
 
-            foreach (Match match in Regex.Matches(
-                         preparedLine,
-                         $@"(?<![\w$]){Regex.Escape(binding.Alias)}\s*\.\s*[A-Za-z_$][\w$]*"))
+            foreach (var matchIndex in EnumerateNamespaceAliasQualifiedReferenceStarts(preparedLine, binding.Alias))
             {
                 ReferenceExtractor.AddReference(
                     references,
                     seen,
                     fileId,
                     binding.ModuleSpecifier,
-                    match.Index,
+                    matchIndex,
                     "reference",
                     context,
                     lineNumber,
-                    resolveContainerForColumn(match.Index));
+                    resolveContainerForColumn(matchIndex));
             }
         }
     }
+
+    private static IEnumerable<int> EnumerateNamespaceAliasQualifiedReferenceStarts(string text, string alias)
+    {
+        if (string.IsNullOrEmpty(alias))
+            yield break;
+
+        var searchIndex = 0;
+        while (searchIndex < text.Length)
+        {
+            var aliasIndex = text.IndexOf(alias, searchIndex, StringComparison.Ordinal);
+            if (aliasIndex < 0)
+                yield break;
+
+            searchIndex = aliasIndex + Math.Max(1, alias.Length);
+            if (aliasIndex > 0 && IsTypeScriptIdentifierPart(text[aliasIndex - 1]))
+                continue;
+
+            var afterAlias = aliasIndex + alias.Length;
+            if (afterAlias < text.Length && IsTypeScriptIdentifierPart(text[afterAlias]))
+                continue;
+
+            var dotIndex = SkipWhitespace(text, afterAlias);
+            if (dotIndex >= text.Length || text[dotIndex] != '.')
+                continue;
+
+            var memberIndex = SkipWhitespace(text, dotIndex + 1);
+            if (memberIndex >= text.Length || !IsTypeScriptNamespaceMemberStart(text[memberIndex]))
+                continue;
+
+            yield return aliasIndex;
+        }
+    }
+
+    private static bool IsTypeScriptNamespaceMemberStart(char ch) =>
+        ch == '_' || ch == '$' || ch is >= 'A' and <= 'Z' || ch is >= 'a' and <= 'z';
 
     private static int? FindShadowLine(IReadOnlyList<string> preparedLines, string alias, int bindingLine)
     {

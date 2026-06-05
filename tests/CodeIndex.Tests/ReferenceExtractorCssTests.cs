@@ -147,6 +147,19 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_Css_LongSelectorLine_UsesBoundedMatchEnumeration()
+    {
+        var className = new string('a', 20_000);
+        var content = $".{className} {{ color: red; }}";
+
+        var symbols = SymbolExtractor.Extract(1, "css", content);
+
+        var exception = Record.Exception(() => ReferenceExtractor.Extract(1, "css", content, symbols));
+
+        Assert.Null(exception);
+    }
+
+    [Fact]
     public void Extract_Css_DescendantSelectors_KeepClassReferencesVisible()
     {
         const string content = """

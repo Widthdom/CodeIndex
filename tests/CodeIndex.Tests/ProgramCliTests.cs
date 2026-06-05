@@ -1,7 +1,9 @@
 using CodeIndex.Cli;
 using CodeIndex.Database;
+using CodeIndex.Mcp;
 using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
+using System.Globalization;
 using System.IO.Compression;
 using System.Text.Json;
 
@@ -41,6 +43,24 @@ public class ProgramCliTests
         Assert.Contains("Error: --json is not supported for mcp; MCP already speaks JSON-RPC", stderr);
         Assert.Contains("Usage: cdidx mcp [--db <path>]", stderr);
         Assert.DoesNotContain("Warning: unknown option", stderr);
+    }
+
+    [Fact]
+    public void Mcp_HttpOversizedLimitEnvironmentReturnsUsageError()
+    {
+        var oversized = (HttpMcpTransport.MaxConfiguredRequestBodyBytes + 1).ToString(CultureInfo.InvariantCulture);
+        var (exitCode, _, stderr) = RunCliInSubprocess(
+            ["mcp", "--transport", "http"],
+            new Dictionary<string, string?> { [HttpMcpTransport.MaxRequestBodyBytesEnvVar] = oversized });
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains(HttpMcpTransport.MaxRequestBodyBytesEnvVar, stderr);
+        Assert.Contains(
+            $"between 1 and {HttpMcpTransport.MaxConfiguredRequestBodyBytes.ToString(CultureInfo.InvariantCulture)}",
+            stderr,
+            StringComparison.Ordinal);
+        Assert.Contains("HTTP limits:", stderr);
+        Assert.DoesNotContain("HTTP transport listening", stderr);
     }
 
     [Fact]
@@ -726,6 +746,31 @@ public class ProgramCliTests
         Assert.Equal(1, preflight.GetProperty("match_count").GetInt32());
         Assert.Equal(2878, preflight.GetProperty("matches")[0].GetProperty("number").GetInt32());
         Assert.Equal("title_exact", preflight.GetProperty("matches")[0].GetProperty("reason").GetString());
+    }
+
+    [Fact]
+    public void Suggestions_ExportIssueDraftsRedactsSensitiveSampledTitle()
+    {
+        using var fixture = SuggestionFixture.Create();
+        var secret = $"issue-draft-secret-{Guid.NewGuid():N}";
+        fixture.Add(
+            "output_format",
+            "csharp",
+            "Issue draft export should redact sampled metadata",
+            submitted: false,
+            sampledTitle: $"Leaked api_key={secret}");
+        var openIssuesPath = fixture.WriteOpenIssuesJson("[]");
+
+        var (exitCode, stdout, stderr) = RunCliInSubprocess([
+            "suggestions", "export", "--db", fixture.DbPath, "--format", "issue-drafts", "--open-issues", openIssuesPath
+        ]);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.DoesNotContain(secret, stdout);
+        using var doc = JsonDocument.Parse(stdout);
+        var title = doc.RootElement.GetProperty("drafts")[0].GetProperty("title").GetString();
+        Assert.Contains("REDACTED:credential", title!);
     }
 
     [Fact]
