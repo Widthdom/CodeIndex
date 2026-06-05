@@ -126,6 +126,37 @@ public class McpAuditLogTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_OversizedRequestId_IsRejectedBeforeAuditRecord_Issue3104()
+    {
+        using var sink = new AuditLogSink(_auditPath, AuditLogSink.DefaultMaxBytes, includeValues: false);
+        using var server = CreateServer(sink);
+        var oversizedId = new string('r', McpServer.MaxRequestIdCharacterCount + 1);
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = oversizedId,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "ping",
+                ["arguments"] = new JsonObject(),
+            },
+        };
+
+        var response = server.HandleMessage(request)!;
+
+        Assert.Equal(-32600, response["error"]!["code"]!.GetValue<int>());
+        Assert.Equal("invalid_request", response["error"]!["data"]!["category"]!.GetValue<string>());
+        AssertJsonNullId(response);
+        if (File.Exists(_auditPath))
+        {
+            var rawLog = File.ReadAllText(_auditPath);
+            Assert.DoesNotContain(oversizedId, rawLog, StringComparison.Ordinal);
+            Assert.True(string.IsNullOrWhiteSpace(rawLog), "oversized request ids must be rejected before tool audit emission");
+        }
+    }
+
+    [Fact]
     public void ToolsCall_DisabledTool_EmitsAuditRecordWithToolDisabledError()
     {
         // Regression for #1562 codex review: operator-denied tools must show up in the
@@ -594,5 +625,11 @@ public class McpAuditLogTests : IDisposable
         var lines = File.ReadAllLines(_auditPath);
         Assert.Single(lines);
         return JsonDocument.Parse(lines[0]).RootElement.Clone();
+    }
+
+    private static void AssertJsonNullId(JsonNode response)
+    {
+        Assert.True(response.AsObject().ContainsKey("id"), "JSON-RPC error responses must include id:null");
+        Assert.Null(response["id"]);
     }
 }

@@ -174,6 +174,8 @@ public partial class McpServer : IDisposable
     private const string SamplingEnabledEnvironmentVariable = "CDIDX_MCP_SAMPLING";
     internal const int MaxJsonDepth = 32;
     internal const int MaxBatchRequestCount = 100;
+    internal const int MaxRequestIdCharacterCount = 128;
+    internal const int MaxRequestIdByteLength = 256;
     // Stdio buffer for the JSON-RPC loop. Sized to fit typical large MCP payloads (e.g. batch_query)
     // in a single read so the StreamReader does not grow from its 1 KB default toward MaxLineCharacterCount.
     // JSON-RPCループのstdioバッファ。大きめのMCPペイロードを1回の読み取りで吸収し、
@@ -968,7 +970,10 @@ public partial class McpServer : IDisposable
             || obj["method"] is not null)
             return false;
 
-        var key = id?.ToJsonString(_jsonOptions) ?? "null";
+        if (!TrySerializeRequestId(id, out var serializedId, out _))
+            return false;
+
+        var key = serializedId ?? "null";
         if (!_pendingClientRequests.TryRemove(key, out var pending))
             return false;
 
@@ -1223,11 +1228,12 @@ public partial class McpServer : IDisposable
         // で例外を投げると、認証ゲート前に -32603 が返ってしまい、未認証呼び出し元に dispatch
         // 内部まで届いた事実が漏れる (#1559)。
         var method = TryGetStringMember(obj, "method");
-        if (!TryGetRequestId(obj, out var hasId, out var id))
-            return CreateErrorResponse(hasId: true, id: null, code: -32600, message: "Invalid request: id must be string, number, or null",
+        if (!TryGetRequestId(obj, out var hasId, out var id, out var idError))
+            return CreateErrorResponse(hasId: true, id: null, code: -32600, message: BuildInvalidRequestIdMessage(idError),
                 category: McpErrorEnvelope.CategoryInvalidRequest,
-                suggestion: "JSON-RPC 2.0 `id` must be a string, integer, or null. Booleans/objects/arrays are not allowed.",
-                retrySafe: false);
+                suggestion: BuildInvalidRequestIdSuggestion(idError),
+                retrySafe: false,
+                extraData: BuildInvalidRequestIdData(idError));
 
         using var correlationScope = hasId && CurrentCorrelationContext.Value is null ? BeginRequestCorrelation(id) : null;
 
@@ -2932,16 +2938,7 @@ public partial class McpServer : IDisposable
 
     private static string? SerializeRequestId(JsonNode? id)
     {
-        if (id is null)
-            return null;
-        try
-        {
-            return id.ToJsonString();
-        }
-        catch
-        {
-            return null;
-        }
+        return TrySerializeRequestId(id, out var serialized, out _) ? serialized : null;
     }
 
     private static string? TryReadStringArg(JsonNode? args, string key)
@@ -3183,8 +3180,19 @@ public partial class McpServer : IDisposable
 
     // --- JSON-RPC helpers / JSON-RPCヘルパー ---
 
-    private static bool TryGetRequestId(JsonObject request, out bool hasId, out JsonNode? id)
+    private enum RequestIdValidationError
     {
+        None,
+        InvalidType,
+        TooLong,
+    }
+
+    private static bool TryGetRequestId(JsonObject request, out bool hasId, out JsonNode? id)
+        => TryGetRequestId(request, out hasId, out id, out _);
+
+    private static bool TryGetRequestId(JsonObject request, out bool hasId, out JsonNode? id, out RequestIdValidationError error)
+    {
+        error = RequestIdValidationError.None;
         hasId = request.TryGetPropertyValue("id", out id);
         if (!hasId)
             return true;
@@ -3192,18 +3200,121 @@ public partial class McpServer : IDisposable
         if (id is null)
             return true;
 
-        if (id is JsonValue)
-        {
-            var serialized = id.ToJsonString();
-            if (serialized.Length == 0)
-                return false;
+        return TrySerializeRequestId(id, out _, out error);
+    }
 
-            var first = serialized[0];
-            return first == '"' || first == '-' || char.IsDigit(first) || first == 'n';
+    private static bool TrySerializeRequestId(JsonNode? id, out string? serialized, out RequestIdValidationError error)
+    {
+        serialized = null;
+        error = RequestIdValidationError.None;
+        if (id is null)
+            return true;
+
+        if (id is not JsonValue value)
+        {
+            error = RequestIdValidationError.InvalidType;
+            return false;
         }
 
-        return false;
+        return TrySerializeRequestIdValue(value, out serialized, out error);
     }
+
+    private static bool TrySerializeRequestIdValue(JsonValue value, out string? serialized, out RequestIdValidationError error)
+    {
+        serialized = null;
+        error = RequestIdValidationError.None;
+        JsonValueKind kind;
+        try
+        {
+            kind = value.GetValueKind();
+        }
+        catch
+        {
+            error = RequestIdValidationError.InvalidType;
+            return false;
+        }
+
+        switch (kind)
+        {
+            case JsonValueKind.String:
+                try
+                {
+                    var requestId = value.GetValue<string>();
+                    if (!IsRequestIdWithinBounds(requestId))
+                    {
+                        error = RequestIdValidationError.TooLong;
+                        return false;
+                    }
+
+                    serialized = JsonSerializer.Serialize(requestId);
+                    return true;
+                }
+                catch
+                {
+                    error = RequestIdValidationError.InvalidType;
+                    return false;
+                }
+
+            case JsonValueKind.Number:
+                try
+                {
+                    serialized = value.TryGetValue<JsonElement>(out var element) && element.ValueKind == JsonValueKind.Number
+                        ? element.GetRawText()
+                        : value.ToJsonString();
+                }
+                catch
+                {
+                    error = RequestIdValidationError.InvalidType;
+                    return false;
+                }
+
+                if (serialized.Length == 0 || !(serialized[0] == '-' || char.IsDigit(serialized[0])))
+                {
+                    error = RequestIdValidationError.InvalidType;
+                    serialized = null;
+                    return false;
+                }
+
+                if (!IsRequestIdWithinBounds(serialized))
+                {
+                    error = RequestIdValidationError.TooLong;
+                    serialized = null;
+                    return false;
+                }
+
+                return true;
+
+            case JsonValueKind.Null:
+                return true;
+
+            default:
+                error = RequestIdValidationError.InvalidType;
+                return false;
+        }
+    }
+
+    private static bool IsRequestIdWithinBounds(string value)
+        => value.Length <= MaxRequestIdCharacterCount
+            && Encoding.UTF8.GetByteCount(value) <= MaxRequestIdByteLength;
+
+    private static string BuildInvalidRequestIdMessage(RequestIdValidationError error)
+        => error == RequestIdValidationError.TooLong
+            ? "Invalid request: id exceeds the request-id length limit"
+            : "Invalid request: id must be string, number, or null";
+
+    private static string BuildInvalidRequestIdSuggestion(RequestIdValidationError error)
+        => error == RequestIdValidationError.TooLong
+            ? $"JSON-RPC 2.0 `id` must be no more than {MaxRequestIdCharacterCount} characters and {MaxRequestIdByteLength} UTF-8 bytes. Use a compact string or number id."
+            : "JSON-RPC 2.0 `id` must be a string, integer, or null. Booleans/objects/arrays are not allowed.";
+
+    private static JsonObject? BuildInvalidRequestIdData(RequestIdValidationError error)
+        => error == RequestIdValidationError.TooLong
+            ? new JsonObject
+            {
+                ["max_request_id_chars"] = MaxRequestIdCharacterCount,
+                ["max_request_id_bytes"] = MaxRequestIdByteLength,
+            }
+            : null;
 
     private static JsonObject CreateSuccessResponse(JsonNode? id, JsonNode result)
         => CreateSuccessResponse(id is not null, id, result);

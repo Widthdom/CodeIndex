@@ -16,6 +16,10 @@ internal sealed class LspServer : IDisposable
     internal const int MaxLspHeaderLineBytes = 8 * 1024;
     internal const int MaxPositionDocumentBytes = 4 * 1024 * 1024;
     internal const int MaxJsonDepth = 32;
+    private const int JsonRpcInvalidParamsCode = -32602;
+    private const int JsonRpcInternalErrorCode = -32603;
+    private const string JsonRpcInvalidParamsMessage = "Invalid params";
+    private const string JsonRpcInternalErrorMessage = "Internal error";
     private static readonly JsonDocumentOptions LspJsonDocumentOptions = new()
     {
         MaxDepth = MaxJsonDepth,
@@ -98,9 +102,13 @@ internal sealed class LspServer : IDisposable
                     _ => hasId ? Error(id, -32601, $"Method not found: {method}") : null,
                 };
             }
-            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or JsonException or IOException)
+            catch (Exception ex) when (ex is ArgumentException or JsonException)
             {
-                return hasId ? Error(id, -32602, ex.Message) : null;
+                return hasId ? Error(id, JsonRpcInvalidParamsCode, JsonRpcInvalidParamsMessage) : null;
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or IOException)
+            {
+                return hasId ? Error(id, JsonRpcInternalErrorCode, JsonRpcInternalErrorMessage) : null;
             }
         }
     }
