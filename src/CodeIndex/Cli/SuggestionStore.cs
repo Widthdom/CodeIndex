@@ -725,9 +725,10 @@ public class SuggestionStore
                 continue;
             }
 
-            results.Add(record);
             if (take.HasValue && results.Count >= take.Value)
-                break;
+                continue;
+
+            results.Add(record);
         }
 
         return results;

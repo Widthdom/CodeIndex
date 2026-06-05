@@ -148,6 +148,19 @@ public class SuggestionStoreTests : IDisposable
         Assert.True(File.Exists(path + ".bak"));
     }
 
+    [Fact]
+    public void LoadPage_TooManyRecordsAfterPage_PreservesBackupAndReturnsEmpty()
+    {
+        var path = Path.Combine(_tempDir, "suggestions-codeindex.json");
+        WriteEmptyRecordStore(path, SuggestionStore.MaxSuggestionStoreRecords + 1);
+
+        var records = _store.Load(skip: 0, take: 1);
+
+        Assert.Empty(records);
+        Assert.False(File.Exists(path));
+        Assert.True(File.Exists(path + ".bak"));
+    }
+
     // --- TryAdd tests / TryAdd テスト ---
 
     [Fact]
