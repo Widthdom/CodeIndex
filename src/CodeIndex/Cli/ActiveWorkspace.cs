@@ -9,6 +9,11 @@ internal static class ActiveWorkspace
 {
     internal const string EnvironmentVariable = "CDIDX_ACTIVE_WORKSPACE";
     private const int MaxStateBytes = 64 * 1024;
+    internal const int MaxStateJsonDepth = 16;
+    private static readonly JsonDocumentOptions StateJsonDocumentOptions = new()
+    {
+        MaxDepth = MaxStateJsonDepth,
+    };
 
     internal static string StatePath
     {
@@ -41,7 +46,7 @@ internal static class ActiveWorkspace
                 return null;
             }
 
-            using var document = JsonDocument.Parse(text);
+            using var document = JsonDocument.Parse(text, StateJsonDocumentOptions);
             var root = document.RootElement;
             var name = ReadString(root, "name") ?? "default";
             var workspaceRoot = ReadString(root, "root") ?? Environment.CurrentDirectory;

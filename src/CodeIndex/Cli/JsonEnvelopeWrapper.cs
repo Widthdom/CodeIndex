@@ -18,6 +18,7 @@ internal static class JsonEnvelopeWrapper
 {
     internal const string EnvelopeFlag = "--json-envelope";
     internal const int MaxCapturedOutputChars = 10 * 1024 * 1024;
+    internal const int MaxRawJsonItemDepth = 32;
 
     private static readonly HashSet<string> WrappableCommands = new(StringComparer.Ordinal)
     {
@@ -210,7 +211,7 @@ internal static class JsonEnvelopeWrapper
             JsonNode? node;
             try
             {
-                node = JsonNode.Parse(line);
+                node = JsonNode.Parse(line, documentOptions: new JsonDocumentOptions { MaxDepth = MaxRawJsonItemDepth });
             }
             catch (JsonException)
             {

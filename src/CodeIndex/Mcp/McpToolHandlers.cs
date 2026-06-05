@@ -2107,11 +2107,11 @@ public partial class McpServer
             var status = reader.GetStatus();
             WorkspaceMetadataEnricher.Enrich(status, _dbPath, _dbPathExplicit);
             status.MacProfile = MacProfileDetector.DetectCurrent();
-            status.GraphSupportedLanguages = ReferenceExtractor.GetSupportedLanguages().OrderBy(l => l).ToList();
             ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(status.ProjectRoot);
+            status.GraphSupportedLanguages = ReferenceExtractor.GetSupportedLanguages().OrderBy(l => l).ToList();
             status.Extractors = ExtractorPluginRegistry.GetStatusSnapshot();
-            using var postExtractionHookRunner = PostExtractionHookRunner.DiscoverDefault();
-            var postExtractionHooks = postExtractionHookRunner.Hooks;
+            var postExtractionHookSnapshot = PostExtractionHookRunner.DiscoverDefaultMetadata();
+            var postExtractionHooks = postExtractionHookSnapshot.Hooks;
             if (postExtractionHooks.Count > 0)
             {
                 status.Hooks = postExtractionHooks
@@ -2120,7 +2120,7 @@ public partial class McpServer
                         Name = hook.Name,
                         AssemblyPath = hook.AssemblyPath,
                         TypeName = hook.TypeName,
-                        CallbackBudgetMs = (long)Math.Round(postExtractionHookRunner.CallbackBudget.TotalMilliseconds, MidpointRounding.AwayFromZero),
+                        CallbackBudgetMs = (long)Math.Round(postExtractionHookSnapshot.CallbackBudget.TotalMilliseconds, MidpointRounding.AwayFromZero),
                     })
                     .ToList();
             }
@@ -4391,7 +4391,13 @@ public partial class McpServer
         if (toolInvocationContext != null && SourceCodeDetector.ContainsSourceCode(toolInvocationContext))
             return CreateToolErrorResponse(id, "Tool invocation context appears to contain source code. Please describe the invocation without including code.");
 
-        var sampling = await TrySampleSuggestionMetadataAsync(category, language, description, context, toolInvocationContext).ConfigureAwait(false);
+        var sampling = await TrySampleSuggestionMetadataAsync(
+            category,
+            language,
+            RedactSuggestionSamplingInput(description),
+            context == null ? null : RedactSuggestionSamplingInput(context),
+            toolInvocationContext == null ? null : RedactSuggestionSamplingInput(toolInvocationContext)).ConfigureAwait(false);
+        sampling = RedactSuggestionSamplingResult(sampling);
 
         // 4. Compute dedup hash / 重複排除ハッシュを計算
         var hash = SuggestionStore.ComputeHash(category, language, description);
@@ -4448,13 +4454,14 @@ public partial class McpServer
         }
 
         var result = await store.TryAddAndSubmitAsync(record, githubCallback).ConfigureAwait(false);
+        var storedHash = result.StoredHash ?? hash;
 
         if (!result.IsNew)
         {
             var dupPayload = new JsonObject
             {
                 ["status"] = "duplicate",
-                ["hash"] = hash,
+                ["hash"] = storedHash,
                 ["message"] = result.AlreadySubmitted
                     ? "This suggestion has already been recorded and submitted."
                     : result.UpstreamUrl != null
@@ -4483,7 +4490,7 @@ public partial class McpServer
         var payload = new JsonObject
         {
             ["status"] = "recorded",
-            ["hash"] = hash,
+            ["hash"] = storedHash,
             ["category"] = category,
             ["language"] = language,
             ["stored_locally"] = true,
@@ -4574,6 +4581,33 @@ public partial class McpServer
 
     private sealed record SuggestionSamplingResult(string? Title, string[]? Tags);
 
+    private static string RedactSuggestionSamplingInput(string value)
+        => SuggestionStore.RedactSensitiveText(value, out _);
+
+    private static SuggestionSamplingResult? RedactSuggestionSamplingResult(SuggestionSamplingResult? sampling)
+    {
+        if (sampling == null)
+            return null;
+
+        var title = SanitizeSampledTitle(RedactNullableSamplingValue(sampling.Title));
+        var tags = sampling.Tags?
+            .Select(RedactNullableSamplingValue)
+            .Where(t => !string.IsNullOrWhiteSpace(t))
+            .Select(SanitizeSampledTag)
+            .Where(t => t != null)
+            .Cast<string>()
+            .Distinct(StringComparer.Ordinal)
+            .Take(6)
+            .ToArray();
+
+        return title == null && (tags == null || tags.Length == 0)
+            ? null
+            : new SuggestionSamplingResult(title, tags is { Length: > 0 } ? tags : null);
+    }
+
+    private static string? RedactNullableSamplingValue(string? value)
+        => value == null ? null : SuggestionStore.RedactSensitiveText(value, out _);
+
     private async Task<SuggestionSamplingResult?> TrySampleSuggestionMetadataAsync(
         string category,
         string? language,
@@ -4611,9 +4645,11 @@ public partial class McpServer
         try
         {
             var parsed = JsonNode.Parse(text, documentOptions: new JsonDocumentOptions { MaxDepth = MaxSamplingResponseJsonDepth });
-            var title = SanitizeSampledTitle(TryReadStringValue(parsed?["title"]));
+            var title = SanitizeSampledTitle(RedactNullableSamplingValue(TryReadStringValue(parsed?["title"])));
             var tags = parsed?["tags"] is JsonArray tagArray
                 ? tagArray.Select(TryReadStringValue)
+                    .Where(t => !string.IsNullOrWhiteSpace(t))
+                    .Select(RedactNullableSamplingValue)
                     .Where(t => !string.IsNullOrWhiteSpace(t))
                     .Select(SanitizeSampledTag)
                     .Where(t => t != null)

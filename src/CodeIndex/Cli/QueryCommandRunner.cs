@@ -24,6 +24,7 @@ public static class QueryCommandRunner
     internal const int DefaultImpactLimit = 50;
     internal const int BatchMaxLineChars = 1024 * 1024;
     internal const int BatchMaxArgumentCount = 256;
+    internal const int BatchMaxJsonDepth = 32;
     internal const string DefaultLimitEnvironmentVariable = "CDIDX_DEFAULT_LIMIT";
     internal const string DefaultSnippetLinesEnvironmentVariable = "CDIDX_DEFAULT_SNIPPET_LINES";
     internal const string DefaultMaxLineWidthEnvironmentVariable = "CDIDX_DEFAULT_MAX_LINE_WIDTH";
@@ -33,6 +34,11 @@ public static class QueryCommandRunner
     private const string LanguageCapabilitySymbols = "symbols";
     internal static readonly TimeSpan DefaultStaleAfter = TimeSpan.FromHours(24);
     internal static TimeProvider TimeProvider { get; set; } = TimeProvider.System;
+    private static readonly JsonDocumentOptions BatchJsonDocumentOptions = new()
+    {
+        MaxDepth = BatchMaxJsonDepth,
+    };
+
     [ThreadStatic]
     private static DbReader? s_batchReader;
 
@@ -372,7 +378,7 @@ public static class QueryCommandRunner
 
         try
         {
-            using var document = JsonDocument.Parse(line);
+            using var document = JsonDocument.Parse(line, BatchJsonDocumentOptions);
             if (document.RootElement.ValueKind != JsonValueKind.Array || document.RootElement.GetArrayLength() == 0)
             {
                 Console.Error.WriteLine($"Error: batch line {lineNumber} must be a non-empty JSON string array.");
@@ -3137,11 +3143,11 @@ public static class QueryCommandRunner
             }
             // Attach runtime metadata / ランタイムメタデータを付加
             status.SymbolKinds = reader.GetSymbolKindCounts();
-            status.GraphSupportedLanguages = ReferenceExtractor.GetSupportedLanguages().OrderBy(l => l).ToList();
             ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(status.ProjectRoot);
+            status.GraphSupportedLanguages = ReferenceExtractor.GetSupportedLanguages().OrderBy(l => l).ToList();
             status.Extractors = ExtractorPluginRegistry.GetStatusSnapshot();
-            using var postExtractionHookRunner = PostExtractionHookRunner.DiscoverDefault();
-            var postExtractionHooks = postExtractionHookRunner.Hooks;
+            var postExtractionHookSnapshot = PostExtractionHookRunner.DiscoverDefaultMetadata();
+            var postExtractionHooks = postExtractionHookSnapshot.Hooks;
             if (postExtractionHooks.Count > 0)
             {
                 status.Hooks = postExtractionHooks
@@ -3150,7 +3156,7 @@ public static class QueryCommandRunner
                         Name = hook.Name,
                         AssemblyPath = hook.AssemblyPath,
                         TypeName = hook.TypeName,
-                        CallbackBudgetMs = (long)Math.Round(postExtractionHookRunner.CallbackBudget.TotalMilliseconds, MidpointRounding.AwayFromZero),
+                        CallbackBudgetMs = (long)Math.Round(postExtractionHookSnapshot.CallbackBudget.TotalMilliseconds, MidpointRounding.AwayFromZero),
                     })
                     .ToList();
             }

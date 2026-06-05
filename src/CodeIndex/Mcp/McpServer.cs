@@ -833,7 +833,7 @@ public partial class McpServer : IDisposable
     {
         try
         {
-            var node = JsonNode.Parse(frame);
+            var node = JsonNode.Parse(frame, documentOptions: new JsonDocumentOptions { MaxDepth = MaxJsonDepth });
             return node is JsonObject obj
                 && obj.ContainsKey("id")
                 && obj["method"] is null

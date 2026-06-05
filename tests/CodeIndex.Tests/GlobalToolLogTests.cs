@@ -53,6 +53,64 @@ public class GlobalToolLogTests
     }
 
     [Fact]
+    public void FormatArgs_RedactsUnderscoreSeparatedSecretArguments()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_LOG_REDACT");
+        env.Set("CDIDX_LOG_REDACT", null);
+
+        var formatted = GlobalToolLog.FormatArgs([
+            "--api_key=api-secret",
+            "--access_key",
+            "access-secret",
+        ]);
+
+        Assert.Contains("--api_key=<redacted>", formatted);
+        Assert.Contains("--access_key <redacted>", formatted);
+        Assert.DoesNotContain("api-secret", formatted);
+        Assert.DoesNotContain("access-secret", formatted);
+    }
+
+    [Fact]
+    public void FormatArgs_TruncatesOverlongArgumentBeforeRedaction()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_LOG_REDACT");
+        env.Set("CDIDX_LOG_REDACT", null);
+        var tailSecret = "tail-secret-value-should-not-survive";
+        var argument = "safe:" + new string('!', GlobalToolLog.RedactionArgumentLengthLimit) + tailSecret;
+
+        var formatted = GlobalToolLog.FormatArgs([argument]);
+
+        Assert.Contains(GlobalToolLog.RedactionTruncationMarker, formatted);
+        Assert.DoesNotContain(tailSecret, formatted);
+        Assert.True(formatted.Length < argument.Length);
+    }
+
+    [Fact]
+    public void FormatArgs_RedactsOverlongUriUserInfoBeforeTruncation()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_LOG_REDACT");
+        env.Set("CDIDX_LOG_REDACT", null);
+        var argument = "https://user:" + new string('!', GlobalToolLog.RedactionArgumentLengthLimit) + "@example.test/repo.git";
+
+        var formatted = GlobalToolLog.FormatArgs([argument]);
+
+        Assert.Equal("<redacted>", formatted);
+        Assert.DoesNotContain("user:", formatted);
+    }
+
+    [Fact]
+    public void FormatArgs_RedactsOverlongSensitiveAssignment()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_LOG_REDACT");
+        env.Set("CDIDX_LOG_REDACT", null);
+        var argument = "--api_key=" + new string('x', GlobalToolLog.RedactionArgumentLengthLimit * 2);
+
+        var formatted = GlobalToolLog.FormatArgs([argument]);
+
+        Assert.Equal("--api_key=<redacted>", formatted);
+    }
+
+    [Fact]
     public void FormatArgs_AllowsExplicitNoRedaction()
     {
         using var env = EnvironmentVariableScope.Capture("CDIDX_LOG_REDACT");

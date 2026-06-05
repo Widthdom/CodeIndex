@@ -1994,7 +1994,7 @@ internal static class LanguageReferenceExtractionSupport
 
         foreach (var regex in new[] { GoVarTypeRegex, GoFieldTypeRegex, GoTypeAliasRegex })
         {
-            foreach (Match match in regex.Matches(preparedLine))
+            foreach (Match match in BoundedRegex.EnumerateMatches(regex, preparedLine))
             {
                 var group = match.Groups["type"];
                 EmitGoTypeExpression(group.Value, group.Index, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
@@ -5355,7 +5355,7 @@ internal static class LanguageReferenceExtractionSupport
 
     private static IEnumerable<Match> EnumerateMatches(Regex regex, string input)
     {
-        foreach (Match match in regex.Matches(input))
+        foreach (Match match in BoundedRegex.EnumerateMatches(regex, input))
             yield return match;
     }
 

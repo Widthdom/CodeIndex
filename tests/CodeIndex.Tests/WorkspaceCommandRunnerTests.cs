@@ -360,6 +360,48 @@ public class WorkspaceCommandRunnerTests
     }
 
     [Fact]
+    public void DeeplyNestedActiveWorkspaceState_DoesNotOverrideQueryResolution_Issue3036()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_active_workspace_depth_project");
+        var configHome = TestProjectHelper.CreateTempProject("cdidx_active_workspace_depth_config");
+        try
+        {
+            using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME");
+            Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
+            Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
+            Directory.CreateDirectory(Path.GetDirectoryName(ActiveWorkspace.StatePath)!);
+            var activeDbPath = Path.Combine(configHome, "active.db");
+            var nestedPrefix = string.Concat(Enumerable.Repeat("""{"next":""", ActiveWorkspace.MaxStateJsonDepth + 1));
+            var nested = nestedPrefix + "0" + new string('}', ActiveWorkspace.MaxStateJsonDepth + 1);
+            File.WriteAllText(ActiveWorkspace.StatePath, $$"""
+                {
+                  "name": "active",
+                  "root": {{JsonSerializer.Serialize(configHome)}},
+                  "db_path": {{JsonSerializer.Serialize(activeDbPath)}},
+                  "extra": {{nested}}
+                }
+                """);
+
+            DbPathResolution? query = null;
+            var (_, _, stderr) = ConsoleCapture.Capture(() =>
+            {
+                query = DbPathResolver.ResolveForQuery(projectRoot, explicitDbPath: null, explicitDataDir: null);
+                return 0;
+            });
+
+            Assert.NotNull(query);
+            Assert.Contains("Ignoring active workspace state", stderr);
+            Assert.Equal(Path.Combine(projectRoot, ".cdidx", "codeindex.db"), query!.DbPath);
+            Assert.Equal(DbPathResolver.DataDirSourceWorkspace, query.DataDirSource);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            TestProjectHelper.DeleteDirectory(configHome);
+        }
+    }
+
+    [Fact]
     public void ActiveWorkspaceSave_OnPosix_WritesPrivateStateFile()
     {
         if (OperatingSystem.IsWindows())
