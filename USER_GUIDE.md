@@ -1386,8 +1386,10 @@ Each record is a single JSON object on its own line with these fields:
 | `wal_checkpoint_ms` | number (optional) | Reserved for future WAL checkpoint timing |
 | `files_indexed` | number (optional) | Reserved for future per-index file counts |
 | `error` | string (optional) | Short error category, when the command failed in a way worth tagging |
+| `<field>_length` | number (optional) | Original character count when `tool`, `source`, `language`, or `error` was truncated |
+| `<field>_truncated` | boolean (optional) | Present and `true` when `tool`, `source`, `language`, or `error` was truncated |
 
-Optional fields are omitted from the JSON when null so future consumers can grow new columns without breaking older parsers. The file is local-only and uses the relaxed JSON encoder so timestamps stay human-readable in `tail` / `grep` workflows.
+Optional fields are omitted from the JSON when null so future consumers can grow new columns without breaking older parsers. Metrics string fields are bounded before serialization. If `tool`, `source`, `language`, or `error` is too long, the emitted value is clipped and the record includes the matching `<field>_length` / `<field>_truncated` metadata so consumers can detect the truncation. Each serialized JSON object is also kept within an 8 KiB event budget, so pathological escaping can reduce string fields below the normal per-field cap. The file is local-only and uses the relaxed JSON encoder so timestamps stay human-readable in `tail` / `grep` workflows.
 
 Example output:
 
@@ -3618,8 +3620,10 @@ MCP ツールで catch-all まで突き抜けた例外（想定外の SQLite 例
 | `wal_checkpoint_ms` | number（任意） | 将来の WAL チェックポイント時間計測用に予約 |
 | `files_indexed` | number（任意） | 将来の index 当たり処理ファイル数用に予約 |
 | `error` | string（任意） | タグ付けに値する失敗時の短いエラーカテゴリ |
+| `<field>_length` | number（任意） | `tool` / `source` / `language` / `error` が切り詰められた場合の元の文字数 |
+| `<field>_truncated` | boolean（任意） | `tool` / `source` / `language` / `error` が切り詰められた場合に `true` で付与 |
 
-任意フィールドは値が null のとき JSON から省略されるため、後でフィールドを追加しても古いパーサを壊しません。ファイルはローカル専用で、`tail` / `grep` ワークフローでも timestamp が人間可読のまま残るよう relaxed エンコーダを使用します。
+任意フィールドは値が null のとき JSON から省略されるため、後でフィールドを追加しても古いパーサを壊しません。metrics の文字列フィールドは serialization 前に制限されます。`tool` / `source` / `language` / `error` が長すぎる場合、出力値は切り詰められ、対応する `<field>_length` / `<field>_truncated` metadata により consumer が truncation を検出できます。各 serialized JSON object は 8 KiB の event budget 内にも収められるため、escape による膨張が激しい入力では通常の field 単位上限よりさらに短くなる場合があります。ファイルはローカル専用で、`tail` / `grep` ワークフローでも timestamp が人間可読のまま残るよう relaxed エンコーダを使用します。
 
 出力例:
 

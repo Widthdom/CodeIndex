@@ -880,6 +880,21 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ResourcesList_DoesNotAdvertiseUrisTooLongToRead_Issue3122()
+    {
+        var longPath = "src/" + new string('x', McpBoundedText.MaxResourceUriChars) + ".cs";
+        InsertIndexedFile(longPath, "csharp", "public class TooLongResource { }");
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"resources/list","params":{}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+
+        var resources = response["result"]!["resources"]!.AsArray();
+        Assert.DoesNotContain(resources, resource => resource!["name"]!.GetValue<string>() == longPath);
+        Assert.All(resources, resource =>
+            Assert.True(resource!["uri"]!.GetValue<string>().Length <= McpBoundedText.MaxResourceUriChars));
+    }
+
+    [Fact]
     public void ResourcesRead_ReturnsIndexedFileContent()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"cdidx://file/src/app.cs"}}""")!;
@@ -12123,6 +12138,25 @@ public class McpServerTests : IDisposable
         Assert.Equal(caller.Length, data["caller_length"]!.GetValue<int>());
         Assert.True(data["caller_truncated"]!.GetValue<bool>());
         Assert.Contains(display.Text, log);
+    }
+
+    [Fact]
+    public void RateLimited_ErrorAndLog_TruncatesToolName_Issue3118()
+    {
+        var tool = new string('t', McpBoundedText.MaxToolNameChars + 25);
+        var display = McpBoundedText.ForDisplay(tool, McpBoundedText.MaxToolNameChars);
+
+        var response = McpServer.CreateRateLimitedErrorResponse(null, tool, "client", retryAfterMs: 123);
+        var log = McpServer.BuildRateLimitedLog(tool, "client", retryAfterMs: 123);
+
+        Assert.DoesNotContain(tool, response.ToJsonString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(tool, log, StringComparison.Ordinal);
+        Assert.Contains(display.Text, response["error"]!["message"]!.GetValue<string>());
+        Assert.Contains(display.Text, log);
+        var data = response["error"]!["data"]!;
+        Assert.Equal(display.Text, data["tool"]!.GetValue<string>());
+        Assert.Equal(tool.Length, data["tool_length"]!.GetValue<int>());
+        Assert.True(data["tool_truncated"]!.GetValue<bool>());
     }
 
     [Fact]

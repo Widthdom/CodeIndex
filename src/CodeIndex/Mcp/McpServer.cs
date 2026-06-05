@@ -1890,9 +1890,13 @@ public partial class McpServer : IDisposable
             var resources = new JsonArray();
             foreach (var file in page)
             {
+                var uri = BuildResourceUri(file.Path);
+                if (uri.Length > McpBoundedText.MaxResourceUriChars)
+                    continue;
+
                 resources.Add(new JsonObject
                 {
-                    ["uri"] = BuildResourceUri(file.Path),
+                    ["uri"] = uri,
                     ["name"] = file.Path,
                     ["description"] = $"{file.Path} ({file.Lang ?? "unknown"}, {file.Lines} lines)",
                     ["mimeType"] = GetResourceMimeType(file.Lang),
@@ -2310,6 +2314,7 @@ public partial class McpServer : IDisposable
     /// </summary>
     internal static JsonObject CreateRateLimitedErrorResponse(JsonNode? id, string tool, string caller, long retryAfterMs)
     {
+        var toolDisplay = BoundToolNameForDisplay(tool);
         var callerDisplay = BoundClientIdentityForDisplay(caller);
         // #1560 contract preserved: `error_category`, `tool`, `caller`, `retry_after_ms`.
         // #1581 adds the canonical envelope (`category`, `suggestion`, `retry_safe`) alongside.
@@ -2318,10 +2323,11 @@ public partial class McpServer : IDisposable
         var extraData = new JsonObject
         {
             ["error_category"] = "rate_limited",
-            ["tool"] = tool,
+            ["tool"] = toolDisplay.Text,
             ["caller"] = callerDisplay.Text,
             ["retry_after_ms"] = retryAfterMs,
         };
+        toolDisplay.AddMetadata(extraData, "tool");
         callerDisplay.AddMetadata(extraData, "caller");
         var data = McpErrorEnvelope.BuildData(
             category: McpErrorEnvelope.CategoryRateLimited,
@@ -2331,7 +2337,7 @@ public partial class McpServer : IDisposable
         var error = new JsonObject
         {
             ["code"] = -32000,
-            ["message"] = $"Rate limit exceeded for tool '{tool}' (retry after {retryAfterMs} ms).",
+            ["message"] = $"Rate limit exceeded for tool '{toolDisplay.Text}' (retry after {retryAfterMs} ms).",
             ["data"] = data,
         };
         var response = new JsonObject
