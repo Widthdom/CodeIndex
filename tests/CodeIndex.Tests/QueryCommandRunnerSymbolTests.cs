@@ -692,6 +692,99 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunUnused_WithJsonBucketFilterReturnsOnlyRequestedBucket()
+    {
+        var (projectRoot, dbPath) = CreateUnusedFixtureDb();
+        try
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--bucket", "likely_unused_private"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var symbols = json.GetProperty("symbols");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(1, json.GetProperty("count").GetInt32());
+            Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("likely_unused_private").GetInt32());
+            Assert.False(json.GetProperty("returned_bucket_counts").TryGetProperty("maybe_unused_nonpublic", out _));
+            Assert.Equal("Hidden", symbols[0].GetProperty("name").GetString());
+            Assert.Equal("likely_unused_private", symbols[0].GetProperty("unused_bucket").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunUnused_WithJsonMinConfidenceFiltersLowerConfidenceBuckets()
+    {
+        var (projectRoot, dbPath) = CreateUnusedFixtureDb();
+        try
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--min-confidence", "medium"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(1, json.GetProperty("count").GetInt32());
+            Assert.Equal("Hidden", json.GetProperty("symbols")[0].GetProperty("name").GetString());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("by_confidence").GetProperty("medium").GetInt32());
+            Assert.False(json.GetProperty("summary").GetProperty("by_confidence").TryGetProperty("low", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunUnused_CountJsonWithBucketFilterCountsFilteredSymbols()
+    {
+        var (projectRoot, dbPath) = CreateUnusedFixtureDb();
+        try
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--bucket", "public_or_exported_no_refs", "--count"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(6, json.GetProperty("count").GetInt32());
+            Assert.Equal(1, json.GetProperty("files").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("--bucket", "missing_bucket", "invalid --bucket value")]
+    [InlineData("--min-confidence", "high", "invalid --min-confidence value")]
+    public void RunUnused_InvalidBucketOrConfidenceFails(string optionName, string value, string expectedError)
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+            [optionName, value],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.InvalidArgument, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains(expectedError, stderr);
+        Assert.Contains($"Usage: {ConsoleUi.GetUsageLine("unused")}", stderr);
+    }
+
+    [Fact]
     public void RunUnused_WithJsonUsesReturnedBucketCountsForCurrentPage()
     {
         var (projectRoot, dbPath) = CreateUnusedFixtureDb();

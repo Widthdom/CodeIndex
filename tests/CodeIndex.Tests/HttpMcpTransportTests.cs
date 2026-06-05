@@ -240,6 +240,20 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
+    public async Task HttpTransport_RequestLogger_TooDeepJsonRpcIdReturnsNull_Issue3014()
+    {
+        var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath, requestLogger: records.Enqueue);
+
+        using var response = await harness.PostJsonAsync(BuildNestedJsonRpcRequest(McpServer.MaxJsonDepth + 1));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var snapshot = await WaitForRequestLogRecordsAsync(records, 1);
+        var record = Assert.Single(snapshot, record => record.Method == "POST");
+        Assert.Null(record.RequestId);
+    }
+
+    [Fact]
     public async Task HttpTransport_TwoSequentialRequests_ShareWarmServer()
     {
         // Issue #1558: AI clients should be able to keep a single MCP server warm across
@@ -764,6 +778,35 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
+    public async Task HttpTransport_GenericAuthTokenFallback_AcceptsBearerHeaderWithoutBodyToken()
+    {
+        using var env = EnvironmentVariableScope.Capture(
+            ProgramRunner.McpHttpTokenEnvVar,
+            McpAuthenticatorFactory.AuthTokenEnvVar);
+        env.Set(ProgramRunner.McpHttpTokenEnvVar, null);
+        env.Set(McpAuthenticatorFactory.AuthTokenEnvVar, "generic-token");
+
+        var bearerToken = ProgramRunner.ResolveMcpHttpBearerTokenFromEnvironment();
+        var authenticator = ProgramRunner.CreateMcpAuthenticatorForTransport("http");
+        await using var harness = await McpHttpHarness.StartAsync(
+            _dbPath,
+            bearerToken: bearerToken,
+            authenticator: authenticator);
+
+        using var client = new HttpClient();
+        using var request = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
+        {
+            Content = new StringContent("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", Encoding.UTF8, "application/json"),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "generic-token");
+        using var response = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.DoesNotContain("Unauthorized", body, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task HttpTransport_BearerToken_RejectsMissingHeader()
     {
         const string token = "s3cret-token";
@@ -986,6 +1029,14 @@ public class HttpMcpTransportTests : IDisposable
         return builder.ToString();
     }
 
+    private static string BuildNestedJsonRpcRequest(int nestedObjectCount)
+    {
+        var builder = new StringBuilder("""{"jsonrpc":"2.0","id":1,"method":"ping","params":""");
+        AppendNestedObject(builder, nestedObjectCount);
+        builder.Append('}');
+        return builder.ToString();
+    }
+
     private static void AppendNestedObject(StringBuilder builder, int nestedObjectCount)
     {
         for (var i = 0; i < nestedObjectCount; i++)
@@ -1021,6 +1072,7 @@ public class HttpMcpTransportTests : IDisposable
         public static async Task<McpHttpHarness> StartAsync(
             string dbPath,
             string? bearerToken = null,
+            IMcpAuthenticator? authenticator = null,
             Action<HttpMcpTransport.HttpRequestLogRecord>? requestLogger = null,
             int? maxRequestBodyBytes = null,
             int? maxQueuedRequests = null)
@@ -1034,7 +1086,9 @@ public class HttpMcpTransportTests : IDisposable
                 requestLogger,
                 maxRequestBodyBytes,
                 maxQueuedRequests);
-            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var server = authenticator is null
+                ? new McpServer(dbPath, ConsoleUi.LoadVersion())
+                : new McpServer(dbPath, ConsoleUi.LoadVersion(), dbPathExplicit: false, authenticator);
             var cts = new CancellationTokenSource();
             var loopTask = Task.Run(() => server.RunAsync(transport, cts.Token));
             // Give the listener a tick to start accepting; HttpListener.Start is synchronous but the

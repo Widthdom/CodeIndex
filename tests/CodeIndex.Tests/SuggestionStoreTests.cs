@@ -330,21 +330,75 @@ public class SuggestionStoreTests : IDisposable
         var record = MakeRecord(
             "other",
             null,
-            "AWS AKIA1234567890ABCDEF and password=swordfish and Bearer AbCdEfGhIjKlMnOpQrStUvWxYz123456 should not persist");
+            "AWS AKIA1234567890ABCDEF and password=swordfish and token=tok123 and github_token=git123 and api_key=abc123 and openai_api_key=oa123 and access-key=def456 and CDIDX_GITHUB_TOKEN=cdidx123 and Bearer AbCdEfGhIjKlMnOpQrStUvWxYz123456 should not persist");
         record.Context = "token aaBB11ccDD22eeFF33ggHH44iiJJ55kk";
-        record.ToolInvocationContext = "secret=hunter2";
+        record.ToolInvocationContext = "secret=hunter2 access_key=ghi789";
+        record.SampledTitle = "Sensitive text redaction";
+        record.SampledTags = ["security", "suggestions"];
+        record.EvidencePaths = ["src/CodeIndex/Cli/SuggestionStore.cs"];
 
         Assert.True(_store.TryAdd(record));
 
         var stored = Assert.Single(_store.LoadAll());
         Assert.Contains("[REDACTED:aws_access_key]", stored.Description);
         Assert.Contains("password=[REDACTED:credential]", stored.Description);
+        Assert.Contains("token=[REDACTED:credential]", stored.Description);
+        Assert.Contains("github_token=[REDACTED:credential]", stored.Description);
+        Assert.Contains("api_key=[REDACTED:credential]", stored.Description);
+        Assert.Contains("openai_api_key=[REDACTED:credential]", stored.Description);
+        Assert.Contains("access-key=[REDACTED:credential]", stored.Description);
+        Assert.Contains("CDIDX_GITHUB_TOKEN=[REDACTED:credential]", stored.Description);
         Assert.Contains("[REDACTED:bearer_token]", stored.Description);
         Assert.Contains("[REDACTED:high_entropy_token]", stored.Context);
         Assert.Contains("secret=[REDACTED:credential]", stored.ToolInvocationContext);
+        Assert.Contains("access_key=[REDACTED:credential]", stored.ToolInvocationContext);
+        Assert.Equal("Sensitive text redaction", stored.SampledTitle);
+        Assert.Equal(["security", "suggestions"], stored.SampledTags);
+        Assert.Equal(["src/CodeIndex/Cli/SuggestionStore.cs"], stored.EvidencePaths);
         Assert.DoesNotContain("AKIA1234567890ABCDEF", stored.Description);
         Assert.DoesNotContain("swordfish", stored.Description);
+        Assert.DoesNotContain("tok123", stored.Description);
+        Assert.DoesNotContain("git123", stored.Description);
+        Assert.DoesNotContain("abc123", stored.Description);
+        Assert.DoesNotContain("oa123", stored.Description);
+        Assert.DoesNotContain("def456", stored.Description);
+        Assert.DoesNotContain("cdidx123", stored.Description);
         Assert.DoesNotContain("hunter2", stored.ToolInvocationContext);
+        Assert.DoesNotContain("ghi789", stored.ToolInvocationContext);
+    }
+
+    [Fact]
+    public void TryAdd_RedactsSensitiveSampledMetadataBeforePersistence()
+    {
+        var record = MakeRecord("other", null, "Sampled metadata redaction");
+        record.SampledTitle = "Sampled title api_key=sample-title-secret";
+        record.SampledTags = ["security", "github_token=sample-tag-secret"];
+
+        Assert.True(_store.TryAdd(record));
+
+        var stored = Assert.Single(_store.LoadAll());
+        Assert.Contains("api_key=[REDACTED:credential]", stored.SampledTitle!);
+        Assert.Contains("github_token=[REDACTED:credential]", stored.SampledTags!);
+        Assert.DoesNotContain("sample-title-secret", stored.SampledTitle!);
+        Assert.DoesNotContain("sample-tag-secret", string.Join(" ", stored.SampledTags!));
+    }
+
+    [Fact]
+    public void TryAdd_TruncatesLargeSensitiveFieldsBeforePersistence()
+    {
+        var tailSecret = "tail-secret-value-should-not-survive";
+        var record = MakeRecord(
+            "other",
+            null,
+            "api_key=" + new string('a', SuggestionStore.RedactionFieldLengthLimit) + tailSecret);
+
+        Assert.True(_store.TryAdd(record));
+
+        var stored = Assert.Single(_store.LoadAll());
+        Assert.Contains("api_key=[REDACTED:credential]", stored.Description);
+        Assert.Contains(SuggestionStore.RedactionTruncationMarker, stored.Description);
+        Assert.DoesNotContain(tailSecret, stored.Description);
+        Assert.True(stored.Description.Length < record.Description.Length);
     }
 
     [Fact]
@@ -766,6 +820,28 @@ public class SuggestionStoreTests : IDisposable
     }
 
     [Fact]
+    public void CorruptFile_OnPosixHardensBackupFileMode()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var filePath = Path.Combine(_tempDir, "suggestions-codeindex.json");
+        var backupPath = filePath + ".bak";
+        File.WriteAllText(filePath, "{corrupt json[[[");
+#pragma warning disable CA1416
+        File.SetUnixFileMode(
+            filePath,
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
+#pragma warning restore CA1416
+
+        var all = _store.LoadAll();
+
+        Assert.Empty(all);
+        Assert.True(File.Exists(backupPath), "Corrupt file should be preserved as .bak");
+        AssertPrivateFileMode(backupPath);
+    }
+
+    [Fact]
     public void ZeroByteFile_IsPreservedAsBackup()
     {
         var filePath = Path.Combine(_tempDir, "suggestions-codeindex.json");
@@ -829,6 +905,24 @@ public class SuggestionStoreTests : IDisposable
         Assert.True(File.Exists(archivePath));
         var archive = File.ReadAllText(archivePath);
         Assert.Contains("Old suggestion", archive);
+    }
+
+    [Fact]
+    public void TryAdd_OnPosixCreatesPrivateArchiveFile()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var clock = new ManualTimeProvider(new DateTimeOffset(2031, 1, 1, 0, 0, 0, TimeSpan.Zero));
+        var store = new SuggestionStore(_tempDir, null, clock);
+        var old = MakeRecord("other", null, "Old suggestion");
+        Assert.True(store.TryAdd(old));
+
+        clock.SetUtcNow(new DateTimeOffset(2032, 2, 5, 0, 0, 0, TimeSpan.Zero));
+        var fresh = MakeRecord("other", null, "Fresh suggestion");
+        Assert.True(store.TryAdd(fresh));
+
+        AssertPrivateFileMode(Path.Combine(_tempDir, "suggestions-codeindex.archive.jsonl"));
     }
 
     [Fact]
@@ -943,6 +1037,15 @@ public class SuggestionStoreTests : IDisposable
             Hash = SuggestionStore.ComputeHash(category, language, description),
             CreatedAt = DateTime.UtcNow,
         };
+    }
+
+    private static void AssertPrivateFileMode(string path)
+    {
+#pragma warning disable CA1416
+        Assert.Equal(
+            DataDirectorySecurity.PrivateFileMode,
+            File.GetUnixFileMode(path) & DataDirectorySecurity.PermissionBits);
+#pragma warning restore CA1416
     }
 
     public void Dispose()

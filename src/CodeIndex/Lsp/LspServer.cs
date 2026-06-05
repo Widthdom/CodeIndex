@@ -15,6 +15,12 @@ internal sealed class LspServer : IDisposable
     internal const int MaxLspFrameBytes = 8 * 1024 * 1024;
     internal const int MaxLspHeaderLineBytes = 8 * 1024;
     internal const int MaxPositionDocumentBytes = 4 * 1024 * 1024;
+    internal const int MaxJsonDepth = 32;
+    private static readonly JsonDocumentOptions LspJsonDocumentOptions = new()
+    {
+        MaxDepth = MaxJsonDepth,
+    };
+
     private readonly DbReader _reader;
     private readonly string _version;
     private readonly JsonSerializerOptions _jsonOptions;
@@ -54,7 +60,7 @@ internal sealed class LspServer : IDisposable
         JsonDocument document;
         try
         {
-            document = JsonDocument.Parse(payload);
+            document = JsonDocument.Parse(payload, LspJsonDocumentOptions);
         }
         catch (JsonException)
         {
@@ -74,7 +80,7 @@ internal sealed class LspServer : IDisposable
 
                 var method = root.TryGetProperty("method", out var methodElement) ? methodElement.GetString() : null;
                 hasId = root.TryGetProperty("id", out var idElement);
-                id = hasId ? JsonNode.Parse(idElement.GetRawText()) : null;
+                id = hasId ? JsonNode.Parse(idElement.GetRawText(), documentOptions: LspJsonDocumentOptions) : null;
 
                 if (method == null)
                     return hasId ? Error(id, -32600, "Invalid Request") : null;

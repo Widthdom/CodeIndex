@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
+using System.Reflection;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
@@ -876,6 +877,21 @@ public class McpServerTests : IDisposable
             .Single(r => r!["name"]!.GetValue<string>() == "src/app.cs")!;
         Assert.Equal("cdidx://file/src/app.cs", resource["uri"]!.GetValue<string>());
         Assert.Equal("text/x-csharp", resource["mimeType"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ResourcesList_DoesNotAdvertiseUrisTooLongToRead_Issue3122()
+    {
+        var longPath = "src/" + new string('x', McpBoundedText.MaxResourceUriChars) + ".cs";
+        InsertIndexedFile(longPath, "csharp", "public class TooLongResource { }");
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"resources/list","params":{}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+
+        var resources = response["result"]!["resources"]!.AsArray();
+        Assert.DoesNotContain(resources, resource => resource!["name"]!.GetValue<string>() == longPath);
+        Assert.All(resources, resource =>
+            Assert.True(resource!["uri"]!.GetValue<string>().Length <= McpBoundedText.MaxResourceUriChars));
     }
 
     [Fact]
@@ -8146,6 +8162,58 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_Index_WhenDbLockInfoTooDeep_ReturnsBusyWithoutHolderDetails_Issue3043()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_deep_lock_fixture_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(fixtureDir);
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_index_deep_lock_{Guid.NewGuid():N}.db");
+        var lockPath = McpIndexRunLock.ResolveLockPath(dbPath);
+        Directory.CreateDirectory(Path.GetDirectoryName(lockPath)!);
+        var infoPath = lockPath + ".info";
+        var info = new StringBuilder($$"""{"pid":{{Environment.ProcessId}},"since":"2026-01-02T03:04:05.0000000+00:00","extra":""");
+        AppendNestedObject(info, McpIndexRunLock.MaxInfoJsonDepth + 1);
+        info.Append('}');
+        File.WriteAllText(infoPath, info.ToString());
+        using var heldLock = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        using var server = new McpServer(dbPath, ConsoleUi.LoadVersion(), dbPathExplicit: true);
+        try
+        {
+            var request = new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = 1,
+                ["method"] = "tools/call",
+                ["params"] = new JsonObject
+                {
+                    ["name"] = "index",
+                    ["arguments"] = new JsonObject
+                    {
+                        ["path"] = fixtureDir
+                    }
+                }
+            };
+
+            var response = server.HandleMessage(request)!;
+
+            Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+            var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+            Assert.Contains("index already running on this DB", text);
+            Assert.Contains("holder metadata unavailable", text);
+            Assert.DoesNotContain($"pid {Environment.ProcessId}", text);
+        }
+        finally
+        {
+            heldLock.Dispose();
+            File.Delete(infoPath);
+            File.Delete(lockPath);
+            if (Directory.Exists(fixtureDir))
+                Directory.Delete(fixtureDir, recursive: true);
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
     public void ToolsCall_Index_NonexistentDir_ReturnsError()
     {
         // Use a path within CWD that doesn't exist / CWD内の存在しないパスを使用
@@ -9624,6 +9692,16 @@ public class McpServerTests : IDisposable
         Assert.Equal("UseIOptions", symbols[8]!["name"]!.GetValue<string>());
         Assert.Equal("public_or_exported_no_refs", symbols[8]!["unusedBucket"]!.GetValue<string>());
         Assert.Contains("returned buckets", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+
+        var filteredRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp","path":"unused_fixture.cs","bucket":"likely_unused_private","minConfidence":"medium"}}}""")!;
+        var filteredResponse = _server.HandleMessage(filteredRequest)!;
+        var filteredStructured = filteredResponse["result"]!["structuredContent"]!;
+        var filteredSymbols = filteredStructured["symbols"]!.AsArray();
+
+        Assert.False(filteredResponse["result"]!["isError"]?.GetValue<bool>() ?? false);
+        Assert.Equal(1, filteredStructured["count"]!.GetValue<int>());
+        Assert.Equal("Hidden", filteredSymbols[0]!["name"]!.GetValue<string>());
+        Assert.Equal("likely_unused_private", filteredSymbols[0]!["unusedBucket"]!.GetValue<string>());
     }
 
     [Fact]
@@ -10733,6 +10811,40 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void SuggestImprovement_RedactedDescriptionReturnsStoredHash()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_GITHUB_TOKEN");
+        env.Set("CDIDX_GITHUB_TOKEN", null);
+        var secret = $"secret-{Guid.NewGuid():N}";
+        var description = $"MCP redaction hash regression api_key={secret}";
+        var json = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "suggest_improvement",
+                ["arguments"] = new JsonObject
+                {
+                    ["category"] = "other",
+                    ["description"] = description,
+                }
+            }
+        };
+
+        var response = _server.HandleMessage((JsonNode)json)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        var responseHash = structured["hash"]!.GetValue<string>();
+        var stored = new SuggestionStore(Path.GetDirectoryName(_dbPath)!, Path.GetFileNameWithoutExtension(_dbPath)).LoadAll()
+            .Single(s => s.Hash == responseHash);
+        Assert.Equal(stored.Hash, responseHash);
+        Assert.Contains("api_key=[REDACTED:credential]", stored.Description);
+        Assert.DoesNotContain(secret, stored.Description);
+    }
+
+    [Fact]
     public void SuggestImprovement_RejectsNonRelativeEvidencePath()
     {
         var uniqueDesc = $"Evidence path validation regression {Guid.NewGuid():N}";
@@ -10804,6 +10916,64 @@ public class McpServerTests : IDisposable
             .Single(s => s.Description == uniqueDesc);
         Assert.Equal("Improve TypeScript arrow symbol extraction", stored.SampledTitle);
         Assert.Contains("symbol_extraction", stored.SampledTags!);
+    }
+
+    [Fact]
+    public void SuggestImprovement_WhenSamplingReturnsSensitiveMetadata_RedactsBeforeResponseAndPersistence()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_GITHUB_TOKEN");
+        env.Set("CDIDX_GITHUB_TOKEN", null);
+        _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"capabilities":{"sampling":{}}}}""")!);
+        var secret = $"sample-secret-{Guid.NewGuid():N}";
+        string? capturedPrompt = null;
+        _server.ClientRequestHandlerForTests = (method, parameters) =>
+        {
+            Assert.Equal("sampling/createMessage", method);
+            capturedPrompt = parameters?["messages"]?[0]?["content"]?["text"]?.GetValue<string>();
+            return new JsonObject
+            {
+                ["content"] = new JsonObject
+                {
+                    ["type"] = "text",
+                    ["text"] = $$"""{"title":"Echoed api_key={{secret}}","tags":["github_token={{secret}}"]}"""
+                }
+            };
+        };
+        var description = $"Sampling metadata redaction regression api_key={secret}";
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "suggest_improvement",
+                ["arguments"] = new JsonObject
+                {
+                    ["category"] = "other",
+                    ["description"] = description,
+                }
+            }
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        var sampledTitle = structured["sampled_title"]!.GetValue<string>();
+        var sampledTags = string.Join(" ", structured["sampled_tags"]!.AsArray().Select(tag => tag!.GetValue<string>()));
+        Assert.Contains("api_key=[REDACTED:credential]", sampledTitle);
+        Assert.Contains("redacted", sampledTags);
+        Assert.NotNull(capturedPrompt);
+        Assert.DoesNotContain(secret, capturedPrompt);
+        Assert.DoesNotContain(secret, sampledTitle);
+        Assert.DoesNotContain(secret, sampledTags);
+        var responseHash = structured["hash"]!.GetValue<string>();
+        var stored = new SuggestionStore(Path.GetDirectoryName(_dbPath)!, Path.GetFileNameWithoutExtension(_dbPath)).LoadAll()
+            .Single(s => s.Hash == responseHash);
+        Assert.DoesNotContain(secret, stored.Description);
+        Assert.DoesNotContain(secret, stored.SampledTitle!);
+        Assert.DoesNotContain(secret, string.Join(" ", stored.SampledTags!));
     }
 
     [Fact]
@@ -11997,6 +12167,25 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void RateLimited_ErrorAndLog_TruncatesToolName_Issue3118()
+    {
+        var tool = new string('t', McpBoundedText.MaxToolNameChars + 25);
+        var display = McpBoundedText.ForDisplay(tool, McpBoundedText.MaxToolNameChars);
+
+        var response = McpServer.CreateRateLimitedErrorResponse(null, tool, "client", retryAfterMs: 123);
+        var log = McpServer.BuildRateLimitedLog(tool, "client", retryAfterMs: 123);
+
+        Assert.DoesNotContain(tool, response.ToJsonString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(tool, log, StringComparison.Ordinal);
+        Assert.Contains(display.Text, response["error"]!["message"]!.GetValue<string>());
+        Assert.Contains(display.Text, log);
+        var data = response["error"]!["data"]!;
+        Assert.Equal(display.Text, data["tool"]!.GetValue<string>());
+        Assert.Equal(tool.Length, data["tool_length"]!.GetValue<int>());
+        Assert.True(data["tool_truncated"]!.GetValue<bool>());
+    }
+
+    [Fact]
     public void ToolResult_DatabaseMissing_CarriesEnvelopeOnStructuredContent()
     {
         // Tool-result errors (MCP isError shape) mirror the JSON-RPC envelope by exposing
@@ -12101,6 +12290,16 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void IsServerResponseFrame_TooDeepResponse_ReturnsFalse_Issue3012()
+    {
+        Assert.True(InvokeIsServerResponseFrame("""{"jsonrpc":"2.0","id":1,"result":{}}"""));
+
+        var frame = BuildNestedJsonRpcResponse(McpServer.MaxJsonDepth + 1);
+
+        Assert.False(InvokeIsServerResponseFrame(frame));
+    }
+
+    [Fact]
     public void HandleMessage_BatchMixedRequests_ReturnsResponseArray()
     {
         var batch = JsonNode.Parse("""[{"jsonrpc":"2.0","id":1,"method":"ping"},{"jsonrpc":"2.0","method":"notifications/initialized"},{"jsonrpc":"2.0","id":2,"method":"nope"}]""")!;
@@ -12176,6 +12375,32 @@ public class McpServerTests : IDisposable
         var obj = Assert.IsType<JsonObject>(node);
         Assert.True(obj.ContainsKey("id"));
         Assert.Null(obj["id"]);
+    }
+
+    private static bool InvokeIsServerResponseFrame(string frame)
+    {
+        var method = typeof(McpServer).GetMethod("IsServerResponseFrame", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(method);
+        return (bool)method.Invoke(null, [frame])!;
+    }
+
+    private static string BuildNestedJsonRpcResponse(int nestedObjectCount)
+    {
+        var builder = new StringBuilder("""{"jsonrpc":"2.0","id":1,"result":""");
+        AppendNestedObject(builder, nestedObjectCount);
+        builder.Append('}');
+        return builder.ToString();
+    }
+
+    private static void AppendNestedObject(StringBuilder builder, int nestedObjectCount)
+    {
+        for (var i = 0; i < nestedObjectCount; i++)
+            builder.Append("""{"next":""");
+
+        builder.Append('0');
+
+        for (var i = 0; i < nestedObjectCount; i++)
+            builder.Append('}');
     }
 
     private static void WriteOversizedAsciiFile(string path)

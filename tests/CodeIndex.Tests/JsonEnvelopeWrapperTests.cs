@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using CodeIndex.Cli;
 
@@ -269,6 +270,29 @@ public class JsonEnvelopeWrapperTests
     }
 
     [Fact]
+    public void RunWrapped_TooDeepRawJsonItem_KeepsLineAsString_Issue3016()
+    {
+        var rawLine = BuildNestedRawJson(JsonEnvelopeWrapper.MaxRawJsonItemDepth + 1);
+        var (exitCode, stdout, stderr) = CaptureConsole(() => JsonEnvelopeWrapper.RunWrapped(
+            "search",
+            ["Needle", "--json-envelope"],
+            "1.0.0",
+            _jsonOptions,
+            _ =>
+            {
+                Console.WriteLine(rawLine);
+                return CommandExitCodes.Success;
+            }));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = JsonDocument.Parse(stdout);
+        var result = Assert.Single(document.RootElement.GetProperty("results").EnumerateArray());
+        Assert.Equal(JsonValueKind.String, result.ValueKind);
+        Assert.Equal(rawLine, result.GetString());
+    }
+
+    [Fact]
     public void Symbols_WithEnvelope_NormalizesQueryFromExtraNames()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("envelope_symbols");
@@ -298,4 +322,18 @@ public class JsonEnvelopeWrapperTests
 
     private static (int ExitCode, string Stdout, string Stderr) CaptureConsole(Func<int> action)
         => ConsoleCapture.Capture(action);
+
+    private static string BuildNestedRawJson(int nestedObjectCount)
+    {
+        var builder = new StringBuilder("""{"value":""");
+        for (var i = 0; i < nestedObjectCount; i++)
+            builder.Append("""{"next":""");
+
+        builder.Append('0');
+
+        for (var i = 0; i < nestedObjectCount; i++)
+            builder.Append('}');
+        builder.Append('}');
+        return builder.ToString();
+    }
 }

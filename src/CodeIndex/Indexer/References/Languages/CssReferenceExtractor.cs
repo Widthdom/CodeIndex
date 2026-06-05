@@ -159,7 +159,7 @@ internal static class CssReferenceExtractor
         HashSet<string>? definitionNames,
         SymbolRecord? container)
     {
-        foreach (Match match in pattern.Regex.Matches(preparedLine))
+        foreach (Match match in BoundedRegex.EnumerateMatches(pattern.Regex, preparedLine))
         {
             var nameGroup = match.Groups["name"];
             if (definitionNames != null && definitionNames.Contains(nameGroup.Value))
@@ -443,7 +443,7 @@ internal static class CssReferenceExtractor
         HashSet<string>? definitionNames,
         SymbolRecord? container)
     {
-        foreach (Match match in regex.Matches(selectorPartBody))
+        foreach (Match match in BoundedRegex.EnumerateMatches(regex, selectorPartBody))
         {
             var nameGroup = match.Groups["name"];
             var prefixIndex = nameGroup.Index - 1;

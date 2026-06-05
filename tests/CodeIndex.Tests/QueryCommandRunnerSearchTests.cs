@@ -214,6 +214,219 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_ListRecipesJsonIncludesBuiltInAuditMetadata_Issue3144()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["--list-recipes", "--json"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        var root = document.RootElement;
+        var recipe = root
+            .GetProperty("recipes")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "risky-code");
+        var query = recipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "raw-diagnostic-echo");
+
+        Assert.Equal(1, root.GetProperty("count").GetInt32());
+        Assert.Contains(recipe.GetProperty("recommended_labels").EnumerateArray(), label => label.GetString() == "audit");
+        Assert.Equal("ex.Message", query.GetProperty("query").GetString());
+        Assert.True(query.GetProperty("exact_substring").GetBoolean());
+        Assert.Contains("redaction", query.GetProperty("description").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("False positives", query.GetProperty("false_positive_guidance").GetString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("count")]
+    [InlineData("csv")]
+    public void RunSearch_ListRecipesRejectsUnsupportedFormattedOutputs_Issue3144(string format)
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["--list-recipes", "--format", format],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("--format count/compact/csv/tsv/lsp/qf/sarif/issue-drafts is not supported with --list-recipes", stderr);
+    }
+
+    [Fact]
+    public void RunSearch_ListRecipesRejectsJsonArray_Issue3144()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["--list-recipes", "--json=array"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("--json=array is not supported with --list-recipes", stderr);
+    }
+
+    [Fact]
+    public void RunSearch_RecipeJsonRunsBuiltInQueries_Issue3144()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_recipe_json");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                """
+                using System.Text.Json;
+
+                public sealed class App
+                {
+                    public void Run(Exception ex, CancellationToken token)
+                    {
+                        JsonDocument.Parse("{}");
+                        reader.ReadToEnd();
+                        Console.WriteLine(ex.Message);
+                        _ = CancellationToken.None;
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "risky-code", "--db", dbPath, "--lang", "csharp", "--limit", "2", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            var unboundedJsonParse = root
+                .GetProperty("queries")
+                .EnumerateArray()
+                .Single(item => item.GetProperty("name").GetString() == "unbounded-json-parse");
+
+            Assert.Equal("risky-code", root.GetProperty("recipe").GetProperty("name").GetString());
+            Assert.Equal(5, root.GetProperty("query_count").GetInt32());
+            Assert.True(root.GetProperty("result_count").GetInt32() >= 4);
+            Assert.Equal(1, unboundedJsonParse.GetProperty("count").GetInt32());
+            Assert.Equal("JsonDocument.Parse", unboundedJsonParse.GetProperty("query").GetString());
+            Assert.Equal("src/app.cs", unboundedJsonParse.GetProperty("results")[0].GetProperty("path").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("count")]
+    [InlineData("compact")]
+    public void RunSearch_RecipeRejectsUnsupportedFormattedOutputs_Issue3144(string format)
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["--recipe", "risky-code", "--format", format],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("--format count/compact/csv/tsv/lsp/qf/sarif is not supported with --recipe", stderr);
+    }
+
+    [Fact]
+    public void RunSearch_RecipeRejectsJsonArray_Issue3144()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["--recipe", "risky-code", "--json=array"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("--json=array is not supported with --recipe", stderr);
+    }
+
+    [Fact]
+    public void RunSearch_RecipeIssueDraftsIncludeLabelsEvidenceAndDuplicatePreflight_Issue3145()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_recipe_issue_drafts");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var openIssuesPath = Path.Combine(projectRoot, "open-issues.json");
+            File.WriteAllText(
+                openIssuesPath,
+                """
+                [
+                  {
+                    "number": 3145,
+                    "title": "Search audit recipe risky-code: unbounded-json-parse",
+                    "labels": [{"name": "audit"}, {"name": "bug"}],
+                    "url": "https://example.test/issues/3145"
+                  }
+                ]
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                """
+                using System.Text.Json;
+
+                public sealed class App
+                {
+                    public void Run()
+                    {
+                        JsonDocument.Parse("{}");
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "risky-code", "--db", dbPath, "--format", "issue-drafts", "--open-issues", openIssuesPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            var draft = Assert.Single(root.GetProperty("drafts").EnumerateArray());
+            var duplicatePreflight = draft.GetProperty("duplicate_preflight");
+            var match = Assert.Single(duplicatePreflight.GetProperty("matches").EnumerateArray());
+            var body = draft.GetProperty("body").GetString();
+
+            Assert.Equal(1, root.GetProperty("count").GetInt32());
+            Assert.True(root.GetProperty("duplicate_preflight").GetProperty("checked").GetBoolean());
+            Assert.Equal(1, root.GetProperty("duplicate_preflight").GetProperty("open_issue_count").GetInt32());
+            Assert.Equal("Search audit recipe risky-code: unbounded-json-parse", draft.GetProperty("title").GetString());
+            Assert.Contains(draft.GetProperty("labels").EnumerateArray(), label => label.GetString() == "audit");
+            Assert.Contains(draft.GetProperty("labels").EnumerateArray(), label => label.GetString() == "bug");
+            Assert.Equal("src/app.cs", draft.GetProperty("evidence_paths")[0].GetString());
+            Assert.Contains("JsonDocument.Parse", body, StringComparison.Ordinal);
+            Assert.Contains("False-positive guidance", body, StringComparison.Ordinal);
+            Assert.DoesNotContain("public sealed class App", body, StringComparison.Ordinal);
+            Assert.Equal("unbounded-json-parse", draft.GetProperty("source").GetProperty("query_name").GetString());
+            Assert.Equal(1, duplicatePreflight.GetProperty("match_count").GetInt32());
+            Assert.Equal(3145, match.GetProperty("number").GetInt32());
+            Assert.Equal("title_exact", match.GetProperty("reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_IssueDraftsRequireRecipe_Issue3145()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["Authenticate", "--format", "issue-drafts"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("--format issue-drafts requires --recipe", stderr);
+    }
+
+    [Fact]
     public void RunSearch_ProfileEmitsSqlPhasesAndQueryPlan_Issue1643()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_profile");

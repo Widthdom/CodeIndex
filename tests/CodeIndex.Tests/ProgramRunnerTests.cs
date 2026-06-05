@@ -45,6 +45,34 @@ public class ProgramRunnerTests
         Assert.True(ProgramRunner.IsProjectPathArg(arg));
     }
 
+    [Fact]
+    public void ResolveMcpHttpBearerTokenFromEnvironment_HttpTokenWinsThenFallsBackToGeneric()
+    {
+        using var env = EnvironmentVariableScope.Capture(
+            ProgramRunner.McpHttpTokenEnvVar,
+            McpAuthenticatorFactory.AuthTokenEnvVar);
+
+        env.Set(ProgramRunner.McpHttpTokenEnvVar, "http-secret");
+        env.Set(McpAuthenticatorFactory.AuthTokenEnvVar, "generic-secret");
+        Assert.Equal("http-secret", ProgramRunner.ResolveMcpHttpBearerTokenFromEnvironment());
+
+        env.Set(ProgramRunner.McpHttpTokenEnvVar, "   ");
+        Assert.Equal("generic-secret", ProgramRunner.ResolveMcpHttpBearerTokenFromEnvironment());
+
+        env.Set(McpAuthenticatorFactory.AuthTokenEnvVar, "\t");
+        Assert.Null(ProgramRunner.ResolveMcpHttpBearerTokenFromEnvironment());
+    }
+
+    [Fact]
+    public void CreateMcpAuthenticatorForTransport_HttpUsesBearerGateInsteadOfBodyTokenGate()
+    {
+        using var env = EnvironmentVariableScope.Capture(McpAuthenticatorFactory.AuthTokenEnvVar);
+        env.Set(McpAuthenticatorFactory.AuthTokenEnvVar, "generic-secret");
+
+        Assert.IsType<TokenMcpAuthenticator>(ProgramRunner.CreateMcpAuthenticatorForTransport("stdio"));
+        Assert.IsType<LocalStdioAuthenticator>(ProgramRunner.CreateMcpAuthenticatorForTransport("http"));
+    }
+
     [Theory]
     [InlineData("--json")]
     [InlineData("--json=array")]

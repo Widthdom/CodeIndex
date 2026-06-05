@@ -458,6 +458,30 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PythonOversizedLogicalHeaderAndStatement_DoesNotThrow()
+    {
+        var longTypeName = new string('A', 40_000);
+        var longValueName = new string('B', 40_000);
+        var content = $$"""
+            def build(
+                value: {{longTypeName}},
+            ):
+                result = (
+                    {{longValueName}}
+                )
+                return result
+            """;
+
+        var exception = Record.Exception(() =>
+        {
+            var symbols = SymbolExtractor.Extract(1, "python", content);
+            ReferenceExtractor.Extract(1, "python", content, symbols);
+        });
+
+        Assert.Null(exception);
+    }
+
+    [Fact]
     public void Extract_PythonClassHook_AssignsReferencesToHookContainer()
     {
         const string content = """

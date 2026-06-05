@@ -19,6 +19,9 @@ public partial class DbReader
     internal const int DefaultSearchGuardWindow = 8;
     internal const int MaxSearchGuardWindow = 200;
     internal const int MaxSearchGuardFilters = 8;
+    internal const int MaxGuardedSearchCandidates = 1000;
+    private const int MinGuardedSearchCandidates = 200;
+    private const int GuardedSearchOverFetchFactor = 50;
 
     /// <summary>
     /// Sanitize user input for FTS5 MATCH by quoting each token as a phrase.
@@ -113,6 +116,8 @@ public partial class DbReader
         var normalizedQuery = rawQuery ? query : NormalizeLiteralSearchQuery(query, lang);
         var coverageTokens = exact ? new List<string>() : GetSearchCoverageTokens(normalizedQuery, rawQuery);
         var hasGuardFilters = guardFilters is { Count: > 0 };
+        var exactSubstringBoost = !exact && !rawQuery && IsPunctuationHeavyLiteralQuery(query);
+        var guardedCandidateLimit = hasGuardFilters ? GetGuardedSearchCandidateLimit(limit, cursor) : 0;
         using var cmd = _conn.CreateCommand();
         string sql;
 
@@ -153,8 +158,10 @@ public partial class DbReader
         if (since != null && _fileColumns.Contains("modified"))
             sql += " AND f.modified >= @since";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        sql += $" ORDER BY {GetSearchOrderSql(coverageTokens.Count)}";
-        if (!hasGuardFilters)
+        sql += $" ORDER BY {GetSearchOrderSql(coverageTokens.Count, exactSubstringBoost)}";
+        if (hasGuardFilters)
+            sql += " LIMIT @candidateFetchLimit";
+        else
             sql += " LIMIT @limit";
         if (cursor is { } && !hasGuardFilters)
             sql += " OFFSET @cursorOffset";
@@ -168,6 +175,8 @@ public partial class DbReader
         AddSearchCoverageParameters(cmd, coverageTokens);
         if (!hasGuardFilters)
             cmd.Parameters.AddWithValue("@limit", limit);
+        else
+            cmd.Parameters.AddWithValue("@candidateFetchLimit", guardedCandidateLimit + 1);
         if (lang != null)
             cmd.Parameters.AddWithValue("@lang", lang);
         if (since != null && _fileColumns.Contains("modified"))
@@ -205,12 +214,39 @@ public partial class DbReader
             throw new FtsQuerySyntaxException(ex.Message, ex);
         }
 
+        var guardCandidateLimitReached = hasGuardFilters && raw.Count > guardedCandidateLimit;
+        if (guardCandidateLimitReached)
+            raw.RemoveRange(guardedCandidateLimit, raw.Count - guardedCandidateLimit);
+
         if (hasGuardFilters)
             raw = FilterBySearchGuards(raw, query, normalizedQuery, rawQuery, exact, lang, guardFilters!, guardWindow);
 
         var results = deduplicate ? DeduplicateOverlappingResults(raw) : raw;
+        if (guardCandidateLimitReached && results.Count < GetGuardedSearchRequestedPageEnd(limit, cursor))
+            throw new SearchGuardCandidateLimitException(guardedCandidateLimit, limit, cursor?.Offset ?? 0);
+
         AttachSearchEnclosingSymbols(results, query, exact);
         return hasGuardFilters ? PageGuardedSearchResults(results, limit, cursor) : results;
+    }
+
+    private static int GetGuardedSearchCandidateLimit(int limit, SearchCursor? cursor)
+    {
+        var requestedLimit = Math.Max(0L, limit);
+        var requestedOffset = Math.Max(0L, cursor?.Offset ?? 0);
+        var requestedPageEnd = requestedOffset + requestedLimit;
+        if (requestedPageEnd <= 0)
+            return 0;
+
+        var overFetched = requestedPageEnd * GuardedSearchOverFetchFactor;
+        var candidateLimit = Math.Max(MinGuardedSearchCandidates, overFetched);
+        return (int)Math.Min(MaxGuardedSearchCandidates, candidateLimit);
+    }
+
+    private static long GetGuardedSearchRequestedPageEnd(int limit, SearchCursor? cursor)
+    {
+        var requestedLimit = Math.Max(0L, limit);
+        var requestedOffset = Math.Max(0L, cursor?.Offset ?? 0);
+        return requestedOffset + requestedLimit;
     }
 
     private void AttachSearchEnclosingSymbols(IReadOnlyList<SearchResult> results, string query, bool caseSensitive)
@@ -386,7 +422,7 @@ public partial class DbReader
             sql += " AND f.modified >= @since";
 
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        sql += $" ORDER BY {GetSearchOrderSql(coverageTokens.Count)}";
+        sql += $" ORDER BY {GetSearchOrderSql(coverageTokens.Count, exactSubstringBoost: false)}";
 
         cmd.CommandText = sql;
         if (exact)
@@ -1038,10 +1074,46 @@ public partial class DbReader
         }
     }
 
-    private static string GetSearchOrderSql(int coverageTokenCount)
+    private static string GetSearchOrderSql(int coverageTokenCount, bool exactSubstringBoost)
     {
         var coverageOrder = GetSearchCoverageOrderSql(coverageTokenCount);
-        return $"{PathBucketOrder}, {ExactSymbolMatchOrder}, {PrefixSymbolMatchOrder}, {SearchVisibilityOrder}, {PathTextMatchOrder}, {ChunkTextMatchOrder}, {ChunkStructuredFieldOrder}, {ChunkSymbolKindOrder}, {ChunkSymbolDepthOrder}, {coverageOrder}rank, f.modified DESC, f.path, c.id ASC";
+        var exactSubstringOrder = exactSubstringBoost
+            ? $"CASE WHEN instr({GetExactSearchTextSql("c.content", "f.lang")}, {GetExactSearchTextSql("@rankingQuery", "f.lang")}) > 0 THEN 0 ELSE 1 END, "
+            : string.Empty;
+        return $"{PathBucketOrder}, {exactSubstringOrder}{ExactSymbolMatchOrder}, {PrefixSymbolMatchOrder}, {SearchVisibilityOrder}, {PathTextMatchOrder}, {ChunkTextMatchOrder}, {ChunkStructuredFieldOrder}, {ChunkSymbolKindOrder}, {ChunkSymbolDepthOrder}, {coverageOrder}rank, f.modified DESC, f.path, c.id ASC";
+    }
+
+    private static bool IsPunctuationHeavyLiteralQuery(string query)
+    {
+        var trimmed = query.Trim();
+        if (trimmed.Length == 0 || !trimmed.Any(char.IsLetterOrDigit))
+            return false;
+
+        var tokens = trimmed.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        var punctuationCount = trimmed.Count(IsCodePunctuation);
+        return punctuationCount >= 2 || tokens.Any(IsStandaloneCodeOperatorToken);
+    }
+
+    private static bool IsStandaloneCodeOperatorToken(string token)
+        => token.Length > 0
+            && token.All(ch => !char.IsLetterOrDigit(ch) && !char.IsWhiteSpace(ch) && ch != '_')
+            && token.Any(IsCodePunctuation);
+
+    private static bool IsCodePunctuation(char ch)
+    {
+        if (char.IsLetterOrDigit(ch) || char.IsWhiteSpace(ch) || ch == '_')
+            return false;
+
+        return ch is '.'
+            or ':' or ';' or ','
+            or '=' or '$' or '@' or '#'
+            or '%' or '^' or '&' or '|'
+            or '!' or '?' or '+' or '-'
+            or '*' or '/' or '\\'
+            or '<' or '>'
+            or '(' or ')' or '[' or ']'
+            or '{' or '}'
+            or '"' or '\'' or '`' or '~';
     }
 
     private static string GetSearchCoverageOrderSql(int coverageTokenCount)

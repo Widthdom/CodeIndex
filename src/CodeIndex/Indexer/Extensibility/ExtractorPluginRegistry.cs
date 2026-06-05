@@ -4,6 +4,7 @@ using System.Runtime.Loader;
 using System.Text;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using CodeIndex.Diagnostics;
 using Microsoft.Win32.SafeHandles;
 
 namespace CodeIndex.Indexer.Extensibility;
@@ -24,6 +25,7 @@ public static class ExtractorPluginRegistry
     private static readonly object Gate = new();
     private static readonly Dictionary<string, ISymbolExtractor> SymbolExtractors = new(StringComparer.Ordinal);
     private static readonly Dictionary<string, IReferenceExtractor> ReferenceExtractors = new(StringComparer.Ordinal);
+    private static readonly HashSet<string> LoadedPluginAssemblyPaths = new(StringComparer.OrdinalIgnoreCase);
     private static readonly HashSet<string> LoadedPatternConfigPaths = new(StringComparer.OrdinalIgnoreCase);
     private static readonly List<ExtractorRegistryDiagnostic> Diagnostics = [];
     private const int DiagnosticLimit = 20;
@@ -125,6 +127,7 @@ public static class ExtractorPluginRegistry
         {
             SymbolExtractors.Clear();
             ReferenceExtractors.Clear();
+            LoadedPluginAssemblyPaths.Clear();
             LoadedPatternConfigPaths.Clear();
             Diagnostics.Clear();
             pluginAssemblyCount = 0;
@@ -142,6 +145,7 @@ public static class ExtractorPluginRegistry
         {
             SymbolExtractors.Clear();
             ReferenceExtractors.Clear();
+            LoadedPluginAssemblyPaths.Clear();
             LoadedPatternConfigPaths.Clear();
             Diagnostics.Clear();
             pluginAssemblyCount = 0;
@@ -156,6 +160,9 @@ public static class ExtractorPluginRegistry
     internal static IReadOnlyList<string> EnumeratePluginAssemblyPathsForTests()
         => EnumeratePluginAssemblyPaths().ToArray();
 
+    internal static IReadOnlyList<string> EnumeratePluginAssemblyPathsForTests(string? projectRoot)
+        => EnumeratePluginAssemblyPaths(EnumeratePluginDirectories(projectRoot)).ToArray();
+
     internal static IReadOnlyList<string> EnumeratePluginAssemblyPathsForTests(IReadOnlyList<string> directories)
         => EnumeratePluginAssemblyPaths(directories).ToArray();
 
@@ -165,12 +172,22 @@ public static class ExtractorPluginRegistry
     internal static void LoadPluginForTests(string pluginPath)
         => TryLoadPlugin(pluginPath);
 
+    internal static void LoadPluginsForProjectRoot(string? projectRoot)
+    {
+        EnsurePluginsLoaded();
+        if (string.IsNullOrWhiteSpace(projectRoot) || !WorkspacePluginsTrusted())
+            return;
+
+        LoadPluginAssemblies(EnumerateWorkspacePluginDirectories(Path.GetFullPath(projectRoot)));
+    }
+
     internal static void LoadPatternConfigsForProjectRoot(string? projectRoot)
     {
         EnsurePluginsLoaded();
         if (string.IsNullOrWhiteSpace(projectRoot))
             return;
 
+        LoadPluginsForProjectRoot(projectRoot);
         foreach (var patternPath in EnumeratePatternConfigPaths(Path.GetFullPath(projectRoot)))
             TryLoadPatternConfig(patternPath);
     }
@@ -191,6 +208,9 @@ public static class ExtractorPluginRegistry
                 TryLoadPatternConfig(patternPath);
             directory = Directory.GetParent(directory)?.FullName ?? string.Empty;
         }
+
+        foreach (var patternPath in EnumerateUserPatternConfigPaths())
+            TryLoadPatternConfig(patternPath);
     }
 
     private static void EnsurePluginsLoaded()
@@ -203,10 +223,7 @@ public static class ExtractorPluginRegistry
             if (pluginsLoaded)
                 return;
 
-            LoadPluginAssemblies(EnumeratePluginDirectories());
-            foreach (var patternPath in EnumeratePatternConfigPaths(Environment.CurrentDirectory))
-                TryLoadPatternConfig(patternPath);
-
+            LoadPluginAssemblies(EnumeratePluginDirectories(projectRoot: null));
             pluginsLoaded = true;
         }
     }
@@ -219,7 +236,7 @@ public static class ExtractorPluginRegistry
     }
 
     private static IEnumerable<string> EnumeratePluginAssemblyPaths()
-        => EnumeratePluginAssemblyPaths(EnumeratePluginDirectories());
+        => EnumeratePluginAssemblyPaths(EnumeratePluginDirectories(projectRoot: null));
 
     private static IEnumerable<string> EnumeratePluginAssemblyPaths(IEnumerable<string> directories)
     {
@@ -267,7 +284,7 @@ public static class ExtractorPluginRegistry
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            ReportPluginDirectorySkipped(directory, ex.Message);
+            ReportPluginDirectorySkipped(directory, "could not enumerate plugin directory");
             return null;
         }
     }
@@ -285,19 +302,27 @@ public static class ExtractorPluginRegistry
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            ReportPluginDirectorySkipped(directory, ex.Message);
+            ReportPluginDirectorySkipped(directory, "could not enumerate plugin directory");
             return false;
         }
     }
 
-    private static IEnumerable<string> EnumeratePluginDirectories()
+    private static IEnumerable<string> EnumeratePluginDirectories(string? projectRoot)
     {
-        if (WorkspacePluginsTrusted())
-            yield return Path.Combine(Environment.CurrentDirectory, ".cdidx", "plugins");
+        if (WorkspacePluginsTrusted() && !string.IsNullOrWhiteSpace(projectRoot))
+        {
+            foreach (var directory in EnumerateWorkspacePluginDirectories(Path.GetFullPath(projectRoot)))
+                yield return directory;
+        }
 
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         if (!string.IsNullOrWhiteSpace(home))
             yield return Path.Combine(home, ".cdidx", "plugins");
+    }
+
+    private static IEnumerable<string> EnumerateWorkspacePluginDirectories(string projectRoot)
+    {
+        yield return Path.Combine(projectRoot, ".cdidx", "plugins");
     }
 
     private static IEnumerable<string> EnumeratePatternConfigPaths(string workspaceRoot, bool includeUserDirectory = true)
@@ -312,6 +337,12 @@ public static class ExtractorPluginRegistry
         if (!includeUserDirectory)
             yield break;
 
+        foreach (var path in EnumerateUserPatternConfigPaths())
+            yield return path;
+    }
+
+    private static IEnumerable<string> EnumerateUserPatternConfigPaths()
+    {
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         if (!string.IsNullOrWhiteSpace(home))
         {
@@ -344,7 +375,7 @@ public static class ExtractorPluginRegistry
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            ReportPatternDirectoryRejected(directory, ex.Message);
+            ReportPatternDirectoryRejected(directory, "could not enumerate pattern directory");
             yield break;
         }
 
@@ -383,7 +414,7 @@ public static class ExtractorPluginRegistry
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            ReportPatternDirectoryRejected(directory, ex.Message);
+            ReportPatternDirectoryRejected(directory, "could not inspect pattern directory");
             return true;
         }
     }
@@ -450,9 +481,9 @@ public static class ExtractorPluginRegistry
                             RegexOptions.Compiled | RegexOptions.CultureInvariant,
                             PatternRegexTimeout);
                     }
-                    catch (ArgumentException ex)
+                    catch (ArgumentException)
                     {
-                        ReportPatternConfigRejected(path, $"invalid regex for kind '{pendingKind}': {ex.Message}");
+                        ReportPatternConfigRejected(path, $"invalid regex for kind '{DiagnosticSanitizer.ForMessage(pendingKind)}'");
                         return;
                     }
 
@@ -474,15 +505,15 @@ public static class ExtractorPluginRegistry
                 ReportPatternConfigSkipped(path, "missing language or regex patterns");
             }
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            ReportPatternConfigRejected(path, ex.Message);
+            ReportPatternConfigRejected(path, "could not parse pattern config");
         }
     }
 
     private static void ReportPatternConfigRejected(string path, string reason)
     {
-        Console.Error.WriteLine($"[cdidx] Skipped pattern config '{path}': {reason}.");
+        Console.Error.WriteLine($"[cdidx] Skipped pattern config '{DiagnosticSanitizer.ForPath(path)}': {DiagnosticSanitizer.ForMessage(reason)}.");
         RecordDiagnostic(
             "pattern",
             path,
@@ -494,7 +525,7 @@ public static class ExtractorPluginRegistry
 
     private static void ReportPatternConfigSkipped(string path, string reason)
     {
-        Console.Error.WriteLine($"[cdidx] Skipped pattern config '{path}': {reason}.");
+        Console.Error.WriteLine($"[cdidx] Skipped pattern config '{DiagnosticSanitizer.ForPath(path)}': {DiagnosticSanitizer.ForMessage(reason)}.");
         RecordDiagnostic(
             "pattern",
             path,
@@ -506,7 +537,7 @@ public static class ExtractorPluginRegistry
 
     private static void ReportPatternDirectoryRejected(string path, string reason)
     {
-        Console.Error.WriteLine($"[cdidx] Skipped pattern directory '{path}': {reason}.");
+        Console.Error.WriteLine($"[cdidx] Skipped pattern directory '{DiagnosticSanitizer.ForPath(path)}': {DiagnosticSanitizer.ForMessage(reason)}.");
         RecordDiagnostic(
             "pattern_directory",
             path,
@@ -816,6 +847,12 @@ public static class ExtractorPluginRegistry
         try
         {
             fullPath = Path.GetFullPath(pluginPath);
+            lock (Gate)
+            {
+                if (!LoadedPluginAssemblyPaths.Add(fullPath))
+                    return;
+            }
+
             if (!PluginAssemblyCandidateIsWithinBudget(fullPath))
                 return;
 
@@ -855,14 +892,14 @@ public static class ExtractorPluginRegistry
                     TryRegisterPluginType(type, fullPath);
             }
         }
-        catch (Exception ex)
+        catch (Exception)
         {
             RecordDiagnostic(
                 "plugin",
                 fullPath,
                 typeName: null,
                 severity: "error",
-                $"Failed to load plugin assembly: {ex.Message}",
+                "Failed to load plugin assembly.",
                 countsAsSkippedFile: true);
         }
     }
@@ -881,7 +918,7 @@ public static class ExtractorPluginRegistry
                 fullPath,
                 typeName: null,
                 severity: "error",
-                $"Plugin assembly skipped: could not inspect file ({ex.Message}).",
+                "Plugin assembly skipped: could not inspect file.",
                 countsAsSkippedFile: true);
             return false;
         }
@@ -941,14 +978,14 @@ public static class ExtractorPluginRegistry
                 Register(referenceExtractor);
             }
         }
-        catch (Exception ex)
+        catch (Exception)
         {
             RecordDiagnostic(
                 "plugin_type",
                 pluginPath,
                 type.FullName,
                 severity: "error",
-                $"Failed to instantiate plugin type: {ex.Message}",
+                "Failed to instantiate plugin type.",
                 countsAsSkippedFile: false);
         }
     }
@@ -967,7 +1004,12 @@ public static class ExtractorPluginRegistry
             if (countsAsSkippedFile)
                 skippedFileCount++;
             if (Diagnostics.Count < DiagnosticLimit)
-                Diagnostics.Add(new ExtractorRegistryDiagnostic(kind, path, typeName, severity, message));
+                Diagnostics.Add(new ExtractorRegistryDiagnostic(
+                    DiagnosticSanitizer.ForMessage(kind),
+                    DiagnosticSanitizer.ForPath(path),
+                    DiagnosticSanitizer.ForOptionalLabel(typeName),
+                    DiagnosticSanitizer.ForMessage(severity),
+                    DiagnosticSanitizer.ForMessage(message)));
         }
     }
 

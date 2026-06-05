@@ -405,7 +405,9 @@ conflicting instructions.
 ```bash
 cdidx validate
 cdidx validate --kind replacement_char --path src/
-cdidx validate --json --path legacy/
+cdidx validate --kind replacement_char --severity warning --path src/
+cdidx validate --json=array --limit 50 --path legacy/
+cdidx validate --json --limit 50 --path legacy/
 ```
 
 `validate` reports indexed files that are likely to produce misleading snippets
@@ -414,6 +416,10 @@ CR-only line endings, likely non-UTF-8 content, and Git LFS pointer placeholders
 For `replacement_char`, JSON and MCP responses include `origin` (`source_literal`
 or `decode_replacement`) and `severity` so agents can distinguish intentional
 U+FFFD literals from likely encoding damage.
+Use `--severity warning` to hide informational source literals and focus on
+findings that indicate likely encoding damage.
+Use `--json=array` when a pipeline expects a bare issue array instead of the
+default `{ "count": ..., "issues": [...] }` object.
 LFS pointers are recorded as `lfs_pointer_skipped` and their placeholder body is
 not indexed; run `git lfs pull` and then `cdidx index .` to index the real file
 content.
@@ -423,6 +429,7 @@ content.
 ```bash
 cdidx unused --lang csharp --exclude-tests
 cdidx unused --kind function --path src/ --limit 50
+cdidx unused --bucket likely_unused_private --min-confidence medium
 cdidx unused --json --count
 cdidx unused --json --by-bucket
 ```
@@ -432,8 +439,10 @@ confidence. JSON output includes `summary.by_bucket`, `summary.by_confidence`,
 and `bucket_taxonomy` for the `likely_unused_private`,
 `maybe_unused_nonpublic`, `public_or_exported_no_refs`, and
 `reflection_or_config_suspect` buckets; `--by-bucket` also groups returned
-symbols under those bucket keys. Public APIs, framework entrypoints, generated
-hooks, reflection, and configuration-based usage can be false positives. C#
+symbols under those bucket keys. Use `--bucket <name>` to return only one
+bucket, and `--min-confidence <medium|low>` to omit lower-confidence classes.
+Public APIs, framework entrypoints, generated hooks, reflection, and
+configuration-based usage can be false positives. C#
 `nameof(...)`, `typeof(...)`, and direct reflection member-name literals such as
 `GetMethod("Foo")` are indexed, but dynamically constructed names still require
 manual review.
@@ -841,6 +850,9 @@ cdidx search "Run();" --exact-substring                 # case-sensitive exact s
 cdidx search "Foo.Bar" --lang csharp --exact-substring  # Java/Kotlin/C# exact search/find canonicalizes escaped source identifiers
 cdidx search "File.ReadAllText" --exact-substring --reject-before "Length" --guard-window 8  # API calls missing a nearby preceding guard
 cdidx search "FileMode.Create" --exact-substring --require-after "File.Move" --guard-window 12  # require a nearby follow-up action
+cdidx search --list-recipes                             # show reusable audit recipes
+cdidx search --recipe risky-code --json                 # run a curated audit query set and return grouped JSON
+cdidx search --recipe risky-code --format issue-drafts --open-issues open-issues.json  # issue draft JSON with duplicate preflight
 cdidx search "--open-reports" --path README.md --count  # quoted literal that starts with --
 cdidx search --query "--path" --path README.md          # search for an option-looking literal
 ```
@@ -854,9 +866,31 @@ Guard-aware search filters primary `search` matches by nearby literal guards:
 appears in the selected line window, while `--reject-before` / `--reject-after`
 drop matches when the guard query appears. JSON search results include
 `guard_evidence` for required guards that matched.
+Guarded searches inspect a bounded candidate set before pagination; if a guarded
+query is too broad to satisfy the requested page within that budget, CLI and MCP
+return a validation error. Narrow with more specific query text, `--lang`,
+`--path`, `--exclude-tests`, or a smaller MCP cursor offset.
 The MCP `search` tool exposes the same mode as camelCase arguments:
 `requireBefore`, `requireAfter`, `rejectBefore`, `rejectAfter`, and
 `guardWindow`.
+
+Search audit recipes expand one named recipe into multiple curated search
+queries. `--list-recipes` reports the available names, descriptions,
+recommended labels, query text, exact-match mode, and false-positive guidance.
+`--recipe <name>` applies normal search filters such as `--lang`, `--path`,
+`--exclude-path`, `--exclude-tests`, `--limit`, and snippet controls to every
+query in the recipe. With `--json`, recipe runs emit one aggregate JSON payload
+grouped by recipe query instead of the usual newline-delimited search stream.
+Recipe runs support text output, `--json` / `--format json`, and
+`--format issue-drafts`; `--list-recipes` supports text or JSON. Other search
+export formats and `--json=array` are rejected for recipe modes because recipe
+output is grouped by query or list metadata.
+For triage automation, `--format issue-drafts` emits draft issue objects with
+titles, labels, evidence paths, Markdown bodies, and duplicate-preflight
+metadata. `--open-issues <path>` accepts an open-issue JSON list such as
+`gh issue list --state open --json number,title,labels,url`; when omitted,
+the payload still includes `duplicate_preflight.checked: false`. Draft bodies
+include evidence paths and recipe metadata but not source snippets.
 
 ### Debugging queries
 
@@ -1174,6 +1208,9 @@ same source location.
 | `--exclude-visibility <v[,v]>` | `definition`, `symbols`, `unused`, `hotspots` | Exclude symbols with the requested visibility values. Accepts the same comma-separated values and alias expansion as `--visibility`. |
 | `--path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `validate` | Restrict results to glob-style path patterns. `*` and `?` are wildcards. Repeatable; multiple values are OR'd together |
 | `--query <query>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `inspect`, `impact` | Pass a query literal explicitly, useful when the query starts with `-`. Query commands except `find` also accept `-- <query>` as a one-token query escape while continuing to parse later options. |
+| `--recipe <name>` | `search` | Run a reusable audit recipe such as `risky-code`. Normal search filters and snippet controls apply to every recipe query; text, `--json` / `--format json`, and `--format issue-drafts` are supported. |
+| `--list-recipes` | `search` | List available search audit recipes with query text, recommended labels, exact-match mode, and false-positive guidance. |
+| `--open-issues <path>` | `search --recipe <name> --format issue-drafts` | Preflight generated issue drafts against an open-issues JSON file such as `gh issue list --state open --json number,title,labels,url`. |
 | `--exclude-path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | Exclude glob-style path patterns. `*` and `?` are wildcards (repeatable) |
 | `--exclude-tests` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | Exclude likely test files and prefer production code |
 | `--include-generated` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `deps`, `impact`, `unused`, `hotspots` | Include files detected as generated code; generated files are excluded from query results by default |
@@ -1349,8 +1386,10 @@ Each record is a single JSON object on its own line with these fields:
 | `wal_checkpoint_ms` | number (optional) | Reserved for future WAL checkpoint timing |
 | `files_indexed` | number (optional) | Reserved for future per-index file counts |
 | `error` | string (optional) | Short error category, when the command failed in a way worth tagging |
+| `<field>_length` | number (optional) | Original character count when `tool`, `source`, `language`, or `error` was truncated |
+| `<field>_truncated` | boolean (optional) | Present and `true` when `tool`, `source`, `language`, or `error` was truncated |
 
-Optional fields are omitted from the JSON when null so future consumers can grow new columns without breaking older parsers. The file is local-only and uses the relaxed JSON encoder so timestamps stay human-readable in `tail` / `grep` workflows.
+Optional fields are omitted from the JSON when null so future consumers can grow new columns without breaking older parsers. Metrics string fields are bounded before serialization. If `tool`, `source`, `language`, or `error` is too long, the emitted value is clipped and the record includes the matching `<field>_length` / `<field>_truncated` metadata so consumers can detect the truncation. Each serialized JSON object is also kept within an 8 KiB event budget, so pathological escaping can reduce string fields below the normal per-field cap. The file is local-only and uses the relaxed JSON encoder so timestamps stay human-readable in `tail` / `grep` workflows.
 
 Example output:
 
@@ -2065,25 +2104,29 @@ CDIDX_MCP_HTTP_TOKEN=s3cret cdidx mcp \
   --transport http --http-listen 0.0.0.0:9000          # LAN bind; bearer token is mandatory
 ```
 
+For HTTP, `CDIDX_MCP_HTTP_TOKEN` is the preferred bearer secret. If it is
+unset, HTTP falls back to `CDIDX_MCP_AUTH_TOKEN` as the bearer secret, and
+clients still authenticate with `Authorization: Bearer <token>`.
+
 Each HTTP `POST /` carries one JSON-RPC frame in the request body, the matching response is returned in the same HTTP body (`200 OK`, `application/json`), and notifications return `204 No Content`. `GET /events` opens a `text/event-stream` channel for server-to-client frames; the server emits no unsolicited JSON-RPC frames unless keep-alive notifications are opted in with `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S`. Accepted keep-alive values are finite seconds from `1` to `300`; invalid or out-of-range values leave keep-alive disabled with a `stderr` warning. The stream is independent and does not block normal POST requests. Non-POST verbs on `/` return `405 Method Not Allowed` with `Allow: POST`. Request bodies are capped at 1,000,000 bytes by default and oversized requests return `413 Payload Too Large`; the pending POST queue and accepted handler tasks are capped at 64 by default, and concurrent `/events` streams are capped at 16. Full queues, handler pools, or stream slots return `429 Too Many Requests` with `Retry-After: 1`. Tune those positive-integer limits with `CDIDX_MCP_HTTP_MAX_REQUEST_BYTES`, `CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH`, `CDIDX_MCP_HTTP_MAX_CONCURRENT_HANDLERS`, and `CDIDX_MCP_HTTP_MAX_EVENT_STREAMS`; accepted ranges are `1..16777216` bytes and `1..1024` for each count limit. Invalid non-positive or non-numeric values fall back to the defaults, while values above those maximums are rejected before the listener starts. Idle event streams receive minimal SSE comment heartbeats so disconnected clients release their stream slots. When the persistent lifecycle log is enabled, HTTP mode also writes one `mcp_http_request` record per request with method, path, status, duration, auth outcome, remote peer, correlation id, and JSON-RPC request id when available. Method, path, remote peer, and request id fields are capped at 256 characters with a `...<truncated>` marker. Request and response bodies are not logged.
 
 Security defaults:
 
 - The listener binds to a loopback address (`127.0.0.1`) by default, and the wildcard hosts `+` / `*` are rejected outright.
-- Binding to a non-loopback host (e.g. `0.0.0.0:9000`) is refused unless you set `CDIDX_MCP_HTTP_TOKEN` to a shared secret; when set, every request must carry `Authorization: Bearer <token>` or the listener returns `401 Unauthorized` with `WWW-Authenticate: Bearer realm="cdidx-mcp"`.
+- Binding to a non-loopback host (e.g. `0.0.0.0:9000`) is refused unless you set `CDIDX_MCP_HTTP_TOKEN` or `CDIDX_MCP_AUTH_TOKEN` to a shared secret. `CDIDX_MCP_HTTP_TOKEN` wins when both are set. When an HTTP bearer secret is configured, every request must carry `Authorization: Bearer <token>` or the listener returns `401 Unauthorized` with `WWW-Authenticate: Bearer realm="cdidx-mcp"`; HTTP clients do not also need `params.auth.token`.
 - The configured token's SHA-256 digest is precomputed at start-up; per-request authentication only hashes the supplied input and compares against the stored digest in constant time, so neither the configured token's length nor its bytes leak through timing. Configured and supplied tokens longer than 4096 characters are rejected before hashing.
 
 The stdio transport stays byte-for-byte unchanged, so existing client configs keep working without modification.
 
 #### Optional MCP authentication: `CDIDX_MCP_AUTH_TOKEN`
 
-`CDIDX_MCP_HTTP_TOKEN` above guards the HTTP transport at the `Authorization: Bearer ...` header. For an additional JSON-RPC-level auth gate that works on **any** transport (including stdio), `cdidx mcp` also recognises `CDIDX_MCP_AUTH_TOKEN` (#1559).
+`CDIDX_MCP_HTTP_TOKEN` above guards the HTTP transport at the `Authorization: Bearer ...` header. If it is unset, HTTP uses `CDIDX_MCP_AUTH_TOKEN` as the bearer secret instead. For stdio, `CDIDX_MCP_AUTH_TOKEN` enables the JSON-RPC-level auth gate (#1559).
 
 The default `cdidx mcp` server is **permissive** — the OS-enforced stdio process boundary already gates access, and every existing client setup above (Claude Code, Cursor, Windsurf, Copilot, Codex) keeps working unchanged. When `CDIDX_MCP_AUTH_TOKEN` is unset (or whitespace-only), the server accepts every request and tags it with the shared `stdio` / `local` caller identity.
 
-If you expose `cdidx mcp` over a less-trusted channel (a forwarded socket, a sandbox bridge, a shared CI runner), set `CDIDX_MCP_AUTH_TOKEN` to a non-whitespace secret. The server then requires every responded JSON-RPC request (`initialize`, `tools/list`, `tools/call`, `ping`) to include the same token at `params.auth.token`. The expected token is stored as a SHA-256 digest and the presented token is hashed to the same length before `CryptographicOperations.FixedTimeEquals`, so missing / wrong-length / wrong-value guesses share one constant-time path and neither token length nor bytes leak through timing. Mismatches return a uniform JSON-RPC `-32001 "Unauthorized"` — the wire body never distinguishes "missing token" from "wrong token", so the response cannot be used as a token-existence oracle (#1530). The detailed failure reason is written to `cdidx mcp` stderr for local diagnostics, with `method` sanitized to strip control characters so a malicious request body cannot forge log lines. Notifications (`notifications/initialized`, `notifications/cancelled`) skip the gate because they have no `id` and cannot signal an error code.
+If you expose stdio `cdidx mcp` over a less-trusted channel (a forwarded socket, a sandbox bridge, a shared CI runner), set `CDIDX_MCP_AUTH_TOKEN` to a non-whitespace secret. The stdio server then requires every responded JSON-RPC request (`initialize`, `tools/list`, `tools/call`, `ping`) to include the same token at `params.auth.token`. HTTP uses the same variable only as a bearer-secret fallback when `CDIDX_MCP_HTTP_TOKEN` is unset, so HTTP clients send `Authorization: Bearer <token>` instead of duplicating the token in the JSON-RPC body. The expected token is stored as a SHA-256 digest and the presented token is hashed to the same length before `CryptographicOperations.FixedTimeEquals`, so missing / wrong-length / wrong-value guesses share one constant-time path and neither token length nor bytes leak through timing. Mismatches return a uniform JSON-RPC `-32001 "Unauthorized"` — the wire body never distinguishes "missing token" from "wrong token", so the response cannot be used as a token-existence oracle (#1530). The detailed failure reason is written to `cdidx mcp` stderr for local diagnostics, with `method` sanitized to strip control characters so a malicious request body cannot forge log lines. Notifications (`notifications/initialized`, `notifications/cancelled`) skip the gate because they have no `id` and cannot signal an error code.
 
-This is a defensive primitive for custom MCP clients you control and for the networked transports that will reuse the same `McpCallerIdentity` shape (audit log #1562). Stdio clients that do not inject `params.auth.token` will be rejected once the variable is set, so leave it unset unless you actively want to enforce token authentication.
+This remains useful for custom stdio MCP clients you control. Stdio clients that do not inject `params.auth.token` will be rejected once the variable is set, so leave it unset unless you actively want to enforce body-token authentication; HTTP clients should prefer the bearer-header contract above.
 
 #### Restricting which MCP tools a deployment exposes
 
@@ -2593,7 +2636,9 @@ render できます。
 ```bash
 cdidx validate
 cdidx validate --kind replacement_char --path src/
-cdidx validate --json --path legacy/
+cdidx validate --kind replacement_char --severity warning --path src/
+cdidx validate --json=array --limit 50 --path legacy/
+cdidx validate --json --limit 50 --path legacy/
 ```
 
 `validate` は、snippet や symbol name を誤らせやすい indexed file を報告します。
@@ -2601,7 +2646,10 @@ cdidx validate --json --path legacy/
 ending、likely non-UTF-8 content、Git LFS pointer placeholder などです。
 `replacement_char` の JSON / MCP response には `origin` (`source_literal` /
 `decode_replacement`) と `severity` が入り、意図的な U+FFFD literal と
-エンコーディング破損の可能性を agent が区別できます。LFS pointer
+エンコーディング破損の可能性を agent が区別できます。`--severity warning`
+を使うと、informational な source literal を隠して、エンコーディング破損の
+可能性がある finding に集中できます。pipeline が既定の `{ "count": ..., "issues": [...] }`
+object ではなく bare issue array を期待する場合は `--json=array` を使えます。LFS pointer
 は `lfs_pointer_skipped` として記録され、placeholder 本文は index されません。
 実体を index するには `git lfs pull` の後に `cdidx index .` を再実行してください。
 
@@ -2610,6 +2658,7 @@ ending、likely non-UTF-8 content、Git LFS pointer placeholder などです。
 ```bash
 cdidx unused --lang csharp --exclude-tests
 cdidx unused --kind function --path src/ --limit 50
+cdidx unused --bucket likely_unused_private --min-confidence medium
 cdidx unused --json --count
 cdidx unused --json --by-bucket
 ```
@@ -2618,8 +2667,9 @@ cdidx unused --json --by-bucket
 分類します。JSON 出力には `likely_unused_private`、`maybe_unused_nonpublic`、
 `public_or_exported_no_refs`、`reflection_or_config_suspect` bucket 用の
 `summary.by_bucket`、`summary.by_confidence`、`bucket_taxonomy` が含まれます。
-`--by-bucket` は返却された symbols も bucket key ごとに grouped します。Public API、
-framework entrypoint、generated hook、reflection、config 経由の使用は false positive
+`--by-bucket` は返却された symbols も bucket key ごとに grouped します。
+`--bucket <name>` で単一 bucket だけを返し、`--min-confidence <medium|low>` で
+より低い confidence class を除外できます。Public API、framework entrypoint、generated hook、reflection、config 経由の使用は false positive
 になりえます。C# の `nameof(...)`、`typeof(...)`、`GetMethod("Foo")` のような
 直接的な reflection member-name literal は indexed されますが、動的に組み立てられる
 名前は手動確認が必要です。
@@ -3046,6 +3096,9 @@ cdidx search "Run();" --exact-substring                 # 大文字小文字区�
 cdidx search "Foo.Bar" --lang csharp --exact-substring  # Java/Kotlin/C# の exact 検索 / find は escaped source identifier を正規化する
 cdidx search "File.ReadAllText" --exact-substring --reject-before "Length" --guard-window 8  # 直前の guard がない API 呼び出し
 cdidx search "FileMode.Create" --exact-substring --require-after "File.Move" --guard-window 12  # 近傍の後続処理を要求
+cdidx search --list-recipes                             # 再利用可能な audit recipe を表示
+cdidx search --recipe risky-code --json                 # curated audit query set を実行し、grouped JSON を返す
+cdidx search --recipe risky-code --format issue-drafts --open-issues open-issues.json  # duplicate preflight 付き issue draft JSON
 cdidx search "--open-reports" --path README.md --count  # `--` で始まる引用済みリテラル
 cdidx search --query "--path" --path README.md          # オプションに見えるリテラルを検索
 ```
@@ -3058,8 +3111,29 @@ guard-aware search は primary の `search` 一致を近傍の literal guard で
 `--require-before` / `--require-after` は指定行窓内に guard query がある場合だけ残し、
 `--reject-before` / `--reject-after` は guard query がある一致を落とします。JSON の検索結果には
 一致した required guard の `guard_evidence` が含まれます。
+guard filter を使う検索は pagination 前に上限付きの候補集合だけを調べます。その budget 内で
+要求ページを満たせないほど query が広い場合、CLI/MCP は validation error を返します。
+query text、`--lang`、`--path`、`--exclude-tests` で絞り込むか、MCP cursor の offset を小さくしてください。
 MCP `search` tool では同じ mode を camelCase 引数 `requireBefore`, `requireAfter`,
 `rejectBefore`, `rejectAfter`, `guardWindow` で指定できます。
+
+search audit recipe は、名前付き recipe を複数の curated search query に展開します。
+`--list-recipes` は利用可能な名前、説明、推奨 label、query text、exact-match mode、
+false-positive guidance を表示します。`--recipe <name>` は `--lang`、`--path`、
+`--exclude-path`、`--exclude-tests`、`--limit`、snippet control など通常の search filter
+を recipe 内の各 query に適用します。`--json` 併用時、recipe run は通常の
+newline-delimited search stream ではなく、recipe query ごとに grouped された 1 つの
+aggregate JSON payload を出力します。
+recipe run が対応する形式は text output、`--json` / `--format json`、
+`--format issue-drafts` です。`--list-recipes` は text または JSON に対応します。
+その他の search export format と `--json=array` は、recipe output が query または
+list metadata ごとに grouped されるため usage error で拒否します。
+triage automation では `--format issue-drafts` を使うと、title、label、evidence path、
+Markdown body、duplicate-preflight metadata を持つ issue draft object を出力します。
+`--open-issues <path>` は `gh issue list --state open --json number,title,labels,url`
+のような open issue JSON list を受け取り、未指定の場合も payload には
+`duplicate_preflight.checked: false` が含まれます。draft body は evidence path と
+recipe metadata を含みますが、source snippet は含めません。
 
 ### クエリのデバッグ
 
@@ -3373,6 +3447,9 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--exclude-visibility <v[,v]>` | `definition`, `symbols`, `unused`, `hotspots` | 指定した可視性のシンボルを除外する。値と alias 展開は `--visibility` と同じ |
 | `--path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `validate` | glob 形式のパスパターンで結果を絞る。`*` と `?` がワイルドカード。繰り返し指定可（複数値は OR で結合） |
 | `--query <query>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `inspect`, `impact` | クエリを明示的なリテラルとして渡す。クエリが `-` で始まる場合に有用。`find` 以外のクエリ系コマンドでは `-- <query>` も1トークンのクエリエスケープとして受け付け、その後のオプション解析を続ける。 |
+| `--recipe <name>` | `search` | `risky-code` などの再利用可能な audit recipe を実行する。通常の search filter と snippet control は recipe 内の各 query に適用され、text、`--json` / `--format json`、`--format issue-drafts` に対応する。 |
+| `--list-recipes` | `search` | 利用可能な search audit recipe を query text、推奨 label、exact-match mode、false-positive guidance 付きで一覧表示する。 |
+| `--open-issues <path>` | `search --recipe <name> --format issue-drafts` | `gh issue list --state open --json number,title,labels,url` のような open issue JSON file と照合し、生成した issue draft を事前重複確認する。 |
 | `--exclude-path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | glob 形式のパスパターンを除外する。`*` と `?` がワイルドカード。繰り返し指定可 |
 | `--exclude-tests` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | テストらしいパスを除外し、本番コードを優先 |
 | `--include-generated` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `deps`, `impact`, `unused`, `hotspots` | 生成コードとして検出されたファイルを含める。生成ファイルは既定でクエリ結果から除外される |
@@ -3547,8 +3624,10 @@ MCP ツールで catch-all まで突き抜けた例外（想定外の SQLite 例
 | `wal_checkpoint_ms` | number（任意） | 将来の WAL チェックポイント時間計測用に予約 |
 | `files_indexed` | number（任意） | 将来の index 当たり処理ファイル数用に予約 |
 | `error` | string（任意） | タグ付けに値する失敗時の短いエラーカテゴリ |
+| `<field>_length` | number（任意） | `tool` / `source` / `language` / `error` が切り詰められた場合の元の文字数 |
+| `<field>_truncated` | boolean（任意） | `tool` / `source` / `language` / `error` が切り詰められた場合に `true` で付与 |
 
-任意フィールドは値が null のとき JSON から省略されるため、後でフィールドを追加しても古いパーサを壊しません。ファイルはローカル専用で、`tail` / `grep` ワークフローでも timestamp が人間可読のまま残るよう relaxed エンコーダを使用します。
+任意フィールドは値が null のとき JSON から省略されるため、後でフィールドを追加しても古いパーサを壊しません。metrics の文字列フィールドは serialization 前に制限されます。`tool` / `source` / `language` / `error` が長すぎる場合、出力値は切り詰められ、対応する `<field>_length` / `<field>_truncated` metadata により consumer が truncation を検出できます。各 serialized JSON object は 8 KiB の event budget 内にも収められるため、escape による膨張が激しい入力では通常の field 単位上限よりさらに短くなる場合があります。ファイルはローカル専用で、`tail` / `grep` ワークフローでも timestamp が人間可読のまま残るよう relaxed エンコーダを使用します。
 
 出力例:
 
@@ -4237,25 +4316,29 @@ CDIDX_MCP_HTTP_TOKEN=s3cret cdidx mcp \
   --transport http --http-listen 0.0.0.0:9000          # LAN 公開時は bearer token が必須
 ```
 
+HTTP では `CDIDX_MCP_HTTP_TOKEN` が優先の bearer secret です。未設定の場合は
+`CDIDX_MCP_AUTH_TOKEN` を bearer secret として fallback し、クライアントは引き続き
+`Authorization: Bearer <token>` で認証します。
+
 HTTP の `POST /` 1 件が JSON-RPC フレーム 1 件に対応し、応答は同じ HTTP レスポンスのボディに `200 OK` / `application/json` で返ります。通知は `204 No Content` です。`GET /events` はサーバー→クライアントフレーム用の `text/event-stream` channel を開きます。server-initiated JSON-RPC frame は `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S` で keep-alive notification を opt-in した場合だけ送信されます。受理される値は有限な `1`〜`300` 秒で、不正値や範囲外の値では `stderr` に警告を出して keep-alive を無効のままにします。この stream は独立しており通常の POST リクエストを塞ぎません。`/` への POST 以外は `405 Method Not Allowed`（`Allow: POST` 付き）です。リクエスト本文は既定で 1,000,000 bytes までに制限され、超過時は `413 Payload Too Large` を返します。保留中 POST queue と受理済み handler task は既定で 64 件まで、同時 `/events` stream は既定で 16 件までに制限されます。queue、handler pool、stream slot が満杯の場合は `Retry-After: 1` 付きの `429 Too Many Requests` を返します。正の整数の `CDIDX_MCP_HTTP_MAX_REQUEST_BYTES`、`CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH`、`CDIDX_MCP_HTTP_MAX_CONCURRENT_HANDLERS`、`CDIDX_MCP_HTTP_MAX_EVENT_STREAMS` で調整でき、受理範囲は本文が `1..16777216` bytes、各件数 limit が `1..1024` 件です。正でない値や数値でない値は既定にフォールバックし、最大値を超える値は listener 起動前に拒否されます。idle event stream には最小限の SSE comment heartbeat を送り、切断済み client の stream slot を解放します。永続 lifecycle log が有効な場合、HTTP mode はリクエストごとに `mcp_http_request` レコードも出力し、method、path、status、duration、auth outcome、remote peer、correlation id、利用可能な JSON-RPC request id を記録します。method、path、remote peer、request id は 256 文字を上限に `...<truncated>` marker 付きで切り詰めます。リクエスト/レスポンス本文は記録しません。
 
 セキュリティ既定:
 
 - listener は既定で loopback アドレス（`127.0.0.1`）のみに bind し、ワイルドカード `+` / `*` は最初から拒否します。
-- 非 loopback ホスト（例: `0.0.0.0:9000`）に bind するには `CDIDX_MCP_HTTP_TOKEN` で共有秘密を指定する必要があります。指定時はすべてのリクエストに `Authorization: Bearer <token>` ヘッダーが必要で、欠落・不一致は `401 Unauthorized`（`WWW-Authenticate: Bearer realm="cdidx-mcp"` 付き）です。
+- 非 loopback ホスト（例: `0.0.0.0:9000`）に bind するには `CDIDX_MCP_HTTP_TOKEN` または `CDIDX_MCP_AUTH_TOKEN` で共有秘密を指定する必要があります。両方が設定されている場合は `CDIDX_MCP_HTTP_TOKEN` が優先されます。HTTP bearer secret が設定されている場合、すべてのリクエストに `Authorization: Bearer <token>` ヘッダーが必要で、欠落・不一致は `401 Unauthorized`（`WWW-Authenticate: Bearer realm="cdidx-mcp"` 付き）です。HTTP クライアントは `params.auth.token` も送る必要はありません。
 - 設定トークンの SHA-256 digest はサーバー起動時に一度だけ計算してメモリ保持し、リクエスト毎の認証では受信トークンのみハッシュ計算して FixedTimeEquals で比較します。設定トークン側はリクエスト毎にハッシュしないため、長さやバイト列が timing から漏れません。設定 token と受信 token は 4096 文字を超える場合、hash 前に拒否します。
 
 stdio トランスポートはバイト単位で挙動が変わらないため、既存クライアント設定はそのまま動作します。
 
 #### MCP 認証（任意）: `CDIDX_MCP_AUTH_TOKEN`
 
-上記の `CDIDX_MCP_HTTP_TOKEN` は HTTP トランスポートの `Authorization: Bearer ...` ヘッダーを守るためのものです。これに加えて、**どのトランスポート（stdio 含む）でも有効** な JSON-RPC レベルの認証ゲートとして、`cdidx mcp` は `CDIDX_MCP_AUTH_TOKEN` も認識します (#1559)。
+上記の `CDIDX_MCP_HTTP_TOKEN` は HTTP トランスポートの `Authorization: Bearer ...` ヘッダーを守るためのものです。未設定の場合、HTTP は `CDIDX_MCP_AUTH_TOKEN` を bearer secret として使います。stdio では `CDIDX_MCP_AUTH_TOKEN` が JSON-RPC レベルの認証ゲートを有効にします (#1559)。
 
 既定の `cdidx mcp` サーバーは **permissive** です — OS のプロセス境界が stdio へのアクセスを既に絞っているため、上記の Claude Code / Cursor / Windsurf / Copilot / Codex の設定はそのまま動作します。`CDIDX_MCP_AUTH_TOKEN` を未設定（または空白のみ）にしておくと、サーバーは全リクエストを受理し、共有の `stdio` / `local` 呼び出し元アイデンティティを付与します。
 
-`cdidx mcp` を信頼度の低いチャネル（転送ソケット、サンドボックスブリッジ、共有 CI ランナーなど）に露出する場合は、`CDIDX_MCP_AUTH_TOKEN` に空白以外の秘密値を設定してください。設定すると、サーバーは応答が必要な全 JSON-RPC リクエスト（`initialize`、`tools/list`、`tools/call`、`ping`）に対し、`params.auth.token` が同じトークンと一致することを要求します。期待トークンは SHA-256 ダイジェストとして保持し、提示トークンも同じ長さにハッシュしてから `CryptographicOperations.FixedTimeEquals` で比較するため、「未提示／長さ違い／値違い」を 1 つの定数時間パスに集約し、トークン長やバイト列が timing から漏れません。不一致は統一された JSON-RPC `-32001 "Unauthorized"` を返します。ワイヤ本文では「未提示」と「不一致」を区別しないため、応答を用いたトークン存在判定オラクル攻撃を防ぎます（#1530）。失敗詳細はローカル診断用に `cdidx mcp` の stderr に出力されますが、`method` は制御文字を除去するサニタイズを通すため、悪意あるリクエスト本文によるログ偽造を防ぎます。通知（`notifications/initialized`、`notifications/cancelled`）はゲートをスキップします — `id` を持たずエラーコードも返せないためです。
+stdio の `cdidx mcp` を信頼度の低いチャネル（転送ソケット、サンドボックスブリッジ、共有 CI ランナーなど）に露出する場合は、`CDIDX_MCP_AUTH_TOKEN` に空白以外の秘密値を設定してください。stdio サーバーは応答が必要な全 JSON-RPC リクエスト（`initialize`、`tools/list`、`tools/call`、`ping`）に対し、`params.auth.token` が同じトークンと一致することを要求します。HTTP では `CDIDX_MCP_HTTP_TOKEN` が未設定の場合だけ同じ変数を bearer-secret fallback として使うため、HTTP クライアントは JSON-RPC body に token を重複させず `Authorization: Bearer <token>` を送ります。期待トークンは SHA-256 ダイジェストとして保持し、提示トークンも同じ長さにハッシュしてから `CryptographicOperations.FixedTimeEquals` で比較するため、「未提示／長さ違い／値違い」を 1 つの定数時間パスに集約し、トークン長やバイト列が timing から漏れません。不一致は統一された JSON-RPC `-32001 "Unauthorized"` を返します。ワイヤ本文では「未提示」と「不一致」を区別しないため、応答を用いたトークン存在判定オラクル攻撃を防ぎます（#1530）。失敗詳細はローカル診断用に `cdidx mcp` の stderr に出力されますが、`method` は制御文字を除去するサニタイズを通すため、悪意あるリクエスト本文によるログ偽造を防ぎます。通知（`notifications/initialized`、`notifications/cancelled`）はゲートをスキップします — `id` を持たずエラーコードも返せないためです。
 
-これは defense-in-depth の基盤であり、自分で制御する MCP クライアントや、同じ `McpCallerIdentity` を再利用するネットワーク transport（監査ログ #1562）で活用するためのものです。stdio クライアントが `params.auth.token` を注入しない場合、変数を設定した時点で拒否されるので、token 認証を能動的に強制したい場合以外は未設定のまま残してください。
+これは自分で制御する stdio MCP クライアント向けの defense-in-depth として有効です。stdio クライアントが `params.auth.token` を注入しない場合、変数を設定した時点で拒否されるので、body token 認証を能動的に強制したい場合以外は未設定のまま残してください。HTTP クライアントは上記の bearer header 契約を優先してください。
 
 #### デプロイ単位で公開する MCP ツールを制限する
 

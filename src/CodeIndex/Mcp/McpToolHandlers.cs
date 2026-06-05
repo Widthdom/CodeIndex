@@ -28,7 +28,6 @@ public partial class McpServer
     private static readonly HashSet<string> BoundedEnumLikeScalarArguments = new(StringComparer.Ordinal)
     {
         "category",
-        "direction",
         "format",
         "groupBy",
         "kind",
@@ -486,7 +485,7 @@ public partial class McpServer
 
     private static JsonObject? ValidateCommonListArguments(JsonNode? args)
     {
-        foreach (var propertyName in new[] { "path", "project", "excludePaths", "names" })
+        foreach (var propertyName in new[] { "path", "project", "excludePaths", "names", "sections" })
         {
             if (ValidateStringListArgument(args, propertyName) is JsonObject error)
                 return error;
@@ -603,24 +602,32 @@ public partial class McpServer
 
     private static bool TryGetExpectedJsonType(string toolName, string argumentName, out string expected)
     {
-        if (argumentName is "path" or "project" or "excludePaths" or "names" or "files" or "commits" or "changedBetween")
+        if (argumentName is "excludePaths" or "names" or "sections" or "files" or "commits" or "changedBetween")
         {
             expected = string.Empty;
             return false;
+        }
+
+        if (argumentName == "path")
+        {
+            expected = ToolAllowsStringOrArrayPath(toolName) ? "string_or_array" : "string";
+            return true;
         }
 
         expected = argumentName switch
         {
             "limit" or "offset" or "snippetLines" or "maxLineWidth" or "before" or "after" or
                 "focusLine" or "focusColumn" or "focusLength" or "startLine" or "endLine" or
-                "maxHops" or "maxDepth" or "depth" or "parallelism" or "maxFileBytes" or "guardWindow" => "integer",
+                "maxHops" or "maxDepth" or "depth" or "parallelism" or "maxFileBytes" or
+                "guardWindow" or "maxOutputBytes" => "integer",
             "excludeTests" or "includeGenerated" or "rawQuery" or "noDedup" or "exactSubstring" or
                 "exactName" or "exact" or "prefix" or "countOnly" or "includeBody" or "lsp_compatible" or
-                "regex" or "withPaths" or "rebuild" or "dryRun" or "dry_run" or "force" or "optimize" => "boolean",
-            "requireBefore" or "requireAfter" or "rejectBefore" or "rejectAfter" => "string_or_array",
-            "query" or "lang" or "kind" or "format" or "rankBy" or "since" or "path" or "project" or
-                "solution" or "symbol" or "direction" or "groupBy" or "category" or "language" or
-                "description" or "context" or "toolInvocationContext" or "db" => "string",
+                "regex" or "withPaths" or "rebuild" or "dryRun" or "dry_run" or "force" or
+                "optimize" or "reverse" or "cycles" => "boolean",
+            "project" or "requireBefore" or "requireAfter" or "rejectBefore" or "rejectAfter" => "string_or_array",
+            "query" or "lang" or "kind" or "format" or "rankBy" or "since" or "cursor" or
+                "solution" or "symbol" or "groupBy" or "category" or "language" or
+                "bucket" or "minConfidence" or "description" or "context" or "toolInvocationContext" or "db" => "string",
             "queries" or "evidencePaths" or "evidence_paths" => "array",
             _ => string.Empty,
         };
@@ -630,6 +637,14 @@ public partial class McpServer
 
         return true;
     }
+
+    private static bool ToolAllowsStringOrArrayPath(string toolName) => toolName switch
+    {
+        "search" or "definition" or "references" or "callers" or "callees" or "symbols" or
+        "files" or "find_in_file" or "map" or "analyze_symbol" or "deps" or "impact_analysis" or
+        "validate" or "unused_symbols" or "symbol_hotspots" => true,
+        _ => false,
+    };
 
     private static bool MatchesExpectedJsonType(JsonNode? node, string expected) => expected switch
     {
@@ -674,17 +689,17 @@ public partial class McpServer
         "references" => new HashSet<string>(StringComparer.Ordinal) { "query", "kind", "lang", "limit", "offset", "maxLineWidth", "lsp_compatible", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "countOnly", "format", "project", "solution" },
         "callers" or "callees" => new HashSet<string>(StringComparer.Ordinal) { "query", "kind", "rankBy", "lang", "limit", "offset", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "countOnly", "format", "project", "solution" },
         "symbols" => new HashSet<string>(StringComparer.Ordinal) { "query", "names", "kind", "lang", "limit", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "exactName", "exact", "project", "solution" },
-        "files" => new HashSet<string>(StringComparer.Ordinal) { "query", "lang", "limit", "path", "excludePaths", "excludeTests", "includeGenerated", "since" },
+        "files" => new HashSet<string>(StringComparer.Ordinal) { "query", "lang", "limit", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "project", "solution" },
         "find_in_file" => new HashSet<string>(StringComparer.Ordinal) { "query", "path", "limit", "lang", "excludePaths", "excludeTests", "includeGenerated", "before", "after", "snippetLines", "focusLine", "focusColumn", "maxLineWidth", "exact", "regex" },
-        "excerpt" => new HashSet<string>(StringComparer.Ordinal) { "path", "startLine", "endLine", "before", "after", "focusLine", "focusColumn", "focusLength", "maxLineWidth" },
-        "map" => new HashSet<string>(StringComparer.Ordinal) { "limit", "lang", "path", "excludePaths", "excludeTests", "project", "solution" },
+        "excerpt" => new HashSet<string>(StringComparer.Ordinal) { "path", "startLine", "endLine", "before", "after", "focusLine", "focusColumn", "focusLength", "maxLineWidth", "maxOutputBytes" },
+        "map" => new HashSet<string>(StringComparer.Ordinal) { "limit", "lang", "path", "excludePaths", "excludeTests", "sections", "depth", "project", "solution" },
         "analyze_symbol" => new HashSet<string>(StringComparer.Ordinal) { "query", "lang", "limit", "includeBody", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "maxLineWidth", "project", "solution" },
-        "outline" => new HashSet<string>(StringComparer.Ordinal) { "path", "limit", "includeImports", "maxLineWidth" },
+        "outline" => new HashSet<string>(StringComparer.Ordinal) { "path" },
         "batch_query" => new HashSet<string>(StringComparer.Ordinal) { "queries" },
-        "deps" => new HashSet<string>(StringComparer.Ordinal) { "path", "direction", "lang", "limit", "excludePaths", "excludeTests", "project", "solution" },
-        "impact_analysis" => new HashSet<string>(StringComparer.Ordinal) { "symbol", "query", "lang", "maxHops", "maxDepth", "depth", "limit", "path", "excludePaths", "excludeTests", "includeGenerated", "withPaths", "countOnly", "project", "solution" },
-        "validate" => new HashSet<string>(StringComparer.Ordinal) { "path", "lang", "limit", "excludePaths", "excludeTests", "project", "solution" },
-        "unused_symbols" => new HashSet<string>(StringComparer.Ordinal) { "kind", "lang", "limit", "path", "excludePaths", "excludeTests", "project", "solution" },
+        "deps" => new HashSet<string>(StringComparer.Ordinal) { "path", "reverse", "format", "cycles", "lang", "limit", "excludePaths", "excludeTests", "project", "solution" },
+        "impact_analysis" => new HashSet<string>(StringComparer.Ordinal) { "query", "lang", "maxHops", "maxDepth", "limit", "path", "excludePaths", "excludeTests", "includeGenerated", "withPaths", "countOnly", "project", "solution" },
+        "validate" => new HashSet<string>(StringComparer.Ordinal) { "kind", "path", "excludePaths", "excludeTests", "project", "solution" },
+        "unused_symbols" => new HashSet<string>(StringComparer.Ordinal) { "kind", "lang", "limit", "path", "excludePaths", "excludeTests", "bucket", "minConfidence", "project", "solution" },
         "symbol_hotspots" => new HashSet<string>(StringComparer.Ordinal) { "kind", "lang", "limit", "groupBy", "path", "excludePaths", "excludeTests", "project", "solution" },
         "index" => new HashSet<string>(StringComparer.Ordinal) { "path", "rebuild", "maxFileBytes" },
         "backfill_fold" => new HashSet<string>(StringComparer.Ordinal) { "dry_run", "dryRun", "force" },
@@ -740,8 +755,12 @@ public partial class McpServer
 
         if (node is JsonValue scalar && scalar.TryGetValue<string>(out var scalarText))
         {
-            if (propertyName == "names")
-                return null;
+            if (propertyName is "excludePaths" or "names" or "sections")
+                return new JsonObject
+                {
+                    ["message"] = $"{propertyName} must be an array of strings.",
+                    ["invalid_count"] = 1,
+                };
             if (propertyName == "path" && string.IsNullOrWhiteSpace(scalarText))
                 return null;
             if (string.IsNullOrWhiteSpace(scalarText))
@@ -1130,7 +1149,15 @@ public partial class McpServer
         {
             if (countOnly)
             {
-                var countResults = reader.Search(query, MaxLimit, lang, rawQuery, pathPatterns, excludePaths, excludeTests, deduplicate, since, exact, prefix, guardFilters: guardFilters, guardWindow: guardWindow);
+                List<SearchResult> countResults;
+                try
+                {
+                    countResults = reader.Search(query, MaxLimit, lang, rawQuery, pathPatterns, excludePaths, excludeTests, deduplicate, since, exact, prefix, guardFilters: guardFilters, guardWindow: guardWindow);
+                }
+                catch (SearchGuardCandidateLimitException ex)
+                {
+                    return CreateToolErrorResponse(id, $"guarded search is too broad: {ex.Message} Narrow the search with more specific query text, lang/path filters, or a smaller cursor offset.");
+                }
                 var truncatedCount = countResults.Count >= MaxLimit;
                 var payload = BuildCountOnlyPayload(countResults.Count, truncatedCount ? null : countResults.Count, truncatedCount, countResults, result => result.Path);
                 payload["query"] = query;
@@ -1145,7 +1172,15 @@ public partial class McpServer
                 return CreateToolResult(id, $"Counted {countResults.Count} search result(s).", payload);
             }
 
-            var results = reader.Search(query, FetchLimitForEnvelope(limit), lang, rawQuery, pathPatterns, excludePaths, excludeTests, deduplicate, since, exact, prefix, cursor: cursor, guardFilters: guardFilters, guardWindow: guardWindow);
+            List<SearchResult> results;
+            try
+            {
+                results = reader.Search(query, FetchLimitForEnvelope(limit), lang, rawQuery, pathPatterns, excludePaths, excludeTests, deduplicate, since, exact, prefix, cursor: cursor, guardFilters: guardFilters, guardWindow: guardWindow);
+            }
+            catch (SearchGuardCandidateLimitException ex)
+            {
+                return CreateToolErrorResponse(id, $"guarded search is too broad: {ex.Message} Narrow the search with more specific query text, lang/path filters, or a smaller cursor offset.");
+            }
             var ftsDiagnostics = DbReader.AnalyzeFtsQuery(query, rawQuery, prefix, lang);
             var truncated = TrimToRequestedLimit(results, limit);
             if (results.Count == 0)
@@ -2072,11 +2107,11 @@ public partial class McpServer
             var status = reader.GetStatus();
             WorkspaceMetadataEnricher.Enrich(status, _dbPath, _dbPathExplicit);
             status.MacProfile = MacProfileDetector.DetectCurrent();
-            status.GraphSupportedLanguages = ReferenceExtractor.GetSupportedLanguages().OrderBy(l => l).ToList();
             ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(status.ProjectRoot);
+            status.GraphSupportedLanguages = ReferenceExtractor.GetSupportedLanguages().OrderBy(l => l).ToList();
             status.Extractors = ExtractorPluginRegistry.GetStatusSnapshot();
-            using var postExtractionHookRunner = PostExtractionHookRunner.DiscoverDefault();
-            var postExtractionHooks = postExtractionHookRunner.Hooks;
+            var postExtractionHookSnapshot = PostExtractionHookRunner.DiscoverDefaultMetadata();
+            var postExtractionHooks = postExtractionHookSnapshot.Hooks;
             if (postExtractionHooks.Count > 0)
             {
                 status.Hooks = postExtractionHooks
@@ -2085,7 +2120,7 @@ public partial class McpServer
                         Name = hook.Name,
                         AssemblyPath = hook.AssemblyPath,
                         TypeName = hook.TypeName,
-                        CallbackBudgetMs = (long)Math.Round(postExtractionHookRunner.CallbackBudget.TotalMilliseconds, MidpointRounding.AwayFromZero),
+                        CallbackBudgetMs = (long)Math.Round(postExtractionHookSnapshot.CallbackBudget.TotalMilliseconds, MidpointRounding.AwayFromZero),
                     })
                     .ToList();
             }
@@ -3392,9 +3427,15 @@ public partial class McpServer
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? QueryCommandRunner.DefaultImpactLimit);
         var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
         var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
+        var bucket = args?["bucket"]?.GetValue<string>()?.ToLowerInvariant();
+        var minConfidence = args?["minConfidence"]?.GetValue<string>()?.ToLowerInvariant();
         var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
+        if (bucket != null && !QueryCommandRunner.IsKnownUnusedBucket(bucket))
+            return CreateToolErrorResponse(id, $"Invalid bucket '{bucket}'. Use one of: {string.Join(", ", QueryCommandRunner.OrderedUnusedBuckets)}.");
+        if (minConfidence != null && !QueryCommandRunner.IsKnownUnusedConfidence(minConfidence))
+            return CreateToolErrorResponse(id, $"Invalid minConfidence '{minConfidence}'. Use one of: medium, low.");
 
         // Add graph-support metadata for AI trust decisions
         // AI の信頼判断のためにグラフ対応メタデータを追加
@@ -3403,7 +3444,15 @@ public partial class McpServer
 
         return WithDbReader(id, args, reader =>
         {
-            var results = reader.GetUnusedSymbols(limit, kind, lang, pathPatterns, excludePaths, excludeTests);
+            var results = reader.GetUnusedSymbols(
+                limit,
+                kind,
+                lang,
+                pathPatterns,
+                excludePaths,
+                excludeTests,
+                bucketFilter: bucket,
+                minConfidence: minConfidence);
             var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests);
             var zeroResultSqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignal(
                 baseSqlGraphSignal,
@@ -4356,7 +4405,13 @@ public partial class McpServer
         if (toolInvocationContext != null && SourceCodeDetector.ContainsSourceCode(toolInvocationContext))
             return CreateToolErrorResponse(id, "Tool invocation context appears to contain source code. Please describe the invocation without including code.");
 
-        var sampling = await TrySampleSuggestionMetadataAsync(category, language, description, context, toolInvocationContext).ConfigureAwait(false);
+        var sampling = await TrySampleSuggestionMetadataAsync(
+            category,
+            language,
+            RedactSuggestionSamplingInput(description),
+            context == null ? null : RedactSuggestionSamplingInput(context),
+            toolInvocationContext == null ? null : RedactSuggestionSamplingInput(toolInvocationContext)).ConfigureAwait(false);
+        sampling = RedactSuggestionSamplingResult(sampling);
 
         // 4. Compute dedup hash / 重複排除ハッシュを計算
         var hash = SuggestionStore.ComputeHash(category, language, description);
@@ -4413,13 +4468,14 @@ public partial class McpServer
         }
 
         var result = await store.TryAddAndSubmitAsync(record, githubCallback).ConfigureAwait(false);
+        var storedHash = result.StoredHash ?? hash;
 
         if (!result.IsNew)
         {
             var dupPayload = new JsonObject
             {
                 ["status"] = "duplicate",
-                ["hash"] = hash,
+                ["hash"] = storedHash,
                 ["message"] = result.AlreadySubmitted
                     ? "This suggestion has already been recorded and submitted."
                     : result.UpstreamUrl != null
@@ -4448,7 +4504,7 @@ public partial class McpServer
         var payload = new JsonObject
         {
             ["status"] = "recorded",
-            ["hash"] = hash,
+            ["hash"] = storedHash,
             ["category"] = category,
             ["language"] = language,
             ["stored_locally"] = true,
@@ -4539,6 +4595,33 @@ public partial class McpServer
 
     private sealed record SuggestionSamplingResult(string? Title, string[]? Tags);
 
+    private static string RedactSuggestionSamplingInput(string value)
+        => SuggestionStore.RedactSensitiveText(value, out _);
+
+    private static SuggestionSamplingResult? RedactSuggestionSamplingResult(SuggestionSamplingResult? sampling)
+    {
+        if (sampling == null)
+            return null;
+
+        var title = SanitizeSampledTitle(RedactNullableSamplingValue(sampling.Title));
+        var tags = sampling.Tags?
+            .Select(RedactNullableSamplingValue)
+            .Where(t => !string.IsNullOrWhiteSpace(t))
+            .Select(SanitizeSampledTag)
+            .Where(t => t != null)
+            .Cast<string>()
+            .Distinct(StringComparer.Ordinal)
+            .Take(6)
+            .ToArray();
+
+        return title == null && (tags == null || tags.Length == 0)
+            ? null
+            : new SuggestionSamplingResult(title, tags is { Length: > 0 } ? tags : null);
+    }
+
+    private static string? RedactNullableSamplingValue(string? value)
+        => value == null ? null : SuggestionStore.RedactSensitiveText(value, out _);
+
     private async Task<SuggestionSamplingResult?> TrySampleSuggestionMetadataAsync(
         string category,
         string? language,
@@ -4576,9 +4659,11 @@ public partial class McpServer
         try
         {
             var parsed = JsonNode.Parse(text, documentOptions: new JsonDocumentOptions { MaxDepth = MaxSamplingResponseJsonDepth });
-            var title = SanitizeSampledTitle(TryReadStringValue(parsed?["title"]));
+            var title = SanitizeSampledTitle(RedactNullableSamplingValue(TryReadStringValue(parsed?["title"])));
             var tags = parsed?["tags"] is JsonArray tagArray
                 ? tagArray.Select(TryReadStringValue)
+                    .Where(t => !string.IsNullOrWhiteSpace(t))
+                    .Select(RedactNullableSamplingValue)
                     .Where(t => !string.IsNullOrWhiteSpace(t))
                     .Select(SanitizeSampledTag)
                     .Where(t => t != null)
