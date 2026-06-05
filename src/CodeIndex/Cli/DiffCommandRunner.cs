@@ -8,6 +8,7 @@ namespace CodeIndex.Cli;
 public static class DiffCommandRunner
 {
     private const int DefaultDiffLimit = 20;
+    internal static int MaxDiffLimit => QueryCommandRunner.NumericFlagUpperBounds["--limit"];
     private const int DriftExitCode = 1;
     private const int SchemaMismatchExitCode = 2;
     private const int UnreadableExitCode = 3;
@@ -110,6 +111,11 @@ public static class DiffCommandRunner
                 case "--limit" when i + 1 < args.Length:
                     if (!int.TryParse(args[++i], out limit) || limit < 0)
                         parseError = "--limit requires a non-negative integer";
+                    else if (limit > MaxDiffLimit)
+                    {
+                        parseError = $"--limit must be less than or equal to {MaxDiffLimit}";
+                        limit = DefaultDiffLimit;
+                    }
                     break;
                 case "--limit":
                     parseError = "--limit requires a value";

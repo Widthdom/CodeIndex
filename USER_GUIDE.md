@@ -393,7 +393,7 @@ be audited whenever the matching help text changes.
 
 | Setting | Current default | Source of truth |
 |---|---|---|
-| Query result limit | `20` (`--limit`, alias `--top`) | CLI help and query runners |
+| Query/diff result limit | `20` (`--limit`, alias `--top` for query commands), max `10000` | CLI help and query runners |
 | Search snippet lines | `8` (`--snippet-lines`, max `20`) | CLI help and search runner |
 | Max line width | `512` (`--max-line-width`, `0` disables) | `LineWidthFormatter.DefaultMaxLineWidth` |
 | Index max file size | `4MiB` unless `CDIDX_MAX_FILE_BYTES` is set | index runner help |
@@ -2659,7 +2659,7 @@ render できます。
 
 | 設定 | 現在の既定値 | Source of truth |
 |---|---|---|
-| Query result limit | `20`（`--limit`、alias `--top`） | CLI help と query runners |
+| Query/diff result limit | `20`（`--limit`、query command では alias `--top`）、最大 `10000` | CLI help と query runners |
 | Search snippet lines | `8`（`--snippet-lines`、最大 `20`） | CLI help と search runner |
 | Max line width | `512`（`--max-line-width`、`0` で無効） | `LineWidthFormatter.DefaultMaxLineWidth` |
 | Index max file size | `CDIDX_MAX_FILE_BYTES` 未設定時は `4MiB` | index runner help |

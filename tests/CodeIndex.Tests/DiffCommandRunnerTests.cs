@@ -87,6 +87,25 @@ public class DiffCommandRunnerTests
     }
 
     [Fact]
+    public void ParseArgs_LimitAcceptsMaximum_Issue3162()
+    {
+        var options = DiffCommandRunner.ParseArgs(["left.db", "right.db", "--limit", $"{DiffCommandRunner.MaxDiffLimit}"]);
+
+        Assert.Equal(DiffCommandRunner.MaxDiffLimit, options.Limit);
+        Assert.Null(options.ParseError);
+    }
+
+    [Fact]
+    public void ParseArgs_LimitRejectsValueAboveMaximum_Issue3162()
+    {
+        var aboveMaximum = $"{DiffCommandRunner.MaxDiffLimit + 1}";
+        var options = DiffCommandRunner.ParseArgs(["left.db", "right.db", "--limit", aboveMaximum]);
+
+        Assert.InRange(options.Limit, 0, DiffCommandRunner.MaxDiffLimit);
+        Assert.Equal("--limit must be less than or equal to 10000", options.ParseError);
+    }
+
+    [Fact]
     public void Run_DetailedJsonReportsLimitedSymbolRows_Issue2885()
     {
         var leftRoot = TestProjectHelper.CreateTempProject("cdidx_diff_detailed_left");
