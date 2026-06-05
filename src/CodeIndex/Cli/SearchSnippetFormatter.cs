@@ -115,7 +115,7 @@ public static class SearchSnippetFormatter
         var tokens = queryForLanguage.Tokens;
         var normalizeCSharpVerbatimNames = queryForLanguage.NormalizeCSharpVerbatimNames;
 
-        var matchScan = FindMatchingLineIndexes(content, normalizedQuery, tokens, caseSensitive, normalizeCSharpVerbatimNames);
+        var matchScan = FindMatchingLineIndexes(content, normalizedQuery, tokens, caseSensitive, normalizeCSharpVerbatimNames, maxLines);
         var lineCount = matchScan.LineCount;
         if (lineCount == 0)
         {
@@ -129,7 +129,7 @@ public static class SearchSnippetFormatter
         var matchIndexes = matchScan.MatchIndexes;
         var focusStart = matchIndexes.Count > 0 ? matchIndexes[0] : 0;
         var focusEnd = focusStart;
-        var includedMatchLineCount = Math.Min(1, matchIndexes.Count);
+        var includedMatchLineCount = matchIndexes.Count > 0 ? 1 : 0;
         foreach (var matchIndex in matchIndexes.Skip(1))
         {
             if ((matchIndex - focusStart) + 1 > maxLines)
@@ -138,7 +138,7 @@ public static class SearchSnippetFormatter
             focusEnd = matchIndex;
             includedMatchLineCount++;
         }
-        var droppedMatchLineCount = Math.Max(0, matchIndexes.Count - includedMatchLineCount);
+        var droppedMatchLineCount = Math.Max(0, matchScan.TotalMatchCount - includedMatchLineCount);
 
         var focusLength = Math.Max(1, (focusEnd - focusStart) + 1);
         var remaining = Math.Max(0, maxLines - focusLength);
@@ -425,11 +425,13 @@ public static class SearchSnippetFormatter
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
-    private static SearchSnippetLineMatchScan FindMatchingLineIndexes(string content, string query, string[] tokens, bool caseSensitive, bool normalizeCSharpVerbatimNames)
+    private static SearchSnippetLineMatchScan FindMatchingLineIndexes(string content, string query, string[] tokens, bool caseSensitive, bool normalizeCSharpVerbatimNames, int maxTrackedWindowLines)
     {
         var comparison = caseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
         var matches = new List<int>();
         var lineCount = 0;
+        var totalMatchCount = 0;
+        int? focusStart = null;
 
         if (!string.IsNullOrWhiteSpace(query))
         {
@@ -438,7 +440,7 @@ public static class SearchSnippetFormatter
                 lineCount++;
                 var line = normalizeCSharpVerbatimNames ? CSharpVerbatimNameNormalizer.Normalize(rawLine) : rawLine;
                 if (line.Contains(query, comparison))
-                    matches.Add(i);
+                    AddTrackedMatchIndex(matches, i, maxTrackedWindowLines, ref focusStart, ref totalMatchCount);
             }
         }
         else
@@ -447,19 +449,29 @@ public static class SearchSnippetFormatter
         }
 
         if (matches.Count > 0 || tokens.Length == 0)
-            return new SearchSnippetLineMatchScan(matches, lineCount);
+            return new SearchSnippetLineMatchScan(matches, lineCount, totalMatchCount);
 
         matches.Clear();
         lineCount = 0;
+        totalMatchCount = 0;
+        focusStart = null;
         foreach (var (i, rawLine) in EnumerateContentLines(content))
         {
             lineCount++;
             var line = normalizeCSharpVerbatimNames ? CSharpVerbatimNameNormalizer.Normalize(rawLine) : rawLine;
             if (tokens.Any(token => line.Contains(token, comparison)))
-                matches.Add(i);
+                AddTrackedMatchIndex(matches, i, maxTrackedWindowLines, ref focusStart, ref totalMatchCount);
         }
 
-        return new SearchSnippetLineMatchScan(matches, lineCount);
+        return new SearchSnippetLineMatchScan(matches, lineCount, totalMatchCount);
+    }
+
+    private static void AddTrackedMatchIndex(List<int> matches, int lineIndex, int maxTrackedWindowLines, ref int? focusStart, ref int totalMatchCount)
+    {
+        totalMatchCount++;
+        focusStart ??= lineIndex;
+        if ((lineIndex - focusStart.Value) + 1 <= maxTrackedWindowLines)
+            matches.Add(lineIndex);
     }
 
     private static List<SearchSnippetLine> ReadSnippetLines(string content, int start, int end, bool normalizeCSharpVerbatimNames)
@@ -514,7 +526,7 @@ public static class SearchSnippetFormatter
         yield return (lineIndex, content[lineStart..]);
     }
 
-    private sealed record SearchSnippetLineMatchScan(List<int> MatchIndexes, int LineCount);
+    private sealed record SearchSnippetLineMatchScan(List<int> MatchIndexes, int LineCount, int TotalMatchCount);
 
     private sealed record SearchSnippetLine(int Index, string Text, string? NormalizedText, int[]? RawIndexMap);
 
