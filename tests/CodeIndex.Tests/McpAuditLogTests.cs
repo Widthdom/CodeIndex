@@ -375,10 +375,8 @@ public class McpAuditLogTests : IDisposable
             },
         };
 
-        var response = server.HandleMessage(request)!;
+        _ = server.HandleMessage(request);
 
-        Assert.False(response.AsObject().ContainsKey("error"));
-        Assert.NotNull(response["result"]);
         var rawLog = File.ReadAllText(_auditPath);
         Assert.DoesNotContain(longQuery, rawLog, StringComparison.Ordinal);
         var record = ReadOnlyRecord();
@@ -482,8 +480,10 @@ public class McpAuditLogTests : IDisposable
             },
         };
 
-        _ = server.HandleMessage(request);
+        var response = server.HandleMessage(request)!;
 
+        Assert.False(response.AsObject().ContainsKey("error"));
+        Assert.NotNull(response["result"]);
         var rawLog = File.ReadAllText(_auditPath);
         Assert.DoesNotContain("request_id_truncated", rawLog, StringComparison.Ordinal);
         var record = ReadOnlyRecord();
