@@ -589,9 +589,22 @@ internal static class ExportImportCommandRunner
 
     private static void TryDeleteFile(string path)
     {
-        if (File.Exists(path))
-            File.Delete(path);
+        try
+        {
+            if (!File.Exists(path))
+                return;
+
+            if (DeleteSqliteSidecarForTesting != null)
+                DeleteSqliteSidecarForTesting(path);
+            else
+                File.Delete(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or PathTooLongException)
+        {
+        }
     }
+
+    internal static Action<string>? DeleteSqliteSidecarForTesting { get; set; }
 
     private static bool IsSamePath(string left, string right)
         => string.Equals(

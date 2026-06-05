@@ -377,6 +377,35 @@ public class ExportImportCommandRunnerTests
     }
 
     [Fact]
+    public void ReplaceImportedDatabase_SidecarCleanupFailureDoesNotFailAfterMove_Issue3125()
+    {
+        var workDir = Path.Combine(Path.GetTempPath(), $"cdidx_import_cleanup_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(workDir);
+        try
+        {
+            var dbPath = Path.Combine(workDir, "codeindex.db");
+            var tempPath = Path.Combine(workDir, "staged.db");
+            File.WriteAllText(dbPath, "existing db");
+            File.WriteAllText(dbPath + "-wal", "existing wal");
+            File.WriteAllText(dbPath + "-shm", "existing shm");
+            File.WriteAllText(tempPath, "imported db");
+            ExportImportCommandRunner.DeleteSqliteSidecarForTesting = _ => throw new IOException("simulated sidecar cleanup failure");
+
+            ExportImportCommandRunner.ReplaceImportedDatabase(tempPath, dbPath);
+
+            Assert.Equal("imported db", File.ReadAllText(dbPath));
+            Assert.False(File.Exists(tempPath));
+            Assert.True(File.Exists(dbPath + "-wal"));
+            Assert.True(File.Exists(dbPath + "-shm"));
+        }
+        finally
+        {
+            ExportImportCommandRunner.DeleteSqliteSidecarForTesting = null;
+            Directory.Delete(workDir, recursive: true);
+        }
+    }
+
+    [Fact]
     public void ReplaceImportedDatabase_AppliesPrivateFileMode()
     {
         if (OperatingSystem.IsWindows())
