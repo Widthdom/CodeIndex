@@ -106,6 +106,75 @@ public class LspServerTests
     }
 
     [Fact]
+    public void HandleMessage_InvalidParams_ReturnsStableErrorMessage_Issue3200()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_invalid_params");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var request = JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0",
+                id = 20,
+                method = "textDocument/documentSymbol",
+                @params = new
+                {
+                    textDocument = new { uri = string.Empty },
+                },
+            });
+
+            var response = server.HandleMessage(request);
+
+            Assert.NotNull(response);
+            Assert.Equal(-32602, response!["error"]!["code"]!.GetValue<int>());
+            var message = response["error"]!["message"]!.GetValue<string>();
+            Assert.Equal("Invalid params", message);
+            Assert.DoesNotContain("textDocument.uri", message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void HandleMessage_InternalFailure_ReturnsStableErrorMessage_Issue3200()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_internal_error");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            db.Dispose();
+            var request = JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0",
+                id = 21,
+                method = "workspace/symbol",
+                @params = new
+                {
+                    query = "Needle",
+                },
+            });
+
+            var response = server.HandleMessage(request);
+
+            Assert.NotNull(response);
+            Assert.Equal(-32603, response!["error"]!["code"]!.GetValue<int>());
+            var message = response["error"]!["message"]!.GetValue<string>();
+            Assert.Equal("Internal error", message);
+            Assert.DoesNotContain(nameof(ObjectDisposedException), message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_MalformedJsonFrame_WritesParseErrorAndContinues()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_malformed_json");
