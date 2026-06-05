@@ -1398,7 +1398,7 @@ public class McpServerTests : IDisposable
     [Theory]
     [InlineData("outline", "../outside.cs", "`..` path traversal")]
     [InlineData("excerpt", "/tmp/outside.cs", "workspace-relative")]
-    [InlineData("index", "C:/outside", "workspace-relative")]
+    [InlineData("index", "TOO_LONG", "must be no longer than")]
     [InlineData("outline", "TOO_LONG", "must be no longer than")]
     public void ToolCall_RequiredPath_RejectsInvalidPathValues_Issue3186(
         string toolName,
@@ -3431,7 +3431,7 @@ public class McpServerTests : IDisposable
         Assert.True(result["isError"]!.GetValue<bool>());
         var text = result["content"]![0]!["text"]!.GetValue<string>();
         Assert.DoesNotContain("Unknown argument 'maxFileBytes'", text, StringComparison.Ordinal);
-        Assert.Contains("Parameter \"path\" must be workspace-relative", text, StringComparison.Ordinal);
+        Assert.Contains("Path must be within the current working directory", text, StringComparison.Ordinal);
     }
 
     [Fact]

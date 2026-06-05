@@ -1121,6 +1121,27 @@ public partial class McpServer
         return true;
     }
 
+    private static bool TryReadRequiredIndexPathParameter(JsonNode? args, string propertyName, out string value, out string? error)
+    {
+        if (!TryReadRequiredStringParameter(args, propertyName, out value, out error))
+            return false;
+
+        if (value.Length > MaxMcpArrayFilterStringLength)
+        {
+            error = $"Parameter \"{propertyName}\" must be no longer than {MaxMcpArrayFilterStringLength} characters.";
+            return false;
+        }
+
+        if (value.IndexOf("\0", StringComparison.Ordinal) >= 0)
+        {
+            error = $"Parameter \"{propertyName}\" must not contain NUL bytes.";
+            return false;
+        }
+
+        error = null;
+        return true;
+    }
+
     private static bool HasWindowsDrivePrefix(string path)
         => path.Length >= 2
             && path[1] == ':'
@@ -3718,7 +3739,7 @@ public partial class McpServer
 
     private async Task<JsonNode> ExecuteIndexAsync(JsonNode? id, JsonNode? args, JsonNode? progressToken = null)
     {
-        if (!TryReadRequiredPathParameter(args, "path", out var path, out var requiredError))
+        if (!TryReadRequiredIndexPathParameter(args, "path", out var path, out var requiredError))
             return CreateToolErrorResponse(id, requiredError!);
 
         var rebuild = args?["rebuild"]?.GetValue<bool>() ?? false;
