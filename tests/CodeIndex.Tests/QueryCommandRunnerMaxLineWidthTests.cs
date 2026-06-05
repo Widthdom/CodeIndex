@@ -18,6 +18,7 @@ public class QueryCommandRunnerMaxLineWidthTests
             "--max-line-width",
             123,
             "placeholder",
+            null,
         ];
 
         var result = (bool)TryParsePositiveInt.Invoke(null, args)!;
@@ -36,6 +37,7 @@ public class QueryCommandRunnerMaxLineWidthTests
             "--limit",
             123,
             "placeholder",
+            null,
         ];
 
         var result = (bool)TryParsePositiveInt.Invoke(null, args)!;
