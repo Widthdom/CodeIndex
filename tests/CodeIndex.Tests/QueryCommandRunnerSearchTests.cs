@@ -41,6 +41,68 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_FormatLspEmitsLocationArray()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_format_lsp");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                "public class App { void Run() { Authenticate(); } }");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Authenticate", "--db", dbPath, "--format", "lsp"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var row = Assert.Single(document.RootElement.EnumerateArray());
+            Assert.EndsWith("/src/app.cs", row.GetProperty("uri").GetString(), StringComparison.Ordinal);
+            Assert.True(row.GetProperty("range").TryGetProperty("start", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_FormatSarifEmitsResultsArray()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_format_sarif");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                "public class App { void Run() { Authenticate(); } }");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Authenticate", "--db", dbPath, "--format", "sarif"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            Assert.Equal("2.1.0", root.GetProperty("version").GetString());
+            var result = Assert.Single(root.GetProperty("runs")[0].GetProperty("results").EnumerateArray());
+            Assert.Equal("search", result.GetProperty("ruleId").GetString());
+            Assert.Equal("src/app.cs", result.GetProperty("locations")[0].GetProperty("physicalLocation").GetProperty("artifactLocation").GetProperty("uri").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_FormatCsvEmitsDelimitedRows_Issue1941()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_format_csv");

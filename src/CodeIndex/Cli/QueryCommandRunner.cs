@@ -1191,7 +1191,14 @@ public static class QueryCommandRunner
         => BuildLspLocation(result.Path, result.FirstLine, 1, result.FirstLine, 1);
 
     private static void WriteLspLocations(IEnumerable<LspLocation> locations, JsonSerializerOptions jsonOptions)
-        => Console.WriteLine(JsonSerializer.Serialize(locations.ToList(), CliJsonSerializerContextFactory.Create(jsonOptions).ListLspLocation));
+    {
+        var itemOptions = GetCompactJsonOptions(jsonOptions);
+        var context = CliJsonSerializerContextFactory.Create(itemOptions);
+        WriteJsonArray(
+            locations,
+            (writer, location) => writer.Write(JsonSerializer.Serialize(location, context.LspLocation)),
+            jsonOptions);
+    }
 
     private static bool TryWriteEmptyFormattedResult(QueryCommandOptions options, JsonSerializerOptions jsonOptions)
     {
@@ -1256,19 +1263,57 @@ public static class QueryCommandRunner
 
     private static void WriteCompactLocations(IEnumerable<FormattedLocation> locations, JsonSerializerOptions jsonOptions)
     {
-        var rows = new JsonArray();
-        foreach (var location in locations)
-        {
-            var row = new JsonObject
+        var itemOptions = GetCompactJsonOptions(jsonOptions);
+        WriteJsonArray(
+            locations,
+            (writer, location) =>
             {
-                ["file"] = location.File,
-                ["line"] = location.Line,
-            };
-            if (location.Column.HasValue)
-                row["column"] = location.Column.Value;
-            rows.Add(row);
+                writer.Write("{\"file\":");
+                writer.Write(JsonSerializer.Serialize(location.File, itemOptions));
+                writer.Write(",\"line\":");
+                writer.Write(location.Line.ToString(CultureInfo.InvariantCulture));
+                if (location.Column.HasValue)
+                {
+                    writer.Write(",\"column\":");
+                    writer.Write(location.Column.Value.ToString(CultureInfo.InvariantCulture));
+                }
+                writer.Write('}');
+            },
+            jsonOptions);
+    }
+
+    private static void WriteJsonArray<T>(IEnumerable<T> items, Action<TextWriter, T> writeItem, JsonSerializerOptions jsonOptions)
+    {
+        var writer = Console.Out;
+        if (!jsonOptions.WriteIndented)
+        {
+            writer.Write('[');
+            var first = true;
+            foreach (var item in items)
+            {
+                if (!first)
+                    writer.Write(',');
+                writeItem(writer, item);
+                first = false;
+            }
+            writer.WriteLine(']');
+            return;
         }
-        Console.WriteLine(rows.ToJsonString(jsonOptions));
+
+        writer.WriteLine("[");
+        var wroteAny = false;
+        foreach (var item in items)
+        {
+            if (wroteAny)
+                writer.WriteLine(",");
+            writer.Write("  ");
+            writeItem(writer, item);
+            wroteAny = true;
+        }
+
+        if (wroteAny)
+            writer.WriteLine();
+        writer.WriteLine("]");
     }
 
     private static void WriteDelimitedLocations(IEnumerable<FormattedLocation> locations, string outputFormat)
@@ -1308,51 +1353,44 @@ public static class QueryCommandRunner
 
     private static void WriteSarif(IEnumerable<(string Path, int Line, int Column, string Message, string RuleId)> items, JsonSerializerOptions jsonOptions)
     {
-        var results = new JsonArray();
+        var writer = Console.Out;
+        var itemOptions = GetCompactJsonOptions(jsonOptions);
+        writer.Write("{\"version\":\"2.1.0\",\"runs\":[{\"tool\":{\"driver\":{\"name\":\"cdidx\",\"informationUri\":\"https://github.com/Widthdom/CodeIndex\"}},\"results\":");
+        WriteJsonArrayInline(
+            items,
+            (resultWriter, item) => WriteSarifResult(resultWriter, item, itemOptions),
+            separator: ",");
+        writer.WriteLine("}]}");
+    }
+
+    private static void WriteJsonArrayInline<T>(IEnumerable<T> items, Action<TextWriter, T> writeItem, string separator)
+    {
+        var writer = Console.Out;
+        writer.Write('[');
+        var first = true;
         foreach (var item in items)
         {
-            results.Add(new JsonObject
-            {
-                ["ruleId"] = item.RuleId,
-                ["message"] = new JsonObject { ["text"] = item.Message },
-                ["locations"] = new JsonArray
-                {
-                    new JsonObject
-                    {
-                        ["physicalLocation"] = new JsonObject
-                        {
-                            ["artifactLocation"] = new JsonObject { ["uri"] = item.Path },
-                            ["region"] = new JsonObject
-                            {
-                                ["startLine"] = Math.Max(1, item.Line),
-                                ["startColumn"] = Math.Max(1, item.Column),
-                            },
-                        },
-                    },
-                },
-            });
+            if (!first)
+                writer.Write(separator);
+            writeItem(writer, item);
+            first = false;
         }
+        writer.Write(']');
+    }
 
-        var payload = new JsonObject
-        {
-            ["version"] = "2.1.0",
-            ["runs"] = new JsonArray
-            {
-                new JsonObject
-                {
-                    ["tool"] = new JsonObject
-                    {
-                        ["driver"] = new JsonObject
-                        {
-                            ["name"] = "cdidx",
-                            ["informationUri"] = "https://github.com/Widthdom/CodeIndex",
-                        },
-                    },
-                    ["results"] = results,
-                },
-            },
-        };
-        Console.WriteLine(payload.ToJsonString(jsonOptions));
+    private static void WriteSarifResult(TextWriter writer, (string Path, int Line, int Column, string Message, string RuleId) item, JsonSerializerOptions jsonOptions)
+    {
+        writer.Write("{\"ruleId\":");
+        writer.Write(JsonSerializer.Serialize(item.RuleId, jsonOptions));
+        writer.Write(",\"message\":{\"text\":");
+        writer.Write(JsonSerializer.Serialize(item.Message, jsonOptions));
+        writer.Write("},\"locations\":[{\"physicalLocation\":{\"artifactLocation\":{\"uri\":");
+        writer.Write(JsonSerializer.Serialize(item.Path, jsonOptions));
+        writer.Write("},\"region\":{\"startLine\":");
+        writer.Write(Math.Max(1, item.Line).ToString(CultureInfo.InvariantCulture));
+        writer.Write(",\"startColumn\":");
+        writer.Write(Math.Max(1, item.Column).ToString(CultureInfo.InvariantCulture));
+        writer.Write("}}}]}");
     }
 
     public static int RunDefinition(string[] cmdArgs, JsonSerializerOptions jsonOptions)
