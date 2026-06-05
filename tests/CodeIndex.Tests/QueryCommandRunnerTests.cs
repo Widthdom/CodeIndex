@@ -287,6 +287,7 @@ public partial class QueryCommandRunnerTests
     [InlineData("30m", 30 * 60)]
     [InlineData("2h", 2 * 60 * 60)]
     [InlineData("7d", 7 * 24 * 60 * 60)]
+    [InlineData(QueryCommandRunner.MaxStaleAfterDisplay, 30 * 24 * 60 * 60)]
     public void TryParseStaleAfter_AcceptsCompactDurations(string value, int expectedSeconds)
     {
         Assert.True(QueryCommandRunner.TryParseStaleAfter(value, out var staleAfter, out var error));
@@ -304,6 +305,15 @@ public partial class QueryCommandRunnerTests
     {
         Assert.False(QueryCommandRunner.TryParseStaleAfter(value, out _, out var error));
         Assert.Contains("stale-after", error);
+    }
+
+    [Theory]
+    [InlineData("31d")]
+    [InlineData("721h")]
+    public void TryParseStaleAfter_RejectsDurationsAboveMaximum_Issue3176(string value)
+    {
+        Assert.False(QueryCommandRunner.TryParseStaleAfter(value, out _, out var error));
+        Assert.Contains(QueryCommandRunner.MaxStaleAfterDisplay, error);
     }
 
     [Fact]

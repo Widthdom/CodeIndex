@@ -34,6 +34,8 @@ public static class QueryCommandRunner
     private const string LanguageCapabilityReferences = "references";
     private const string LanguageCapabilitySymbols = "symbols";
     internal static readonly TimeSpan DefaultStaleAfter = TimeSpan.FromHours(24);
+    internal static readonly TimeSpan MaxStaleAfter = TimeSpan.FromDays(30);
+    internal const string MaxStaleAfterDisplay = "30d";
     internal static TimeProvider TimeProvider { get; set; } = TimeProvider.System;
     private static readonly JsonDocumentOptions BatchJsonDocumentOptions = new()
     {
@@ -7142,6 +7144,12 @@ public static class QueryCommandRunner
         if (ticks > TimeSpan.MaxValue.Ticks)
         {
             error = $"Error: stale-after value '{value}' is too large.";
+            return false;
+        }
+
+        if (ticks > MaxStaleAfter.Ticks)
+        {
+            error = $"Error: stale-after value '{value}' exceeds the maximum {MaxStaleAfterDisplay}.";
             return false;
         }
 
