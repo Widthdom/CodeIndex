@@ -171,7 +171,7 @@ public static class ReportCommandRunner
         sb.AppendLine("- `metadata.json` — version, OS, .NET runtime info (machine-readable).");
         sb.AppendLine("- `version.txt` — cdidx version only.");
         sb.AppendLine("- `env.txt` — human-readable OS / runtime summary.");
-        sb.AppendLine("- `schema.txt` — capped SQLite table list and bounded row counts (no user content).");
+        sb.AppendLine("- `schema.txt` — capped SQLite table list and bounded row counts (no table row contents).");
         if (includeLog)
         {
             sb.AppendLine("- `log/stderr-recent.log` — last N lines of the cdidx lifecycle log");
