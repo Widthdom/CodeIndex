@@ -1983,6 +1983,8 @@ strings are capped at 1000 characters before symbol search runs.
 `textDocument/documentSymbol` returns at most 1000 indexed symbols, truncates
 each `detail` string to 512 characters with `...`, and stops adding symbols
 before the result array exceeds 524288 JSON bytes.
+Position-based `definition` and `references` lookups read at most 16384
+characters from the target source line before returning an empty result.
 
 Tool results include structured JSON in `structuredContent` plus a short text summary in `content`, so AI tools can parse typed data without scraping large text blocks.
 
@@ -4259,6 +4261,8 @@ invalid request として拒否します。
 `workspace/symbol` の query string は symbol search を実行する前に 1000 文字で上限をかけます。
 `textDocument/documentSymbol` は最大 1000 件の indexed symbol を返し、各 `detail` string を
 `...` 付きの 512 文字に切り詰め、result array が 524288 JSON bytes を超える前に symbol 追加を止めます。
+position-based な `definition` / `references` lookup は、対象 source line を最大 16384 文字まで読み、
+超過時は空の result を返します。
 
 ツール結果は `structuredContent` に構造化JSON、`content` に短い要約テキストを返すため、AIツールは巨大なテキストをパースせずに型付きデータを扱えます。
 

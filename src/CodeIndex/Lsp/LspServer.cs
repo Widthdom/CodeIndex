@@ -24,6 +24,7 @@ internal sealed class LspServer : IDisposable
     internal const int MaxDocumentSymbols = 1000;
     internal const int MaxDocumentSymbolDetailChars = 512;
     internal const int MaxDocumentSymbolResponseBytes = 512 * 1024;
+    internal const int MaxPositionLineChars = 16 * 1024;
     internal const int MaxUnknownMethodDiagnosticChars = 240;
     private const int JsonRpcInvalidParamsCode = -32602;
     private const int JsonRpcInternalErrorCode = -32603;
@@ -329,24 +330,56 @@ internal sealed class LspServer : IDisposable
                 return false;
 
             using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
-            for (var currentLine = 0; currentLine <= targetLine; currentLine++)
+            var currentLine = 0;
+            var currentLineLength = 0;
+            StringBuilder? builder = targetLine == 0 ? new StringBuilder() : null;
+            while (true)
             {
-                var line = reader.ReadLine();
-                if (line == null)
-                    return false;
-                if (currentLine == targetLine)
+                var next = reader.Read();
+                if (next < 0)
                 {
-                    sourceLine = line;
-                    return true;
+                    if (currentLine == targetLine && currentLineLength <= MaxPositionLineChars && builder != null)
+                    {
+                        sourceLine = builder.ToString();
+                        return true;
+                    }
+
+                    return false;
                 }
+
+                var c = (char)next;
+                if (c == '\r' || c == '\n')
+                {
+                    if (c == '\r' && reader.Peek() == '\n')
+                        reader.Read();
+
+                    if (currentLine == targetLine)
+                    {
+                        sourceLine = builder?.ToString() ?? string.Empty;
+                        return true;
+                    }
+
+                    currentLine++;
+                    currentLineLength = 0;
+                    builder = currentLine == targetLine ? new StringBuilder() : null;
+                    continue;
+                }
+
+                currentLineLength++;
+                if (currentLineLength > MaxPositionLineChars)
+                {
+                    if (currentLine == targetLine)
+                        return false;
+                    continue;
+                }
+
+                builder?.Append(c);
             }
         }
         catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException or UnauthorizedAccessException)
         {
             return false;
         }
-
-        return false;
     }
 
     internal static string? ExtractTokenAtUtf16Position(string line, int character)

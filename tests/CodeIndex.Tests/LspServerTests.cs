@@ -966,6 +966,37 @@ public class LspServerTests
     }
 
     [Fact]
+    public void HandleMessage_Definition_ReturnsEmptyForLineOverPositionBudget_Issue3136()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_definition_long_line");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var sourcePath = Path.Combine(projectRoot, "long_line.cs");
+            var indexedSource = "class App { void Needle() { } void Call() { Needle(); } }\n";
+            TestProjectHelper.InsertIndexedFile(dbPath, "long_line.cs", "csharp", indexedSource);
+            var oversizedLine = new string('x', LspServer.MaxPositionLineChars + 1) + " Needle();\n";
+            File.WriteAllText(sourcePath, oversizedLine);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var request = CreateDefinitionRequest(
+                sourcePath,
+                3136,
+                0,
+                oversizedLine.IndexOf("Needle();", StringComparison.Ordinal));
+
+            var response = server.HandleMessage(request);
+
+            Assert.NotNull(response);
+            Assert.Empty(response!["result"]!.AsArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void HandleMessage_Definition_HonorsCaseInsensitiveWorkspaceCasing()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_definition_case_insensitive");
