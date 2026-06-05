@@ -2151,7 +2151,7 @@ internal static class ProgramRunner
     };
 
     private const string DefaultMcpHttpListen = "127.0.0.1:38080";
-    private const string McpHttpTokenEnvVar = "CDIDX_MCP_HTTP_TOKEN";
+    internal const string McpHttpTokenEnvVar = "CDIDX_MCP_HTTP_TOKEN";
 
     private static int RunLsp(string[] cmdArgs, string appVersion, JsonSerializerOptions jsonOptions)
     {
@@ -2254,16 +2254,20 @@ internal static class ProgramRunner
             if (!TryOpenMcpAuditLog(runOptions.AuditOptions, out auditLog, out exitCode))
                 return exitCode;
 
-            // Pick the authenticator based on `CDIDX_MCP_AUTH_TOKEN` (#1559). When unset the
-            // permissive local-stdio default keeps the historical behaviour; when set every
-            // JSON-RPC request must include a matching `params.auth.token`. The tool-enablement
-            // gate (#1561) is wired automatically by the McpServer ctor via
-            // `McpToolFilter.FromEnvironment()`.
-            // `CDIDX_MCP_AUTH_TOKEN` の有無で authenticator を切り替える (#1559)。未設定なら
-            // permissive な stdio 既定で従来動作を維持し、設定済みなら全 JSON-RPC リクエストに
-            // `params.auth.token` の一致を要求する。ツール有効化ゲート (#1561) は McpServer の
-            // コンストラクタ内部で `McpToolFilter.FromEnvironment()` から自動取得される。
-            var authenticator = Mcp.McpAuthenticatorFactory.FromEnvironment();
+            // Pick the JSON-RPC authenticator for the selected transport. Stdio keeps the
+            // historical `CDIDX_MCP_AUTH_TOKEN` / `params.auth.token` gate (#1559). HTTP uses
+            // its bearer header gate instead, with `CDIDX_MCP_HTTP_TOKEN` taking precedence over
+            // `CDIDX_MCP_AUTH_TOKEN` as a fallback (#3156), so clients never need both header and
+            // body tokens for one HTTP request. The tool-enablement gate (#1561) is wired
+            // automatically by the McpServer ctor via `McpToolFilter.FromEnvironment()`.
+            // 選択済み transport に応じて JSON-RPC authenticator を選ぶ。stdio は従来通り
+            // `CDIDX_MCP_AUTH_TOKEN` / `params.auth.token` ゲートを使う (#1559)。HTTP は bearer
+            // header ゲートへ一本化し、`CDIDX_MCP_HTTP_TOKEN` を優先、未設定なら
+            // `CDIDX_MCP_AUTH_TOKEN` を fallback として使う (#3156)。そのため HTTP では同一
+            // リクエストに header token と body token の両方を要求しない。ツール有効化ゲート
+            // (#1561) は McpServer のコンストラクタ内部で `McpToolFilter.FromEnvironment()`
+            // から自動取得される。
+            var authenticator = CreateMcpAuthenticatorForTransport(runOptions.Transport);
             using var server = new McpServer(runOptions.QueryOptions.DbPath, appVersion, runOptions.QueryOptions.DbPathExplicit, authenticator, auditLog);
             return RunMcpServer(server, runOptions.Transport, runOptions.ListenSpec);
         }
@@ -2429,6 +2433,23 @@ internal static class ProgramRunner
         }
     }
 
+    internal static IMcpAuthenticator CreateMcpAuthenticatorForTransport(string transport)
+        => string.Equals(transport, "http", StringComparison.OrdinalIgnoreCase)
+            ? LocalStdioAuthenticator.Instance
+            : McpAuthenticatorFactory.FromEnvironment();
+
+    internal static string? ResolveMcpHttpBearerTokenFromEnvironment()
+    {
+        var httpToken = NormalizeMcpToken(Environment.GetEnvironmentVariable(McpHttpTokenEnvVar));
+        if (httpToken is not null)
+            return httpToken;
+
+        return NormalizeMcpToken(Environment.GetEnvironmentVariable(McpAuthenticatorFactory.AuthTokenEnvVar));
+    }
+
+    private static string? NormalizeMcpToken(string? token)
+        => string.IsNullOrWhiteSpace(token) ? null : token;
+
     private static int RunMcpHttp(McpServer server, string listenSpec)
     {
         HttpMcpTransport.HttpListenSpec resolved;
@@ -2444,17 +2465,23 @@ internal static class ProgramRunner
         }
 
         // Require a shared-secret bearer token when the user opts into a non-loopback bind so the
-        // MCP catalog is not exposed to the local network unauthenticated. Loopback binds skip the
-        // requirement because they're indistinguishable from the existing stdio threat model.
-        // 非 loopback への bind 時は共有秘密トークンを必須にし、認証なしの LAN 露出を防ぐ。
-        // loopback bind は stdio と同等の脅威モデルとみなしてトークン要件を緩める。
-        var bearerToken = Environment.GetEnvironmentVariable(McpHttpTokenEnvVar);
-        if (string.IsNullOrEmpty(bearerToken))
-            bearerToken = null;
+        // MCP catalog is not exposed to the local network unauthenticated. HTTP resolves that
+        // bearer token from `CDIDX_MCP_HTTP_TOKEN` first, then falls back to the generic
+        // `CDIDX_MCP_AUTH_TOKEN` so setting the generic auth token also protects HTTP without
+        // forcing clients to send both `Authorization` and `params.auth.token` (#3156). Loopback
+        // binds skip the requirement because they're indistinguishable from the existing stdio
+        // threat model when neither token is configured.
+        // 非 loopback への bind 時は共有秘密 bearer token を必須にし、認証なしの LAN 露出を
+        // 防ぐ。HTTP はまず `CDIDX_MCP_HTTP_TOKEN` を使い、未設定なら汎用の
+        // `CDIDX_MCP_AUTH_TOKEN` を bearer token として使うため、汎用 token を設定しただけでも
+        // HTTP は保護され、クライアントに `Authorization` と `params.auth.token` の両方を
+        // 要求しない (#3156)。どちらの token も未設定なら、loopback bind は stdio と同等の脅威
+        // モデルとみなしてトークン要件を緩める。
+        var bearerToken = ResolveMcpHttpBearerTokenFromEnvironment();
 
         if (!resolved.IsLoopback && bearerToken is null)
         {
-            Console.Error.WriteLine($"Error: --transport http refuses to bind to '{resolved.Host}' without a shared secret. Set the `{McpHttpTokenEnvVar}` environment variable or bind to a loopback address.");
+            Console.Error.WriteLine($"Error: --transport http refuses to bind to '{resolved.Host}' without a shared secret. Set the `{McpHttpTokenEnvVar}` or `{McpAuthenticatorFactory.AuthTokenEnvVar}` environment variable, or bind to a loopback address.");
             PrintMcpUsage();
             return CommandExitCodes.UsageError;
         }
