@@ -169,12 +169,15 @@ public sealed class TokenMcpAuthenticator : IMcpAuthenticator
 /// Pick the authenticator based on environment configuration. With
 /// <c>CDIDX_MCP_AUTH_TOKEN</c> unset (the default), keep the historical stdio behaviour
 /// (<see cref="LocalStdioAuthenticator"/>). When set to a non-whitespace value, enforce
-/// token authentication on every request (<see cref="TokenMcpAuthenticator"/>). This is
-/// the only public composition surface the CLI uses; tests inject authenticators directly.
+/// token authentication on every request (<see cref="TokenMcpAuthenticator"/>). The CLI uses
+/// this for stdio; HTTP resolves the same environment variable as a bearer-token fallback in
+/// ProgramRunner so HTTP clients authenticate through <c>Authorization: Bearer</c> instead
+/// of also sending <c>params.auth.token</c>.
 /// 環境変数に応じて authenticator を選ぶ。<c>CDIDX_MCP_AUTH_TOKEN</c> 未設定（既定）では
 /// 従来の stdio 動作を維持する (<see cref="LocalStdioAuthenticator"/>)。空白以外の値が
 /// セットされていれば全リクエストにトークン認証を強制する (<see cref="TokenMcpAuthenticator"/>)。
-/// CLI 側はこの公開合成 API のみを使い、テストは authenticator を直接 inject する。
+/// CLI はこれを stdio に使う。HTTP は ProgramRunner で同じ環境変数を bearer-token fallback
+/// として解決し、<c>params.auth.token</c> ではなく <c>Authorization: Bearer</c> で認証する。
 /// </summary>
 public static class McpAuthenticatorFactory
 {
