@@ -581,7 +581,7 @@ internal sealed class LspServer : IDisposable
     internal static string UriToPath(string uri)
     {
         if (!Uri.TryCreate(uri, UriKind.Absolute, out var parsed) || !parsed.IsFile)
-            return uri;
+            throw new ArgumentException("textDocument.uri must be an absolute file URI.");
         return parsed.LocalPath;
     }
 

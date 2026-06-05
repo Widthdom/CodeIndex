@@ -567,6 +567,42 @@ public class LspServerTests
         }
     }
 
+    [Theory]
+    [InlineData("untitled:scratch.cs")]
+    [InlineData("https://example.invalid/app.cs")]
+    public void HandleMessage_DocumentSymbol_RejectsNonFileTextDocumentUri_Issue3206(string uri)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_document_symbol_uri_scheme");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var request = JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0",
+                id = 3206,
+                method = "textDocument/documentSymbol",
+                @params = new
+                {
+                    textDocument = new { uri },
+                },
+            });
+
+            var response = server.HandleMessage(request);
+
+            Assert.NotNull(response);
+            var error = response!["error"]!;
+            Assert.Equal(-32602, error["code"]!.GetValue<int>());
+            Assert.Equal("Invalid params", error["message"]!.GetValue<string>());
+            Assert.DoesNotContain(uri, response.ToJsonString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Fact]
     public void HandleMessage_Definition_ReturnsLocationForTokenAtPosition()
     {
