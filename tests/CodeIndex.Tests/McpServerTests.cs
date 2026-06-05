@@ -6361,6 +6361,34 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void Constructor_InvalidKeepAliveEnvironment_TruncatesWarning_Issue3091()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture("CDIDX_MCP_KEEP_ALIVE_INTERVAL_S");
+            var originalErr = Console.Error;
+            using var stderr = new StringWriter();
+            var value = new string('x', ConsoleUi.DefaultDiagnosticValueCharLimit + 1);
+            try
+            {
+                env.Set("CDIDX_MCP_KEEP_ALIVE_INTERVAL_S", value);
+                Console.SetError(stderr);
+
+                using var server = new McpServer(_dbPath, "1.0", dbPathExplicit: true);
+
+                var warning = stderr.ToString();
+                Assert.Contains("Ignoring invalid CDIDX_MCP_KEEP_ALIVE_INTERVAL_S", warning);
+                Assert.Contains("<truncated; original length", warning);
+                Assert.DoesNotContain(value, warning);
+            }
+            finally
+            {
+                Console.SetError(originalErr);
+            }
+        }
+    }
+
+    [Fact]
     public void ToolsCall_Status_ReportsKeepAliveIntervalBounds()
     {
         var response = _server.HandleMessage(JsonNode.Parse(

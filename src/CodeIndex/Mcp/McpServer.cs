@@ -1365,7 +1365,7 @@ public partial class McpServer : IDisposable
             || seconds > MaxKeepAliveIntervalSeconds)
         {
             Console.Error.WriteLine(
-                $"[cdidx-mcp] Ignoring invalid {KeepAliveIntervalEnvironmentVariable}='{raw}'. Expected a finite value between {MinKeepAliveIntervalSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} and {MaxKeepAliveIntervalSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} seconds. Keep-alive notifications stay disabled.");
+                $"[cdidx-mcp] Ignoring invalid {KeepAliveIntervalEnvironmentVariable}='{ConsoleUi.FormatBoundedValue(raw)}'. Expected a finite value between {MinKeepAliveIntervalSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} and {MaxKeepAliveIntervalSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} seconds. Keep-alive notifications stay disabled.");
             return null;
         }
         return TimeSpan.FromSeconds(seconds);
