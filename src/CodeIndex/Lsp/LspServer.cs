@@ -15,12 +15,16 @@ internal sealed class LspServer : IDisposable
     internal const int MaxLspFrameBytes = 8 * 1024 * 1024;
     internal const int MaxLspHeaderLineBytes = 8 * 1024;
     internal const int MaxPositionDocumentBytes = 4 * 1024 * 1024;
-    internal const int MaxLspRequestIdRawChars = 4 * 1024;
+    internal const int MaxLspRequestIdRawBytes = 4 * 1024;
     internal const int MaxJsonDepth = 32;
     private const int JsonRpcInvalidParamsCode = -32602;
     private const int JsonRpcInternalErrorCode = -32603;
     private const string JsonRpcInvalidParamsMessage = "Invalid params";
     private const string JsonRpcInternalErrorMessage = "Internal error";
+    private static readonly JsonReaderOptions LspJsonReaderOptions = new()
+    {
+        MaxDepth = MaxJsonDepth,
+    };
     private static readonly JsonDocumentOptions LspJsonDocumentOptions = new()
     {
         MaxDepth = MaxJsonDepth,
@@ -85,8 +89,8 @@ internal sealed class LspServer : IDisposable
 
                 var method = root.TryGetProperty("method", out var methodElement) ? methodElement.GetString() : null;
                 hasId = root.TryGetProperty("id", out var idElement);
-                if (hasId && !TryParseRequestId(idElement, out id))
-                    return Error(null, -32600, $"Request id must be {MaxLspRequestIdRawChars} raw JSON characters or fewer.");
+                if (hasId && !TryParseRequestId(payload, idElement, out id))
+                    return Error(null, -32600, $"Request id must be {MaxLspRequestIdRawBytes} raw JSON bytes or fewer.");
 
                 if (method == null)
                     return hasId ? Error(id, -32600, "Invalid Request") : null;
@@ -115,15 +119,63 @@ internal sealed class LspServer : IDisposable
         }
     }
 
-    private static bool TryParseRequestId(JsonElement idElement, out JsonNode? id)
+    private static bool TryParseRequestId(string payload, JsonElement idElement, out JsonNode? id)
     {
         id = null;
+        if (!TryGetTopLevelRequestIdRawByteCount(payload, out var rawIdBytes) || rawIdBytes > MaxLspRequestIdRawBytes)
+            return false;
+
         var rawId = idElement.GetRawText();
-        if (rawId.Length > MaxLspRequestIdRawChars)
+        if (Encoding.UTF8.GetByteCount(rawId) > MaxLspRequestIdRawBytes)
             return false;
 
         id = JsonNode.Parse(rawId, documentOptions: LspJsonDocumentOptions);
         return true;
+    }
+
+    private static bool TryGetTopLevelRequestIdRawByteCount(string payload, out int rawIdBytes)
+    {
+        rawIdBytes = 0;
+        var buffer = ArrayPool<byte>.Shared.Rent(Encoding.UTF8.GetMaxByteCount(payload.Length));
+        try
+        {
+            var byteCount = Encoding.UTF8.GetBytes(payload.AsSpan(), buffer);
+            var reader = new Utf8JsonReader(buffer.AsSpan(0, byteCount), LspJsonReaderOptions);
+            if (!reader.Read() || reader.TokenType != JsonTokenType.StartObject)
+                return true;
+
+            while (reader.Read())
+            {
+                if (reader.TokenType == JsonTokenType.EndObject && reader.CurrentDepth == 0)
+                    break;
+                if (reader.TokenType != JsonTokenType.PropertyName || reader.CurrentDepth != 1)
+                    continue;
+
+                var isId = reader.ValueTextEquals("id"u8);
+                if (!reader.Read())
+                    return false;
+
+                var valueStart = reader.TokenStartIndex;
+                reader.Skip();
+                if (isId)
+                {
+                    var rawLength = reader.BytesConsumed - valueStart;
+                    if (rawLength > int.MaxValue)
+                        return false;
+                    rawIdBytes = (int)rawLength;
+                }
+            }
+
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
     }
 
     private JsonObject HandleShutdown(JsonNode? id)

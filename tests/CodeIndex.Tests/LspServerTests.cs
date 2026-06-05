@@ -183,7 +183,7 @@ public class LspServerTests
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             using var db = new DbContext(dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
-            var oversizedId = new string('A', LspServer.MaxLspRequestIdRawChars + 1);
+            var oversizedId = new string('A', LspServer.MaxLspRequestIdRawBytes + 1);
             var request = JsonSerializer.Serialize(new
             {
                 jsonrpc = "2.0",
