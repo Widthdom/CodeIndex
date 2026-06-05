@@ -1975,8 +1975,10 @@ URIs, and are rejected before URI parsing when they exceed 4096 characters,
 matching the MCP resource URI limit and keeping error responses bounded. LSP
 frame parsing also rejects more than 64 header lines, more than 65536 aggregate
 header bytes, any one header line above 8192 bytes, duplicate `Content-Length`
-headers, or a body above 8388608 bytes before reading the message body. Request
-IDs must be bounded JSON-RPC scalar values: strings are capped at 256
+headers, or a body above 8388608 bytes before reading the message body.
+Unknown-method diagnostics echo at most 240 method-name characters with `...`
+when the method name is longer. Request IDs must be bounded JSON-RPC scalar
+values: strings are capped at 256
 characters, integer IDs must fit in `Int64`, and non-scalar IDs are rejected as
 invalid requests before response IDs are cloned. `workspace/symbol` query
 strings are capped at 1000 characters before symbol search runs.
@@ -4257,6 +4259,8 @@ cdidxには**MCP（Model Context Protocol）サーバー**が組み込まれて�
 LSP frame parsing は、message body を読む前に 64 行を超える header、合計 65536 bytes を
 超える header、8192 bytes を超える単一 header 行、重複した `Content-Length` header、
 8388608 bytes を超える body を拒否します。
+method-not-found diagnostic で echo する method name は最大 240 文字に制限され、
+長い場合は `...` を付けて切り詰めます。
 request ID は bounded な JSON-RPC scalar value に限定され、string は 256 文字まで、
 integer ID は `Int64` に収まるものだけを受理し、non-scalar ID は response ID を複製する前に
 invalid request として拒否します。

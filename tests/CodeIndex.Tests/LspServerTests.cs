@@ -177,6 +177,40 @@ public class LspServerTests
     }
 
     [Fact]
+    public void HandleMessage_UnknownMethod_TruncatesMethodName_Issue3205()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_unknown_method_3205");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var method = "workspace/" + new string('m', LspServer.MaxUnknownMethodDiagnosticChars + 20) + "LEAK_SENTINEL";
+            var request = JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0",
+                id = 3205,
+                method,
+            });
+
+            var response = server.HandleMessage(request);
+
+            Assert.NotNull(response);
+            var error = response!["error"]!;
+            Assert.Equal(-32601, error["code"]!.GetValue<int>());
+            var message = error["message"]!.GetValue<string>();
+            Assert.StartsWith("Method not found: workspace/", message, StringComparison.Ordinal);
+            Assert.EndsWith("...", message, StringComparison.Ordinal);
+            Assert.DoesNotContain("LEAK_SENTINEL", message, StringComparison.Ordinal);
+            Assert.True(message.Length <= "Method not found: ".Length + LspServer.MaxUnknownMethodDiagnosticChars + "...".Length);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void HandleMessage_UnknownMethod_PreservesSlashDelimitedMethodName_Issue3127()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_unknown_method_slash");
