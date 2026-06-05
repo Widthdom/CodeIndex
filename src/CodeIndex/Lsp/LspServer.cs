@@ -15,6 +15,7 @@ internal sealed class LspServer : IDisposable
     internal const int MaxLspFrameBytes = 8 * 1024 * 1024;
     internal const int MaxLspHeaderLineBytes = 8 * 1024;
     internal const int MaxPositionDocumentBytes = 4 * 1024 * 1024;
+    internal const int MaxLspRequestIdRawChars = 4 * 1024;
     internal const int MaxJsonDepth = 32;
     private const int JsonRpcInvalidParamsCode = -32602;
     private const int JsonRpcInternalErrorCode = -32603;
@@ -84,7 +85,8 @@ internal sealed class LspServer : IDisposable
 
                 var method = root.TryGetProperty("method", out var methodElement) ? methodElement.GetString() : null;
                 hasId = root.TryGetProperty("id", out var idElement);
-                id = hasId ? JsonNode.Parse(idElement.GetRawText(), documentOptions: LspJsonDocumentOptions) : null;
+                if (hasId && !TryParseRequestId(idElement, out id))
+                    return Error(null, -32600, $"Request id must be {MaxLspRequestIdRawChars} raw JSON characters or fewer.");
 
                 if (method == null)
                     return hasId ? Error(id, -32600, "Invalid Request") : null;
@@ -111,6 +113,17 @@ internal sealed class LspServer : IDisposable
                 return hasId ? Error(id, JsonRpcInternalErrorCode, JsonRpcInternalErrorMessage) : null;
             }
         }
+    }
+
+    private static bool TryParseRequestId(JsonElement idElement, out JsonNode? id)
+    {
+        id = null;
+        var rawId = idElement.GetRawText();
+        if (rawId.Length > MaxLspRequestIdRawChars)
+            return false;
+
+        id = JsonNode.Parse(rawId, documentOptions: LspJsonDocumentOptions);
+        return true;
     }
 
     private JsonObject HandleShutdown(JsonNode? id)
