@@ -1027,6 +1027,32 @@ public partial class McpServer
         return paths.Count == 0 ? null : paths;
     }
 
+    private static JsonObject? ValidateProjectFilterArguments(JsonNode? args)
+    {
+        var projects = ReadPathList(args, "project") ?? [];
+        if (projects.Count == 0)
+            return null;
+
+        var solution = args?["solution"]?.GetValue<string>();
+        try
+        {
+            _ = SolutionProjectResolver.ResolveProjectDirectoryGlobs(Environment.CurrentDirectory, projects, solution);
+            return null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            var diagnostic = McpBoundedText.ForDisplay(ex.Message);
+            var error = new JsonObject
+            {
+                ["message"] = $"Project filter could not be resolved: {diagnostic.Text}",
+                ["parameter"] = "project",
+                ["diagnostic"] = diagnostic.Text,
+            };
+            diagnostic.AddMetadata(error, "diagnostic");
+            return error;
+        }
+    }
+
     private static bool TryReadSinceArgument(JsonNode? args, out DateTime? since, out string? error)
     {
         var sinceStr = args?["since"]?.GetValue<string>();
@@ -2780,6 +2806,16 @@ public partial class McpServer
                     suggestion: "Send only non-empty string entries within the documented MCP array bounds.",
                     retrySafe: false,
                     extraData: listArgumentError);
+                continue;
+            }
+
+            if (ValidateProjectFilterArguments(toolArgs) is JsonObject projectFilterError)
+            {
+                AppendSlotError(requestIndex, toolName, toolArgs, slotStopwatch, projectFilterError["message"]!.GetValue<string>(),
+                    category: McpErrorEnvelope.CategoryInvalidArgument,
+                    suggestion: "Use a project name or project path from the current workspace, or correct the solution filter.",
+                    retrySafe: false,
+                    extraData: projectFilterError);
                 continue;
             }
 

@@ -1321,6 +1321,41 @@ public class McpServerTests : IDisposable
         Assert.Equal(McpErrorEnvelope.CategoryInvalidArgument, result["structuredContent"]!["category"]!.GetValue<string>());
     }
 
+    [Fact]
+    public void ToolsCall_ProjectFilterResolverFailure_ReturnsInvalidArgument_Issue3160()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"App","project":"DefinitelyMissingProject3160"}}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+
+        var result = response["result"]!;
+        Assert.True(result["isError"]!.GetValue<bool>(), response.ToJsonString());
+        var text = result["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("Project filter could not be resolved", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("Tool 'search' failed", text, StringComparison.Ordinal);
+        Assert.DoesNotContain(nameof(InvalidOperationException), text, StringComparison.Ordinal);
+        var structured = result["structuredContent"]!;
+        Assert.Equal(McpErrorEnvelope.CategoryInvalidArgument, structured["category"]!.GetValue<string>());
+        Assert.Equal("project", structured["parameter"]!.GetValue<string>());
+        Assert.Contains("DefinitelyMissingProject3160", structured["diagnostic"]!.GetValue<string>(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ToolsCall_BatchQuery_ProjectFilterResolverFailure_ReturnsSlotError_Issue3160()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[{"tool":"search","arguments":{"query":"App","project":"DefinitelyMissingProject3160"}}]}}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(1, structured["metadata"]!["errors"]!.GetValue<int>());
+        var slot = Assert.Single(structured["results"]!.AsArray());
+        Assert.False(slot!["ok"]!.GetValue<bool>());
+        Assert.Contains("Project filter could not be resolved", slot["error"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Equal(McpErrorEnvelope.CategoryInvalidArgument, slot["category"]!.GetValue<string>());
+        Assert.Equal("project", slot["parameter"]!.GetValue<string>());
+    }
+
     [Theory]
     [InlineData("outline")]
     [InlineData("excerpt")]

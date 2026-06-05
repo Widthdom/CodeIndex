@@ -2464,6 +2464,15 @@ public partial class McpServer : IDisposable
                     retrySafe: false,
                     extraData: listArgumentError);
             }
+            else if (ValidateProjectFilterArguments(args) is JsonObject projectFilterError)
+            {
+                metricsError = "invalid_project_filter";
+                response = CreateToolErrorResponse(id, projectFilterError["message"]!.GetValue<string>(),
+                    category: McpErrorEnvelope.CategoryInvalidArgument,
+                    suggestion: "Use a project name or project path from the current workspace, or correct the solution filter.",
+                    retrySafe: false,
+                    extraData: projectFilterError);
+            }
             else
             {
                 // Per-(tool, caller) rate limiter check (#1560). Disabled by default; when an
