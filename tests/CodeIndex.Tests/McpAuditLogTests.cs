@@ -37,7 +37,7 @@ public class McpAuditLogTests : IDisposable
     private McpServer CreateServer(AuditLogSink sink) =>
         new(_dbPath, ConsoleUi.LoadVersion(), dbPathExplicit: false, sink);
 
-    private McpServer CreateServerWithFilter(AuditLogSilË sink, McpToolFilter filter) =>
+    private McpServer CreateServerWithFilter(AuditLogSink sink, McpToolFilter filter) =>
         new(_dbPath, ConsoleUi.LoadVersion(), dbPathExplicit: false, serializeResponse: null, authenticator: null, toolFilter: filter, auditLog: sink);
 
     [Fact]
