@@ -22,6 +22,8 @@ internal static class MetricsSink
     internal const string EnvVarName = "CDIDX_METRICS";
     internal const long DefaultMaxBytes = 50L * 1024 * 1024;
     internal const int RotationKeep = 3;
+    internal const int MaxStringFieldChars = 1024;
+    internal const int MaxSerializedEventBytes = 8 * 1024;
 
     internal static IDisposable? TryStart(string? explicitPath) =>
         TryStart(explicitPath, DefaultMaxBytes);
@@ -146,6 +148,35 @@ internal static class MetricsSink
 
     internal static string SerializeEvent(MetricsEvent evt)
     {
+        var encoded = SerializeEventBytes(evt, MaxStringFieldChars);
+        if (encoded.Length <= MaxSerializedEventBytes)
+            return Encoding.UTF8.GetString(encoded);
+
+        // JSON escaping can expand already-clamped strings, especially control chars.
+        // Re-clamp all string fields until the serialized JSON object fits the event cap.
+        var low = 0;
+        var high = MaxStringFieldChars - 1;
+        var best = SerializeEventBytes(evt, 0);
+        while (low <= high)
+        {
+            var mid = low + ((high - low) / 2);
+            var candidate = SerializeEventBytes(evt, mid);
+            if (candidate.Length <= MaxSerializedEventBytes)
+            {
+                best = candidate;
+                low = mid + 1;
+            }
+            else
+            {
+                high = mid - 1;
+            }
+        }
+
+        return Encoding.UTF8.GetString(best);
+    }
+
+    private static byte[] SerializeEventBytes(MetricsEvent evt, int maxStringChars)
+    {
         using var buffer = new MemoryStream();
         using (var jw = new Utf8JsonWriter(buffer, new JsonWriterOptions
         {
@@ -162,12 +193,12 @@ internal static class MetricsSink
         {
             jw.WriteStartObject();
             jw.WriteString("timestamp", evt.Timestamp.ToString("O", CultureInfo.InvariantCulture));
-            jw.WriteString("tool", evt.Tool);
-            jw.WriteString("source", evt.Source);
+            WriteBoundedString(jw, "tool", evt.Tool, maxStringChars);
+            WriteBoundedString(jw, "source", evt.Source, maxStringChars);
             jw.WriteNumber("elapsed_ms", Math.Round(evt.ElapsedMs, 3));
             jw.WriteNumber("exit_code", evt.ExitCode);
             if (evt.Language is { } lang)
-                jw.WriteString("language", lang);
+                WriteBoundedString(jw, "language", lang, maxStringChars);
             if (evt.BytesRead is { } br)
                 jw.WriteNumber("bytes_read", br);
             if (evt.BytesWritten is { } bw)
@@ -177,12 +208,38 @@ internal static class MetricsSink
             if (evt.FilesIndexed is { } fi)
                 jw.WriteNumber("files_indexed", fi);
             if (evt.Error is { } err)
-                jw.WriteString("error", err);
+                WriteBoundedString(jw, "error", err, maxStringChars);
             jw.WriteEndObject();
         }
-        return Encoding.UTF8.GetString(buffer.ToArray());
+        return buffer.ToArray();
+    }
+
+    private static void WriteBoundedString(Utf8JsonWriter jw, string name, string value, int maxChars)
+    {
+        var bounded = BoundString(value, maxChars);
+        jw.WriteString(name, bounded.Text);
+        if (!bounded.Truncated)
+            return;
+
+        jw.WriteNumber(name + "_length", bounded.OriginalLength);
+        jw.WriteBoolean(name + "_truncated", true);
+    }
+
+    private static BoundedMetricsString BoundString(string value, int maxChars)
+    {
+        var safeMax = Math.Max(0, maxChars);
+        if (value.Length <= safeMax)
+            return new BoundedMetricsString(value, value.Length, Truncated: false);
+
+        var end = safeMax;
+        if (end > 0 && end < value.Length && char.IsHighSurrogate(value[end - 1]) && char.IsLowSurrogate(value[end]))
+            end--;
+
+        return new BoundedMetricsString(value.Substring(0, end), value.Length, Truncated: true);
     }
 }
+
+internal readonly record struct BoundedMetricsString(string Text, int OriginalLength, bool Truncated);
 
 /// <summary>
 /// Structured metrics record emitted to the JSONL sink. Optional fields are omitted from
