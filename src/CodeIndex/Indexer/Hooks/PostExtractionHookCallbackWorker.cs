@@ -111,6 +111,13 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
                 return Failure($"failed to read worker response: {responseException.Message}", stopwatch.ElapsedMilliseconds);
             }
 
+            if (CallbackBudgetExceeded(stopwatch, callbackBudget))
+            {
+                KillWorker();
+                stopwatch.Stop();
+                return TimedOut(stopwatch.ElapsedMilliseconds);
+            }
+
             stopwatch.Stop();
             var responseJson = responseTask.GetAwaiter().GetResult();
             if (responseJson == null)
@@ -299,6 +306,9 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
 
         return Math.Max(1, (int)Math.Ceiling(Math.Min(remainingMilliseconds, int.MaxValue)));
     }
+
+    private static bool CallbackBudgetExceeded(Stopwatch stopwatch, TimeSpan callbackBudget)
+        => stopwatch.Elapsed > callbackBudget;
 
     private static string BuildWorkerExitError(Process? process, string stderr, string fallback)
     {
