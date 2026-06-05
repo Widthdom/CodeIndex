@@ -1922,7 +1922,7 @@ The following categories ride the standard JSON-RPC codes:
 | --- | --- | --- | --- |
 | `-32700` | `parse_error` | `false` | Frame was not valid JSON. |
 | `-32700` | `message_too_large` | `false` | Frame is above the per-frame byte cap and is rejected before parsing. The frame reader uses the parse-error code because the frame is unreadable in the same sense as malformed JSON. |
-| `-32600` | `invalid_request` | `false` | Frame parsed but is not a JSON object, is missing required JSON-RPC fields, or carries an invalid `id`. |
+| `-32600` | `invalid_request` | `false` | Frame parsed but is not a JSON object, is missing required JSON-RPC fields, or carries an invalid `id`. String and numeric request ids are capped before echo/audit serialization; oversized ids return `id:null` plus `data.max_request_id_chars` / `data.max_request_id_bytes`. |
 | `-32601` | `method_not_found` | `false` | Unknown JSON-RPC method (not one of `initialize` / `tools/list` / `tools/call` / `ping` / supported `notifications/*`). |
 | `-32601` | `tool_disabled` | `false` | Known MCP tool is disabled by `CDIDX_MCP_TOOLS_ALLOW` / `CDIDX_MCP_TOOLS_DENY` (#1561). The `-32601` wire code is preserved so the pre-#1581 client contract still holds; only the envelope is additive. `data.tool` carries the disabled tool name. |
 | `-32602` | `tool_unknown` | `false` | `tools/call` received an MCP tool name the server does not implement (typo or version mismatch). `data.tool` carries the unknown name. |
@@ -3548,7 +3548,7 @@ JSON-RPC 2.0 は `-32700` と `-32600..-32603` を仕様自身、`-32000..-32099
 | --- | --- | --- | --- |
 | `-32700` | `parse_error` | `false` | フレームが JSON として解析できなかった。 |
 | `-32700` | `message_too_large` | `false` | フレームがパース前にバイト上限を超えて拒否された。フレームリーダーは「読めない」という意味で parse-error と同じコードを使う。 |
-| `-32600` | `invalid_request` | `false` | パースはできたが JSON オブジェクトでない、JSON-RPC 必須フィールド欠落、または不正な `id` を含む。 |
+| `-32600` | `invalid_request` | `false` | パースはできたが JSON オブジェクトでない、JSON-RPC 必須フィールド欠落、または不正な `id` を含む。文字列と数値の request id は echo / audit serialization 前に上限を適用し、過大な id は `id:null` と `data.max_request_id_chars` / `data.max_request_id_bytes` 付きで返す。 |
 | `-32601` | `method_not_found` | `false` | 未知 JSON-RPC メソッド（`initialize` / `tools/list` / `tools/call` / `ping` / サポート対象 `notifications/*` 以外）。 |
 | `-32601` | `tool_disabled` | `false` | `CDIDX_MCP_TOOLS_ALLOW` / `CDIDX_MCP_TOOLS_DENY`（#1561）で無効化された既知ツール。ワイヤコードは #1581 以前のクライアント契約を保つため `-32601` のまま維持し、envelope のみ additive に追加する。`data.tool` に無効化されたツール名を含める。 |
 | `-32602` | `tool_unknown` | `false` | `tools/call` がサーバー未実装の MCP ツール名を指定した（typo またはバージョン不整合）。`data.tool` に未知の名前を含める。 |
