@@ -1,3 +1,4 @@
+using CodeIndex.Database;
 using CodeIndex.Indexer;
 using Microsoft.Data.Sqlite;
 using System.Security.Cryptography;
@@ -239,8 +240,9 @@ public static class DbPathResolver
         try
         {
             // Strip query params (?immutable=1 etc.) before URI parsing so LocalPath is clean.
-            var qIdx = dbPath.IndexOf('?');
-            var trimmed = qIdx >= 0 ? dbPath[..qIdx] : dbPath;
+            if (!SqliteFileUri.TryGetPathBeforeQuery(dbPath, out var trimmed, out var boundsError))
+                throw boundsError ?? new FormatException("Invalid SQLite file URI.");
+
             if (ContainsInvalidPercentEscape(trimmed))
                 throw new FormatException("Invalid percent escape in SQLite file URI.");
 
@@ -427,27 +429,16 @@ public static class DbPathResolver
     }
 
     public static bool UriRequestsReadOnly(string uriText)
-    {
-        if (!uriText.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
-            return false;
-
-        var qIdx = uriText.IndexOf('?');
-        if (qIdx < 0) return false;
-        var query = uriText[(qIdx + 1)..];
-        foreach (var raw in query.Split('&'))
-        {
-            var seg = raw.Trim();
-            if (seg.Equals("immutable=1", StringComparison.OrdinalIgnoreCase)) return true;
-            if (seg.Equals("mode=ro", StringComparison.OrdinalIgnoreCase)) return true;
-        }
-        return false;
-    }
+        => SqliteFileUri.RequestsReadOnly(uriText);
 
     private static bool PathsEqual(string left, string right)
         => PathCasing.PathsEqual(left, right);
 
-    private static string QuoteLogValue(string value) =>
-        "\"" + value.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal).Replace("\r", "\\r", StringComparison.Ordinal).Replace("\n", "\\n", StringComparison.Ordinal) + "\"";
+    private static string QuoteLogValue(string value)
+    {
+        var boundedValue = SqliteFileUri.TruncateDiagnosticValue(value);
+        return "\"" + boundedValue.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal).Replace("\r", "\\r", StringComparison.Ordinal).Replace("\n", "\\n", StringComparison.Ordinal) + "\"";
+    }
 
     private static bool IsUnderDirectory(string parentDirectory, string candidatePath)
         => PathCasing.IsPathEqualOrParent(parentDirectory, candidatePath);

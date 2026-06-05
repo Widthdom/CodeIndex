@@ -17,6 +17,13 @@ public class DbCommandRunnerTests
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
     };
 
+    public static IEnumerable<object[]> DirectSqliteModeArgs()
+    {
+        yield return new object[] { new[] { "--integrity-check" } };
+        yield return new object[] { new[] { "schema" } };
+        yield return new object[] { new[] { "prune", "--dry-run" } };
+    }
+
     [Fact]
     public void ParseArgs_IntegrityCheckFlagSetsFlag()
     {
@@ -98,6 +105,23 @@ public class DbCommandRunnerTests
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
         Assert.Contains("db requires a mode flag", stderr);
         Assert.Contains("--integrity-check", stderr);
+    }
+
+    [Theory]
+    [MemberData(nameof(DirectSqliteModeArgs))]
+    public void Run_DirectSqliteModesRejectOversizedFileUriQuery_Issue3140(string[] modeArgs)
+    {
+        var dbUri = "file:///tmp/codeindex.db?" + new string('a', SqliteFileUri.MaxQueryLength + 1);
+        var args = new List<string>(modeArgs) { "--db", dbUri }.ToArray();
+
+        var (exitCode, stdout, stderr) = RunAndCaptureStreams(args);
+
+        Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("invalid --db file URI", stderr);
+        Assert.Contains($"SQLite file URI query length exceeds {SqliteFileUri.MaxQueryLength}", stderr);
+        Assert.Contains("supported limits", stderr);
+        Assert.DoesNotContain(new string('a', SqliteFileUri.MaxDiagnosticValueLength + 1), stderr);
     }
 
     [Fact]

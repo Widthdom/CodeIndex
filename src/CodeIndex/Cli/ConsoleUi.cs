@@ -955,6 +955,11 @@ public static class ConsoleUi
         WriteHelpLine("  --ascii                    Use ASCII spinner/progress glyphs instead of Unicode glyphs (also honors CDIDX_ASCII=1, NO_UNICODE, TERM=dumb, accessibility env hints, and non-UTF-8 locales)");
         WriteHelpLine("  --no-progress              Disable animated progress/spinner output (also honors CDIDX_DISABLE_PROGRESS=1 and PREFERS_REDUCED_MOTION)");
         Console.WriteLine("  --metrics <path>           Append one JSONL record per CLI command / MCP tool call to <path> (also honors CDIDX_METRICS=<path>)");
+        Console.WriteLine("  --log-format <text|json>   Persistent stderr log format (also honors CDIDX_LOG_FORMAT)");
+        Console.WriteLine("  --log-retain-count <n>     Persistent stderr log file retention count (also honors CDIDX_LOG_RETAIN)");
+        Console.WriteLine("  --log-max-size-mb <n>      Persistent stderr log rotation size cap in MiB (also honors CDIDX_LOG_MAX_SIZE_MB)");
+        WriteHelpLine("  --debug-unsafe             Allow raw debug dumps only when CDIDX_DEBUG=unsafe is also set; local troubleshooting only");
+        WriteHelpLine("  --strict-version           Treat workspace version pin mismatches as exit code 64 instead of warnings");
         Console.WriteLine("  --help, -h                 Show this help message");
         Console.WriteLine("  --version, -V              Show version information");
         Console.WriteLine("  --license                  Show licensing, trademark, and commercial-use summary");
@@ -1404,6 +1409,7 @@ public static class ConsoleUi
     private static string GetBashCompletions()
     {
         var cmds = string.Join(" ", Commands);
+        var topLevelFlags = string.Join(" ", BuildTopLevelFlagList());
         var langs = GetCompletionLangs();
         var kinds = GetCompletionKinds();
         var version = LoadVersion();
@@ -1419,12 +1425,15 @@ public static class ConsoleUi
         sb.Append($"    commands=\"{cmds}\"\n");
         sb.Append("\n");
         sb.Append("    if [ $COMP_CWORD -eq 1 ]; then\n");
-        sb.Append("        COMPREPLY=($(compgen -W \"$commands --help --version --license\" -- \"$cur\"))\n");
+        sb.Append($"        COMPREPLY=($(compgen -W \"$commands --help --version --license {topLevelFlags}\" -- \"$cur\"))\n");
         sb.Append("        return\n");
         sb.Append("    fi\n");
         sb.Append("\n");
         sb.Append("    case \"$prev\" in\n");
-        sb.Append("        --db|--path|--exclude-path|--output|-o) COMPREPLY=($(compgen -f -- \"$cur\")) ;;\n");
+        sb.Append("        --db|--path|--exclude-path|--output|-o|--metrics) COMPREPLY=($(compgen -f -- \"$cur\")) ;;\n");
+        sb.Append("        --color) COMPREPLY=($(compgen -W \"auto always never\" -- \"$cur\")) ;;\n");
+        sb.Append("        --palette) COMPREPLY=($(compgen -W \"basic 256 truecolor\" -- \"$cur\")) ;;\n");
+        sb.Append("        --log-format) COMPREPLY=($(compgen -W \"text json\" -- \"$cur\")) ;;\n");
         sb.Append($"        --lang) COMPREPLY=($(compgen -W \"{langs}\" -- \"$cur\")) ;;\n");
         sb.Append($"        --kind) COMPREPLY=($(compgen -W \"{kinds}\" -- \"$cur\")) ;;\n");
         sb.Append("        *)\n");
@@ -1510,6 +1519,8 @@ public static class ConsoleUi
         sb.Append("    )\n");
         sb.Append("\n");
         sb.Append("    _arguments -C \\\n");
+        foreach (var arg in BuildZshTopLevelArgs(langs, kinds))
+            sb.Append($"        {arg} \\\n");
         sb.Append("        '1:command:->cmds' \\\n");
         sb.Append("        '*::arg:->args'\n");
         sb.Append("\n");
@@ -1556,6 +1567,17 @@ public static class ConsoleUi
         return args;
     }
 
+    private static List<string> BuildZshTopLevelArgs(string langs, string kinds)
+    {
+        var args = new List<string>();
+        foreach (var flag in CliFlagSchema.GetTopLevelCompletionFlags())
+            args.AddRange(FormatZshArguments(flag, langs, kinds));
+        args.Add("'--help[Show help]'");
+        args.Add("'--version[Show version]'");
+        args.Add("'--license[Show license summary]'");
+        return args;
+    }
+
     private static List<string> BuildZshGenericArgs(string langs, string kinds)
     {
         var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -1597,6 +1619,9 @@ public static class ConsoleUi
             "<datetime>" => "datetime",
             "<lang>" => $"language:({langs})",
             "<kind>" => $"kind:({kinds})",
+            "<auto|always|never>" => "mode:(auto always never)",
+            "<basic|256|truecolor>" => "palette:(basic 256 truecolor)",
+            "<text|json>" => "format:(text json)",
             "<query>" => "query",
             "<name>" => "name",
             "<host:port>" => "address",
@@ -1631,6 +1656,21 @@ public static class ConsoleUi
         lines.Add("complete -c cdidx -n '__fish_use_subcommand' -l help -d 'Show help'");
         lines.Add("complete -c cdidx -n '__fish_use_subcommand' -l version -d 'Show version'");
         lines.Add("complete -c cdidx -n '__fish_use_subcommand' -l license -d 'Show license summary'");
+        foreach (var flag in CliFlagSchema.GetTopLevelCompletionFlags())
+        {
+            var name = flag.Name.TrimStart('-');
+            var shortName = flag.ShortName is null ? "" : $" -s {flag.ShortName.TrimStart('-')}";
+            var requiresArg = flag.IsValueBearing ? " -r" : "";
+            var argSpec = flag.ValuePlaceholder switch
+            {
+                "<auto|always|never>" => " -a 'auto always never'",
+                "<basic|256|truecolor>" => " -a 'basic 256 truecolor'",
+                "<text|json>" => " -a 'text json'",
+                _ => "",
+            };
+            var description = flag.Description.Replace("'", "\\'");
+            lines.Add($"complete -c cdidx -n '__fish_use_subcommand' -l {name}{shortName}{requiresArg}{argSpec} -d '{description}'");
+        }
 
         // Emit one `complete` line per schema flag, joining the applicable command list into the
         // fish `__fish_seen_subcommand_from` predicate. Hotspots' `--group-by-name` description is
@@ -1640,6 +1680,8 @@ public static class ConsoleUi
         // という対応で生成する。`--group-by-name` のみ既存テストが期待する短い tooltip を維持。
         foreach (var flag in CliFlagSchema.All)
         {
+            if (flag.Commands.Count == 0)
+                continue;
             var commands = string.Join(' ', flag.Commands.OrderBy(c => Array.IndexOf(Commands, c)));
             var name = flag.Name.TrimStart('-');
             // Token order is `-l name (-r)? (-a 'values')? -d 'description'` — matches the
@@ -1672,6 +1714,7 @@ public static class ConsoleUi
         var cmds = FormatPowerShellArray(Commands);
         var langs = FormatPowerShellArray(GetCompletionLangs().Split(' ', StringSplitOptions.RemoveEmptyEntries));
         var kinds = FormatPowerShellArray(GetCompletionKinds().Split(' ', StringSplitOptions.RemoveEmptyEntries));
+        var topLevelFlags = FormatPowerShellArray(BuildTopLevelFlagList());
         var sb = new StringBuilder();
         sb.AppendLine($"# cdidx PowerShell completions generated for version {LoadVersion()}");
         sb.AppendLine("# Regenerate this script after upgrading cdidx.");
@@ -1680,6 +1723,10 @@ public static class ConsoleUi
         sb.AppendLine($"    $commands = @({cmds})");
         sb.AppendLine($"    $langs = @({langs})");
         sb.AppendLine($"    $kinds = @({kinds})");
+        sb.AppendLine("    $colorModes = @('auto', 'always', 'never')");
+        sb.AppendLine("    $palettes = @('basic', '256', 'truecolor')");
+        sb.AppendLine("    $logFormats = @('text', 'json')");
+        sb.AppendLine($"    $topLevelFlags = @({topLevelFlags})");
         sb.AppendLine("    $elements = @($commandAst.CommandElements)");
         sb.AppendLine("    $tokens = @($elements | ForEach-Object { $_.Extent.Text })");
         sb.AppendLine("    $lastElement = if ($elements.Count -ge 1) { $elements[$elements.Count - 1] } else { $null }");
@@ -1690,15 +1737,18 @@ public static class ConsoleUi
         sb.AppendLine("        [System.Management.Automation.CompletionResult]::new($value, $value, $kind, $value)");
         sb.AppendLine("    }");
         sb.AppendLine("    switch ($prev) {");
-        sb.AppendLine("        { $_ -in @('--db', '--path', '--exclude-path', '--output', '-o') } {");
+        sb.AppendLine("        { $_ -in @('--db', '--path', '--exclude-path', '--output', '-o', '--metrics') } {");
         sb.AppendLine("            Get-ChildItem -Name \"$wordToComplete*\" -ErrorAction SilentlyContinue | ForEach-Object { New-CdidxCompletion $_ 'ProviderItem' }");
         sb.AppendLine("            return");
         sb.AppendLine("        }");
+        sb.AppendLine("        '--color' { $colorModes | Where-Object { $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { New-CdidxCompletion $_ }; return }");
+        sb.AppendLine("        '--palette' { $palettes | Where-Object { $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { New-CdidxCompletion $_ }; return }");
+        sb.AppendLine("        '--log-format' { $logFormats | Where-Object { $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { New-CdidxCompletion $_ }; return }");
         sb.AppendLine("        '--lang' { $langs | Where-Object { $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { New-CdidxCompletion $_ }; return }");
         sb.AppendLine("        '--kind' { $kinds | Where-Object { $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { New-CdidxCompletion $_ }; return }");
         sb.AppendLine("    }");
         sb.AppendLine("    if (-not $subcmd -or ($tokens.Count -le 2 -and -not ([string]::IsNullOrEmpty($wordToComplete)) -and -not $afterLastToken)) {");
-        sb.AppendLine("        $commands + @('--help', '--version', '--license') | Where-Object { $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { New-CdidxCompletion $_ 'ParameterName' }");
+        sb.AppendLine("        $commands + @('--help', '--version', '--license') + $topLevelFlags | Where-Object { $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { New-CdidxCompletion $_ 'ParameterName' }");
         sb.AppendLine("        return");
         sb.AppendLine("    }");
         sb.AppendLine("    switch ($subcmd) {");
@@ -1723,6 +1773,18 @@ public static class ConsoleUi
         tokens.Add("--help");
         if (command == "find")
             tokens.Add("--");
+        return tokens;
+    }
+
+    private static List<string> BuildTopLevelFlagList()
+    {
+        var tokens = new List<string>();
+        foreach (var flag in CliFlagSchema.GetTopLevelCompletionFlags())
+        {
+            tokens.Add(flag.Name);
+            if (flag.ShortName is not null)
+                tokens.Add(flag.ShortName);
+        }
         return tokens;
     }
 

@@ -1545,6 +1545,38 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void WithDb_OversizedFileUriQueryReturnsBoundedDiagnostics_Issue3140()
+    {
+        var longQuery = new string('a', SqliteFileUri.MaxQueryLength + 1);
+        var dbUri = "file:///tmp/codeindex.db?" + longQuery;
+
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--db", dbUri],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+        Assert.Contains($"SQLite file URI query length exceeds {SqliteFileUri.MaxQueryLength}", stderr);
+        Assert.Contains("...(truncated,", stderr);
+        Assert.DoesNotContain(new string('a', SqliteFileUri.MaxDiagnosticValueLength + 1), stderr);
+    }
+
+    [Fact]
+    public void WithDb_ReadOnlyOversizedFileUriQueryReturnsBoundedDiagnostics_Issue3140()
+    {
+        var longQuery = new string('a', SqliteFileUri.MaxQueryLength + 1);
+        var dbUri = "file:///tmp/codeindex.db?" + longQuery;
+
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--read-only", "--db", dbUri],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+        Assert.Contains($"SQLite file URI query length exceeds {SqliteFileUri.MaxQueryLength}", stderr);
+        Assert.Contains("...(truncated,", stderr);
+        Assert.DoesNotContain(new string('a', SqliteFileUri.MaxDiagnosticValueLength + 1), stderr);
+    }
+
+    [Fact]
     public void WithDb_SqliteCantOpenSurfacesAccessOpenCategory_Issue2072()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue2072_cantopen");

@@ -34,6 +34,10 @@ public static partial class IndexCommandRunner
                 "Run `cdidx optimize --help` to see the supported command shape.",
                 CommandErrorCodes.UsageError);
 
+        var dbUriValidationExitCode = ValidateDbPathFileUri(options.DbPath, "optimize", options.Json, jsonOptions);
+        if (dbUriValidationExitCode != null)
+            return dbUriValidationExitCode.Value;
+
         if (DbPathResolver.UriRequestsReadOnly(options.DbPath))
             return WriteCommandError(
                 options.Json,
