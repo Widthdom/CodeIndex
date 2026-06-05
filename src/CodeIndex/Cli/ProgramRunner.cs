@@ -26,28 +26,10 @@ internal static class ProgramRunner
     internal const long TestExtractorMaxInputBytes = 4 * 1024 * 1024;
     private static readonly TimeSpan InstallerRunTimeout = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan InstallerKillWaitTimeout = TimeSpan.FromSeconds(5);
-    private static readonly HashSet<string> NonLogGlobalOptionNames = new(StringComparer.Ordinal)
-    {
-        "--quiet",
-        "-q",
-        "--silent",
-        "--color",
-        "--palette",
-        "--ascii",
-        "--no-progress",
-        "--metrics",
-        "--debug-unsafe",
-        "--strict-version",
-    };
-    private static readonly HashSet<string> TopLevelValueOptionNames = new(StringComparer.Ordinal)
-    {
-        "--color",
-        "--palette",
-        "--metrics",
-        "--log-format",
-        "--log-retain-count",
-        "--log-max-size-mb",
-    };
+    private static readonly HashSet<string> NonLogGlobalOptionNames =
+        CliFlagSchema.GetTopLevelGlobalOptionNames(includeLogOptions: false);
+    private static readonly HashSet<string> TopLevelValueOptionNames =
+        CliFlagSchema.GetTopLevelValueOptionNames();
     internal static TimeProvider TimeProvider { get; set; } = TimeProvider.System;
 
     private sealed record CommandRunContext(

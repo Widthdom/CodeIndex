@@ -703,7 +703,7 @@ public class ConsoleUiTests
     {
         var output = ConsoleUi.GetCompletionScript("bash");
 
-        Assert.Contains("--db|--path|--exclude-path|--output|-o) COMPREPLY=($(compgen -f -- \"$cur\"))", output);
+        Assert.Contains("--db|--path|--exclude-path|--output|-o|--metrics) COMPREPLY=($(compgen -f -- \"$cur\"))", output);
         Assert.Contains("--lang) COMPREPLY=($(compgen -W \"", output);
         Assert.Contains("csharp", output);
         Assert.Contains("python", output);
@@ -711,6 +711,28 @@ public class ConsoleUiTests
         Assert.Contains("function", output);
         Assert.Contains("type_reference", output);
         Assert.Contains("razor_event_binding", output);
+    }
+
+    [Fact]
+    public void PrintCompletions_TopLevelGlobalLogFlagsAcrossShells()
+    {
+        var bash = ConsoleUi.GetCompletionScript("bash");
+        var zsh = ConsoleUi.GetCompletionScript("zsh");
+        var fish = ConsoleUi.GetCompletionScript("fish");
+        var powershell = ConsoleUi.GetCompletionScript("powershell");
+
+        foreach (var flag in new[] { "--log-format", "--log-retain-count", "--log-max-size-mb" })
+        {
+            Assert.Contains(flag, bash);
+            Assert.Contains(flag, zsh);
+            Assert.Contains(flag, powershell);
+            Assert.Contains($"-l {flag.TrimStart('-')}", fish);
+        }
+
+        Assert.Contains("--log-format) COMPREPLY=($(compgen -W \"text json\" -- \"$cur\"))", bash);
+        Assert.Contains("'--log-format[Persistent stderr log format]:format:(text json)'", zsh);
+        Assert.Contains("-l log-format -r -a 'text json'", fish);
+        Assert.Contains("'--log-format' { $logFormats", powershell);
     }
 
     [Fact]
@@ -1024,6 +1046,9 @@ public class ConsoleUiTests
 
         Assert.Contains("Index and update options:", output);
         Assert.Contains("Query options:", output);
+        Assert.Contains("--log-format <text|json>", output);
+        Assert.Contains("--log-retain-count <n>", output);
+        Assert.Contains("--log-max-size-mb <n>", output);
         Assert.Contains("--limit <n>, --top <n>", output);
         Assert.DoesNotContain("Commands:", output);
         Assert.DoesNotContain("Examples:", output);
