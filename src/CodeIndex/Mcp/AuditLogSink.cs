@@ -31,6 +31,13 @@ internal sealed class AuditLogSink : IDisposable
     internal const long MaxMaxBytes = 1024L * 1024 * 1024;   // 1 GiB
     internal const int RotationKeep = 3;                     // path, path.1, path.2
     internal const string RedactedValue = "[REDACTED]";
+    internal const string TruncatedValue = "[TRUNCATED]";
+    internal const int MaxArgValueDepth = 8;
+    internal const int MaxArgValueProperties = 64;
+    internal const int MaxArgValueArrayItems = 64;
+    internal const int MaxArgValueTotalNodes = 512;
+    internal const int MaxArgValueStringChars = 512;
+    internal const int MaxArgValuesSerializedBytes = 16 * 1024;
 
     private static readonly Regex SecretValuePattern = new(
         "(?i)(github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9_]{20,}|sk-(?:proj-)?[A-Za-z0-9_-]{20,}|xox[baprs]-[A-Za-z0-9-]{20,}|AKIA[0-9A-Z]{16}|://[^/\\s:@]+:[^/\\s:@]+@|(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|authorization)=[^&\\s]+)",
@@ -269,6 +276,21 @@ internal sealed class AuditLogSink : IDisposable
             }
             if (evt.ArgValuesRedacted)
                 jw.WriteBoolean("arg_values_redacted", true);
+            if (evt.ArgValuesTruncated)
+            {
+                jw.WriteBoolean("arg_values_truncated", true);
+                jw.WriteNumber("arg_values_max_bytes", MaxArgValuesSerializedBytes);
+                if (evt.ArgValuesSerializedBytes is { } argValuesSerializedBytes)
+                    jw.WriteNumber("arg_values_serialized_bytes", argValuesSerializedBytes);
+                if (evt.ArgValueTruncationReasons is { Count: > 0 } reasons)
+                {
+                    jw.WritePropertyName("arg_values_truncation_reasons");
+                    jw.WriteStartArray();
+                    foreach (var reason in reasons)
+                        jw.WriteStringValue(reason);
+                    jw.WriteEndArray();
+                }
+            }
 
             if (evt.ResultCount is { } rc)
                 jw.WriteNumber("result_count", rc);
@@ -284,66 +306,140 @@ internal sealed class AuditLogSink : IDisposable
 
     internal static JsonNode? SanitizeArgValue(string key, JsonNode? value, out bool redacted)
     {
-        redacted = false;
-        return SanitizeArgValueCore(key, value, ref redacted);
+        var state = new ArgValueSanitizationState();
+        var sanitized = SanitizeArgValue(key, value, state);
+        redacted = state.Redacted;
+        return sanitized;
     }
 
-    private static JsonNode? SanitizeArgValueCore(string key, JsonNode? value, ref bool redacted)
+    internal static JsonNode? SanitizeArgValue(string key, JsonNode? value, ArgValueSanitizationState state)
+        => SanitizeArgValueCore(key, value, state, depth: 0);
+
+    private static JsonNode? SanitizeArgValueCore(string key, JsonNode? value, ArgValueSanitizationState state, int depth)
     {
+        if (!state.TryReserveNode())
+            return CreateTruncatedValue();
+
         if (IsSecretLikeKey(key))
         {
-            redacted = true;
+            state.MarkRedacted();
+            state.TryReserveSerializedBytes(EstimateStringJsonBytes(RedactedValue));
             return JsonValue.Create(RedactedValue);
         }
 
         return value switch
         {
-            null => null,
-            JsonObject obj => SanitizeObject(obj, ref redacted),
-            JsonArray arr => SanitizeArray(arr, ref redacted),
-            JsonValue jsonValue => SanitizeScalar(jsonValue, ref redacted),
+            null => ReserveNull(state),
+            JsonObject obj => SanitizeObject(obj, state, depth),
+            JsonArray arr => SanitizeArray(arr, state, depth),
+            JsonValue jsonValue => SanitizeScalar(jsonValue, state),
             _ => null,
         };
     }
 
-    private static JsonObject SanitizeObject(JsonObject obj, ref bool redacted)
+    private static JsonNode? ReserveNull(ArgValueSanitizationState state)
     {
+        state.TryReserveSerializedBytes("null".Length);
+        return null;
+    }
+
+    private static JsonNode SanitizeObject(JsonObject obj, ArgValueSanitizationState state, int depth)
+    {
+        if (depth >= MaxArgValueDepth)
+        {
+            state.AddTruncationReason("depth_limit");
+            return CreateTruncatedValue();
+        }
+
+        if (!state.TryReserveSerializedBytes(2))
+            return CreateTruncatedValue();
+
         var clone = new JsonObject();
+        var propertyCount = 0;
         foreach (var (key, value) in obj)
-            clone[key] = SanitizeArgValueCore(key, value, ref redacted);
+        {
+            if (propertyCount >= MaxArgValueProperties)
+            {
+                state.AddTruncationReason("object_property_count_limit");
+                break;
+            }
+
+            if (!state.TryReservePropertyName(key))
+                break;
+
+            clone[key] = SanitizeArgValueCore(key, value, state, depth + 1);
+            propertyCount++;
+        }
         return clone;
     }
 
-    private static JsonArray SanitizeArray(JsonArray arr, ref bool redacted)
+    private static JsonNode SanitizeArray(JsonArray arr, ArgValueSanitizationState state, int depth)
     {
+        if (depth >= MaxArgValueDepth)
+        {
+            state.AddTruncationReason("depth_limit");
+            return CreateTruncatedValue();
+        }
+
+        if (!state.TryReserveSerializedBytes(2))
+            return CreateTruncatedValue();
+
         var clone = new JsonArray();
+        var itemCount = 0;
         foreach (var value in arr)
-            clone.Add(SanitizeArgValueCore(string.Empty, value, ref redacted));
+        {
+            if (itemCount >= MaxArgValueArrayItems)
+            {
+                state.AddTruncationReason("array_item_count_limit");
+                break;
+            }
+
+            clone.Add(SanitizeArgValueCore(string.Empty, value, state, depth + 1));
+            itemCount++;
+        }
         return clone;
     }
 
-    private static JsonNode? SanitizeScalar(JsonValue value, ref bool redacted)
+    private static JsonNode SanitizeScalar(JsonValue value, ArgValueSanitizationState state)
     {
         if (value.TryGetValue<string>(out var text))
         {
             if (SecretValuePattern.IsMatch(text))
             {
-                redacted = true;
+                state.MarkRedacted();
+                state.TryReserveSerializedBytes(EstimateStringJsonBytes(RedactedValue));
                 return JsonValue.Create(RedactedValue);
             }
 
-            return JsonValue.Create(text);
+            var display = McpBoundedText.ForDisplay(text, MaxArgValueStringChars);
+            if (display.Truncated)
+                state.AddTruncationReason("string_length_limit");
+            if (!state.TryReserveSerializedBytes(EstimateStringJsonBytes(display.Text)))
+                return CreateTruncatedValue();
+            return JsonValue.Create(display.Text);
         }
 
         try
         {
-            return JsonNode.Parse(value.ToJsonString());
+            var json = value.ToJsonString();
+            if (!state.TryReserveSerializedBytes(Encoding.UTF8.GetByteCount(json)))
+                return CreateTruncatedValue();
+            return JsonNode.Parse(json) ?? CreateTruncatedValue();
         }
         catch
         {
-            return null;
+            state.AddTruncationReason("scalar_serialization_failed");
+            return CreateTruncatedValue();
         }
     }
+
+    private static JsonValue CreateTruncatedValue() => JsonValue.Create(TruncatedValue);
+
+    private static int EstimateStringJsonBytes(string value)
+        => Encoding.UTF8.GetByteCount(value) + 2;
+
+    private static int EstimatePropertyNameJsonBytes(string key)
+        => EstimateStringJsonBytes(key) + 1;
 
     private static bool IsSecretLikeKey(string key)
     {
@@ -371,6 +467,59 @@ internal sealed class AuditLogSink : IDisposable
                 sb.Append(char.ToLowerInvariant(ch));
         }
         return sb.ToString();
+    }
+
+    internal sealed class ArgValueSanitizationState
+    {
+        private readonly List<string> _truncationReasons = new();
+        private int _nodeCount;
+        private int _serializedBytes;
+
+        internal bool Redacted { get; private set; }
+        internal bool Truncated => _truncationReasons.Count > 0;
+        internal IReadOnlyList<string> TruncationReasons => _truncationReasons;
+        internal int SerializedBytes => _serializedBytes;
+
+        internal void MarkRedacted() => Redacted = true;
+
+        internal bool TryReserveNode()
+        {
+            if (_nodeCount >= MaxArgValueTotalNodes)
+            {
+                AddTruncationReason("node_count_limit");
+                return false;
+            }
+
+            _nodeCount++;
+            return true;
+        }
+
+        internal bool TryReserveSerializedBytes(int byteCount)
+        {
+            var next = _serializedBytes + Math.Max(0, byteCount);
+            if (next > MaxArgValuesSerializedBytes)
+            {
+                AddTruncationReason("serialized_bytes_limit");
+                return false;
+            }
+
+            _serializedBytes = next;
+            return true;
+        }
+
+        internal bool TryReservePropertyName(string key)
+            => TryReserveSerializedBytes(EstimatePropertyNameJsonBytes(key));
+
+        internal void AddTruncationReason(string reason)
+        {
+            foreach (var existing in _truncationReasons)
+            {
+                if (StringComparer.Ordinal.Equals(existing, reason))
+                    return;
+            }
+
+            _truncationReasons.Add(reason);
+        }
     }
 
     /// <summary>
@@ -407,6 +556,9 @@ internal sealed class AuditLogSink : IDisposable
         bool ToolTruncated = false,
         IReadOnlyList<KeyValuePair<string, int>>? ArgKeyLengths = null,
         bool ArgValuesRedacted = false,
+        bool ArgValuesTruncated = false,
+        IReadOnlyList<string>? ArgValueTruncationReasons = null,
+        int? ArgValuesSerializedBytes = null,
         int? CallerNameLength = null,
         bool CallerNameTruncated = false,
         int? CallerVersionLength = null,

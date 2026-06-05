@@ -2660,7 +2660,11 @@ public partial class McpServer : IDisposable
             var (errorCode, observedErrorType) = ExtractErrorCode(response);
             var resultCount = ExtractResultCount(response);
             var (argKeys, argLengths, argKeyLengths, argValuesEcho) =
-                SanitizeArgs(args, _auditLog.IncludeValues, out var argValuesRedacted);
+                SanitizeArgs(args, _auditLog.IncludeValues,
+                    out var argValuesRedacted,
+                    out var argValuesTruncated,
+                    out var argValueTruncationReasons,
+                    out var argValuesSerializedBytes);
             var toolDisplay = BoundToolNameForDisplay(toolName);
             var evt = new AuditLogSink.AuditEvent(
                 Timestamp: startedAt,
@@ -2679,6 +2683,9 @@ public partial class McpServer : IDisposable
                 ToolTruncated: toolDisplay.Truncated,
                 ArgKeyLengths: argKeyLengths,
                 ArgValuesRedacted: argValuesRedacted,
+                ArgValuesTruncated: argValuesTruncated,
+                ArgValueTruncationReasons: argValueTruncationReasons,
+                ArgValuesSerializedBytes: argValuesSerializedBytes,
                 CallerNameLength: _clientNameDisplay?.Truncated == true ? _clientNameDisplay.Value.OriginalLength : null,
                 CallerNameTruncated: _clientNameDisplay?.Truncated == true,
                 CallerVersionLength: _clientVersionDisplay?.Truncated == true ? _clientVersionDisplay.Value.OriginalLength : null,
@@ -2760,12 +2767,21 @@ public partial class McpServer : IDisposable
     /// </summary>
     internal static (IReadOnlyList<string> Keys, IReadOnlyList<KeyValuePair<string, int>> Lengths, IReadOnlyList<KeyValuePair<string, int>> KeyLengths, JsonNode? ValuesEcho)
         SanitizeArgs(JsonNode? args, bool includeValues)
-        => SanitizeArgs(args, includeValues, out _);
+        => SanitizeArgs(args, includeValues, out _, out _, out _, out _);
 
     private static (IReadOnlyList<string> Keys, IReadOnlyList<KeyValuePair<string, int>> Lengths, IReadOnlyList<KeyValuePair<string, int>> KeyLengths, JsonNode? ValuesEcho)
-        SanitizeArgs(JsonNode? args, bool includeValues, out bool argValuesRedacted)
+        SanitizeArgs(
+            JsonNode? args,
+            bool includeValues,
+            out bool argValuesRedacted,
+            out bool argValuesTruncated,
+            out IReadOnlyList<string> argValueTruncationReasons,
+            out int? argValuesSerializedBytes)
     {
         argValuesRedacted = false;
+        argValuesTruncated = false;
+        argValueTruncationReasons = Array.Empty<string>();
+        argValuesSerializedBytes = null;
         if (args is not JsonObject argsObj)
             return (Array.Empty<string>(), Array.Empty<KeyValuePair<string, int>>(), Array.Empty<KeyValuePair<string, int>>(), null);
 
@@ -2774,6 +2790,8 @@ public partial class McpServer : IDisposable
         var keyLengths = new List<KeyValuePair<string, int>>();
         var usedKeys = new HashSet<string>(StringComparer.Ordinal);
         JsonObject? echoObject = includeValues ? new JsonObject() : null;
+        AuditLogSink.ArgValueSanitizationState? valueState = includeValues ? new AuditLogSink.ArgValueSanitizationState() : null;
+        var argValueBudgetExhausted = false;
         foreach (var (key, value) in argsObj)
         {
             var keyDisplay = McpBoundedText.ForDisplay(key);
@@ -2782,12 +2800,18 @@ public partial class McpServer : IDisposable
             lengths.Add(new KeyValuePair<string, int>(displayKey, AuditLogSink.MeasureArgLength(value)));
             if (keyDisplay.Truncated)
                 keyLengths.Add(new KeyValuePair<string, int>(displayKey, keyDisplay.OriginalLength));
-            if (echoObject is not null)
+            if (echoObject is not null && !argValueBudgetExhausted)
             {
                 try
                 {
-                    echoObject[displayKey] = AuditLogSink.SanitizeArgValue(key, value, out var valueRedacted);
-                    argValuesRedacted |= valueRedacted;
+                    if (!valueState!.TryReservePropertyName(displayKey))
+                    {
+                        argValueBudgetExhausted = true;
+                        continue;
+                    }
+
+                    echoObject[displayKey] = AuditLogSink.SanitizeArgValue(key, value, valueState!);
+                    argValuesRedacted = valueState!.Redacted;
                 }
                 catch
                 {
@@ -2795,6 +2819,14 @@ public partial class McpServer : IDisposable
                 }
             }
         }
+        if (valueState is not null)
+        {
+            argValuesRedacted = valueState.Redacted;
+            argValuesTruncated = valueState.Truncated;
+            argValueTruncationReasons = valueState.TruncationReasons;
+            argValuesSerializedBytes = valueState.SerializedBytes;
+        }
+
         return (keys, lengths, keyLengths, includeValues ? echoObject : null);
     }
 

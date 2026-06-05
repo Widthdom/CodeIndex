@@ -184,6 +184,28 @@ public class AuditLogSinkTests
     }
 
     [Fact]
+    public void SanitizeArgValue_BudgetsPayloadBeforeClone_Issue3106()
+    {
+        var items = new JsonArray();
+        for (var i = 0; i < AuditLogSink.MaxArgValueArrayItems + 2; i++)
+            items.Add(i);
+        var args = new JsonObject
+        {
+            ["query"] = new string('x', AuditLogSink.MaxArgValueStringChars + 10),
+            ["items"] = items,
+        };
+        var state = new AuditLogSink.ArgValueSanitizationState();
+
+        var sanitized = AuditLogSink.SanitizeArgValue("arguments", args, state)!.AsObject();
+
+        Assert.True(state.Truncated);
+        Assert.Contains("string_length_limit", state.TruncationReasons);
+        Assert.Contains("array_item_count_limit", state.TruncationReasons);
+        Assert.EndsWith("...", sanitized["query"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Equal(AuditLogSink.MaxArgValueArrayItems, sanitized["items"]!.AsArray().Count);
+    }
+
+    [Fact]
     public void MeasureArgLength_ReportsTypeSpecificCounts()
     {
         Assert.Equal(0, AuditLogSink.MeasureArgLength(null));

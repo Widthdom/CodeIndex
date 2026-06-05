@@ -1390,8 +1390,12 @@ Each record is a single JSON object on its own line with these fields:
 | `request_id` | string (optional) | JSON-encoded JSON-RPC request id, when present |
 | `arg_keys` | string[] | Ordered list of argument names supplied to the tool |
 | `arg_lengths` | object | Per-argument length sketch — string→char count, array→element count, object→key count, scalar→0 |
-| `arg_values` | object (optional) | Redacted argument payload. Present only when `--audit-log-include-values` is enabled |
+| `arg_values` | object (optional) | Redacted and budgeted argument payload. Present only when `--audit-log-include-values` is enabled |
 | `arg_values_redacted` | boolean (optional) | `true` when secret-like keys or token patterns were replaced with `[REDACTED]` |
+| `arg_values_truncated` | boolean (optional) | `true` when include-values output hit a depth, count, string, or byte budget |
+| `arg_values_truncation_reasons` | string[] (optional) | Stable truncation reason codes when `arg_values_truncated` is true |
+| `arg_values_serialized_bytes` | number (optional) | Approximate serialized-byte budget consumed by retained `arg_values` |
+| `arg_values_max_bytes` | number (optional) | Maximum serialized-byte budget for retained `arg_values` |
 | `result_count` | number (optional) | `structuredContent.count` or `structuredContent.results.length` for successful calls; omitted otherwise |
 | `elapsed_ms` | number | Wall-clock duration in milliseconds (3 decimal places) |
 | `error_code` | number | `0` on success, `1` for MCP tool errors (`isError: true`), or the verbatim JSON-RPC error code (e.g. `-32602`) |
@@ -3597,8 +3601,12 @@ MCP ツールで catch-all まで突き抜けた例外（想定外の SQLite 例
 | `request_id` | string（任意） | JSON-RPC リクエスト id を JSON エンコードしたもの |
 | `arg_keys` | string[] | ツールへ渡された引数名の順序付きリスト |
 | `arg_lengths` | object | 引数ごとの長さ概算（文字列→文字数、配列→要素数、オブジェクト→キー数、スカラ→0） |
-| `arg_values` | object（任意） | redaction 済みの引数本体。`--audit-log-include-values` 指定時のみ付与 |
+| `arg_values` | object（任意） | redaction および budget 適用済みの引数本体。`--audit-log-include-values` 指定時のみ付与 |
 | `arg_values_redacted` | boolean（任意） | secret 風のキーまたは token pattern が `[REDACTED]` に置き換えられた場合に `true` |
+| `arg_values_truncated` | boolean（任意） | include-values 出力が depth / count / string / byte budget に到達した場合に `true` |
+| `arg_values_truncation_reasons` | string[]（任意） | `arg_values_truncated` が true の場合の安定した truncation reason code |
+| `arg_values_serialized_bytes` | number（任意） | 保持された `arg_values` が消費した概算 serialized byte budget |
+| `arg_values_max_bytes` | number（任意） | 保持される `arg_values` の最大 serialized byte budget |
 | `result_count` | number（任意） | 成功時の `structuredContent.count` または `structuredContent.results.length`。それ以外は省略 |
 | `elapsed_ms` | number | ウォールクロック経過ミリ秒（小数 3 桁） |
 | `error_code` | number | 成功=`0`、MCP ツールエラー（`isError: true`）=`1`、JSON-RPC エラー=そのコード（例: `-32000` のレート制限、`-32602` の引数エラー） |

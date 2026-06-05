@@ -317,6 +317,86 @@ public class McpAuditLogTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_IncludeValues_BudgetsArgumentPayload_Issue3106()
+    {
+        using var sink = new AuditLogSink(_auditPath, AuditLogSink.DefaultMaxBytes, includeValues: true);
+        using var server = CreateServer(sink);
+        var longQuery = new string('q', AuditLogSink.MaxArgValueStringChars + 25);
+        var items = new JsonArray();
+        for (var i = 0; i < AuditLogSink.MaxArgValueArrayItems + 3; i++)
+            items.Add(i);
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "does_not_exist",
+                ["arguments"] = new JsonObject
+                {
+                    ["query"] = longQuery,
+                    ["items"] = items,
+                },
+            },
+        };
+
+        _ = server.HandleMessage(request);
+
+        var rawLog = File.ReadAllText(_auditPath);
+        Assert.DoesNotContain(longQuery, rawLog, StringComparison.Ordinal);
+        var record = ReadOnlyRecord();
+        Assert.True(record.GetProperty("arg_values_truncated").GetBoolean());
+        var reasons = record.GetProperty("arg_values_truncation_reasons").EnumerateArray()
+            .Select(reason => reason.GetString())
+            .ToArray();
+        Assert.Contains("string_length_limit", reasons);
+        Assert.Contains("array_item_count_limit", reasons);
+        var values = record.GetProperty("arg_values");
+        Assert.EndsWith("...", values.GetProperty("query").GetString(), StringComparison.Ordinal);
+        Assert.Equal(AuditLogSink.MaxArgValueArrayItems, values.GetProperty("items").GetArrayLength());
+    }
+
+    [Fact]
+    public void ToolsCall_IncludeValues_ChargesTopLevelArgumentKeysToValueBudget_Issue3106()
+    {
+        using var sink = new AuditLogSink(_auditPath, AuditLogSink.DefaultMaxBytes, includeValues: true);
+        using var server = CreateServer(sink);
+
+        var arguments = new JsonObject();
+        string? lastDisplayKey = null;
+        for (var i = 0; i < 64; i++)
+        {
+            var key = "arg" + i.ToString("D2", System.Globalization.CultureInfo.InvariantCulture)
+                + "_" + new string('k', McpBoundedText.MaxDiagnosticDisplayChars + 25);
+            lastDisplayKey = McpBoundedText.ForDisplay(key).Text;
+            arguments[key] = new string('v', 200);
+        }
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "does_not_exist",
+                ["arguments"] = arguments,
+            },
+        };
+
+        _ = server.HandleMessage(request);
+
+        var record = ReadOnlyRecord();
+        Assert.True(record.GetProperty("arg_values_truncated").GetBoolean());
+        Assert.True(record.GetProperty("arg_values_serialized_bytes").GetInt32() <= AuditLogSink.MaxArgValuesSerializedBytes);
+        var reasons = record.GetProperty("arg_values_truncation_reasons").EnumerateArray()
+            .Select(reason => reason.GetString())
+            .ToArray();
+        Assert.Contains("serialized_bytes_limit", reasons);
+        Assert.False(record.GetProperty("arg_values").TryGetProperty(lastDisplayKey!, out _));
+    }
+
+    [Fact]
     public void ToolsCall_ValuesOmitted_ByDefault()
     {
         using var sink = new AuditLogSink(_auditPath, AuditLogSink.DefaultMaxBytes, includeValues: false);
