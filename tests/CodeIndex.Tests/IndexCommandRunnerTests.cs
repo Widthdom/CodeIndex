@@ -881,6 +881,37 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void ParseArgs_InvalidNotifyEnvironmentWarnsAndFallsBack_Issue3135()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture(IndexCommandRunner.CompletionNotificationEnvironmentVariable);
+            var originalErr = Console.Error;
+            using var stderr = new StringWriter();
+            var value = new string('x', ConsoleUi.DefaultDiagnosticValueCharLimit + 1);
+            try
+            {
+                env.Set(IndexCommandRunner.CompletionNotificationEnvironmentVariable, value);
+                Console.SetError(stderr);
+
+                var options = IndexCommandRunner.ParseArgs(["."]);
+
+                Assert.Equal(CompletionNotificationMode.Auto, options.NotifyMode);
+                Assert.Null(options.ParseError);
+                var warning = stderr.ToString();
+                Assert.Contains($"invalid {IndexCommandRunner.CompletionNotificationEnvironmentVariable} value", warning);
+                Assert.Contains("ignored; use auto, bell, osc9, desktop, or none", warning);
+                Assert.Contains("<truncated; original length", warning);
+                Assert.DoesNotContain(value, warning);
+            }
+            finally
+            {
+                Console.SetError(originalErr);
+            }
+        }
+    }
+
+    [Fact]
     public void Run_FullScanAfterHeadChange_WithPostExtractionHooksKeepsSequentialReferences()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_head_changed_hooks_sequential");

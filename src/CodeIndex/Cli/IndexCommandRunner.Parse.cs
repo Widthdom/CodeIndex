@@ -21,6 +21,7 @@ public static partial class IndexCommandRunner
         "--read-only", "--immutable",
     ];
 
+    internal const string CompletionNotificationEnvironmentVariable = "CDIDX_NOTIFY";
     internal const string IndexParallelismEnvironmentVariable = "CDIDX_INDEX_PARALLELISM";
     internal const int MaxIndexParallelism = 16;
     internal const int MaxSymbolKindFilterCsvLength = 2048;
@@ -524,12 +525,16 @@ public static partial class IndexCommandRunner
 
     private static CompletionNotificationMode ReadCompletionNotificationModeFromEnvironment()
     {
-        var value = Environment.GetEnvironmentVariable("CDIDX_NOTIFY");
+        var value = Environment.GetEnvironmentVariable(CompletionNotificationEnvironmentVariable);
         if (string.IsNullOrWhiteSpace(value))
             return CompletionNotificationMode.Auto;
 
-        string? ignored = null;
-        return ParseCompletionNotificationMode(value, CompletionNotificationMode.Auto, ref ignored);
+        string? parseError = null;
+        var mode = ParseCompletionNotificationMode(value, CompletionNotificationMode.Auto, ref parseError);
+        if (parseError != null)
+            WarnInvalidCompletionNotificationEnvironmentValue(value);
+
+        return mode;
     }
 
     private static CompletionNotificationMode ParseCompletionNotificationMode(string value, CompletionNotificationMode fallback, ref string? parseError)
@@ -549,6 +554,12 @@ public static partial class IndexCommandRunner
     {
         parseError ??= $"invalid --notify value '{ConsoleUi.FormatBoundedValue(value)}': expected auto, bell, osc9, desktop, or none";
         return fallback;
+    }
+
+    private static void WarnInvalidCompletionNotificationEnvironmentValue(string value)
+    {
+        var displayValue = ConsoleUi.FormatBoundedValue(value);
+        Console.Error.WriteLine($"Warning: invalid {CompletionNotificationEnvironmentVariable} value '{displayValue}' (ignored; use auto, bell, osc9, desktop, or none) / 不正な {CompletionNotificationEnvironmentVariable} 値 '{displayValue}'（無視。auto, bell, osc9, desktop, none のいずれかを指定）");
     }
 
     private static string? AbsolutizePathOption(string? value)
