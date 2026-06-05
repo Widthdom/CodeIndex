@@ -135,6 +135,55 @@ public class AuditLogSinkTests
     }
 
     [Fact]
+    public void SerializeEvent_MarksRedactedArgValues_WhenSet_Issue3067()
+    {
+        var args = JsonNode.Parse("""{"token":"[REDACTED]"}""");
+        var evt = new AuditLogSink.AuditEvent(
+            Timestamp: DateTimeOffset.UtcNow,
+            Tool: "search",
+            CallerName: null,
+            CallerVersion: null,
+            RequestId: null,
+            ArgKeys: new[] { "token" },
+            ArgLengths: new[] { new KeyValuePair<string, int>("token", 12) },
+            ArgValues: args,
+            ResultCount: 0,
+            ElapsedMs: 1.0,
+            ErrorCode: 0,
+            ErrorType: null,
+            ArgValuesRedacted: true);
+
+        var json = AuditLogSink.SerializeEvent(evt, includeValues: true);
+        using var doc = JsonDocument.Parse(json);
+        Assert.True(doc.RootElement.GetProperty("arg_values_redacted").GetBoolean());
+    }
+
+    [Fact]
+    public void SanitizeArgValue_RedactsSecretKeysAndTokenPatterns_Issue3067()
+    {
+        var args = JsonNode.Parse("""
+            {
+              "access_token": "plain-secret",
+              "query": "token=ghp_abcdefghijklmnopqrstuvwxyz123456",
+              "nested": {
+                "password": "hunter2",
+                "db_pwd": "hunter2",
+                "auth_header": "Bearer abcdefghijklmnop"
+              }
+            }
+            """);
+
+        var sanitized = AuditLogSink.SanitizeArgValue("arguments", args, out var redacted)!.AsObject();
+
+        Assert.True(redacted);
+        Assert.Equal(AuditLogSink.RedactedValue, sanitized["access_token"]!.GetValue<string>());
+        Assert.Equal(AuditLogSink.RedactedValue, sanitized["query"]!.GetValue<string>());
+        Assert.Equal(AuditLogSink.RedactedValue, sanitized["nested"]!["password"]!.GetValue<string>());
+        Assert.Equal(AuditLogSink.RedactedValue, sanitized["nested"]!["db_pwd"]!.GetValue<string>());
+        Assert.Equal(AuditLogSink.RedactedValue, sanitized["nested"]!["auth_header"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void MeasureArgLength_ReportsTypeSpecificCounts()
     {
         Assert.Equal(0, AuditLogSink.MeasureArgLength(null));

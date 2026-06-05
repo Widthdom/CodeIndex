@@ -2659,7 +2659,8 @@ public partial class McpServer : IDisposable
         {
             var (errorCode, observedErrorType) = ExtractErrorCode(response);
             var resultCount = ExtractResultCount(response);
-            var (argKeys, argLengths, argKeyLengths, argValuesEcho) = SanitizeArgs(args, _auditLog.IncludeValues);
+            var (argKeys, argLengths, argKeyLengths, argValuesEcho) =
+                SanitizeArgs(args, _auditLog.IncludeValues, out var argValuesRedacted);
             var toolDisplay = BoundToolNameForDisplay(toolName);
             var evt = new AuditLogSink.AuditEvent(
                 Timestamp: startedAt,
@@ -2677,6 +2678,7 @@ public partial class McpServer : IDisposable
                 ToolLength: toolDisplay.Truncated ? toolDisplay.OriginalLength : null,
                 ToolTruncated: toolDisplay.Truncated,
                 ArgKeyLengths: argKeyLengths,
+                ArgValuesRedacted: argValuesRedacted,
                 CallerNameLength: _clientNameDisplay?.Truncated == true ? _clientNameDisplay.Value.OriginalLength : null,
                 CallerNameTruncated: _clientNameDisplay?.Truncated == true,
                 CallerVersionLength: _clientVersionDisplay?.Truncated == true ? _clientVersionDisplay.Value.OriginalLength : null,
@@ -2758,7 +2760,12 @@ public partial class McpServer : IDisposable
     /// </summary>
     internal static (IReadOnlyList<string> Keys, IReadOnlyList<KeyValuePair<string, int>> Lengths, IReadOnlyList<KeyValuePair<string, int>> KeyLengths, JsonNode? ValuesEcho)
         SanitizeArgs(JsonNode? args, bool includeValues)
+        => SanitizeArgs(args, includeValues, out _);
+
+    private static (IReadOnlyList<string> Keys, IReadOnlyList<KeyValuePair<string, int>> Lengths, IReadOnlyList<KeyValuePair<string, int>> KeyLengths, JsonNode? ValuesEcho)
+        SanitizeArgs(JsonNode? args, bool includeValues, out bool argValuesRedacted)
     {
+        argValuesRedacted = false;
         if (args is not JsonObject argsObj)
             return (Array.Empty<string>(), Array.Empty<KeyValuePair<string, int>>(), Array.Empty<KeyValuePair<string, int>>(), null);
 
@@ -2779,7 +2786,8 @@ public partial class McpServer : IDisposable
             {
                 try
                 {
-                    echoObject[displayKey] = value?.DeepClone();
+                    echoObject[displayKey] = AuditLogSink.SanitizeArgValue(key, value, out var valueRedacted);
+                    argValuesRedacted |= valueRedacted;
                 }
                 catch
                 {

@@ -1376,7 +1376,7 @@ Example output:
 | Flag | Default | Effect |
 |---|---|---|
 | `--audit-log <path>` | (off) | Enable audit emission and write JSONL records to `<path>`. The parent directory is created if missing. |
-| `--audit-log-include-values` | off | Echo the full argument payload into each record. Requires `--audit-log`. Off by default because `query` / `name` arguments may contain literal source snippets or secret-shaped strings. |
+| `--audit-log-include-values` | off | Echo a redacted copy of the argument payload into each record. Requires `--audit-log`. Off by default because `query` / `name` arguments may contain literal source snippets or secret-shaped strings. |
 | `--audit-log-max-bytes <n>` | `52428800` (50 MiB) | Size threshold (bytes) at which the active log rotates. Must be between 4096 and 1073741824. |
 
 Each record is a single JSON object on its own line with these fields:
@@ -1390,7 +1390,8 @@ Each record is a single JSON object on its own line with these fields:
 | `request_id` | string (optional) | JSON-encoded JSON-RPC request id, when present |
 | `arg_keys` | string[] | Ordered list of argument names supplied to the tool |
 | `arg_lengths` | object | Per-argument length sketch — string→char count, array→element count, object→key count, scalar→0 |
-| `arg_values` | object (optional) | Full argument payload. Present only when `--audit-log-include-values` is enabled |
+| `arg_values` | object (optional) | Redacted argument payload. Present only when `--audit-log-include-values` is enabled |
+| `arg_values_redacted` | boolean (optional) | `true` when secret-like keys or token patterns were replaced with `[REDACTED]` |
 | `result_count` | number (optional) | `structuredContent.count` or `structuredContent.results.length` for successful calls; omitted otherwise |
 | `elapsed_ms` | number | Wall-clock duration in milliseconds (3 decimal places) |
 | `error_code` | number | `0` on success, `1` for MCP tool errors (`isError: true`), or the verbatim JSON-RPC error code (e.g. `-32602`) |
@@ -3582,7 +3583,7 @@ MCP ツールで catch-all まで突き抜けた例外（想定外の SQLite 例
 | フラグ | 既定 | 効果 |
 |---|---|---|
 | `--audit-log <path>` | (無効) | 監査出力を有効化し `<path>` に JSONL を書き出す。親ディレクトリは無ければ自動作成 |
-| `--audit-log-include-values` | off | 引数の値をレコードに含める。`--audit-log` 必須。既定で off なのは `query` / `name` 引数にソース片や secret 風の文字列が入りうるため |
+| `--audit-log-include-values` | off | redaction 済みの引数値をレコードに含める。`--audit-log` 必須。既定で off なのは `query` / `name` 引数にソース片や secret 風の文字列が入りうるため |
 | `--audit-log-max-bytes <n>` | `52428800` (50 MiB) | ローテーションの閾値（バイト）。4096 以上 1073741824 以下 |
 
 各レコードは独立した行に 1 つの JSON オブジェクトとして書き出され、フィールドは次の通りです。
@@ -3596,7 +3597,8 @@ MCP ツールで catch-all まで突き抜けた例外（想定外の SQLite 例
 | `request_id` | string（任意） | JSON-RPC リクエスト id を JSON エンコードしたもの |
 | `arg_keys` | string[] | ツールへ渡された引数名の順序付きリスト |
 | `arg_lengths` | object | 引数ごとの長さ概算（文字列→文字数、配列→要素数、オブジェクト→キー数、スカラ→0） |
-| `arg_values` | object（任意） | 引数本体。`--audit-log-include-values` 指定時のみ付与 |
+| `arg_values` | object（任意） | redaction 済みの引数本体。`--audit-log-include-values` 指定時のみ付与 |
+| `arg_values_redacted` | boolean（任意） | secret 風のキーまたは token pattern が `[REDACTED]` に置き換えられた場合に `true` |
 | `result_count` | number（任意） | 成功時の `structuredContent.count` または `structuredContent.results.length`。それ以外は省略 |
 | `elapsed_ms` | number | ウォールクロック経過ミリ秒（小数 3 桁） |
 | `error_code` | number | 成功=`0`、MCP ツールエラー（`isError: true`）=`1`、JSON-RPC エラー=そのコード（例: `-32000` のレート制限、`-32602` の引数エラー） |

@@ -282,6 +282,41 @@ public class McpAuditLogTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_IncludeValues_RedactsSecretLikeArgumentValues_Issue3067()
+    {
+        using var sink = new AuditLogSink(_auditPath, AuditLogSink.DefaultMaxBytes, includeValues: true);
+        using var server = CreateServer(sink);
+
+        var token = "ghp_abcdefghijklmnopqrstuvwxyz123456";
+        var unknown = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "does_not_exist",
+                ["arguments"] = new JsonObject
+                {
+                    ["apiToken"] = token,
+                    ["query"] = "https://user:pass@example.test/repo",
+                },
+            },
+        };
+        _ = server.HandleMessage(unknown);
+
+        var rawLog = File.ReadAllText(_auditPath);
+        Assert.DoesNotContain(token, rawLog, StringComparison.Ordinal);
+        Assert.DoesNotContain("user:pass", rawLog, StringComparison.Ordinal);
+
+        var record = ReadOnlyRecord();
+        var values = record.GetProperty("arg_values");
+        Assert.Equal(AuditLogSink.RedactedValue, values.GetProperty("apiToken").GetString());
+        Assert.Equal(AuditLogSink.RedactedValue, values.GetProperty("query").GetString());
+        Assert.True(record.GetProperty("arg_values_redacted").GetBoolean());
+    }
+
+    [Fact]
     public void ToolsCall_ValuesOmitted_ByDefault()
     {
         using var sink = new AuditLogSink(_auditPath, AuditLogSink.DefaultMaxBytes, includeValues: false);
@@ -294,6 +329,40 @@ public class McpAuditLogTests : IDisposable
         Assert.False(record.TryGetProperty("arg_values", out _),
             "arg_values must stay absent when include-values is off");
         Assert.Equal(6, record.GetProperty("arg_lengths").GetProperty("query").GetInt32());
+    }
+
+    [Fact]
+    public void ToolsCall_IncludeValues_RedactsLongSecretLikeTopLevelArgumentKey_Issue3067()
+    {
+        using var sink = new AuditLogSink(_auditPath, AuditLogSink.DefaultMaxBytes, includeValues: true);
+        using var server = CreateServer(sink);
+
+        var secret = "top-secret-long-key-value";
+        var secretKey = new string('k', McpBoundedText.MaxDiagnosticDisplayChars + 10) + "Password";
+        var display = McpBoundedText.ForDisplay(secretKey);
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "does_not_exist",
+                ["arguments"] = new JsonObject
+                {
+                    [secretKey] = secret,
+                },
+            },
+        };
+
+        _ = server.HandleMessage(request);
+
+        var rawLog = File.ReadAllText(_auditPath);
+        Assert.DoesNotContain(secret, rawLog, StringComparison.Ordinal);
+        var record = ReadOnlyRecord();
+        Assert.Equal(display.Text, record.GetProperty("arg_keys")[0].GetString());
+        Assert.Equal(AuditLogSink.RedactedValue, record.GetProperty("arg_values").GetProperty(display.Text).GetString());
+        Assert.True(record.GetProperty("arg_values_redacted").GetBoolean());
     }
 
     [Fact]

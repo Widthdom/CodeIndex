@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using CodeIndex.Cli;
 using CodeIndex.Indexer;
 
@@ -29,6 +30,11 @@ internal sealed class AuditLogSink : IDisposable
     internal const long MinMaxBytes = 4 * 1024;              // 4 KiB
     internal const long MaxMaxBytes = 1024L * 1024 * 1024;   // 1 GiB
     internal const int RotationKeep = 3;                     // path, path.1, path.2
+    internal const string RedactedValue = "[REDACTED]";
+
+    private static readonly Regex SecretValuePattern = new(
+        "(?i)(github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9_]{20,}|sk-(?:proj-)?[A-Za-z0-9_-]{20,}|xox[baprs]-[A-Za-z0-9-]{20,}|AKIA[0-9A-Z]{16}|://[^/\\s:@]+:[^/\\s:@]+@|(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|authorization)=[^&\\s]+)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private readonly object _gate = new();
     private readonly string _path;
@@ -261,6 +267,8 @@ internal sealed class AuditLogSink : IDisposable
                 jw.WritePropertyName("arg_values");
                 values.WriteTo(jw);
             }
+            if (evt.ArgValuesRedacted)
+                jw.WriteBoolean("arg_values_redacted", true);
 
             if (evt.ResultCount is { } rc)
                 jw.WriteNumber("result_count", rc);
@@ -272,6 +280,97 @@ internal sealed class AuditLogSink : IDisposable
             jw.WriteEndObject();
         }
         return Encoding.UTF8.GetString(buffer.ToArray());
+    }
+
+    internal static JsonNode? SanitizeArgValue(string key, JsonNode? value, out bool redacted)
+    {
+        redacted = false;
+        return SanitizeArgValueCore(key, value, ref redacted);
+    }
+
+    private static JsonNode? SanitizeArgValueCore(string key, JsonNode? value, ref bool redacted)
+    {
+        if (IsSecretLikeKey(key))
+        {
+            redacted = true;
+            return JsonValue.Create(RedactedValue);
+        }
+
+        return value switch
+        {
+            null => null,
+            JsonObject obj => SanitizeObject(obj, ref redacted),
+            JsonArray arr => SanitizeArray(arr, ref redacted),
+            JsonValue jsonValue => SanitizeScalar(jsonValue, ref redacted),
+            _ => null,
+        };
+    }
+
+    private static JsonObject SanitizeObject(JsonObject obj, ref bool redacted)
+    {
+        var clone = new JsonObject();
+        foreach (var (key, value) in obj)
+            clone[key] = SanitizeArgValueCore(key, value, ref redacted);
+        return clone;
+    }
+
+    private static JsonArray SanitizeArray(JsonArray arr, ref bool redacted)
+    {
+        var clone = new JsonArray();
+        foreach (var value in arr)
+            clone.Add(SanitizeArgValueCore(string.Empty, value, ref redacted));
+        return clone;
+    }
+
+    private static JsonNode? SanitizeScalar(JsonValue value, ref bool redacted)
+    {
+        if (value.TryGetValue<string>(out var text))
+        {
+            if (SecretValuePattern.IsMatch(text))
+            {
+                redacted = true;
+                return JsonValue.Create(RedactedValue);
+            }
+
+            return JsonValue.Create(text);
+        }
+
+        try
+        {
+            return JsonNode.Parse(value.ToJsonString());
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static bool IsSecretLikeKey(string key)
+    {
+        var normalized = NormalizeKey(key);
+        return normalized.Contains("pwd", StringComparison.Ordinal)
+            || normalized.Contains("auth", StringComparison.Ordinal)
+            || normalized.Contains("password", StringComparison.Ordinal)
+            || normalized.Contains("passwd", StringComparison.Ordinal)
+            || normalized.Contains("secret", StringComparison.Ordinal)
+            || normalized.Contains("token", StringComparison.Ordinal)
+            || normalized.Contains("apikey", StringComparison.Ordinal)
+            || normalized.Contains("accesskey", StringComparison.Ordinal)
+            || normalized.Contains("privatekey", StringComparison.Ordinal)
+            || normalized.Contains("authorization", StringComparison.Ordinal)
+            || normalized.Contains("credential", StringComparison.Ordinal)
+            || normalized.Contains("sessioncookie", StringComparison.Ordinal);
+    }
+
+    private static string NormalizeKey(string key)
+    {
+        var sb = new StringBuilder(key.Length);
+        foreach (var ch in key)
+        {
+            if (char.IsLetterOrDigit(ch))
+                sb.Append(char.ToLowerInvariant(ch));
+        }
+        return sb.ToString();
     }
 
     /// <summary>
@@ -307,6 +406,7 @@ internal sealed class AuditLogSink : IDisposable
         int? ToolLength = null,
         bool ToolTruncated = false,
         IReadOnlyList<KeyValuePair<string, int>>? ArgKeyLengths = null,
+        bool ArgValuesRedacted = false,
         int? CallerNameLength = null,
         bool CallerNameTruncated = false,
         int? CallerVersionLength = null,
