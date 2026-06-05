@@ -5,7 +5,6 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using CodeIndex.Cli;
 using CodeIndex.Database;
-using CodeIndex.Diagnostics;
 using CodeIndex.Models;
 
 namespace CodeIndex.Lsp;
@@ -119,20 +118,12 @@ internal sealed class LspServer : IDisposable
     {
         var wasTruncated = method.Length > MaxUnknownMethodDiagnosticChars;
         var boundedMethod = wasTruncated ? method[..MaxUnknownMethodDiagnosticChars] : method;
-        try
-        {
-            var sanitized = DiagnosticSanitizer.ForMessage(boundedMethod);
-            return AppendEllipsisIfNeeded(sanitized, wasTruncated);
-        }
-        catch (System.Text.RegularExpressions.RegexMatchTimeoutException)
-        {
-            var fallback = boundedMethod
-                .Replace('\r', ' ')
-                .Replace('\n', ' ')
-                .Replace('\t', ' ')
-                .Trim();
-            return AppendEllipsisIfNeeded(fallback, wasTruncated);
-        }
+        var sanitized = boundedMethod
+            .Replace('\r', ' ')
+            .Replace('\n', ' ')
+            .Replace('\t', ' ')
+            .Trim();
+        return AppendEllipsisIfNeeded(sanitized, wasTruncated);
     }
 
     private static string AppendEllipsisIfNeeded(string value, bool wasTruncated)
