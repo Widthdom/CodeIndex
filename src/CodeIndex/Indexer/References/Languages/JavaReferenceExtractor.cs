@@ -1137,7 +1137,7 @@ internal static class JavaReferenceExtractor
             lineNumber,
             resolveContainerForColumn);
 
-        foreach (Match match in ModuleProvidesDirectiveReferenceRegex.Matches(preparedLine))
+        foreach (Match match in BoundedRegex.EnumerateMatches(ModuleProvidesDirectiveReferenceRegex, preparedLine))
         {
             var serviceGroup = match.Groups["service"];
             ReferenceExtractor.AddTypeReferenceSegment(
@@ -1185,7 +1185,7 @@ internal static class JavaReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
-        foreach (Match match in regex.Matches(preparedLine))
+        foreach (Match match in BoundedRegex.EnumerateMatches(regex, preparedLine))
         {
             var nameGroup = match.Groups["name"];
             ReferenceExtractor.AddTypeReferenceSegment(

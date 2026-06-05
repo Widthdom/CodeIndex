@@ -69,7 +69,7 @@ internal static class TerraformReferenceExtractor
         HashSet<string>? definitionNames,
         SymbolRecord? container)
     {
-        foreach (Match match in pattern.Regex.Matches(preparedLine))
+        foreach (Match match in BoundedRegex.EnumerateMatches(pattern.Regex, preparedLine))
         {
             var nameGroup = match.Groups["name"];
             if (definitionNames != null && definitionNames.Contains(nameGroup.Value))

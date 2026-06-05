@@ -144,6 +144,41 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunStatus_Json_ReportsHookCandidatesWithoutLoadingAssemblies_3142()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_hook_metadata_3142");
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture("CDIDX_HOOKS_DIR");
+            try
+            {
+                var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+                var hooksDir = Path.Combine(projectRoot, "hooks");
+                Directory.CreateDirectory(hooksDir);
+                var hookPath = Path.Combine(hooksDir, "broken.dll");
+                File.WriteAllText(hookPath, "not a real assembly");
+                env.Set("CDIDX_HOOKS_DIR", hooksDir);
+
+                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                    ["--db", dbPath, "--json"],
+                    _jsonOptions));
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                using var document = JsonDocument.Parse(stdout);
+                var hook = Assert.Single(document.RootElement.GetProperty("hooks").EnumerateArray());
+                Assert.Equal("broken", hook.GetProperty("name").GetString());
+                Assert.EndsWith("broken.dll", hook.GetProperty("assembly_path").GetString(), StringComparison.Ordinal);
+                Assert.Equal(string.Empty, hook.GetProperty("type_name").GetString());
+            }
+            finally
+            {
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
     public void RunStatus_Json_ReportsFoldOnlyRemediationHint()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_fold_only_json");

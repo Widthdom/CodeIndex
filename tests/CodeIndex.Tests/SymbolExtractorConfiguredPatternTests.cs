@@ -8,38 +8,47 @@ namespace CodeIndex.Tests;
 public partial class SymbolExtractorTests
 {
     [Fact]
-    public void EnumeratePluginAssemblyPaths_SkipsWorkspacePluginsUnlessTrusted()
+    public void EnumeratePluginAssemblyPaths_UsesExplicitProjectRootForWorkspacePlugins()
     {
         lock (TestConsoleLock.Gate)
         {
             using var env = EnvironmentVariableScope.Capture(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable);
-            var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_workspace_plugins_{Guid.NewGuid():N}");
+            var projectRoot = Path.Combine(Path.GetTempPath(), $"cdidx_workspace_plugins_project_{Guid.NewGuid():N}");
+            var cwdRoot = Path.Combine(Path.GetTempPath(), $"cdidx_workspace_plugins_cwd_{Guid.NewGuid():N}");
             var originalDirectory = Environment.CurrentDirectory;
             try
             {
-                var pluginDir = Path.Combine(tempDir, ".cdidx", "plugins");
-                Directory.CreateDirectory(pluginDir);
-                var pluginFileName = $"demo_{Guid.NewGuid():N}.dll";
-                var pluginPath = Path.Combine(pluginDir, pluginFileName);
-                File.WriteAllText(pluginPath, "not a real dll");
-                Environment.CurrentDirectory = tempDir;
+                var projectPluginDir = Path.Combine(projectRoot, ".cdidx", "plugins");
+                var cwdPluginDir = Path.Combine(cwdRoot, ".cdidx", "plugins");
+                Directory.CreateDirectory(projectPluginDir);
+                Directory.CreateDirectory(cwdPluginDir);
+                var projectPluginFileName = $"project_{Guid.NewGuid():N}.dll";
+                var cwdPluginFileName = $"cwd_{Guid.NewGuid():N}.dll";
+                File.WriteAllText(Path.Combine(projectPluginDir, projectPluginFileName), "not a real dll");
+                File.WriteAllText(Path.Combine(cwdPluginDir, cwdPluginFileName), "not a real dll");
+                Environment.CurrentDirectory = cwdRoot;
                 env.Set(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable, null);
 
-                var untrustedPaths = ExtractorPluginRegistry.EnumeratePluginAssemblyPathsForTests();
+                var untrustedPaths = ExtractorPluginRegistry.EnumeratePluginAssemblyPathsForTests(projectRoot);
 
-                Assert.DoesNotContain(untrustedPaths, path => Path.GetFileName(path) == pluginFileName);
+                Assert.DoesNotContain(untrustedPaths, path => Path.GetFileName(path) == projectPluginFileName);
 
                 env.Set(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable, "1");
 
-                var trustedPaths = ExtractorPluginRegistry.EnumeratePluginAssemblyPathsForTests();
+                var trustedPaths = ExtractorPluginRegistry.EnumeratePluginAssemblyPathsForTests(projectRoot);
+                var defaultPaths = ExtractorPluginRegistry.EnumeratePluginAssemblyPathsForTests();
 
-                Assert.Contains(trustedPaths, path => Path.GetFileName(path) == pluginFileName);
+                Assert.Contains(trustedPaths, path => Path.GetFileName(path) == projectPluginFileName);
+                Assert.DoesNotContain(trustedPaths, path => Path.GetFileName(path) == cwdPluginFileName);
+                Assert.DoesNotContain(defaultPaths, path => Path.GetFileName(path) == cwdPluginFileName);
             }
             finally
             {
                 Environment.CurrentDirectory = originalDirectory;
-                if (Directory.Exists(tempDir))
-                    Directory.Delete(tempDir, recursive: true);
+                if (Directory.Exists(projectRoot))
+                    Directory.Delete(projectRoot, recursive: true);
+                if (Directory.Exists(cwdRoot))
+                    Directory.Delete(cwdRoot, recursive: true);
             }
         }
     }

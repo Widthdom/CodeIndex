@@ -8,7 +8,12 @@ internal sealed class McpIndexRunLock : IDisposable
 {
     internal const string LockFileName = "index.lock";
     private const int MaxInfoBytes = 4 * 1024;
+    internal const int MaxInfoJsonDepth = 16;
     private static readonly TimeSpan StaleInfoGracePeriod = TimeSpan.FromSeconds(2);
+    private static readonly JsonDocumentOptions InfoJsonDocumentOptions = new()
+    {
+        MaxDepth = MaxInfoJsonDepth,
+    };
 
     private readonly FileStream _stream;
     private readonly string _infoPath;
@@ -97,7 +102,7 @@ internal sealed class McpIndexRunLock : IDisposable
             if (string.IsNullOrWhiteSpace(text))
                 return null;
 
-            using var document = JsonDocument.Parse(text);
+            using var document = JsonDocument.Parse(text, InfoJsonDocumentOptions);
             var root = document.RootElement;
             if (!root.TryGetProperty("pid", out var pidElement) || !pidElement.TryGetInt32(out var pid))
                 return null;

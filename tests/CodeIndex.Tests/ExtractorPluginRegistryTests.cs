@@ -137,6 +137,8 @@ public class ExtractorPluginRegistryTests
                 var diagnostic = Assert.Single(status.Diagnostics!);
                 Assert.Equal("plugin", diagnostic.Kind);
                 Assert.Equal("skipped", diagnostic.Severity);
+                Assert.Equal("oversize.dll", diagnostic.Path);
+                Assert.DoesNotContain(projectRoot, diagnostic.Path, StringComparison.Ordinal);
                 Assert.Contains("too large", diagnostic.Message, StringComparison.Ordinal);
                 Assert.Contains(ExtractorPluginRegistry.MaxPluginAssemblyBytes.ToString(), diagnostic.Message, StringComparison.Ordinal);
             }
@@ -181,6 +183,7 @@ public class ExtractorPluginRegistryTests
                     Assert.Equal("pattern", diagnostic.Kind);
                     Assert.Equal("error", diagnostic.Severity);
                     Assert.EndsWith(".yaml", diagnostic.Path);
+                    Assert.DoesNotContain(projectRoot, diagnostic.Path, StringComparison.Ordinal);
                 });
             }
             finally
@@ -189,5 +192,79 @@ public class ExtractorPluginRegistryTests
                 TestProjectHelper.DeleteDirectory(projectRoot);
             }
         }
+    }
+
+    [Fact]
+    public void LoadPatternConfigsForProjectRoot_UsesExplicitRootInsteadOfCurrentDirectory()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_project_patterns");
+        var cwdRoot = TestProjectHelper.CreateTempProject("extractor_registry_cwd_patterns");
+        lock (TestConsoleLock.Gate)
+        {
+            var originalDirectory = Environment.CurrentDirectory;
+            try
+            {
+                ExtractorPluginRegistry.ReloadForTests();
+                WritePatternConfig(
+                    projectRoot,
+                    "project.yaml",
+                    "language: \"projectdsl\"\nextensions:\n  - extension: \".projecttoy\"\npatterns:\n  - kind: \"class\"\n    regex: \"^project (?<name>\\\\w+)\"\n");
+                WritePatternConfig(
+                    cwdRoot,
+                    "cwd.yaml",
+                    "language: \"cwddsl\"\nextensions:\n  - extension: \".cwdtoy\"\npatterns:\n  - kind: \"class\"\n    regex: \"^cwd (?<name>\\\\w+)\"\n");
+                Environment.CurrentDirectory = cwdRoot;
+
+                ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(projectRoot);
+                var extensions = ExtractorPluginRegistry.LanguageExtensions;
+
+                Assert.Equal("projectdsl", extensions[".projecttoy"]);
+                Assert.False(extensions.ContainsKey(".cwdtoy"));
+            }
+            finally
+            {
+                Environment.CurrentDirectory = originalDirectory;
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(projectRoot);
+                TestProjectHelper.DeleteDirectory(cwdRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void LoadPatternConfigs_SanitizesRejectedPathAndReason_3243()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_sanitized_pattern");
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                WritePatternConfig(
+                    projectRoot,
+                    "broken.yaml",
+                    "language: \"toydsl\"\nextensions:\n  - extension: \".toy\"\npatterns:\n  - kind: \"class\"\n    regex: \"(?<name>\"\n");
+
+                ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(projectRoot);
+                var diagnostic = Assert.Single(ExtractorPluginRegistry.GetStatusSnapshot().Diagnostics!);
+
+                Assert.Equal(".cdidx/patterns/broken.yaml", diagnostic.Path);
+                Assert.DoesNotContain(projectRoot, diagnostic.Path, StringComparison.Ordinal);
+                Assert.Contains("invalid regex", diagnostic.Message, StringComparison.Ordinal);
+                Assert.DoesNotContain("(?<name>", diagnostic.Message, StringComparison.Ordinal);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    private static void WritePatternConfig(string projectRoot, string fileName, string content)
+    {
+        var path = Path.Combine(projectRoot, ".cdidx", "patterns", fileName);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, content);
     }
 }

@@ -191,7 +191,7 @@ internal static class PerlReferenceExtractor
     {
         var args = argsGroup.Value;
         var argsStart = argsGroup.Index;
-        foreach (Match moduleMatch in QuotedModuleRegex.Matches(args))
+        foreach (Match moduleMatch in BoundedRegex.EnumerateMatches(QuotedModuleRegex, args))
         {
             if (moduleMatch.Groups["name"].Success)
             {
@@ -204,7 +204,7 @@ internal static class PerlReferenceExtractor
 
             var names = namesGroup.Value;
             var namesStart = argsStart + namesGroup.Index;
-            foreach (Match nameMatch in Regex.Matches(names, @"[\p{L}_][\w:]*", RegexOptions.CultureInvariant))
+            foreach (Match nameMatch in BoundedRegex.EnumerateMatches(names, @"[\p{L}_][\w:]*", RegexOptions.CultureInvariant))
                 AddBaseModuleReference(nameMatch.Value, namesStart + nameMatch.Index, references, seen, fileId, context, lineNumber, resolveContainerForCall);
         }
     }

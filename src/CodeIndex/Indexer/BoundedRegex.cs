@@ -43,6 +43,18 @@ internal sealed class BoundedRegex : BclRegex
         }
     }
 
+    public static BclMatch Match(BclRegex regex, string input)
+    {
+        try
+        {
+            return regex.Match(input);
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            return BclMatch.Empty;
+        }
+    }
+
     public static new MatchCollection Matches(string input, string pattern) =>
         Matches(input, pattern, RegexOptions.None);
 
@@ -58,6 +70,43 @@ internal sealed class BoundedRegex : BclRegex
         {
             return EmptyMatches();
         }
+    }
+
+    public static IEnumerable<BclMatch> EnumerateMatches(BclRegex regex, string input)
+    {
+        MatchCollection matches;
+        try
+        {
+            matches = regex.Matches(input);
+            _ = matches.Count;
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            yield break;
+        }
+
+        foreach (BclMatch match in matches)
+            yield return match;
+    }
+
+    public static IEnumerable<BclMatch> EnumerateMatches(string input, string pattern) =>
+        EnumerateMatches(input, pattern, RegexOptions.None);
+
+    public static IEnumerable<BclMatch> EnumerateMatches(string input, string pattern, RegexOptions options)
+    {
+        MatchCollection matches;
+        try
+        {
+            matches = BclRegex.Matches(input, pattern, options, DefaultMatchTimeout);
+            _ = matches.Count;
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            yield break;
+        }
+
+        foreach (BclMatch match in matches)
+            yield return match;
     }
 
     public static new bool IsMatch(string input, string pattern) =>
