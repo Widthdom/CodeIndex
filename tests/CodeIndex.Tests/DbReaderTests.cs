@@ -999,6 +999,37 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void CountSymbolsAndDefinitions_VisibilityFiltersStayInCountQueries()
+    {
+        InsertIndexedFile(
+            "src/count_visibility.rs",
+            "rust",
+            """
+            pub fn counted_public() {}
+            fn counted_private() {}
+            """);
+
+        Assert.Equal(1, _reader.CountSearchSymbols("counted_public", lang: "rust", exact: true, visibilityFilters: ["public"]));
+        Assert.Equal(0, _reader.CountSearchSymbols("counted_public", lang: "rust", exact: true, excludeVisibilityFilters: ["public"]));
+
+        var symbolTotal = _reader.CountSearchSymbolsTotal("counted_public", lang: "rust", exact: true, visibilityFilters: ["public"]);
+        Assert.Equal(1, symbolTotal.Count);
+        Assert.Equal(1, symbolTotal.FileCount);
+
+        var excludedSymbolTotal = _reader.CountSearchSymbolsTotal("counted_public", lang: "rust", exact: true, excludeVisibilityFilters: ["public"]);
+        Assert.Equal(0, excludedSymbolTotal.Count);
+        Assert.Equal(0, excludedSymbolTotal.FileCount);
+
+        var definitionTotal = _reader.CountDefinitionsTotal("counted_public", lang: "rust", exact: true, visibilityFilters: ["public"]);
+        Assert.Equal(1, definitionTotal.Count);
+        Assert.Equal(1, definitionTotal.FileCount);
+
+        var excludedDefinitionTotal = _reader.CountDefinitionsTotal("counted_public", lang: "rust", exact: true, excludeVisibilityFilters: ["public"]);
+        Assert.Equal(0, excludedDefinitionTotal.Count);
+        Assert.Equal(0, excludedDefinitionTotal.FileCount);
+    }
+
+    [Fact]
     public void SearchSymbols_JavaScriptCommonJsExportQueriesResolveToLeafNames()
     {
         InsertIndexedFile(

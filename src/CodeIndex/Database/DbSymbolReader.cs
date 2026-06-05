@@ -356,9 +356,6 @@ public partial class DbReader
 
     public int CountSearchSymbols(IReadOnlyList<string>? queries, int limit = 20, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)
     {
-        if (HasVisibilityFilters(visibilityFilters, excludeVisibilityFilters))
-            return SearchSymbols(queries, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact, visibilityFilters, excludeVisibilityFilters).Count;
-
         var validQueries = NormalizeSymbolSearchQueries(queries, lang, exact);
         if (validQueries != null && validQueries.Count > 1)
             return SearchSymbols(validQueries, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact, visibilityFilters, excludeVisibilityFilters).Count;
@@ -400,6 +397,7 @@ public partial class DbReader
         if (since != null && _fileColumns.Contains("modified"))
             innerSql += " AND f.modified >= @since";
         AppendPathFilters(ref innerSql, pathPatterns, excludePathPatterns, excludeTests);
+        AppendVisibilityFilters(ref innerSql, visibilityFilters, excludeVisibilityFilters);
         innerSql += " LIMIT @limit";
 
         cmd.CommandText = $"SELECT COUNT(*) FROM ({innerSql})";
@@ -436,7 +434,8 @@ public partial class DbReader
         if (since != null && _fileColumns.Contains("modified"))
             cmd.Parameters.AddWithValue("@since", since.Value);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
-        cmd.Parameters.AddWithValue("@limit", HasVisibilityFilters(visibilityFilters, excludeVisibilityFilters) ? int.MaxValue : limit);
+        AddVisibilityFilterParameters(cmd, visibilityFilters, excludeVisibilityFilters);
+        cmd.Parameters.AddWithValue("@limit", limit);
 
         var raw = cmd.ExecuteScalar();
         return raw is long l ? (int)l : Convert.ToInt32(raw);
@@ -449,12 +448,6 @@ public partial class DbReader
 
     public QueryCountResult CountSearchSymbolsTotal(IReadOnlyList<string>? queries, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)
     {
-        if (HasVisibilityFilters(visibilityFilters, excludeVisibilityFilters))
-        {
-            var results = SearchSymbols(queries, int.MaxValue, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact, visibilityFilters, excludeVisibilityFilters);
-            return new QueryCountResult(results.Count, results.Select(result => result.Path).Distinct(StringComparer.Ordinal).Count());
-        }
-
         lang = DbReader.NormalizeQueryLanguage(lang);
         using var cmd = _conn.CreateCommand();
 
@@ -512,6 +505,7 @@ public partial class DbReader
         if (since != null && _fileColumns.Contains("modified"))
             sql += " AND f.modified >= @since";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
+        AppendVisibilityFilters(ref sql, visibilityFilters, excludeVisibilityFilters);
         sql += ")";
 
         cmd.CommandText = sql;
@@ -550,6 +544,7 @@ public partial class DbReader
         if (since != null && _fileColumns.Contains("modified"))
             cmd.Parameters.AddWithValue("@since", since.Value);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+        AddVisibilityFilterParameters(cmd, visibilityFilters, excludeVisibilityFilters);
 
         using var reader = cmd.ExecuteTrackedReader();
         return reader.TrackedRead()
@@ -907,12 +902,6 @@ public partial class DbReader
 
     public QueryCountResult CountDefinitionsTotal(string query, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)
     {
-        if (HasVisibilityFilters(visibilityFilters, excludeVisibilityFilters))
-        {
-            var results = GetDefinitions(query, int.MaxValue, kind, lang, includeBody: false, pathPatterns, excludePathPatterns, excludeTests, since, exact, visibilityFilters, excludeVisibilityFilters);
-            return new QueryCountResult(results.Count, results.Select(result => result.Path).Distinct(StringComparer.Ordinal).Count());
-        }
-
         var normalizedQuery = NormalizeSymbolSearchQueryForSymbolSearch(query, lang, exact);
         using var cmd = _conn.CreateCommand();
 
@@ -953,6 +942,7 @@ public partial class DbReader
         if (since != null && _fileColumns.Contains("modified"))
             sql += " AND f.modified >= @since";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
+        AppendVisibilityFilters(ref sql, visibilityFilters, excludeVisibilityFilters);
         sql += $@"
                   AND EXISTS (
                       SELECT 1
@@ -996,6 +986,7 @@ public partial class DbReader
         if (since != null && _fileColumns.Contains("modified"))
             cmd.Parameters.AddWithValue("@since", since.Value);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+        AddVisibilityFilterParameters(cmd, visibilityFilters, excludeVisibilityFilters);
 
         using var reader = cmd.ExecuteTrackedReader();
         return reader.TrackedRead()
