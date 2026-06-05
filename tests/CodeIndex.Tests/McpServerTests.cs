@@ -6449,6 +6449,29 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_Deps_JsonGraph_ReturnsGraphPayload()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_deps_json_graph");
+        try
+        {
+            var dbPath = CreateSqlGraphContractFixtureDb(projectRoot);
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"deps","arguments":{"format":"json-graph","lang":"sql"}}}""")!;
+            var response = server.HandleMessage(request)!;
+            var graph = response["result"]!["structuredContent"]!["graph"]!;
+
+            Assert.NotEmpty(graph["nodes"]!.AsArray());
+            Assert.NotEmpty(graph["edges"]!.AsArray());
+            Assert.NotNull(graph["edges"]![0]!["reference_count"]);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void ToolsCall_Hotspots_ZeroResultSqlScopeStillIncludesDegradedState()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_hotspots_zero_sql_graph_contract");

@@ -3098,15 +3098,25 @@ public partial class McpServer
 
     private static JsonObject BuildJsonGraphPayload(IReadOnlyList<FileDependencyResult> edges)
     {
-        var nodes = edges
-            .SelectMany(edge => new[] { edge.SourcePath, edge.TargetPath })
-            .Distinct(StringComparer.Ordinal)
-            .Select(path => new JsonObject { ["id"] = path })
-            .ToArray<JsonNode?>();
-        var graphEdges = edges
-            .Select(edge => new JsonObject { ["source"] = edge.SourcePath, ["target"] = edge.TargetPath, ["reference_count"] = edge.ReferenceCount })
-            .ToArray<JsonNode?>();
-        return new JsonObject { ["nodes"] = new JsonArray(nodes), ["edges"] = new JsonArray(graphEdges) };
+        var nodes = new JsonArray();
+        var seenNodes = new HashSet<string>(StringComparer.Ordinal);
+        var graphEdges = new JsonArray();
+        foreach (var edge in edges)
+        {
+            if (seenNodes.Add(edge.SourcePath))
+                nodes.Add(new JsonObject { ["id"] = edge.SourcePath });
+            if (seenNodes.Add(edge.TargetPath))
+                nodes.Add(new JsonObject { ["id"] = edge.TargetPath });
+
+            graphEdges.Add(new JsonObject
+            {
+                ["source"] = edge.SourcePath,
+                ["target"] = edge.TargetPath,
+                ["reference_count"] = edge.ReferenceCount,
+            });
+        }
+
+        return new JsonObject { ["nodes"] = nodes, ["edges"] = graphEdges };
     }
 
     private JsonNode ExecuteImpactAnalysis(JsonNode? id, JsonNode? args)

@@ -4652,11 +4652,82 @@ public static class QueryCommandRunner
                 Console.WriteLine("</graph></graphml>");
                 break;
             case OutputFormatJsonGraph:
-                var nodes = edges.SelectMany(edge => new[] { edge.SourcePath, edge.TargetPath }).Distinct(StringComparer.Ordinal).Select(path => new JsonObject { ["id"] = path }).ToArray<JsonNode?>();
-                var graphEdges = edges.Select(edge => new JsonObject { ["source"] = edge.SourcePath, ["target"] = edge.TargetPath, ["reference_count"] = edge.ReferenceCount }).ToArray<JsonNode?>();
-                Console.WriteLine(new JsonObject { ["nodes"] = new JsonArray(nodes), ["edges"] = new JsonArray(graphEdges) }.ToJsonString(jsonOptions));
+                WriteDependencyJsonGraph(edges, jsonOptions);
                 break;
         }
+    }
+
+    private static void WriteDependencyJsonGraph(IReadOnlyList<FileDependencyResult> edges, JsonSerializerOptions jsonOptions)
+    {
+        var seenNodes = new HashSet<string>(StringComparer.Ordinal);
+        var nodes = new List<string>();
+        foreach (var edge in edges)
+        {
+            if (seenNodes.Add(edge.SourcePath))
+                nodes.Add(edge.SourcePath);
+            if (seenNodes.Add(edge.TargetPath))
+                nodes.Add(edge.TargetPath);
+        }
+
+        var writer = Console.Out;
+        if (!jsonOptions.WriteIndented)
+        {
+            writer.Write("{\"nodes\":[");
+            for (var i = 0; i < nodes.Count; i++)
+            {
+                if (i > 0)
+                    writer.Write(',');
+                writer.Write("{\"id\":");
+                writer.Write(JsonSerializer.Serialize(nodes[i], jsonOptions));
+                writer.Write('}');
+            }
+
+            writer.Write("],\"edges\":[");
+            for (var i = 0; i < edges.Count; i++)
+            {
+                if (i > 0)
+                    writer.Write(',');
+                var edge = edges[i];
+                writer.Write("{\"source\":");
+                writer.Write(JsonSerializer.Serialize(edge.SourcePath, jsonOptions));
+                writer.Write(",\"target\":");
+                writer.Write(JsonSerializer.Serialize(edge.TargetPath, jsonOptions));
+                writer.Write(",\"reference_count\":");
+                writer.Write(edge.ReferenceCount.ToString(CultureInfo.InvariantCulture));
+                writer.Write('}');
+            }
+
+            writer.WriteLine("]}");
+            return;
+        }
+
+        writer.WriteLine("{");
+        writer.WriteLine("  \"nodes\": [");
+        for (var i = 0; i < nodes.Count; i++)
+        {
+            writer.Write("    { \"id\": ");
+            writer.Write(JsonSerializer.Serialize(nodes[i], jsonOptions));
+            writer.Write(" }");
+            writer.WriteLine(i + 1 < nodes.Count ? "," : string.Empty);
+        }
+
+        writer.WriteLine("  ],");
+        writer.WriteLine("  \"edges\": [");
+        for (var i = 0; i < edges.Count; i++)
+        {
+            var edge = edges[i];
+            writer.Write("    { \"source\": ");
+            writer.Write(JsonSerializer.Serialize(edge.SourcePath, jsonOptions));
+            writer.Write(", \"target\": ");
+            writer.Write(JsonSerializer.Serialize(edge.TargetPath, jsonOptions));
+            writer.Write(", \"reference_count\": ");
+            writer.Write(edge.ReferenceCount.ToString(CultureInfo.InvariantCulture));
+            writer.Write(" }");
+            writer.WriteLine(i + 1 < edges.Count ? "," : string.Empty);
+        }
+
+        writer.WriteLine("  ]");
+        writer.WriteLine("}");
     }
 
     private static string EscapeDot(string value) => value.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal);

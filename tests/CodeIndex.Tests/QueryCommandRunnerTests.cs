@@ -3456,6 +3456,33 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunDeps_JsonGraph_WritesValidGraphPayload()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_deps_json_graph");
+        try
+        {
+            var dbPath = CreateSqlGraphContractFixtureDb(projectRoot);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+                ["--db", dbPath, "--format", "json-graph", "--lang", "sql"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(json.GetProperty("nodes").GetArrayLength() >= 2);
+            Assert.True(json.GetProperty("edges").GetArrayLength() >= 1);
+            Assert.True(json.GetProperty("edges")[0].TryGetProperty("reference_count", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunDeps_WorkspaceDbJson_AggregatesAndTagsMemberDatabaseEdges()
     {
         var primaryRoot = TestProjectHelper.CreateTempProject("cdidx_deps_workspace_primary");
