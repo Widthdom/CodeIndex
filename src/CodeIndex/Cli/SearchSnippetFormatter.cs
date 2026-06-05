@@ -12,9 +12,25 @@ public static class SearchSnippetFormatter
     public const int DefaultSnippetLines = 8;
     public const int MaxSnippetLines = 20;
 
+    public static SearchSnippetQueryContext PrepareQueryContext(string query)
+    {
+        var normalizedQuery = query.Trim();
+        return new SearchSnippetQueryContext(
+            query,
+            new SearchSnippetPreparedQuery(normalizedQuery, BuildQueryTokens(query, normalizeCSharpVerbatimNames: false), NormalizeCSharpVerbatimNames: false),
+            new SearchSnippetPreparedQuery(CSharpVerbatimNameNormalizer.Normalize(normalizedQuery), BuildQueryTokens(query, normalizeCSharpVerbatimNames: true), NormalizeCSharpVerbatimNames: true));
+    }
+
     public static IReadOnlyList<string> Format(string content, string query, int maxLines = DefaultSnippetLines, bool caseSensitive = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, string? lang = null, SearchSnippetFocusMode focusMode = SearchSnippetFocusMode.Quality)
     {
-        var excerpt = BuildExcerpt(content, query, absoluteStartLine: 1, maxLines, caseSensitive, maxLineWidth, lang, focusMode);
+        return Format(content, PrepareQueryContext(query), maxLines, caseSensitive, maxLineWidth, lang, focusMode);
+    }
+
+    public static IReadOnlyList<string> Format(string content, SearchSnippetQueryContext queryContext, int maxLines = DefaultSnippetLines, bool caseSensitive = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, string? lang = null, SearchSnippetFocusMode focusMode = SearchSnippetFocusMode.Quality)
+    {
+        ArgumentNullException.ThrowIfNull(queryContext);
+
+        var excerpt = BuildExcerpt(content, queryContext, absoluteStartLine: 1, maxLines, caseSensitive, maxLineWidth, lang, focusMode);
         if (excerpt.Lines.Count == 0)
             return [];
 
@@ -32,10 +48,17 @@ public static class SearchSnippetFormatter
 
     public static CompactSearchResult ToCompactResult(SearchResult result, string query, int maxLines = DefaultSnippetLines, bool caseSensitive = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, string? lang = null, SearchSnippetFocusMode focusMode = SearchSnippetFocusMode.Quality, bool exposeLiteralHighlights = false)
     {
-        var excerpt = BuildExcerpt(result.Content, query, result.StartLine, maxLines, caseSensitive, maxLineWidth, lang ?? result.Lang, focusMode, exposeLiteralHighlights);
+        return ToCompactResult(result, PrepareQueryContext(query), maxLines, caseSensitive, maxLineWidth, lang, focusMode, exposeLiteralHighlights);
+    }
+
+    public static CompactSearchResult ToCompactResult(SearchResult result, SearchSnippetQueryContext queryContext, int maxLines = DefaultSnippetLines, bool caseSensitive = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, string? lang = null, SearchSnippetFocusMode focusMode = SearchSnippetFocusMode.Quality, bool exposeLiteralHighlights = false)
+    {
+        ArgumentNullException.ThrowIfNull(queryContext);
+
+        var excerpt = BuildExcerpt(result.Content, queryContext, result.StartLine, maxLines, caseSensitive, maxLineWidth, lang ?? result.Lang, focusMode, exposeLiteralHighlights);
         return new CompactSearchResult
         {
-            Query = query,
+            Query = queryContext.Query,
             Path = result.Path,
             Lang = result.Lang,
             Visibility = result.Visibility,
@@ -63,12 +86,27 @@ public static class SearchSnippetFormatter
 
     public static IEnumerable<CompactSearchResult> ToCompactResults(IEnumerable<SearchResult> results, string query, int maxLines = DefaultSnippetLines, bool caseSensitive = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, string? lang = null, SearchSnippetFocusMode focusMode = SearchSnippetFocusMode.Quality, bool exposeLiteralHighlights = false)
     {
+        var queryContext = PrepareQueryContext(query);
+        return ToCompactResults(results, queryContext, maxLines, caseSensitive, maxLineWidth, lang, focusMode, exposeLiteralHighlights);
+    }
+
+    public static IEnumerable<CompactSearchResult> ToCompactResults(IEnumerable<SearchResult> results, SearchSnippetQueryContext queryContext, int maxLines = DefaultSnippetLines, bool caseSensitive = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, string? lang = null, SearchSnippetFocusMode focusMode = SearchSnippetFocusMode.Quality, bool exposeLiteralHighlights = false)
+    {
+        ArgumentNullException.ThrowIfNull(queryContext);
+
         foreach (var result in results)
-            yield return ToCompactResult(result, query, maxLines, caseSensitive, maxLineWidth, lang ?? result.Lang, focusMode, exposeLiteralHighlights);
+            yield return ToCompactResult(result, queryContext, maxLines, caseSensitive, maxLineWidth, lang ?? result.Lang, focusMode, exposeLiteralHighlights);
     }
 
     public static SearchSnippetExcerpt BuildExcerpt(string content, string query, int absoluteStartLine, int maxLines = DefaultSnippetLines, bool caseSensitive = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, string? lang = null, SearchSnippetFocusMode focusMode = SearchSnippetFocusMode.Quality, bool exposeLiteralHighlights = false)
     {
+        return BuildExcerpt(content, PrepareQueryContext(query), absoluteStartLine, maxLines, caseSensitive, maxLineWidth, lang, focusMode, exposeLiteralHighlights);
+    }
+
+    public static SearchSnippetExcerpt BuildExcerpt(string content, SearchSnippetQueryContext queryContext, int absoluteStartLine, int maxLines = DefaultSnippetLines, bool caseSensitive = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, string? lang = null, SearchSnippetFocusMode focusMode = SearchSnippetFocusMode.Quality, bool exposeLiteralHighlights = false)
+    {
+        ArgumentNullException.ThrowIfNull(queryContext);
+
         maxLines = ClampSnippetLines(maxLines);
         maxLineWidth = LineWidthFormatter.ClampMaxLineWidth(maxLineWidth);
 
@@ -82,19 +120,10 @@ public static class SearchSnippetFormatter
             };
         }
 
-        var normalizedQuery = query.Trim();
-        var normalizeCSharpVerbatimNames = string.Equals(lang, "csharp", StringComparison.OrdinalIgnoreCase);
-        if (normalizeCSharpVerbatimNames)
-            normalizedQuery = CSharpVerbatimNameNormalizer.Normalize(normalizedQuery);
-
-        var tokens = query
-            .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
-            .Select(NormalizeToken)
-            .Where(t => t.Length > 0)
-            .Where(t => t is not "AND" and not "OR" and not "NOT" and not "NEAR")
-            .Select(token => normalizeCSharpVerbatimNames ? CSharpVerbatimNameNormalizer.Normalize(token) : token)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
+        var queryForLanguage = queryContext.ForLanguage(lang);
+        var normalizedQuery = queryForLanguage.NormalizedQuery;
+        var tokens = queryForLanguage.Tokens;
+        var normalizeCSharpVerbatimNames = queryForLanguage.NormalizeCSharpVerbatimNames;
 
         string[]? normalizedLines = null;
         int[][]? rawIndexMaps = null;
@@ -393,6 +422,16 @@ public static class SearchSnippetFormatter
     public static int ClampSnippetLines(int maxLines) =>
         Math.Clamp(maxLines, 1, MaxSnippetLines);
 
+    private static string[] BuildQueryTokens(string query, bool normalizeCSharpVerbatimNames) =>
+        query
+            .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
+            .Select(NormalizeToken)
+            .Where(t => t.Length > 0)
+            .Where(t => t is not "AND" and not "OR" and not "NOT" and not "NEAR")
+            .Select(token => normalizeCSharpVerbatimNames ? CSharpVerbatimNameNormalizer.Normalize(token) : token)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
     private static List<int> FindMatchingLineIndexes(string[] lines, string query, string[] tokens, bool caseSensitive = false)
     {
         var comparison = caseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
@@ -502,6 +541,26 @@ public static class SearchSnippetFormatter
     }
 
 }
+
+public sealed class SearchSnippetQueryContext
+{
+    internal SearchSnippetQueryContext(string query, SearchSnippetPreparedQuery defaultQuery, SearchSnippetPreparedQuery csharpQuery)
+    {
+        Query = query;
+        DefaultQuery = defaultQuery;
+        CSharpQuery = csharpQuery;
+    }
+
+    public string Query { get; }
+
+    internal SearchSnippetPreparedQuery DefaultQuery { get; }
+    internal SearchSnippetPreparedQuery CSharpQuery { get; }
+
+    internal SearchSnippetPreparedQuery ForLanguage(string? lang) =>
+        string.Equals(lang, "csharp", StringComparison.OrdinalIgnoreCase) ? CSharpQuery : DefaultQuery;
+}
+
+internal readonly record struct SearchSnippetPreparedQuery(string NormalizedQuery, string[] Tokens, bool NormalizeCSharpVerbatimNames);
 
 public sealed class CompactSearchResult
 {

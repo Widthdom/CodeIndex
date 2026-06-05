@@ -1,4 +1,5 @@
 using System.Text.Json;
+using CodeIndex.Database;
 using CodeIndex.Indexer;
 using Microsoft.Data.Sqlite;
 
@@ -29,6 +30,15 @@ public static class DiffCommandRunner
                 "Run `cdidx diff <db1> <db2> --help` to see the supported command shape.",
                 CommandErrorCodes.UsageError);
 
+        var json = options.Json || options.SummaryOnly;
+        var leftUriValidationExitCode = ValidateReadableDbFileUri(options.LeftDb!, json, jsonOptions);
+        if (leftUriValidationExitCode != null)
+            return leftUriValidationExitCode.Value;
+
+        var rightUriValidationExitCode = ValidateReadableDbFileUri(options.RightDb!, json, jsonOptions);
+        if (rightUriValidationExitCode != null)
+            return rightUriValidationExitCode.Value;
+
         try
         {
             var leftHeader = ReadHeader(options.LeftDb!);
@@ -56,6 +66,20 @@ public static class DiffCommandRunner
                 "Pass two readable CodeIndex SQLite database paths.",
                 CommandErrorCodes.DbError);
         }
+    }
+
+    private static int? ValidateReadableDbFileUri(string dbPath, bool json, JsonSerializerOptions jsonOptions)
+    {
+        if (SqliteFileUri.TryValidateBounds(dbPath, out var parseError))
+            return null;
+
+        return WriteCommandError(
+            json,
+            jsonOptions,
+            $"invalid database file URI: {SqliteFileUri.FormatParseError(parseError)}",
+            UnreadableExitCode,
+            "Pass two readable CodeIndex SQLite database paths or valid SQLite file URIs.",
+            CommandErrorCodes.DbError);
     }
 
     internal static DiffCommandOptions ParseArgs(string[] args)

@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Net;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -797,11 +798,82 @@ public class ProgramRunnerTests
     }
 
     [Theory]
-    [InlineData("v1.26.0", "https://raw.githubusercontent.com/Widthdom/CodeIndex/v1.26.0/install.sh")]
-    [InlineData(" release/test ", "https://raw.githubusercontent.com/Widthdom/CodeIndex/release%2Ftest/install.sh")]
+    [InlineData("v1.26.0", "https://github.com/Widthdom/CodeIndex/releases/download/v1.26.0/install.sh")]
+    [InlineData(" release/test ", "https://github.com/Widthdom/CodeIndex/releases/download/release%2Ftest/install.sh")]
     public void BuildInstallerScriptUrl_UsesResolvedReleaseTag(string releaseTag, string expected)
     {
         Assert.Equal(expected, ProgramRunner.BuildInstallerScriptUrl(releaseTag));
+    }
+
+    [Theory]
+    [InlineData("v1.26.0", "install.sh", "https://github.com/Widthdom/CodeIndex/releases/download/v1.26.0/install.sh")]
+    [InlineData(" release/test ", "sha256sums.txt", "https://github.com/Widthdom/CodeIndex/releases/download/release%2Ftest/sha256sums.txt")]
+    public void BuildReleaseAssetUrl_UsesResolvedReleaseTagAndAsset(string releaseTag, string assetName, string expected)
+    {
+        Assert.Equal(expected, ProgramRunner.BuildReleaseAssetUrl(releaseTag, assetName));
+    }
+
+    [Fact]
+    public void GetReleaseAssetChecksum_FindsInstallerScriptEntry()
+    {
+        var expected = new string('a', 64);
+        var manifest = $"""
+{new string('b', 64)}  CodeIndex-linux-x64.tar.gz
+{expected}  install.sh
+""";
+
+        var checksum = ProgramRunner.GetReleaseAssetChecksum(manifest, "install.sh");
+
+        Assert.Equal(expected, checksum);
+    }
+
+    [Fact]
+    public void GetReleaseAssetChecksum_RequiresInstallerScriptEntry()
+    {
+        var manifest = $"{new string('b', 64)}  CodeIndex-linux-x64.tar.gz\n";
+
+        var ex = Assert.Throws<InvalidDataException>(() =>
+            ProgramRunner.GetReleaseAssetChecksum(manifest, "install.sh"));
+
+        Assert.Contains("install.sh", ex.Message);
+    }
+
+    [Fact]
+    public void VerifyFileSha256_AcceptsExpectedDigest()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"cdidx-install-checksum-{Guid.NewGuid():N}.sh");
+        var content = Encoding.UTF8.GetBytes("#!/bin/sh\necho ok\n");
+        File.WriteAllBytes(path, content);
+        try
+        {
+            var expected = Convert.ToHexString(SHA256.HashData(content)).ToLowerInvariant();
+
+            ProgramRunner.VerifyFileSha256(path, expected, "install.sh");
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void VerifyFileSha256_RejectsMismatchedDigest()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"cdidx-install-checksum-{Guid.NewGuid():N}.sh");
+        File.WriteAllText(path, "#!/bin/sh\necho ok\n");
+        try
+        {
+            var ex = Assert.Throws<InvalidDataException>(() =>
+                ProgramRunner.VerifyFileSha256(path, new string('0', 64), "install.sh"));
+
+            Assert.Contains("checksum mismatch", ex.Message);
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
     }
 
     [Fact]
@@ -877,6 +949,24 @@ sleep 5
             if (File.Exists(path))
                 File.Delete(path);
         }
+    }
+
+    [Fact]
+    public async Task DownloadReleaseChecksumManifestAsync_RejectsOverLimitResponse()
+    {
+        using var client = new HttpClient(new StaticResponseHandler(new ByteArrayContent(new byte[(int)ProgramRunner.MaxReleaseChecksumBytes + 1])))
+        {
+            Timeout = Timeout.InfiniteTimeSpan,
+        };
+
+        var ex = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            ProgramRunner.DownloadReleaseChecksumManifestAsync(
+                client,
+                "v1.27.0",
+                TimeSpan.FromSeconds(1),
+                CancellationToken.None));
+
+        Assert.Contains($"{ProgramRunner.MaxReleaseChecksumBytes} byte limit", ex.Message);
     }
 
     [Fact]

@@ -464,8 +464,9 @@ public class McpAuditLogTests : IDisposable
     {
         using var sink = new AuditLogSink(_auditPath, AuditLogSink.DefaultMaxBytes, includeValues: false);
         using var server = CreateServer(sink);
-        var id = new string('\u00e9', McpServer.MaxRequestIdCharacterCount);
+        var id = new string('r', McpServer.MaxRequestIdCharacterCount);
         var serializedId = JsonSerializer.Serialize(id);
+        Assert.True(serializedId.Length > AuditLogSink.MaxRequestIdChars);
         var display = McpBoundedText.ForDisplay(serializedId, AuditLogSink.MaxRequestIdChars);
         var request = new JsonObject
         {

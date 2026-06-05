@@ -159,14 +159,20 @@ public class DbContext : IDisposable
         message = string.Empty;
         isNotFound = false;
 
-        if (dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase) && UriRequestsReadOnly(dbPath))
+        if (SqliteFileUri.StartsWithFileScheme(dbPath) && !SqliteFileUri.TryValidateBounds(dbPath, out var boundsError))
+        {
+            message = boundsError?.Message ?? "Invalid SQLite file URI.";
+            return false;
+        }
+
+        if (SqliteFileUri.StartsWithFileScheme(dbPath) && SqliteFileUri.RequestsReadOnly(dbPath))
         {
             message = $"database must be writable: {dbPath}";
             return false;
         }
 
         var openTarget = dbPath;
-        if (dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+        if (SqliteFileUri.StartsWithFileScheme(dbPath))
         {
             var normalized = TryGetLocalPath(dbPath);
             if (normalized != null)
@@ -238,8 +244,11 @@ public class DbContext : IDisposable
         // and all write-oriented pragmas. This is the CLI escape hatch for sandboxes where
         // even SqliteOpenMode.ReadOnly cannot touch -shm/-wal side files.
         // URI 形式が渡された場合は writable open を省き、直接 read-only として扱う。
-        if (dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+        if (SqliteFileUri.StartsWithFileScheme(dbPath))
         {
+            if (!SqliteFileUri.TryValidateBounds(dbPath, out var boundsError))
+                throw boundsError ?? new FormatException("Invalid SQLite file URI.");
+
             // URI escape hatch — but ONLY when the caller explicitly requested read-only
             // semantics. A bare `file:///path.db` without `immutable=1` / `mode=ro` falls
             // through to the normal filesystem path, otherwise SQLite's default open mode
@@ -248,7 +257,7 @@ public class DbContext : IDisposable
             // and skip TryMigrateForRead / writable pragmas.
             // 明示的に read-only を要求した URI のみエスケープハッチ扱い。裸の file: URI は
             // 通常経路にフォールバックさせて read-write-CREATE の副作用を防ぐ。
-            if (UriRequestsReadOnly(dbPath))
+            if (SqliteFileUri.RequestsReadOnly(dbPath))
             {
                 try
                 {
@@ -444,8 +453,13 @@ public class DbContext : IDisposable
 
     public static string ToReadOnlyUri(string dbPath)
     {
-        if (dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+        if (SqliteFileUri.StartsWithFileScheme(dbPath))
+        {
+            if (!SqliteFileUri.TryValidateBounds(dbPath, out var boundsError))
+                throw boundsError ?? new FormatException("Invalid SQLite file URI.");
+
             return AppendReadOnlyQuery(dbPath);
+        }
 
         var fileUri = new Uri(Path.GetFullPath(dbPath)).AbsoluteUri;
         return $"{fileUri}?immutable=1&mode=ro";
@@ -716,25 +730,6 @@ public class DbContext : IDisposable
             innerException: lastBusyError);
     }
 
-    // Detect whether a SQLite URI explicitly requests read-only semantics. Only URIs that
-    // set `immutable=1` or `mode=ro` take the read-only escape hatch — plain `file:`
-    // URIs must not, or SQLite would open read-write-CREATE and a `status` call could
-    // silently mutate or create the target DB.
-    // `immutable=1` or `mode=ro` が明示されている場合のみ read-only として扱う。
-    private static bool UriRequestsReadOnly(string uriText)
-    {
-        var qIdx = uriText.IndexOf('?');
-        if (qIdx < 0) return false;
-        var query = uriText[(qIdx + 1)..];
-        foreach (var raw in query.Split('&'))
-        {
-            var seg = raw.Trim();
-            if (seg.Equals("immutable=1", StringComparison.OrdinalIgnoreCase)) return true;
-            if (seg.Equals("mode=ro", StringComparison.OrdinalIgnoreCase)) return true;
-        }
-        return false;
-    }
-
     // Best-effort: extract the filesystem path from a SQLite URI so -wal checks can run.
     // Returns null if parsing fails; the caller simply skips the gate in that case.
     // URI から filesystem path を取り出すベストエフォート。失敗したらゲートをスキップ。
@@ -743,8 +738,9 @@ public class DbContext : IDisposable
         try
         {
             // Trim the query string (?immutable=1 etc.) before parsing so LocalPath is clean.
-            var qIdx = uriText.IndexOf('?');
-            var trimmed = qIdx >= 0 ? uriText[..qIdx] : uriText;
+            if (!SqliteFileUri.TryGetPathBeforeQuery(uriText, out var trimmed, out _))
+                return null;
+
             var uri = new Uri(trimmed);
             return uri.IsFile ? uri.LocalPath : null;
         }

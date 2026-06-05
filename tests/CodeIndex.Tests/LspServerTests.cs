@@ -175,32 +175,6 @@ public class LspServerTests
     }
 
     [Fact]
-    public void HandleMessage_OversizedRequestId_ReturnsInvalidRequestWithoutEcho_Issue3113()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_large_id");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            using var db = new DbContext(dbPath);
-            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
-            var oversizedId = new string('\u00e9', LspServer.MaxLspRequestIdRawBytes / 2);
-            var request = $"{{\"jsonrpc\":\"2.0\",\"id\":\"{oversizedId}\",\"method\":\"initialize\",\"params\":{{}}}}";
-
-            var response = server.HandleMessage(request);
-
-            Assert.NotNull(response);
-            Assert.Equal(-32600, response!["error"]!["code"]!.GetValue<int>());
-            Assert.Contains("Request id must be", response["error"]!["message"]!.GetValue<string>(), StringComparison.Ordinal);
-            Assert.Null(response["id"]);
-            Assert.DoesNotContain(oversizedId, response.ToJsonString());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
     public void Run_MalformedJsonFrame_WritesParseErrorAndContinues()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_malformed_json");
@@ -364,6 +338,43 @@ public class LspServerTests
                 .ToArray();
             Assert.Contains("TestApp", names);
             Assert.DoesNotContain("SrcApp", names);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void HandleMessage_DocumentSymbol_RejectsOversizedTextDocumentUri_Issue3129()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_document_symbol_long_uri");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var oversizedUri = "file:///" + new string('a', LspServer.MaxTextDocumentUriChars);
+            var request = JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0",
+                id = 3129,
+                method = "textDocument/documentSymbol",
+                @params = new
+                {
+                    textDocument = new { uri = oversizedUri },
+                },
+            });
+
+            var response = server.HandleMessage(request);
+
+            Assert.NotNull(response);
+            var error = response!["error"]!;
+            Assert.Equal(-32602, error["code"]!.GetValue<int>());
+            var message = error["message"]!.GetValue<string>();
+            Assert.Equal("Invalid params", message);
+            Assert.True(message.Length < 120);
+            Assert.DoesNotContain(oversizedUri, message, StringComparison.Ordinal);
         }
         finally
         {

@@ -2,6 +2,7 @@ using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
 using Microsoft.Data.Sqlite;
+using System.Globalization;
 
 namespace CodeIndex.Tests;
 
@@ -252,6 +253,18 @@ public class DbPathResolverTests
     }
 
     [Fact]
+    public void UriRequestsReadOnly_OversizedFileUriQuery_ReturnsFalseWithoutScanningQuery()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_path_resolver_{Guid.NewGuid():N}.db");
+        var readOnlyUri = new Uri(dbPath).AbsoluteUri +
+            "?" +
+            new string('a', SqliteFileUri.MaxQueryLength + 1) +
+            "&immutable=1";
+
+        Assert.False(DbPathResolver.UriRequestsReadOnly(readOnlyUri));
+    }
+
+    [Fact]
     public void TryResolveWritableMutationDbPath_RelativeReadOnlyUri_ReturnsWorkingDirectoryPath()
     {
         var fileName = $"cdidx_db_path_resolver_{Guid.NewGuid():N}.db";
@@ -273,6 +286,95 @@ public class DbPathResolverTests
         Assert.False(resolved);
         Assert.Equal(malformedUri, normalized);
         Assert.NotNull(parseError);
+    }
+
+    [Fact]
+    public void TryNormalizeDbPath_OversizedFileUri_ReturnsParseErrorWithoutChangingValue()
+    {
+        var oversizedUri = "file:///" + new string('a', SqliteFileUri.MaxUriLength);
+
+        var resolved = DbPathResolver.TryNormalizeDbPath(oversizedUri, out var normalized, out var parseError);
+
+        Assert.False(resolved);
+        Assert.Equal(oversizedUri, normalized);
+        Assert.NotNull(parseError);
+        Assert.Contains(SqliteFileUri.MaxUriLength.ToString(CultureInfo.InvariantCulture), parseError.Message);
+        Assert.DoesNotContain(new string('a', 32), parseError.Message);
+    }
+
+    [Fact]
+    public void TryNormalizeDbPath_OversizedFileUriQuery_ReturnsParseErrorWithoutChangingValue()
+    {
+        var oversizedQueryUri = "file:///tmp/codeindex.db?" + new string('a', SqliteFileUri.MaxQueryLength + 1);
+
+        var resolved = DbPathResolver.TryNormalizeDbPath(oversizedQueryUri, out var normalized, out var parseError);
+
+        Assert.False(resolved);
+        Assert.Equal(oversizedQueryUri, normalized);
+        Assert.NotNull(parseError);
+        Assert.Contains(SqliteFileUri.MaxQueryLength.ToString(CultureInfo.InvariantCulture), parseError.Message);
+        Assert.DoesNotContain(new string('a', 32), parseError.Message);
+    }
+
+    [Fact]
+    public void TryValidateExistingCodeIndexDb_OversizedFileUriQuery_ReturnsBoundedErrorWithoutOpening()
+    {
+        var opened = false;
+        var oversizedQueryUri = "file:///tmp/codeindex.db?" + new string('a', SqliteFileUri.MaxQueryLength + 1);
+
+        var resolved = DbContext.TryValidateExistingCodeIndexDb(
+            oversizedQueryUri,
+            _ =>
+            {
+                opened = true;
+                throw new InvalidOperationException("Unexpected open.");
+            },
+            _ => throw new InvalidOperationException("Unexpected open."),
+            sleep: null,
+            out var message,
+            out var isNotFound);
+
+        Assert.False(resolved);
+        Assert.False(opened);
+        Assert.False(isNotFound);
+        Assert.Contains(SqliteFileUri.MaxQueryLength.ToString(CultureInfo.InvariantCulture), message);
+        Assert.DoesNotContain(new string('a', 32), message);
+    }
+
+    [Fact]
+    public void DbContext_OversizedFileUriQuery_ThrowsBeforeOpeningSqlite()
+    {
+        var oversizedQueryUri = "file:///tmp/codeindex.db?" + new string('a', SqliteFileUri.MaxQueryLength + 1);
+
+        var ex = Assert.Throws<FormatException>(() => new DbContext(oversizedQueryUri));
+
+        Assert.Contains(SqliteFileUri.MaxQueryLength.ToString(CultureInfo.InvariantCulture), ex.Message);
+        Assert.DoesNotContain(new string('a', 32), ex.Message);
+    }
+
+    [Fact]
+    public void ToReadOnlyUri_OversizedFileUriQuery_ThrowsBeforeAppendingReadOnlyFlags()
+    {
+        var oversizedQueryUri = "file:///tmp/codeindex.db?" + new string('a', SqliteFileUri.MaxQueryLength + 1);
+
+        var ex = Assert.Throws<FormatException>(() => DbContext.ToReadOnlyUri(oversizedQueryUri));
+
+        Assert.Contains(SqliteFileUri.MaxQueryLength.ToString(CultureInfo.InvariantCulture), ex.Message);
+        Assert.DoesNotContain("immutable=1", ex.Message);
+        Assert.DoesNotContain(new string('a', 32), ex.Message);
+    }
+
+    [Fact]
+    public void TruncateDiagnosticValue_OversizedInput_ReturnsBoundedValueWithLength()
+    {
+        var oversizedUri = "file:" + new string('x', SqliteFileUri.MaxDiagnosticValueLength + 1);
+
+        var diagnostic = SqliteFileUri.TruncateDiagnosticValue(oversizedUri);
+
+        Assert.True(diagnostic.Length < SqliteFileUri.MaxDiagnosticValueLength + 64);
+        Assert.Contains("truncated", diagnostic, StringComparison.Ordinal);
+        Assert.Contains(oversizedUri.Length.ToString(CultureInfo.InvariantCulture), diagnostic, StringComparison.Ordinal);
+        Assert.DoesNotContain(new string('x', SqliteFileUri.MaxDiagnosticValueLength), diagnostic);
     }
 
     [Fact]

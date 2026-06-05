@@ -1,5 +1,6 @@
 using System.Text.Json;
 using CodeIndex.Cli;
+using CodeIndex.Database;
 using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
@@ -41,6 +42,21 @@ public class DiffCommandRunnerTests
             TestProjectHelper.DeleteDirectory(leftRoot);
             TestProjectHelper.DeleteDirectory(rightRoot);
         }
+    }
+
+    [Fact]
+    public void Run_OversizedFileUriQueryReturnsBoundedErrorBeforeReadingHeaders_Issue3140()
+    {
+        var dbUri = "file:///tmp/codeindex.db?" + new string('a', SqliteFileUri.MaxQueryLength + 1);
+
+        var (exitCode, stdout, stderr) = RunWithCapturedStreams([dbUri, "/tmp/missing-codeindex.db"]);
+
+        Assert.Equal(3, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("invalid database file URI", stderr);
+        Assert.Contains($"SQLite file URI query length exceeds {SqliteFileUri.MaxQueryLength}", stderr);
+        Assert.Contains("valid SQLite file URIs", stderr);
+        Assert.DoesNotContain(new string('a', SqliteFileUri.MaxDiagnosticValueLength + 1), stderr);
     }
 
     [Fact]
@@ -598,6 +614,29 @@ public class DiffCommandRunnerTests
             finally
             {
                 Console.SetOut(originalOut);
+            }
+        }
+    }
+
+    private (int ExitCode, string StdOut, string StdErr) RunWithCapturedStreams(string[] args)
+    {
+        var originalOut = Console.Out;
+        var originalErr = Console.Error;
+        using var stdout = new StringWriter();
+        using var stderr = new StringWriter();
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                Console.SetOut(stdout);
+                Console.SetError(stderr);
+                var exitCode = DiffCommandRunner.Run(args, _jsonOptions);
+                return (exitCode, stdout.ToString(), stderr.ToString());
+            }
+            finally
+            {
+                Console.SetOut(originalOut);
+                Console.SetError(originalErr);
             }
         }
     }

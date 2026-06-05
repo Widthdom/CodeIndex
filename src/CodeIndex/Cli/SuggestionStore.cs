@@ -33,8 +33,10 @@ public class SuggestionStore
     internal const int DefaultMaxAgeDays = 365;
     internal const int DefaultMaxCount = 5000;
     internal const int MaxSuggestionStoreBytes = 8 * 1024 * 1024;
+    internal const int MaxSuggestionStoreJsonDepth = 16;
     internal const int MaximumMaxAgeDays = 3650;
     internal const int MaximumMaxCount = 100_000;
+    internal const int MaxSuggestionStoreRecords = MaximumMaxCount;
     private const int FuzzyDedupRecentLimit = 100;
     private const string RedactedAwsAccessKey = "[REDACTED:aws_access_key]";
     private const string RedactedBearerToken = "[REDACTED:bearer_token]";
@@ -79,6 +81,7 @@ public class SuggestionStore
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
         PropertyNameCaseInsensitive = true,
+        MaxDepth = MaxSuggestionStoreJsonDepth,
     };
 
     static SuggestionStore()
@@ -440,32 +443,14 @@ public class SuggestionStore
     /// </summary>
     private List<SuggestionRecord> ReadUnlocked()
     {
-        var ioPath = LongPath.EnsureWindowsPrefix(_filePath);
-        if (!File.Exists(ioPath))
-            return new List<SuggestionRecord>();
-
-        if (new FileInfo(ioPath).Length == 0)
-        {
-            PreserveCorruptFile();
-            return new List<SuggestionRecord>();
-        }
-
-        var json = DataDirectorySecurity.ReadTextWithinLimit(ioPath, MaxSuggestionStoreBytes, StreamingReadFileShare);
-        if (json is null)
-        {
-            PreserveCorruptFile();
-            return new List<SuggestionRecord>();
-        }
-
-        if (string.IsNullOrWhiteSpace(json))
+        if (!TryReadStoreSnapshot(out var snapshot))
             return new List<SuggestionRecord>();
 
         try
         {
-            var records = JsonSerializer.Deserialize<List<SuggestionRecord>>(json, s_readOptions)
-                          ?? new List<SuggestionRecord>();
-            NormalizeRecordDefaults(records);
-            return records;
+            return ReadFilteredSnapshotAsync(snapshot, _ => true, skip: 0, take: null, normalizeDefaults: true)
+                .GetAwaiter()
+                .GetResult();
         }
         catch (JsonException)
         {
@@ -481,15 +466,45 @@ public class SuggestionStore
     private static void NormalizeRecordDefaults(List<SuggestionRecord> records)
     {
         foreach (var record in records)
+            NormalizeRecordDefaults(record);
+    }
+
+    private static void NormalizeRecordDefaults(SuggestionRecord record)
+    {
+        NormalizeLegacyFields(record);
+        if (string.IsNullOrWhiteSpace(record.CreatedByAgent))
+            record.CreatedByAgent = "unknown";
+        if (string.IsNullOrWhiteSpace(record.SessionId))
+            record.SessionId = "unknown";
+        if (string.IsNullOrWhiteSpace(record.ClientVersion))
+            record.ClientVersion = "unknown";
+    }
+
+    private bool TryReadStoreSnapshot(out byte[] snapshot)
+    {
+        snapshot = Array.Empty<byte>();
+        var ioPath = LongPath.EnsureWindowsPrefix(_filePath);
+        if (!File.Exists(ioPath))
+            return false;
+
+        var readSnapshot = DataDirectorySecurity.ReadBytesWithinLimit(ioPath, MaxSuggestionStoreBytes, StreamingReadFileShare);
+        if (readSnapshot is null)
         {
-            NormalizeLegacyFields(record);
-            if (string.IsNullOrWhiteSpace(record.CreatedByAgent))
-                record.CreatedByAgent = "unknown";
-            if (string.IsNullOrWhiteSpace(record.SessionId))
-                record.SessionId = "unknown";
-            if (string.IsNullOrWhiteSpace(record.ClientVersion))
-                record.ClientVersion = "unknown";
+            PreserveCorruptFile();
+            return false;
         }
+
+        if (readSnapshot.Length == 0)
+        {
+            PreserveCorruptFile();
+            return false;
+        }
+
+        if (IsEmptyOrJsonWhitespace(readSnapshot))
+            return false;
+
+        snapshot = readSnapshot;
+        return true;
     }
 
     private static (SuggestionRecord? Record, double? Score) FindDuplicate(
@@ -635,29 +650,14 @@ public class SuggestionStore
         int skip = 0,
         int? take = null)
     {
-        var ioPath = LongPath.EnsureWindowsPrefix(_filePath);
-        if (!File.Exists(ioPath))
-            return new List<SuggestionRecord>();
-
-        var snapshot = DataDirectorySecurity.ReadBytesWithinLimit(ioPath, MaxSuggestionStoreBytes, StreamingReadFileShare);
-        if (snapshot is null)
-        {
-            PreserveCorruptFile();
-            return new List<SuggestionRecord>();
-        }
-
-        if (snapshot.Length == 0)
-        {
-            PreserveCorruptFile();
-            return new List<SuggestionRecord>();
-        }
-
-        if (IsEmptyOrJsonWhitespace(snapshot))
+        if (!TryReadStoreSnapshot(out var snapshot))
             return new List<SuggestionRecord>();
 
         try
         {
-            return ReadFilteredSnapshotAsync(snapshot, predicate, skip, take).GetAwaiter().GetResult();
+            return ReadFilteredSnapshotAsync(snapshot, predicate, skip, take, normalizeDefaults: false)
+                .GetAwaiter()
+                .GetResult();
         }
         catch (JsonException)
         {
@@ -698,17 +698,26 @@ public class SuggestionStore
         byte[] snapshot,
         Func<SuggestionRecord, bool> predicate,
         int skip,
-        int? take)
+        int? take,
+        bool normalizeDefaults)
     {
         var results = new List<SuggestionRecord>();
+        var recordsRead = 0;
         var skipped = 0;
 
         await using var stream = new MemoryStream(snapshot, writable: false);
 
         await foreach (var record in JsonSerializer.DeserializeAsyncEnumerable<SuggestionRecord>(stream, s_readOptions))
         {
+            recordsRead++;
+            if (recordsRead > MaxSuggestionStoreRecords)
+                throw new JsonException($"Suggestion store contains more than {MaxSuggestionStoreRecords} records.");
+
             if (record == null || !predicate(record))
                 continue;
+
+            if (normalizeDefaults)
+                NormalizeRecordDefaults(record);
 
             if (skipped < skip)
             {
@@ -716,9 +725,10 @@ public class SuggestionStore
                 continue;
             }
 
-            results.Add(record);
             if (take.HasValue && results.Count >= take.Value)
-                break;
+                continue;
+
+            results.Add(record);
         }
 
         return results;
