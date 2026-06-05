@@ -100,6 +100,20 @@ public class McpToolContractTests
             "MCP tools/list schema and argument type validator drift detected:\n" + string.Join('\n', failures));
     }
 
+    [Fact]
+    public void ToolsList_SearchCursorHasSharedArgumentContract_Issue3192()
+    {
+        var searchProperties = GetAdvertisedToolSchemas()["search"];
+        var allowed = GetAllowedToolArguments("search");
+        var (hasValidator, validatorType) = TryGetExpectedJsonType("search", "cursor");
+
+        Assert.True(searchProperties.ContainsKey("cursor"));
+        Assert.Contains("cursor", allowed);
+        Assert.Equal("string", ExpectedTypeFromSchema(searchProperties["cursor"]));
+        Assert.True(hasValidator);
+        Assert.Equal("string", validatorType);
+    }
+
     private static Dictionary<string, Dictionary<string, JsonObject>> GetAdvertisedToolSchemas()
     {
         using var server = new McpServer("unused.db", "test", dbPathExplicit: false, McpToolFilter.AllowAll());
