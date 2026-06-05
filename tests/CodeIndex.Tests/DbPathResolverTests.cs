@@ -403,6 +403,43 @@ public class DbPathResolverTests
     }
 
     [Fact]
+    public void MetadataStringProbesReturnNullOnFilesystemExceptions_Issue3175()
+    {
+        try
+        {
+            DbPathResolver.OpenMetadataConnectionForTesting = _ => throw new IOException("simulated metadata probe failure");
+
+            Assert.Null(DbPathResolver.TryReadIndexedHeadCommit("unreadable.db"));
+            Assert.False(DbPathResolver.TryHasIndexedHeadCommitBranchStamp("unreadable.db"));
+        }
+        finally
+        {
+            DbPathResolver.OpenMetadataConnectionForTesting = null;
+        }
+    }
+
+    [Fact]
+    public void ResolveProjectRootForQuery_MetadataSampleProbeFilesystemErrorReturnsNull_Issue3175()
+    {
+        var dbContainerRoot = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_probe_failure");
+        var dbPath = Path.Combine(dbContainerRoot, ".cdidx", "codeindex.db");
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+            DbPathResolver.OpenMetadataConnectionForTesting = _ => throw new IOException("simulated metadata sample failure");
+
+            var resolved = DbPathResolver.ResolveProjectRootForQuery(dbPath, dbPathExplicit: true);
+
+            Assert.Null(resolved);
+        }
+        finally
+        {
+            DbPathResolver.OpenMetadataConnectionForTesting = null;
+            TestProjectHelper.DeleteDirectory(dbContainerRoot);
+        }
+    }
+
+    [Fact]
     public void ResolveProjectRootForQuery_ReadOnlyUri_PrefersStoredIndexedProjectRootMetadata()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_meta_uri");

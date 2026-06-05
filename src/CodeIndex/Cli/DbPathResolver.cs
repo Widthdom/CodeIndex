@@ -340,7 +340,7 @@ public static class DbPathResolver
             var raw = cmd.ExecuteScalar();
             return raw is string value && !string.IsNullOrWhiteSpace(value) ? value : null;
         }
-        catch (SqliteException)
+        catch (Exception ex) when (IsMetadataProbeException(ex))
         {
             return null;
         }
@@ -357,7 +357,7 @@ public static class DbPathResolver
             cmd.Parameters.AddWithValue("@key", key);
             return cmd.ExecuteScalar() != null;
         }
-        catch (SqliteException)
+        catch (Exception ex) when (IsMetadataProbeException(ex))
         {
             return false;
         }
@@ -425,8 +425,13 @@ public static class DbPathResolver
 
     private static SqliteConnection OpenMetadataConnection(string dbPath)
     {
+        if (OpenMetadataConnectionForTesting != null)
+            return OpenMetadataConnectionForTesting(dbPath);
+
         return new SqliteConnection(BuildSqliteConnectionString(dbPath, SqliteOpenMode.ReadOnly));
     }
+
+    internal static Func<string, SqliteConnection>? OpenMetadataConnectionForTesting { get; set; }
 
     public static bool UriRequestsReadOnly(string uriText)
         => SqliteFileUri.RequestsReadOnly(uriText);
@@ -495,12 +500,20 @@ public static class DbPathResolver
 
             return samples;
         }
-        catch (SqliteException)
+        catch (Exception ex) when (IsMetadataProbeException(ex))
         {
             // Fall back to persisted metadata / 永続化 metadata 側へフォールバック
             return [];
         }
     }
+
+    private static bool IsMetadataProbeException(Exception ex)
+        => ex is SqliteException
+            or IOException
+            or UnauthorizedAccessException
+            or ArgumentException
+            or NotSupportedException
+            or PathTooLongException;
 
     private static SampleMatchResult CountMatchingSamples(string candidateRoot, IReadOnlyList<IndexedFileSample> samples)
     {
