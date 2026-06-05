@@ -26,6 +26,11 @@ internal static class McpBoundedText
     internal const int MaxPromptNameChars = 128;
     internal const int MaxPromptArgumentChars = 512;
     internal const int MaxResourceUriChars = 4096;
+    internal const int MaxProgressTokenStringChars = 256;
+    internal const int MaxProgressTokenPropertyNameChars = 64;
+    internal const int MaxProgressTokenNodeCount = 32;
+    internal const int MaxProgressTokenDepth = 4;
+    internal const int MaxProgressTokenJsonBytes = 1024;
 
     internal static BoundedMcpText ForDisplay(string value, int maxChars = MaxDiagnosticDisplayChars)
     {

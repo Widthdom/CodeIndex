@@ -59,6 +59,10 @@ public static partial class IndexCommandRunner
                 CommandErrorCodes.UsageError);
         }
 
+        var dbUriValidationExitCode = ValidateDbPathFileUri(dbPath, "index", options.Json, jsonOptions);
+        if (dbUriValidationExitCode != null)
+            return dbUriValidationExitCode.Value;
+
         var rebuildConfirmationExitCode = ConfirmRebuildIfNeeded(options, dbPath, jsonOptions);
         if (rebuildConfirmationExitCode != null)
             return rebuildConfirmationExitCode.Value;
@@ -86,6 +90,24 @@ public static partial class IndexCommandRunner
         }
 
         return null;
+    }
+
+    private static int? ValidateDbPathFileUri(
+        string dbPath,
+        string command,
+        bool json,
+        JsonSerializerOptions jsonOptions)
+    {
+        if (DbPathResolver.TryNormalizeDbPath(dbPath, out _, out var parseError))
+            return null;
+
+        return WriteCommandError(
+            json,
+            jsonOptions,
+            $"invalid --db file URI for {command}: {SqliteFileUri.FormatParseError(parseError)}",
+            CommandExitCodes.DatabaseError,
+            "Pass a valid SQLite file URI whose full value and query string fit within the supported limits.",
+            CommandErrorCodes.DbError);
     }
 
     private static int? ValidateCommitRefsBeforeIndexSetup(IndexCommandOptions options, JsonSerializerOptions jsonOptions)

@@ -440,16 +440,16 @@ jobs:
       - name: Collect release files
         run: |
           mkdir -p release-files
-          # Tarballs/zips are per-RID artifacts; the SBOM is a single
-          # RID-independent JSON file. Both go in release-files so
-          # sha256sums.txt covers the SBOM as well, letting supply-chain
-          # consumers verify the SBOM bytes the same way they verify the
-          # binaries.
-          # tarball/zip は RID 別の成果物、SBOM は RID 非依存の単一 JSON。
-          # どちらも release-files に集約することで sha256sums.txt が SBOM の
-          # ハッシュもカバーし、SBOM 利用側はバイナリと同じ手順で SBOM の
-          # 完全性を検証できる。
+          # Tarballs/zips are per-RID artifacts; the SBOM and installer script
+          # are RID-independent files. Put all of them in release-files so
+          # sha256sums.txt covers the bytes that supply-chain consumers and
+          # `cdidx upgrade` verify before use.
+          # tarball/zip は RID 別の成果物、SBOM と installer script は RID 非依存の
+          # ファイル。すべて release-files に集約することで sha256sums.txt が
+          # supply-chain consumer と `cdidx upgrade` が使用前に検証する bytes を
+          # カバーする。
           find all-artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.cdx.json' \) -exec cp {} release-files/ \;
+          cp install.sh release-files/install.sh
           cd release-files
           expected_rids="linux-x64 linux-arm64 osx-arm64 win-x64 win-arm64"
           for rid in $expected_rids; do
@@ -510,6 +510,7 @@ jobs:
             release-files/*.tar.gz
             release-files/*.zip
             release-files/*.cdx.json
+            release-files/install.sh
             release-files/sha256sums.txt
             release-files/sha256sums.txt.asc
 
@@ -597,7 +598,7 @@ jobs:
           # リリースが "Failed to download sha256sums.txt ... HTTP 404" で
           # 失敗した。verify step が取得する全 asset をポーリングし、伝播の
           # 遅い asset があってもリリースを失敗させず待ち切る。
-          VERIFY_ASSET_NAMES: CodeIndex-linux-x64.tar.gz sha256sums.txt sha256sums.txt.asc
+          VERIFY_ASSET_NAMES: CodeIndex-linux-x64.tar.gz install.sh sha256sums.txt sha256sums.txt.asc
         run: |
           set -euo pipefail
           mapfile -t expected_assets < <(cd release-files && printf '%s\n' *)

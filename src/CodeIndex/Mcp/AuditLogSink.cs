@@ -39,7 +39,7 @@ internal sealed class AuditLogSink : IDisposable
     internal const int MaxArgValueStringChars = 512;
     internal const int MaxArgValuesSerializedBytes = 16 * 1024;
     internal const int MaxAuditArgumentCount = 64;
-    internal const int MaxRequestIdChars = 256;
+    internal const int MaxRequestIdChars = 128;
     internal const int MaxSerializedEventBytes = 64 * 1024;
 
     private static readonly Regex SecretValuePattern = new(

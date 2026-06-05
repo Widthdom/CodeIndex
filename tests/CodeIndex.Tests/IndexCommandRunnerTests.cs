@@ -3198,6 +3198,37 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_OversizedFileUriQueryDbPath_ReturnsBoundedJsonError_Issue3140()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "class App {}\n");
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var dbUri = new Uri(dbPath).AbsoluteUri + "?" + new string('a', SqliteFileUri.MaxQueryLength + 1);
+
+            var (exitCode, stdout, stderr) = RunCliInSubprocess([projectRoot, "--db", dbUri, "--json"], projectRoot);
+
+            using var document = JsonDocument.Parse(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("error", json.GetProperty("status").GetString());
+            Assert.Equal(CommandErrorCodes.DbError, json.GetProperty("error_code").GetString());
+            Assert.Contains("invalid --db file URI for index", json.GetProperty("message").GetString());
+            Assert.Contains($"SQLite file URI query length exceeds {SqliteFileUri.MaxQueryLength}", json.GetProperty("message").GetString());
+            Assert.Contains("supported limits", json.GetProperty("hint").GetString());
+            Assert.DoesNotContain(new string('a', SqliteFileUri.MaxDiagnosticValueLength + 1), stdout);
+            Assert.False(Directory.Exists(Path.Combine(projectRoot, ".cdidx")));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_MissingCdidxDirectoryInReadOnlyProject_ReturnsDatabaseErrorWithoutStackTrace()
     {
         if (OperatingSystem.IsWindows())
@@ -3412,6 +3443,45 @@ public class IndexCommandRunnerTests
             if (File.Exists(dbPath))
                 File.Delete(dbPath);
         }
+    }
+
+    [Fact]
+    public void RunOptimizeFts_OversizedFileUriQuery_ReturnsBoundedJsonError_Issue3140()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_optimize_uri_cap_{Guid.NewGuid():N}.db");
+        var dbUri = new Uri(dbPath).AbsoluteUri + "?" + new string('a', SqliteFileUri.MaxQueryLength + 1);
+        int exitCode;
+        JsonElement json;
+        string stderr;
+        lock (TestConsoleLock.Gate)
+        {
+            var originalOut = Console.Out;
+            var originalErr = Console.Error;
+            try
+            {
+                using var stdout = new StringWriter();
+                using var stderrWriter = new StringWriter();
+                Console.SetOut(stdout);
+                Console.SetError(stderrWriter);
+                exitCode = IndexCommandRunner.RunOptimizeFts(["--db", dbUri, "--json"], _jsonOptions);
+                stderr = stderrWriter.ToString();
+                using var document = JsonDocument.Parse(stdout.ToString());
+                json = document.RootElement.Clone();
+            }
+            finally
+            {
+                Console.SetOut(originalOut);
+                Console.SetError(originalErr);
+            }
+        }
+
+        Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Equal("error", json.GetProperty("status").GetString());
+        Assert.Equal(CommandErrorCodes.DbError, json.GetProperty("error_code").GetString());
+        Assert.Contains("invalid --db file URI for optimize", json.GetProperty("message").GetString());
+        Assert.Contains($"SQLite file URI query length exceeds {SqliteFileUri.MaxQueryLength}", json.GetProperty("message").GetString());
+        Assert.Contains("supported limits", json.GetProperty("hint").GetString());
     }
 
     [Fact]

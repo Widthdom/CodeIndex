@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using CodeIndex.Cli;
 using CodeIndex.Models;
 
@@ -102,6 +103,58 @@ public class SuggestionStoreTests : IDisposable
         File.WriteAllBytes(path, Enumerable.Repeat((byte)'x', SuggestionStore.MaxSuggestionStoreBytes + 1).ToArray());
 
         var records = _store.LoadByStatus(SuggestionStatus.Draft);
+
+        Assert.Empty(records);
+        Assert.False(File.Exists(path));
+        Assert.True(File.Exists(path + ".bak"));
+    }
+
+    [Fact]
+    public void LoadAll_ExcessiveJsonDepth_PreservesBackupAndReturnsEmpty()
+    {
+        var path = Path.Combine(_tempDir, "suggestions-codeindex.json");
+        File.WriteAllText(path, BuildDeepSuggestionStoreJson(SuggestionStore.MaxSuggestionStoreJsonDepth + 1));
+
+        var records = _store.LoadAll();
+
+        Assert.Empty(records);
+        Assert.False(File.Exists(path));
+        Assert.True(File.Exists(path + ".bak"));
+    }
+
+    [Fact]
+    public void LoadAll_TooManyRecords_PreservesBackupAndReturnsEmpty()
+    {
+        var path = Path.Combine(_tempDir, "suggestions-codeindex.json");
+        WriteEmptyRecordStore(path, SuggestionStore.MaxSuggestionStoreRecords + 1);
+
+        var records = _store.LoadAll();
+
+        Assert.Empty(records);
+        Assert.False(File.Exists(path));
+        Assert.True(File.Exists(path + ".bak"));
+    }
+
+    [Fact]
+    public void LoadByStatus_TooManyRecordsBeforeFilter_PreservesBackupAndReturnsEmpty()
+    {
+        var path = Path.Combine(_tempDir, "suggestions-codeindex.json");
+        WriteEmptyRecordStore(path, SuggestionStore.MaxSuggestionStoreRecords + 1);
+
+        var records = _store.LoadByStatus(SuggestionStatus.SubmittedPendingTriage);
+
+        Assert.Empty(records);
+        Assert.False(File.Exists(path));
+        Assert.True(File.Exists(path + ".bak"));
+    }
+
+    [Fact]
+    public void LoadPage_TooManyRecordsAfterPage_PreservesBackupAndReturnsEmpty()
+    {
+        var path = Path.Combine(_tempDir, "suggestions-codeindex.json");
+        WriteEmptyRecordStore(path, SuggestionStore.MaxSuggestionStoreRecords + 1);
+
+        var records = _store.Load(skip: 0, take: 1);
 
         Assert.Empty(records);
         Assert.False(File.Exists(path));
@@ -1026,6 +1079,34 @@ public class SuggestionStoreTests : IDisposable
     }
 
     // --- Helpers / ヘルパー ---
+
+    private static string BuildDeepSuggestionStoreJson(int nestedObjectCount)
+    {
+        var builder = new StringBuilder();
+        builder.Append("[{\"category\":\"other\",\"description\":\"Deep suggestion\",\"hash\":\"deep\",\"ignored\":");
+        for (var i = 0; i < nestedObjectCount; i++)
+            builder.Append("{\"x\":");
+        builder.Append("\"value\"");
+        for (var i = 0; i < nestedObjectCount; i++)
+            builder.Append('}');
+        builder.Append("}]");
+        return builder.ToString();
+    }
+
+    private static void WriteEmptyRecordStore(string path, int count)
+    {
+        var builder = new StringBuilder(capacity: (count * 3) + 2);
+        builder.Append('[');
+        for (var i = 0; i < count; i++)
+        {
+            if (i > 0)
+                builder.Append(',');
+            builder.Append("{}");
+        }
+
+        builder.Append(']');
+        File.WriteAllText(path, builder.ToString());
+    }
 
     private static SuggestionRecord MakeRecord(string category, string? language, string description)
     {
