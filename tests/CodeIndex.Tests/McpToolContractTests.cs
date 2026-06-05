@@ -139,6 +139,24 @@ public class McpToolContractTests
         Assert.Equal((true, "boolean"), TryGetExpectedJsonType("deps", "cycles"));
     }
 
+    [Fact]
+    public void ToolsList_MapSectionsAndDepthHaveSharedArgumentContract_Issue3197()
+    {
+        var mapProperties = GetAdvertisedToolSchemas()["map"];
+        var allowed = GetAllowedToolArguments("map");
+
+        Assert.True(mapProperties.ContainsKey("sections"));
+        Assert.Contains("sections", allowed);
+        Assert.Equal("array", ExpectedTypeFromSchema(mapProperties["sections"]));
+        Assert.Contains("sections", SpecializedListValidatedArguments);
+        Assert.Equal((false, string.Empty), TryGetExpectedJsonType("map", "sections"));
+
+        Assert.True(mapProperties.ContainsKey("depth"));
+        Assert.Contains("depth", allowed);
+        Assert.Equal("integer", ExpectedTypeFromSchema(mapProperties["depth"]));
+        Assert.Equal((true, "integer"), TryGetExpectedJsonType("map", "depth"));
+    }
+
     private static Dictionary<string, Dictionary<string, JsonObject>> GetAdvertisedToolSchemas()
     {
         using var server = new McpServer("unused.db", "test", dbPathExplicit: false, McpToolFilter.AllowAll());
