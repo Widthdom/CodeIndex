@@ -218,7 +218,7 @@ The documented `status --json` trust contract covers these fields:
 
 When any readiness field is degraded, `degraded_root_cause` identifies the primary stable code and `readiness_degradations[]` lists every degraded field with `root_cause`, human `degraded_reason`, `recommended_action`, and `alternative_action`. `issues_table_available` reports physical table presence; use `file_issues_data_current` to decide whether `file_issues` rows are current for the index generation.
 
-After a current full-repository scan, `unknown_extension_file_count` reports how many skipped files had unmapped non-empty extensions, while `unknown_extension_files` lists up to `unknown_extension_file_path_limit` paths and `unknown_extension_files_truncated` marks when more paths exist.
+After a current full-repository scan, `unknown_extension_file_count` reports how many skipped files had unmapped non-empty extensions, while `unknown_extension_files` lists a path sample capped by `unknown_extension_file_path_limit` items and the decoded-character budget. `unknown_extension_files_truncated` marks when more paths existed than were emitted for either cap; `unknown_extension_file_path_limit` is the item cap, not a guarantee that the sample always reaches that count.
 
 `extractors` reports runtime extractor plugin and pattern-config diagnostics, including loaded counts, skipped file counts, and a bounded diagnostics list for load failures. Diagnostic paths and messages are sanitized before they are surfaced.
 
