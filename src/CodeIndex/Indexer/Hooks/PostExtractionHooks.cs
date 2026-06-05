@@ -125,13 +125,17 @@ public sealed class PostExtractionHookRunner : IDisposable
 
                 try
                 {
-                    if (Activator.CreateInstance(type) is not IPostExtractionHook hook)
+                    if (type.GetConstructor(Type.EmptyTypes) == null)
+                    {
+                        runner.EnqueueDiagnostic(dllPath, type.FullName, "Failed to instantiate hook: public parameterless constructor not found.");
                         continue;
+                    }
 
+                    var info = new PostExtractionHookInfo(type.Name, Path.GetFullPath(dllPath), type.FullName ?? type.Name);
                     loaded.Add(new LoadedPostExtractionHook(
-                        hook,
-                        new PostExtractionHookInfo(type.Name, Path.GetFullPath(dllPath), type.FullName ?? type.Name),
-                        AssemblyLoadContext.GetLoadContext(type.Assembly)));
+                        info,
+                        AssemblyLoadContext.GetLoadContext(type.Assembly),
+                        new PostExtractionHookCallbackWorkerClient(info)));
                 }
                 catch (Exception)
                 {
@@ -277,8 +281,11 @@ public sealed class PostExtractionHookRunner : IDisposable
             var workingSymbols = CloneSymbols(symbols);
             if (InvokeHookWithBudget(
                     hook,
+                    PostExtractionHookCallbackKind.Symbols,
                     nameof(IPostExtractionHook.OnSymbolsExtracted),
-                    () => hook.Instance.OnSymbolsExtracted(context, workingSymbols)))
+                    context,
+                    workingSymbols,
+                    null))
             {
                 ReplaceList(symbols, workingSymbols);
             }
@@ -294,59 +301,72 @@ public sealed class PostExtractionHookRunner : IDisposable
             var workingReferences = CloneReferences(references);
             if (InvokeHookWithBudget(
                     hook,
+                    PostExtractionHookCallbackKind.References,
                     nameof(IPostExtractionHook.OnReferencesExtracted),
-                    () => hook.Instance.OnReferencesExtracted(context, workingReferences)))
+                    context,
+                    null,
+                    workingReferences))
             {
                 ReplaceList(references, workingReferences);
             }
         }
     }
 
-    private bool InvokeHookWithBudget(LoadedPostExtractionHook hook, string callback, Action invoke)
+    private bool InvokeHookWithBudget(
+        LoadedPostExtractionHook hook,
+        PostExtractionHookCallbackKind kind,
+        string callback,
+        FileContext context,
+        List<SymbolRecord>? symbols,
+        List<ReferenceRecord>? references)
     {
         if (disabledHooks.ContainsKey(hook.Info.TypeName))
             return false;
 
-        var stopwatch = Stopwatch.StartNew();
-        Exception? failure = null;
-        var task = Task.Run(() =>
+        var result = hook.Worker.Invoke(
+            kind,
+            callback,
+            context,
+            symbols,
+            references,
+            callbackBudget);
+        if (result.TimedOut)
         {
-            try
-            {
-                lock (hook.Instance)
-                    invoke();
-            }
-            catch (Exception ex)
-            {
-                failure = ex;
-            }
-        });
-
-        if (!task.Wait(callbackBudget))
-        {
-            stopwatch.Stop();
-            var timeoutDurationMs = Math.Max(
-                stopwatch.ElapsedMilliseconds,
-                (long)Math.Ceiling(callbackBudget.TotalMilliseconds));
             disabledHooks.TryAdd(hook.Info.TypeName, 0);
             EnqueueDiagnostic(
                 hook.Info.AssemblyPath,
                 hook.Info.TypeName,
                 $"{callback} exceeded the {callbackBudget.TotalMilliseconds:0} ms callback budget; hook disabled for this index run.",
                 callback,
-                timeoutDurationMs);
+                result.DurationMs);
             return false;
         }
 
-        stopwatch.Stop();
-        if (failure != null)
+        if (!result.Success)
+        {
+            disabledHooks.TryAdd(hook.Info.TypeName, 0);
+            EnqueueDiagnostic(
+                hook.Info.AssemblyPath,
+                hook.Info.TypeName,
+                $"{callback} failed in isolated worker.",
+                callback,
+                result.DurationMs);
+            return false;
+        }
+
+        if (result.Symbols != null && symbols != null)
+            ReplaceList(symbols, result.Symbols);
+        if (result.References != null && references != null)
+            ReplaceList(references, result.References);
+
+        if (result.CallbackError != null)
         {
             EnqueueDiagnostic(
                 hook.Info.AssemblyPath,
                 hook.Info.TypeName,
                 $"{callback} failed.",
                 callback,
-                stopwatch.ElapsedMilliseconds);
+                result.DurationMs);
         }
 
         return true;
@@ -482,6 +502,11 @@ public sealed class PostExtractionHookRunner : IDisposable
             return;
 
         disposed = true;
+        foreach (var hook in hooks)
+        {
+            hook.Worker.Dispose();
+        }
+
         var loadContexts = hooks
             .Select(hook => hook.LoadContext)
             .Where(loadContext => loadContext is { IsCollectible: true })
@@ -496,7 +521,7 @@ public sealed class PostExtractionHookRunner : IDisposable
     }
 
     private sealed record LoadedPostExtractionHook(
-        IPostExtractionHook Instance,
         PostExtractionHookInfo Info,
-        AssemblyLoadContext? LoadContext);
+        AssemblyLoadContext? LoadContext,
+        PostExtractionHookCallbackWorkerClient Worker);
 }

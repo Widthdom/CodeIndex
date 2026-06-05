@@ -8,6 +8,7 @@ using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
+using CodeIndex.Indexer.Hooks;
 using CodeIndex.Lsp;
 using CodeIndex.Mcp;
 using Microsoft.Data.Sqlite;
@@ -65,6 +66,9 @@ internal static class ProgramRunner
         Action? beforeDispatchForTesting = null,
         CancellationToken cancellationToken = default)
     {
+        if (PostExtractionHookCallbackWorker.TryRunCommand(args, Console.In, Console.Out, Console.Error, out var hookWorkerExitCode))
+            return hookWorkerExitCode;
+
         appVersion ??= ConsoleUi.LoadVersion();
 
         // Load project-local `.cdidxrc.json` before anything else reads env vars so log

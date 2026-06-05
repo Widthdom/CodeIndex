@@ -177,7 +177,7 @@ trust metadata before the dependent rows are written.
 
 Out-of-tree post-extraction hooks can implement `CodeIndex.Indexer.Hooks.IPostExtractionHook` in a `.dll` placed under `~/.config/cdidx/hooks/` (or the directory named by `CDIDX_HOOKS_DIR`). Hook discovery examines at most `CDIDX_HOOK_DISCOVERY_MAX_DLLS` DLL candidates (default: 128), requires each candidate to be no larger than `CDIDX_HOOK_DISCOVERY_MAX_BYTES` bytes (default: 67108864), then loads the bounded candidate set in path order. Each concrete hook type is instantiated with a public parameterless constructor, then called after built-in symbol extraction and again after built-in reference extraction, before rows are persisted. Hooks receive a `FileContext` plus mutable `IList<SymbolRecord>` / `IList<ReferenceRecord>` values, so they can annotate extracted records, add synthetic symbols, or add domain-specific references.
 
-Hook failures are isolated to that hook invocation: assembly load, construction, and callback exceptions are captured as diagnostics and indexing continues. Each callback runs against a scratch copy with a bounded wall-clock budget controlled by `CDIDX_HOOK_CALLBACK_BUDGET_MS` (default: 5000 ms). A timed-out callback contributes no mutations, emits an index warning, and disables that hook for the remainder of the current index run. `status --json` and MCP `status` expose loaded hooks under `hooks` with `name`, `assembly_path`, `type_name`, and `callback_budget_ms` so users can confirm which extensions are active and what timeout is being enforced.
+Hook failures are isolated to that hook invocation: assembly load, construction, and callback exceptions are captured as diagnostics and indexing continues. Each loaded hook runs in an isolated worker process, and callbacks run against scratch copies with a bounded wall-clock budget controlled by `CDIDX_HOOK_CALLBACK_BUDGET_MS` (default: 5000 ms). The first callback budget covers worker startup and callback execution. A timed-out callback kills the worker process tree, contributes no mutations, emits an index warning, and disables that hook for the remainder of the current index run. `status --json` and MCP `status` expose loaded hooks under `hooks` with `name`, `assembly_path`, `type_name`, and `callback_budget_ms` so users can confirm which extensions are active and what timeout is being enforced.
 
 ### Ignore file parsing
 
@@ -2269,8 +2269,10 @@ hook は `FileContext` と mutable な `IList<SymbolRecord>` / `IList<ReferenceR
 extracted record の annotation、synthetic symbol 追加、domain-specific reference 追加ができます。
 
 assembly load、construction、callback exception は diagnostic として捕捉され、indexing は継続します。
-各 callback は scratch copy 上で実行され、`CDIDX_HOOK_CALLBACK_BUDGET_MS`（既定 5000 ms）の
-wall-clock budget を超えると mutation は捨てられ、index warning を出し、その index run 中は
+各 loaded hook は isolated worker process 内で動き、callback は scratch copy 上で実行され、
+`CDIDX_HOOK_CALLBACK_BUDGET_MS`（既定 5000 ms）の wall-clock budget が適用されます。
+最初の callback budget には worker startup と callback execution が含まれます。budget を超えた callback は
+worker process tree を kill され、mutation は捨てられ、index warning を出し、その index run 中は
 該当 hook が disabled になります。`status --json` と MCP `status` は `hooks` に `name`、
 `assembly_path`、`type_name`、`callback_budget_ms` を公開します。
 
