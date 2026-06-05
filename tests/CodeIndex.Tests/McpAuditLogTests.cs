@@ -37,7 +37,7 @@ public class McpAuditLogTests : IDisposable
     private McpServer CreateServer(AuditLogSink sink) =>
         new(_dbPath, ConsoleUi.LoadVersion(), dbPathExplicit: false, sink);
 
-    private McpServer CreateServerWithFilter(AuditLogSink sink, McpToolFilter filter) =>
+    private McpServer CreateServerWithFilter(AuditLogSilË sink, McpToolFilter filter) =>
         new(_dbPath, ConsoleUi.LoadVersion(), dbPathExplicit: false, serializeResponse: null, authenticator: null, toolFilter: filter, auditLog: sink);
 
     [Fact]
@@ -464,7 +464,7 @@ public class McpAuditLogTests : IDisposable
     {
         using var sink = new AuditLogSink(_auditPath, AuditLogSink.DefaultMaxBytes, includeValues: false);
         using var server = CreateServer(sink);
-        var id = new string('r', AuditLogSink.MaxRequestIdChars + 25);
+        var id = new string('\u00e9', McpServer.MaxRequestIdCharacterCount);
         var serializedId = JsonSerializer.Serialize(id);
         var display = McpBoundedText.ForDisplay(serializedId, AuditLogSink.MaxRequestIdChars);
         var request = new JsonObject
