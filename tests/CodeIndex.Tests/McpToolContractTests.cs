@@ -114,6 +114,31 @@ public class McpToolContractTests
         Assert.Equal("string", validatorType);
     }
 
+    [Fact]
+    public void ToolsList_DepsArgumentsHaveSharedArgumentContract_Issue3196()
+    {
+        var depsProperties = GetAdvertisedToolSchemas()["deps"];
+        var allowed = GetAllowedToolArguments("deps");
+
+        foreach (var argumentName in new[] { "reverse", "format", "cycles" })
+        {
+            Assert.True(depsProperties.ContainsKey(argumentName));
+            Assert.Contains(argumentName, allowed);
+        }
+
+        Assert.False(depsProperties.ContainsKey("direction"));
+        Assert.DoesNotContain("direction", allowed);
+        Assert.False(depsProperties.ContainsKey("includeGenerated"));
+        Assert.DoesNotContain("includeGenerated", allowed);
+
+        Assert.Equal("boolean", ExpectedTypeFromSchema(depsProperties["reverse"]));
+        Assert.Equal("string", ExpectedTypeFromSchema(depsProperties["format"]));
+        Assert.Equal("boolean", ExpectedTypeFromSchema(depsProperties["cycles"]));
+        Assert.Equal((true, "boolean"), TryGetExpectedJsonType("deps", "reverse"));
+        Assert.Equal((true, "string"), TryGetExpectedJsonType("deps", "format"));
+        Assert.Equal((true, "boolean"), TryGetExpectedJsonType("deps", "cycles"));
+    }
+
     private static Dictionary<string, Dictionary<string, JsonObject>> GetAdvertisedToolSchemas()
     {
         using var server = new McpServer("unused.db", "test", dbPathExplicit: false, McpToolFilter.AllowAll());
