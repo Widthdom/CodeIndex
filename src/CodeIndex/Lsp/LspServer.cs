@@ -527,13 +527,22 @@ internal sealed class LspServer : IDisposable
 
     private static string GetDocumentPath(JsonElement root)
     {
-        var uri = GetString(root, "params", "textDocument", "uri");
+        var uri = GetTextDocumentUri(root);
+        return UriToPath(uri);
+    }
+
+    private static string GetTextDocumentUri(JsonElement root)
+    {
+        if (!TryGet(root, out var value, "params", "textDocument", "uri") || value.ValueKind != JsonValueKind.String)
+            throw new ArgumentException("textDocument.uri must be a string.");
+
+        var uri = value.GetString();
         if (string.IsNullOrWhiteSpace(uri))
             throw new ArgumentException("textDocument.uri is required.");
         if (uri.Length > MaxTextDocumentUriChars)
             throw new ArgumentException(
                 $"textDocument.uri is too long. Max length is {MaxTextDocumentUriChars} characters; actual length is {uri.Length}.");
-        return UriToPath(uri);
+        return uri;
     }
 
     private static string? GetString(JsonElement root, params string[] path)
