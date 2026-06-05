@@ -10,9 +10,11 @@ unless you explicitly add the optional token controls below.
 
 The optional HTTP transport is also a local operator surface, not a public
 multi-tenant service. It rejects wildcard listen hosts, refuses non-loopback
-binds unless `CDIDX_MCP_HTTP_TOKEN` is set, and requires
-`Authorization: Bearer <token>` on every HTTP request when that token is
-configured.
+binds unless `CDIDX_MCP_HTTP_TOKEN` or `CDIDX_MCP_AUTH_TOKEN` is set, and
+requires `Authorization: Bearer <token>` on every HTTP request when a bearer
+secret is configured. `CDIDX_MCP_HTTP_TOKEN` takes precedence when both
+variables are set; `CDIDX_MCP_AUTH_TOKEN` is the HTTP bearer fallback and does
+not make HTTP clients also send `params.auth.token`.
 
 Stdio requests can require a shared secret by setting `CDIDX_MCP_AUTH_TOKEN`.
 When the variable is unset, stdio keeps the historical local-trusted-client

@@ -23,8 +23,12 @@ public static class ReportCommandRunner
     internal const int DefaultLogLines = 200;
     internal const int MaxLogLines = 2000;
     internal const int MaxLogFileTailBytes = 1024 * 1024;
+    internal const int MaxSchemaTables = 64;
+    internal const int MaxSchemaTableNameDisplayChars = 96;
+    internal const int MaxSchemaRowCountScanRows = 1000;
     internal const string RedactedPlaceholder = "[redacted]";
     internal const UnixFileMode BundleFileMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+    private const string TruncatedTableNameSuffix = "...[truncated]";
 
     public static int Run(string[] cmdArgs, JsonSerializerOptions jsonOptions, string? appVersion = null)
     {
@@ -167,7 +171,7 @@ public static class ReportCommandRunner
         sb.AppendLine("- `metadata.json` — version, OS, .NET runtime info (machine-readable).");
         sb.AppendLine("- `version.txt` — cdidx version only.");
         sb.AppendLine("- `env.txt` — human-readable OS / runtime summary.");
-        sb.AppendLine("- `schema.txt` — list of SQLite tables and row counts (no user content).");
+        sb.AppendLine("- `schema.txt` — capped SQLite table list and bounded row counts (no table row contents).");
         if (includeLog)
         {
             sb.AppendLine("- `log/stderr-recent.log` — last N lines of the cdidx lifecycle log");
@@ -184,7 +188,7 @@ public static class ReportCommandRunner
         sb.AppendLine();
         sb.AppendLine("- Indexed source content, file paths, query strings, and `args=` lines are not included by default.");
         sb.AppendLine("- Path-bearing lifecycle fields such as `process_path=`, `base_dir=`, `cwd=`, `db=`, and `path=` are redacted by default.");
-        sb.AppendLine("- Schema reporting only emits table names and integer row counts.");
+        sb.AppendLine($"- Schema reporting emits at most {MaxSchemaTables} table names, capped at {MaxSchemaTableNameDisplayChars} display characters, with row counts bounded at {MaxSchemaRowCountScanRows} scanned rows per table.");
         return sb.ToString();
     }
 
@@ -209,38 +213,64 @@ public static class ReportCommandRunner
         var tableNames = new List<string>();
         using (var listCmd = connection.CreateCommand())
         {
-            listCmd.CommandText = "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name";
+            listCmd.CommandText = $"SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' LIMIT {MaxSchemaTables + 1}";
             using var reader = listCmd.ExecuteReader();
             while (reader.Read())
                 tableNames.Add(reader.GetString(0));
         }
 
+        var tableListTruncated = tableNames.Count > MaxSchemaTables;
+        if (tableListTruncated)
+            tableNames.RemoveRange(MaxSchemaTables, tableNames.Count - MaxSchemaTables);
+
         foreach (var name in tableNames)
         {
             long rowCount;
+            var rowCountTruncated = false;
             try
             {
                 using var countCmd = connection.CreateCommand();
-                countCmd.CommandText = $"SELECT COUNT(*) FROM \"{name.Replace("\"", "\"\"")}\"";
-                rowCount = Convert.ToInt64(countCmd.ExecuteScalar());
+                countCmd.CommandText = $"SELECT COUNT(*) FROM (SELECT 1 FROM \"{name.Replace("\"", "\"\"")}\" LIMIT {MaxSchemaRowCountScanRows + 1})";
+                var cappedCount = Convert.ToInt64(countCmd.ExecuteScalar());
+                rowCountTruncated = cappedCount > MaxSchemaRowCountScanRows;
+                rowCount = rowCountTruncated ? MaxSchemaRowCountScanRows : cappedCount;
             }
             catch (SqliteException)
             {
                 rowCount = -1;
             }
-            tables.Add(new ReportSchemaTable(name, rowCount));
+            tables.Add(new ReportSchemaTable(FormatSchemaTableName(name), rowCount, rowCountTruncated));
         }
 
         var sb = new StringBuilder();
         sb.AppendLine($"database: {RedactedPlaceholder}");
-        sb.AppendLine($"tables  : {tables.Count}");
+        sb.AppendLine(tableListTruncated
+            ? $"tables  : {tables.Count} (capped; additional tables omitted)"
+            : $"tables  : {tables.Count}");
+        sb.AppendLine($"limits  : table entries <= {MaxSchemaTables}, table name chars <= {MaxSchemaTableNameDisplayChars}, row count scan rows <= {MaxSchemaRowCountScanRows}");
         sb.AppendLine();
         sb.AppendLine("name | row_count");
         sb.AppendLine("-----|----------");
         foreach (var t in tables)
-            sb.AppendLine($"{t.Name} | {(t.RowCount < 0 ? "(unreadable)" : t.RowCount.ToString())}");
+            sb.AppendLine($"{t.Name} | {FormatSchemaRowCount(t)}");
 
         return (sb.ToString(), tables, dbPath, true);
+    }
+
+    private static string FormatSchemaTableName(string name)
+    {
+        if (name.Length <= MaxSchemaTableNameDisplayChars)
+            return name;
+
+        return name[..(MaxSchemaTableNameDisplayChars - TruncatedTableNameSuffix.Length)] + TruncatedTableNameSuffix;
+    }
+
+    private static string FormatSchemaRowCount(ReportSchemaTable table)
+    {
+        if (table.RowCount < 0)
+            return "(unreadable)";
+
+        return table.RowCountTruncated ? $">={table.RowCount}" : table.RowCount.ToString();
     }
 
     internal static string BuildRecentLogTail(int maxLines, bool includeArgs, out int linesIncluded)
@@ -498,7 +528,7 @@ internal sealed class ReportBundle
         Files.Add((name, Encoding.UTF8.GetBytes(content)));
 }
 
-internal sealed record ReportSchemaTable(string Name, long RowCount);
+internal sealed record ReportSchemaTable(string Name, long RowCount, bool RowCountTruncated = false);
 
 internal sealed record ReportMetadata(
     string Version,

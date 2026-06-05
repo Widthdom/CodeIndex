@@ -1145,12 +1145,12 @@ cdidx report --output report.tgz
 cdidx report --output report.tgz --json
 ```
 
-`cdidx report --output <path>` packages a redacted `.tar.gz` you can attach to a GitHub issue. The bundle includes the cdidx version, .NET runtime, OS / process architecture, and a `schema.txt` listing each SQLite table with its row count (no user content). It also tails the recent cdidx lifecycle log (`stderr-yyyyMMdd.log`), with the database path, lifecycle-log source directory, `process_path=`, `base_dir=`, `cwd=`, `db=`, `path=`, and `args=` lines replaced by `[redacted]` so local filesystem paths and literal query strings never leave your machine.
+`cdidx report --output <path>` packages a redacted `.tar.gz` you can attach to a GitHub issue. The bundle includes the cdidx version, .NET runtime, OS / process architecture, and a `schema.txt` with a capped SQLite table list plus bounded row counts (no table row contents). It also tails the recent cdidx lifecycle log (`stderr-yyyyMMdd.log`), with the database path, lifecycle-log source directory, `process_path=`, `base_dir=`, `cwd=`, `db=`, `path=`, and `args=` lines replaced by `[redacted]` so local filesystem paths and literal query strings never leave your machine.
 
 | Flag | Default | Effect |
 |---|---|---|
 | `--output <path>` / `-o <path>` | (required) | Destination `.tar.gz`. The directory is created if missing; on POSIX, the archive and tar entries are owner-readable/writable only. |
-| `--db <path>` | `.cdidx/codeindex.db` | Override the database whose schema is summarized. If absent, `schema.txt` records that no DB was found. |
+| `--db <path>` | `.cdidx/codeindex.db` | Override the database whose schema is summarized. If absent, `schema.txt` records that no DB was found. Schema summaries cap table entries at 64, displayed table names at 96 characters, and row-count scans at 1000 rows per table. |
 | `--log-lines <n>` | `200` | How many trailing lifecycle-log lines to include (`0` disables the tail; values above `2000` are clamped). Each log file contributes from a bounded 1,048,576-byte tail window instead of being loaded fully. |
 | `--no-log` | | Skip the lifecycle log entirely. |
 | `--include-args` | | Keep literal `cwd=` and `args=` values in the log tail (opt-in; share only with trusted recipients). |
@@ -2104,25 +2104,29 @@ CDIDX_MCP_HTTP_TOKEN=s3cret cdidx mcp \
   --transport http --http-listen 0.0.0.0:9000          # LAN bind; bearer token is mandatory
 ```
 
+For HTTP, `CDIDX_MCP_HTTP_TOKEN` is the preferred bearer secret. If it is
+unset, HTTP falls back to `CDIDX_MCP_AUTH_TOKEN` as the bearer secret, and
+clients still authenticate with `Authorization: Bearer <token>`.
+
 Each HTTP `POST /` carries one JSON-RPC frame in the request body, the matching response is returned in the same HTTP body (`200 OK`, `application/json`), and notifications return `204 No Content`. `GET /events` opens a `text/event-stream` channel for server-to-client frames; the server emits no unsolicited frames unless keep-alive notifications are opted in with `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S`. Accepted keep-alive values are finite seconds from `1` to `300`; invalid or out-of-range values leave keep-alive disabled with a `stderr` warning. The stream is independent and does not block normal POST requests. Non-POST verbs on `/` return `405 Method Not Allowed` with `Allow: POST`. Request bodies are capped at 1,000,000 bytes by default and oversized requests return `413 Payload Too Large`; the pending POST queue is capped at 64 requests by default and full queues return `429 Too Many Requests` with `Retry-After: 1`. Tune those positive-integer limits with `CDIDX_MCP_HTTP_MAX_REQUEST_BYTES` and `CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH`; accepted ranges are `1..16777216` bytes and `1..1024` queued requests. Invalid non-positive or non-numeric values fall back to the defaults, while values above those maximums are rejected before the listener starts. When the persistent lifecycle log is enabled, HTTP mode also writes one `mcp_http_request` record per request with method, path, status, duration, auth outcome, remote peer, correlation id, and JSON-RPC request id when available. Request and response bodies are not logged.
 
 Security defaults:
 
 - The listener binds to a loopback address (`127.0.0.1`) by default, and the wildcard hosts `+` / `*` are rejected outright.
-- Binding to a non-loopback host (e.g. `0.0.0.0:9000`) is refused unless you set `CDIDX_MCP_HTTP_TOKEN` to a shared secret; when set, every request must carry `Authorization: Bearer <token>` or the listener returns `401 Unauthorized` with `WWW-Authenticate: Bearer realm="cdidx-mcp"`.
+- Binding to a non-loopback host (e.g. `0.0.0.0:9000`) is refused unless you set `CDIDX_MCP_HTTP_TOKEN` or `CDIDX_MCP_AUTH_TOKEN` to a shared secret. `CDIDX_MCP_HTTP_TOKEN` wins when both are set. When an HTTP bearer secret is configured, every request must carry `Authorization: Bearer <token>` or the listener returns `401 Unauthorized` with `WWW-Authenticate: Bearer realm="cdidx-mcp"`; HTTP clients do not also need `params.auth.token`.
 - The configured token's SHA-256 digest is precomputed at start-up; per-request authentication only hashes the supplied input and compares against the stored digest in constant time, so neither the configured token's length nor its bytes leak through timing.
 
 The stdio transport stays byte-for-byte unchanged, so existing client configs keep working without modification.
 
 #### Optional MCP authentication: `CDIDX_MCP_AUTH_TOKEN`
 
-`CDIDX_MCP_HTTP_TOKEN` above guards the HTTP transport at the `Authorization: Bearer ...` header. For an additional JSON-RPC-level auth gate that works on **any** transport (including stdio), `cdidx mcp` also recognises `CDIDX_MCP_AUTH_TOKEN` (#1559).
+`CDIDX_MCP_HTTP_TOKEN` above guards the HTTP transport at the `Authorization: Bearer ...` header. If it is unset, HTTP uses `CDIDX_MCP_AUTH_TOKEN` as the bearer secret instead. For stdio, `CDIDX_MCP_AUTH_TOKEN` enables the JSON-RPC-level auth gate (#1559).
 
 The default `cdidx mcp` server is **permissive** — the OS-enforced stdio process boundary already gates access, and every existing client setup above (Claude Code, Cursor, Windsurf, Copilot, Codex) keeps working unchanged. When `CDIDX_MCP_AUTH_TOKEN` is unset (or whitespace-only), the server accepts every request and tags it with the shared `stdio` / `local` caller identity.
 
-If you expose `cdidx mcp` over a less-trusted channel (a forwarded socket, a sandbox bridge, a shared CI runner), set `CDIDX_MCP_AUTH_TOKEN` to a non-whitespace secret. The server then requires every responded JSON-RPC request (`initialize`, `tools/list`, `tools/call`, `ping`) to include the same token at `params.auth.token`. The expected token is stored as a SHA-256 digest and the presented token is hashed to the same length before `CryptographicOperations.FixedTimeEquals`, so missing / wrong-length / wrong-value guesses share one constant-time path and neither token length nor bytes leak through timing. Mismatches return a uniform JSON-RPC `-32001 "Unauthorized"` — the wire body never distinguishes "missing token" from "wrong token", so the response cannot be used as a token-existence oracle (#1530). The detailed failure reason is written to `cdidx mcp` stderr for local diagnostics, with `method` sanitized to strip control characters so a malicious request body cannot forge log lines. Notifications (`notifications/initialized`, `notifications/cancelled`) skip the gate because they have no `id` and cannot signal an error code.
+If you expose stdio `cdidx mcp` over a less-trusted channel (a forwarded socket, a sandbox bridge, a shared CI runner), set `CDIDX_MCP_AUTH_TOKEN` to a non-whitespace secret. The stdio server then requires every responded JSON-RPC request (`initialize`, `tools/list`, `tools/call`, `ping`) to include the same token at `params.auth.token`. HTTP uses the same variable only as a bearer-secret fallback when `CDIDX_MCP_HTTP_TOKEN` is unset, so HTTP clients send `Authorization: Bearer <token>` instead of duplicating the token in the JSON-RPC body. The expected token is stored as a SHA-256 digest and the presented token is hashed to the same length before `CryptographicOperations.FixedTimeEquals`, so missing / wrong-length / wrong-value guesses share one constant-time path and neither token length nor bytes leak through timing. Mismatches return a uniform JSON-RPC `-32001 "Unauthorized"` — the wire body never distinguishes "missing token" from "wrong token", so the response cannot be used as a token-existence oracle (#1530). The detailed failure reason is written to `cdidx mcp` stderr for local diagnostics, with `method` sanitized to strip control characters so a malicious request body cannot forge log lines. Notifications (`notifications/initialized`, `notifications/cancelled`) skip the gate because they have no `id` and cannot signal an error code.
 
-This is a defensive primitive for custom MCP clients you control and for the networked transports that will reuse the same `McpCallerIdentity` shape (audit log #1562). Stdio clients that do not inject `params.auth.token` will be rejected once the variable is set, so leave it unset unless you actively want to enforce token authentication.
+This remains useful for custom stdio MCP clients you control. Stdio clients that do not inject `params.auth.token` will be rejected once the variable is set, so leave it unset unless you actively want to enforce body-token authentication; HTTP clients should prefer the bearer-header contract above.
 
 #### Restricting which MCP tools a deployment exposes
 
@@ -3382,12 +3386,12 @@ cdidx report --output report.tgz
 cdidx report --output report.tgz --json
 ```
 
-`cdidx report --output <path>` は GitHub Issue に添付できる匿名化済み `.tar.gz` を生成します。バンドルには cdidx のバージョン、.NET ランタイム、OS / プロセスアーキテクチャ、各 SQLite テーブル名と整数の行数のみを記録した `schema.txt`（ユーザコンテンツは含まれません）が入ります。さらに直近のライフサイクルログ（`stderr-yyyyMMdd.log`）の末尾も含まれますが、DB パス、ライフサイクルログの source directory、`process_path=`、`base_dir=`、`cwd=`、`db=`、`path=`、`args=` 行は `[redacted]` に置換されるため、ローカルファイルシステムのパスや具体的なクエリ文字列が端末から外に出ることはありません。
+`cdidx report --output <path>` は GitHub Issue に添付できる匿名化済み `.tar.gz` を生成します。バンドルには cdidx のバージョン、.NET ランタイム、OS / プロセスアーキテクチャ、上限付きの SQLite テーブル一覧と bounded な行数を記録した `schema.txt`（table の行内容は含まれません）が入ります。さらに直近のライフサイクルログ（`stderr-yyyyMMdd.log`）の末尾も含まれますが、DB パス、ライフサイクルログの source directory、`process_path=`、`base_dir=`、`cwd=`、`db=`、`path=`、`args=` 行は `[redacted]` に置換されるため、ローカルファイルシステムのパスや具体的なクエリ文字列が端末から外に出ることはありません。
 
 | フラグ | 既定値 | 効果 |
 |---|---|---|
 | `--output <path>` / `-o <path>` | （必須） | 出力先 `.tar.gz`。親ディレクトリが無ければ作成します。POSIX では archive と tar entry は owner の読み書きのみになります。 |
-| `--db <path>` | `.cdidx/codeindex.db` | スキーマ要約対象の DB を上書きします。存在しなければ `schema.txt` に「DB が見つからなかった」旨が記録されます。 |
+| `--db <path>` | `.cdidx/codeindex.db` | スキーマ要約対象の DB を上書きします。存在しなければ `schema.txt` に「DB が見つからなかった」旨が記録されます。スキーマ要約は table entry を 64 件、表示 table 名を 96 文字、行数 scan を table ごとに 1000 行までに制限します。 |
 | `--log-lines <n>` | `200` | ライフサイクルログ末尾を何行含めるか（`0` で末尾を含めません。`2000` を超える値は clamp されます）。各ログファイルは全体を読み込まず、末尾 1,048,576 byte の範囲から収集します。 |
 | `--no-log` | | ライフサイクルログを完全に省略します。 |
 | `--include-args` | | ログ末尾の `cwd=` / `args=` 値を伏字化せずそのまま含めます（信頼できる相手にだけ使用してください）。 |
@@ -4312,25 +4316,29 @@ CDIDX_MCP_HTTP_TOKEN=s3cret cdidx mcp \
   --transport http --http-listen 0.0.0.0:9000          # LAN 公開時は bearer token が必須
 ```
 
+HTTP では `CDIDX_MCP_HTTP_TOKEN` が優先の bearer secret です。未設定の場合は
+`CDIDX_MCP_AUTH_TOKEN` を bearer secret として fallback し、クライアントは引き続き
+`Authorization: Bearer <token>` で認証します。
+
 HTTP の `POST /` 1 件が JSON-RPC フレーム 1 件に対応し、応答は同じ HTTP レスポンスのボディに `200 OK` / `application/json` で返ります。通知は `204 No Content` です。`GET /events` はサーバー→クライアントフレーム用の `text/event-stream` channel を開きます。server-initiated frame は `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S` で keep-alive notification を opt-in した場合だけ送信されます。受理される値は有限な `1`〜`300` 秒で、不正値や範囲外の値では `stderr` に警告を出して keep-alive を無効のままにします。この stream は独立しており通常の POST リクエストを塞ぎません。`/` への POST 以外は `405 Method Not Allowed`（`Allow: POST` 付き）です。リクエスト本文は既定で 1,000,000 bytes までに制限され、超過時は `413 Payload Too Large` を返します。保留中 POST queue は既定で 64 件までに制限され、満杯時は `Retry-After: 1` 付きの `429 Too Many Requests` を返します。正の整数の `CDIDX_MCP_HTTP_MAX_REQUEST_BYTES` と `CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH` で調整でき、受理範囲は本文が `1..16777216` bytes、queue が `1..1024` 件です。正でない値や数値でない値は既定にフォールバックし、最大値を超える値は listener 起動前に拒否されます。永続 lifecycle log が有効な場合、HTTP mode はリクエストごとに `mcp_http_request` レコードも出力し、method、path、status、duration、auth outcome、remote peer、correlation id、利用可能な JSON-RPC request id を記録します。リクエスト/レスポンス本文は記録しません。
 
 セキュリティ既定:
 
 - listener は既定で loopback アドレス（`127.0.0.1`）のみに bind し、ワイルドカード `+` / `*` は最初から拒否します。
-- 非 loopback ホスト（例: `0.0.0.0:9000`）に bind するには `CDIDX_MCP_HTTP_TOKEN` で共有秘密を指定する必要があります。指定時はすべてのリクエストに `Authorization: Bearer <token>` ヘッダーが必要で、欠落・不一致は `401 Unauthorized`（`WWW-Authenticate: Bearer realm="cdidx-mcp"` 付き）です。
+- 非 loopback ホスト（例: `0.0.0.0:9000`）に bind するには `CDIDX_MCP_HTTP_TOKEN` または `CDIDX_MCP_AUTH_TOKEN` で共有秘密を指定する必要があります。両方が設定されている場合は `CDIDX_MCP_HTTP_TOKEN` が優先されます。HTTP bearer secret が設定されている場合、すべてのリクエストに `Authorization: Bearer <token>` ヘッダーが必要で、欠落・不一致は `401 Unauthorized`（`WWW-Authenticate: Bearer realm="cdidx-mcp"` 付き）です。HTTP クライアントは `params.auth.token` も送る必要はありません。
 - 設定トークンの SHA-256 digest はサーバー起動時に一度だけ計算してメモリ保持し、リクエスト毎の認証では受信トークンのみハッシュ計算して FixedTimeEquals で比較します。設定トークン側はリクエスト毎にハッシュしないため、長さやバイト列が timing から漏れません。
 
 stdio トランスポートはバイト単位で挙動が変わらないため、既存クライアント設定はそのまま動作します。
 
 #### MCP 認証（任意）: `CDIDX_MCP_AUTH_TOKEN`
 
-上記の `CDIDX_MCP_HTTP_TOKEN` は HTTP トランスポートの `Authorization: Bearer ...` ヘッダーを守るためのものです。これに加えて、**どのトランスポート（stdio 含む）でも有効** な JSON-RPC レベルの認証ゲートとして、`cdidx mcp` は `CDIDX_MCP_AUTH_TOKEN` も認識します (#1559)。
+上記の `CDIDX_MCP_HTTP_TOKEN` は HTTP トランスポートの `Authorization: Bearer ...` ヘッダーを守るためのものです。未設定の場合、HTTP は `CDIDX_MCP_AUTH_TOKEN` を bearer secret として使います。stdio では `CDIDX_MCP_AUTH_TOKEN` が JSON-RPC レベルの認証ゲートを有効にします (#1559)。
 
 既定の `cdidx mcp` サーバーは **permissive** です — OS のプロセス境界が stdio へのアクセスを既に絞っているため、上記の Claude Code / Cursor / Windsurf / Copilot / Codex の設定はそのまま動作します。`CDIDX_MCP_AUTH_TOKEN` を未設定（または空白のみ）にしておくと、サーバーは全リクエストを受理し、共有の `stdio` / `local` 呼び出し元アイデンティティを付与します。
 
-`cdidx mcp` を信頼度の低いチャネル（転送ソケット、サンドボックスブリッジ、共有 CI ランナーなど）に露出する場合は、`CDIDX_MCP_AUTH_TOKEN` に空白以外の秘密値を設定してください。設定すると、サーバーは応答が必要な全 JSON-RPC リクエスト（`initialize`、`tools/list`、`tools/call`、`ping`）に対し、`params.auth.token` が同じトークンと一致することを要求します。期待トークンは SHA-256 ダイジェストとして保持し、提示トークンも同じ長さにハッシュしてから `CryptographicOperations.FixedTimeEquals` で比較するため、「未提示／長さ違い／値違い」を 1 つの定数時間パスに集約し、トークン長やバイト列が timing から漏れません。不一致は統一された JSON-RPC `-32001 "Unauthorized"` を返します。ワイヤ本文では「未提示」と「不一致」を区別しないため、応答を用いたトークン存在判定オラクル攻撃を防ぎます（#1530）。失敗詳細はローカル診断用に `cdidx mcp` の stderr に出力されますが、`method` は制御文字を除去するサニタイズを通すため、悪意あるリクエスト本文によるログ偽造を防ぎます。通知（`notifications/initialized`、`notifications/cancelled`）はゲートをスキップします — `id` を持たずエラーコードも返せないためです。
+stdio の `cdidx mcp` を信頼度の低いチャネル（転送ソケット、サンドボックスブリッジ、共有 CI ランナーなど）に露出する場合は、`CDIDX_MCP_AUTH_TOKEN` に空白以外の秘密値を設定してください。stdio サーバーは応答が必要な全 JSON-RPC リクエスト（`initialize`、`tools/list`、`tools/call`、`ping`）に対し、`params.auth.token` が同じトークンと一致することを要求します。HTTP では `CDIDX_MCP_HTTP_TOKEN` が未設定の場合だけ同じ変数を bearer-secret fallback として使うため、HTTP クライアントは JSON-RPC body に token を重複させず `Authorization: Bearer <token>` を送ります。期待トークンは SHA-256 ダイジェストとして保持し、提示トークンも同じ長さにハッシュしてから `CryptographicOperations.FixedTimeEquals` で比較するため、「未提示／長さ違い／値違い」を 1 つの定数時間パスに集約し、トークン長やバイト列が timing から漏れません。不一致は統一された JSON-RPC `-32001 "Unauthorized"` を返します。ワイヤ本文では「未提示」と「不一致」を区別しないため、応答を用いたトークン存在判定オラクル攻撃を防ぎます（#1530）。失敗詳細はローカル診断用に `cdidx mcp` の stderr に出力されますが、`method` は制御文字を除去するサニタイズを通すため、悪意あるリクエスト本文によるログ偽造を防ぎます。通知（`notifications/initialized`、`notifications/cancelled`）はゲートをスキップします — `id` を持たずエラーコードも返せないためです。
 
-これは defense-in-depth の基盤であり、自分で制御する MCP クライアントや、同じ `McpCallerIdentity` を再利用するネットワーク transport（監査ログ #1562）で活用するためのものです。stdio クライアントが `params.auth.token` を注入しない場合、変数を設定した時点で拒否されるので、token 認証を能動的に強制したい場合以外は未設定のまま残してください。
+これは自分で制御する stdio MCP クライアント向けの defense-in-depth として有効です。stdio クライアントが `params.auth.token` を注入しない場合、変数を設定した時点で拒否されるので、body token 認証を能動的に強制したい場合以外は未設定のまま残してください。HTTP クライアントは上記の bearer header 契約を優先してください。
 
 #### デプロイ単位で公開する MCP ツールを制限する
 
