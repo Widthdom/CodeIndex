@@ -59,12 +59,13 @@ public static class ReportCommandRunner
 
         try
         {
+            var fullOutputPath = Path.GetFullPath(options.OutputPath!);
             var resolvedVersion = appVersion ?? ConsoleUi.LoadVersion();
             var bundle = BuildBundle(options, resolvedVersion);
-            WriteBundle(options.OutputPath!, bundle);
+            WriteBundle(fullOutputPath, bundle);
 
             var summary = new ReportBundleSummary(
-                Path.GetFullPath(options.OutputPath!),
+                fullOutputPath,
                 resolvedVersion,
                 bundle.Files.Count,
                 bundle.SchemaTables.Count,
@@ -393,12 +394,13 @@ public static class ReportCommandRunner
 
     internal static void WriteBundle(string outputPath, ReportBundle bundle, Action? beforeWriteEntries = null)
     {
-        var dir = Path.GetDirectoryName(outputPath);
+        var fullOutputPath = Path.GetFullPath(outputPath);
+        var dir = Path.GetDirectoryName(fullOutputPath);
         if (!string.IsNullOrEmpty(dir))
             Directory.CreateDirectory(dir);
 
         AtomicFileWriter.Write(
-            outputPath,
+            fullOutputPath,
             stream =>
             {
                 using var gz = new GZipStream(stream, CompressionLevel.Optimal, leaveOpen: true);

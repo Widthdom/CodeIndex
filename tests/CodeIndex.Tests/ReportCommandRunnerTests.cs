@@ -234,6 +234,34 @@ public class ReportCommandRunnerTests
     }
 
     [Fact]
+    public void WriteBundle_RelativeOutputUsesInitialFullPathWhenCurrentDirectoryChanges_Issue3147()
+    {
+        var originalDirectory = Environment.CurrentDirectory;
+        var workDir = CreateWorkDir();
+        var driftDir = CreateWorkDir();
+        try
+        {
+            Directory.SetCurrentDirectory(workDir);
+            var bundle = new ReportBundle();
+            bundle.AddText("metadata.txt", "ok");
+
+            ReportCommandRunner.WriteBundle(
+                "bundle.tgz",
+                bundle,
+                beforeWriteEntries: () => Directory.SetCurrentDirectory(driftDir));
+
+            Assert.True(File.Exists(Path.Combine(workDir, "bundle.tgz")));
+            Assert.False(File.Exists(Path.Combine(driftDir, "bundle.tgz")));
+        }
+        finally
+        {
+            Directory.SetCurrentDirectory(originalDirectory);
+            TryDeleteDirectory(workDir);
+            TryDeleteDirectory(driftDir);
+        }
+    }
+
+    [Fact]
     public void Run_WithRealDb_SchemaTxtListsTablesAndRowCounts()
     {
         var workDir = CreateWorkDir();
