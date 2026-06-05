@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Net;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -19,8 +20,11 @@ internal static class ProgramRunner
 {
     private const int RetainedQueryTraceFileCount = 30;
     internal const string QuietEnvironmentVariable = "CDIDX_QUIET";
-    private const string InstallerScriptUrlTemplate = "https://raw.githubusercontent.com/Widthdom/CodeIndex/{0}/install.sh";
+    private const string ReleaseAssetUrlTemplate = "https://github.com/Widthdom/CodeIndex/releases/download/{0}/{1}";
+    private const string InstallerScriptAssetName = "install.sh";
+    private const string ReleaseChecksumAssetName = "sha256sums.txt";
     private const long MaxInstallerScriptBytes = 1024 * 1024;
+    internal const long MaxReleaseChecksumBytes = 256 * 1024;
     internal const int WorkspaceVersionPinMaxBytes = 4096;
     internal const int WorkspaceVersionPinMaxSkippedBlankLines = 16;
     internal const int WorkspaceVersionPinMaxLineChars = 256;
@@ -3019,6 +3023,15 @@ internal static class ProgramRunner
         {
             using (var client = new HttpClient { Timeout = TimeSpan.FromSeconds(20) })
             {
+                var checksumManifest = DownloadReleaseChecksumManifestAsync(
+                        client,
+                        result.LatestVersion,
+                        TimeSpan.FromSeconds(20),
+                        CancellationToken.None)
+                    .GetAwaiter()
+                    .GetResult();
+                var expectedInstallerSha256 = GetReleaseAssetChecksum(checksumManifest, InstallerScriptAssetName);
+
                 DownloadInstallerScriptAsync(
                         client,
                         result.LatestVersion,
@@ -3027,6 +3040,7 @@ internal static class ProgramRunner
                         CancellationToken.None)
                     .GetAwaiter()
                     .GetResult();
+                VerifyFileSha256(scriptPath, expectedInstallerSha256, InstallerScriptAssetName);
             }
 
             var startInfo = CreateInstallerProcessStartInfo(scriptPath, result.LatestVersion, installDir);
@@ -3079,10 +3093,83 @@ internal static class ProgramRunner
     }
 
     internal static string BuildInstallerScriptUrl(string releaseTag)
+        => BuildReleaseAssetUrl(releaseTag, InstallerScriptAssetName);
+
+    internal static string BuildReleaseAssetUrl(string releaseTag, string assetName)
         => string.Format(
             CultureInfo.InvariantCulture,
-            InstallerScriptUrlTemplate,
-            Uri.EscapeDataString(releaseTag.Trim()));
+            ReleaseAssetUrlTemplate,
+            Uri.EscapeDataString(releaseTag.Trim()),
+            Uri.EscapeDataString(assetName));
+
+    internal static async Task<string> DownloadReleaseChecksumManifestAsync(
+        HttpClient client,
+        string releaseTag,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
+        using var downloadCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        downloadCts.CancelAfter(timeout);
+        using var request = new HttpRequestMessage(HttpMethod.Get, BuildReleaseAssetUrl(releaseTag, ReleaseChecksumAssetName));
+        using var response = await client.SendAsync(
+            request,
+            HttpCompletionOption.ResponseHeadersRead,
+            downloadCts.Token).ConfigureAwait(false);
+        response.EnsureSuccessStatusCode();
+        var bytes = await BoundedHttpContentReader.ReadAsByteArrayAsync(
+            response.Content,
+            MaxReleaseChecksumBytes,
+            downloadCts.Token).ConfigureAwait(false);
+        return Encoding.UTF8.GetString(bytes);
+    }
+
+    internal static string GetReleaseAssetChecksum(string checksumManifest, string assetName)
+    {
+        foreach (var rawLine in checksumManifest.Split('\n'))
+        {
+            var line = rawLine.TrimEnd('\r');
+            if (line.Length < 66)
+                continue;
+
+            var checksum = line[..64];
+            if (!IsSha256Hex(checksum) || !char.IsWhiteSpace(line[64]))
+                continue;
+
+            var fileName = line[65..].TrimStart();
+            if (fileName.StartsWith('*'))
+                fileName = fileName[1..];
+            if (string.Equals(fileName, assetName, StringComparison.Ordinal))
+                return checksum.ToLowerInvariant();
+        }
+
+        throw new InvalidDataException($"Release checksum manifest does not contain {assetName}.");
+    }
+
+    internal static void VerifyFileSha256(string path, string expectedSha256Hex, string assetName)
+    {
+        if (!IsSha256Hex(expectedSha256Hex))
+            throw new InvalidDataException($"Release checksum for {assetName} is not a valid SHA-256 digest.");
+
+        using var stream = File.OpenRead(path);
+        var actual = Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+        if (!string.Equals(actual, expectedSha256Hex, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException(
+                $"Downloaded {assetName} checksum mismatch: expected {expectedSha256Hex}, got {actual}.");
+    }
+
+    private static bool IsSha256Hex(string value)
+    {
+        if (value.Length != 64)
+            return false;
+
+        foreach (var ch in value)
+        {
+            if (!Uri.IsHexDigit(ch))
+                return false;
+        }
+
+        return true;
+    }
 
     internal static async Task DownloadInstallerScriptAsync(
         HttpClient client,
