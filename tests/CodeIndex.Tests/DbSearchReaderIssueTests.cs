@@ -117,6 +117,33 @@ public sealed class DbSearchReaderIssueTests : IDisposable
         Assert.Equal(24_999, evidence.Line);
     }
 
+    [Fact]
+    public void Search_GuardFiltersReadTinyWindowFromLargeChunk_Issue3085()
+    {
+        var lines = Enumerable.Range(1, 40_000)
+            .Select(i => i switch
+            {
+                1 => "public void Setup() { TinyGuardMarker(); }",
+                2 => "public void Run() { TinyWindowNeedle(); }",
+                _ => $"// filler {i}",
+            });
+        InsertIndexedFile("src/guard-window-large.cs", "csharp", string.Join('\n', lines));
+
+        var results = _reader.Search(
+            "TinyWindowNeedle",
+            exact: true,
+            pathPatterns: ["src/guard-window-large.cs"],
+            limit: 1,
+            guardFilters: [new SearchGuardFilter(SearchGuardRole.Require, SearchGuardDirection.Before, "TinyGuardMarker")],
+            guardWindow: 1);
+
+        var result = Assert.Single(results);
+        Assert.Equal(2, result.StartLine);
+        var evidence = Assert.Single(result.GuardEvidence!);
+        Assert.Equal(1, evidence.Line);
+        Assert.Equal("public void Setup() { TinyGuardMarker(); }", evidence.Text);
+    }
+
     private void InsertIndexedFile(string path, string lang, string content, DateTime? modified = null)
     {
         var normalized = content.Replace("\r\n", "\n");

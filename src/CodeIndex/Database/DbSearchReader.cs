@@ -657,13 +657,14 @@ public partial class DbReader
         while (reader.TrackedRead())
         {
             var chunkStartLine = reader.GetInt32(0);
-            var chunkLines = SplitContentLines(reader.GetString(1));
-            for (var i = 0; i < chunkLines.Length; i++)
+            var relativeStart = Math.Max(0, startLine - chunkStartLine);
+            var relativeEnd = Math.Max(relativeStart, endLine - chunkStartLine);
+            foreach (var (lineOffset, text) in EnumerateContentLines(reader.GetString(1), relativeStart, relativeEnd))
             {
-                var lineNumber = chunkStartLine + i;
+                var lineNumber = chunkStartLine + lineOffset;
                 if (lineNumber < startLine || lineNumber > endLine)
                     continue;
-                linesByNumber.TryAdd(lineNumber, chunkLines[i]);
+                linesByNumber.TryAdd(lineNumber, text);
             }
         }
 
@@ -693,8 +694,14 @@ public partial class DbReader
     private static string[] SplitContentLines(string content)
         => content.Replace("\r\n", "\n").Split('\n');
 
-    private static IEnumerable<(int Index, string Text)> EnumerateContentLines(string content)
+    private static IEnumerable<(int Index, string Text)> EnumerateContentLines(string content) =>
+        EnumerateContentLines(content, startIndex: 0, endIndex: int.MaxValue);
+
+    private static IEnumerable<(int Index, string Text)> EnumerateContentLines(string content, int startIndex, int endIndex)
     {
+        if (endIndex < startIndex)
+            yield break;
+
         var lineStart = 0;
         var lineIndex = 0;
         for (var i = 0; i < content.Length; i++)
@@ -705,12 +712,16 @@ public partial class DbReader
             var lineEnd = i;
             if (lineEnd > lineStart && content[lineEnd - 1] == '\r')
                 lineEnd--;
-            yield return (lineIndex, content[lineStart..lineEnd]);
+            if (lineIndex > endIndex)
+                yield break;
+            if (lineIndex >= startIndex)
+                yield return (lineIndex, content[lineStart..lineEnd]);
             lineIndex++;
             lineStart = i + 1;
         }
 
-        yield return (lineIndex, content[lineStart..]);
+        if (lineIndex >= startIndex && lineIndex <= endIndex)
+            yield return (lineIndex, content[lineStart..]);
     }
 
     private static string FormatSearchGuardRole(SearchGuardRole role)
