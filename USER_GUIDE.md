@@ -1145,12 +1145,12 @@ cdidx report --output report.tgz
 cdidx report --output report.tgz --json
 ```
 
-`cdidx report --output <path>` packages a redacted `.tar.gz` you can attach to a GitHub issue. The bundle includes the cdidx version, .NET runtime, OS / process architecture, and a `schema.txt` listing each SQLite table with its row count (no user content). It also tails the recent cdidx lifecycle log (`stderr-yyyyMMdd.log`), with the database path, lifecycle-log source directory, `process_path=`, `base_dir=`, `cwd=`, `db=`, `path=`, and `args=` lines replaced by `[redacted]` so local filesystem paths and literal query strings never leave your machine.
+`cdidx report --output <path>` packages a redacted `.tar.gz` you can attach to a GitHub issue. The bundle includes the cdidx version, .NET runtime, OS / process architecture, and a `schema.txt` with a capped SQLite table list plus bounded row counts (no table row contents). It also tails the recent cdidx lifecycle log (`stderr-yyyyMMdd.log`), with the database path, lifecycle-log source directory, `process_path=`, `base_dir=`, `cwd=`, `db=`, `path=`, and `args=` lines replaced by `[redacted]` so local filesystem paths and literal query strings never leave your machine.
 
 | Flag | Default | Effect |
 |---|---|---|
 | `--output <path>` / `-o <path>` | (required) | Destination `.tar.gz`. The directory is created if missing; on POSIX, the archive and tar entries are owner-readable/writable only. |
-| `--db <path>` | `.cdidx/codeindex.db` | Override the database whose schema is summarized. If absent, `schema.txt` records that no DB was found. |
+| `--db <path>` | `.cdidx/codeindex.db` | Override the database whose schema is summarized. If absent, `schema.txt` records that no DB was found. Schema summaries cap table entries at 64, displayed table names at 96 characters, and row-count scans at 1000 rows per table. |
 | `--log-lines <n>` | `200` | How many trailing lifecycle-log lines to include (`0` disables the tail; values above `2000` are clamped). Each log file contributes from a bounded 1,048,576-byte tail window instead of being loaded fully. |
 | `--no-log` | | Skip the lifecycle log entirely. |
 | `--include-args` | | Keep literal `cwd=` and `args=` values in the log tail (opt-in; share only with trusted recipients). |
@@ -3386,12 +3386,12 @@ cdidx report --output report.tgz
 cdidx report --output report.tgz --json
 ```
 
-`cdidx report --output <path>` は GitHub Issue に添付できる匿名化済み `.tar.gz` を生成します。バンドルには cdidx のバージョン、.NET ランタイム、OS / プロセスアーキテクチャ、各 SQLite テーブル名と整数の行数のみを記録した `schema.txt`（ユーザコンテンツは含まれません）が入ります。さらに直近のライフサイクルログ（`stderr-yyyyMMdd.log`）の末尾も含まれますが、DB パス、ライフサイクルログの source directory、`process_path=`、`base_dir=`、`cwd=`、`db=`、`path=`、`args=` 行は `[redacted]` に置換されるため、ローカルファイルシステムのパスや具体的なクエリ文字列が端末から外に出ることはありません。
+`cdidx report --output <path>` は GitHub Issue に添付できる匿名化済み `.tar.gz` を生成します。バンドルには cdidx のバージョン、.NET ランタイム、OS / プロセスアーキテクチャ、上限付きの SQLite テーブル一覧と bounded な行数を記録した `schema.txt`（table の行内容は含まれません）が入ります。さらに直近のライフサイクルログ（`stderr-yyyyMMdd.log`）の末尾も含まれますが、DB パス、ライフサイクルログの source directory、`process_path=`、`base_dir=`、`cwd=`、`db=`、`path=`、`args=` 行は `[redacted]` に置換されるため、ローカルファイルシステムのパスや具体的なクエリ文字列が端末から外に出ることはありません。
 
 | フラグ | 既定値 | 効果 |
 |---|---|---|
 | `--output <path>` / `-o <path>` | （必須） | 出力先 `.tar.gz`。親ディレクトリが無ければ作成します。POSIX では archive と tar entry は owner の読み書きのみになります。 |
-| `--db <path>` | `.cdidx/codeindex.db` | スキーマ要約対象の DB を上書きします。存在しなければ `schema.txt` に「DB が見つからなかった」旨が記録されます。 |
+| `--db <path>` | `.cdidx/codeindex.db` | スキーマ要約対象の DB を上書きします。存在しなければ `schema.txt` に「DB が見つからなかった」旨が記録されます。スキーマ要約は table entry を 64 件、表示 table 名を 96 文字、行数 scan を table ごとに 1000 行までに制限します。 |
 | `--log-lines <n>` | `200` | ライフサイクルログ末尾を何行含めるか（`0` で末尾を含めません。`2000` を超える値は clamp されます）。各ログファイルは全体を読み込まず、末尾 1,048,576 byte の範囲から収集します。 |
 | `--no-log` | | ライフサイクルログを完全に省略します。 |
 | `--include-args` | | ログ末尾の `cwd=` / `args=` 値を伏字化せずそのまま含めます（信頼できる相手にだけ使用してください）。 |
