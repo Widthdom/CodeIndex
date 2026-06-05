@@ -1022,11 +1022,12 @@ public static class QueryCommandRunner
         var rows = new List<SearchDisplayRow>(results.Count);
         var seenMatchLocations = !exact || options.NoDedup ? null : new HashSet<string>(StringComparer.Ordinal);
         var displayQuery = queryOverride ?? options.Query!;
+        var queryContext = SearchSnippetFormatter.PrepareQueryContext(displayQuery);
         foreach (var result in results)
         {
             var compact = SearchSnippetFormatter.ToCompactResult(
                 result,
-                displayQuery,
+                queryContext,
                 options.SnippetLines,
                 exact,
                 options.MaxLineWidth,

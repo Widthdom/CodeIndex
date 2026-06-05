@@ -203,6 +203,55 @@ public class SearchSnippetFormatterTests
     }
 
     [Fact]
+    public void BuildExcerpt_PreparedQueryContextMatchesStringQuery()
+    {
+        const string content = "alpha\nbeta gamma\nalpha beta gamma\n";
+        var context = SearchSnippetFormatter.PrepareQueryContext("alpha beta gamma");
+
+        var direct = SearchSnippetFormatter.BuildExcerpt(content, "alpha beta gamma", absoluteStartLine: 10, maxLines: 2);
+        var prepared = SearchSnippetFormatter.BuildExcerpt(content, context, absoluteStartLine: 10, maxLines: 2);
+
+        Assert.Equal(direct.StartLine, prepared.StartLine);
+        Assert.Equal(direct.EndLine, prepared.EndLine);
+        Assert.Equal(direct.MatchLines, prepared.MatchLines);
+        Assert.Equal(direct.Lines, prepared.Lines);
+        Assert.Equal(direct.Highlights.Single().Terms, prepared.Highlights.Single().Terms);
+    }
+
+    [Fact]
+    public void ToCompactResults_PreparedQueryContextRemainsLanguageAwareAcrossResults()
+    {
+        var context = SearchSnippetFormatter.PrepareQueryContext("Foo.Bar");
+        var results = new[]
+        {
+            new SearchResult
+            {
+                Path = "src/a.cs",
+                Lang = "csharp",
+                StartLine = 1,
+                EndLine = 1,
+                Content = "using @Foo.@Bar;",
+            },
+            new SearchResult
+            {
+                Path = "docs/a.md",
+                Lang = "markdown",
+                StartLine = 1,
+                EndLine = 1,
+                Content = "Foo.Bar",
+            },
+        };
+
+        var compact = SearchSnippetFormatter.ToCompactResults(results, context, maxLines: 1).ToArray();
+
+        Assert.Equal(["src/a.cs", "docs/a.md"], compact.Select(result => result.Path).ToArray());
+        var csharpOccurrence = Assert.Single(compact[0].Highlights.Single().TermOccurrences);
+        Assert.Equal("Foo.@Bar", csharpOccurrence.Term);
+        var markdownOccurrence = Assert.Single(compact[1].Highlights.Single().TermOccurrences);
+        Assert.Equal("Foo.Bar", markdownOccurrence.Term);
+    }
+
+    [Fact]
     public void TryReconstructRawSpan_ReturnsFalse_WhenNormalizedSpanCannotAnchorEnd()
     {
         var mapped = SearchSnippetFormatter.TryReconstructRawSpan([0, 1, 2], normalizedStart: 1, matchLength: 4, out var rawColumn, out var rawLength);
