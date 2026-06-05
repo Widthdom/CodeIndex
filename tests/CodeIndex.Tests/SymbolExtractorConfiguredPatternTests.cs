@@ -85,6 +85,35 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_ConfiguredPatternYaml_ReadsManyLineConfig()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_patterns_many_lines_{Guid.NewGuid():N}");
+            try
+            {
+                var commentLines = string.Join("\n", Enumerable.Repeat("#", 4096));
+                WritePatternConfig(
+                    tempDir,
+                    $"{commentLines}\nlanguage: \"toydsl\"\nextensions:\n  - extension: \".toy\"\npatterns:\n  - kind: \"class\"\n    regex: \"^entity (?<name>\\\\w+)\"\n");
+                ExtractorPluginRegistry.ReloadForTests();
+
+                var symbols = SymbolExtractor.Extract(2, "toydsl", "entity Widget", "demo.toy", tempDir);
+
+                var symbol = Assert.Single(symbols);
+                Assert.Equal("class", symbol.Kind);
+                Assert.Equal("Widget", symbol.Name);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                if (Directory.Exists(tempDir))
+                    Directory.Delete(tempDir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public void Extract_ConfiguredPatternYaml_RejectsOversizeConfigWithDiagnostic()
     {
         lock (TestConsoleLock.Gate)
