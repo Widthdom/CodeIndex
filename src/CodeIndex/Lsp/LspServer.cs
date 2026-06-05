@@ -136,11 +136,12 @@ internal sealed class LspServer : IDisposable
     private static bool TryGetTopLevelRequestIdRawByteCount(string payload, out int rawIdBytes)
     {
         rawIdBytes = 0;
-        var buffer = ArrayPool<byte>.Shared.Rent(Encoding.UTF8.GetMaxByteCount(payload.Length));
+        var payloadByteCount = Encoding.UTF8.GetByteCount(payload);
+        var buffer = ArrayPool<byte>.Shared.Rent(payloadByteCount);
         try
         {
-            var byteCount = Encoding.UTF8.GetBytes(payload.AsSpan(), buffer);
-            var reader = new Utf8JsonReader(buffer.AsSpan(0, byteCount), LspJsonReaderOptions);
+            _ = Encoding.UTF8.GetBytes(payload.AsSpan(), buffer);
+            var reader = new Utf8JsonReader(buffer.AsSpan(0, payloadByteCount), LspJsonReaderOptions);
             if (!reader.Read() || reader.TokenType != JsonTokenType.StartObject)
                 return true;
 
