@@ -12332,6 +12332,40 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ProcessFrame_OversizedStringRequestId_ReturnsInvalidRequestWithNullId_Issue3104()
+    {
+        var oversizedId = new string('x', McpServer.MaxRequestIdCharacterCount + 1);
+        var raw = _server.ProcessFrame("{\"jsonrpc\":\"2.0\",\"id\":\"" + oversizedId + "\",\"method\":\"tools/list\"}");
+
+        Assert.NotNull(raw);
+        Assert.DoesNotContain(oversizedId, raw, StringComparison.Ordinal);
+        var response = JsonNode.Parse(raw!)!;
+        var error = response["error"]!;
+        Assert.Equal(-32600, error["code"]!.GetValue<int>());
+        Assert.Equal("invalid_request", error["data"]!["category"]!.GetValue<string>());
+        Assert.Equal(McpServer.MaxRequestIdCharacterCount, error["data"]!["max_request_id_chars"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxRequestIdByteLength, error["data"]!["max_request_id_bytes"]!.GetValue<int>());
+        AssertJsonNullId(response);
+    }
+
+    [Fact]
+    public void ProcessFrame_OversizedNumericRequestId_ReturnsInvalidRequestWithNullId_Issue3104()
+    {
+        var oversizedId = new string('9', McpServer.MaxRequestIdCharacterCount + 1);
+        var raw = _server.ProcessFrame("{\"jsonrpc\":\"2.0\",\"id\":" + oversizedId + ",\"method\":\"tools/list\"}");
+
+        Assert.NotNull(raw);
+        Assert.DoesNotContain(oversizedId, raw, StringComparison.Ordinal);
+        var response = JsonNode.Parse(raw!)!;
+        var error = response["error"]!;
+        Assert.Equal(-32600, error["code"]!.GetValue<int>());
+        Assert.Equal("invalid_request", error["data"]!["category"]!.GetValue<string>());
+        Assert.Equal(McpServer.MaxRequestIdCharacterCount, error["data"]!["max_request_id_chars"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxRequestIdByteLength, error["data"]!["max_request_id_bytes"]!.GetValue<int>());
+        AssertJsonNullId(response);
+    }
+
+    [Fact]
     public void ProcessFrame_TooDeepJson_ReturnsParseErrorWithNullId()
     {
         var raw = _server.ProcessFrame(new string('[', McpServer.MaxJsonDepth + 2) + "0" + new string(']', McpServer.MaxJsonDepth + 2));

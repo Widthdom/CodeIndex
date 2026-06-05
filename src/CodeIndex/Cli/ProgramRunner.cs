@@ -18,6 +18,8 @@ namespace CodeIndex.Cli;
 internal static class ProgramRunner
 {
     private const int RetainedQueryTraceFileCount = 30;
+    internal const int QueryTraceValueMaxChars = 128;
+    internal const int QueryTraceArrayMaxItems = 8;
     internal const string QuietEnvironmentVariable = "CDIDX_QUIET";
     private const string InstallerScriptUrlTemplate = "https://raw.githubusercontent.com/Widthdom/CodeIndex/{0}/install.sh";
     private const long MaxInstallerScriptBytes = 1024 * 1024;
@@ -610,9 +612,9 @@ internal static class ProgramRunner
         Console.WriteLine("terminal:");
         Console.WriteLine(ConsoleUi.FormatSummaryLine("stdout_tty", !Console.IsOutputRedirected, indent: "  "));
         Console.WriteLine(ConsoleUi.FormatSummaryLine("stderr_tty", !Console.IsErrorRedirected, indent: "  "));
-        Console.WriteLine(ConsoleUi.FormatSummaryLine("columns", Environment.GetEnvironmentVariable("COLUMNS") ?? "<unset>", indent: "  "));
-        Console.WriteLine(ConsoleUi.FormatSummaryLine("no_color", Environment.GetEnvironmentVariable("NO_COLOR") ?? "<unset>", indent: "  "));
-        Console.WriteLine(ConsoleUi.FormatSummaryLine("term", Environment.GetEnvironmentVariable("TERM") ?? "<unset>", indent: "  "));
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("columns", FormatDoctorEnvironmentValue(Environment.GetEnvironmentVariable("COLUMNS")), indent: "  "));
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("no_color", FormatDoctorEnvironmentValue(Environment.GetEnvironmentVariable("NO_COLOR")), indent: "  "));
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("term", FormatDoctorEnvironmentValue(Environment.GetEnvironmentVariable("TERM")), indent: "  "));
         Console.WriteLine(ConsoleUi.FormatSummaryLine("locale", CultureInfo.CurrentCulture.Name, indent: "  "));
         Console.WriteLine(ConsoleUi.FormatSummaryLine("ui_locale", CultureInfo.CurrentUICulture.Name, indent: "  "));
         Console.WriteLine();
@@ -624,7 +626,7 @@ internal static class ProgramRunner
         Console.WriteLine();
         Console.WriteLine("config:");
         Console.WriteLine(ConsoleUi.FormatSummaryLine(CdidxConfigFile.FileName, File.Exists(Path.Combine(Environment.CurrentDirectory, CdidxConfigFile.FileName)) ? "present" : "not found", indent: "  "));
-        Console.WriteLine(ConsoleUi.FormatSummaryLine(CdidxConfigFile.DisableEnvVar, Environment.GetEnvironmentVariable(CdidxConfigFile.DisableEnvVar) ?? "<unset>", indent: "  "));
+        Console.WriteLine(ConsoleUi.FormatSummaryLine(CdidxConfigFile.DisableEnvVar, FormatDoctorEnvironmentValue(Environment.GetEnvironmentVariable(CdidxConfigFile.DisableEnvVar)), indent: "  "));
         Console.WriteLine();
         Console.WriteLine("cdidx_env:");
         foreach (var (key, value) in EnumerateCdidxEnvironment())
@@ -643,12 +645,15 @@ internal static class ProgramRunner
         foreach (var row in rows)
         {
             any = true;
-            yield return (row.Key, IsSensitiveEnvironmentName(row.Key) ? "<redacted>" : string.IsNullOrEmpty(row.Value) ? "<empty>" : row.Value);
+            yield return (row.Key, IsSensitiveEnvironmentName(row.Key) ? "<redacted>" : string.IsNullOrEmpty(row.Value) ? "<empty>" : ConsoleUi.FormatBoundedValue(row.Value));
         }
 
         if (!any)
             yield return ("<none>", "");
     }
+
+    private static string FormatDoctorEnvironmentValue(string? value)
+        => value == null ? "<unset>" : ConsoleUi.FormatBoundedValue(value);
 
     private static bool IsSensitiveEnvironmentName(string name) =>
         name.Contains("TOKEN", StringComparison.OrdinalIgnoreCase)
@@ -1670,15 +1675,15 @@ internal static class ProgramRunner
             var bytes = ReadWorkspaceVersionPinBytes(pinPath);
             if (bytes.Length > WorkspaceVersionPinMaxBytes)
             {
-                warning = $"Warning: ignoring .cdidx-version at {pinPath}: file exceeds {WorkspaceVersionPinMaxBytes} bytes.";
+                warning = BuildWorkspaceVersionPinWarning($"file exceeds {WorkspaceVersionPinMaxBytes} bytes");
                 return false;
             }
 
-            return TryParseWorkspaceVersionPin(DecodeWorkspaceVersionPinBytes(bytes), pinPath, out required, out warning);
+            return TryParseWorkspaceVersionPin(DecodeWorkspaceVersionPinBytes(bytes), out required, out warning);
         }
         catch (Exception ex)
         {
-            warning = $"Warning: could not read .cdidx-version at {pinPath}: {ex.Message}";
+            warning = BuildWorkspaceVersionPinReadWarning(ex);
             return false;
         }
     }
@@ -1723,7 +1728,7 @@ internal static class ProgramRunner
         return reader.ReadToEnd();
     }
 
-    private static bool TryParseWorkspaceVersionPin(string content, string pinPath, out string required, out string warning)
+    private static bool TryParseWorkspaceVersionPin(string content, out string required, out string warning)
     {
         required = string.Empty;
         warning = string.Empty;
@@ -1737,7 +1742,7 @@ internal static class ProgramRunner
             lineNumber++;
             if (line.Length > WorkspaceVersionPinMaxLineChars)
             {
-                warning = $"Warning: ignoring .cdidx-version at {pinPath}: line {lineNumber} exceeds {WorkspaceVersionPinMaxLineChars} characters.";
+                warning = BuildWorkspaceVersionPinWarning($"line {lineNumber} exceeds {WorkspaceVersionPinMaxLineChars} characters");
                 return false;
             }
 
@@ -1746,7 +1751,7 @@ internal static class ProgramRunner
                 skippedBlankLines++;
                 if (skippedBlankLines > WorkspaceVersionPinMaxSkippedBlankLines)
                 {
-                    warning = $"Warning: ignoring .cdidx-version at {pinPath}: more than {WorkspaceVersionPinMaxSkippedBlankLines} leading blank lines.";
+                    warning = BuildWorkspaceVersionPinWarning($"more than {WorkspaceVersionPinMaxSkippedBlankLines} leading blank lines");
                     return false;
                 }
 
@@ -1758,6 +1763,24 @@ internal static class ProgramRunner
         }
 
         return true;
+    }
+
+    internal static string BuildWorkspaceVersionPinReadWarningForTesting(Exception exception)
+        => BuildWorkspaceVersionPinReadWarning(exception);
+
+    private static string BuildWorkspaceVersionPinWarning(string reason)
+        => $"Warning: ignoring .cdidx-version: {ConsoleUi.FormatBoundedValue(reason)}.";
+
+    private static string BuildWorkspaceVersionPinReadWarning(Exception exception)
+    {
+        var reason = exception switch
+        {
+            UnauthorizedAccessException => "permission denied",
+            ArgumentException or NotSupportedException or PathTooLongException => "invalid path",
+            IOException => "read failed",
+            _ => "read failed",
+        };
+        return $"Warning: could not read .cdidx-version: {reason}.";
     }
 
     internal static string? FindWorkspaceVersionPin(string startDirectory)
@@ -1912,7 +1935,7 @@ internal static class ProgramRunner
             }
             if (rawValue is not ("none" or "stderr" or "file"))
             {
-                error = $"Error: --trace must be one of `none`, `stderr`, or `file`, got `{rawValue}`.";
+                error = $"Error: --trace must be one of `none`, `stderr`, or `file`, got `{ConsoleUi.FormatBoundedValue(rawValue)}`.";
                 return false;
             }
             traceMode = rawValue;
@@ -2021,17 +2044,17 @@ internal static class ProgramRunner
                 case "--json":
                     parameters["json"] = true;
                     if (!string.IsNullOrWhiteSpace(value))
-                        parameters["json_format"] = value;
+                        AddQueryTraceString(parameters, "json_format", value);
                     break;
                 case "--count":
                     parameters["count"] = true;
                     break;
                 case "--lang" when !string.IsNullOrWhiteSpace(value):
-                    parameters["lang"] = value;
+                    AddQueryTraceString(parameters, "lang", value);
                     break;
                 case "--limit" when !string.IsNullOrWhiteSpace(value):
                 case "--top" when !string.IsNullOrWhiteSpace(value):
-                    parameters["limit"] = value;
+                    AddQueryTraceString(parameters, "limit", value);
                     break;
                 case "--path" when !string.IsNullOrWhiteSpace(value):
                     paths.Add(value);
@@ -2041,11 +2064,45 @@ internal static class ProgramRunner
                     break;
             }
         }
-        if (paths.Count > 0)
-            parameters["path"] = new JsonArray(paths.Select(path => JsonValue.Create(path)).ToArray());
-        if (excludePaths.Count > 0)
-            parameters["exclude_path"] = new JsonArray(excludePaths.Select(path => JsonValue.Create(path)).ToArray());
+        AddQueryTraceArray(parameters, "path", paths);
+        AddQueryTraceArray(parameters, "exclude_path", excludePaths);
         return parameters;
+    }
+
+    private static void AddQueryTraceString(JsonObject parameters, string name, string value)
+    {
+        var bounded = ConsoleUi.BoundDisplayText(value, QueryTraceValueMaxChars);
+        parameters[name] = bounded.Text;
+        if (bounded.Truncated)
+        {
+            parameters[$"{name}_truncated"] = true;
+            parameters[$"{name}_original_length"] = bounded.OriginalLength;
+        }
+    }
+
+    private static void AddQueryTraceArray(JsonObject parameters, string name, List<string> values)
+    {
+        if (values.Count == 0)
+            return;
+
+        var array = new JsonArray();
+        var valueTruncated = false;
+        foreach (var value in values.Take(QueryTraceArrayMaxItems))
+        {
+            var bounded = ConsoleUi.BoundDisplayText(value, QueryTraceValueMaxChars);
+            valueTruncated |= bounded.Truncated;
+            array.Add(JsonValue.Create(bounded.Text));
+        }
+
+        parameters[name] = array;
+        if (values.Count > QueryTraceArrayMaxItems)
+        {
+            parameters[$"{name}_truncated"] = true;
+            parameters[$"{name}_original_count"] = values.Count;
+        }
+
+        if (valueTruncated)
+            parameters[$"{name}_value_truncated"] = true;
     }
 
     private sealed class QueryTraceOutputCapture : TextWriter
