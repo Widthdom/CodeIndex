@@ -372,9 +372,7 @@ public class LspServerTests
             var error = response!["error"]!;
             Assert.Equal(-32602, error["code"]!.GetValue<int>());
             var message = error["message"]!.GetValue<string>();
-            Assert.Equal(
-                $"textDocument.uri is too long. Max length is {LspServer.MaxTextDocumentUriChars} characters; actual length is {oversizedUri.Length}.",
-                message);
+            Assert.Equal("Invalid params", message);
             Assert.True(message.Length < 120);
             Assert.DoesNotContain(oversizedUri, message, StringComparison.Ordinal);
         }
