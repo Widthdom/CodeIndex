@@ -18069,6 +18069,68 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScript_MalformedTsconfigSkipsPathAliasesWithWarning()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("tsconfig_alias_malformed_symbols");
+        try
+        {
+            WriteFile(projectRoot, "tsconfig.json", """
+                {
+                  "compilerOptions": {
+                    "baseUrl": ".",
+                    "paths": {
+                      "@/*": ["src/*"]
+                    }
+                  }
+                """);
+            WriteFile(projectRoot, "src/components/Button.tsx", "export const Button = 1;\n");
+            var sourcePath = WriteFile(projectRoot, "src/main.ts", "import { Button } from \"@/components/Button\";\n");
+
+            List<SymbolRecord> symbols = [];
+            var stderr = ConsoleCapture.CaptureError(() =>
+                symbols = SymbolExtractor.Extract(1, "typescript", File.ReadAllText(sourcePath), sourcePath));
+
+            Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "@/components/Button");
+            Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "src/components/Button.tsx");
+            Assert.Contains("Skipped TypeScript path alias config", stderr, StringComparison.Ordinal);
+            Assert.Contains("could not be parsed as JSON", stderr, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DeepTsconfigJsonSkipsPathAliasesWithWarning()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("tsconfig_alias_deep_json_symbols");
+        try
+        {
+            var deepJson = string.Concat(Enumerable.Repeat("{\"nested\":", 40)) + "0" + new string('}', 40);
+            WriteFile(
+                projectRoot,
+                "tsconfig.json",
+                "{\"compilerOptions\":{\"baseUrl\":\".\",\"paths\":{\"@/*\":[\"src/*\"]}},\"deep\":" + deepJson + "}");
+            WriteFile(projectRoot, "src/components/Button.tsx", "export const Button = 1;\n");
+            var sourcePath = WriteFile(projectRoot, "src/main.ts", "import { Button } from \"@/components/Button\";\n");
+
+            List<SymbolRecord> symbols = [];
+            var stderr = ConsoleCapture.CaptureError(() =>
+                symbols = SymbolExtractor.Extract(1, "typescript", File.ReadAllText(sourcePath), sourcePath));
+
+            Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "@/components/Button");
+            Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "src/components/Button.tsx");
+            Assert.Contains("Skipped TypeScript path alias config", stderr, StringComparison.Ordinal);
+            Assert.Contains("32-level depth limit", stderr, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Extract_TypeScript_ExcessiveTsconfigExtendsDepthSkipsInheritedPathAliasesWithWarning()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("tsconfig_alias_deep_extends_symbols");

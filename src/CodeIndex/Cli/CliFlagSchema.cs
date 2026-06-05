@@ -31,6 +31,13 @@ internal sealed record CliFlag
     public required IReadOnlySet<string> Commands { get; init; }
 
     /// <summary>
+    /// Whether this flag is accepted before a subcommand and should be surfaced in
+    /// top-level completion/help contracts.
+    /// サブコマンド前に受理され、トップレベル補完 / help 契約にも出すフラグかどうか。
+    /// </summary>
+    public bool TopLevel { get; init; }
+
+    /// <summary>
     /// Commands for which the parser accepts the flag (typically to emit a friendlier
     /// error like "use --exact-substring on search instead of --exact-name") but for
     /// which shell completions deliberately omit it to avoid recommending the wrong
@@ -217,11 +224,20 @@ internal static class CliFlagSchema
             new() { Name = "--workspace-db", ValuePlaceholder = "<path>", Description = "Additional workspace member database path for dependency aggregation", Commands = Set(WorkspaceDbCommands) },
             new() { Name = "--data-dir", ValuePlaceholder = "<dir>", Description = "Directory containing codeindex.db; overrides CDIDX_DATA_DIR/XDG/workspace defaults", Commands = Set(DataDirCommands) },
             new() { Name = "--json", Description = "JSON output; search/files/validate also accept --json=array for a single JSON array", Commands = Set(JsonCommands) },
-            new() { Name = "--pretty", Description = "Pretty-print JSON output with indentation", Commands = Set(JsonCommands) },
+            new() { Name = "--pretty", Description = "Pretty-print JSON output with indentation", Commands = Set(JsonCommands), TopLevel = true },
             new() { Name = "--compact", Description = "AI-oriented compact JSON with capped list sections and truncation metadata", Commands = Set(CompactJsonCommands) },
             new() { Name = "--format", ValuePlaceholder = "<text|json|count|compact|csv|tsv|lsp|qf|sarif|issue-drafts>", Description = "Standard output format for token budgets, editor integrations, and CI; search recipes also accept issue-drafts", Commands = Set(FormatCommands) },
-            new() { Name = "--quiet", ShortName = "-q", Description = "Suppress informational stderr output; errors still print", Commands = Set(AllCommands.ToArray()) },
-            new() { Name = "--silent", Description = "Alias for --quiet", Commands = Set(AllCommands.ToArray()) },
+            new() { Name = "--quiet", ShortName = "-q", Description = "Suppress informational stderr output; errors still print", Commands = Set(AllCommands.ToArray()), TopLevel = true },
+            new() { Name = "--silent", Description = "Alias for --quiet", Commands = Set(AllCommands.ToArray()), TopLevel = true },
+            new() { Name = "--color", ValuePlaceholder = "<auto|always|never>", Description = "Color output mode", Commands = Set(), TopLevel = true },
+            new() { Name = "--palette", ValuePlaceholder = "<basic|256|truecolor>", Description = "ANSI color palette", Commands = Set(), TopLevel = true },
+            new() { Name = "--ascii", Description = "Use ASCII progress glyphs", Commands = Set(), TopLevel = true },
+            new() { Name = "--metrics", ValuePlaceholder = "<path>", Description = "Append command metrics JSONL to a file", Commands = Set(), TopLevel = true },
+            new() { Name = "--debug-unsafe", Description = "Allow raw debug dumps when CDIDX_DEBUG=unsafe is also set", Commands = Set(), TopLevel = true },
+            new() { Name = "--strict-version", Description = "Fail when the workspace version pin does not match this binary", Commands = Set(), TopLevel = true },
+            new() { Name = "--log-format", ValuePlaceholder = "<text|json>", Description = "Persistent stderr log format", Commands = Set(), TopLevel = true },
+            new() { Name = "--log-retain-count", ValuePlaceholder = "<n>", Description = "Persistent stderr log file retention count", Commands = Set(), TopLevel = true },
+            new() { Name = "--log-max-size-mb", ValuePlaceholder = "<n>", Description = "Persistent stderr log rotation size cap in MiB", Commands = Set(), TopLevel = true },
             new() { Name = "--profile", Description = "Emit SQL timing and EXPLAIN QUERY PLAN profile JSON after the normal result", Commands = Set(ProfileCommands) },
             new() { Name = "--verbose", Description = "Emit query debug diagnostics to stderr, or _debug JSON when combined with --json", Commands = Set(VerboseQueryCommands.Concat(new[] { "index" }).ToArray()) },
             new() { Name = "--notify", ValuePlaceholder = "<auto|bell|osc9|desktop|none>", Description = "Signal long index completion; desktop currently emits OSC 9 terminal notification", Commands = Set("index") },
@@ -273,7 +289,7 @@ internal static class CliFlagSchema
             new() { Name = "--reject-before", ValuePlaceholder = "<query>", Description = "Search: reject primary matches with a nearby guard query before them", Commands = Set("search") },
             new() { Name = "--reject-after", ValuePlaceholder = "<query>", Description = "Search: reject primary matches with a nearby guard query after them", Commands = Set("search") },
             new() { Name = "--guard-window", ValuePlaceholder = "<n>", Description = "Search: line window for require/reject guard queries", Commands = Set("search") },
-            new() { Name = "--no-progress", Description = "Disable animated progress and spinner output", Commands = Set(AllCommands.ToArray()) },
+            new() { Name = "--no-progress", Description = "Disable animated progress and spinner output", Commands = Set(AllCommands.ToArray()), TopLevel = true },
             new() { Name = "--name", ValuePlaceholder = "<name>", Description = "Exact symbol name", Commands = Set("symbols") },
             new() { Name = "--max-line-width", ValuePlaceholder = "<n>", Description = "Clamp long single-line payloads (0 disables clamping)", Commands = Set(MaxLineWidthCommands) },
             new() { Name = "--snippet-lines", ValuePlaceholder = "<n>", Description = "Snippet length", Commands = Set("search", "find", "references", "callers", "callees", "impact") },
@@ -357,6 +373,42 @@ internal static class CliFlagSchema
     public static IReadOnlyList<CliFlag> GetCompletionFlagsForCommand(string command)
     {
         return All.Where(f => f.AppliesTo(command)).ToList();
+    }
+
+    /// <summary>
+    /// Flags accepted before a subcommand and surfaced in top-level shell completion.
+    /// サブコマンド前に受理され、トップレベル補完に出すフラグ集合。
+    /// </summary>
+    public static IReadOnlyList<CliFlag> GetTopLevelCompletionFlags()
+    {
+        return All.Where(f => f.TopLevel).ToList();
+    }
+
+    public static HashSet<string> GetTopLevelGlobalOptionNames(bool includeLogOptions)
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var flag in All)
+        {
+            if (!flag.TopLevel)
+                continue;
+            if (!includeLogOptions && flag.Name.StartsWith("--log-", StringComparison.Ordinal))
+                continue;
+            names.Add(flag.Name);
+            if (flag.ShortName is not null)
+                names.Add(flag.ShortName);
+        }
+        return names;
+    }
+
+    public static HashSet<string> GetTopLevelValueOptionNames()
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var flag in All)
+        {
+            if (flag is { TopLevel: true, IsValueBearing: true })
+                names.Add(flag.Name);
+        }
+        return names;
     }
 
     /// <summary>

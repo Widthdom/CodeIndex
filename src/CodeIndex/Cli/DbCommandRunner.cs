@@ -65,7 +65,16 @@ public static class DbCommandRunner
                 CommandErrorCodes.UsageError);
 
         var dbPath = options.DbPath;
-        var isUri = dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase);
+        var isUri = SqliteFileUri.StartsWithFileScheme(dbPath);
+        if (!SqliteFileUri.TryValidateBounds(dbPath, out var parseError))
+            return WriteCommandError(
+                options.Json,
+                jsonOptions,
+                $"invalid --db file URI: {SqliteFileUri.FormatParseError(parseError)}",
+                CommandExitCodes.DatabaseError,
+                "Pass a valid SQLite file URI whose full value and query string fit within the supported limits.",
+                CommandErrorCodes.DbError);
+
         if (!isUri && !File.Exists(LongPath.EnsureWindowsPrefix(dbPath)))
             return WriteCommandError(
                 options.Json,
