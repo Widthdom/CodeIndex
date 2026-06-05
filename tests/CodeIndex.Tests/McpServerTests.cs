@@ -5966,6 +5966,28 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_CallersAndCallees_CountOnly_OmitsRowsAndReturnsHistogram()
+    {
+        InsertIndexedFile("src/count-only-graph.py", "python", "def login(user):\n    return Run(user)\n");
+
+        var callersRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"callers","arguments":{"query":"Run","lang":"python","countOnly":true}}}""")!;
+        var callersResponse = _server.HandleMessage(callersRequest)!;
+        var callersStructured = callersResponse["result"]!["structuredContent"]!;
+        Assert.True(callersStructured["count_only"]!.GetValue<bool>());
+        Assert.True(callersStructured["count"]!.GetValue<int>() >= 1);
+        Assert.Empty(callersStructured["results"]!.AsArray());
+        Assert.NotEmpty(callersStructured["top_files"]!.AsArray());
+
+        var calleesRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"callees","arguments":{"query":"login","lang":"python","countOnly":true}}}""")!;
+        var calleesResponse = _server.HandleMessage(calleesRequest)!;
+        var calleesStructured = calleesResponse["result"]!["structuredContent"]!;
+        Assert.True(calleesStructured["count_only"]!.GetValue<bool>());
+        Assert.True(calleesStructured["count"]!.GetValue<int>() >= 1);
+        Assert.Empty(calleesStructured["results"]!.AsArray());
+        Assert.NotEmpty(calleesStructured["top_files"]!.AsArray());
+    }
+
+    [Fact]
     public void ToolsCall_ImpactAnalysis_CountOnly_OmitsCallerRows()
     {
         InsertIndexedFile(

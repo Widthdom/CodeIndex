@@ -1467,7 +1467,7 @@ public partial class McpServer
         {
             if (countOnly)
             {
-                var countOnlyTotal = reader.CountSearchReferences(query, int.MaxValue, lang, kind, pathPatterns, excludePaths, excludeTests, exact);
+                var countOnlyTotal = reader.CountSearchReferencesTotal(query, lang, kind, pathPatterns, excludePaths, excludeTests, exact).Count;
                 var histogramResults = countOnlyTotal > 0
                     ? reader.SearchReferences(query, Math.Min(countOnlyTotal, MaxLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, maxLineWidth)
                     : [];
@@ -1483,7 +1483,7 @@ public partial class McpServer
             var results = reader.SearchReferences(query, FetchLimitForEnvelope(limit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, maxLineWidth, offset: offset);
             var truncated = TrimToRequestedLimit(results, limit);
             var total = truncated || offset > 0
-                ? reader.CountSearchReferences(query, int.MaxValue, lang, kind, pathPatterns, excludePaths, excludeTests, exact)
+                ? reader.CountSearchReferencesTotal(query, lang, kind, pathPatterns, excludePaths, excludeTests, exact).Count
                 : results.Count;
             if (lspCompatible)
                 QueryCommandRunner.AttachLspLocations(results);
@@ -1571,7 +1571,7 @@ public partial class McpServer
         {
             if (countOnly)
             {
-                var countOnlyTotal = reader.CountCallers(query, int.MaxValue, lang, kind, pathPatterns, excludePaths, excludeTests, exact);
+                var countOnlyTotal = reader.CountCallersTotal(query, lang, kind, pathPatterns, excludePaths, excludeTests, exact).Count;
                 var histogramResults = countOnlyTotal > 0
                     ? reader.GetCallers(query, Math.Min(countOnlyTotal, MaxLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, rankMode: rankMode)
                     : [];
@@ -1587,7 +1587,7 @@ public partial class McpServer
             var results = reader.GetCallers(query, FetchLimitForEnvelope(limit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, rankMode: rankMode, offset: offset);
             var truncated = TrimToRequestedLimit(results, limit);
             var total = truncated || offset > 0
-                ? reader.CountCallers(query, int.MaxValue, lang, kind, pathPatterns, excludePaths, excludeTests, exact)
+                ? reader.CountCallersTotal(query, lang, kind, pathPatterns, excludePaths, excludeTests, exact).Count
                 : results.Count;
             var graphSupport = ResolveGraphSupport(reader, exact, query, lang, pathPatterns, excludePaths, excludeTests);
             var sqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignalByLanguages(
@@ -1665,7 +1665,7 @@ public partial class McpServer
         {
             if (countOnly)
             {
-                var countOnlyTotal = reader.CountCallees(query, int.MaxValue, lang, kind, pathPatterns, excludePaths, excludeTests, exact);
+                var countOnlyTotal = reader.CountCalleesTotal(query, lang, kind, pathPatterns, excludePaths, excludeTests, exact).Count;
                 var histogramResults = countOnlyTotal > 0
                     ? reader.GetCallees(query, Math.Min(countOnlyTotal, MaxLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, rankMode: rankMode)
                     : [];
@@ -1681,7 +1681,7 @@ public partial class McpServer
             var results = reader.GetCallees(query, FetchLimitForEnvelope(limit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, rankMode: rankMode, offset: offset);
             var truncated = TrimToRequestedLimit(results, limit);
             var total = truncated || offset > 0
-                ? reader.CountCallees(query, int.MaxValue, lang, kind, pathPatterns, excludePaths, excludeTests, exact)
+                ? reader.CountCalleesTotal(query, lang, kind, pathPatterns, excludePaths, excludeTests, exact).Count
                 : results.Count;
             var graphSupport = ResolveGraphSupport(reader, exact, query, lang, pathPatterns, excludePaths, excludeTests);
             var sqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignalByLanguages(
