@@ -1038,12 +1038,26 @@ public class DbWriter
     private void WarnSkippedBatchRow(string rowIdentifier, Exception batchException, Exception rowException)
     {
         Interlocked.Increment(ref _batchRowsSkipped);
-        var message = $"Warning: skipped failed batch row ({rowIdentifier}); batch_error={batchException.Message}; row_error={rowException.Message}";
+        var message = BuildBatchRowSkipWarning(rowIdentifier, batchException, rowException);
         var testSink = BatchRowSkipWarningForTesting;
         if (testSink != null)
             testSink(message);
         else
             Console.Error.WriteLine(message);
+    }
+
+    internal static string BuildBatchRowSkipWarningForTesting(string rowIdentifier, Exception batchException, Exception rowException)
+        => BuildBatchRowSkipWarning(rowIdentifier, batchException, rowException);
+
+    private static string BuildBatchRowSkipWarning(string rowIdentifier, Exception batchException, Exception rowException)
+        => $"Warning: skipped failed batch row ({FormatBatchRowSkipDiagnosticValue(rowIdentifier)}); batch_error={FormatBatchRowSkipDiagnosticValue(batchException.Message)}; row_error={FormatBatchRowSkipDiagnosticValue(rowException.Message)}";
+
+    private static string FormatBatchRowSkipDiagnosticValue(string? value)
+    {
+        return ConsoleUi.FormatBoundedValue(value)
+            .Replace("\r", " ", StringComparison.Ordinal)
+            .Replace("\n", " ", StringComparison.Ordinal)
+            .Replace("\t", " ", StringComparison.Ordinal);
     }
 
     private void InsertChunkBatch(IReadOnlyList<ChunkRecord> chunks, int start, int end)

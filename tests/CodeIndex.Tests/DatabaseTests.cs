@@ -1803,6 +1803,27 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void BatchRowSkipWarning_TruncatesOversizedDiagnostics_Issue3094()
+    {
+        var rowValue = new string('r', ConsoleUi.DefaultDiagnosticValueCharLimit + 1);
+        var batchValue = new string('b', ConsoleUi.DefaultDiagnosticValueCharLimit + 1);
+        var rowErrorValue = new string('e', ConsoleUi.DefaultDiagnosticValueCharLimit + 1);
+
+        var warning = DbWriter.BuildBatchRowSkipWarningForTesting(
+            $"symbol file_id=1 name={rowValue} line=42",
+            new InvalidOperationException(batchValue),
+            new InvalidOperationException(rowErrorValue));
+
+        Assert.Contains("Warning: skipped failed batch row", warning, StringComparison.Ordinal);
+        Assert.Contains("batch_error=", warning, StringComparison.Ordinal);
+        Assert.Contains("row_error=", warning, StringComparison.Ordinal);
+        Assert.Contains("<truncated; original length", warning, StringComparison.Ordinal);
+        Assert.DoesNotContain(rowValue, warning, StringComparison.Ordinal);
+        Assert.DoesNotContain(batchValue, warning, StringComparison.Ordinal);
+        Assert.DoesNotContain(rowErrorValue, warning, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void DeleteFileData_RemovesChunksAndSymbols()
     {
         var fileId = _writer.UpsertFile(new FileRecord
