@@ -3145,6 +3145,8 @@ public partial class McpServer
     {
         if (!TryReadRequiredStringParameter(args, "query", out var query, out var requiredError))
             return CreateToolErrorResponse(id, requiredError!);
+        if (query.Length > QueryLimits.MaxQueryLength)
+            return CreateToolErrorResponse(id, QueryLimits.FormatQueryTooLongError());
         if (IsBareVerbatimQueryToken(query))
             return CreateToolErrorResponse(id, "Add a real symbol name after the command; bare verbatim prefixes like `@` are not valid queries.");
 

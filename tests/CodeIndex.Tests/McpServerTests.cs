@@ -4079,6 +4079,32 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_ImpactAnalysis_RejectsOversizedQuery_Issue3184()
+    {
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "impact_analysis",
+                ["arguments"] = new JsonObject
+                {
+                    ["query"] = new string('a', QueryLimits.MaxQueryLength + 1),
+                },
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        var result = response["result"]!;
+        Assert.True(result["isError"]!.GetValue<bool>());
+        Assert.Equal(QueryLimits.FormatQueryTooLongError(), result["content"]![0]!["text"]!.GetValue<string>());
+        Assert.Equal(McpErrorEnvelope.CategoryInvalidArgument, result["structuredContent"]!["category"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void ToolsCall_Search_SnippetLinesControlsExcerptLength()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"App","snippetLines":3}}}""")!;
