@@ -16,6 +16,9 @@ public static class ExtractorPluginRegistry
     internal const int MaxPatternConfigBytes = 64 * 1024;
     internal const int MaxPatternRulesPerConfig = 128;
     internal const int MaxPatternRulesTotal = 128;
+    internal const int MaxPatternLanguageLength = 64;
+    internal const int MaxPatternExtensionLength = 64;
+    internal const int MaxPatternKindLength = 64;
     internal const int MaxPatternRegexLength = 4096;
     internal const int MaxPatternConfigCandidatesPerDirectory = 128;
     internal const int MaxPluginAssemblyCandidatesPerDirectory = 128;
@@ -482,53 +485,87 @@ public static class ExtractorPluginRegistry
                     continue;
 
                 var itemLine = TrimPatternConfigListMarker(line);
-                if (TryReadScalar(line, "language", out var value))
+                var scalarResult = TryReadScalar(line, "language", MaxPatternLanguageLength, out var value, out var scalarLength);
+                if (scalarResult == PatternScalarReadResult.TooLong)
+                {
+                    ReportPatternConfigRejected(path, $"language scalar is too long ({scalarLength} characters; maximum {MaxPatternLanguageLength})");
+                    return;
+                }
+
+                if (scalarResult == PatternScalarReadResult.Success)
                 {
                     language = NormalizePluginLanguage(value);
                 }
-                else if (TryReadScalar(itemLine, "extension", out value))
+                else
                 {
-                    extensions.Add(NormalizePluginExtension(value) ?? value);
-                }
-                else if (TryReadScalar(itemLine, "kind", out value))
-                {
-                    pendingKind = value.Trim();
-                }
-                else if (TryReadScalar(itemLine, "regex", out value) && pendingKind != null)
-                {
-                    if (patterns.Count >= MaxPatternRulesPerConfig)
+                    scalarResult = TryReadScalar(itemLine, "extension", MaxPatternExtensionLength, out value, out scalarLength);
+                    if (scalarResult == PatternScalarReadResult.TooLong)
                     {
-                        ReportPatternConfigRejected(path, $"too many pattern rules (maximum {MaxPatternRulesTotal})");
+                        ReportPatternConfigRejected(path, $"extension scalar is too long ({scalarLength} characters; maximum {MaxPatternExtensionLength})");
                         return;
                     }
 
-                    if (value.Length > MaxPatternRegexLength)
+                    if (scalarResult == PatternScalarReadResult.Success)
                     {
-                        ReportPatternConfigRejected(path, $"regex for kind '{pendingKind}' is too long ({value.Length} characters; maximum {MaxPatternRegexLength})");
-                        return;
+                        var extension = NormalizePluginExtension(value) ?? value;
+                        if (extension.Length > MaxPatternExtensionLength)
+                        {
+                            ReportPatternConfigRejected(path, $"extension scalar is too long ({extension.Length} characters; maximum {MaxPatternExtensionLength})");
+                            return;
+                        }
+
+                        extensions.Add(extension);
                     }
-
-                    if (!TryReservePatternRuleBudget(path))
-                        return;
-
-                    Regex regex;
-                    try
+                    else
                     {
-                        regex = new Regex(
-                            value,
-                            RegexOptions.Compiled | RegexOptions.CultureInvariant,
-                            PatternRegexTimeout);
-                    }
-                    catch (ArgumentException)
-                    {
-                        ReportPatternConfigRejected(path, $"invalid regex for kind '{DiagnosticSanitizer.ForMessage(pendingKind)}'");
-                        return;
-                    }
+                        scalarResult = TryReadScalar(itemLine, "kind", MaxPatternKindLength, out value, out scalarLength);
+                        if (scalarResult == PatternScalarReadResult.TooLong)
+                        {
+                            ReportPatternConfigRejected(path, $"kind scalar is too long ({scalarLength} characters; maximum {MaxPatternKindLength})");
+                            return;
+                        }
 
-                    patterns.Add(new ConfiguredSymbolExtractor.PatternRule(
-                        pendingKind,
-                        regex));
-                    pendingKind = null;
+                        if (scalarResult == PatternScalarReadResult.Success)
+                        {
+                            pendingKind = value.Trim();
+                        }
+                        else if (TryReadScalar(itemLine, "regex", out value) && pendingKind != null)
+                        {
+                            if (patterns.Count >= MaxPatternRulesPerConfig)
+                            {
+                                ReportPatternConfigRejected(path, $"too many pattern rules (maximum {MaxPatternRulesTotal})");
+                                return;
+                            }
+
+                            if (value.Length > MaxPatternRegexLength)
+                            {
+                                ReportPatternConfigRejected(path, $"regex for kind '{pendingKind}' is too long ({value.Length} characters; maximum {MaxPatternRegexLength})");
+                                return;
+                            }
+
+                            if (!TryReservePatternRuleBudget(path))
+                                return;
+
+                            Regex regex;
+                            try
+                            {
+                                regex = new Regex(
+                                    value,
+                                    RegexOptions.Compiled | RegexOptions.CultureInvariant,
+                                    PatternRegexTimeout);
+                            }
+                            catch (ArgumentException)
+                            {
+                                ReportPatternConfigRejected(path, $"invalid regex for kind '{DiagnosticSanitizer.ForMessage(pendingKind)}'");
+                                return;
+                            }
+
+                            patterns.Add(new ConfiguredSymbolExtractor.PatternRule(
+                                pendingKind,
+                                regex));
+                            pendingKind = null;
+                        }
+                    }
                 }
             }
 
@@ -908,21 +945,43 @@ public static class ExtractorPluginRegistry
         public uint FileIndexLow;
     }
 
+    private enum PatternScalarReadResult
+    {
+        Missing,
+        Empty,
+        TooLong,
+        Success,
+    }
+
     private static bool TryReadScalar(ReadOnlySpan<char> line, string key, out string value)
+        => TryReadScalar(line, key, int.MaxValue, out value, out _) == PatternScalarReadResult.Success;
+
+    private static PatternScalarReadResult TryReadScalar(
+        ReadOnlySpan<char> line,
+        string key,
+        int maxLength,
+        out string value,
+        out int scalarLength)
     {
         value = string.Empty;
+        scalarLength = 0;
         if (line.Length <= key.Length || line[key.Length] != ':')
-            return false;
+            return PatternScalarReadResult.Missing;
 
         if (!line.StartsWith(key.AsSpan(), StringComparison.OrdinalIgnoreCase))
-            return false;
+            return PatternScalarReadResult.Missing;
 
         var scalar = TrimScalarQuotes(line[(key.Length + 1)..].Trim());
         if (scalar.IsEmpty)
-            return false;
+            return PatternScalarReadResult.Empty;
 
         value = scalar.ToString().Replace("\\\\", "\\", StringComparison.Ordinal);
-        return value.Length > 0;
+        scalarLength = value.Length;
+        if (scalarLength == 0)
+            return PatternScalarReadResult.Empty;
+        return scalarLength > maxLength
+            ? PatternScalarReadResult.TooLong
+            : PatternScalarReadResult.Success;
     }
 
     private static ReadOnlySpan<char> TrimScalarQuotes(ReadOnlySpan<char> value)
