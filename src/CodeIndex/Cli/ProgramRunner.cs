@@ -54,6 +54,9 @@ internal static class ProgramRunner
         Action? beforeDispatchForTesting = null,
         CancellationToken cancellationToken = default)
     {
+        if (SymbolExtractionWorker.TryRunCommand(args, Console.In, Console.Out, Console.Error, out var symbolWorkerExitCode))
+            return symbolWorkerExitCode;
+
         if (PostExtractionHookCallbackWorker.TryRunCommand(args, Console.In, Console.Out, Console.Error, out var hookWorkerExitCode))
             return hookWorkerExitCode;
 

@@ -105,44 +105,22 @@ public static partial class IndexCommandRunner
         string filePath,
         string projectRoot,
         string phasePath,
+        SymbolExtractionWorkerClient worker,
         CancellationToken cancellationToken)
     {
         var timeout = IndexExtractionStallTimeoutForTesting?.Invoke() ?? IndexExtractionStallTimeout;
         if (timeout <= TimeSpan.Zero)
             return SymbolExtractor.Extract(fileId, lang, content, filePath, projectRoot, cancellationToken);
 
-        using var extractionCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        var extractionToken = extractionCts.Token;
-        var task = Task.Run(
-            () => SymbolExtractor.Extract(fileId, lang, content, filePath, projectRoot, extractionToken),
-            CancellationToken.None);
-        try
-        {
-            if (task.Wait(timeout, cancellationToken))
-                return task.GetAwaiter().GetResult();
-        }
-        catch (AggregateException ex) when (ex.InnerExceptions.Count == 1)
-        {
-            throw ex.InnerExceptions[0];
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
+        cancellationToken.ThrowIfCancellationRequested();
+        var result = worker.Invoke(fileId, lang, content, filePath, projectRoot, timeout, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (result.TimedOut)
+            throw new IndexExtractionStalledException(0, null, timeout, phasePath);
+        if (!result.Success)
+            throw new InvalidOperationException(result.WorkerError ?? "isolated symbol extraction worker failed.");
 
-        extractionCts.Cancel();
-        try
-        {
-            task.Wait(TimeSpan.FromSeconds(1));
-        }
-        catch (AggregateException ex) when (ex.InnerExceptions.All(inner => inner is OperationCanceledException or TaskCanceledException))
-        {
-        }
-        catch (OperationCanceledException)
-        {
-        }
-
-        throw new IndexExtractionStalledException(0, null, timeout, phasePath);
+        return result.Symbols ?? [];
     }
 
     private static string CollapseLineBreaks(string value)
@@ -892,11 +870,13 @@ public static partial class IndexCommandRunner
 
             using var extractionResults = new BlockingCollection<FullScanFileWorkItem>(Math.Max(1, extractionParallelism * 4));
             using var extractionStallCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            using var mainSymbolExtractionWorker = new SymbolExtractionWorkerClient();
             var extractionCancellationToken = extractionStallCts.Token;
             var nextFileIndex = -1;
             var workers = Enumerable.Range(0, extractionParallelism)
                 .Select(workerIndex => Task.Factory.StartNew(() =>
                 {
+                    using var workerSymbolExtractionWorker = new SymbolExtractionWorkerClient();
                     while (true)
                     {
                         extractionCancellationToken.ThrowIfCancellationRequested();
@@ -926,6 +906,7 @@ public static partial class IndexCommandRunner
                                     filePath,
                                     Path.GetFullPath(options.ProjectPath!),
                                     activeJsonExtractionPhases[workerIndex],
+                                    workerSymbolExtractionWorker,
                                     extractionCancellationToken);
                                 if (symbols.Count > options.MaxSymbolsPerFile)
                                 {
@@ -1145,6 +1126,7 @@ public static partial class IndexCommandRunner
                             item.FilePath,
                             Path.GetFullPath(options.ProjectPath!),
                             currentJsonIndexFile,
+                            mainSymbolExtractionWorker,
                             cancellationToken)
                         : ReassignSymbolFileIds(item.Symbols, fileId);
                     if (symbols.Count > options.MaxSymbolsPerFile)

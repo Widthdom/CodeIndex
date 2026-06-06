@@ -163,6 +163,41 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void SymbolExtractionWorker_TimeoutKillsWorkerBeforeDelayedExtractionContinues()
+    {
+        var projectRoot = CreateTempProject();
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture(
+                SymbolExtractionWorker.DelayEnvironmentVariable,
+                SymbolExtractionWorker.CompletionPathEnvironmentVariable);
+            try
+            {
+                var completionPath = Path.Combine(projectRoot, "symbol-worker.done");
+                env.Set(SymbolExtractionWorker.DelayEnvironmentVariable, "500");
+                env.Set(SymbolExtractionWorker.CompletionPathEnvironmentVariable, completionPath);
+
+                using var worker = new SymbolExtractionWorkerClient();
+                var result = worker.Invoke(
+                    0,
+                    "csharp",
+                    "public class App { }\n",
+                    Path.Combine(projectRoot, "App.cs"),
+                    projectRoot,
+                    TimeSpan.FromMilliseconds(50));
+
+                Assert.True(result.TimedOut);
+                Assert.False(result.Success);
+                AssertFileDoesNotAppear(completionPath, TimeSpan.FromMilliseconds(1000));
+            }
+            finally
+            {
+                DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
     public void GetJsonIndexHeartbeatPath_UsesWorkerPhaseWhenMainThreadIsIdle()
     {
         var message = IndexCommandRunner.GetJsonIndexHeartbeatPath(
@@ -9880,6 +9915,18 @@ public class IndexCommandRunnerTests
         }
 
         throw new InvalidOperationException("Could not locate built cdidx.dll from test output path / テスト出力パスから cdidx.dll を特定できませんでした");
+    }
+
+    private static void AssertFileDoesNotAppear(string path, TimeSpan duration)
+    {
+        var deadline = DateTimeOffset.UtcNow.Add(duration);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            if (File.Exists(path))
+                throw new InvalidOperationException("The timed-out symbol extraction worker continued running after the callback returned.");
+
+            Thread.Sleep(25);
+        }
     }
 
     private static string GetRepositoryRoot()
