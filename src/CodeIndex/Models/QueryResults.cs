@@ -95,6 +95,10 @@ public class SymbolResult
     public int? BodyStartLine { get; set; }
     public int? BodyEndLine { get; set; }
     public string? Signature { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool SignatureTruncated { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? SignatureOriginalLength { get; set; }
     public string? ContainerKind { get; set; }
     public string? ContainerName { get; set; }
     public string? Visibility { get; set; }
@@ -1098,6 +1102,10 @@ public class OutlineSymbol
     public int? BodyStartLine { get; set; }
     public int? BodyEndLine { get; set; }
     public string? Signature { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool SignatureTruncated { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? SignatureOriginalLength { get; set; }
     public string? ContainerKind { get; set; }
     public string? ContainerName { get; set; }
     public string? Visibility { get; set; }
