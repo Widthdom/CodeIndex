@@ -202,9 +202,8 @@ internal static class JsonEnvelopeWrapper
         if (string.IsNullOrEmpty(raw))
             return array;
 
-        foreach (var rawLine in raw.Split('\n'))
+        foreach (var line in EnumerateRawLines(raw))
         {
-            var line = rawLine.TrimEnd('\r');
             if (string.IsNullOrWhiteSpace(line))
                 continue;
 
@@ -228,6 +227,23 @@ internal static class JsonEnvelopeWrapper
         }
 
         return array;
+    }
+
+    private static IEnumerable<string> EnumerateRawLines(string raw)
+    {
+        var start = 0;
+        while (start <= raw.Length)
+        {
+            var newline = raw.IndexOf('\n', start);
+            if (newline < 0)
+            {
+                yield return raw[start..].TrimEnd('\r');
+                yield break;
+            }
+
+            yield return raw[start..newline].TrimEnd('\r');
+            start = newline + 1;
+        }
     }
 
     private static bool IsJsonStreamDoneSentinel(JsonNode node)
