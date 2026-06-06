@@ -2621,7 +2621,9 @@ public partial class McpServer : IDisposable
             out _,
             out _,
             out var argKeysTruncated,
-            out var argKeyTruncationReasons);
+            out var argKeyTruncationReasons,
+            out var argKeysOmittedCount,
+            out var argKeyNamesTruncatedCount);
         var toolDisplay = BoundToolNameForDisplay(toolName);
         var argsObject = new JsonObject();
         foreach (var pair in argLengths)
@@ -2643,7 +2645,7 @@ public partial class McpServer : IDisposable
             ["arg_lengths"] = argsObject,
         };
         toolDisplay.AddMetadata(evt, "tool");
-        AddArgKeyMetadata(evt, argKeyLengths);
+        AddArgKeyMetadata(evt, argKeyLengths, argKeysOmittedCount, argKeyNamesTruncatedCount);
         if (argKeysTruncated)
             evt["arg_keys_truncated"] = true;
         if (argKeyTruncationReasons.Count > 0)
@@ -2786,7 +2788,9 @@ public partial class McpServer : IDisposable
                     out var argValueTruncationReasons,
                     out var argValuesSerializedBytes,
                     out var argKeysTruncated,
-                    out var argKeyTruncationReasons);
+                    out var argKeyTruncationReasons,
+                    out var argKeysOmittedCount,
+                    out var argKeyNamesTruncatedCount);
             var toolDisplay = BoundToolNameForDisplay(toolName);
             var requestId = SerializeRequestId(id);
             BoundedMcpText? requestIdDisplay = requestId is null
@@ -2810,6 +2814,8 @@ public partial class McpServer : IDisposable
                 ArgKeyLengths: argKeyLengths,
                 ArgKeysTruncated: argKeysTruncated,
                 ArgKeyTruncationReasons: argKeyTruncationReasons,
+                ArgKeysOmittedCount: argKeysOmittedCount,
+                ArgKeyNamesTruncatedCount: argKeyNamesTruncatedCount,
                 ArgValuesRedacted: argValuesRedacted,
                 ArgValuesTruncated: argValuesTruncated,
                 ArgValueTruncationReasons: argValueTruncationReasons,
@@ -2897,7 +2903,7 @@ public partial class McpServer : IDisposable
     /// </summary>
     internal static (IReadOnlyList<string> Keys, IReadOnlyList<KeyValuePair<string, int>> Lengths, IReadOnlyList<KeyValuePair<string, int>> KeyLengths, JsonNode? ValuesEcho)
         SanitizeArgs(JsonNode? args, bool includeValues)
-        => SanitizeArgs(args, includeValues, out _, out _, out _, out _, out _, out _);
+        => SanitizeArgs(args, includeValues, out _, out _, out _, out _, out _, out _, out _, out _);
 
     private static (IReadOnlyList<string> Keys, IReadOnlyList<KeyValuePair<string, int>> Lengths, IReadOnlyList<KeyValuePair<string, int>> KeyLengths, JsonNode? ValuesEcho)
         SanitizeArgs(
@@ -2908,13 +2914,17 @@ public partial class McpServer : IDisposable
             out IReadOnlyList<string> argValueTruncationReasons,
             out int? argValuesSerializedBytes,
             out bool argKeysTruncated,
-            out IReadOnlyList<string> argKeyTruncationReasons)
+            out IReadOnlyList<string> argKeyTruncationReasons,
+            out int argKeysOmittedCount,
+            out int argKeyNamesTruncatedCount)
     {
         argValuesRedacted = false;
         argValuesTruncated = false;
         argValueTruncationReasons = Array.Empty<string>();
         argValuesSerializedBytes = null;
         argKeysTruncated = false;
+        argKeysOmittedCount = 0;
+        argKeyNamesTruncatedCount = 0;
         var argKeyReasons = new List<string>();
         argKeyTruncationReasons = argKeyReasons;
         if (args is not JsonObject argsObj)
@@ -2933,11 +2943,12 @@ public partial class McpServer : IDisposable
             if (argumentCount >= AuditLogSink.MaxAuditArgumentCount)
             {
                 argKeysTruncated = true;
+                argKeysOmittedCount = argsObj.Count - argumentCount;
                 AddUniqueReason(argKeyReasons, "arg_key_count_limit");
                 break;
             }
 
-            var keyDisplay = McpBoundedText.ForDisplay(key);
+            var keyDisplay = McpBoundedText.ForDisplay(key, AuditLogSink.MaxAuditArgumentKeyChars);
             var displayKey = MakeUniqueArgumentDisplayKey(key, keyDisplay, usedKeys);
             keys.Add(displayKey);
             lengths.Add(new KeyValuePair<string, int>(displayKey, AuditLogSink.MeasureArgLength(value)));
@@ -2945,6 +2956,7 @@ public partial class McpServer : IDisposable
             {
                 keyLengths.Add(new KeyValuePair<string, int>(displayKey, keyDisplay.OriginalLength));
                 argKeysTruncated = true;
+                argKeyNamesTruncatedCount++;
                 AddUniqueReason(argKeyReasons, "arg_key_length_limit");
             }
             if (echoObject is not null && !argValueBudgetExhausted)
@@ -3021,15 +3033,24 @@ public partial class McpServer : IDisposable
         return Convert.ToHexString(bytes.AsSpan(0, 4)).ToLowerInvariant();
     }
 
-    private static void AddArgKeyMetadata(JsonObject target, IReadOnlyList<KeyValuePair<string, int>> argKeyLengths)
+    private static void AddArgKeyMetadata(
+        JsonObject target,
+        IReadOnlyList<KeyValuePair<string, int>> argKeyLengths,
+        int argKeysOmittedCount,
+        int argKeyNamesTruncatedCount)
     {
-        if (argKeyLengths.Count == 0)
-            return;
-        var lengths = new JsonObject();
-        foreach (var pair in argKeyLengths)
-            lengths[pair.Key] = pair.Value;
-        target["arg_key_lengths"] = lengths;
-        target["arg_keys_truncated"] = true;
+        if (argKeyLengths.Count > 0)
+        {
+            var lengths = new JsonObject();
+            foreach (var pair in argKeyLengths)
+                lengths[pair.Key] = pair.Value;
+            target["arg_key_lengths"] = lengths;
+            target["arg_keys_truncated"] = true;
+        }
+        if (argKeysOmittedCount > 0)
+            target["arg_keys_omitted_count"] = argKeysOmittedCount;
+        if (argKeyNamesTruncatedCount > 0)
+            target["arg_key_names_truncated_count"] = argKeyNamesTruncatedCount;
     }
 
     private static string? SerializeRequestId(JsonNode? id)

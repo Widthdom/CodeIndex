@@ -39,6 +39,7 @@ internal sealed class AuditLogSink : IDisposable
     internal const int MaxArgValueStringChars = 512;
     internal const int MaxArgValuesSerializedBytes = 16 * 1024;
     internal const int MaxAuditArgumentCount = 64;
+    internal const int MaxAuditArgumentKeyChars = McpBoundedText.MaxDiagnosticDisplayChars;
     internal const int MaxRequestIdChars = 256;
     internal const int MaxSerializedEventBytes = 64 * 1024;
 
@@ -323,6 +324,10 @@ internal sealed class AuditLogSink : IDisposable
                     jw.WriteStringValue(reason);
                 jw.WriteEndArray();
             }
+            if (evt.ArgKeysOmittedCount > 0)
+                jw.WriteNumber("arg_keys_omitted_count", evt.ArgKeysOmittedCount);
+            if (evt.ArgKeyNamesTruncatedCount > 0)
+                jw.WriteNumber("arg_key_names_truncated_count", evt.ArgKeyNamesTruncatedCount);
 
             if (includeValues && evt.ArgValues is { } values)
             {
@@ -657,6 +662,8 @@ internal sealed class AuditLogSink : IDisposable
         IReadOnlyList<KeyValuePair<string, int>>? ArgKeyLengths = null,
         bool ArgKeysTruncated = false,
         IReadOnlyList<string>? ArgKeyTruncationReasons = null,
+        int ArgKeysOmittedCount = 0,
+        int ArgKeyNamesTruncatedCount = 0,
         bool ArgValuesRedacted = false,
         bool ArgValuesTruncated = false,
         IReadOnlyList<string>? ArgValueTruncationReasons = null,

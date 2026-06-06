@@ -618,12 +618,12 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
-    public async Task ProcessLineAsync_UnknownArgumentName_TruncatesTelemetryKeyMetadata_Issue3117()
+    public async Task ProcessLineAsync_UnknownArgumentName_TruncatesTelemetryKeyMetadata_Issue3117_Issue3105()
     {
         using var writer = new StringWriter();
         using var error = new StringWriter();
-        var argumentName = new string('k', McpBoundedText.MaxDiagnosticDisplayChars + 25);
-        var display = McpBoundedText.ForDisplay(argumentName);
+        var argumentName = new string('k', AuditLogSink.MaxAuditArgumentKeyChars + 25);
+        var display = McpBoundedText.ForDisplay(argumentName, AuditLogSink.MaxAuditArgumentKeyChars);
         var request = new JsonObject
         {
             ["jsonrpc"] = "2.0",
@@ -671,10 +671,11 @@ public class McpServerTests : IDisposable
         Assert.Contains(root.GetProperty("arg_keys").EnumerateArray(), key => key.GetString() == display.Text);
         Assert.Equal(argumentName.Length, root.GetProperty("arg_key_lengths").GetProperty(display.Text).GetInt32());
         Assert.True(root.GetProperty("arg_keys_truncated").GetBoolean());
+        Assert.Equal(1, root.GetProperty("arg_key_names_truncated_count").GetInt32());
     }
 
     [Fact]
-    public async Task ProcessLineAsync_CapsTelemetryArgumentKeyCount_Issue3237()
+    public async Task ProcessLineAsync_CapsTelemetryArgumentKeyCount_Issue3237_Issue3105()
     {
         using var writer = new StringWriter();
         using var error = new StringWriter();
@@ -722,6 +723,7 @@ public class McpServerTests : IDisposable
         Assert.True(root.GetProperty("arg_keys_truncated").GetBoolean());
         Assert.Contains(root.GetProperty("arg_key_truncation_reasons").EnumerateArray(),
             reason => reason.GetString() == "arg_key_count_limit");
+        Assert.Equal(3, root.GetProperty("arg_keys_omitted_count").GetInt32());
         Assert.DoesNotContain(root.GetProperty("arg_keys").EnumerateArray(),
             key => key.GetString() == $"arg{AuditLogSink.MaxAuditArgumentCount}");
     }
@@ -8755,10 +8757,10 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
-    public void SanitizeArgs_TruncatesArgumentKeysForAuditAndTelemetry_Issue3117()
+    public void SanitizeArgs_TruncatesArgumentKeysForAuditAndTelemetry_Issue3117_Issue3105()
     {
-        var argumentName = new string('k', McpBoundedText.MaxDiagnosticDisplayChars + 1);
-        var display = McpBoundedText.ForDisplay(argumentName);
+        var argumentName = new string('k', AuditLogSink.MaxAuditArgumentKeyChars + 1);
+        var display = McpBoundedText.ForDisplay(argumentName, AuditLogSink.MaxAuditArgumentKeyChars);
         var args = new JsonObject
         {
             [argumentName] = "value",
@@ -8777,10 +8779,10 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
-    public void SanitizeArgs_TruncatesArgumentKeysInValuesEcho_Issue3117()
+    public void SanitizeArgs_TruncatesArgumentKeysInValuesEcho_Issue3117_Issue3105()
     {
-        var argumentName = new string('k', McpBoundedText.MaxDiagnosticDisplayChars + 25);
-        var display = McpBoundedText.ForDisplay(argumentName);
+        var argumentName = new string('k', AuditLogSink.MaxAuditArgumentKeyChars + 25);
+        var display = McpBoundedText.ForDisplay(argumentName, AuditLogSink.MaxAuditArgumentKeyChars);
         var args = new JsonObject
         {
             [argumentName] = "value",
@@ -8798,9 +8800,9 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
-    public void SanitizeArgs_DisambiguatesCollidingTruncatedKeys_Issue3117()
+    public void SanitizeArgs_DisambiguatesCollidingTruncatedKeys_Issue3117_Issue3105()
     {
-        var sharedPrefix = new string('c', McpBoundedText.MaxDiagnosticDisplayChars + 25);
+        var sharedPrefix = new string('c', AuditLogSink.MaxAuditArgumentKeyChars + 25);
         var firstArgumentName = sharedPrefix + "a";
         var secondArgumentName = sharedPrefix + "b";
         var args = new JsonObject
