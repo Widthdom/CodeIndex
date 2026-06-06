@@ -679,13 +679,14 @@ public class McpServerTests : IDisposable
     {
         using var writer = new StringWriter();
         using var error = new StringWriter();
+        const int requestId = 3325;
         var arguments = new JsonObject();
         for (var i = 0; i < AuditLogSink.MaxAuditArgumentCount + 3; i++)
             arguments[$"arg{i}"] = i;
         var request = new JsonObject
         {
             ["jsonrpc"] = "2.0",
-            ["id"] = 123,
+            ["id"] = requestId,
             ["method"] = "tools/call",
             ["params"] = new JsonObject
             {
@@ -715,7 +716,8 @@ public class McpServerTests : IDisposable
 
         var line = error.ToString()
             .Split('\n', StringSplitOptions.RemoveEmptyEntries)
-            .Single(l => l.Contains("\"event\":\"mcp.tool.invocation\"", StringComparison.Ordinal));
+            .Single(l => l.Contains("\"event\":\"mcp.tool.invocation\"", StringComparison.Ordinal)
+                && l.Contains($"\"request_id\":\"{requestId}\"", StringComparison.Ordinal));
         var jsonStart = line.IndexOf('{');
         using var document = JsonDocument.Parse(line[jsonStart..]);
         var root = document.RootElement;
