@@ -4111,6 +4111,42 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_Search_GuardFiltersFailFastWhenCombinedArraysExceedLimit_Issue3073()
+    {
+        var requireBefore = new JsonArray();
+        for (var i = 0; i < DbReader.MaxSearchGuardFilters; i++)
+            requireBefore.Add($"Guard{i}");
+        var requireAfter = new JsonArray();
+        requireAfter.Add("Overflow");
+        requireAfter.Add(42);
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "search",
+                ["arguments"] = new JsonObject
+                {
+                    ["query"] = "Run",
+                    ["requireBefore"] = requireBefore,
+                    ["requireAfter"] = requireAfter,
+                },
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        var result = response["result"]!;
+        Assert.True(result["isError"]!.GetValue<bool>());
+        var text = result["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains($"search accepts at most {DbReader.MaxSearchGuardFilters} guard filters; got {DbReader.MaxSearchGuardFilters + 1}.", text);
+        Assert.DoesNotContain("entries must be strings", text);
+        Assert.Equal("invalid_argument", result["structuredContent"]!["category"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void ToolsCall_Search_GuardPaginationResumesWithinSplitChunk_Issue2852()
     {
         InsertIndexedFile(

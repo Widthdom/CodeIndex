@@ -420,54 +420,47 @@ public partial class McpServer
             : [];
     }
 
-    private JsonNode? TryReadStringOrStringList(JsonNode? id, JsonNode? args, string propertyName, out List<string> values)
-    {
-        values = [];
-        var node = args?[propertyName];
-        if (node is null)
-            return null;
-
-        if (node is JsonValue singleValue && singleValue.TryGetValue<string>(out var singleText))
-        {
-            values.Add(singleText);
-            return null;
-        }
-
-        if (node is JsonArray array)
-        {
-            foreach (var item in array)
-            {
-                if (item is not JsonValue value || !value.TryGetValue<string>(out var text))
-                    return CreateToolErrorResponse(id, $"'{propertyName}' entries must be strings.");
-                values.Add(text);
-            }
-            return null;
-        }
-
-        return CreateToolErrorResponse(id, $"'{propertyName}' must be a string or string array.");
-    }
-
     private JsonNode? TryReadSearchGuardFilters(JsonNode? id, JsonNode? args, out List<SearchGuardFilter> filters)
     {
         filters = [];
         var collected = new List<SearchGuardFilter>();
 
+        JsonNode? AddFilter(string propertyName, SearchGuardRole role, SearchGuardDirection direction, string value)
+        {
+            if (collected.Count >= DbReader.MaxSearchGuardFilters)
+                return CreateToolErrorResponse(id, $"search accepts at most {DbReader.MaxSearchGuardFilters} guard filters; got {collected.Count + 1}.");
+
+            if (string.IsNullOrWhiteSpace(value))
+                return CreateToolErrorResponse(id, $"'{propertyName}' entries must be non-empty strings.");
+            if (value.Length > QueryLimits.MaxQueryLength)
+                return CreateToolErrorResponse(id, $"'{propertyName}' query too long (max {QueryLimits.MaxQueryLength} characters).");
+
+            collected.Add(new SearchGuardFilter(role, direction, value));
+            return null;
+        }
+
         JsonNode? AddFilters(string propertyName, SearchGuardRole role, SearchGuardDirection direction)
         {
-            if (TryReadStringOrStringList(id, args, propertyName, out var values) is JsonNode readError)
-                return readError;
+            var node = args?[propertyName];
+            if (node is null)
+                return null;
 
-            foreach (var value in values)
+            if (node is JsonValue singleValue && singleValue.TryGetValue<string>(out var singleText))
+                return AddFilter(propertyName, role, direction, singleText);
+
+            if (node is JsonArray array)
             {
-                if (string.IsNullOrWhiteSpace(value))
-                    return CreateToolErrorResponse(id, $"'{propertyName}' entries must be non-empty strings.");
-                if (value.Length > QueryLimits.MaxQueryLength)
-                    return CreateToolErrorResponse(id, $"'{propertyName}' query too long (max {QueryLimits.MaxQueryLength} characters).");
-
-                collected.Add(new SearchGuardFilter(role, direction, value));
+                foreach (var item in array)
+                {
+                    if (item is not JsonValue value || !value.TryGetValue<string>(out var text))
+                        return CreateToolErrorResponse(id, $"'{propertyName}' entries must be strings.");
+                    if (AddFilter(propertyName, role, direction, text) is JsonNode addError)
+                        return addError;
+                }
+                return null;
             }
 
-            return null;
+            return CreateToolErrorResponse(id, $"'{propertyName}' must be a string or string array.");
         }
 
         if (AddFilters("requireBefore", SearchGuardRole.Require, SearchGuardDirection.Before) is JsonNode requireBeforeError)
@@ -480,9 +473,7 @@ public partial class McpServer
             return rejectAfterError;
 
         filters = collected;
-        return filters.Count > DbReader.MaxSearchGuardFilters
-            ? CreateToolErrorResponse(id, $"search accepts at most {DbReader.MaxSearchGuardFilters} guard filters; got {filters.Count}.")
-            : null;
+        return null;
     }
 
     private static JsonObject? ValidateCommonListArguments(JsonNode? args)
