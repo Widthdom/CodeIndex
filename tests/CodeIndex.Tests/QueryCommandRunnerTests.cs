@@ -335,6 +335,46 @@ public partial class QueryCommandRunnerTests
         }
     }
 
+    [Fact]
+    public void RunDefinition_LspFormatUsesIndexedProjectRootForExplicitDb_Issue3151()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_explicit_db_root");
+        var otherRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_other_cwd");
+        var originalCurrentDirectory = Environment.CurrentDirectory;
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/App/Service.cs",
+                "csharp",
+                """
+                public class Service
+                {
+                    public void Run() { }
+                }
+                """);
+
+            Environment.CurrentDirectory = otherRoot;
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                ["Service", "--db", dbPath, "--format", "lsp", "--exact-name", "--lang", "csharp", "--kind", "class"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = JsonDocument.Parse(stdout);
+            var location = Assert.Single(document.RootElement.EnumerateArray());
+            var expectedUri = new Uri(Path.Combine(projectRoot, "src", "App", "Service.cs")).AbsoluteUri;
+            Assert.Equal(expectedUri, location.GetProperty("uri").GetString());
+        }
+        finally
+        {
+            Environment.CurrentDirectory = originalCurrentDirectory;
+            TestProjectHelper.DeleteDirectory(otherRoot);
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Theory]
     [InlineData("30m", 30 * 60)]
     [InlineData("2h", 2 * 60 * 60)]

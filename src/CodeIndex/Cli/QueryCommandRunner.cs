@@ -48,6 +48,8 @@ public static class QueryCommandRunner
     private static string? s_batchDbPath;
     [ThreadStatic]
     private static bool s_batchDbPathExplicit;
+    [ThreadStatic]
+    private static string? s_activeQueryProjectRoot;
 
     private static DateTime GetUtcNow() => TimeProvider.GetUtcNow().UtcDateTime;
 
@@ -1158,11 +1160,14 @@ public static class QueryCommandRunner
         }
     }
 
-    public static LspLocation BuildLspLocation(string path, int startLine, int startColumn, int endLine, int endColumn)
+    public static LspLocation BuildLspLocation(string path, int startLine, int startColumn, int endLine, int endColumn, string? projectRoot = null)
     {
+        var baseRoot = string.IsNullOrWhiteSpace(projectRoot)
+            ? s_activeQueryProjectRoot ?? Environment.CurrentDirectory
+            : projectRoot;
         var absolutePath = Path.IsPathFullyQualified(path)
             ? path
-            : Path.GetFullPath(path, Environment.CurrentDirectory);
+            : Path.GetFullPath(path, baseRoot);
         return new LspLocation
         {
             Uri = new Uri(absolutePath).AbsoluteUri,
@@ -7441,7 +7446,17 @@ public static class QueryCommandRunner
             }
 
             reader.IncludeGenerated = options.IncludeGenerated;
-            var exitCode = reader.RunWithGeneratedScope(() => action(reader));
+            var previousProjectRoot = s_activeQueryProjectRoot;
+            s_activeQueryProjectRoot = ResolveProjectFilterRoot(dbPath, options.DbPathExplicit);
+            int exitCode;
+            try
+            {
+                exitCode = reader.RunWithGeneratedScope(() => action(reader));
+            }
+            finally
+            {
+                s_activeQueryProjectRoot = previousProjectRoot;
+            }
             var profileEntries = profiling ? Database.DbDebug.EndProfile() : [];
             if (options.Profile)
                 WriteProfilePayload(profileEntries, jsonOptions);
