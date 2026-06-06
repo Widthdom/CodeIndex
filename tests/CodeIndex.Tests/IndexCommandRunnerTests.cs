@@ -1294,6 +1294,49 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void ResolveProjects_RejectsFallbackDiscoveryDirectoryTraversalLimit_Issue3213()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_solution_fallback_directory_limit");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            var limits = SolutionProjectResolverLimits.Default with { MaxFallbackDiscoveryDirectories = 1 };
+
+            var ex = Assert.Throws<InvalidOperationException>(
+                () => SolutionProjectResolver.ResolveProjects(projectRoot, solutionPath: null, limits));
+
+            Assert.Contains("fallback project discovery traversed more than 1 directories", ex.Message);
+            Assert.Contains("pass --solution <path>", ex.Message);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ResolveProjects_RejectsFallbackDiscoveryFileTraversalLimit_Issue3213()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_solution_fallback_file_limit");
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "A.txt"), "a");
+            File.WriteAllText(Path.Combine(projectRoot, "B.txt"), "b");
+            var limits = SolutionProjectResolverLimits.Default with { MaxFallbackDiscoveryFiles = 1 };
+
+            var ex = Assert.Throws<InvalidOperationException>(
+                () => SolutionProjectResolver.ResolveProjects(projectRoot, solutionPath: null, limits));
+
+            Assert.Contains("fallback project discovery traversed more than 1 files", ex.Message);
+            Assert.Contains("pass --solution <path>", ex.Message);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void ResolveProjectFiles_HonorsGitRootIgnoreRulesForNestedWorkspace_Issue2862()
     {
         var repoRoot = TestProjectHelper.CreateTempProject("cdidx_index_project_filter_git_root");

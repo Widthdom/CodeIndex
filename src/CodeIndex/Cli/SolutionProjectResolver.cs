@@ -6,19 +6,29 @@ internal sealed record DotNetProjectInfo(string Name, string ProjectPath, string
 
 internal readonly record struct SolutionProjectResolverLimits(
     int MaxAutomaticSolutionCandidates,
+    int MaxFallbackDiscoveryDirectories,
+    int MaxFallbackDiscoveryFiles,
     int MaxTraversalDiagnostics)
 {
     internal const int DefaultMaxAutomaticSolutionCandidates = 128;
+    internal const int DefaultMaxFallbackDiscoveryDirectories = 4096;
+    internal const int DefaultMaxFallbackDiscoveryFiles = 65536;
     internal const int DefaultMaxTraversalDiagnostics = 8;
 
     public static SolutionProjectResolverLimits Default { get; } = new(
         DefaultMaxAutomaticSolutionCandidates,
+        DefaultMaxFallbackDiscoveryDirectories,
+        DefaultMaxFallbackDiscoveryFiles,
         DefaultMaxTraversalDiagnostics);
 
     public void Validate()
     {
         if (MaxAutomaticSolutionCandidates <= 0)
             throw new ArgumentOutOfRangeException(nameof(MaxAutomaticSolutionCandidates), MaxAutomaticSolutionCandidates, "Limit must be positive.");
+        if (MaxFallbackDiscoveryDirectories <= 0)
+            throw new ArgumentOutOfRangeException(nameof(MaxFallbackDiscoveryDirectories), MaxFallbackDiscoveryDirectories, "Limit must be positive.");
+        if (MaxFallbackDiscoveryFiles <= 0)
+            throw new ArgumentOutOfRangeException(nameof(MaxFallbackDiscoveryFiles), MaxFallbackDiscoveryFiles, "Limit must be positive.");
         if (MaxTraversalDiagnostics <= 0)
             throw new ArgumentOutOfRangeException(nameof(MaxTraversalDiagnostics), MaxTraversalDiagnostics, "Limit must be positive.");
     }
@@ -62,7 +72,8 @@ internal static class SolutionProjectResolver
         if (solution != null)
             return ParseSolution(solution, workspaceRoot, indexer);
 
-        return EnumerateFilesUsingIndexerPolicy(workspaceRoot, workspaceRoot, indexer, limits, traversalDiagnostics)
+        var budget = ProjectTraversalBudget.ForFallbackDiscovery(limits);
+        return EnumerateFilesUsingIndexerPolicy(workspaceRoot, workspaceRoot, indexer, limits, budget, traversalDiagnostics)
             .Where(IsDotNetProjectFile)
             .Select(path => BuildProjectInfo(path, workspaceRoot))
             .OrderBy(project => project.Name, StringComparer.OrdinalIgnoreCase)
@@ -123,7 +134,7 @@ internal static class SolutionProjectResolver
                     traversalDiagnostics));
             }
 
-            foreach (var file in EnumerateFilesUsingIndexerPolicy(root, match.DirectoryPath, indexer, SolutionProjectResolverLimits.Default, traversalDiagnostics))
+            foreach (var file in EnumerateFilesUsingIndexerPolicy(root, match.DirectoryPath, indexer, SolutionProjectResolverLimits.Default, budget: null, traversalDiagnostics))
             {
                 var relative = Path.GetRelativePath(root, file)
                     .Replace(Path.DirectorySeparatorChar, '/')
@@ -245,6 +256,7 @@ internal static class SolutionProjectResolver
         string startDirectory,
         FileIndexer indexer,
         SolutionProjectResolverLimits limits,
+        ProjectTraversalBudget? budget,
         IList<string>? traversalDiagnostics)
     {
         var root = Path.GetFullPath(workspaceRoot);
@@ -253,17 +265,18 @@ internal static class SolutionProjectResolver
             yield break;
 
         var pending = new Stack<string>();
+        budget?.RecordDirectory(root, start);
         pending.Push(start);
         while (pending.Count > 0)
         {
             var directory = pending.Pop();
-            foreach (var childDirectory in EnumerateChildDirectories(root, directory, limits, traversalDiagnostics))
+            foreach (var childDirectory in EnumerateChildDirectories(root, directory, limits, budget, traversalDiagnostics))
             {
                 if (!ShouldSkipDirectoryForTraversal(root, childDirectory, indexer, limits, traversalDiagnostics))
                     pending.Push(childDirectory);
             }
 
-            foreach (var file in EnumerateDirectoryFiles(root, directory, limits, traversalDiagnostics))
+            foreach (var file in EnumerateDirectoryFiles(root, directory, limits, budget, traversalDiagnostics))
             {
                 if (ShouldIncludeFileForTraversal(root, file, indexer, limits, traversalDiagnostics))
                     yield return file;
@@ -323,56 +336,145 @@ internal static class SolutionProjectResolver
         return false;
     }
 
-    private static IReadOnlyList<string> EnumerateChildDirectories(
+    private static IEnumerable<string> EnumerateChildDirectories(
         string workspaceRoot,
         string directory,
         SolutionProjectResolverLimits limits,
+        ProjectTraversalBudget? budget,
         IList<string>? traversalDiagnostics)
         => EnumerateDirectoryEntries(
             workspaceRoot,
             directory,
             "subdirectories",
+            ProjectTraversalEntryKind.Directory,
             Directory.EnumerateDirectories,
             limits,
+            budget,
             traversalDiagnostics);
 
-    private static IReadOnlyList<string> EnumerateDirectoryFiles(
+    private static IEnumerable<string> EnumerateDirectoryFiles(
         string workspaceRoot,
         string directory,
         SolutionProjectResolverLimits limits,
+        ProjectTraversalBudget? budget,
         IList<string>? traversalDiagnostics)
         => EnumerateDirectoryEntries(
             workspaceRoot,
             directory,
             "files",
+            ProjectTraversalEntryKind.File,
             Directory.EnumerateFiles,
             limits,
+            budget,
             traversalDiagnostics);
 
-    private static IReadOnlyList<string> EnumerateDirectoryEntries(
+    private static IEnumerable<string> EnumerateDirectoryEntries(
         string workspaceRoot,
         string directory,
         string entryKind,
+        ProjectTraversalEntryKind budgetKind,
         Func<string, IEnumerable<string>> enumerate,
         SolutionProjectResolverLimits limits,
+        ProjectTraversalBudget? budget,
         IList<string>? traversalDiagnostics)
     {
+        IEnumerable<string> entries;
         try
         {
-            return enumerate(LongPath.EnsureWindowsPrefix(directory))
-                .Select(LongPath.RemoveWindowsPrefix)
-                .ToList();
+            entries = enumerate(LongPath.EnsureWindowsPrefix(directory));
         }
         catch (UnauthorizedAccessException)
         {
             AddTraversalDiagnostic(workspaceRoot, directory, entryKind, "permissions", limits, traversalDiagnostics);
+            yield break;
         }
         catch (IOException)
         {
             AddTraversalDiagnostic(workspaceRoot, directory, entryKind, "an I/O error", limits, traversalDiagnostics);
+            yield break;
         }
 
-        return [];
+        using var enumerator = entries.GetEnumerator();
+        while (true)
+        {
+            string entry;
+            try
+            {
+                if (!enumerator.MoveNext())
+                    yield break;
+                entry = LongPath.RemoveWindowsPrefix(enumerator.Current);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                AddTraversalDiagnostic(workspaceRoot, directory, entryKind, "permissions", limits, traversalDiagnostics);
+                yield break;
+            }
+            catch (IOException)
+            {
+                AddTraversalDiagnostic(workspaceRoot, directory, entryKind, "an I/O error", limits, traversalDiagnostics);
+                yield break;
+            }
+
+            budget?.RecordEntry(workspaceRoot, entry, budgetKind);
+            yield return entry;
+        }
+    }
+
+    private enum ProjectTraversalEntryKind
+    {
+        Directory,
+        File,
+    }
+
+    private sealed class ProjectTraversalBudget
+    {
+        private readonly int _maxDirectories;
+        private readonly int _maxFiles;
+        private readonly string _context;
+        private readonly string _recoveryHint;
+        private int _directoriesTraversed;
+        private int _filesTraversed;
+
+        private ProjectTraversalBudget(int maxDirectories, int maxFiles, string context, string recoveryHint)
+        {
+            _maxDirectories = maxDirectories;
+            _maxFiles = maxFiles;
+            _context = context;
+            _recoveryHint = recoveryHint;
+        }
+
+        public static ProjectTraversalBudget ForFallbackDiscovery(SolutionProjectResolverLimits limits)
+            => new(
+                limits.MaxFallbackDiscoveryDirectories,
+                limits.MaxFallbackDiscoveryFiles,
+                "fallback project discovery",
+                "pass --solution <path> to avoid fallback workspace discovery");
+
+        public void RecordDirectory(string workspaceRoot, string directory)
+        {
+            _directoriesTraversed++;
+            if (_directoriesTraversed > _maxDirectories)
+                ThrowExceeded(workspaceRoot, directory, "directories", _maxDirectories);
+        }
+
+        public void RecordEntry(string workspaceRoot, string path, ProjectTraversalEntryKind kind)
+        {
+            if (kind == ProjectTraversalEntryKind.Directory)
+            {
+                RecordDirectory(workspaceRoot, path);
+                return;
+            }
+
+            _filesTraversed++;
+            if (_filesTraversed > _maxFiles)
+                ThrowExceeded(workspaceRoot, path, "files", _maxFiles);
+        }
+
+        private void ThrowExceeded(string workspaceRoot, string path, string unit, int limit)
+        {
+            throw new InvalidOperationException(
+                $"{_context} traversed more than {limit} {unit} under {workspaceRoot}; last path: {FormatRelativePathForDiagnostic(workspaceRoot, path)}; {_recoveryHint}.");
+        }
     }
 
     private static void AddTraversalDiagnostic(
