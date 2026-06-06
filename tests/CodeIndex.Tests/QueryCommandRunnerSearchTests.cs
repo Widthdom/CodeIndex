@@ -2347,6 +2347,49 @@ jobs:
     }
 
     [Fact]
+    public void RunSearch_QuotedPhrasePreservesFtsPhraseSemantics_Issue2999()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_quoted_phrase_2999");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/match.cs",
+                "csharp",
+                "var regex = new Regex(pattern);\n");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/noise.cs",
+                "csharp",
+                "var created = new Builder();\nvar matcher = Regex.Match(input, pattern);\n");
+
+            var json = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["\"new Regex\"", "--db", dbPath, "--json=array"],
+                _jsonOptions));
+            var count = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["\"new Regex\"", "--db", dbPath, "--count"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(json.Stdout);
+            var row = Assert.Single(document.RootElement.EnumerateArray());
+
+            Assert.Equal(CommandExitCodes.Success, json.Result);
+            Assert.Equal(string.Empty, json.Stderr);
+            Assert.Equal("src/match.cs", row.GetProperty("path").GetString());
+            Assert.Equal(1, row.GetProperty("match_lines")[0].GetInt32());
+
+            Assert.Equal(CommandExitCodes.Success, count.Result);
+            Assert.Equal("1", count.Stdout.Trim());
+            Assert.Equal(string.Empty, count.Stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_ExcludeTestsSkipsPythonConftestFiles()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_conftest_exclude");

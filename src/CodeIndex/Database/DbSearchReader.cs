@@ -44,10 +44,56 @@ public partial class DbReader
         // クエリ内のダブルクォートをエスケープし、各トークンをダブルクォートで囲む。
         // ユーザー入力末尾の `*` は prefix 検索の shorthand として保持し、`auth*` で
         // `authenticate` を raw FTS5 構文なしに検索できるようにする。
-        var tokens = query.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
-        if (tokens.Length == 0)
+        var tokens = SplitLiteralSearchTerms(query);
+        if (tokens.Count == 0)
             return "\"\"";
         return string.Join(" ", tokens.Select(token => FormatFtsToken(token, prefix)));
+    }
+
+    private static List<string> SplitLiteralSearchTerms(string query)
+    {
+        var tokens = new List<string>();
+        for (var i = 0; i < query.Length;)
+        {
+            while (i < query.Length && char.IsWhiteSpace(query[i]))
+                i++;
+            if (i >= query.Length)
+                break;
+
+            if (query[i] != '"')
+            {
+                var start = i;
+                while (i < query.Length && !char.IsWhiteSpace(query[i]))
+                    i++;
+                tokens.Add(query[start..i]);
+                continue;
+            }
+
+            i++;
+            var phrase = new StringBuilder();
+            while (i < query.Length)
+            {
+                if (query[i] == '"')
+                {
+                    if (i + 1 < query.Length && query[i + 1] == '"')
+                    {
+                        phrase.Append('"');
+                        i += 2;
+                        continue;
+                    }
+
+                    i++;
+                    break;
+                }
+
+                phrase.Append(query[i]);
+                i++;
+            }
+
+            tokens.Add(phrase.Length == 0 ? "\"" : phrase.ToString());
+        }
+
+        return tokens;
     }
 
     public static FtsQueryDiagnostics AnalyzeFtsQuery(string query, bool rawQuery = false, bool prefix = false, string? lang = null)
