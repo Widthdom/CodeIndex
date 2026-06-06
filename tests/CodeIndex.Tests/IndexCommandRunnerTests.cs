@@ -7905,6 +7905,62 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_DryRun_JsonCapsFileSamples()
+    {
+        var projectRoot = CreateTempProject();
+        var fileCount = IndexCommandRunner.DryRunFileSampleLimit + 3;
+        try
+        {
+            foreach (var i in Enumerable.Range(0, fileCount))
+                File.WriteAllText(Path.Combine(projectRoot, $"sample{i:D3}.cs"), $"public class Sample{i} {{ }}\n");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("dry_run", json.GetProperty("status").GetString());
+            Assert.Equal(fileCount, json.GetProperty("files_total").GetInt32());
+            Assert.Equal(fileCount, json.GetProperty("languages").GetProperty("csharp").GetInt32());
+            Assert.Equal(IndexCommandRunner.DryRunFileSampleLimit, json.GetProperty("file_sample_limit").GetInt32());
+            Assert.True(json.GetProperty("file_samples_truncated").GetBoolean());
+            Assert.Equal(IndexCommandRunner.DryRunFileSampleLimit, json.GetProperty("file_samples").GetArrayLength());
+            Assert.Equal(0, json.GetProperty("errors_total").GetInt32());
+            Assert.False(json.GetProperty("errors_truncated").GetBoolean());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_JsonCapsErrorSamples()
+    {
+        var projectRoot = CreateTempProject();
+        var fileCount = IndexCommandRunner.DryRunErrorSampleLimit + 3;
+        try
+        {
+            foreach (var i in Enumerable.Range(0, fileCount))
+                File.WriteAllText(Path.Combine(projectRoot, $"large{i:D3}.cs"), $"public class Large{i} {{ }}\n");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--dry-run", "--max-file-bytes", "1", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("dry_run", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("files_total").GetInt32());
+            Assert.Equal(fileCount, json.GetProperty("errors_total").GetInt32());
+            Assert.Equal(IndexCommandRunner.DryRunErrorSampleLimit, json.GetProperty("error_limit").GetInt32());
+            Assert.True(json.GetProperty("errors_truncated").GetBoolean());
+            Assert.Equal(IndexCommandRunner.DryRunErrorSampleLimit, json.GetProperty("errors").GetArrayLength());
+            Assert.Equal(IndexCommandRunner.DryRunFileSampleLimit, json.GetProperty("file_sample_limit").GetInt32());
+            Assert.False(json.GetProperty("file_samples_truncated").GetBoolean());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_DryRun_FullScan_ReportsUnreadableDirectory()
     {
         if (OperatingSystem.IsWindows())
