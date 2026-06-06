@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
@@ -2027,6 +2028,36 @@ public class DatabaseTests : IDisposable
         Assert.Equal("interface", reader.GetString(1));
         Assert.Equal(2, reader.GetInt32(2));
         Assert.False(reader.Read());
+    }
+
+    [Fact]
+    public void TypeScriptFileHasModuleSyntaxForTests_UsesBoundedFallbackRead_Issue3179()
+    {
+        var projectRoot = Path.Combine(Path.GetTempPath(), $"cdidx_ts_module_fallback_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(projectRoot);
+            var normalFile = Path.Combine(projectRoot, "normal.ts");
+            File.WriteAllText(normalFile, "// comment\nexport {}\n");
+
+            var oversizedFile = Path.Combine(projectRoot, "oversized.ts");
+            File.WriteAllText(oversizedFile, "export {}\n" + new string('x', (int)FileIndexer.DefaultMaxFileSizeBytes));
+
+            var lateMarkerFile = Path.Combine(projectRoot, "late-marker.ts");
+            var lateMarkerBuilder = new StringBuilder();
+            for (var i = 0; i < 17000; i++)
+                lateMarkerBuilder.Append("// filler\n");
+            lateMarkerBuilder.Append("export {}\n");
+            File.WriteAllText(lateMarkerFile, lateMarkerBuilder.ToString());
+
+            Assert.True(DbWriter.TypeScriptFileHasModuleSyntaxForTests(normalFile));
+            Assert.False(DbWriter.TypeScriptFileHasModuleSyntaxForTests(oversizedFile));
+            Assert.False(DbWriter.TypeScriptFileHasModuleSyntaxForTests(lateMarkerFile));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
     }
 
     private static HashSet<string> ReadIndexNames(SqliteConnection connection, string tableName)

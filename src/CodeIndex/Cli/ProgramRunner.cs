@@ -32,6 +32,7 @@ internal static class ProgramRunner
     internal const int WorkspaceVersionPinMaxSkippedBlankLines = 16;
     internal const int WorkspaceVersionPinMaxLineChars = 256;
     internal const long TestExtractorMaxInputBytes = 4 * 1024 * 1024;
+    private const int TestExtractorReadBufferBytes = 81920;
     private static readonly TimeSpan InstallerRunTimeout = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan InstallerKillWaitTimeout = TimeSpan.FromSeconds(5);
     private static readonly HashSet<string> NonLogGlobalOptionNames =
@@ -40,6 +41,7 @@ internal static class ProgramRunner
         CliFlagSchema.GetTopLevelValueOptionNames();
     internal static TimeProvider TimeProvider { get; set; } = TimeProvider.System;
     internal static Func<HttpClient> UpgradeHttpClientFactory { get; set; } = CreateUpgradeHttpClient;
+    internal static Action<string>? TestExtractorFileLengthCheckedForTesting { get; set; }
     internal static Action<string>? DeleteInstallDirectoryWriteProbeForTesting { get; set; }
 
     private sealed record CommandRunContext(
@@ -537,15 +539,14 @@ internal static class ProgramRunner
             using var stream = File.OpenRead(LongPath.EnsureWindowsPrefix(path));
             if (stream.Length > TestExtractorMaxInputBytes)
             {
-                exitCode = CommandErrorWriter.Write(
-                    $"{displayRole} is too large: {stream.Length} bytes exceeds the {TestExtractorMaxInputBytes} byte limit.",
-                    CommandExitCodes.InvalidArgument,
-                    "Use a smaller extractor fixture or expectation file.");
+                exitCode = WriteTestExtractorTooLargeError(displayRole, stream.Length);
                 return false;
             }
 
-            using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
-            content = reader.ReadToEnd();
+            TestExtractorFileLengthCheckedForTesting?.Invoke(path);
+            if (!TryReadTestExtractorStream(stream, displayRole, out content, out exitCode))
+                return false;
+
             return true;
         }
         catch (IOException ex)
@@ -559,6 +560,48 @@ internal static class ProgramRunner
             return false;
         }
     }
+
+    private static bool TryReadTestExtractorStream(Stream stream, string displayRole, out string content, out int exitCode)
+    {
+        content = string.Empty;
+        exitCode = CommandExitCodes.Success;
+        using var buffer = new MemoryStream(capacity: (int)Math.Min(TestExtractorMaxInputBytes, Math.Max(0, stream.Length)));
+        var scratch = new byte[TestExtractorReadBufferBytes];
+        long bytesRead = 0;
+        while (true)
+        {
+            var remainingBudget = TestExtractorMaxInputBytes + 1 - bytesRead;
+            if (remainingBudget <= 0)
+            {
+                exitCode = WriteTestExtractorTooLargeError(displayRole, bytesRead);
+                return false;
+            }
+
+            var read = stream.Read(scratch, 0, (int)Math.Min(scratch.Length, remainingBudget));
+            if (read == 0)
+                break;
+
+            bytesRead += read;
+            if (bytesRead > TestExtractorMaxInputBytes)
+            {
+                exitCode = WriteTestExtractorTooLargeError(displayRole, bytesRead);
+                return false;
+            }
+
+            buffer.Write(scratch, 0, read);
+        }
+
+        buffer.Position = 0;
+        using var reader = new StreamReader(buffer, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        content = reader.ReadToEnd();
+        return true;
+    }
+
+    private static int WriteTestExtractorTooLargeError(string displayRole, long bytes)
+        => CommandErrorWriter.Write(
+            $"{displayRole} is too large: {bytes} bytes exceeds the {TestExtractorMaxInputBytes} byte limit.",
+            CommandExitCodes.InvalidArgument,
+            "Use a smaller extractor fixture or expectation file.");
 
     private static bool TryConsumeInlineOrNext(string[] args, ref int index, string arg, string flag, out string value)
     {

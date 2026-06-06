@@ -293,6 +293,32 @@ public class JsonEnvelopeWrapperTests
     }
 
     [Fact]
+    public void RunWrapped_MixedRawLines_ParsesWithoutMaterializingSplitArray_Issue3015()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => JsonEnvelopeWrapper.RunWrapped(
+            "search",
+            ["Needle", "--json-envelope"],
+            "1.0.0",
+            _jsonOptions,
+            _ =>
+            {
+                Console.Write("{\"path\":\"src/App.cs\"}\r\n");
+                Console.Write("not-json\r\n");
+                Console.Write("{\"done\":true,\"interrupted\":false,\"count\":2}\r\n");
+                return CommandExitCodes.Success;
+            }));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = JsonDocument.Parse(stdout);
+        var results = document.RootElement.GetProperty("results").EnumerateArray().ToArray();
+        Assert.Equal(2, results.Length);
+        Assert.Equal("src/App.cs", results[0].GetProperty("path").GetString());
+        Assert.Equal(JsonValueKind.String, results[1].ValueKind);
+        Assert.Equal("not-json", results[1].GetString());
+    }
+
+    [Fact]
     public void Symbols_WithEnvelope_NormalizesQueryFromExtraNames()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("envelope_symbols");

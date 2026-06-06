@@ -1,3 +1,4 @@
+using System.Text;
 using CodeIndex.Cli;
 
 namespace CodeIndex.Tests;
@@ -73,6 +74,16 @@ public class SourceCodeDetectorTests
     }
 
     [Fact]
+    public void AllowsLargeNaturalLanguageWithoutWholeTextSplit_Issue3068()
+    {
+        var builder = new StringBuilder();
+        for (var i = 0; i < 6000; i++)
+            builder.Append("Search ranking should keep implementation files ahead of generated fixtures. Line ").Append(i).Append('\n');
+
+        Assert.False(SourceCodeDetector.ContainsSourceCode(builder.ToString()));
+    }
+
+    [Fact]
     public void AllowsEmptyOrWhitespace()
     {
         Assert.False(SourceCodeDetector.ContainsSourceCode(""));
@@ -109,6 +120,18 @@ public class SourceCodeDetectorTests
                  + "    {\n"
                  + "        Console.WriteLine(line);\n"
                  + "    }\n"
+                 + "}";
+        Assert.True(SourceCodeDetector.ContainsSourceCode(text));
+    }
+
+    [Fact]
+    public void RejectsCrLfMultiLineCodeBlock_Issue3068()
+    {
+        var text = "public void ProcessFile(string path)\r\n"
+                 + "{\r\n"
+                 + "    var content = File.ReadAllText(path);\r\n"
+                 + "    return;\r\n"
+                 + "    Console.WriteLine(content);\r\n"
                  + "}";
         Assert.True(SourceCodeDetector.ContainsSourceCode(text));
     }

@@ -36,6 +36,8 @@ public class DbWriter
     private const int DeleteFilesBatchSize = 500;
     private const int MaxSqlVariables = 999;
     private const int SqliteConstraintErrorCode = 19;
+    private const int TypeScriptModuleSyntaxFallbackMaxBytes = (int)FileIndexer.DefaultMaxFileSizeBytes;
+    private const int TypeScriptModuleSyntaxFallbackMaxLines = 16384;
     private static readonly BoundedRegex CSharpExternAliasSignatureRegex = new(
         @"^\s*extern\s+alias\b",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -1557,8 +1559,20 @@ public class DbWriter
     {
         try
         {
-            foreach (var line in File.ReadLines(absolutePath))
+            var content = DataDirectorySecurity.ReadTextWithinLimit(
+                absolutePath,
+                TypeScriptModuleSyntaxFallbackMaxBytes,
+                FileShare.ReadWrite | FileShare.Delete);
+            if (content is null)
+                return false;
+
+            var lineCount = 0;
+            foreach (var line in EnumerateLines(content))
             {
+                lineCount++;
+                if (lineCount > TypeScriptModuleSyntaxFallbackMaxLines)
+                    return false;
+
                 var trimmed = line.TrimStart();
                 if (trimmed.StartsWith("import ", StringComparison.Ordinal)
                     || trimmed.StartsWith("export ", StringComparison.Ordinal)
@@ -1568,11 +1582,36 @@ public class DbWriter
                 }
             }
         }
-        catch (IOException) { }
-        catch (UnauthorizedAccessException) { }
+        catch (Exception ex) when (IsExpectedTypeScriptFallbackReadException(ex)) { }
 
         return false;
     }
+
+    internal static bool TypeScriptFileHasModuleSyntaxForTests(string absolutePath) =>
+        TypeScriptFileHasModuleSyntax(absolutePath);
+
+    private static IEnumerable<string> EnumerateLines(string text)
+    {
+        var start = 0;
+        while (start <= text.Length)
+        {
+            var newline = text.IndexOf('\n', start);
+            if (newline < 0)
+            {
+                yield return text[start..].TrimEnd('\r');
+                yield break;
+            }
+
+            yield return text[start..newline].TrimEnd('\r');
+            start = newline + 1;
+        }
+    }
+
+    private static bool IsExpectedTypeScriptFallbackReadException(Exception ex) =>
+        ex is IOException
+            or UnauthorizedAccessException
+            or ArgumentException
+            or NotSupportedException;
 
     /// <summary>
     /// Insert file validation issues.
