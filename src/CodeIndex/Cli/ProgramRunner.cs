@@ -42,6 +42,7 @@ internal static class ProgramRunner
     internal static TimeProvider TimeProvider { get; set; } = TimeProvider.System;
     internal static Func<HttpClient> UpgradeHttpClientFactory { get; set; } = CreateUpgradeHttpClient;
     internal static Action<string>? TestExtractorFileLengthCheckedForTesting { get; set; }
+    internal static Action<string>? DeleteInstallDirectoryWriteProbeForTesting { get; set; }
 
     private sealed record CommandRunContext(
         JsonSerializerOptions JsonOptions,
@@ -3391,19 +3392,44 @@ internal static class ProgramRunner
             downloadCts.Token).ConfigureAwait(false);
     }
 
-    private static bool CanWriteDirectory(string directory)
+    internal static bool CanWriteDirectory(string directory)
     {
+        string? probe = null;
+        var createdProbe = false;
         try
         {
             Directory.CreateDirectory(directory);
-            var probe = Path.Combine(directory, $".cdidx-write-test-{Guid.NewGuid():N}");
+            probe = Path.Combine(directory, $".cdidx-write-test-{Guid.NewGuid():N}");
             File.WriteAllText(probe, "");
-            File.Delete(probe);
+            createdProbe = true;
             return true;
         }
         catch
         {
             return false;
+        }
+        finally
+        {
+            if (createdProbe && probe != null)
+                TryDeleteInstallDirectoryWriteProbe(probe);
+        }
+    }
+
+    private static void TryDeleteInstallDirectoryWriteProbe(string probePath)
+    {
+        try
+        {
+            if (!File.Exists(probePath))
+                return;
+
+            if (DeleteInstallDirectoryWriteProbeForTesting != null)
+                DeleteInstallDirectoryWriteProbeForTesting(probePath);
+            else
+                File.Delete(probePath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Console.Error.WriteLine($"Warning: failed to delete install directory write probe {ConsoleUi.FormatBoundedValue(probePath)} ({CommandErrorWriter.FormatSanitizedException(ex)}).");
         }
     }
 

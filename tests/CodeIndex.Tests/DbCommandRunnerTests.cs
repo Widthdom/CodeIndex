@@ -437,6 +437,46 @@ public class DbCommandRunnerTests
     }
 
     [Fact]
+    public void Run_CheckpointTempCleanupFailurePreservesOriginalFailure_Issue3029()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_cleanup_{Guid.NewGuid():N}");
+        var dbPath = Path.Combine(root, "codeindex.db");
+        string? cleanupPath = null;
+        try
+        {
+            Directory.CreateDirectory(root);
+            using (var db = new DbContext(dbPath))
+                db.InitializeSchema();
+            SqliteConnection.ClearAllPools();
+
+            var checkpointRoot = dbPath + ".checkpoints";
+            Directory.CreateDirectory(checkpointRoot);
+            File.WriteAllText(Path.Combine(checkpointRoot, "saved"), "checkpoint path blocker");
+            DbCommandRunner.DeleteTemporaryDirectoryForTesting = path =>
+            {
+                cleanupPath = path;
+                throw new IOException("simulated checkpoint temp cleanup failure");
+            };
+
+            var (exitCode, _, stderr) = RunAndCaptureStreams(["checkpoint", "saved", "--db", dbPath]);
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.Contains("failed to create database checkpoint", stderr);
+            Assert.Contains("Warning: failed to delete checkpoint temporary directory", stderr);
+            Assert.Contains("IOException", stderr);
+            Assert.NotNull(cleanupPath);
+            Assert.True(Directory.Exists(cleanupPath));
+        }
+        finally
+        {
+            DbCommandRunner.DeleteTemporaryDirectoryForTesting = null;
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Run_CheckpointsList_JsonIncludesCreatedCheckpoint()
     {
         var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_list_{Guid.NewGuid():N}");
@@ -569,6 +609,92 @@ public class DbCommandRunnerTests
         finally
         {
             DbCommandRunner.RestoreFailureAfterBackupForTesting = null;
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Run_RestoreTemporaryNamesIncludeCollisionResistantSuffix_Issue3031()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_restore_suffix_{Guid.NewGuid():N}");
+        var dbPath = Path.Combine(root, "codeindex.db");
+        var inspected = false;
+        Directory.CreateDirectory(root);
+        try
+        {
+            using (var db = new DbContext(dbPath))
+                db.InitializeSchema();
+            SqliteConnection.ClearAllPools();
+            var (checkpointExit, _, _) = RunAndCaptureStreams(["checkpoint", "saved", "--db", dbPath]);
+            Assert.Equal(CommandExitCodes.Success, checkpointExit);
+
+            File.WriteAllText(dbPath, "changed");
+            DbCommandRunner.RestoreFailureAfterBackupForTesting = () =>
+            {
+                var restoreTempPath = Assert.Single(Directory.GetDirectories(root, "codeindex.db.restore-tmp-*"));
+                var backupPath = Assert.Single(Directory.GetDirectories(root, "codeindex.db.restore-backup-*"));
+                AssertRestoreSuffix(Path.GetFileName(restoreTempPath), "codeindex.db.restore-tmp-");
+                AssertRestoreSuffix(Path.GetFileName(backupPath), "codeindex.db.restore-backup-");
+                inspected = true;
+            };
+
+            var (restoreExit, _, _) = RunAndCaptureStreams(["restore", "saved", "--db", dbPath]);
+
+            Assert.Equal(CommandExitCodes.Success, restoreExit);
+            Assert.True(inspected);
+        }
+        finally
+        {
+            DbCommandRunner.RestoreFailureAfterBackupForTesting = null;
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Run_RestoreTempCleanupFailureWarnsWithoutFailing_Issue3030()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_restore_cleanup_{Guid.NewGuid():N}");
+        var dbPath = Path.Combine(root, "codeindex.db");
+        string? cleanupPath = null;
+        Directory.CreateDirectory(root);
+        try
+        {
+            using (var db = new DbContext(dbPath))
+                db.InitializeSchema();
+            SqliteConnection.ClearAllPools();
+            var originalBytes = File.ReadAllBytes(dbPath);
+            var (checkpointExit, _, _) = RunAndCaptureStreams(["checkpoint", "saved", "--db", dbPath]);
+            Assert.Equal(CommandExitCodes.Success, checkpointExit);
+
+            File.WriteAllText(dbPath, "changed");
+            DbCommandRunner.DeleteTemporaryDirectoryForTesting = path =>
+            {
+                if (Path.GetFileName(path).StartsWith("codeindex.db.restore-tmp-", StringComparison.Ordinal))
+                {
+                    cleanupPath = path;
+                    throw new IOException("simulated restore temp cleanup failure");
+                }
+
+                Directory.Delete(path, recursive: true);
+            };
+
+            var (restoreExit, restoreOut, stderr) = RunAndCaptureStreams(["restore", "saved", "--db", dbPath]);
+
+            Assert.Equal(CommandExitCodes.Success, restoreExit);
+            Assert.Contains("Restored", restoreOut);
+            Assert.Equal(originalBytes, File.ReadAllBytes(dbPath));
+            Assert.Contains("Warning: failed to delete restore temporary directory", stderr);
+            Assert.Contains("IOException", stderr);
+            Assert.NotNull(cleanupPath);
+            Assert.True(Directory.Exists(cleanupPath));
+        }
+        finally
+        {
+            DbCommandRunner.DeleteTemporaryDirectoryForTesting = null;
             SqliteConnection.ClearAllPools();
             if (Directory.Exists(root))
                 Directory.Delete(root, recursive: true);
@@ -741,6 +867,16 @@ public class DbCommandRunnerTests
         var exitCode = DbCommandRunner.RunIntegrityCheck(args, _jsonOptions);
         using var document = JsonDocument.Parse(capture.Out!.ToString()!);
         return (exitCode, document.RootElement.Clone());
+    }
+
+    private static void AssertRestoreSuffix(string directoryName, string prefix)
+    {
+        Assert.StartsWith(prefix, directoryName);
+        var suffix = directoryName[prefix.Length..];
+        Assert.Equal(50, suffix.Length);
+        Assert.True(suffix[..17].All(char.IsDigit));
+        Assert.Equal('-', suffix[17]);
+        Assert.True(suffix[18..].All(char.IsAsciiHexDigit));
     }
 
     private static void AssertPrivateDirectory(string path)

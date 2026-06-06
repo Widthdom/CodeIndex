@@ -356,7 +356,8 @@ internal sealed record GroupedSymbolHotspotJsonResult(
     string? Visibility,
     string? Container,
     int DefinitionSites,
-    List<string> Paths);
+    List<string> Paths,
+    bool PathsTruncated);
 
 internal sealed record VersionInfoJsonResult(
     [property: JsonPropertyName("name")] string Name,

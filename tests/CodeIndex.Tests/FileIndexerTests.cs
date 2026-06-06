@@ -49,6 +49,45 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void Constructor_CaseProbeAvoidsRootProbeArtifacts_Issue3174()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-case-probe-indexer-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            _ = new FileIndexer(tempDir);
+
+            Assert.Empty(Directory.GetFiles(tempDir, ".cdidx_case_probe_*", SearchOption.TopDirectoryOnly));
+            Assert.False(Directory.Exists(Path.Combine(tempDir, CaseSensitivityProbeDirectory.DataDirectoryName)));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
+    public void Constructor_CaseProbePreservesExistingCdidxDirectory_Issue3174()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-case-probe-existing-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var dataDirectory = Path.Combine(tempDir, CaseSensitivityProbeDirectory.DataDirectoryName);
+            Directory.CreateDirectory(dataDirectory);
+
+            _ = new FileIndexer(tempDir);
+
+            Assert.True(Directory.Exists(dataDirectory));
+            Assert.False(Directory.Exists(Path.Combine(dataDirectory, CaseSensitivityProbeDirectory.ProbeDirectoryName)));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
     public void ScanFilesDetailed_CaseInsensitiveChildDirectory_SkipsCaseOnlyDuplicatePathWithWarning()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-case-dedupe-{Guid.NewGuid():N}");

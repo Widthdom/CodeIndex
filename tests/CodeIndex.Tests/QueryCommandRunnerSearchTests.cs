@@ -3606,6 +3606,78 @@ jobs:
     }
 
     [Fact]
+    public void RunFind_StreamsOverlappingChunksOnce_Issue3099()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_find_stream_chunks");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                var fileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/overlap.txt",
+                    Lang = "text",
+                    Size = "first\nalpha one\nshared alpha\nalpha after\nlast".Length,
+                    Lines = 5,
+                    Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                    Checksum = "overlapping-chunks",
+                });
+                writer.InsertChunks([
+                    new ChunkRecord
+                    {
+                        FileId = fileId,
+                        ChunkIndex = 0,
+                        StartLine = 1,
+                        EndLine = 3,
+                        Content = "first\nalpha one\nshared alpha",
+                    },
+                    new ChunkRecord
+                    {
+                        FileId = fileId,
+                        ChunkIndex = 1,
+                        StartLine = 3,
+                        EndLine = 5,
+                        Content = "shared alpha\nalpha after\nlast",
+                    }
+                ]);
+            }
+
+            var (findExitCode, findStdout, findStderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["shared", "--db", dbPath, "--path", "src/overlap.txt", "--json", "--before", "1", "--after", "1"],
+                _jsonOptions));
+            using var findDocument = ParseJsonOutput(findStdout);
+            var findJson = findDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, findExitCode);
+            Assert.Equal(string.Empty, findStderr);
+            Assert.Equal(3, findJson.GetProperty("line").GetInt32());
+            Assert.Equal(1, findJson.GetProperty("column").GetInt32());
+            Assert.Equal(2, findJson.GetProperty("start_line").GetInt32());
+            Assert.Equal(4, findJson.GetProperty("end_line").GetInt32());
+            Assert.Contains("alpha one", findJson.GetProperty("snippet").GetString());
+            Assert.Contains("alpha after", findJson.GetProperty("snippet").GetString());
+
+            var (countExitCode, countStdout, countStderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["alpha", "--db", dbPath, "--path", "src/overlap.txt", "--json", "--count"],
+                _jsonOptions));
+            using var countDocument = ParseJsonOutput(countStdout);
+            var countJson = countDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, countExitCode);
+            Assert.Equal(string.Empty, countStderr);
+            Assert.Equal(3, countJson.GetProperty("count").GetInt32());
+            Assert.Equal(1, countJson.GetProperty("files").GetInt32());
+            Assert.Equal(1, countJson.GetProperty("file_count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunFind_ExactTreatsCSharpGlobalQualifiedNamesAsCanonical()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_find_exact_csharp_global");
