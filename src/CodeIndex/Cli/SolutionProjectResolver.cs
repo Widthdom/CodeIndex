@@ -4,6 +4,19 @@ namespace CodeIndex.Cli;
 
 internal sealed record DotNetProjectInfo(string Name, string ProjectPath, string DirectoryPath);
 
+internal readonly record struct SolutionProjectResolverLimits(int MaxAutomaticSolutionCandidates)
+{
+    internal const int DefaultMaxAutomaticSolutionCandidates = 128;
+
+    public static SolutionProjectResolverLimits Default { get; } = new(DefaultMaxAutomaticSolutionCandidates);
+
+    public void Validate()
+    {
+        if (MaxAutomaticSolutionCandidates <= 0)
+            throw new ArgumentOutOfRangeException(nameof(MaxAutomaticSolutionCandidates), MaxAutomaticSolutionCandidates, "Limit must be positive.");
+    }
+}
+
 internal static class SolutionProjectResolver
 {
     internal const long MaxSolutionFileBytes = 8L * 1024 * 1024;
@@ -11,18 +24,26 @@ internal static class SolutionProjectResolver
     internal const int MaxSolutionProjectReferences = 4096;
 
     public static IReadOnlyList<DotNetProjectInfo> ResolveProjects(string workspaceRoot, string? solutionPath = null)
+        => ResolveProjects(workspaceRoot, solutionPath, SolutionProjectResolverLimits.Default);
+
+    internal static IReadOnlyList<DotNetProjectInfo> ResolveProjects(
+        string workspaceRoot,
+        string? solutionPath,
+        SolutionProjectResolverLimits limits)
     {
+        limits.Validate();
         var root = Path.GetFullPath(workspaceRoot);
         var indexer = CreateIndexerWithWorkspacePolicy(root);
-        return ResolveProjects(root, solutionPath, indexer);
+        return ResolveProjects(root, solutionPath, indexer, limits);
     }
 
     private static IReadOnlyList<DotNetProjectInfo> ResolveProjects(
         string workspaceRoot,
         string? solutionPath,
-        FileIndexer indexer)
+        FileIndexer indexer,
+        SolutionProjectResolverLimits limits)
     {
-        var solution = ResolveSolutionPath(workspaceRoot, solutionPath);
+        var solution = ResolveSolutionPath(workspaceRoot, solutionPath, limits);
         if (solution != null)
             return ParseSolution(solution, workspaceRoot, indexer);
 
@@ -42,7 +63,7 @@ internal static class SolutionProjectResolver
         if (requestedProjects.Count == 0)
             return [];
 
-        var projects = ResolveProjects(workspaceRoot, solutionPath);
+        var projects = ResolveProjects(workspaceRoot, solutionPath, SolutionProjectResolverLimits.Default);
         var globs = new List<string>();
         foreach (var requested in requestedProjects)
         {
@@ -69,7 +90,7 @@ internal static class SolutionProjectResolver
 
         var root = Path.GetFullPath(workspaceRoot);
         var indexer = CreateIndexerWithWorkspacePolicy(root);
-        var projects = ResolveProjects(root, solutionPath, indexer);
+        var projects = ResolveProjects(root, solutionPath, indexer, SolutionProjectResolverLimits.Default);
         var files = new SortedSet<string>(StringComparer.Ordinal);
         foreach (var requested in requestedProjects)
         {
@@ -97,7 +118,10 @@ internal static class SolutionProjectResolver
         return new FileIndexer(root, ignoreCase, ignoreRuleRoot);
     }
 
-    private static string? ResolveSolutionPath(string workspaceRoot, string? solutionPath)
+    private static string? ResolveSolutionPath(
+        string workspaceRoot,
+        string? solutionPath,
+        SolutionProjectResolverLimits limits)
     {
         if (!string.IsNullOrWhiteSpace(solutionPath))
         {
@@ -107,9 +131,19 @@ internal static class SolutionProjectResolver
             return File.Exists(path) ? Path.GetFullPath(path) : throw new FileNotFoundException($"solution not found: {solutionPath}", path);
         }
 
-        var solutions = Directory.EnumerateFiles(workspaceRoot, "*.sln", SearchOption.TopDirectoryOnly)
-            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
-            .ToList();
+        var solutions = new List<string>();
+        foreach (var solution in Directory.EnumerateFiles(workspaceRoot, "*.sln", SearchOption.TopDirectoryOnly))
+        {
+            if (solutions.Count >= limits.MaxAutomaticSolutionCandidates)
+            {
+                throw new InvalidOperationException(
+                    $"automatic solution discovery found more than {limits.MaxAutomaticSolutionCandidates} .sln files at {workspaceRoot}; pass --solution <path> to select a solution explicitly.");
+            }
+
+            solutions.Add(solution);
+        }
+
+        solutions.Sort(StringComparer.OrdinalIgnoreCase);
         return solutions.Count == 1 ? solutions[0] : null;
     }
 

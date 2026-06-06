@@ -1217,6 +1217,29 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void ResolveProjects_RejectsTooManyAutomaticSolutionCandidates_Issue3065()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_solution_candidate_limit");
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "A.sln"), string.Empty);
+            File.WriteAllText(Path.Combine(projectRoot, "B.sln"), string.Empty);
+            File.WriteAllText(Path.Combine(projectRoot, "C.sln"), string.Empty);
+            var limits = SolutionProjectResolverLimits.Default with { MaxAutomaticSolutionCandidates = 2 };
+
+            var ex = Assert.Throws<InvalidOperationException>(
+                () => SolutionProjectResolver.ResolveProjects(projectRoot, solutionPath: null, limits));
+
+            Assert.Contains("automatic solution discovery found more than 2 .sln files", ex.Message);
+            Assert.Contains("pass --solution <path>", ex.Message);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void ResolveProjectFiles_HonorsGitRootIgnoreRulesForNestedWorkspace_Issue2862()
     {
         var repoRoot = TestProjectHelper.CreateTempProject("cdidx_index_project_filter_git_root");
