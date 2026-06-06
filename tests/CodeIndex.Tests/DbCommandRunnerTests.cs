@@ -616,6 +616,45 @@ public class DbCommandRunnerTests
     }
 
     [Fact]
+    public void Run_RestoreTemporaryNamesIncludeCollisionResistantSuffix_Issue3031()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_restore_suffix_{Guid.NewGuid():N}");
+        var dbPath = Path.Combine(root, "codeindex.db");
+        var inspected = false;
+        Directory.CreateDirectory(root);
+        try
+        {
+            using (var db = new DbContext(dbPath))
+                db.InitializeSchema();
+            SqliteConnection.ClearAllPools();
+            var (checkpointExit, _, _) = RunAndCaptureStreams(["checkpoint", "saved", "--db", dbPath]);
+            Assert.Equal(CommandExitCodes.Success, checkpointExit);
+
+            File.WriteAllText(dbPath, "changed");
+            DbCommandRunner.RestoreFailureAfterBackupForTesting = () =>
+            {
+                var restoreTempPath = Assert.Single(Directory.GetDirectories(root, "codeindex.db.restore-tmp-*"));
+                var backupPath = Assert.Single(Directory.GetDirectories(root, "codeindex.db.restore-backup-*"));
+                AssertRestoreSuffix(Path.GetFileName(restoreTempPath), "codeindex.db.restore-tmp-");
+                AssertRestoreSuffix(Path.GetFileName(backupPath), "codeindex.db.restore-backup-");
+                inspected = true;
+            };
+
+            var (restoreExit, _, _) = RunAndCaptureStreams(["restore", "saved", "--db", dbPath]);
+
+            Assert.Equal(CommandExitCodes.Success, restoreExit);
+            Assert.True(inspected);
+        }
+        finally
+        {
+            DbCommandRunner.RestoreFailureAfterBackupForTesting = null;
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Run_Restore_OnPosix_CreatesPrivateStagingAndBackupPermissions()
     {
         if (OperatingSystem.IsWindows())
@@ -781,6 +820,16 @@ public class DbCommandRunnerTests
         var exitCode = DbCommandRunner.RunIntegrityCheck(args, _jsonOptions);
         using var document = JsonDocument.Parse(capture.Out!.ToString()!);
         return (exitCode, document.RootElement.Clone());
+    }
+
+    private static void AssertRestoreSuffix(string directoryName, string prefix)
+    {
+        Assert.StartsWith(prefix, directoryName);
+        var suffix = directoryName[prefix.Length..];
+        Assert.Equal(50, suffix.Length);
+        Assert.True(suffix[..17].All(char.IsDigit));
+        Assert.Equal('-', suffix[17]);
+        Assert.True(suffix[18..].All(char.IsAsciiHexDigit));
     }
 
     private static void AssertPrivateDirectory(string path)

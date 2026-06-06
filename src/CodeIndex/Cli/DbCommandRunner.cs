@@ -782,8 +782,9 @@ public static class DbCommandRunner
         if (!File.Exists(LongPath.EnsureWindowsPrefix(checkpointDbPath)))
             throw new InvalidOperationException($"checkpoint is incomplete: {FormatCheckpointNameForDiagnostic(name)}");
 
-        var restoreTempPath = fullDbPath + ".restore-tmp-" + DateTimeOffset.UtcNow.ToString("yyyyMMddHHmmssfff", System.Globalization.CultureInfo.InvariantCulture);
-        var backupPath = fullDbPath + ".restore-backup-" + DateTimeOffset.UtcNow.ToString("yyyyMMddHHmmssfff", System.Globalization.CultureInfo.InvariantCulture);
+        var restorePathSuffix = MakeRestorePathSuffix();
+        var restoreTempPath = fullDbPath + ".restore-tmp-" + restorePathSuffix;
+        var backupPath = fullDbPath + ".restore-backup-" + restorePathSuffix;
         DataDirectorySecurity.CreateSensitiveDirectory(restoreTempPath);
         try
         {
@@ -836,6 +837,11 @@ public static class DbCommandRunner
 
     private static string MakeTimestampCheckpointName()
         => DateTimeOffset.UtcNow.ToString("yyyyMMddHHmmssfff", System.Globalization.CultureInfo.InvariantCulture);
+
+    private static string MakeRestorePathSuffix()
+        => DateTimeOffset.UtcNow.ToString("yyyyMMddHHmmssfff", System.Globalization.CultureInfo.InvariantCulture)
+            + "-"
+            + Guid.NewGuid().ToString("N");
 
     private static string GetCheckpointRoot(string fullDbPath)
         => fullDbPath + CheckpointsDirectorySuffix;
