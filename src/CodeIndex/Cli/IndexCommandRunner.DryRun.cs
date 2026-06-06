@@ -204,7 +204,17 @@ public static partial class IndexCommandRunner
                     exitCode = WriteDryRunInterrupted(options, jsonOptions);
                     return false;
                 }
-                catch { /* ignore git errors in dry-run */ }
+                catch (Exception ex)
+                {
+                    exitCode = WriteCommandError(
+                        options.Json,
+                        jsonOptions,
+                        $"failed to resolve changed files between git refs: {ex.Message}",
+                        CommandExitCodes.UsageError,
+                        "Check the refs and rerun `cdidx index <projectPath> --changed-between <old-ref> <new-ref>`.",
+                        CommandErrorCodes.UsageError);
+                    return false;
+                }
             }
 
             if (relevantIgnoreFileChanged || ContainsIgnoreFilePath(changedFiles))

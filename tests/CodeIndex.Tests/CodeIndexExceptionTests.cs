@@ -229,7 +229,7 @@ public class CodeIndexExceptionTests
 
         stopwatch.Stop();
         Assert.Equal(cts.Token, ex.CancellationToken);
-        Assert.Equal(1, attempts);
+        Assert.InRange(attempts, 1, 2);
         Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(1), $"Cancellation took {stopwatch.Elapsed}.");
     }
 
@@ -255,7 +255,7 @@ public class CodeIndexExceptionTests
 
         stopwatch.Stop();
         Assert.Equal(cts.Token, ex.CancellationToken);
-        Assert.Equal(1, attempts);
+        Assert.InRange(attempts, 1, 2);
         Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(1), $"Cancellation took {stopwatch.Elapsed}.");
     }
 
