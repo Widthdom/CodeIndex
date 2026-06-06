@@ -23,6 +23,7 @@ public static class QueryCommandRunner
     internal const int DefaultMapLimit = 10;
     internal const int DefaultCompactSectionLimit = 5;
     internal const int DefaultImpactLimit = 50;
+    internal const int DefaultDependencyCycleGraphLimit = 1_000;
     internal const int BatchMaxLineChars = 1024 * 1024;
     internal const int BatchMaxArgumentCount = 256;
     internal const int BatchMaxJsonDepth = 32;
@@ -4462,38 +4463,56 @@ public static class QueryCommandRunner
         return WithDb(options, jsonOptions, reader =>
         {
             var reverse = cmdArgs.Any(a => a == "--reverse");
-            var results = GetWorkspaceFileDependencies(reader, options, reverse);
+            var results = GetWorkspaceFileDependencies(reader, options, reverse, options.Limit);
+            var cycleCandidates = options.DependencyCycles
+                ? GetWorkspaceFileDependencies(reader, options, reverse, GetDependencyCycleGraphLimit(options.Limit))
+                : results;
             var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
-            var sqlGraphSignal = results.Count == 0
-                ? baseSqlGraphSignal
-                : NarrowSqlGraphContractSignalByPaths(
-                    reader,
-                    baseSqlGraphSignal,
-                    results.SelectMany(result => new[] { result.SourcePath, result.TargetPath }),
-                    options.Lang);
             if (results.Count == 0)
             {
+                var zeroSqlGraphSignal = baseSqlGraphSignal;
                 if (options.Json && !reader._hasReferencesTable)
-                    WriteDegradedGraphZeroResult(reader, "edges", json: true, graphAvailable: false, jsonOptions, queryOptions: options, extraFields: payload => AddSqlGraphContractJsonFields(payload, sqlGraphSignal));
+                    WriteDegradedGraphZeroResult(reader, "edges", json: true, graphAvailable: false, jsonOptions, queryOptions: options, extraFields: payload => AddSqlGraphContractJsonFields(payload, zeroSqlGraphSignal));
                 else if (options.Json)
-                    Console.WriteLine(BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "edges", graphTableAvailable: true, degraded: !sqlGraphSignal.Ready, queryOptions: options, extraFields: payload => AddSqlGraphContractJsonFields(payload, sqlGraphSignal)).ToJsonString(jsonOptions));
+                    Console.WriteLine(BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "edges", graphTableAvailable: true, degraded: !zeroSqlGraphSignal.Ready, queryOptions: options, extraFields: payload => AddSqlGraphContractJsonFields(payload, zeroSqlGraphSignal)).ToJsonString(jsonOptions));
                 else
                 {
                     Console.Error.WriteLine(BuildZeroResultLine("No file dependencies found", options));
-                    WriteSqlGraphContractWarningIfNeeded(json: false, sqlGraphSignal, reader, options);
+                    WriteSqlGraphContractWarningIfNeeded(json: false, zeroSqlGraphSignal, reader, options);
                     WriteDegradedGraphZeroResult(reader, "edges", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
                 }
                 return ZeroResultExitCode(options);
             }
 
             List<List<string>> cycles = [];
-            var outputEdges = options.DependencyCycles ? FilterCycleEdges(results, out cycles) : results;
+            var outputEdges = options.DependencyCycles
+                ? FilterCycleEdges(cycleCandidates, out cycles).Take(options.Limit).ToList()
+                : results;
+            if (options.DependencyCycles)
+                cycles = cycles.Take(options.Limit).ToList();
+            var sqlGraphSignalPaths = options.DependencyCycles
+                ? cycles.Count > 0
+                    ? cycles.SelectMany(static cycle => cycle)
+                    : cycleCandidates.SelectMany(static result => new[] { result.SourcePath, result.TargetPath })
+                : results.SelectMany(static result => new[] { result.SourcePath, result.TargetPath });
+            var sqlGraphSignal = NarrowSqlGraphContractSignalByPaths(
+                reader,
+                baseSqlGraphSignal,
+                sqlGraphSignalPaths,
+                options.Lang);
             if (options.DependencyCycles && cycles.Count == 0)
             {
                 if (options.Json)
-                    Console.WriteLine(new JsonObject { ["count"] = 0, ["cycles"] = new JsonArray() }.ToJsonString(jsonOptions));
+                {
+                    var payload = new JsonObject { ["count"] = 0, ["cycles"] = new JsonArray() };
+                    AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
+                    Console.WriteLine(payload.ToJsonString(jsonOptions));
+                }
                 else
+                {
                     Console.Error.WriteLine(BuildZeroResultLine("No dependency cycles found", options));
+                    WriteSqlGraphContractWarningIfNeeded(json: false, sqlGraphSignal, reader, options);
+                }
                 return ZeroResultExitCode(options);
             }
 
@@ -4788,9 +4807,17 @@ public static class QueryCommandRunner
 
     private static string EscapeDot(string value) => value.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal);
 
-    private static List<FileDependencyResult> GetWorkspaceFileDependencies(DbReader primaryReader, QueryCommandOptions options, bool reverse)
+    internal static int GetDependencyCycleGraphLimit(int displayLimit)
     {
-        var results = primaryReader.GetFileDependencies(options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, reverse);
+        var requestedLimit = Math.Max(displayLimit, DefaultDependencyCycleGraphLimit);
+        return NumericFlagUpperBounds.TryGetValue("--limit", out var maxLimit)
+            ? Math.Min(requestedLimit, maxLimit)
+            : requestedLimit;
+    }
+
+    private static List<FileDependencyResult> GetWorkspaceFileDependencies(DbReader primaryReader, QueryCommandOptions options, bool reverse, int limit)
+    {
+        var results = primaryReader.GetFileDependencies(limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, reverse);
         if (options.WorkspaceDbPaths.Count == 0)
             return results;
 
@@ -4806,7 +4833,7 @@ public static class QueryCommandRunner
             using var db = new DbContext(normalizedDbPath);
             db.TryMigrateForRead();
             var reader = new DbReader(db) { IncludeGenerated = primaryReader.IncludeGenerated };
-            var memberResults = reader.GetFileDependencies(options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, reverse);
+            var memberResults = reader.GetFileDependencies(limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, reverse);
             TagFileDependencyResults(memberResults, normalizedDbPath);
             results.AddRange(memberResults);
         }
@@ -4816,7 +4843,7 @@ public static class QueryCommandRunner
             {
                 if (string.Equals(sourceDb, targetDb, StringComparison.Ordinal))
                     continue;
-                results.AddRange(GetCrossDatabaseFileDependencies(sourceDb, targetDb, options, reverse));
+                results.AddRange(GetCrossDatabaseFileDependencies(sourceDb, targetDb, options, reverse, limit));
             }
 
         return results
@@ -4825,11 +4852,11 @@ public static class QueryCommandRunner
             .ThenBy(result => result.SourcePath, StringComparer.Ordinal)
             .ThenBy(result => result.TargetDb, StringComparer.Ordinal)
             .ThenBy(result => result.TargetPath, StringComparer.Ordinal)
-            .Take(options.Limit)
+            .Take(limit)
             .ToList();
     }
 
-    private static List<FileDependencyResult> GetCrossDatabaseFileDependencies(string sourceDbPath, string targetDbPath, QueryCommandOptions options, bool reverse)
+    private static List<FileDependencyResult> GetCrossDatabaseFileDependencies(string sourceDbPath, string targetDbPath, QueryCommandOptions options, bool reverse, int limit)
     {
         var builder = new SqliteConnectionStringBuilder
         {
@@ -4900,7 +4927,7 @@ public static class QueryCommandRunner
             GROUP BY edge_totals.source_path, edge_totals.target_path, edge_totals.reference_count
             ORDER BY edge_totals.reference_count DESC, edge_totals.source_path, edge_totals.target_path
             LIMIT @limit";
-        cmd.Parameters.AddWithValue("@limit", options.Limit);
+        cmd.Parameters.AddWithValue("@limit", limit);
         cmd.Parameters.AddWithValue("@symbolSampleLimit", DbReader.DependencySymbolSampleLimit);
 
         var results = new List<FileDependencyResult>();

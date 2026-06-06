@@ -6691,6 +6691,77 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_DepsCyclesUsesGraphBudgetBeyondDisplayLimit_Issue3185()
+    {
+        var writer = new DbWriter(_db.Connection);
+        var highTargetId = InsertDependencyFile(writer, "src/HighTarget.cs");
+        var highCallerId = InsertDependencyFile(writer, "src/HighCaller.cs");
+        var cycleAId = InsertDependencyFile(writer, "src/CycleA.cs");
+        var cycleBId = InsertDependencyFile(writer, "src/CycleB.cs");
+        var cycleCId = InsertDependencyFile(writer, "src/CycleC.cs");
+        var cycleDId = InsertDependencyFile(writer, "src/CycleD.cs");
+        InsertDependencySymbols(writer, highTargetId, ["HighTarget"]);
+        InsertDependencyReferences(writer, highCallerId, Enumerable.Repeat("HighTarget", 5).ToArray());
+        InsertDependencySymbols(writer, cycleAId, ["CycleA"]);
+        InsertDependencyReferences(writer, cycleAId, ["CycleB"]);
+        InsertDependencySymbols(writer, cycleBId, ["CycleB"]);
+        InsertDependencyReferences(writer, cycleBId, ["CycleA"]);
+        InsertDependencySymbols(writer, cycleCId, ["CycleC"]);
+        InsertDependencyReferences(writer, cycleCId, ["CycleD"]);
+        InsertDependencySymbols(writer, cycleDId, ["CycleD"]);
+        InsertDependencyReferences(writer, cycleDId, ["CycleC"]);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"deps","arguments":{"cycles":true,"limit":1,"lang":"csharp"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+        var cycle = Assert.Single(structured["cycles"]!.AsArray());
+        var nodes = cycle!["nodes"]!.AsArray().Select(node => node!.GetValue<string>()).ToArray();
+
+        Assert.Equal(1, structured["count"]!.GetValue<int>());
+        Assert.Equal(2, nodes.Length);
+        Assert.All(nodes, node => Assert.StartsWith("src/Cycle", node));
+    }
+
+    private static long InsertDependencyFile(DbWriter writer, string path)
+    {
+        return writer.UpsertFile(new FileRecord
+        {
+            Path = path,
+            Lang = "csharp",
+            Size = 1,
+            Lines = 1,
+            Modified = new DateTime(2026, 6, 6, 0, 0, 0, DateTimeKind.Utc),
+            Checksum = Guid.NewGuid().ToString("N"),
+        });
+    }
+
+    private static void InsertDependencySymbols(DbWriter writer, long fileId, IReadOnlyList<string> symbolNames)
+    {
+        writer.InsertSymbols(symbolNames.Select((symbolName, index) => new SymbolRecord
+        {
+            FileId = fileId,
+            Kind = "class",
+            Name = symbolName,
+            Line = index + 1,
+            StartLine = index + 1,
+            EndLine = index + 1,
+        }).ToArray());
+    }
+
+    private static void InsertDependencyReferences(DbWriter writer, long fileId, IReadOnlyList<string> symbolNames)
+    {
+        writer.InsertReferences(symbolNames.Select((symbolName, index) => new ReferenceRecord
+        {
+            FileId = fileId,
+            SymbolName = symbolName,
+            ReferenceKind = "type_reference",
+            Line = index + 1,
+            Column = 1,
+            Context = symbolName,
+        }).ToArray());
+    }
+
+    [Fact]
     public void ToolsCall_Deps_JsonGraph_ReturnsGraphPayload()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_deps_json_graph");

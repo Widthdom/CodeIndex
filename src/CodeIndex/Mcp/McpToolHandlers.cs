@@ -3192,16 +3192,26 @@ public partial class McpServer
         return WithDbReader(id, args, reader =>
         {
             var results = reader.GetFileDependencies(limit, lang, pathPatterns, excludePaths, excludeTests, reverse);
+            var cycleCandidates = cyclesOnly
+                ? reader.GetFileDependencies(QueryCommandRunner.GetDependencyCycleGraphLimit(limit), lang, pathPatterns, excludePaths, excludeTests, reverse)
+                : results;
             var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests);
+            List<List<string>> cycles = [];
+            var outputEdges = cyclesOnly ? QueryCommandRunner.FilterCycleEdges(cycleCandidates, out cycles).Take(limit).ToList() : results;
+            if (cyclesOnly)
+                cycles = cycles.Take(limit).ToList();
+            var sqlGraphSignalPaths = cyclesOnly
+                ? cycles.Count > 0
+                    ? cycles.SelectMany(static cycle => cycle)
+                    : cycleCandidates.SelectMany(static result => new[] { result.SourcePath, result.TargetPath })
+                : results.SelectMany(static result => new[] { result.SourcePath, result.TargetPath });
             var sqlGraphSignal = results.Count == 0
                 ? baseSqlGraphSignal
                 : QueryCommandRunner.NarrowSqlGraphContractSignalByPaths(
                     reader,
                     baseSqlGraphSignal,
-                    results.SelectMany(result => new[] { result.SourcePath, result.TargetPath }),
+                    sqlGraphSignalPaths,
                     lang);
-            List<List<string>> cycles = [];
-            var outputEdges = cyclesOnly ? QueryCommandRunner.FilterCycleEdges(results, out cycles) : results;
             var payload = new JsonObject { ["count"] = cyclesOnly ? cycles.Count : results.Count };
             if (cyclesOnly)
                 payload["cycles"] = QueryCommandRunner.BuildDependencyCyclesJson(cycles);
