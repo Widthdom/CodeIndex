@@ -4982,9 +4982,14 @@ public partial class McpServer
     }
 
     private bool HasClientCapability(string name)
-        => _clientCapabilities is JsonObject obj
-            && obj.TryGetPropertyValue(name, out var node)
-            && node is not null;
+        => name switch
+        {
+            "roots" => _clientSupportsRoots,
+            "sampling" => _clientSupportsSampling,
+            _ => _clientCapabilities is JsonObject obj
+                && obj.TryGetPropertyValue(name, out var node)
+                && node is not null,
+        };
 
     private static bool IsSamplingEnabled()
     {

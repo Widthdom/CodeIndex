@@ -927,6 +927,7 @@ public class McpServerTests : IDisposable
             {
                 ["capabilities"] = new JsonObject
                 {
+                    ["roots"] = new JsonObject(),
                     ["sampling"] = new JsonObject(),
                     ["experimental"] = new JsonObject
                     {
@@ -938,6 +939,8 @@ public class McpServerTests : IDisposable
         _server.HandleMessage(request);
 
         Assert.Empty(_server.ClientCapabilitiesForTests!.AsObject());
+        Assert.True(_server.ClientSupportsRootsForTests);
+        Assert.True(_server.ClientSupportsSamplingForTests);
 
         var status = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
         var response = _server.HandleMessage(status)!;
@@ -956,6 +959,8 @@ public class McpServerTests : IDisposable
     public void Initialize_CapsClientCapabilitiesDepthForSessionStatus_Issue3225()
     {
         var capabilities = new JsonObject();
+        capabilities["roots"] = new JsonObject();
+        capabilities["sampling"] = new JsonObject();
         var current = capabilities;
         for (var i = 0; i < McpServer.MaxClientCapabilitiesDepth + 4; i++)
         {
@@ -977,6 +982,8 @@ public class McpServerTests : IDisposable
         _server.HandleMessage(request);
 
         Assert.Empty(_server.ClientCapabilitiesForTests!.AsObject());
+        Assert.True(_server.ClientSupportsRootsForTests);
+        Assert.True(_server.ClientSupportsSamplingForTests);
 
         var status = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
         var response = _server.HandleMessage(status)!;

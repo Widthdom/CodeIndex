@@ -116,6 +116,8 @@ public partial class McpServer : IDisposable
     private JsonNode? _clientCapabilities;
     private int? _clientCapabilitiesSerializedBytes;
     private string? _clientCapabilitiesTruncationReason;
+    private bool _clientSupportsRoots;
+    private bool _clientSupportsSampling;
     private JsonArray _clientRoots = [];
     private JsonArray _clientRootDiagnostics = [];
     private int _clientRootCount;
@@ -1838,6 +1840,8 @@ public partial class McpServer : IDisposable
         _clientCapabilities = null;
         _clientCapabilitiesSerializedBytes = null;
         _clientCapabilitiesTruncationReason = null;
+        _clientSupportsRoots = false;
+        _clientSupportsSampling = false;
         ResetClientRoots();
         if (initializeParams is not JsonObject obj)
             return;
@@ -1863,6 +1867,7 @@ public partial class McpServer : IDisposable
 
     private void CaptureClientCapabilities(JsonNode capabilities)
     {
+        CaptureClientCapabilityFlags(capabilities);
         var json = capabilities.ToJsonString();
         var serializedBytes = Encoding.UTF8.GetByteCount(json);
         _clientCapabilitiesSerializedBytes = serializedBytes;
@@ -1886,6 +1891,15 @@ public partial class McpServer : IDisposable
     {
         _clientCapabilities = new JsonObject();
         _clientCapabilitiesTruncationReason = reason;
+    }
+
+    private void CaptureClientCapabilityFlags(JsonNode capabilities)
+    {
+        if (capabilities is not JsonObject obj)
+            return;
+
+        _clientSupportsRoots = obj.TryGetPropertyValue("roots", out var roots) && roots is not null;
+        _clientSupportsSampling = obj.TryGetPropertyValue("sampling", out var sampling) && sampling is not null;
     }
 
     private void CaptureClientRoot(string uri)
@@ -1918,6 +1932,10 @@ public partial class McpServer : IDisposable
         .Where(root => !string.IsNullOrWhiteSpace(root))
         .Cast<string>()
         .ToArray();
+
+    internal bool ClientSupportsRootsForTests => _clientSupportsRoots;
+
+    internal bool ClientSupportsSamplingForTests => _clientSupportsSampling;
 
     internal string McpLogLevelForTests => _mcpLogLevel;
 
