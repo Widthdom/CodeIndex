@@ -3781,6 +3781,30 @@ jobs:
         Assert.DoesNotContain("query cannot be empty or whitespace-only", stderr);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RunFind_QueryTooLongReturnsUsageError_Issue3100(bool countOnly)
+    {
+        var args = new List<string>
+        {
+            new('x', QueryLimits.MaxQueryLength + 1),
+            "--path",
+            "src/**/*.cs",
+        };
+        if (countOnly)
+            args.Add("--count");
+
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+            [.. args],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains($"Error: {QueryLimits.FormatQueryTooLongError()}", stderr);
+        Assert.Contains("Hint: Shorten the find text", stderr);
+        Assert.Contains("Usage: cdidx find", stderr);
+    }
+
     [Fact]
     public void RunSearch_ZeroResultsHonorsStaleAfterEnvironment()
     {

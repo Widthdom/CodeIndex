@@ -2727,6 +2727,13 @@ public static class QueryCommandRunner
             Console.Error.WriteLine(FindUsage);
             return CommandExitCodes.UsageError;
         }
+        if (options.Query.Length > QueryLimits.MaxQueryLength)
+        {
+            Console.Error.WriteLine($"Error: {QueryLimits.FormatQueryTooLongError()}");
+            Console.Error.WriteLine("Hint: Shorten the find text or split generated input into smaller queries before running `cdidx find`.");
+            Console.Error.WriteLine(FindUsage);
+            return CommandExitCodes.UsageError;
+        }
 
         if (options.PathPatterns.Count == 0)
         {
