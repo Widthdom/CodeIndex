@@ -6,6 +6,7 @@ namespace CodeIndex.Cli;
 internal static class PrivateLogFile
 {
     internal const UnixFileMode PrivateFileMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+    internal const int MaxExistingFilesToHarden = 128;
 
     internal static FileStream OpenAppend(string path, FileShare share = FileShare.ReadWrite)
     {
@@ -49,8 +50,14 @@ internal static class PrivateLogFile
 
         try
         {
+            var hardened = 0;
             foreach (var file in new DirectoryInfo(directory).EnumerateFiles(pattern, SearchOption.TopDirectoryOnly))
+            {
                 TrySetPrivatePermissions(file.FullName);
+                hardened++;
+                if (hardened >= MaxExistingFilesToHarden)
+                    break;
+            }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -62,20 +69,76 @@ internal static class PrivateLogFile
     {
         try
         {
-            var oldFiles = new DirectoryInfo(directory)
-                .EnumerateFiles(pattern, SearchOption.TopDirectoryOnly)
-                .OrderByDescending(file => file.LastWriteTimeUtc)
-                .ThenByDescending(file => file.Name, StringComparer.Ordinal)
-                .Skip(retainedFileCount)
-                .ToList();
+            var directoryInfo = new DirectoryInfo(directory);
+            var retainedFiles = SelectRetainedFiles(
+                directoryInfo.EnumerateFiles(pattern, SearchOption.TopDirectoryOnly),
+                retainedFileCount);
+            var retainedPaths = new HashSet<string>(
+                retainedFiles.Select(file => file.FullName),
+                OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
 
-            foreach (var file in oldFiles)
-                file.Delete();
+            foreach (var file in directoryInfo.EnumerateFiles(pattern, SearchOption.TopDirectoryOnly))
+            {
+                if (ShouldPruneFile(file, retainedPaths, retainedFiles, retainedFileCount))
+                    file.Delete();
+            }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             // Best-effort only / ベストエフォートのみ
         }
+    }
+
+    private static IReadOnlyList<FileInfo> SelectRetainedFiles(IEnumerable<FileInfo> files, int retainedFileCount)
+    {
+        if (retainedFileCount <= 0)
+            return [];
+
+        var retained = new List<FileInfo>(retainedFileCount);
+        foreach (var file in files)
+            AddRetainedFile(retained, file, retainedFileCount);
+
+        return retained;
+    }
+
+    private static void AddRetainedFile(List<FileInfo> retained, FileInfo file, int retainedFileCount)
+    {
+        var insertAt = retained.FindIndex(existing => CompareRetentionOrder(file, existing) > 0);
+        if (insertAt < 0)
+        {
+            if (retained.Count < retainedFileCount)
+                retained.Add(file);
+            return;
+        }
+
+        retained.Insert(insertAt, file);
+        if (retained.Count > retainedFileCount)
+            retained.RemoveAt(retained.Count - 1);
+    }
+
+    private static bool ShouldPruneFile(
+        FileInfo file,
+        HashSet<string> retainedPaths,
+        IReadOnlyList<FileInfo> retainedFiles,
+        int retainedFileCount)
+    {
+        if (retainedPaths.Contains(file.FullName))
+            return false;
+        if (retainedFileCount <= 0)
+            return true;
+        if (retainedFiles.Count < retainedFileCount)
+            return false;
+
+        return CompareRetentionOrder(file, retainedFiles[^1]) < 0;
+    }
+
+    private static int CompareRetentionOrder(FileInfo left, FileInfo right)
+    {
+        var modified = left.LastWriteTimeUtc.CompareTo(right.LastWriteTimeUtc);
+        if (modified != 0)
+            return modified;
+
+        return string.Compare(left.Name, right.Name, StringComparison.Ordinal);
     }
 
     internal static bool TryRotateSlots(string path, int retainedFileCount)
