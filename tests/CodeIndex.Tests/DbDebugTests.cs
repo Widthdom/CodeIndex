@@ -200,6 +200,38 @@ public class DbDebugTests
     }
 
     [Fact]
+    public void DumpToStderr_RedactedMode_HashesLargeStringsWithBoundedShape()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_DEBUG");
+        env.Set("CDIDX_DEBUG", "1");
+        try
+        {
+            DbDebug.ResetContext();
+            var largeValue = new string('x', 100_000) + "tail";
+            using var conn = new SqliteConnection("Data Source=:memory:");
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT @value AS content";
+            cmd.Parameters.AddWithValue("@value", largeValue);
+            using (var reader = cmd.ExecuteTrackedReader())
+            {
+                Assert.True(reader.TrackedRead());
+                _ = reader.GetString(0);
+            }
+
+            var output = CaptureStderr(() => DbDebug.DumpToStderr(new InvalidOperationException("boom")));
+            Assert.Contains($"@value = <str len={largeValue.Length} sha256=", output);
+            Assert.Contains($"[content] = <str len={largeValue.Length} sha256=", output);
+            Assert.DoesNotContain(new string('x', 1000), output);
+            Assert.DoesNotContain("tail", output);
+        }
+        finally
+        {
+            DbDebug.ResetContext();
+        }
+    }
+
+    [Fact]
     public void DumpToStderr_UnsafeMode_IncludesRawContent()
     {
         using var env = EnvironmentVariableScope.Capture("CDIDX_DEBUG");

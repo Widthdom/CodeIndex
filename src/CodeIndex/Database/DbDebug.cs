@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Security.Cryptography;
 using System.Text;
 using System.Diagnostics;
@@ -30,6 +31,7 @@ namespace CodeIndex.Database;
 public static class DbDebug
 {
     private const int MaxNumericChars = 64;
+    private const int MaxHashSegmentChars = 2048;
     private static readonly byte[] s_hashSalt = RandomNumberGenerator.GetBytes(16);
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<SqliteDataReader, ActiveProfile> s_activeProfiles = new();
 
@@ -431,15 +433,34 @@ public static class DbDebug
 
     private static string ShortHash(string s)
     {
-        var valueBytes = Encoding.UTF8.GetBytes(s);
-        var input = new byte[s_hashSalt.Length + valueBytes.Length];
-        Buffer.BlockCopy(s_hashSalt, 0, input, 0, s_hashSalt.Length);
-        Buffer.BlockCopy(valueBytes, 0, input, s_hashSalt.Length, valueBytes.Length);
-        var bytes = SHA256.HashData(input);
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        hash.AppendData(s_hashSalt);
+        AppendHashInt32(hash, s.Length);
+        var prefixLength = Math.Min(s.Length, MaxHashSegmentChars);
+        AppendHashUtf8(hash, s.AsSpan(0, prefixLength));
+        var suffixStart = Math.Max(prefixLength, s.Length - MaxHashSegmentChars);
+        AppendHashInt32(hash, suffixStart);
+        if (suffixStart < s.Length)
+            AppendHashUtf8(hash, s.AsSpan(suffixStart));
+
+        var bytes = hash.GetHashAndReset();
         var sb = new StringBuilder(16);
         for (int i = 0; i < 8; i++)
             sb.Append(bytes[i].ToString("x2"));
         return sb.ToString();
+    }
+
+    private static void AppendHashInt32(IncrementalHash hash, int value)
+    {
+        Span<byte> buffer = stackalloc byte[4];
+        BinaryPrimitives.WriteInt32LittleEndian(buffer, value);
+        hash.AppendData(buffer);
+    }
+
+    private static void AppendHashUtf8(IncrementalHash hash, ReadOnlySpan<char> value)
+    {
+        var bytes = Encoding.UTF8.GetBytes(value.ToString());
+        hash.AppendData(bytes);
     }
 
     private static bool LooksLikePathName(string? valueName) =>
