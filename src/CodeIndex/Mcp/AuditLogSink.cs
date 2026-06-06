@@ -39,6 +39,7 @@ internal sealed class AuditLogSink : IDisposable
     internal const int MaxArgValueStringChars = 512;
     internal const int MaxArgValuesSerializedBytes = 16 * 1024;
     internal const int MaxAuditArgumentCount = 64;
+    internal const int MaxAuditArgumentKeyChars = McpBoundedText.MaxDiagnosticDisplayChars;
     internal const int MaxRequestIdChars = 256;
     internal const int MaxSerializedEventBytes = 64 * 1024;
 
@@ -219,8 +220,8 @@ internal sealed class AuditLogSink : IDisposable
 
     internal static string SerializeEvent(AuditEvent evt, bool includeValues)
     {
-        var serialized = SerializeEventCore(evt, includeValues);
-        if (Encoding.UTF8.GetByteCount(serialized) <= MaxSerializedEventBytes)
+        evt = BoundEventScalarFields(evt);
+        if (TrySerializeEventCore(evt, includeValues, out var serialized))
             return serialized;
 
         if (includeValues && evt.ArgValues is not null)
@@ -231,9 +232,10 @@ internal sealed class AuditLogSink : IDisposable
                 ArgValuesTruncated = true,
                 ArgValueTruncationReasons = AppendTruncationReason(evt.ArgValueTruncationReasons, "event_size_limit"),
                 ArgValuesSerializedBytes = null,
+                EventTruncated = true,
+                EventTruncationReasons = AppendTruncationReason(evt.EventTruncationReasons, "event_size_limit"),
             };
-            serialized = SerializeEventCore(fallback, includeValues: false);
-            if (Encoding.UTF8.GetByteCount(serialized) <= MaxSerializedEventBytes)
+            if (TrySerializeEventCore(fallback, includeValues: false, out serialized))
                 return serialized;
 
             evt = fallback;
@@ -246,117 +248,171 @@ internal sealed class AuditLogSink : IDisposable
             ArgKeyLengths = null,
             ArgKeysTruncated = true,
             ArgKeyTruncationReasons = AppendTruncationReason(evt.ArgKeyTruncationReasons, "event_size_limit"),
+            ArgKeysOmittedCount = Math.Max(evt.ArgKeysOmittedCount, evt.ArgKeys.Count),
+            EventTruncated = true,
+            EventTruncationReasons = AppendTruncationReason(evt.EventTruncationReasons, "event_size_limit"),
         };
-        serialized = SerializeEventCore(compact, includeValues && compact.ArgValues is not null);
-        if (Encoding.UTF8.GetByteCount(serialized) <= MaxSerializedEventBytes)
+        if (TrySerializeEventCore(compact, includeValues && compact.ArgValues is not null, out serialized))
             return serialized;
 
-        return serialized;
+        var minimal = compact with
+        {
+            CallerName = null,
+            CallerVersion = null,
+            RequestId = null,
+            ResultCount = null,
+            ErrorType = null,
+            ArgKeys = Array.Empty<string>(),
+            ArgLengths = Array.Empty<KeyValuePair<string, int>>(),
+            ArgValues = null,
+            ArgKeyLengths = null,
+            ArgValuesSerializedBytes = null,
+            ArgValuesTruncated = compact.ArgValues is not null || compact.ArgValuesTruncated,
+            ArgValueTruncationReasons = AppendTruncationReason(compact.ArgValueTruncationReasons, "event_size_limit"),
+            EventTruncated = true,
+            EventTruncationReasons = AppendTruncationReason(compact.EventTruncationReasons, "event_size_limit"),
+        };
+        if (TrySerializeEventCore(minimal, includeValues: false, out serialized))
+            return serialized;
+
+        return "{\"event_truncated\":true,\"event_truncation_reasons\":[\"event_size_limit\"]}";
     }
 
-    private static string SerializeEventCore(AuditEvent evt, bool includeValues)
+    private static bool TrySerializeEventCore(AuditEvent evt, bool includeValues, out string serialized)
     {
-        using var buffer = new MemoryStream();
-        using (var jw = new Utf8JsonWriter(buffer, new JsonWriterOptions
+        serialized = string.Empty;
+        using var buffer = new BoundedAuditEventUtf8Stream(MaxSerializedEventBytes);
+        try
         {
-            Indented = false,
-            // Mirror MetricsSink: local-only JSONL stays human readable in tail/grep.
-            // 出力は local 限定なので tail/grep で読める relaxed encoder を使う。
-            Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
-        }))
+            using (var jw = new Utf8JsonWriter(buffer, new JsonWriterOptions
+            {
+                Indented = false,
+                // Mirror MetricsSink: local-only JSONL stays human readable in tail/grep.
+                // 出力は local 限定なので tail/grep で読める relaxed encoder を使う。
+                Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+            }))
+            {
+                WriteEventCore(jw, evt, includeValues);
+            }
+            serialized = buffer.GetCapturedString();
+            return true;
+        }
+        catch (AuditEventByteLimitExceededException)
         {
-            jw.WriteStartObject();
-            jw.WriteString("timestamp", evt.Timestamp.ToString("O", CultureInfo.InvariantCulture));
-            jw.WriteString("tool", evt.Tool);
-            if (evt.ToolLength is { } toolLength)
-                jw.WriteNumber("tool_length", toolLength);
-            if (evt.ToolTruncated)
-                jw.WriteBoolean("tool_truncated", true);
-            if (evt.CallerName is { } caller)
-                jw.WriteString("caller", caller);
-            if (evt.CallerNameLength is { } callerLength)
-                jw.WriteNumber("caller_length", callerLength);
-            if (evt.CallerNameTruncated)
-                jw.WriteBoolean("caller_truncated", true);
-            if (evt.CallerVersion is { } callerVersion)
-                jw.WriteString("caller_version", callerVersion);
-            if (evt.CallerVersionLength is { } callerVersionLength)
-                jw.WriteNumber("caller_version_length", callerVersionLength);
-            if (evt.CallerVersionTruncated)
-                jw.WriteBoolean("caller_version_truncated", true);
-            if (evt.RequestId is { } reqId)
-                jw.WriteString("request_id", reqId);
-            if (evt.RequestIdLength is { } requestIdLength)
-                jw.WriteNumber("request_id_length", requestIdLength);
-            if (evt.RequestIdTruncated)
-                jw.WriteBoolean("request_id_truncated", true);
+            return false;
+        }
+    }
 
-            jw.WritePropertyName("arg_keys");
-            jw.WriteStartArray();
-            foreach (var key in evt.ArgKeys)
-                jw.WriteStringValue(key);
-            jw.WriteEndArray();
+    private static void WriteEventCore(Utf8JsonWriter jw, AuditEvent evt, bool includeValues)
+    {
+        jw.WriteStartObject();
+        jw.WriteString("timestamp", evt.Timestamp.ToString("O", CultureInfo.InvariantCulture));
+        jw.WriteString("tool", evt.Tool);
+        if (evt.ToolLength is { } toolLength)
+            jw.WriteNumber("tool_length", toolLength);
+        if (evt.ToolTruncated)
+            jw.WriteBoolean("tool_truncated", true);
+        if (evt.CallerName is { } caller)
+            jw.WriteString("caller", caller);
+        if (evt.CallerNameLength is { } callerLength)
+            jw.WriteNumber("caller_length", callerLength);
+        if (evt.CallerNameTruncated)
+            jw.WriteBoolean("caller_truncated", true);
+        if (evt.CallerVersion is { } callerVersion)
+            jw.WriteString("caller_version", callerVersion);
+        if (evt.CallerVersionLength is { } callerVersionLength)
+            jw.WriteNumber("caller_version_length", callerVersionLength);
+        if (evt.CallerVersionTruncated)
+            jw.WriteBoolean("caller_version_truncated", true);
+        if (evt.RequestId is { } reqId)
+            jw.WriteString("request_id", reqId);
+        if (evt.RequestIdLength is { } requestIdLength)
+            jw.WriteNumber("request_id_length", requestIdLength);
+        if (evt.RequestIdTruncated)
+            jw.WriteBoolean("request_id_truncated", true);
 
-            jw.WritePropertyName("arg_lengths");
+        jw.WritePropertyName("arg_keys");
+        jw.WriteStartArray();
+        foreach (var key in evt.ArgKeys)
+            jw.WriteStringValue(key);
+        jw.WriteEndArray();
+
+        jw.WritePropertyName("arg_lengths");
+        jw.WriteStartObject();
+        foreach (var kv in evt.ArgLengths)
+            jw.WriteNumber(kv.Key, kv.Value);
+        jw.WriteEndObject();
+
+        var argKeysTruncated = evt.ArgKeysTruncated;
+        if (evt.ArgKeyLengths is { Count: > 0 } argKeyLengths)
+        {
+            jw.WritePropertyName("arg_key_lengths");
             jw.WriteStartObject();
-            foreach (var kv in evt.ArgLengths)
+            foreach (var kv in argKeyLengths)
                 jw.WriteNumber(kv.Key, kv.Value);
             jw.WriteEndObject();
+            argKeysTruncated = true;
+        }
+        if (argKeysTruncated)
+            jw.WriteBoolean("arg_keys_truncated", true);
+        if (evt.ArgKeyTruncationReasons is { Count: > 0 } argKeyReasons)
+        {
+            jw.WritePropertyName("arg_key_truncation_reasons");
+            jw.WriteStartArray();
+            foreach (var reason in argKeyReasons)
+                jw.WriteStringValue(reason);
+            jw.WriteEndArray();
+        }
+        if (evt.ArgKeysOmittedCount > 0)
+            jw.WriteNumber("arg_keys_omitted_count", evt.ArgKeysOmittedCount);
+        if (evt.ArgKeyNamesTruncatedCount > 0)
+            jw.WriteNumber("arg_key_names_truncated_count", evt.ArgKeyNamesTruncatedCount);
 
-            var argKeysTruncated = evt.ArgKeysTruncated;
-            if (evt.ArgKeyLengths is { Count: > 0 } argKeyLengths)
+        if (includeValues && evt.ArgValues is { } values)
+        {
+            jw.WritePropertyName("arg_values");
+            values.WriteTo(jw);
+        }
+        if (evt.ArgValuesRedacted)
+            jw.WriteBoolean("arg_values_redacted", true);
+        if (evt.ArgValuesTruncated)
+        {
+            jw.WriteBoolean("arg_values_truncated", true);
+            jw.WriteNumber("arg_values_max_bytes", MaxArgValuesSerializedBytes);
+            if (evt.ArgValuesSerializedBytes is { } argValuesSerializedBytes)
+                jw.WriteNumber("arg_values_serialized_bytes", argValuesSerializedBytes);
+            if (evt.ArgValueTruncationReasons is { Count: > 0 } reasons)
             {
-                jw.WritePropertyName("arg_key_lengths");
-                jw.WriteStartObject();
-                foreach (var kv in argKeyLengths)
-                    jw.WriteNumber(kv.Key, kv.Value);
-                jw.WriteEndObject();
-                argKeysTruncated = true;
-            }
-            if (argKeysTruncated)
-                jw.WriteBoolean("arg_keys_truncated", true);
-            if (evt.ArgKeyTruncationReasons is { Count: > 0 } argKeyReasons)
-            {
-                jw.WritePropertyName("arg_key_truncation_reasons");
+                jw.WritePropertyName("arg_values_truncation_reasons");
                 jw.WriteStartArray();
-                foreach (var reason in argKeyReasons)
+                foreach (var reason in reasons)
                     jw.WriteStringValue(reason);
                 jw.WriteEndArray();
             }
-
-            if (includeValues && evt.ArgValues is { } values)
-            {
-                jw.WritePropertyName("arg_values");
-                values.WriteTo(jw);
-            }
-            if (evt.ArgValuesRedacted)
-                jw.WriteBoolean("arg_values_redacted", true);
-            if (evt.ArgValuesTruncated)
-            {
-                jw.WriteBoolean("arg_values_truncated", true);
-                jw.WriteNumber("arg_values_max_bytes", MaxArgValuesSerializedBytes);
-                if (evt.ArgValuesSerializedBytes is { } argValuesSerializedBytes)
-                    jw.WriteNumber("arg_values_serialized_bytes", argValuesSerializedBytes);
-                if (evt.ArgValueTruncationReasons is { Count: > 0 } reasons)
-                {
-                    jw.WritePropertyName("arg_values_truncation_reasons");
-                    jw.WriteStartArray();
-                    foreach (var reason in reasons)
-                        jw.WriteStringValue(reason);
-                    jw.WriteEndArray();
-                }
-            }
-
-            if (evt.ResultCount is { } rc)
-                jw.WriteNumber("result_count", rc);
-
-            jw.WriteNumber("elapsed_ms", Math.Round(evt.ElapsedMs, 3));
-            jw.WriteNumber("error_code", evt.ErrorCode);
-            if (evt.ErrorType is { } et)
-                jw.WriteString("error", et);
-            jw.WriteEndObject();
         }
-        return Encoding.UTF8.GetString(buffer.ToArray());
+
+        if (evt.EventTruncated)
+        {
+            jw.WriteBoolean("event_truncated", true);
+            jw.WriteNumber("event_max_bytes", MaxSerializedEventBytes);
+            if (evt.EventTruncationReasons is { Count: > 0 } eventReasons)
+            {
+                jw.WritePropertyName("event_truncation_reasons");
+                jw.WriteStartArray();
+                foreach (var reason in eventReasons)
+                    jw.WriteStringValue(reason);
+                jw.WriteEndArray();
+            }
+        }
+
+        if (evt.ResultCount is { } rc)
+            jw.WriteNumber("result_count", rc);
+
+        jw.WriteNumber("elapsed_ms", Math.Round(evt.ElapsedMs, 3));
+        jw.WriteNumber("error_code", evt.ErrorCode);
+        if (evt.ErrorType is { } et)
+            jw.WriteString("error", et);
+        jw.WriteEndObject();
     }
 
     private static IReadOnlyList<string> AppendTruncationReason(IReadOnlyList<string>? reasons, string reason)
@@ -373,6 +429,105 @@ internal sealed class AuditLogSink : IDisposable
         }
         result.Add(reason);
         return result;
+    }
+
+    private static AuditEvent BoundEventScalarFields(AuditEvent evt)
+    {
+        var tool = BoundAuditText(evt.Tool, McpBoundedText.MaxToolNameChars, evt.ToolLength, evt.ToolTruncated);
+        var caller = BoundAuditText(evt.CallerName, McpBoundedText.MaxClientInfoChars, evt.CallerNameLength, evt.CallerNameTruncated);
+        var callerVersion = BoundAuditText(evt.CallerVersion, McpBoundedText.MaxClientInfoChars, evt.CallerVersionLength, evt.CallerVersionTruncated);
+        var requestId = BoundAuditText(evt.RequestId, MaxRequestIdChars, evt.RequestIdLength, evt.RequestIdTruncated);
+
+        return evt with
+        {
+            Tool = tool.Text!,
+            ToolLength = tool.Length,
+            ToolTruncated = tool.Truncated,
+            CallerName = caller.Text,
+            CallerNameLength = caller.Length,
+            CallerNameTruncated = caller.Truncated,
+            CallerVersion = callerVersion.Text,
+            CallerVersionLength = callerVersion.Length,
+            CallerVersionTruncated = callerVersion.Truncated,
+            RequestId = requestId.Text,
+            RequestIdLength = requestId.Length,
+            RequestIdTruncated = requestId.Truncated,
+            ErrorType = evt.ErrorType is null
+                ? null
+                : McpBoundedText.ForDisplay(evt.ErrorType, McpBoundedText.MaxDiagnosticDisplayChars).Text,
+        };
+    }
+
+    private static (string? Text, int? Length, bool Truncated) BoundAuditText(string? value, int maxChars, int? length, bool truncated)
+    {
+        if (value is null)
+            return (null, length, truncated);
+
+        var display = McpBoundedText.ForDisplay(value, maxChars);
+        if (!display.Truncated)
+            return (value, length, truncated);
+
+        return (display.Text, length ?? display.OriginalLength, true);
+    }
+
+    private sealed class AuditEventByteLimitExceededException(int bytesWritten) : Exception
+    {
+        public int BytesWritten { get; } = bytesWritten;
+    }
+
+    private sealed class BoundedAuditEventUtf8Stream(int maxBytes) : Stream
+    {
+        private readonly MemoryStream _buffer = new(Math.Min(Math.Max(maxBytes, 0), 16 * 1024));
+
+        public int BytesWritten { get; private set; }
+
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public string GetCapturedString()
+            => Encoding.UTF8.GetString(_buffer.GetBuffer(), 0, (int)_buffer.Length);
+
+        public override void Flush()
+        {
+        }
+
+        public override int Read(byte[] buffer, int offset, int count)
+            => throw new NotSupportedException();
+
+        public override long Seek(long offset, SeekOrigin origin)
+            => throw new NotSupportedException();
+
+        public override void SetLength(long value)
+            => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count)
+            => Write(buffer.AsSpan(offset, count));
+
+        public override void Write(ReadOnlySpan<byte> buffer)
+        {
+            if (buffer.Length == 0)
+                return;
+
+            var remaining = maxBytes - BytesWritten;
+            if (remaining < buffer.Length)
+            {
+                if (remaining > 0)
+                    _buffer.Write(buffer[..remaining]);
+                BytesWritten = maxBytes == int.MaxValue ? int.MaxValue : maxBytes + 1;
+                throw new AuditEventByteLimitExceededException(BytesWritten);
+            }
+
+            _buffer.Write(buffer);
+            BytesWritten += buffer.Length;
+        }
     }
 
     internal static JsonNode? SanitizeArgValue(string key, JsonNode? value, out bool redacted)
@@ -657,10 +812,14 @@ internal sealed class AuditLogSink : IDisposable
         IReadOnlyList<KeyValuePair<string, int>>? ArgKeyLengths = null,
         bool ArgKeysTruncated = false,
         IReadOnlyList<string>? ArgKeyTruncationReasons = null,
+        int ArgKeysOmittedCount = 0,
+        int ArgKeyNamesTruncatedCount = 0,
         bool ArgValuesRedacted = false,
         bool ArgValuesTruncated = false,
         IReadOnlyList<string>? ArgValueTruncationReasons = null,
         int? ArgValuesSerializedBytes = null,
+        bool EventTruncated = false,
+        IReadOnlyList<string>? EventTruncationReasons = null,
         int? RequestIdLength = null,
         bool RequestIdTruncated = false,
         int? CallerNameLength = null,
