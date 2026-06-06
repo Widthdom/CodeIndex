@@ -34,6 +34,7 @@ public static class DbDebug
     private const int MaxHashSegmentChars = 2048;
     internal const int MaxQueryPlanRows = 64;
     internal const int MaxQueryPlanDetailChars = 512;
+    internal const int MaxSlowQuerySqlChars = 200;
     private const string DiagnosticTruncationMarker = "...<truncated>";
     private static readonly byte[] s_hashSalt = RandomNumberGenerator.GetBytes(16);
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<SqliteDataReader, ActiveProfile> s_activeProfiles = new();
@@ -272,12 +273,13 @@ public static class DbDebug
 
     private static void WriteSlowQueryToStderr(SqliteCommand cmd, double elapsedMs, int? rowsRead)
     {
-        var sql = (cmd.CommandText ?? string.Empty).ReplaceLineEndings(" ");
-        if (sql.Length > 200)
-            sql = sql[..200] + "...";
+        var sql = FormatSqlForSlowQueryLog(cmd.CommandText ?? string.Empty);
         var rowText = rowsRead.HasValue ? $" rows={rowsRead.Value}" : string.Empty;
         Console.Error.WriteLine($"[cdidx] slow_query elapsed_ms={elapsedMs:0.###}{rowText} sql={sql}");
     }
+
+    internal static string FormatSqlForSlowQueryLog(string sql) =>
+        TruncateDiagnosticText(sql.ReplaceLineEndings(" "), MaxSlowQuerySqlChars);
 
     private static List<QueryPlanRow> CaptureQueryPlan(SqliteCommand source)
     {
@@ -314,7 +316,7 @@ public static class DbDebug
         return rows;
     }
 
-    private static string TruncateDiagnosticText(string value, int maxChars)
+    internal static string TruncateDiagnosticText(string value, int maxChars)
     {
         if (value.Length <= maxChars)
             return value;
@@ -560,7 +562,7 @@ public sealed class QueryProfileEntry
         _slowLogged = true;
         try
         {
-            CodeIndex.Cli.GlobalToolLog.Info($"slow_query elapsed_ms={elapsedMs:0.###} rows_scanned={RowsScanned} sql={Sql.Replace("\n", " ", StringComparison.Ordinal)}");
+            CodeIndex.Cli.GlobalToolLog.Info($"slow_query elapsed_ms={elapsedMs:0.###} rows_scanned={RowsScanned} sql={DbDebug.FormatSqlForSlowQueryLog(Sql)}");
         }
         catch
         {

@@ -1,3 +1,4 @@
+using CodeIndex.Cli;
 using CodeIndex.Database;
 using Microsoft.Data.Sqlite;
 using System.Diagnostics;
@@ -108,6 +109,47 @@ public class DbDebugTests
         finally
         {
             DbDebug.EndProfile();
+        }
+    }
+
+    [Fact]
+    public void QueryProfileEntry_SlowQueryGlobalToolLogTruncatesSql()
+    {
+        var logDir = Path.Combine(Path.GetTempPath(), $"cdidx_slow_query_log_{Guid.NewGuid():N}");
+        using var env = EnvironmentVariableScope.Capture(
+            "CDIDX_FORCE_GLOBAL_TOOL_LOG",
+            "CDIDX_DISABLE_PERSISTENT_LOG",
+            "CDIDX_GLOBAL_TOOL_LOG_DIR",
+            GlobalToolLog.LogFormatEnvironmentVariable);
+        try
+        {
+            env.Set("CDIDX_FORCE_GLOBAL_TOOL_LOG", "1");
+            env.Set("CDIDX_DISABLE_PERSISTENT_LOG", null);
+            env.Set("CDIDX_GLOBAL_TOOL_LOG_DIR", logDir);
+            env.Set(GlobalToolLog.LogFormatEnvironmentVariable, "text");
+
+            using var session = GlobalToolLog.TryStartForTesting(["status"], "1.10.0");
+            Assert.NotNull(session);
+            var sql = "SELECT " + new string('x', 5000) + Environment.NewLine + "FROM very_large_query";
+            var entry = new QueryProfileEntry(sql, []);
+            entry.AddElapsed(TimeSpan.FromMilliseconds(10));
+            entry.MarkCompletedIfSlow(0);
+            session!.Dispose();
+
+            var logPath = Assert.Single(Directory.GetFiles(logDir, "stderr-*.log"));
+            var content = File.ReadAllText(logPath);
+            var slowLine = Assert.Single(content.Split('\n').Where(line => line.Contains("slow_query", StringComparison.Ordinal)));
+            Assert.Contains("sql=SELECT ", slowLine);
+            Assert.Contains("...<truncated>", slowLine);
+            Assert.DoesNotContain(new string('x', 1000), content);
+            var sqlText = slowLine[(slowLine.IndexOf(" sql=", StringComparison.Ordinal) + " sql=".Length)..].TrimEnd('\r');
+            Assert.True(sqlText.Length <= DbDebug.MaxSlowQuerySqlChars, $"SQL text was {sqlText.Length} chars.");
+            Assert.DoesNotContain('\r', sqlText);
+            Assert.DoesNotContain('\n', sqlText);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(logDir);
         }
     }
 
