@@ -867,6 +867,35 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void Initialize_CapturesClientCapabilitiesAsDetachedClone_Issue3055()
+    {
+        var capabilities = new JsonObject
+        {
+            ["experimental"] = new JsonObject
+            {
+                ["progress"] = true,
+            },
+        };
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "initialize",
+            ["params"] = new JsonObject
+            {
+                ["capabilities"] = capabilities,
+            },
+        };
+
+        _server.HandleMessage(request);
+        capabilities["experimental"] = new JsonObject { ["progress"] = false };
+        var copy = _server.ClientCapabilitiesForTests!;
+        copy["experimental"]!["progress"] = false;
+
+        Assert.True(_server.ClientCapabilitiesForTests!["experimental"]!["progress"]!.GetValue<bool>());
+    }
+
+    [Fact]
     public void Initialize_ClientInfo_TruncatesSessionStatusAndCallerIdentity_Issue3120()
     {
         var name = new string('n', McpBoundedText.MaxClientInfoChars + 25);
@@ -12894,6 +12923,29 @@ public class McpServerTests : IDisposable
         Assert.Equal(expectedRetrySafe, data["retry_safe"]!.GetValue<bool>());
         var suggestion = data["suggestion"]!.GetValue<string>();
         Assert.False(string.IsNullOrWhiteSpace(suggestion));
+    }
+
+    [Fact]
+    public void ErrorEnvelope_ClonesExtraDataWithoutSerializeParseRoundTrip_Issue3055()
+    {
+        var extra = new JsonObject
+        {
+            ["details"] = new JsonObject
+            {
+                ["safe"] = true,
+            },
+            ["category"] = "override",
+        };
+
+        var data = McpErrorEnvelope.BuildData(
+            McpErrorEnvelope.CategoryInvalidArgument,
+            "Fix the request.",
+            retrySafe: false,
+            extra);
+        extra["details"]!["safe"] = false;
+
+        Assert.Equal(McpErrorEnvelope.CategoryInvalidArgument, data["category"]!.GetValue<string>());
+        Assert.True(data["details"]!["safe"]!.GetValue<bool>());
     }
 
     [Fact]

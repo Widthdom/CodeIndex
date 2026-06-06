@@ -1153,7 +1153,7 @@ public partial class McpServer : IDisposable
         if (request is JsonObject obj)
         {
             if (TryGetRequestId(obj, out hasId, out var requestId))
-                id = requestId is null ? null : JsonNode.Parse(requestId.ToJsonString());
+                id = McpJsonNode.Clone(requestId);
             else
                 id = null;
             return;
@@ -1834,7 +1834,7 @@ public partial class McpServer : IDisposable
         if (!obj.TryGetPropertyValue("capabilities", out var capabilities))
             obj.TryGetPropertyValue("clientCapabilities", out capabilities);
         if (capabilities is not null)
-            _clientCapabilities = JsonNode.Parse(capabilities.ToJsonString());
+            _clientCapabilities = McpJsonNode.Clone(capabilities);
 
         if (TryReadStringValue(obj["rootUri"]) is { Length: > 0 } rootUri)
             _clientRoots.Add(rootUri);
@@ -1850,7 +1850,7 @@ public partial class McpServer : IDisposable
         }
     }
 
-    internal JsonNode? ClientCapabilitiesForTests => _clientCapabilities is null ? null : JsonNode.Parse(_clientCapabilities.ToJsonString());
+    internal JsonNode? ClientCapabilitiesForTests => McpJsonNode.Clone(_clientCapabilities);
 
     internal string[] ClientRootsForTests => _clientRoots
         .Select(root => root?.GetValue<string>())
@@ -2299,7 +2299,7 @@ public partial class McpServer : IDisposable
         {
             ["jsonrpc"] = "2.0",
             ["error"] = error,
-            ["id"] = id is null ? JsonNode.Parse("null") : JsonNode.Parse(id.ToJsonString())
+            ["id"] = McpJsonNode.Clone(id)
         };
         return response;
     }
@@ -2376,7 +2376,7 @@ public partial class McpServer : IDisposable
         {
             ["jsonrpc"] = "2.0",
             ["error"] = error,
-            ["id"] = id is null ? JsonNode.Parse("null") : JsonNode.Parse(id.ToJsonString())
+            ["id"] = McpJsonNode.Clone(id)
         };
         return response;
     }
@@ -2661,7 +2661,7 @@ public partial class McpServer : IDisposable
             return null;
 
         return TryMeasureJsonUtf8BytesWithinLimit(token, _jsonOptions, McpBoundedText.MaxProgressTokenJsonBytes, out _)
-            ? token.DeepClone()
+            ? McpJsonNode.Clone(token)
             : null;
     }
 
@@ -3424,7 +3424,7 @@ public partial class McpServer : IDisposable
             ["result"] = result
         };
         if (hasId)
-            response["id"] = id is null ? JsonNode.Parse("null") : JsonNode.Parse(id.ToJsonString());
+            response["id"] = McpJsonNode.Clone(id);
         return response;
     }
 
@@ -3522,7 +3522,7 @@ public partial class McpServer : IDisposable
             }
         };
         if (hasId)
-            response["id"] = id is null ? JsonNode.Parse("null") : JsonNode.Parse(id.ToJsonString());
+            response["id"] = McpJsonNode.Clone(id);
         return response;
     }
 
