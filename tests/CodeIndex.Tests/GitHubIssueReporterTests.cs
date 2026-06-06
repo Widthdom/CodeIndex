@@ -883,6 +883,73 @@ public class GitHubIssueReporterTests : IDisposable
     }
 
     [Fact]
+    public void TryCreateIssueAsync_LabelListStopsAtConfiguredPageCapAndWarns()
+    {
+        _env.Set("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
+
+        var handler = new RecordingHandler();
+        handler.AddResponse(req => req.Method == HttpMethod.Get && req.RequestUri!.AbsolutePath == "/search/issues",
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = MakeJsonContent("""{ "total_count": 0, "items": [] }"""),
+            });
+        for (var page = 1; page <= GitHubIssueReporter.MaxExistingSuggestionLookupPagesPerLabel; page++)
+        {
+            var pageNumber = page;
+            handler.AddResponse(
+                req => req.Method == HttpMethod.Get
+                    && req.RequestUri!.AbsolutePath == "/repos/widthdom/CodeIndex/issues"
+                    && req.RequestUri!.Query.Contains($"&page={pageNumber}", StringComparison.Ordinal),
+                new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = MakeJsonContent(MakeIssueListJson(100, "Submitted by cdidx. Hash: `not-this-hash`")),
+                });
+        }
+        handler.AddResponse(req => req.Method == HttpMethod.Post && req.RequestUri!.AbsolutePath.Contains("/issues"),
+            new HttpResponseMessage(HttpStatusCode.Created)
+            {
+                Content = MakeJsonContent("""{ "html_url": "https://github.com/widthdom/CodeIndex/issues/4444" }"""),
+            });
+        using var mockClient = new HttpClient(handler);
+        GitHubIssueReporter.s_httpClientOverride = mockClient;
+        var originalError = Console.Error;
+        using var capturedError = new StringWriter(CultureInfo.InvariantCulture);
+
+        try
+        {
+            string? url;
+            lock (TestConsoleLock.Gate)
+            {
+                Console.SetError(capturedError);
+                try
+                {
+                    var record = MakeRecordWithKnownHash();
+#pragma warning disable xUnit1031
+                    url = GitHubIssueReporter.TryCreateIssueAsync(record, "1.0.0-test").GetAwaiter().GetResult();
+#pragma warning restore xUnit1031
+                }
+                finally
+                {
+                    Console.SetError(originalError);
+                }
+            }
+
+            Assert.Equal("https://github.com/widthdom/CodeIndex/issues/4444", url);
+            Assert.Equal(GitHubIssueReporter.MaxExistingSuggestionLookupPagesPerLabel + 2, handler.RequestCount);
+            Assert.DoesNotContain(handler.Requests, request => request.RequestUri!.Query.Contains(
+                $"&page={GitHubIssueReporter.MaxExistingSuggestionLookupPagesPerLabel + 1}",
+                StringComparison.Ordinal));
+            Assert.Contains("existing-suggestion lookup reached", capturedError.ToString());
+            Assert.Equal(HttpMethod.Post, handler.Requests[^1].Method);
+        }
+        finally
+        {
+            GitHubIssueReporter.s_httpClientOverride = null;
+            Console.SetError(originalError);
+        }
+    }
+
+    [Fact]
     public async Task TryCreateIssueDetailedAsync_CreateSuccessJsonOverDepthLimit_ReturnsDiagnosticError()
     {
         _env.Set("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
@@ -1317,6 +1384,24 @@ public class GitHubIssueReporterTests : IDisposable
         builder.Append('0');
         for (var i = 0; i < depth; i++)
             builder.Append('}');
+        return builder.ToString();
+    }
+
+    private static string MakeIssueListJson(int count, string body)
+    {
+        var builder = new StringBuilder();
+        builder.Append('[');
+        for (var i = 0; i < count; i++)
+        {
+            if (i > 0)
+                builder.Append(',');
+            builder.Append("{\"html_url\":\"https://github.com/widthdom/CodeIndex/issues/");
+            builder.Append(1000 + i);
+            builder.Append("\",\"state\":\"open\",\"body\":");
+            builder.Append(JsonSerializer.Serialize(body));
+            builder.Append('}');
+        }
+        builder.Append(']');
         return builder.ToString();
     }
 
