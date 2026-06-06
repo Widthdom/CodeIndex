@@ -54,6 +54,7 @@ public static class GitHelper
     };
 
     internal const int MaxCapturedGitOutputChars = 1024 * 1024;
+    private const int GitCaptureReadBufferChars = 8192;
     private static readonly TimeSpan DefaultGitCommandTimeout = TimeSpan.FromSeconds(60);
     private static readonly AsyncLocal<TimeSpan?> GitCommandTimeoutOverride = new();
     internal static TimeSpan GitCommandTimeout
@@ -734,12 +735,11 @@ public static class GitHelper
             || reason.Contains("ambiguous argument 'HEAD", StringComparison.OrdinalIgnoreCase)
             || reason.Contains("bad revision 'HEAD", StringComparison.OrdinalIgnoreCase);
 
-    // Drain stdout and stderr concurrently via Process's own event-based reader threads so a
-    // full stderr pipe buffer cannot deadlock a blocking stdout read. Returns null if the
+    // Drain stdout and stderr concurrently at stream level so a newline-free chunk is capped
+    // before framework line buffering can accumulate unbounded data. Returns null if the
     // process fails to start; otherwise the caller decides how to interpret the exit code.
-    // stdoutとstderrを同時に汲み出す。Process自前のイベントスレッドを使うことで
-    // stderrパイプ満杯による stdout 読み取りデッドロックを防ぎ、
-    // 非同期APIを GetAwaiter().GetResult() で待つ sync-over-async も避ける。
+    // stdout/stderr を stream level で同時に汲み出し、改行なしの巨大 chunk でも framework の
+    // 行バッファに溜まる前に上限を強制する。
     private static (int ExitCode, string Output, string Error)? RunProcessCapturingOutput(
         ProcessStartInfo psi,
         CancellationToken cancellationToken = default)
@@ -762,25 +762,11 @@ public static class GitHelper
             TryKillProcessTree(process);
         }
 
-        // Always terminate captured lines with '\n' (not Environment.NewLine) so callers that
-        // split on '\n' see identical output on Windows and POSIX — git writes LF-only to pipes.
-        // キャプチャ行は常に '\n' 区切りにし、Windows/POSIX 双方で git のパイプ出力(LF)と一致させる。
-        process.OutputDataReceived += (_, e) =>
-        {
-            if (e.Data != null)
-                AppendBoundedCapturedLine(stdout, e.Data, "stdout", MarkFailure);
-        };
-        process.ErrorDataReceived += (_, e) =>
-        {
-            if (e.Data != null)
-                AppendBoundedCapturedLine(stderr, e.Data, "stderr", MarkFailure);
-        };
-
         if (!process.Start())
             return null;
 
-        process.BeginOutputReadLine();
-        process.BeginErrorReadLine();
+        var stdoutTask = Task.Run(() => ReadCapturedStream(process.StandardOutput, stdout, "stdout", MarkFailure));
+        var stderrTask = Task.Run(() => ReadCapturedStream(process.StandardError, stderr, "stderr", MarkFailure));
         var exited = WaitForGitExit(process, GitCommandTimeout, cancellationToken, out var cancelled);
         if (!exited)
         {
@@ -799,6 +785,8 @@ public static class GitHelper
         {
             process.WaitForExit();
         }
+        if (!WaitForCaptureReaders(stdoutTask, stderrTask))
+            MarkFailure("git command output capture did not finish.");
 
         var output = ReadCaptured(stdout);
         var error = ReadCaptured(stderr);
@@ -847,9 +835,49 @@ public static class GitHelper
             return builder.ToString();
     }
 
-    private static void AppendBoundedCapturedLine(
+    private static bool WaitForCaptureReaders(Task stdoutTask, Task stderrTask)
+    {
+        try
+        {
+            return Task.WaitAll([stdoutTask, stderrTask], ToWaitMilliseconds(GitKillWaitTimeout));
+        }
+        catch (AggregateException)
+        {
+            return false;
+        }
+    }
+
+    private static void ReadCapturedStream(
+        TextReader reader,
         StringBuilder builder,
-        string data,
+        string streamName,
+        Action<string> markFailure)
+    {
+        var buffer = new char[GitCaptureReadBufferChars];
+        try
+        {
+            while (true)
+            {
+                var read = reader.Read(buffer, 0, buffer.Length);
+                if (read == 0)
+                    return;
+                if (!AppendBoundedCapturedChars(builder, buffer.AsSpan(0, read), streamName, markFailure))
+                    return;
+            }
+        }
+        catch (IOException ex)
+        {
+            markFailure($"git command {streamName} read failed: {ex.Message}");
+        }
+        catch (ObjectDisposedException)
+        {
+            // Process cleanup closed the stream after another failure path.
+        }
+    }
+
+    private static bool AppendBoundedCapturedChars(
+        StringBuilder builder,
+        ReadOnlySpan<char> data,
         string streamName,
         Action<string> markFailure)
     {
@@ -859,20 +887,20 @@ public static class GitHelper
             if (remaining <= 0)
             {
                 markFailure(BuildCaptureLimitMessage(streamName));
-                return;
+                return false;
             }
 
-            var required = data.Length + 1;
-            if (required <= remaining)
+            if (data.Length <= remaining)
             {
-                builder.Append(data).Append('\n');
-                return;
+                builder.Append(data);
+                return true;
             }
 
-            builder.Append(data.AsSpan(0, Math.Min(data.Length, remaining)));
+            builder.Append(data[..Math.Min(data.Length, remaining)]);
         }
 
         markFailure(BuildCaptureLimitMessage(streamName));
+        return false;
     }
 
     private static string BuildCaptureLimitMessage(string streamName)
