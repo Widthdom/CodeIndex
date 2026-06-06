@@ -15292,6 +15292,75 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Dockerfile_JsonVolumeCapsArrayItems()
+    {
+        var maxItems = SymbolExtractor.DockerfileJsonFormMaxItems;
+        var items = Enumerable.Range(0, maxItems)
+            .Select(i => $"/vol{i}")
+            .Concat(["/too-many"]);
+        var content = "VOLUME [" + string.Join(", ", items.Select(item => JsonSerializer.Serialize(item))) + "]\n";
+
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Equal(maxItems, symbols.Count);
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "/vol0");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "/vol" + (maxItems - 1));
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "/too-many");
+    }
+
+    [Fact]
+    public void Extract_Dockerfile_JsonVolumeSkipsOverlongStrings()
+    {
+        var tooLong = "/" + new string('v', SymbolExtractor.DockerfileJsonFormMaxStringLength);
+        var content = "VOLUME [" + JsonSerializer.Serialize(tooLong) + ", \"/ok\"]\n";
+
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "/ok");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == tooLong);
+        Assert.Single(symbols);
+    }
+
+    [Fact]
+    public void Extract_Dockerfile_JsonShellSkipsOverlongExecutable()
+    {
+        var tooLong = "/" + new string('s', SymbolExtractor.DockerfileJsonFormMaxStringLength);
+        var content = "SHELL [" + JsonSerializer.Serialize(tooLong) + ", \"-c\"]\n";
+
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Empty(symbols);
+    }
+
+    [Theory]
+    [InlineData("COPY")]
+    [InlineData("ADD")]
+    public void Extract_Dockerfile_JsonCopyAddSkipOverlongDestinations(string instruction)
+    {
+        var tooLong = "/" + new string('d', SymbolExtractor.DockerfileJsonFormMaxStringLength);
+        var content = instruction + " [\"source\", " + JsonSerializer.Serialize(tooLong) + "]\n";
+
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Empty(symbols);
+    }
+
+    [Theory]
+    [InlineData("COPY")]
+    [InlineData("ADD")]
+    public void Extract_Dockerfile_JsonCopyAddSkipArraysBeyondItemBudget(string instruction)
+    {
+        var maxItems = SymbolExtractor.DockerfileJsonFormMaxItems;
+        var items = Enumerable.Range(0, maxItems + 1)
+            .Select(i => $"/src{i}");
+        var content = instruction + " [" + string.Join(", ", items.Select(item => JsonSerializer.Serialize(item))) + "]\n";
+
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Empty(symbols);
+    }
+
+    [Fact]
     public void Extract_Dockerfile_DetectsOnbuildCopyDestinationPathSymbols()
     {
         var content = "ONBUILD COPY /src/app /usr/local/bin/app\n";
@@ -18252,6 +18321,59 @@ public partial class SymbolExtractorTests
                 projectRoot,
                 "tsconfig.json",
                 "{\"compilerOptions\":{\"baseUrl\":\".\",\"paths\":{\"@hit/*\":[" + targets + "]}}}");
+            WriteFile(projectRoot, "src/Button.ts", "export const Button = 1;\n");
+            var sourcePath = WriteFile(projectRoot, "src/main.ts", "import { Button } from \"@hit/Button\";\n");
+
+            List<SymbolRecord> symbols = [];
+            var stderr = ConsoleCapture.CaptureError(() =>
+                symbols = SymbolExtractor.Extract(1, "typescript", File.ReadAllText(sourcePath), sourcePath));
+
+            Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "@hit/Button");
+            Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "src/Button.ts");
+            Assert.Contains("Truncated TypeScript path alias targets", stderr, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Extract_TypeScript_ExcessiveTsconfigPathAliasTotalTargetsTruncatesWithWarning()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("tsconfig_alias_total_targets_symbols");
+        try
+        {
+            var maxTargetsPerRule = GetSymbolExtractorIntConstant("MaxTypeScriptPathAliasTargetsPerRule");
+            var maxTotalTargets = GetSymbolExtractorIntConstant("MaxTypeScriptPathAliasTotalTargets");
+            var paths = new StringBuilder();
+            var remainingTargets = maxTotalTargets;
+            var rule = 0;
+            while (remainingTargets > 0)
+            {
+                if (paths.Length > 0)
+                    paths.Append(',');
+
+                var targetsForRule = Math.Min(maxTargetsPerRule, remainingTargets);
+                paths.Append('"').Append("@skip").Append(rule).Append("/*").Append("\":[");
+                for (var target = 0; target < targetsForRule; target++)
+                {
+                    if (target > 0)
+                        paths.Append(',');
+                    paths.Append('"').Append("missing").Append(rule).Append('_').Append(target).Append("/*").Append('"');
+                }
+
+                paths.Append(']');
+                remainingTargets -= targetsForRule;
+                rule++;
+            }
+
+            paths.Append(",\"@hit/*\":[\"src/*\"]");
+
+            WriteFile(
+                projectRoot,
+                "tsconfig.json",
+                "{\"compilerOptions\":{\"baseUrl\":\".\",\"paths\":{" + paths + "}}}");
             WriteFile(projectRoot, "src/Button.ts", "export const Button = 1;\n");
             var sourcePath = WriteFile(projectRoot, "src/main.ts", "import { Button } from \"@hit/Button\";\n");
 
