@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using CodeIndex.Cli;
 using CodeIndex.Database;
@@ -171,6 +173,71 @@ public class DiffCommandRunnerTests
             Assert.Single(symbolsOnlyInRight);
             Assert.Contains("LeftOnly", symbolsOnlyInLeft[0].GetString(), StringComparison.Ordinal);
             Assert.Contains("RightOnly", symbolsOnlyInRight[0].GetString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(leftRoot);
+            TestProjectHelper.DeleteDirectory(rightRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DetailedJsonTruncatesLargeEncodedSymbolFields_Issue3163()
+    {
+        var leftRoot = TestProjectHelper.CreateTempProject("cdidx_diff_large_field_left");
+        var rightRoot = TestProjectHelper.CreateTempProject("cdidx_diff_large_field_right");
+        try
+        {
+            var leftDb = TestProjectHelper.CreateProjectDb(leftRoot);
+            var rightDb = TestProjectHelper.CreateProjectDb(rightRoot);
+            TestProjectHelper.InsertIndexedFile(leftDb, "src/Same.cs", "csharp", "public class Same { }");
+            TestProjectHelper.InsertIndexedFile(rightDb, "src/Same.cs", "csharp", "public class Same { }");
+
+            var longSignature = new string('a', DiffCommandRunner.MaxDiffEncodedFieldSampleLength * 4);
+            InsertSyntheticMethodSymbol(leftDb, "src/Same.cs", "Drifted", longSignature);
+
+            var (exitCode, output) = RunWithCapturedOut([leftDb, rightDb, "--json", "--detailed", "--limit", "1"]);
+
+            Assert.Equal(1, exitCode);
+            using var document = JsonDocument.Parse(output);
+            var row = Assert.Single(document.RootElement.GetProperty("symbols_only_in_left").EnumerateArray()).GetString();
+            Assert.NotNull(row);
+            var expectedHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(longSignature))).ToLowerInvariant();
+            Assert.Contains(new string('a', DiffCommandRunner.MaxDiffEncodedFieldSampleLength), row, StringComparison.Ordinal);
+            Assert.Contains($"[truncated original_length={longSignature.Length}", row, StringComparison.Ordinal);
+            Assert.Contains($"sha256={expectedHash}", row, StringComparison.Ordinal);
+            Assert.DoesNotContain(new string('a', DiffCommandRunner.MaxDiffEncodedFieldSampleLength + 1), row, StringComparison.Ordinal);
+            Assert.True(row!.Length < longSignature.Length);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(leftRoot);
+            TestProjectHelper.DeleteDirectory(rightRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_SummaryOnlyDetectsLargeRowDriftAfterSharedDisplayPrefix_Issue3163()
+    {
+        var leftRoot = TestProjectHelper.CreateTempProject("cdidx_diff_large_prefix_left");
+        var rightRoot = TestProjectHelper.CreateTempProject("cdidx_diff_large_prefix_right");
+        try
+        {
+            var leftDb = TestProjectHelper.CreateProjectDb(leftRoot);
+            var rightDb = TestProjectHelper.CreateProjectDb(rightRoot);
+            TestProjectHelper.InsertIndexedFile(leftDb, "src/Same.cs", "csharp", "public class Same { public void Run() { } }");
+            TestProjectHelper.InsertIndexedFile(rightDb, "src/Same.cs", "csharp", "public class Same { public void Run() { } }");
+
+            var sharedPrefix = new string('x', DiffCommandRunner.MaxDiffEncodedFieldSampleLength);
+            UpdateFirstChunkContent(leftDb, sharedPrefix + "left");
+            UpdateFirstChunkContent(rightDb, sharedPrefix + "right");
+
+            var (exitCode, output) = RunWithCapturedOut([leftDb, rightDb, "--summary-only"]);
+
+            Assert.Equal(1, exitCode);
+            using var document = JsonDocument.Parse(output);
+            Assert.Equal("different", document.RootElement.GetProperty("status").GetString());
+            Assert.False(document.RootElement.GetProperty("identical").GetBoolean());
         }
         finally
         {
