@@ -6233,6 +6233,64 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_UpdateMode_WithChangedBetween_RemovesDeletedPath_2987()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            RunGit(projectRoot, "init");
+            var changelogDir = Path.Combine(projectRoot, "changelog.d", "unreleased");
+            Directory.CreateDirectory(changelogDir);
+            var deletedPath = Path.Combine(changelogDir, "+trimmed-release-json.fixed.md");
+
+            File.WriteAllText(
+                deletedPath,
+                """
+                ---
+                category: fixed
+                ---
+
+                ## English
+
+                - Placeholder.
+
+                ## 日本語
+
+                - プレースホルダー。
+                """);
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "initial");
+            RunGit(projectRoot, "branch", "before-delete");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.Delete(deletedPath);
+            RunGit(projectRoot, "add", "-A");
+            RunGit(projectRoot, "commit", "-m", "delete fragment");
+            RunGit(projectRoot, "branch", "after-delete");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--changed-between", "before-delete", "after-delete", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("removed").GetInt32());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.DoesNotContain("changelog.d/unreleased/+trimmed-release-json.fixed.md", indexedPaths);
+
+            var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", Path.Combine(projectRoot, ".cdidx", "codeindex.db"), "--check", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, statusExitCode);
+            Assert.True(statusJson.GetProperty("workspace_check").GetProperty("matches_workspace").GetBoolean());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_UpdateMode_WithChangedBetween_FallsBackToFullScanWhenIgnoreFilesChange()
     {
         var projectRoot = CreateTempProject();
