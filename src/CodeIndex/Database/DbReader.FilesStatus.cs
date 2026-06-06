@@ -22,7 +22,7 @@ public partial class DbReader
             : null;
 
         using var fileCmd = _conn.CreateCommand();
-        var sql = "SELECT f.path, f.lang, f.lines FROM files f WHERE 1=1";
+        var sql = "SELECT f.id, f.path, f.lang, f.lines FROM files f WHERE 1=1";
         if (lang != null)
             sql += " AND f.lang = @lang";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
@@ -39,86 +39,72 @@ public partial class DbReader
             if (results.Count >= limit)
                 break;
 
-            var path = fileReader.GetString(0);
-            var fileLang = GetNullableString(fileReader, 1);
-            var totalLines = fileReader.GetInt32(2);
-            if (!TryLoadIndexedFileLines(path, out _, out _, out var lineMap) || lineMap.Count == 0)
+            var fileId = fileReader.GetInt64(0);
+            var path = fileReader.GetString(1);
+            var fileLang = GetNullableString(fileReader, 2);
+            var totalLines = fileReader.GetInt32(3);
+            if (totalLines <= 0)
                 continue;
 
             var searchQuery = exact && !regex ? ExactSourceSearchNormalizer.Normalize(query, fileLang) : query;
-            for (int lineNumber = 1; lineNumber <= totalLines && results.Count < limit; lineNumber++)
+            var pendingMatches = new Queue<PendingFileFindMatch>();
+            var snippetWindow = new Queue<IndexedLine>();
+            var snippetLinesByNumber = new Dictionary<int, string>();
+            var acceptedMatches = results.Count;
+
+            foreach (var indexedLine in EnumerateIndexedFileLines(fileId))
             {
-                if (focusLine.HasValue && lineNumber != focusLine.Value)
-                    continue;
-                if (!lineMap.TryGetValue(lineNumber, out var lineText))
-                    continue;
+                if (indexedLine.Number > totalLines)
+                    break;
 
-                int[]? rawIndexMap = null;
-                var searchLine = exact && !regex
-                    ? ExactSourceSearchNormalizer.Normalize(lineText, fileLang, out rawIndexMap)
-                    : lineText;
-                var snippetStart = Math.Max(1, lineNumber - before);
-                var snippetEnd = Math.Min(totalLines, lineNumber + after);
-                var snippetLineNumbers = Enumerable.Range(snippetStart, snippetEnd - snippetStart + 1)
-                    .Where(lineMap.ContainsKey)
-                    .ToList();
-                if (snippetLineNumbers.Count == 0)
-                    continue;
+                AddLineToFindWindow(indexedLine, snippetWindow, snippetLinesByNumber);
 
-                if (regexMatcher != null)
+                if (acceptedMatches < limit && (!focusLine.HasValue || indexedLine.Number == focusLine.Value))
                 {
-                    foreach (Match match in regexMatcher.Matches(searchLine))
+                    foreach (var lineMatch in EnumerateFindLineMatches(
+                        indexedLine.Text,
+                        fileLang,
+                        searchQuery,
+                        comparison,
+                        regexMatcher,
+                        exact && !regex,
+                        focusColumn))
                     {
-                        if (!match.Success || results.Count >= limit)
+                        if (acceptedMatches >= limit)
                             break;
-                        TryAddMatch(match.Index, Math.Max(1, match.Length));
+
+                        pendingMatches.Enqueue(new PendingFileFindMatch(
+                            indexedLine.Number,
+                            lineMatch.Column,
+                            lineMatch.Length,
+                            Math.Max(1, indexedLine.Number - before),
+                            Math.Min(totalLines, indexedLine.Number + after)));
+                        acceptedMatches++;
                     }
-                    continue;
                 }
 
-                for (int searchStart = 0; searchStart < searchLine.Length && results.Count < limit;)
-                {
-                    var matchColumn = searchLine.IndexOf(searchQuery, searchStart, comparison);
-                    if (matchColumn < 0)
-                        break;
-                    TryAddMatch(matchColumn, searchQuery.Length);
-                    searchStart = matchColumn + 1;
-                }
+                FlushReadyFindMatches(
+                    path,
+                    fileLang,
+                    pendingMatches,
+                    snippetLinesByNumber,
+                    results,
+                    maxLineWidth,
+                    indexedLine.Number);
+                PruneFindWindow(indexedLine.Number, before, pendingMatches, snippetWindow, snippetLinesByNumber);
 
-                bool TryAddMatch(int matchColumn, int matchLength)
-                {
-                    var rawMatchColumn = rawIndexMap == null ? matchColumn : rawIndexMap[matchColumn];
-                    var rawMatchLength = matchLength;
-                    if (rawIndexMap != null && matchLength > 0)
-                    {
-                        var rawMatchEndIndex = rawIndexMap[matchColumn + matchLength - 1];
-                        rawMatchLength = rawMatchEndIndex - rawMatchColumn + 1;
-                    }
-                    if (focusColumn.HasValue && (focusColumn.Value < rawMatchColumn + 1 || focusColumn.Value > rawMatchColumn + rawMatchLength))
-                        return false;
-
-                    var snippetLines = snippetLineNumbers.Select(line => lineMap[line]).ToList();
-                    var clampedSnippet = LineWidthFormatter.ClampLines(
-                        snippetLines,
-                        maxLineWidth,
-                        focusLineIndex: snippetLineNumbers.IndexOf(lineNumber),
-                        focusColumn: rawMatchColumn + 1,
-                        focusLength: rawMatchLength);
-
-                    results.Add(new FileFindResult
-                    {
-                        Path = path,
-                        Lang = fileLang,
-                        Line = lineNumber,
-                        Column = rawMatchColumn + 1,
-                        StartLine = snippetLineNumbers[0],
-                        EndLine = snippetLineNumbers[^1],
-                        Snippet = clampedSnippet.Text,
-                        SnippetTruncated = clampedSnippet.Truncated,
-                    });
-                    return true;
-                }
+                if (results.Count >= limit && pendingMatches.Count == 0)
+                    break;
             }
+
+            FlushReadyFindMatches(
+                path,
+                fileLang,
+                pendingMatches,
+                snippetLinesByNumber,
+                results,
+                maxLineWidth,
+                int.MaxValue);
         }
 
         return results;
@@ -152,7 +138,7 @@ public partial class DbReader
             ? new Regex(query, exact ? RegexOptions.None : RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(500))
             : null;
         using var fileCmd = _conn.CreateCommand();
-        var sql = "SELECT f.path, f.lang, f.lines FROM files f WHERE 1=1";
+        var sql = "SELECT f.id, f.path, f.lang, f.lines FROM files f WHERE 1=1";
         if (lang != null)
             sql += " AND f.lang = @lang";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
@@ -167,60 +153,32 @@ public partial class DbReader
         using var fileReader = fileCmd.ExecuteTrackedReader();
         while (fileReader.TrackedRead())
         {
-            var path = fileReader.GetString(0);
-            var fileLang = GetNullableString(fileReader, 1);
-            var totalLines = fileReader.GetInt32(2);
-            if (!TryLoadIndexedFileLines(path, out _, out _, out var lineMap) || lineMap.Count == 0)
+            var fileId = fileReader.GetInt64(0);
+            var fileLang = GetNullableString(fileReader, 2);
+            var totalLines = fileReader.GetInt32(3);
+            if (totalLines <= 0)
                 continue;
 
             var searchQuery = exact && !regex ? ExactSourceSearchNormalizer.Normalize(query, fileLang) : query;
             var fileMatches = 0;
-            for (int lineNumber = 1; lineNumber <= totalLines; lineNumber++)
+            foreach (var indexedLine in EnumerateIndexedFileLines(fileId))
             {
-                if (focusLine.HasValue && lineNumber != focusLine.Value)
+                if (indexedLine.Number > totalLines)
+                    break;
+
+                if (focusLine.HasValue && indexedLine.Number != focusLine.Value)
                     continue;
-                if (!lineMap.TryGetValue(lineNumber, out var lineText))
-                    continue;
 
-                int[]? rawIndexMap = null;
-                var searchLine = exact && !regex
-                    ? ExactSourceSearchNormalizer.Normalize(lineText, fileLang, out rawIndexMap)
-                    : lineText;
-                if (regexMatcher != null)
+                foreach (var _ in EnumerateFindLineMatches(
+                    indexedLine.Text,
+                    fileLang,
+                    searchQuery,
+                    comparison,
+                    regexMatcher,
+                    exact && !regex,
+                    focusColumn))
                 {
-                    foreach (Match match in regexMatcher.Matches(searchLine))
-                    {
-                        if (!match.Success)
-                            continue;
-                        if (IsFocusedMatch(match.Index, Math.Max(1, match.Length)))
-                            fileMatches++;
-                    }
-                    continue;
-                }
-
-                for (int searchStart = 0; searchStart < searchLine.Length;)
-                {
-                    var matchColumn = searchLine.IndexOf(searchQuery, searchStart, comparison);
-                    if (matchColumn < 0)
-                        break;
-
-                    if (IsFocusedMatch(matchColumn, searchQuery.Length))
-                        fileMatches++;
-                    searchStart = matchColumn + 1;
-                }
-
-                bool IsFocusedMatch(int matchColumn, int matchLength)
-                {
-                    if (!focusColumn.HasValue)
-                        return true;
-                    var rawMatchColumn = rawIndexMap == null ? matchColumn : rawIndexMap[matchColumn];
-                    var rawMatchLength = matchLength;
-                    if (rawIndexMap != null && matchLength > 0)
-                    {
-                        var rawMatchEndIndex = rawIndexMap[matchColumn + matchLength - 1];
-                        rawMatchLength = rawMatchEndIndex - rawMatchColumn + 1;
-                    }
-                    return focusColumn.Value >= rawMatchColumn + 1 && focusColumn.Value <= rawMatchColumn + rawMatchLength;
+                    fileMatches++;
                 }
             }
 
@@ -232,6 +190,160 @@ public partial class DbReader
         }
 
         return new QueryCountResult(count, fileCount);
+    }
+
+    private readonly record struct IndexedLine(int Number, string Text);
+
+    private readonly record struct FindLineMatch(int Column, int Length);
+
+    private readonly record struct PendingFileFindMatch(int LineNumber, int Column, int Length, int SnippetStart, int SnippetEnd);
+
+    private IEnumerable<IndexedLine> EnumerateIndexedFileLines(long fileId)
+    {
+        using var chunkCmd = _conn.CreateCommand();
+        chunkCmd.CommandText = @"
+            SELECT c.start_line, c.end_line, c.content
+            FROM chunks c
+            WHERE c.file_id = @fileId
+            ORDER BY c.start_line, c.chunk_index";
+        chunkCmd.Parameters.AddWithValue("@fileId", fileId);
+
+        var lastEmittedLine = 0;
+        using var chunkReader = chunkCmd.ExecuteTrackedReader();
+        while (chunkReader.TrackedRead())
+        {
+            var chunkStartLine = chunkReader.GetInt32(0);
+            var chunkEndLine = chunkReader.GetInt32(1);
+            var chunkLines = chunkReader.GetString(2).Split('\n');
+            var lineCount = chunkEndLine - chunkStartLine + 1;
+
+            for (int i = 0; i < chunkLines.Length && i < lineCount; i++)
+            {
+                var absoluteLine = chunkStartLine + i;
+                if (absoluteLine <= lastEmittedLine)
+                    continue;
+
+                lastEmittedLine = absoluteLine;
+                yield return new IndexedLine(absoluteLine, chunkLines[i]);
+            }
+        }
+    }
+
+    private static IEnumerable<FindLineMatch> EnumerateFindLineMatches(
+        string lineText,
+        string? fileLang,
+        string searchQuery,
+        StringComparison comparison,
+        Regex? regexMatcher,
+        bool normalizeExactSource,
+        int? focusColumn)
+    {
+        int[]? rawIndexMap = null;
+        var searchLine = normalizeExactSource
+            ? ExactSourceSearchNormalizer.Normalize(lineText, fileLang, out rawIndexMap)
+            : lineText;
+
+        if (regexMatcher != null)
+        {
+            foreach (Match match in regexMatcher.Matches(searchLine))
+            {
+                if (!match.Success)
+                    continue;
+                if (TryCreateFindLineMatch(match.Index, Math.Max(1, match.Length), rawIndexMap, focusColumn, out var lineMatch))
+                    yield return lineMatch;
+            }
+
+            yield break;
+        }
+
+        for (int searchStart = 0; searchStart < searchLine.Length;)
+        {
+            var matchColumn = searchLine.IndexOf(searchQuery, searchStart, comparison);
+            if (matchColumn < 0)
+                break;
+
+            if (TryCreateFindLineMatch(matchColumn, searchQuery.Length, rawIndexMap, focusColumn, out var lineMatch))
+                yield return lineMatch;
+            searchStart = matchColumn + 1;
+        }
+    }
+
+    private static bool TryCreateFindLineMatch(int matchColumn, int matchLength, int[]? rawIndexMap, int? focusColumn, out FindLineMatch lineMatch)
+    {
+        var rawMatchColumn = rawIndexMap == null ? matchColumn : rawIndexMap[matchColumn];
+        var rawMatchLength = matchLength;
+        if (rawIndexMap != null && matchLength > 0)
+        {
+            var rawMatchEndIndex = rawIndexMap[matchColumn + matchLength - 1];
+            rawMatchLength = rawMatchEndIndex - rawMatchColumn + 1;
+        }
+
+        lineMatch = new FindLineMatch(rawMatchColumn, rawMatchLength);
+        return !focusColumn.HasValue || (focusColumn.Value >= rawMatchColumn + 1 && focusColumn.Value <= rawMatchColumn + rawMatchLength);
+    }
+
+    private static void AddLineToFindWindow(IndexedLine indexedLine, Queue<IndexedLine> snippetWindow, Dictionary<int, string> snippetLinesByNumber)
+    {
+        snippetWindow.Enqueue(indexedLine);
+        snippetLinesByNumber[indexedLine.Number] = indexedLine.Text;
+    }
+
+    private static void FlushReadyFindMatches(
+        string path,
+        string? fileLang,
+        Queue<PendingFileFindMatch> pendingMatches,
+        Dictionary<int, string> snippetLinesByNumber,
+        List<FileFindResult> results,
+        int maxLineWidth,
+        int availableThroughLine)
+    {
+        while (pendingMatches.Count > 0 && pendingMatches.Peek().SnippetEnd <= availableThroughLine)
+        {
+            var pending = pendingMatches.Dequeue();
+            var snippetLineNumbers = Enumerable.Range(pending.SnippetStart, pending.SnippetEnd - pending.SnippetStart + 1)
+                .Where(snippetLinesByNumber.ContainsKey)
+                .ToList();
+            if (snippetLineNumbers.Count == 0)
+                continue;
+
+            var snippetLines = snippetLineNumbers.Select(line => snippetLinesByNumber[line]).ToList();
+            var clampedSnippet = LineWidthFormatter.ClampLines(
+                snippetLines,
+                maxLineWidth,
+                focusLineIndex: snippetLineNumbers.IndexOf(pending.LineNumber),
+                focusColumn: pending.Column + 1,
+                focusLength: pending.Length);
+
+            results.Add(new FileFindResult
+            {
+                Path = path,
+                Lang = fileLang,
+                Line = pending.LineNumber,
+                Column = pending.Column + 1,
+                StartLine = snippetLineNumbers[0],
+                EndLine = snippetLineNumbers[^1],
+                Snippet = clampedSnippet.Text,
+                SnippetTruncated = clampedSnippet.Truncated,
+            });
+        }
+    }
+
+    private static void PruneFindWindow(
+        int currentLine,
+        int before,
+        Queue<PendingFileFindMatch> pendingMatches,
+        Queue<IndexedLine> snippetWindow,
+        Dictionary<int, string> snippetLinesByNumber)
+    {
+        var minLineToKeep = currentLine - before;
+        if (pendingMatches.Count > 0)
+            minLineToKeep = Math.Min(minLineToKeep, pendingMatches.Peek().SnippetStart);
+
+        while (snippetWindow.Count > 0 && snippetWindow.Peek().Number < minLineToKeep)
+        {
+            var removed = snippetWindow.Dequeue();
+            snippetLinesByNumber.Remove(removed.Number);
+        }
     }
 
     /// <summary>
