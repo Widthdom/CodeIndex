@@ -27,8 +27,8 @@ public partial class DbReader
     private const int MaxSearchGuardLineWindowCacheEntries = 256;
 
     /// <summary>
-    /// Sanitize user input for FTS5 MATCH by quoting each token as a phrase.
-    /// FTS5 MATCH用にユーザー入力をサニタイズ（各トークンをフレーズとして引用）。
+    /// Sanitize user input for FTS5 MATCH by quoting each literal term or phrase.
+    /// FTS5 MATCH用にユーザー入力をサニタイズ（各リテラル語句をフレーズとして引用）。
     /// Prevents FTS5 syntax errors from special characters (*, ", AND, OR, NOT, NEAR, etc.).
     /// 特殊文字（*, ", AND, OR, NOT, NEAR等）によるFTS5構文エラーを防止する。
     /// When <paramref name="prefix"/> is true, every token is treated as an FTS5 prefix phrase
@@ -39,11 +39,12 @@ public partial class DbReader
     /// </summary>
     internal static string SanitizeFtsQuery(string query, bool prefix)
     {
-        // Escape double quotes inside the query, then wrap each whitespace-separated
-        // token in double quotes so FTS5 treats them as literal phrases. A trailing
+        // Escape double quotes inside the query, then wrap each literal term in double
+        // quotes so FTS5 treats quoted spans as phrases and unquoted terms literally. A trailing
         // `*` on the user-supplied token is preserved as a prefix-search shorthand so
         // `auth*` can match `authenticate` without requiring raw FTS5 syntax.
-        // クエリ内のダブルクォートをエスケープし、各トークンをダブルクォートで囲む。
+        // クエリ内のダブルクォートをエスケープし、quoted span をフレーズとして扱いながら
+        // リテラル語句をダブルクォートで囲む。
         // ユーザー入力末尾の `*` は prefix 検索の shorthand として保持し、`auth*` で
         // `authenticate` を raw FTS5 構文なしに検索できるようにする。
         var tokens = SplitLiteralSearchTokens(query);
@@ -227,7 +228,7 @@ public partial class DbReader
         if (hasGuardFilters)
             raw = FilterBySearchGuards(raw, SearchPrimaryMatchContext.Create(query, normalizedQuery, rawQuery, exact, lang), guardFilters!, guardWindow);
 
-        var results = deduplicate ? DeduplicateOverlappingResults(raw) : raw;
+        var results = deduplicate ? DeduplicateOverlappingResults(raw, SearchPrimaryMatchContext.Create(query, normalizedQuery, rawQuery, exact, lang)) : raw;
         if (guardCandidateLimitReached && results.Count < GetGuardedSearchRequestedPageEnd(limit, cursor))
             throw new SearchGuardCandidateLimitException(guardedCandidateLimit, limit, cursor?.Offset ?? 0);
 
@@ -338,8 +339,7 @@ public partial class DbReader
         public static SearchMatchLineTerms Create(string query, string? lang, bool caseSensitive)
         {
             var normalizedQuery = ExactSourceSearchNormalizer.Normalize(query.Trim(), lang);
-            var tokens = query
-                .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
+            var tokens = SplitLiteralSearchTokens(query)
                 .Select(NormalizeSearchSnippetToken)
                 .Where(token => token.Length > 0)
                 .Where(token => token is not "AND" and not "OR" and not "NOT" and not "NEAR")
@@ -430,7 +430,7 @@ public partial class DbReader
         if (exact)
         {
             sql = $@"
-                SELECT f.path, c.start_line, c.end_line,
+                SELECT f.path, f.lang, c.start_line, c.end_line, c.content,
                        0.0 AS rank
                 FROM chunks c
                 JOIN files f ON c.file_id = f.id{SearchSymbolMatchJoinsSql}
@@ -445,7 +445,7 @@ public partial class DbReader
             if (rawQuery)
                 ValidateRawFtsNearDistance(sanitizedQuery);
             sql = $@"
-                SELECT f.path, c.start_line, c.end_line,
+                SELECT f.path, f.lang, c.start_line, c.end_line, c.content,
                        rank
                 FROM fts_chunks
                 JOIN chunks c ON fts_chunks.rowid = c.id
@@ -474,41 +474,37 @@ public partial class DbReader
             cmd.Parameters.AddWithValue("@since", since.Value);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
 
+        var keptMatchLines = new Dictionary<string, HashSet<int>>(StringComparer.Ordinal);
         var keptIntervals = new Dictionary<string, IntervalSet>(StringComparer.Ordinal);
+        var keptFiles = new HashSet<string>(StringComparer.Ordinal);
+        var matchContext = deduplicate ? SearchPrimaryMatchContext.Create(query, normalizedQuery, rawQuery, exact, lang) : null;
         var count = 0;
-        var fileCount = 0;
         try
         {
             using var reader = cmd.ExecuteTrackedReader();
             while (reader.TrackedRead())
             {
                 var path = reader.GetString(0);
-                var startLine = reader.GetInt32(1);
-                var endLine = reader.GetInt32(2);
+                var result = new SearchResult
+                {
+                    Path = path,
+                    Lang = GetNullableString(reader, 1),
+                    StartLine = reader.GetInt32(2),
+                    EndLine = reader.GetInt32(3),
+                    Content = reader.GetString(4),
+                };
                 if (!deduplicate)
                 {
                     count++;
-                    if (!keptIntervals.ContainsKey(path))
-                    {
-                        keptIntervals[path] = new IntervalSet();
-                        fileCount++;
-                    }
+                    keptFiles.Add(path);
                     continue;
                 }
 
-                if (!keptIntervals.TryGetValue(path, out var intervals))
-                {
-                    intervals = new IntervalSet();
-                    keptIntervals[path] = intervals;
-                }
-
-                var hadCoverage = intervals.Count > 0;
-                if (!intervals.AddIfAddsCoverage(startLine, endLine))
+                if (!AddSearchResultDedupCoverage(result, matchContext!, keptMatchLines, keptIntervals))
                     continue;
 
                 count++;
-                if (!hadCoverage)
-                    fileCount++;
+                keptFiles.Add(path);
             }
         }
         catch (SqliteException ex) when (rawQuery && IsFtsQuerySyntaxError(ex))
@@ -516,7 +512,7 @@ public partial class DbReader
             throw new FtsQuerySyntaxException(ex.Message, ex);
         }
 
-        return new QueryCountResult(count, fileCount);
+        return new QueryCountResult(count, keptFiles.Count);
     }
 
     private List<SearchResult> FilterBySearchGuards(
@@ -809,14 +805,55 @@ public partial class DbReader
             $"literal search query is too long ({query.Length} characters); maximum is {MaxLiteralSearchQueryLength}. Split generated input into smaller queries.");
     }
 
-    private static string[] SplitLiteralSearchTokens(string query)
+    internal static string[] SplitLiteralSearchTokens(string query)
     {
-        var tokens = query.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
-        if (tokens.Length <= MaxLiteralSearchTokenCount)
-            return tokens;
+        var tokens = new List<string>();
+        for (var i = 0; i < query.Length;)
+        {
+            while (i < query.Length && char.IsWhiteSpace(query[i]))
+                i++;
+            if (i >= query.Length)
+                break;
 
-        throw new SearchQueryLimitException(
-            $"literal search query has too many terms ({tokens.Length}); maximum is {MaxLiteralSearchTokenCount}. Split generated input into smaller queries.");
+            if (query[i] != '"')
+            {
+                var start = i;
+                while (i < query.Length && !char.IsWhiteSpace(query[i]))
+                    i++;
+                tokens.Add(query[start..i]);
+            }
+            else
+            {
+                i++;
+                var phrase = new StringBuilder();
+                while (i < query.Length)
+                {
+                    if (query[i] == '"')
+                    {
+                        if (i + 1 < query.Length && query[i + 1] == '"')
+                        {
+                            phrase.Append('"');
+                            i += 2;
+                            continue;
+                        }
+
+                        i++;
+                        break;
+                    }
+
+                    phrase.Append(query[i]);
+                    i++;
+                }
+
+                tokens.Add(phrase.Length == 0 ? "\"" : phrase.ToString());
+            }
+
+            if (tokens.Count > MaxLiteralSearchTokenCount)
+                throw new SearchQueryLimitException(
+                    $"literal search query has too many terms ({tokens.Count}); maximum is {MaxLiteralSearchTokenCount}. Split generated input into smaller queries.");
+        }
+
+        return tokens.ToArray();
     }
 
     internal static string ValidateRawFtsQuery(string query)
@@ -1109,22 +1146,17 @@ public partial class DbReader
     /// 同じファイル内で上位の結果に完全包含される結果を除去する。
     /// チャンクは10行重複するが、後続チャンクは重複範囲外の正当なヒットを含みうる。
     /// </summary>
-    private static List<SearchResult> DeduplicateOverlappingResults(List<SearchResult> results)
+    private static List<SearchResult> DeduplicateOverlappingResults(List<SearchResult> results, SearchPrimaryMatchContext matchContext)
     {
         if (results.Count <= 1)
             return results;
 
+        var keptMatchLines = new Dictionary<string, HashSet<int>>(StringComparer.Ordinal);
         var keptIntervals = new Dictionary<string, IntervalSet>(StringComparer.Ordinal);
         var deduped = new List<SearchResult>();
         foreach (var r in results)
         {
-            if (!keptIntervals.TryGetValue(r.Path, out var intervals))
-            {
-                intervals = new IntervalSet();
-                keptIntervals[r.Path] = intervals;
-            }
-
-            if (!intervals.AddIfAddsCoverage(r.StartLine, r.EndLine))
+            if (!AddSearchResultDedupCoverage(r, matchContext, keptMatchLines, keptIntervals))
                 continue;
 
             deduped.Add(r);
@@ -1132,11 +1164,75 @@ public partial class DbReader
         return deduped;
     }
 
+    private static bool AddSearchResultDedupCoverage(
+        SearchResult result,
+        SearchPrimaryMatchContext matchContext,
+        Dictionary<string, HashSet<int>> keptMatchLines,
+        Dictionary<string, IntervalSet> keptIntervals)
+    {
+        if (!keptIntervals.TryGetValue(result.Path, out var intervals))
+        {
+            intervals = new IntervalSet();
+            keptIntervals[result.Path] = intervals;
+        }
+
+        if (intervals.Contains(result.StartLine, result.EndLine))
+            return false;
+
+        var matchLines = FindPrimarySearchMatchLines(result, matchContext)
+            .Select(match => match.LineNumber)
+            .Distinct()
+            .ToArray();
+        if (matchLines.Length > 0)
+        {
+            if (!keptMatchLines.TryGetValue(result.Path, out var lines))
+            {
+                lines = [];
+                keptMatchLines[result.Path] = lines;
+            }
+
+            var added = false;
+            foreach (var line in matchLines)
+            {
+                if (lines.Add(line))
+                    added = true;
+            }
+
+            if (!added)
+                return false;
+        }
+
+        return intervals.AddIfAddsCoverage(result.StartLine, result.EndLine);
+    }
+
     private sealed class IntervalSet
     {
         private readonly List<(int Start, int End)> _intervals = [];
 
         public int Count => _intervals.Count;
+
+        public bool Contains(int start, int end)
+        {
+            if (end < start)
+                (start, end) = (end, start);
+
+            var insertIndex = FindInsertIndex(start);
+            if (insertIndex < _intervals.Count)
+            {
+                var current = _intervals[insertIndex];
+                if (current.Start <= start && current.End >= end)
+                    return true;
+            }
+
+            if (insertIndex > 0)
+            {
+                var previous = _intervals[insertIndex - 1];
+                if (previous.Start <= start && previous.End >= end)
+                    return true;
+            }
+
+            return false;
+        }
 
         public bool AddIfAddsCoverage(int start, int end)
         {

@@ -17,18 +17,50 @@ internal static class SearchQueryAdvisor
             return false;
 
         var trimmed = query.Trim();
-        if (!trimmed.Any(char.IsLetterOrDigit))
+        var hintProbe = TryUnwrapSingleDoubleQuotedPhrase(trimmed, out var phrase)
+            ? phrase
+            : trimmed;
+        if (!hintProbe.Any(char.IsLetterOrDigit))
             return false;
 
-        var tokens = trimmed.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        var tokens = hintProbe.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
         if (tokens.Length == 1 && IsOptionLookingLiteral(tokens[0]))
             return false;
 
-        var punctuationCount = trimmed.Count(IsCodePunctuation);
+        var punctuationCount = hintProbe.Count(IsCodePunctuation);
         if (punctuationCount >= 2)
             return true;
 
         return tokens.Any(IsStandaloneOperatorToken);
+    }
+
+    private static bool TryUnwrapSingleDoubleQuotedPhrase(string query, out string phrase)
+    {
+        phrase = string.Empty;
+        if (query.Length < 2 || query[0] != '"' || query[^1] != '"')
+            return false;
+
+        var builder = new System.Text.StringBuilder();
+        for (var i = 1; i < query.Length - 1; i++)
+        {
+            if (query[i] != '"')
+            {
+                builder.Append(query[i]);
+                continue;
+            }
+
+            if (i + 1 < query.Length - 1 && query[i + 1] == '"')
+            {
+                builder.Append('"');
+                i++;
+                continue;
+            }
+
+            return false;
+        }
+
+        phrase = builder.ToString();
+        return true;
     }
 
     private static bool IsStandaloneOperatorToken(string token)

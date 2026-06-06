@@ -1045,7 +1045,7 @@ public static class QueryCommandRunner
     private static List<SearchDisplayRow> BuildSearchDisplayRows(List<SearchResult> results, QueryCommandOptions options, bool exact, string? queryOverride = null)
     {
         var rows = new List<SearchDisplayRow>(results.Count);
-        var seenMatchLocations = !exact || options.NoDedup ? null : new HashSet<string>(StringComparer.Ordinal);
+        var seenMatchLocations = options.NoDedup ? null : new HashSet<string>(StringComparer.Ordinal);
         var displayQuery = queryOverride ?? options.Query!;
         var queryContext = SearchSnippetFormatter.PrepareQueryContext(displayQuery);
         foreach (var result in results)
