@@ -4,6 +4,7 @@ using System.Runtime.Loader;
 using System.Runtime.Versioning;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using CodeIndex.Models;
 
 namespace CodeIndex.Indexer.Hooks;
@@ -336,10 +337,7 @@ internal static class PostExtractionHookCallbackWorker
 {
     internal const string CommandName = "__cdidx-post-extraction-hook-callback";
     internal const int WorkerKillWaitMilliseconds = 5000;
-    internal static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNameCaseInsensitive = true,
-    };
+    internal static readonly JsonSerializerOptions JsonOptions = PostExtractionHookCallbackWorkerJsonContext.Default.Options;
 
     internal static bool TryRunCommand(
         string[] args,
@@ -363,7 +361,32 @@ internal static class PostExtractionHookCallbackWorker
         out ProcessStartInfo startInfo,
         out string error)
     {
-        var runnerAssemblyPath = typeof(PostExtractionHookCallbackWorker).Assembly.Location;
+        return TryCreateStartInfo(
+            hook,
+            Environment.ProcessPath,
+            ResolveCurrentRunnerAssemblyPath(),
+            out startInfo,
+            out error);
+    }
+
+    internal static bool TryCreateStartInfo(
+        PostExtractionHookInfo hook,
+        string? currentProcessPath,
+        string? runnerAssemblyPath,
+        out ProcessStartInfo startInfo,
+        out string error)
+    {
+        startInfo = CreateStartInfo();
+        if (ShouldStartCurrentExecutable(currentProcessPath, runnerAssemblyPath))
+        {
+            startInfo.FileName = currentProcessPath!;
+            startInfo.ArgumentList.Add(CommandName);
+            startInfo.ArgumentList.Add(hook.AssemblyPath);
+            startInfo.ArgumentList.Add(hook.TypeName);
+            error = string.Empty;
+            return true;
+        }
+
         if (string.IsNullOrWhiteSpace(runnerAssemblyPath))
         {
             startInfo = new ProcessStartInfo();
@@ -371,18 +394,7 @@ internal static class PostExtractionHookCallbackWorker
             return false;
         }
 
-        startInfo = new ProcessStartInfo
-        {
-            FileName = ResolveDotnetHostPath(),
-            UseShellExecute = false,
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            StandardInputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
-            StandardOutputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
-            StandardErrorEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
-            CreateNoWindow = true,
-        };
+        startInfo.FileName = ResolveDotnetHostPath();
         startInfo.ArgumentList.Add(runnerAssemblyPath);
         startInfo.ArgumentList.Add(CommandName);
         startInfo.ArgumentList.Add(hook.AssemblyPath);
@@ -523,6 +535,48 @@ internal static class PostExtractionHookCallbackWorker
         return "dotnet";
     }
 
+    private static ProcessStartInfo CreateStartInfo()
+        => new()
+        {
+            UseShellExecute = false,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            StandardInputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+            StandardOutputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+            StandardErrorEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+            CreateNoWindow = true,
+        };
+
+    private static bool ShouldStartCurrentExecutable(string? currentProcessPath, string? runnerAssemblyPath)
+    {
+        if (string.IsNullOrWhiteSpace(currentProcessPath) || IsDotnetHostPath(currentProcessPath))
+            return false;
+
+        var processName = Path.GetFileNameWithoutExtension(currentProcessPath);
+        var appName = typeof(PostExtractionHookCallbackWorker).Assembly.GetName().Name;
+        if (!string.IsNullOrWhiteSpace(appName)
+            && string.Equals(processName, appName, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return string.IsNullOrWhiteSpace(runnerAssemblyPath);
+    }
+
+    private static string? ResolveCurrentRunnerAssemblyPath()
+    {
+        var assemblyName = typeof(PostExtractionHookCallbackWorker).Assembly.GetName().Name;
+        if (string.IsNullOrWhiteSpace(assemblyName))
+            return null;
+
+        var candidate = Path.Combine(AppContext.BaseDirectory, assemblyName + ".dll");
+        return File.Exists(candidate) ? candidate : null;
+    }
+
+    private static bool IsDotnetHostPath(string path)
+        => string.Equals(Path.GetFileNameWithoutExtension(path), "dotnet", StringComparison.OrdinalIgnoreCase);
+
     private static void ApplyCurrentRuntimeRollForward(ProcessStartInfo startInfo)
     {
         var targetMajor = GetRunnerTargetFrameworkMajor();
@@ -570,3 +624,8 @@ internal static class PostExtractionHookCallbackWorker
         string? CallbackError,
         string? WorkerError);
 }
+
+[JsonSourceGenerationOptions(PropertyNameCaseInsensitive = true)]
+[JsonSerializable(typeof(PostExtractionHookCallbackWorker.WorkerRequest))]
+[JsonSerializable(typeof(PostExtractionHookCallbackWorker.WorkerResponse))]
+internal partial class PostExtractionHookCallbackWorkerJsonContext : JsonSerializerContext;

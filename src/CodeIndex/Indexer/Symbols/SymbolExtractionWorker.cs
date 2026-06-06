@@ -3,6 +3,7 @@ using System.Reflection;
 using System.Runtime.Versioning;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using CodeIndex.Models;
 
 namespace CodeIndex.Indexer;
@@ -326,10 +327,7 @@ internal static class SymbolExtractionWorker
     internal const string CompletionPathEnvironmentVariable = "CDIDX_TEST_SYMBOL_EXTRACTION_WORKER_DONE_PATH";
     internal const string ConsoleStdoutEnvironmentVariable = "CDIDX_TEST_SYMBOL_EXTRACTION_WORKER_STDOUT";
     private const int CapturedConsoleMaxChars = 32 * 1024;
-    internal static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNameCaseInsensitive = true,
-    };
+    internal static readonly JsonSerializerOptions JsonOptions = SymbolExtractionWorkerJsonContext.Default.Options;
 
     internal static bool TryRunCommand(
         string[] args,
@@ -352,7 +350,7 @@ internal static class SymbolExtractionWorker
     {
         return TryCreateStartInfo(
             Environment.ProcessPath,
-            typeof(SymbolExtractionWorker).Assembly.Location,
+            ResolveCurrentRunnerAssemblyPath(),
             out startInfo,
             out error);
     }
@@ -546,6 +544,16 @@ internal static class SymbolExtractionWorker
         return "dotnet";
     }
 
+    private static string? ResolveCurrentRunnerAssemblyPath()
+    {
+        var assemblyName = typeof(SymbolExtractionWorker).Assembly.GetName().Name;
+        if (string.IsNullOrWhiteSpace(assemblyName))
+            return null;
+
+        var candidate = Path.Combine(AppContext.BaseDirectory, assemblyName + ".dll");
+        return File.Exists(candidate) ? candidate : null;
+    }
+
     private static bool IsDotnetHostPath(string path)
         => string.Equals(Path.GetFileNameWithoutExtension(path), "dotnet", StringComparison.OrdinalIgnoreCase);
 
@@ -656,3 +664,8 @@ internal static class SymbolExtractionWorker
         }
     }
 }
+
+[JsonSourceGenerationOptions(PropertyNameCaseInsensitive = true)]
+[JsonSerializable(typeof(SymbolExtractionWorker.WorkerRequest))]
+[JsonSerializable(typeof(SymbolExtractionWorker.WorkerResponse))]
+internal partial class SymbolExtractionWorkerJsonContext : JsonSerializerContext;

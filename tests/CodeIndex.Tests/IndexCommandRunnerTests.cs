@@ -7,6 +7,7 @@ using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
 using CodeIndex.Indexer.Extensibility;
+using CodeIndex.Indexer.Hooks;
 using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
 
@@ -275,6 +276,52 @@ public class IndexCommandRunnerTests
         Assert.True(created, error);
         Assert.NotEqual(currentProcessPath, startInfo.FileName);
         Assert.Equal([runnerAssemblyPath, SymbolExtractionWorker.CommandName], startInfo.ArgumentList);
+    }
+
+    [Fact]
+    public void PostExtractionHookCallbackWorker_StartInfo_UsesCurrentCdidxExecutableWhenAvailable()
+    {
+        var hook = new PostExtractionHookInfo(
+            "demo",
+            Path.Combine(Path.GetTempPath(), "demo-hook.dll"),
+            "Demo.Hook");
+        var currentProcessPath = Path.Combine(Path.GetTempPath(), OperatingSystem.IsWindows() ? "cdidx.exe" : "cdidx");
+
+        var created = PostExtractionHookCallbackWorker.TryCreateStartInfo(
+            hook,
+            currentProcessPath,
+            runnerAssemblyPath: string.Empty,
+            out var startInfo,
+            out var error);
+
+        Assert.True(created, error);
+        Assert.Equal(currentProcessPath, startInfo.FileName);
+        Assert.Equal([PostExtractionHookCallbackWorker.CommandName, hook.AssemblyPath, hook.TypeName], startInfo.ArgumentList);
+        Assert.True(startInfo.RedirectStandardInput);
+        Assert.True(startInfo.RedirectStandardOutput);
+        Assert.True(startInfo.RedirectStandardError);
+    }
+
+    [Fact]
+    public void PostExtractionHookCallbackWorker_StartInfo_UsesFrameworkDependentDllWhenProcessIsNotCdidx()
+    {
+        var hook = new PostExtractionHookInfo(
+            "demo",
+            Path.Combine(Path.GetTempPath(), "demo-hook.dll"),
+            "Demo.Hook");
+        var currentProcessPath = Path.Combine(Path.GetTempPath(), OperatingSystem.IsWindows() ? "testhost.exe" : "testhost");
+        var runnerAssemblyPath = Path.Combine(Path.GetTempPath(), "cdidx.dll");
+
+        var created = PostExtractionHookCallbackWorker.TryCreateStartInfo(
+            hook,
+            currentProcessPath,
+            runnerAssemblyPath,
+            out var startInfo,
+            out var error);
+
+        Assert.True(created, error);
+        Assert.NotEqual(currentProcessPath, startInfo.FileName);
+        Assert.Equal([runnerAssemblyPath, PostExtractionHookCallbackWorker.CommandName, hook.AssemblyPath, hook.TypeName], startInfo.ArgumentList);
     }
 
     [SkipOnMacOsArm64Fact]
