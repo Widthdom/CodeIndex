@@ -11933,6 +11933,83 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public async Task RunAsync_SamplingClientResultOverRetainedLimit_IgnoresOversizedPayload_Issue3098()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_MCP_RESPONSE_MAX_BYTES");
+        env.Set("CDIDX_MCP_RESPONSE_MAX_BYTES", "4096");
+        using var server = new McpServer(_dbPath, "1.0", dbPathExplicit: true);
+        server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"capabilities":{"sampling":{}}}}""")!);
+        var uniqueDesc = $"Oversized out-of-band result regression {Guid.NewGuid():N}";
+        var request = BuildSuggestImprovementRequest(uniqueDesc);
+        var transport = new ClientResponseTransport(request.ToJsonString(), id => new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = id,
+            ["result"] = new JsonObject
+            {
+                ["content"] = new JsonObject
+                {
+                    ["type"] = "text",
+                    ["text"] = $$"""{"title":"Should not be retained","tags":["security"],"padding":"{{new string('r', 5000)}}"}""",
+                },
+            },
+        });
+
+        await server.RunAsync(transport, CancellationToken.None);
+
+        var response = JsonNode.Parse(transport.FinalResponse!)!;
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal("recorded", structured["status"]!.GetValue<string>());
+        Assert.Null(structured["sampled_title"]);
+        Assert.Contains(transport.WrittenFrames, frame =>
+            frame.Contains("\"method\":\"sampling/createMessage\"", StringComparison.Ordinal));
+        var stored = new SuggestionStore(Path.GetDirectoryName(_dbPath)!, Path.GetFileNameWithoutExtension(_dbPath)).LoadAll()
+            .Single(s => s.Description == uniqueDesc);
+        Assert.Null(stored.SampledTitle);
+        Assert.Null(stored.SampledTags);
+    }
+
+    [Fact]
+    public async Task RunAsync_SamplingClientErrorOverRetainedLimit_IgnoresOversizedPayload_Issue3098()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_MCP_RESPONSE_MAX_BYTES");
+        env.Set("CDIDX_MCP_RESPONSE_MAX_BYTES", "4096");
+        using var server = new McpServer(_dbPath, "1.0", dbPathExplicit: true);
+        server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"capabilities":{"sampling":{}}}}""")!);
+        var uniqueDesc = $"Oversized out-of-band error regression {Guid.NewGuid():N}";
+        var request = BuildSuggestImprovementRequest(uniqueDesc);
+        var transport = new ClientResponseTransport(request.ToJsonString(), id => new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = id,
+            ["error"] = new JsonObject
+            {
+                ["code"] = -32000,
+                ["message"] = "client rejected sampling",
+                ["data"] = new JsonObject
+                {
+                    ["padding"] = new string('e', 5000),
+                },
+            },
+        });
+
+        await server.RunAsync(transport, CancellationToken.None);
+
+        var response = JsonNode.Parse(transport.FinalResponse!)!;
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal("recorded", structured["status"]!.GetValue<string>());
+        Assert.Null(structured["sampled_title"]);
+        Assert.DoesNotContain(transport.WrittenFrames, frame =>
+            frame.Contains(new string('e', 5000), StringComparison.Ordinal));
+        var stored = new SuggestionStore(Path.GetDirectoryName(_dbPath)!, Path.GetFileNameWithoutExtension(_dbPath)).LoadAll()
+            .Single(s => s.Description == uniqueDesc);
+        Assert.Null(stored.SampledTitle);
+        Assert.Null(stored.SampledTags);
+    }
+
+    [Fact]
     public void SuggestImprovement_WhenSamplingAvailable_BoundsPromptAndSummarizesInvocationContext()
     {
         _server.HandleMessage(JsonNode.Parse(
@@ -13510,6 +13587,63 @@ public class McpServerTests : IDisposable
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
+    private sealed class ClientResponseTransport : IMcpTransport
+    {
+        private readonly Queue<string?> _frames = new();
+        private readonly SemaphoreSlim _availableFrames = new(0, 1);
+        private readonly Func<string, JsonObject> _responseFactory;
+
+        public ClientResponseTransport(string request, Func<string, JsonObject> responseFactory)
+        {
+            _responseFactory = responseFactory;
+            EnqueueFrame(request);
+        }
+
+        public string Name => "stdio";
+        public string Endpoint => "memory://test";
+        public List<string> WrittenFrames { get; } = [];
+        public string? FinalResponse { get; private set; }
+
+        public async Task<string?> ReadFrameAsync(CancellationToken cancellationToken)
+        {
+            await _availableFrames.WaitAsync(cancellationToken).ConfigureAwait(false);
+            lock (_frames)
+            {
+                return _frames.Dequeue();
+            }
+        }
+
+        public Task WriteFrameAsync(string? frame, CancellationToken cancellationToken)
+        {
+            if (frame is null)
+                return Task.CompletedTask;
+
+            WrittenFrames.Add(frame);
+            var node = JsonNode.Parse(frame)!;
+            if (node["method"] is not null && node["id"] is JsonValue idNode && idNode.TryGetValue<string>(out var id))
+            {
+                EnqueueFrame(_responseFactory(id).ToJsonString());
+            }
+            else if (node["method"] is null)
+            {
+                FinalResponse = frame;
+                EnqueueFrame(null);
+            }
+            return Task.CompletedTask;
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+        private void EnqueueFrame(string? frame)
+        {
+            lock (_frames)
+            {
+                _frames.Enqueue(frame);
+            }
+            _availableFrames.Release();
+        }
+    }
+
     // The shutdown helper is the heart of the #1573 fix: cancelling the CTS through Console.CancelKeyPress
     // (and PosixSignal.SIGTERM on Unix) must trip the loop. This test exercises the cross-platform
     // Ctrl+C path by raising the .NET CancelKeyPress event directly via reflection — the test cannot
@@ -13548,6 +13682,23 @@ public class McpServerTests : IDisposable
 
     private static JsonObject BuildRequiredPathArguments(string toolName, string pathValue)
         => BuildRequiredPathArguments(toolName, JsonValue.Create(pathValue)!);
+
+    private static JsonObject BuildSuggestImprovementRequest(string description)
+        => new()
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "suggest_improvement",
+                ["arguments"] = new JsonObject
+                {
+                    ["category"] = "other",
+                    ["description"] = description,
+                },
+            },
+        };
 
     private static JsonObject BuildRequiredPathArguments(string toolName, JsonNode pathValue)
     {

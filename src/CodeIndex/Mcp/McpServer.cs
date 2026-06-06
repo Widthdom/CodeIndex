@@ -978,10 +978,40 @@ public partial class McpServer : IDisposable
             return false;
 
         if (obj.TryGetPropertyValue("error", out var error) && error is not null)
-            pending.TrySetException(new InvalidOperationException(error.ToJsonString(_jsonOptions)));
+        {
+            if (!TryCloneClientResponseNodeWithinLimit(error, "error", out var clonedError, out var exception))
+                pending.TrySetException(exception);
+            else
+                pending.TrySetException(new InvalidOperationException(clonedError!.ToJsonString(_jsonOptions)));
+        }
+        else if (obj.TryGetPropertyValue("result", out var result) && result is not null)
+        {
+            if (!TryCloneClientResponseNodeWithinLimit(result, "result", out var clonedResult, out var exception))
+                pending.TrySetException(exception);
+            else
+                pending.TrySetResult(clonedResult);
+        }
         else
-            pending.TrySetResult(obj["result"]?.DeepClone());
+        {
+            pending.TrySetResult(null);
+        }
         return true;
+    }
+
+    private bool TryCloneClientResponseNodeWithinLimit(JsonNode node, string memberName, out JsonNode? clone, out InvalidOperationException exception)
+    {
+        var responseLimit = GetMaxResponseBytes();
+        if (TryMeasureJsonUtf8BytesWithinLimit(node, _jsonOptions, responseLimit, out var responseBytes))
+        {
+            clone = McpJsonNode.Clone(node);
+            exception = null!;
+            return true;
+        }
+
+        clone = null;
+        exception = new InvalidOperationException(
+            $"MCP client response {memberName} exceeded the retained byte limit ({responseBytes} > {responseLimit}).");
+        return false;
     }
 
     private async Task<JsonNode?> SendClientRequestAsync(string method, JsonObject? @params, CancellationToken cancellationToken)
