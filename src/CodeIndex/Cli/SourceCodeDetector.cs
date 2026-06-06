@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using CodeIndex.Indexer;
 
 namespace CodeIndex.Cli;
 
@@ -105,29 +106,27 @@ public static class SourceCodeDetector
         if (string.IsNullOrWhiteSpace(text))
             return false;
 
-        var lines = text.Split('\n');
-
         // Run each heuristic independently.
         // Any single match is sufficient to flag the text.
         // 各ヒューリスティックを独立して実行する。
         // 1つでもマッチすればテキストをフラグする。
 
-        if (HasCodeStatementPattern(lines))
+        if (HasCodeStatementPattern(text))
             return true;
 
-        if (HasConsecutiveCodeLines(lines))
+        if (HasConsecutiveCodeLines(text))
             return true;
 
-        if (HasBlockStructure(lines))
+        if (HasBlockStructure(text))
             return true;
 
-        if (HasRepeatedImports(lines))
+        if (HasRepeatedImports(text))
             return true;
 
-        if (HasMultiLineFunctionDefinition(lines))
+        if (HasMultiLineFunctionDefinition(text))
             return true;
 
-        if (HasFencedCodeBlock(lines))
+        if (HasFencedCodeBlock(text))
             return true;
 
         return false;
@@ -156,26 +155,26 @@ public static class SourceCodeDetector
     ///   ではない。行の半数超がこれらの文字で終わっていれば、ほぼ確実に
     ///   ソースコードのブロックである。
     /// </summary>
-    private static bool HasCodeStatementPattern(string[] lines)
+    private static bool HasCodeStatementPattern(string text)
     {
-        // Filter to non-empty lines (ignore blank lines in the count).
-        // 非空行のみを対象にする（空行はカウントから除外）。
-        var nonEmptyLines = lines
-            .Select(l => l.TrimEnd())
-            .Where(l => l.Length > 0)
-            .ToArray();
-
-        if (nonEmptyLines.Length < MinLinesForStatementCheck)
-            return false;
-
         // Count lines ending with code-typical characters.
         // コード的な文字で終わる行をカウントする。
-        var codeEndingCount = nonEmptyLines.Count(line =>
-            line.EndsWith(';')
-            || line.EndsWith('{')
-            || line.EndsWith('}'));
+        var nonEmptyLineCount = 0;
+        var codeEndingCount = 0;
+        foreach (var rawLine in EnumerateLines(text))
+        {
+            var line = rawLine.TrimEnd();
+            if (line.Length == 0)
+                continue;
+            nonEmptyLineCount++;
+            if (line.EndsWith(';') || line.EndsWith('{') || line.EndsWith('}'))
+                codeEndingCount++;
+        }
 
-        var ratio = (double)codeEndingCount / nonEmptyLines.Length;
+        if (nonEmptyLineCount < MinLinesForStatementCheck)
+            return false;
+
+        var ratio = (double)codeEndingCount / nonEmptyLineCount;
         return ratio > StatementEndingThreshold;
     }
 
@@ -204,11 +203,11 @@ public static class SourceCodeDetector
     ///   `return`, `if`, `var`, `=` 等のトークンを含んでいれば、ギャップの
     ///   説明ではなくコード断片のコピペである可能性が高い。
     /// </summary>
-    private static bool HasConsecutiveCodeLines(string[] lines)
+    private static bool HasConsecutiveCodeLines(string text)
     {
         int consecutiveCount = 0;
 
-        foreach (var rawLine in lines)
+        foreach (var rawLine in EnumerateLines(text))
         {
             if (IsIndentedCodeLine(rawLine))
             {
@@ -255,7 +254,7 @@ public static class SourceCodeDetector
     /// 一般的なコードトークンにマッチするパターン。各選択肢はソースコードでは
     /// 一般的だが自然言語の散文では稀なトークンである。
     /// </summary>
-    private static readonly Regex s_codeTokenPattern = new(
+    private static readonly BoundedRegex s_codeTokenPattern = new(
         @"(?:"
         // Assignment or comparison operators / 代入・比較演算子
         + @"[^=!<>]=[^=]"
@@ -293,7 +292,7 @@ public static class SourceCodeDetector
         // 閉じ括弧のみの行（継続行）
         + @"|^[)\]]\s*$"
         + @")",
-        RegexOptions.Compiled);
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     // ---------------------------------------------------------------
     // Heuristic 3: Block Structure
@@ -316,31 +315,35 @@ public static class SourceCodeDetector
     ///   複数行を囲む波括弧ブロックは、関数本体、クラス定義、制御構造の
     ///   典型的な特徴である。このパターンは自然言語には現れない。
     /// </summary>
-    private static bool HasBlockStructure(string[] lines)
+    private static bool HasBlockStructure(string text)
     {
-        for (int i = 0; i < lines.Length; i++)
+        var inBlock = false;
+        var innerLineCount = 0;
+        foreach (var line in EnumerateLines(text))
         {
-            var trimmed = lines[i].TrimEnd();
-
-            // Look for a line ending with '{' / '{' で終わる行を探す
-            if (!trimmed.EndsWith('{'))
-                continue;
-
-            // Count lines until we find a matching '}' / 対応する '}' が見つかるまで行数をカウント
-            int innerLineCount = 0;
-            for (int j = i + 1; j < lines.Length; j++)
+            if (!inBlock)
             {
-                var innerTrimmed = lines[j].Trim();
-                if (innerTrimmed == "}" || innerTrimmed.StartsWith('}'))
+                var trimmed = line.TrimEnd();
+                if (trimmed.EndsWith('{'))
                 {
-                    // Found closing brace. Check if enough lines were inside.
-                    // 閉じ波括弧を発見。内部に十分な行数があったかを検査。
-                    if (innerLineCount >= MinLinesInsideBlock)
-                        return true;
-                    break;
+                    inBlock = true;
+                    innerLineCount = 0;
                 }
-                innerLineCount++;
+                continue;
             }
+
+            var innerTrimmed = line.Trim();
+            if (innerTrimmed == "}" || innerTrimmed.StartsWith('}'))
+            {
+                // Found closing brace. Check if enough lines were inside.
+                // 閉じ波括弧を発見。内部に十分な行数があったかを検査。
+                if (innerLineCount >= MinLinesInsideBlock)
+                    return true;
+                inBlock = false;
+                continue;
+            }
+
+            innerLineCount++;
         }
 
         return false;
@@ -367,11 +370,11 @@ public static class SourceCodeDetector
     ///   典型的なパターンである。自然言語の説明に import 行が3つ連続する
     ///   ことはない。
     /// </summary>
-    private static bool HasRepeatedImports(string[] lines)
+    private static bool HasRepeatedImports(string text)
     {
         int consecutiveCount = 0;
 
-        foreach (var rawLine in lines)
+        foreach (var rawLine in EnumerateLines(text))
         {
             var trimmed = rawLine.Trim();
             if (IsImportLine(trimmed))
@@ -426,20 +429,15 @@ public static class SourceCodeDetector
     ///   関数定義に後続する本体行は、コピペされた関数であり、
     ///   ギャップの説明ではない。
     /// </summary>
-    private static bool HasMultiLineFunctionDefinition(string[] lines)
+    private static bool HasMultiLineFunctionDefinition(string text)
     {
-        for (int i = 0; i < lines.Length; i++)
+        var remainingBodyProbeLines = 0;
+        foreach (var line in EnumerateLines(text))
         {
-            var trimmed = lines[i].Trim();
-            if (!IsFunctionDefinitionLine(trimmed))
-                continue;
-
-            // A function definition was found. Check if it spans multiple lines
-            // (i.e., the next non-empty line looks like code, not prose).
-            // 関数定義を発見。複数行にわたるか確認する（次の非空行がコード的か）。
-            for (int j = i + 1; j < lines.Length && j <= i + 2; j++)
+            if (remainingBodyProbeLines > 0)
             {
-                var nextTrimmed = lines[j].Trim();
+                remainingBodyProbeLines--;
+                var nextTrimmed = line.Trim();
                 if (nextTrimmed.Length == 0)
                     continue;
 
@@ -447,12 +445,21 @@ public static class SourceCodeDetector
                 // this is a multi-line function definition (code).
                 // 次の非空行がインデント付きコードか波括弧なら、
                 // 複数行の関数定義（コード）である。
-                if (nextTrimmed == "{" || nextTrimmed == "}" || IsIndentedCodeLine(lines[j]))
+                if (nextTrimmed == "{" || nextTrimmed == "}" || IsIndentedCodeLine(line))
                     return true;
 
-                break; // Next line is prose — single-line example, allowed.
-                       // 次の行は散文 — 1行の例示、許容。
+                remainingBodyProbeLines = 0; // Next line is prose — single-line example, allowed.
+                                             // 次の行は散文 — 1行の例示、許容。
             }
+
+            var trimmed = line.Trim();
+            if (!IsFunctionDefinitionLine(trimmed))
+                continue;
+
+            // A function definition was found. Check if it spans multiple lines
+            // (i.e., the next non-empty line looks like code, not prose).
+            // 関数定義を発見。複数行にわたるか確認する（次の非空行がコード的か）。
+            remainingBodyProbeLines = 2;
         }
 
         return false;
@@ -462,7 +469,7 @@ public static class SourceCodeDetector
     /// Pattern matching function/method definition signatures.
     /// 関数/メソッド定義シグネチャにマッチするパターン。
     /// </summary>
-    private static readonly Regex s_functionDefPattern = new(
+    private static readonly BoundedRegex s_functionDefPattern = new(
         @"(?:"
         // Python: def function_name( / Python: def 関数名(
         + @"\bdef\s+\w+\s*\("
@@ -475,7 +482,7 @@ public static class SourceCodeDetector
         // C#/Java/C++: access_modifier return_type name( / C#/Java/C++: 修飾子 戻り値型 名前(
         + @"|(?:public|private|protected|internal|static)\s+.*\w+\s*\("
         + @")",
-        RegexOptions.Compiled);
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     /// <summary>
     /// Checks if a line looks like a function/method definition.
@@ -513,12 +520,12 @@ public static class SourceCodeDetector
     ///   このパターンはインデントがない場合や行数が少ない場合にも
     ///   他のヒューリスティックを回避して検出できる。
     /// </summary>
-    private static bool HasFencedCodeBlock(string[] lines)
+    private static bool HasFencedCodeBlock(string text)
     {
         bool inFence = false;
         int contentLines = 0;
 
-        foreach (var rawLine in lines)
+        foreach (var rawLine in EnumerateLines(text))
         {
             var trimmed = rawLine.Trim();
 
@@ -550,5 +557,22 @@ public static class SourceCodeDetector
         }
 
         return false;
+    }
+
+    private static IEnumerable<string> EnumerateLines(string text)
+    {
+        var start = 0;
+        while (start <= text.Length)
+        {
+            var newline = text.IndexOf('\n', start);
+            if (newline < 0)
+            {
+                yield return text[start..].TrimEnd('\r');
+                yield break;
+            }
+
+            yield return text[start..newline].TrimEnd('\r');
+            start = newline + 1;
+        }
     }
 }
