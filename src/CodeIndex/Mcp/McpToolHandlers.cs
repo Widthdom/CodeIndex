@@ -3816,6 +3816,8 @@ public partial class McpServer
         var priorHotspotFamilyVersions = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyVersionMetaKey);
         var priorHotspotFamilyMarkerFingerprints = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyMarkerFingerprintMetaKey);
         var priorIndexedProjectRoot = db.GetMetaString(DbContext.IndexedProjectRootMetaKey);
+        var requestToken = _currentRequestToken.Value;
+        requestToken.ThrowIfCancellationRequested();
         // Capture git HEAD so subsequent queries can detect a worktree branch / HEAD switch
         // (`git switch other-branch` inside the worktree) without a `--check` workspace scan.
         // Like the CLI full-scan path, the value is only persisted at the end of a successful
@@ -3823,7 +3825,7 @@ public partial class McpServer
         // staleness until the next clean refresh. Issues #1508 and #1512.
         // worktree 内の HEAD 切替検出のため HEAD を捕捉。CLI full-scan と同じく成功時のみ
         // 書き込み、partial 失敗は旧 HEAD を残して次回 full scan で更新する。
-        var currentHeadCommit = GitHelper.TryGetHeadCommit(projectPath);
+        var currentHeadCommit = GitHelper.TryGetHeadCommit(projectPath, requestToken);
 
         // On --rebuild, clear readiness before DropAll so a crash during the window
         // (empty tables recreated, MarkReady not yet run) cannot leave old trust bits
@@ -3844,10 +3846,12 @@ public partial class McpServer
         MarkSharedDbMigrated();
 
         var writer = new DbWriter(db);
-        var indexer = new FileIndexer(projectPath, GitHelper.ResolveIgnoreCase(projectPath), GitHelper.TryGetRepositoryRoot(projectPath) ?? Path.GetFullPath(projectPath), maxFileBytes);
+        var indexer = new FileIndexer(
+            projectPath,
+            GitHelper.ResolveIgnoreCase(projectPath, requestToken),
+            GitHelper.TryGetRepositoryRoot(projectPath, requestToken) ?? Path.GetFullPath(projectPath),
+            maxFileBytes);
         using var postExtractionHooks = PostExtractionHookRunner.DiscoverDefault();
-        var requestToken = _currentRequestToken.Value;
-        requestToken.ThrowIfCancellationRequested();
         var currentHotspotFamilyMarkerFingerprints = GetHotspotFamilyMarkerFingerprints(indexer, requestToken);
         var currentCSharpSymbolNameContractVersion = DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var csharpSymbolNameContractMatchesCurrent = priorCSharpSymbolNameContractVersion == currentCSharpSymbolNameContractVersion;
@@ -4145,7 +4149,7 @@ public partial class McpServer
             // untouched and surface staleness until the next clean refresh. Issues #1508 / #1512.
             // CLI full-scan と同じく成功時のみ HEAD を記録する。partial / 失敗は旧 HEAD を残す。
             writer.SetMeta(DbContext.IndexedHeadCommitMetaKey, currentHeadCommit);
-            writer.SetMeta(DbContext.IndexedHeadCommitBranchMetaKey, GitHelper.TryGetHeadBranch(projectPath));
+            writer.SetMeta(DbContext.IndexedHeadCommitBranchMetaKey, GitHelper.TryGetHeadBranch(projectPath, requestToken));
             // #1509: also persist the always-updated HEAD/branch/timestamp triple so
             // status / consumers can detect cross-session staleness via
             // `commits_ahead_of_indexed_head`. Same best-effort contract — git unavailability
@@ -4153,13 +4157,17 @@ public partial class McpServer
             // #1509: HEAD / branch / timestamp を保存し、cross-session staleness 検出を可能にする。
             try
             {
-                var headBranch = GitHelper.TryGetHeadBranch(projectPath);
+                var headBranch = GitHelper.TryGetHeadBranch(projectPath, requestToken);
                 var timestamp = currentHeadCommit != null
                     ? GetUtcNow().ToString("o", System.Globalization.CultureInfo.InvariantCulture)
                     : null;
                 writer.SetMeta(DbContext.IndexedHeadShaMetaKey, currentHeadCommit);
                 writer.SetMeta(DbContext.IndexedHeadBranchMetaKey, headBranch);
                 writer.SetMeta(DbContext.IndexedHeadTimestampMetaKey, timestamp);
+            }
+            catch (OperationCanceledException) when (requestToken.IsCancellationRequested)
+            {
+                throw;
             }
             catch
             {
@@ -4170,11 +4178,15 @@ public partial class McpServer
             // #1546: MCP 経由 index でも case-sensitivity stamp を残す。
             try
             {
-                var ignoreCase = GitHelper.ResolveIgnoreCase(projectPath);
+                var ignoreCase = GitHelper.ResolveIgnoreCase(projectPath, requestToken);
                 CodeIndex.Cli.PathCasing.SeedFromWorkspace(projectPath, ignoreCase);
                 writer.SetMeta(
                     DbContext.WorkspacePathCaseSensitiveMetaKey,
                     (!ignoreCase).ToString(System.Globalization.CultureInfo.InvariantCulture));
+            }
+            catch (OperationCanceledException) when (requestToken.IsCancellationRequested)
+            {
+                throw;
             }
             catch
             {

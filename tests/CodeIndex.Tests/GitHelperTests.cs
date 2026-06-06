@@ -424,6 +424,72 @@ public class GitHelperTests : IDisposable
         }
     }
 
+    [Fact]
+    public void GetChangedFilesFromCommit_CancelDuringGitCommand_ThrowsOperationCanceled()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var repoDir = Path.Combine(_tempDir, "repo-cancel");
+        Directory.CreateDirectory(repoDir);
+        var fakeGitDir = Path.Combine(_tempDir, "fake-git-cancel");
+        Directory.CreateDirectory(fakeGitDir);
+        WriteFakeGitThatHangsOnDiffTree(fakeGitDir);
+
+        var oldPath = Environment.GetEnvironmentVariable("PATH");
+        Environment.SetEnvironmentVariable("PATH", fakeGitDir + Path.PathSeparator + oldPath);
+        try
+        {
+            using var cts = new CancellationTokenSource();
+            cts.CancelAfter(TimeSpan.FromMilliseconds(50));
+            var stopwatch = Stopwatch.StartNew();
+
+            var ex = Assert.Throws<OperationCanceledException>(
+                () => GitHelper.GetChangedFilesFromCommit(repoDir, "0123456789abcdef", cts.Token));
+
+            stopwatch.Stop();
+            Assert.Equal(cts.Token, ex.CancellationToken);
+            Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(2), $"Cancellation took {stopwatch.Elapsed}.");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PATH", oldPath);
+        }
+    }
+
+    [Fact]
+    public void ResolveIgnoreCase_CancelDuringGitCommand_ThrowsOperationCanceled()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var repoDir = Path.Combine(_tempDir, "repo-ignorecase-cancel");
+        Directory.CreateDirectory(repoDir);
+        var fakeGitDir = Path.Combine(_tempDir, "fake-git-ignorecase-cancel");
+        Directory.CreateDirectory(fakeGitDir);
+        WriteFakeGitThatHangsOnRevParse(fakeGitDir);
+
+        var oldPath = Environment.GetEnvironmentVariable("PATH");
+        Environment.SetEnvironmentVariable("PATH", fakeGitDir + Path.PathSeparator + oldPath);
+        try
+        {
+            using var cts = new CancellationTokenSource();
+            cts.CancelAfter(TimeSpan.FromMilliseconds(50));
+            var stopwatch = Stopwatch.StartNew();
+
+            var ex = Assert.Throws<OperationCanceledException>(
+                () => GitHelper.ResolveIgnoreCase(repoDir, cts.Token));
+
+            stopwatch.Stop();
+            Assert.Equal(cts.Token, ex.CancellationToken);
+            Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(2), $"Cancellation took {stopwatch.Elapsed}.");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PATH", oldPath);
+        }
+    }
+
     [Theory]
     [InlineData("feature")]
     [InlineData("v1.0.0")]
@@ -893,6 +959,21 @@ if [ "$1" = "rev-parse" ]; then
   fi
 fi
 if [ "$1" = "diff-tree" ]; then
+  sleep 5
+  exit 0
+fi
+exit 1
+""");
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+    }
+
+    private static void WriteFakeGitThatHangsOnRevParse(string directory)
+    {
+        var script = Path.Combine(directory, "git");
+        File.WriteAllText(script, """
+#!/bin/sh
+if [ "$1" = "rev-parse" ]; then
   sleep 5
   exit 0
 fi

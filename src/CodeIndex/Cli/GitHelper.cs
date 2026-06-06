@@ -139,9 +139,12 @@ public static class GitHelper
     /// Get changed files from a git commit.
     /// gitコミットから変更ファイルを取得する。
     /// </summary>
-    public static List<string> GetChangedFilesFromCommit(string projectRoot, string commitId)
+    public static List<string> GetChangedFilesFromCommit(
+        string projectRoot,
+        string commitId,
+        CancellationToken cancellationToken = default)
     {
-        ValidateSingleCommitRef(projectRoot, commitId);
+        ValidateSingleCommitRef(projectRoot, commitId, cancellationToken);
 
         var psi = new ProcessStartInfo
         {
@@ -161,7 +164,7 @@ public static class GitHelper
         psi.ArgumentList.Add("--name-status");
         psi.ArgumentList.Add(commitId);
 
-        var (exitCode, output, error) = RunProcessCapturingOutput(psi)
+        var (exitCode, output, error) = RunProcessCapturingOutput(psi, cancellationToken)
             ?? throw new InvalidOperationException("Failed to start git process / gitプロセスの起動に失敗");
 
         if (exitCode != 0)
@@ -196,7 +199,10 @@ public static class GitHelper
     public static void ValidateCommitRef(string projectRoot, string commitRef)
         => ValidateSingleCommitRef(projectRoot, commitRef);
 
-    private static void ValidateSingleCommitRef(string projectRoot, string commitId)
+    private static void ValidateSingleCommitRef(
+        string projectRoot,
+        string commitId,
+        CancellationToken cancellationToken = default)
     {
         // Reject range/pathspec syntax before invoking git so --commits remains a list
         // of single commit-ish values, not revision-set expressions.
@@ -211,14 +217,14 @@ public static class GitHelper
                 $"Invalid commit ID '{commitId}'. Provide a single commit-ish; ranges and tag refs are not accepted. Use `git rev-parse --verify <ref>^{{commit}}` to validate it.");
         }
 
-        var symbolicName = TryRunGit(projectRoot, "rev-parse", "--symbolic-full-name", commitId)?.Trim();
+        var symbolicName = TryRunGit(projectRoot, cancellationToken, "rev-parse", "--symbolic-full-name", commitId)?.Trim();
         if (symbolicName != null && symbolicName.StartsWith("refs/tags/", StringComparison.Ordinal))
         {
             throw new ArgumentException(
                 $"Invalid commit ID '{commitId}'. Tag refs are not accepted for --commits; pass the peeled commit SHA from `git rev-parse --verify {commitId}^{{commit}}`.");
         }
 
-        var resolved = TryRunGit(projectRoot, "rev-parse", "--verify", $"{commitId}^{{commit}}")?.Trim();
+        var resolved = TryRunGit(projectRoot, cancellationToken, "rev-parse", "--verify", $"{commitId}^{{commit}}")?.Trim();
         if (string.IsNullOrWhiteSpace(resolved))
         {
             throw new ArgumentException(
@@ -230,7 +236,11 @@ public static class GitHelper
     /// Get changed files between two git refs, including both sides of renames.
     /// 2つのgit ref間の変更ファイルを取得する。rename は旧パスと新パスの両方を含める。
     /// </summary>
-    public static List<string> GetChangedFilesBetweenRefs(string projectRoot, string oldRef, string newRef)
+    public static List<string> GetChangedFilesBetweenRefs(
+        string projectRoot,
+        string oldRef,
+        string newRef,
+        CancellationToken cancellationToken = default)
     {
         ValidateGitRef(oldRef, nameof(oldRef));
         ValidateGitRef(newRef, nameof(newRef));
@@ -251,7 +261,7 @@ public static class GitHelper
         psi.ArgumentList.Add(newRef);
         psi.ArgumentList.Add("--");
 
-        var (exitCode, output, error) = RunProcessCapturingOutput(psi)
+        var (exitCode, output, error) = RunProcessCapturingOutput(psi, cancellationToken)
             ?? throw new InvalidOperationException("Failed to start git process / gitプロセスの起動に失敗");
 
         if (exitCode != 0)
@@ -292,9 +302,9 @@ public static class GitHelper
     /// Try to resolve the current HEAD commit for the repository that contains the project root.
     /// projectRoot を含むリポジトリの現在の HEAD コミットを安全に取得する。
     /// </summary>
-    public static string? TryGetHeadCommit(string projectRoot)
+    public static string? TryGetHeadCommit(string projectRoot, CancellationToken cancellationToken = default)
     {
-        var result = TryGetHeadCommitResult(projectRoot);
+        var result = TryGetHeadCommitResult(projectRoot, cancellationToken);
         return result.State is GitHeadCommitState.Resolved or GitHeadCommitState.DetachedHead
             ? result.Sha
             : null;
@@ -313,14 +323,15 @@ public static class GitHelper
         }
     }
 
-    public static GitHeadCommitResult TryGetHeadCommitResult(string projectRoot)
-        => TryGetHeadCommitResult(projectRoot, gitEnvironmentOverrides: null);
+    public static GitHeadCommitResult TryGetHeadCommitResult(string projectRoot, CancellationToken cancellationToken = default)
+        => TryGetHeadCommitResult(projectRoot, gitEnvironmentOverrides: null, cancellationToken);
 
     internal static GitHeadCommitResult TryGetHeadCommitResult(
         string projectRoot,
-        IReadOnlyDictionary<string, string?>? gitEnvironmentOverrides)
+        IReadOnlyDictionary<string, string?>? gitEnvironmentOverrides,
+        CancellationToken cancellationToken = default)
     {
-        var repositoryRoot = TryGetRepositoryRoot(projectRoot, gitEnvironmentOverrides);
+        var repositoryRoot = TryGetRepositoryRoot(projectRoot, gitEnvironmentOverrides, cancellationToken);
         if (repositoryRoot == null)
         {
             return HasGitMetadataEntry(projectRoot)
@@ -328,7 +339,7 @@ public static class GitHelper
                 : GitHeadCommitResult.NotARepo;
         }
 
-        var headResult = RunGitCapturingResult(projectRoot, gitEnvironmentOverrides, "rev-parse", "--verify", "HEAD^{commit}");
+        var headResult = RunGitCapturingResult(projectRoot, gitEnvironmentOverrides, cancellationToken, "rev-parse", "--verify", "HEAD^{commit}");
         if (headResult.StartError != null)
             return GitHeadCommitResult.Error(headResult.StartError);
 
@@ -344,7 +355,7 @@ public static class GitHelper
         if (string.IsNullOrWhiteSpace(sha))
             return GitHeadCommitResult.None;
 
-        var branchResult = RunGitCapturingResult(projectRoot, gitEnvironmentOverrides, "rev-parse", "--abbrev-ref", "HEAD");
+        var branchResult = RunGitCapturingResult(projectRoot, gitEnvironmentOverrides, cancellationToken, "rev-parse", "--abbrev-ref", "HEAD");
         if (branchResult.StartError != null)
             return GitHeadCommitResult.Error(branchResult.StartError);
         if (branchResult.ExitCode != 0)
@@ -364,9 +375,9 @@ public static class GitHelper
     /// 現在のブランチ短縮名を安全に取得する。detached HEAD は null 扱いにして、
     /// 文字列 "HEAD" を誤ってブランチ名として永続化しないようにする。
     /// </summary>
-    public static string? TryGetHeadBranch(string projectRoot)
+    public static string? TryGetHeadBranch(string projectRoot, CancellationToken cancellationToken = default)
     {
-        var output = TryRunGit(projectRoot, "rev-parse", "--abbrev-ref", "HEAD");
+        var output = TryRunGit(projectRoot, cancellationToken, "rev-parse", "--abbrev-ref", "HEAD");
         var value = output?.Trim();
         if (string.IsNullOrWhiteSpace(value))
             return null;
@@ -448,8 +459,8 @@ public static class GitHelper
     /// Try to resolve the repository root that contains the project path.
     /// projectPath を含むリポジトリのルートを安全に取得する。
     /// </summary>
-    public static string? TryGetRepositoryRoot(string projectPath)
-        => TryGetRepositoryRoot(projectPath, gitEnvironmentOverrides: null);
+    public static string? TryGetRepositoryRoot(string projectPath, CancellationToken cancellationToken = default)
+        => TryGetRepositoryRoot(projectPath, gitEnvironmentOverrides: null, cancellationToken);
 
     internal static GitRepositoryType TryGetRepositoryType(
         string projectRoot,
@@ -472,16 +483,19 @@ public static class GitHelper
     /// Resolve whether ignore matching should be case-insensitive for this workspace.
     /// git 管理下なら core.ignorecase を優先し、そうでなければファイルシステム特性を推定する。
     /// </summary>
-    public static bool ResolveIgnoreCase(string projectRoot)
-        => ResolveIgnoreCase(projectRoot, gitEnvironmentOverrides: null);
+    public static bool ResolveIgnoreCase(string projectRoot, CancellationToken cancellationToken = default)
+        => ResolveIgnoreCase(projectRoot, gitEnvironmentOverrides: null, cancellationToken);
 
-    internal static bool ResolveIgnoreCase(string projectRoot, IReadOnlyDictionary<string, string?>? gitEnvironmentOverrides)
+    internal static bool ResolveIgnoreCase(
+        string projectRoot,
+        IReadOnlyDictionary<string, string?>? gitEnvironmentOverrides,
+        CancellationToken cancellationToken = default)
     {
-        var repoRoot = TryGetRepositoryRoot(projectRoot, gitEnvironmentOverrides);
+        var repoRoot = TryGetRepositoryRoot(projectRoot, gitEnvironmentOverrides, cancellationToken);
         if (repoRoot == null)
             return ProbeFileSystemIgnoreCase(projectRoot);
 
-        var configured = TryRunGit(repoRoot, gitEnvironmentOverrides, "config", "--bool", "--get", "core.ignorecase")?.Trim();
+        var configured = TryRunGit(repoRoot, gitEnvironmentOverrides, cancellationToken, "config", "--bool", "--get", "core.ignorecase")?.Trim();
         if (bool.TryParse(configured, out var ignoreCase))
             return ignoreCase;
 
@@ -575,9 +589,12 @@ public static class GitHelper
         return paths;
     }
 
-    internal static string? TryGetRepositoryRoot(string projectPath, IReadOnlyDictionary<string, string?>? gitEnvironmentOverrides)
+    internal static string? TryGetRepositoryRoot(
+        string projectPath,
+        IReadOnlyDictionary<string, string?>? gitEnvironmentOverrides,
+        CancellationToken cancellationToken = default)
     {
-        var cdup = TryRunGit(projectPath, gitEnvironmentOverrides, "rev-parse", "--show-cdup");
+        var cdup = TryRunGit(projectPath, gitEnvironmentOverrides, cancellationToken, "rev-parse", "--show-cdup");
         if (cdup != null)
         {
             var value = cdup.Trim();
@@ -586,7 +603,7 @@ public static class GitHelper
                 : Path.GetFullPath(Path.Combine(projectPath, value));
         }
 
-        var isBare = TryRunGit(projectPath, gitEnvironmentOverrides, "rev-parse", "--is-bare-repository")?.Trim();
+        var isBare = TryRunGit(projectPath, gitEnvironmentOverrides, cancellationToken, "rev-parse", "--is-bare-repository")?.Trim();
         return string.Equals(isBare, "true", StringComparison.OrdinalIgnoreCase)
             ? Path.GetFullPath(projectPath)
             : null;
@@ -602,52 +619,18 @@ public static class GitHelper
     private static string? TryRunGit(string projectRoot, params string[] args)
         => TryRunGit(projectRoot, gitEnvironmentOverrides: null, args);
 
+    private static string? TryRunGit(string projectRoot, CancellationToken cancellationToken, params string[] args)
+        => TryRunGit(projectRoot, gitEnvironmentOverrides: null, cancellationToken, args);
+
     private readonly record struct GitCommandResult(int? ExitCode, string? Output, string? Error, string? StartError);
 
     private static string? TryRunGit(string projectRoot, IReadOnlyDictionary<string, string?>? gitEnvironmentOverrides, params string[] args)
-    {
-        try
-        {
-            var psi = new ProcessStartInfo
-            {
-                FileName = "git",
-                WorkingDirectory = projectRoot,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            };
+        => TryRunGit(projectRoot, gitEnvironmentOverrides, CancellationToken.None, args);
 
-            foreach (var arg in args)
-                psi.ArgumentList.Add(arg);
-
-            if (gitEnvironmentOverrides != null)
-            {
-                foreach (var (key, value) in gitEnvironmentOverrides)
-                {
-                    if (value == null)
-                        psi.Environment.Remove(key);
-                    else
-                        psi.Environment[key] = value;
-                }
-            }
-
-            var result = RunProcessCapturingOutput(psi);
-            if (result == null)
-                return null;
-
-            var (exitCode, output, _) = result.Value;
-            return exitCode == 0 ? output : null;
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    private static GitCommandResult RunGitCapturingResult(
+    private static string? TryRunGit(
         string projectRoot,
         IReadOnlyDictionary<string, string?>? gitEnvironmentOverrides,
+        CancellationToken cancellationToken,
         params string[] args)
     {
         try
@@ -676,10 +659,63 @@ public static class GitHelper
                 }
             }
 
-            var result = RunProcessCapturingOutput(psi);
+            var result = RunProcessCapturingOutput(psi, cancellationToken);
+            if (result == null)
+                return null;
+
+            var (exitCode, output, _) = result.Value;
+            return exitCode == 0 ? output : null;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static GitCommandResult RunGitCapturingResult(
+        string projectRoot,
+        IReadOnlyDictionary<string, string?>? gitEnvironmentOverrides,
+        CancellationToken cancellationToken = default,
+        params string[] args)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = "git",
+                WorkingDirectory = projectRoot,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+
+            foreach (var arg in args)
+                psi.ArgumentList.Add(arg);
+
+            if (gitEnvironmentOverrides != null)
+            {
+                foreach (var (key, value) in gitEnvironmentOverrides)
+                {
+                    if (value == null)
+                        psi.Environment.Remove(key);
+                    else
+                        psi.Environment[key] = value;
+                }
+            }
+
+            var result = RunProcessCapturingOutput(psi, cancellationToken);
             return result == null
                 ? new GitCommandResult(null, null, null, "Failed to start git process / gitプロセスの起動に失敗")
                 : new GitCommandResult(result.Value.ExitCode, result.Value.Output, result.Value.Error, null);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -704,8 +740,11 @@ public static class GitHelper
     // stdoutとstderrを同時に汲み出す。Process自前のイベントスレッドを使うことで
     // stderrパイプ満杯による stdout 読み取りデッドロックを防ぎ、
     // 非同期APIを GetAwaiter().GetResult() で待つ sync-over-async も避ける。
-    private static (int ExitCode, string Output, string Error)? RunProcessCapturingOutput(ProcessStartInfo psi)
+    private static (int ExitCode, string Output, string Error)? RunProcessCapturingOutput(
+        ProcessStartInfo psi,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         using var process = new Process { StartInfo = psi };
         var stdout = new StringBuilder();
         var stderr = new StringBuilder();
@@ -742,11 +781,18 @@ public static class GitHelper
 
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
-        if (!process.WaitForExit(ToWaitMilliseconds(GitCommandTimeout)))
+        var exited = WaitForGitExit(process, GitCommandTimeout, cancellationToken, out var cancelled);
+        if (!exited)
         {
-            MarkFailure($"git command timed out after {FormatDuration(GitCommandTimeout)}.");
+            MarkFailure(cancelled
+                ? "git command cancelled."
+                : $"git command timed out after {FormatDuration(GitCommandTimeout)}.");
             if (!process.WaitForExit(ToWaitMilliseconds(GitKillWaitTimeout)))
+            {
+                if (cancelled)
+                    cancellationToken.ThrowIfCancellationRequested();
                 return (GitProcessFailureExitCode, ReadCaptured(stdout), CombineCapturedError(ReadCaptured(stderr), failureReason!));
+            }
             process.WaitForExit();
         }
         else
@@ -756,10 +802,43 @@ public static class GitHelper
 
         var output = ReadCaptured(stdout);
         var error = ReadCaptured(stderr);
+        if (cancelled)
+            cancellationToken.ThrowIfCancellationRequested();
         if (failureReason != null)
             return (GitProcessFailureExitCode, output, CombineCapturedError(error, failureReason));
 
         return (process.ExitCode, output, error);
+    }
+
+    private static bool WaitForGitExit(
+        Process process,
+        TimeSpan timeout,
+        CancellationToken cancellationToken,
+        out bool cancelled)
+    {
+        var timeoutMilliseconds = ToWaitMilliseconds(timeout);
+        var waitSliceMilliseconds = Math.Min(50, timeoutMilliseconds);
+        var stopwatch = Stopwatch.StartNew();
+        while (true)
+        {
+            if (process.WaitForExit(waitSliceMilliseconds))
+            {
+                cancelled = false;
+                return true;
+            }
+
+            if (cancellationToken.IsCancellationRequested)
+            {
+                cancelled = true;
+                return false;
+            }
+
+            if (stopwatch.ElapsedMilliseconds >= timeoutMilliseconds)
+            {
+                cancelled = false;
+                return false;
+            }
+        }
     }
 
     private static string ReadCaptured(StringBuilder builder)

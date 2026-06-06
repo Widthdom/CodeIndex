@@ -36,6 +36,10 @@ internal static class IndexWatchRunner
         {
             return RunCore(baseOptions, jsonOptions, projectRoot, resolvedDbPath, cts.Token);
         }
+        catch (OperationCanceledException) when (cts.IsCancellationRequested)
+        {
+            return CommandExitCodes.Success;
+        }
         finally
         {
             Console.CancelKeyPress -= handler;
@@ -50,10 +54,10 @@ internal static class IndexWatchRunner
         CancellationToken cancellationToken)
     {
         var debounce = TimeSpan.FromMilliseconds(baseOptions.WatchDebounceMs ?? DefaultDebounceMs);
-        var ignoreCase = GitHelper.ResolveIgnoreCase(projectRoot);
+        var ignoreCase = GitHelper.ResolveIgnoreCase(projectRoot, cancellationToken);
         var batcher = new FileChangeBatcher(debounce, ignoreCase: ignoreCase);
 
-        var ignoreRuleRoot = GitHelper.TryGetRepositoryRoot(projectRoot) ?? Path.GetFullPath(projectRoot);
+        var ignoreRuleRoot = GitHelper.TryGetRepositoryRoot(projectRoot, cancellationToken) ?? Path.GetFullPath(projectRoot);
         var fileIndexer = new FileIndexer(projectRoot, ignoreCase, ignoreRuleRoot);
         var watchExitCode = CommandExitCodes.Success;
 

@@ -65,6 +65,7 @@ public static partial class IndexCommandRunner
             options,
             spinnerFrames,
             jsonOptions,
+            cancellationToken,
             out var targetPaths,
             out var relevantIgnoreFileChanged);
         if (resolveTargetsExitCode != null)
@@ -986,7 +987,7 @@ public static partial class IndexCommandRunner
         }
         if (errors == 0)
         {
-            StampIndexedHeadMetadata(writer, projectRoot);
+            StampIndexedHeadMetadata(writer, projectRoot, cancellationToken);
             StampCommitScopedFreshHeadMetadata(writer, options, projectRoot, currentHeadCommit);
             if (options.MemoryTrace)
                 memorySamples.Add(CaptureMemorySample("finalize", stopwatch));
