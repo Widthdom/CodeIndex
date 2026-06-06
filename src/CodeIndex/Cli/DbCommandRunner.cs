@@ -812,8 +812,7 @@ public static class DbCommandRunner
         }
         finally
         {
-            if (Directory.Exists(restoreTempPath))
-                Directory.Delete(restoreTempPath, recursive: true);
+            TryDeleteTemporaryDirectory(restoreTempPath, "restore temporary directory");
         }
 
         return backupPath;

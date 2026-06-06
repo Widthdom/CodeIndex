@@ -655,6 +655,53 @@ public class DbCommandRunnerTests
     }
 
     [Fact]
+    public void Run_RestoreTempCleanupFailureWarnsWithoutFailing_Issue3030()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_restore_cleanup_{Guid.NewGuid():N}");
+        var dbPath = Path.Combine(root, "codeindex.db");
+        string? cleanupPath = null;
+        Directory.CreateDirectory(root);
+        try
+        {
+            using (var db = new DbContext(dbPath))
+                db.InitializeSchema();
+            SqliteConnection.ClearAllPools();
+            var originalBytes = File.ReadAllBytes(dbPath);
+            var (checkpointExit, _, _) = RunAndCaptureStreams(["checkpoint", "saved", "--db", dbPath]);
+            Assert.Equal(CommandExitCodes.Success, checkpointExit);
+
+            File.WriteAllText(dbPath, "changed");
+            DbCommandRunner.DeleteTemporaryDirectoryForTesting = path =>
+            {
+                if (Path.GetFileName(path).StartsWith("codeindex.db.restore-tmp-", StringComparison.Ordinal))
+                {
+                    cleanupPath = path;
+                    throw new IOException("simulated restore temp cleanup failure");
+                }
+
+                Directory.Delete(path, recursive: true);
+            };
+
+            var (restoreExit, restoreOut, stderr) = RunAndCaptureStreams(["restore", "saved", "--db", dbPath]);
+
+            Assert.Equal(CommandExitCodes.Success, restoreExit);
+            Assert.Contains("Restored", restoreOut);
+            Assert.Equal(originalBytes, File.ReadAllBytes(dbPath));
+            Assert.Contains("Warning: failed to delete restore temporary directory", stderr);
+            Assert.Contains("IOException", stderr);
+            Assert.NotNull(cleanupPath);
+            Assert.True(Directory.Exists(cleanupPath));
+        }
+        finally
+        {
+            DbCommandRunner.DeleteTemporaryDirectoryForTesting = null;
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Run_Restore_OnPosix_CreatesPrivateStagingAndBackupPermissions()
     {
         if (OperatingSystem.IsWindows())
