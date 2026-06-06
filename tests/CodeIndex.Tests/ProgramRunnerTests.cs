@@ -1038,6 +1038,65 @@ sleep 30
     }
 
     [Fact]
+    public void RunUpgrade_JsonUpdateAvailable_EmitsSingleJsonInstallResult()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture("XDG_CACHE_HOME", UpdateChecker.DisableEnvVar);
+            var cacheRoot = Path.Combine(Path.GetTempPath(), $"cdidx_update_cache_{Guid.NewGuid():N}");
+            env.Set("XDG_CACHE_HOME", cacheRoot);
+            env.Set(UpdateChecker.DisableEnvVar, null);
+            WriteFreshUpdateCheckCache(cacheRoot, "v9.9.9");
+
+            var installerScript = """
+#!/bin/sh
+echo SHOULD_NOT_LEAK_STDOUT
+echo SHOULD_NOT_LEAK_STDERR >&2
+exit 0
+""";
+            var installerSha256 = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(installerScript))).ToLowerInvariant();
+            var checksumManifest = $"{installerSha256}  install.sh\n";
+            var previousFactory = ProgramRunner.UpgradeHttpClientFactory;
+            ProgramRunner.UpgradeHttpClientFactory = () => new HttpClient(
+                new UpgradeAssetResponseHandler(
+                    checksumManifest,
+                    installerScript,
+                    _ => { }))
+            {
+                Timeout = Timeout.InfiniteTimeSpan,
+            };
+
+            try
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                    ["upgrade", "--json"],
+                    appVersion: "1.10.0"));
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Empty(stderr);
+                Assert.DoesNotContain("SHOULD_NOT_LEAK", stdout);
+                using var doc = JsonDocument.Parse(stdout);
+                var root = doc.RootElement;
+                Assert.Equal("1.10.0", root.GetProperty("current_version").GetString());
+                Assert.Equal("v9.9.9", root.GetProperty("latest_version").GetString());
+                Assert.True(root.GetProperty("update_available").GetBoolean());
+                Assert.True(root.GetProperty("from_cache").GetBoolean());
+                Assert.True(root.GetProperty("install_attempted").GetBoolean());
+                Assert.Equal(CommandExitCodes.Success, root.GetProperty("install_exit_code").GetInt32());
+                Assert.True(root.GetProperty("install_succeeded").GetBoolean());
+            }
+            finally
+            {
+                ProgramRunner.UpgradeHttpClientFactory = previousFactory;
+                TestProjectHelper.DeleteDirectory(cacheRoot);
+            }
+        }
+    }
+
+    [Fact]
     public async Task DownloadReleaseChecksumManifestAsync_RejectsOverLimitResponse()
     {
         using var client = new HttpClient(new StaticResponseHandler(new ByteArrayContent(new byte[(int)ProgramRunner.MaxReleaseChecksumBytes + 1])))

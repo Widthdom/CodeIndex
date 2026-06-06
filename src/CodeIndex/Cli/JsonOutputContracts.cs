@@ -39,6 +39,16 @@ internal sealed record CommandErrorJsonResult(
     [property: JsonPropertyName("path")] string? Path = null,
     [property: JsonPropertyName("category")] string? Category = null);
 
+internal sealed record UpgradeJsonResult(
+    [property: JsonPropertyName("current_version")] string CurrentVersion,
+    [property: JsonPropertyName("latest_version")] string? LatestVersion,
+    [property: JsonPropertyName("update_available")] bool UpdateAvailable,
+    [property: JsonPropertyName("from_cache")] bool FromCache,
+    [property: JsonPropertyName("error")] string? Error,
+    [property: JsonPropertyName("install_attempted")] bool InstallAttempted,
+    [property: JsonPropertyName("install_exit_code")] int? InstallExitCode,
+    [property: JsonPropertyName("install_succeeded")] bool? InstallSucceeded);
+
 internal sealed record DbIntegrityCheckJsonResult(
     [property: JsonPropertyName("db_path")] string DbPath,
     [property: JsonPropertyName("ok")] bool Ok,
@@ -485,6 +495,7 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(SymbolResult))]
 [JsonSerializable(typeof(UnusedSymbolResult))]
 [JsonSerializable(typeof(CodeIndex.Models.UpdateCheckResult))]
+[JsonSerializable(typeof(UpgradeJsonResult))]
 [JsonSerializable(typeof(VacuumResult))]
 [JsonSerializable(typeof(VersionInfoJsonResult))]
 [JsonSerializable(typeof(WorkspaceListJsonResult))]

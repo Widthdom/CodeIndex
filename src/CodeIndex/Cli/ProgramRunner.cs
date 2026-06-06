@@ -12,6 +12,7 @@ using CodeIndex.Indexer;
 using CodeIndex.Indexer.Hooks;
 using CodeIndex.Lsp;
 using CodeIndex.Mcp;
+using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Cli;
@@ -3044,16 +3045,34 @@ internal static class ProgramRunner
 
         if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
         {
-            Console.Error.WriteLine("Error: cdidx upgrade currently requires a POSIX shell installer on Linux or macOS.");
-            Console.Error.WriteLine("Hint: download the latest release asset manually, or rerun install.sh from a shell environment.");
+            if (wantsJson)
+            {
+                Console.WriteLine(JsonSerializer.Serialize(
+                    CreateUpgradeJsonResult(result, installAttempted: false, installExitCode: null, "unsupported_platform"),
+                    jsonOptions));
+            }
+            else
+            {
+                Console.Error.WriteLine("Error: cdidx upgrade currently requires a POSIX shell installer on Linux or macOS.");
+                Console.Error.WriteLine("Hint: download the latest release asset manually, or rerun install.sh from a shell environment.");
+            }
             return CommandExitCodes.FeatureUnavailable;
         }
 
         var installDir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         if (!CanWriteDirectory(installDir))
         {
-            Console.Error.WriteLine($"Error: install directory is not writable: {installDir}");
-            Console.Error.WriteLine("Hint: rerun with permissions that can write this directory, or reinstall cdidx into a per-user directory.");
+            if (wantsJson)
+            {
+                Console.WriteLine(JsonSerializer.Serialize(
+                    CreateUpgradeJsonResult(result, installAttempted: false, installExitCode: null, "install_directory_not_writable"),
+                    jsonOptions));
+            }
+            else
+            {
+                Console.Error.WriteLine($"Error: install directory is not writable: {installDir}");
+                Console.Error.WriteLine("Hint: rerun with permissions that can write this directory, or reinstall cdidx into a per-user directory.");
+            }
             return CommandExitCodes.UsageError;
         }
 
@@ -3083,7 +3102,21 @@ internal static class ProgramRunner
             }
 
             var startInfo = CreateInstallerProcessStartInfo(scriptPath, result.LatestVersion, installDir);
-            return RunInstallerProcess(startInfo, InstallerRunTimeout, cancellationToken);
+            var installExitCode = RunInstallerProcess(
+                startInfo,
+                InstallerRunTimeout,
+                cancellationToken,
+                suppressOutput: wantsJson);
+            if (wantsJson)
+            {
+                var error = installExitCode == CommandExitCodes.Success
+                    ? null
+                    : $"installer_exit_code_{installExitCode.ToString(CultureInfo.InvariantCulture)}";
+                Console.WriteLine(JsonSerializer.Serialize(
+                    CreateUpgradeJsonResult(result, installAttempted: true, installExitCode, error),
+                    jsonOptions));
+            }
+            return installExitCode;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -3091,8 +3124,17 @@ internal static class ProgramRunner
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"Error: upgrade failed before install.sh completed ({ex.GetType().Name}: {ex.Message}).");
-            Console.Error.WriteLine("Hint: rerun `install.sh` manually for the desired release.");
+            if (wantsJson)
+            {
+                Console.WriteLine(JsonSerializer.Serialize(
+                    CreateUpgradeJsonResult(result, installAttempted: false, installExitCode: null, ex.GetType().Name),
+                    jsonOptions));
+            }
+            else
+            {
+                Console.Error.WriteLine($"Error: upgrade failed before install.sh completed ({ex.GetType().Name}: {ex.Message}).");
+                Console.Error.WriteLine("Hint: rerun `install.sh` manually for the desired release.");
+            }
             return CommandExitCodes.DatabaseError;
         }
         finally
@@ -3117,14 +3159,26 @@ internal static class ProgramRunner
     internal static int RunInstallerProcess(
         ProcessStartInfo startInfo,
         TimeSpan timeout,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool suppressOutput = false)
     {
+        if (suppressOutput)
+        {
+            startInfo.RedirectStandardOutput = true;
+            startInfo.RedirectStandardError = true;
+        }
+
         using var process = Process.Start(startInfo);
         if (process == null)
         {
-            Console.Error.WriteLine("Error: failed to start install.sh for upgrade.");
+            if (!suppressOutput)
+                Console.Error.WriteLine("Error: failed to start install.sh for upgrade.");
             return CommandExitCodes.DatabaseError;
         }
+
+        var outputDrainTask = suppressOutput
+            ? Task.WhenAll(process.StandardOutput.ReadToEndAsync(), process.StandardError.ReadToEndAsync())
+            : Task.CompletedTask;
 
         try
         {
@@ -3133,6 +3187,7 @@ internal static class ProgramRunner
             if (Task.WhenAny(waitTask, timeoutTask).GetAwaiter().GetResult() == waitTask)
             {
                 waitTask.GetAwaiter().GetResult();
+                outputDrainTask.GetAwaiter().GetResult();
                 return process.ExitCode;
             }
         }
@@ -3140,21 +3195,54 @@ internal static class ProgramRunner
         {
             TryKillProcessTree(process);
             if (!process.WaitForExit(ToWaitMilliseconds(InstallerKillWaitTimeout)))
-                Console.Error.WriteLine("Error: install.sh was cancelled and did not exit after cancellation.");
+            {
+                if (!suppressOutput)
+                    Console.Error.WriteLine("Error: install.sh was cancelled and did not exit after cancellation.");
+            }
+            else
+            {
+                outputDrainTask.GetAwaiter().GetResult();
+            }
             throw;
         }
 
         if (process.HasExited)
+        {
+            outputDrainTask.GetAwaiter().GetResult();
             return process.ExitCode;
+        }
 
         TryKillProcessTree(process);
         if (!process.WaitForExit(ToWaitMilliseconds(InstallerKillWaitTimeout)))
-            Console.Error.WriteLine("Error: install.sh timed out and did not exit after cancellation.");
+        {
+            if (!suppressOutput)
+                Console.Error.WriteLine("Error: install.sh timed out and did not exit after cancellation.");
+        }
         else
-            Console.Error.WriteLine($"Error: install.sh timed out after {FormatDuration(timeout)}.");
-        Console.Error.WriteLine("Hint: rerun `install.sh` manually for the desired release.");
+        {
+            outputDrainTask.GetAwaiter().GetResult();
+            if (!suppressOutput)
+                Console.Error.WriteLine($"Error: install.sh timed out after {FormatDuration(timeout)}.");
+        }
+        if (!suppressOutput)
+            Console.Error.WriteLine("Hint: rerun `install.sh` manually for the desired release.");
         return CommandExitCodes.DatabaseError;
     }
+
+    private static UpgradeJsonResult CreateUpgradeJsonResult(
+        UpdateCheckResult result,
+        bool installAttempted,
+        int? installExitCode,
+        string? error)
+        => new(
+            result.CurrentVersion,
+            result.LatestVersion,
+            result.UpdateAvailable,
+            result.FromCache,
+            error ?? result.Error,
+            installAttempted,
+            installExitCode,
+            installExitCode is null ? null : installExitCode == CommandExitCodes.Success);
 
     internal static string BuildInstallerScriptUrl(string releaseTag)
         => BuildReleaseAssetUrl(releaseTag, InstallerScriptAssetName);
