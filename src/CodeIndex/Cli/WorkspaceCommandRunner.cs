@@ -74,6 +74,8 @@ internal static class WorkspaceCommandRunner
             : manifest?.Members.FirstOrDefault(m => string.Equals(Path.GetFileName(m.Path), name, StringComparison.OrdinalIgnoreCase));
         if (manifest != null && member == null && !useDefault)
             return CommandErrorWriter.WriteJsonOrHuman(json, jsonOptions, "workspace member was not found.", CommandExitCodes.UsageError, "run `cdidx workspace list` and pass one of the listed member directory names.");
+        if (member is { Exists: false })
+            return CommandErrorWriter.WriteJsonOrHuman(json, jsonOptions, "workspace member is missing on disk.", CommandExitCodes.UsageError, "create the missing member directory or run `cdidx workspace list` and choose an existing member.");
 
         var root = member?.Path ?? Environment.CurrentDirectory;
         var dbPath = member?.DbPath ?? DbPathResolver.ResolveForIndex(root, explicitDbPath: null);
