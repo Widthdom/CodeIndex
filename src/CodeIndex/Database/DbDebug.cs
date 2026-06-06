@@ -32,6 +32,9 @@ public static class DbDebug
 {
     private const int MaxNumericChars = 64;
     private const int MaxHashSegmentChars = 2048;
+    internal const int MaxQueryPlanRows = 64;
+    internal const int MaxQueryPlanDetailChars = 512;
+    private const string DiagnosticTruncationMarker = "...<truncated>";
     private static readonly byte[] s_hashSalt = RandomNumberGenerator.GetBytes(16);
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<SqliteDataReader, ActiveProfile> s_activeProfiles = new();
 
@@ -290,19 +293,36 @@ public static class DbDebug
             using var reader = explain.ExecuteReader();
             while (reader.Read())
             {
+                if (rows.Count >= MaxQueryPlanRows)
+                {
+                    rows.Add(new QueryPlanRow(-1, -1, -1, $"EXPLAIN QUERY PLAN rows truncated after {MaxQueryPlanRows} rows."));
+                    break;
+                }
+
                 rows.Add(new QueryPlanRow(
                     reader.GetInt32(0),
                     reader.GetInt32(1),
                     reader.GetInt32(2),
-                    reader.GetString(3)));
+                    TruncateDiagnosticText(reader.GetString(3), MaxQueryPlanDetailChars)));
             }
         }
         catch (Exception ex)
         {
-            rows.Add(new QueryPlanRow(-1, -1, -1, "EXPLAIN QUERY PLAN failed: " + ex.Message));
+            rows.Add(new QueryPlanRow(-1, -1, -1, TruncateDiagnosticText("EXPLAIN QUERY PLAN failed: " + ex.Message, MaxQueryPlanDetailChars)));
         }
 
         return rows;
+    }
+
+    private static string TruncateDiagnosticText(string value, int maxChars)
+    {
+        if (value.Length <= maxChars)
+            return value;
+        if (maxChars <= 0)
+            return string.Empty;
+        if (maxChars <= DiagnosticTruncationMarker.Length)
+            return DiagnosticTruncationMarker[..maxChars];
+        return value[..(maxChars - DiagnosticTruncationMarker.Length)] + DiagnosticTruncationMarker;
     }
 
     internal static void SnapshotRow(SqliteDataReader reader)

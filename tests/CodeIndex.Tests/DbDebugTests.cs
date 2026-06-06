@@ -10,6 +10,12 @@ public class DbDebugTests
     private static string CaptureStderr(Action action)
         => ConsoleCapture.CaptureError(action);
 
+    private static string BuildUnionAllQuery(int count)
+        => string.Join(" UNION ALL ", Enumerable.Range(0, count).Select(i => $"SELECT {i} AS value"));
+
+    private static string QuoteSqlIdentifier(string identifier)
+        => "\"" + identifier.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"";
+
     [Fact]
     public void ExecuteTrackedReader_EmitsActivityAndSlowQueryLog()
     {
@@ -40,6 +46,69 @@ public class DbDebugTests
         var activity = Assert.Single(stopped.Where(activity => activity.OperationName == "db.query"));
         Assert.Equal("sqlite", activity.GetTagItem("db.system"));
         Assert.Equal("SELECT", activity.GetTagItem("db.operation"));
+    }
+
+    [Fact]
+    public void ExecuteTrackedReader_ProfileCapsQueryPlanRows()
+    {
+        DbDebug.ResetForTesting();
+        try
+        {
+            using var conn = new SqliteConnection("Data Source=:memory:");
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = BuildUnionAllQuery(120);
+
+            DbDebug.BeginProfile();
+            using (var reader = cmd.ExecuteTrackedReader())
+            {
+                while (reader.TrackedRead()) { }
+            }
+
+            var entry = Assert.Single(DbDebug.EndProfile());
+            Assert.True(entry.QueryPlan.Count <= DbDebug.MaxQueryPlanRows + 1);
+            Assert.Contains(entry.QueryPlan, row => row.Detail.Contains("truncated after", StringComparison.Ordinal));
+        }
+        finally
+        {
+            DbDebug.EndProfile();
+        }
+    }
+
+    [Fact]
+    public void ExecuteTrackedReader_ProfileTruncatesLongQueryPlanDetails()
+    {
+        DbDebug.ResetForTesting();
+        try
+        {
+            using var conn = new SqliteConnection("Data Source=:memory:");
+            conn.Open();
+            var tableName = "t_" + new string('a', DbDebug.MaxQueryPlanDetailChars * 2);
+            var quotedTableName = QuoteSqlIdentifier(tableName);
+            using (var create = conn.CreateCommand())
+            {
+                create.CommandText = $"CREATE TABLE {quotedTableName} (id INTEGER)";
+                create.ExecuteNonQuery();
+            }
+
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = $"SELECT id FROM {quotedTableName}";
+
+            DbDebug.BeginProfile();
+            using (var reader = cmd.ExecuteTrackedReader())
+            {
+                while (reader.TrackedRead()) { }
+            }
+
+            var entry = Assert.Single(DbDebug.EndProfile());
+            var detail = Assert.Single(entry.QueryPlan).Detail;
+            Assert.True(detail.Length <= DbDebug.MaxQueryPlanDetailChars, $"Detail was {detail.Length} chars.");
+            Assert.EndsWith("...<truncated>", detail, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DbDebug.EndProfile();
+        }
     }
 
     [Fact]
