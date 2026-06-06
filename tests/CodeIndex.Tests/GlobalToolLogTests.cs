@@ -8,6 +8,17 @@ namespace CodeIndex.Tests;
 [Collection("SQLite pool sensitive")]
 public class GlobalToolLogTests
 {
+    private const UnixFileMode PermissionBits =
+        UnixFileMode.UserRead |
+        UnixFileMode.UserWrite |
+        UnixFileMode.UserExecute |
+        UnixFileMode.GroupRead |
+        UnixFileMode.GroupWrite |
+        UnixFileMode.GroupExecute |
+        UnixFileMode.OtherRead |
+        UnixFileMode.OtherWrite |
+        UnixFileMode.OtherExecute;
+
     [Fact]
     public void PrivateLogFile_OpenAppend_OnUnixCreatesPrivateFile()
     {
@@ -28,6 +39,43 @@ public class GlobalToolLogTests
         {
             if (File.Exists(path))
                 File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void PrivateLogFile_HardenExisting_CapsBestEffortWork_Issue3027()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var directory = Path.Combine(Path.GetTempPath(), $"cdidx_private_log_harden_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        var fileCount = PrivateLogFile.MaxExistingFilesToHarden + 2;
+        try
+        {
+            for (var i = 0; i < fileCount; i++)
+            {
+                var path = Path.Combine(directory, $"stderr-{i:D4}.log");
+                File.WriteAllText(path, "x");
+                File.SetUnixFileMode(path, PermissionBits);
+            }
+
+            PrivateLogFile.HardenExisting(directory, "stderr-*.log");
+
+            var privateCount = 0;
+            for (var i = 0; i < fileCount; i++)
+            {
+                var path = Path.Combine(directory, $"stderr-{i:D4}.log");
+                if ((File.GetUnixFileMode(path) & PermissionBits) == PrivateLogFile.PrivateFileMode)
+                    privateCount++;
+            }
+
+            Assert.Equal(PrivateLogFile.MaxExistingFilesToHarden, privateCount);
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
         }
     }
 

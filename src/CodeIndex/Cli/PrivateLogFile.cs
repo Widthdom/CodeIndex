@@ -6,6 +6,7 @@ namespace CodeIndex.Cli;
 internal static class PrivateLogFile
 {
     internal const UnixFileMode PrivateFileMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+    internal const int MaxExistingFilesToHarden = 128;
 
     internal static FileStream OpenAppend(string path, FileShare share = FileShare.ReadWrite)
     {
@@ -49,8 +50,14 @@ internal static class PrivateLogFile
 
         try
         {
+            var hardened = 0;
             foreach (var file in new DirectoryInfo(directory).EnumerateFiles(pattern, SearchOption.TopDirectoryOnly))
+            {
                 TrySetPrivatePermissions(file.FullName);
+                hardened++;
+                if (hardened >= MaxExistingFilesToHarden)
+                    break;
+            }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
