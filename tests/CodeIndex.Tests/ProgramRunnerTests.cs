@@ -223,6 +223,43 @@ public class ProgramRunnerTests
     }
 
     [Fact]
+    public void Run_TestExtractor_SourceGrowsAfterLengthCheck_ReturnsInvalidArgument_Issue3075()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        lock (TestConsoleLock.Gate)
+        {
+            var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_test_extractor_growing_source_{Guid.NewGuid():N}");
+            try
+            {
+                Directory.CreateDirectory(tempDir);
+                var file = Path.Combine(tempDir, "growing.py");
+                File.WriteAllText(file, new string('x', (int)ProgramRunner.TestExtractorMaxInputBytes - 1));
+                ProgramRunner.TestExtractorFileLengthCheckedForTesting = checkedPath =>
+                {
+                    if (checkedPath == file)
+                        File.AppendAllText(file, "xx");
+                };
+
+                var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                    ["test-extractor", "--language", "python", "--file", file, "--json"],
+                    appVersion: "1.10.0"));
+
+                Assert.Equal(CommandExitCodes.InvalidArgument, exitCode);
+                Assert.Empty(stdout);
+                Assert.Contains("test-extractor source file is too large", stderr);
+                Assert.Contains($"{ProgramRunner.TestExtractorMaxInputBytes} byte limit", stderr);
+            }
+            finally
+            {
+                ProgramRunner.TestExtractorFileLengthCheckedForTesting = null;
+                TestProjectHelper.DeleteDirectory(tempDir);
+            }
+        }
+    }
+
+    [Fact]
     public void Run_TestExtractor_ExpectedSymbolsTooLarge_ReturnsInvalidArgument_Issue2896()
     {
         lock (TestConsoleLock.Gate)
