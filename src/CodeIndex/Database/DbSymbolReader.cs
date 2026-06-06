@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.RegularExpressions;
 using CodeIndex.Indexer;
 using Microsoft.Data.Sqlite;
@@ -2904,14 +2905,14 @@ public partial class DbReader
             Math.Max(targetCount * UnusedPublicOverfetchMultiplier, UnusedPublicOverfetchMinimum),
             UnusedPublicOverfetchMaximum);
         var publicOrExported = new List<UnusedSymbolResult>(targetCount);
-        var chunksByFileId = new Dictionary<long, List<UnusedCandidateChunk>>();
-        var privateLike = CollectUnusedCandidateBucket(targetCount, batchSize, 0, chunksByFileId,
+        var fileContentByFileId = new Dictionary<long, string>();
+        var privateLike = CollectUnusedCandidateBucket(targetCount, batchSize, 0, fileContentByFileId,
             kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters);
-        var maybeNonPublic = CollectUnusedCandidateBucket(targetCount, batchSize, 1, chunksByFileId,
+        var maybeNonPublic = CollectUnusedCandidateBucket(targetCount, batchSize, 1, fileContentByFileId,
             kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters);
-        var reflectionOrConfig = CollectUnusedCandidateBucket(targetCount, batchSize, 3, chunksByFileId,
+        var reflectionOrConfig = CollectUnusedCandidateBucket(targetCount, batchSize, 3, fileContentByFileId,
             kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters);
-        CollectPublicUnusedCandidateBucket(targetCount, batchSize, publicFetchBudget, chunksByFileId,
+        CollectPublicUnusedCandidateBucket(targetCount, batchSize, publicFetchBudget, fileContentByFileId,
             publicOrExported, reflectionOrConfig, kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters);
 
         var merged = new List<UnusedSymbolResult>(privateLike.Count + maybeNonPublic.Count + publicOrExported.Count + reflectionOrConfig.Count);
@@ -2932,7 +2933,7 @@ public partial class DbReader
         if (targetBuckets.Count == 0)
             return [];
 
-        var chunksByFileId = new Dictionary<long, List<UnusedCandidateChunk>>();
+        var fileContentByFileId = new Dictionary<long, string>();
         var resultsByBucket = CreateUnusedBucketResultLists();
         const int batchSize = UnusedPublicOverfetchMaximum;
         foreach (var provisionalBucket in GetRelevantUnusedProvisionalBuckets(targetBuckets))
@@ -2948,7 +2949,7 @@ public partial class DbReader
                 offset += batch.Count;
                 foreach (var candidate in batch)
                 {
-                    if (HasSameFilePrivateUse(candidate, chunksByFileId))
+                    if (HasSameFilePrivateUse(candidate, fileContentByFileId))
                         continue;
 
                     var result = CreateUnusedSymbolResult(candidate);
@@ -2967,7 +2968,7 @@ public partial class DbReader
     }
 
     private List<UnusedSymbolResult> CollectUnusedCandidateBucket(int targetCount, int batchSize, int provisionalBucketOrder,
-        Dictionary<long, List<UnusedCandidateChunk>> chunksByFileId, string? kind, string? lang,
+        Dictionary<long, string> fileContentByFileId, string? kind, string? lang,
         IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests,
         IReadOnlyList<string>? visibilityFilters, IReadOnlyList<string>? excludeVisibilityFilters)
     {
@@ -2983,7 +2984,7 @@ public partial class DbReader
             offset += batch.Count;
             foreach (var candidate in batch)
             {
-                if (HasSameFilePrivateUse(candidate, chunksByFileId))
+                if (HasSameFilePrivateUse(candidate, fileContentByFileId))
                     continue;
 
                 results.Add(CreateUnusedSymbolResult(candidate));
@@ -2999,7 +3000,7 @@ public partial class DbReader
     }
 
     private void CollectPublicUnusedCandidateBucket(int targetCount, int batchSize, int candidateBudget,
-        Dictionary<long, List<UnusedCandidateChunk>> chunksByFileId,
+        Dictionary<long, string> fileContentByFileId,
         List<UnusedSymbolResult> publicOrExported, List<UnusedSymbolResult> reflectionOrConfig, string? kind, string? lang,
         IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests,
         IReadOnlyList<string>? visibilityFilters, IReadOnlyList<string>? excludeVisibilityFilters)
@@ -3017,7 +3018,7 @@ public partial class DbReader
             offset += batch.Count;
             foreach (var candidate in batch)
             {
-                if (HasSameFilePrivateUse(candidate, chunksByFileId))
+                if (HasSameFilePrivateUse(candidate, fileContentByFileId))
                     continue;
 
                 candidatesFetched++;
@@ -3042,7 +3043,7 @@ public partial class DbReader
         }
     }
 
-    private bool HasSameFilePrivateUse(UnusedCandidateSymbol candidate, Dictionary<long, List<UnusedCandidateChunk>> chunksByFileId)
+    private bool HasSameFilePrivateUse(UnusedCandidateSymbol candidate, Dictionary<long, string> fileContentByFileId)
     {
         if (!string.Equals(candidate.Lang, "csharp", StringComparison.Ordinal)
             || !IsPrivateLikeVisibility(candidate.Visibility)
@@ -3051,24 +3052,17 @@ public partial class DbReader
             || !HasTable("chunks"))
             return false;
 
-        foreach (var chunk in GetUnusedCandidateChunks(candidate.FileId, chunksByFileId))
-        {
-            var occurrenceCount = DbContext.CountCSharpIdentifierOccurrences(chunk.Content, candidate.Name);
-            if (occurrenceCount <= 0)
-                continue;
-
-            if (chunk.EndLine < candidate.StartLine
-                || chunk.StartLine > candidate.EndLine
-                || occurrenceCount > 1)
-                return true;
-        }
-
-        return false;
+        var fileContent = GetUnusedCandidateFileContent(candidate.FileId, fileContentByFileId);
+        return DbContext.HasCSharpIdentifierOccurrenceOutsideLineRange(
+            fileContent,
+            candidate.Name,
+            candidate.StartLine,
+            candidate.EndLine);
     }
 
-    private List<UnusedCandidateChunk> GetUnusedCandidateChunks(long fileId, Dictionary<long, List<UnusedCandidateChunk>> chunksByFileId)
+    private string GetUnusedCandidateFileContent(long fileId, Dictionary<long, string> fileContentByFileId)
     {
-        if (chunksByFileId.TryGetValue(fileId, out var cached))
+        if (fileContentByFileId.TryGetValue(fileId, out var cached))
             return cached;
 
         using var cmd = _conn.CreateCommand();
@@ -3090,8 +3084,47 @@ public partial class DbReader
                 GetNullableString(reader, 2) ?? string.Empty));
         }
 
-        chunksByFileId[fileId] = chunks;
-        return chunks;
+        var linesByNumber = new SortedDictionary<int, string>();
+        foreach (var chunk in chunks)
+            AddUnusedCandidateChunkLines(linesByNumber, chunk);
+
+        var builder = new StringBuilder();
+        var nextLine = 1;
+        foreach (var line in linesByNumber)
+        {
+            while (nextLine < line.Key)
+            {
+                builder.Append('\n');
+                nextLine++;
+            }
+
+            builder.Append(line.Value);
+            builder.Append('\n');
+            nextLine = line.Key + 1;
+        }
+
+        var content = builder.ToString();
+        fileContentByFileId[fileId] = content;
+        return content;
+    }
+
+    private static void AddUnusedCandidateChunkLines(SortedDictionary<int, string> linesByNumber, UnusedCandidateChunk chunk)
+    {
+        if (chunk.StartLine <= 0 || chunk.Content.Length == 0)
+            return;
+
+        var normalized = chunk.Content.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
+        var lines = normalized.Split('\n');
+        var lineCount = normalized.Length > 0 && normalized[^1] == '\n' ? lines.Length - 1 : lines.Length;
+        if (chunk.EndLine >= chunk.StartLine)
+            lineCount = Math.Min(lineCount, chunk.EndLine - chunk.StartLine + 1);
+
+        for (var i = 0; i < lineCount; i++)
+        {
+            var lineNumber = chunk.StartLine + i;
+            if (!linesByNumber.ContainsKey(lineNumber))
+                linesByNumber.Add(lineNumber, lines[i]);
+        }
     }
 
     private IEnumerable<UnusedCandidateSymbol> FetchUnusedCandidateSymbols(int fetchLimit, int offset, int provisionalBucketOrder, string? kind, string? lang,
@@ -3649,7 +3682,7 @@ public partial class DbReader
     {
         var count = 0;
         var paths = new HashSet<string>(StringComparer.Ordinal);
-        var chunksByFileId = new Dictionary<long, List<UnusedCandidateChunk>>();
+        var fileContentByFileId = new Dictionary<long, string>();
         const int batchSize = UnusedPublicOverfetchMaximum;
         for (var bucket = 0; bucket <= 3; bucket++)
         {
@@ -3664,7 +3697,7 @@ public partial class DbReader
                 offset += batch.Count;
                 foreach (var candidate in batch)
                 {
-                    if (HasSameFilePrivateUse(candidate, chunksByFileId))
+                    if (HasSameFilePrivateUse(candidate, fileContentByFileId))
                         continue;
 
                     var result = CreateUnusedSymbolResult(candidate);
@@ -3688,7 +3721,7 @@ public partial class DbReader
     {
         var count = 0;
         var paths = new HashSet<string>(StringComparer.Ordinal);
-        var chunksByFileId = new Dictionary<long, List<UnusedCandidateChunk>>();
+        var fileContentByFileId = new Dictionary<long, string>();
         const int batchSize = UnusedPublicOverfetchMaximum;
         for (var bucket = 0; bucket <= 3; bucket++)
         {
@@ -3703,7 +3736,7 @@ public partial class DbReader
                 offset += batch.Count;
                 foreach (var candidate in batch)
                 {
-                    if (HasSameFilePrivateUse(candidate, chunksByFileId))
+                    if (HasSameFilePrivateUse(candidate, fileContentByFileId))
                         continue;
 
                     count++;

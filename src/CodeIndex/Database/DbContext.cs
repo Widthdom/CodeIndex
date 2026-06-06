@@ -976,6 +976,68 @@ public class DbContext : IDisposable
         return count;
     }
 
+    internal static bool HasCSharpIdentifierOccurrenceOutsideLineRange(string? text, string? identifier, int startLine, int endLine)
+    {
+        if (string.IsNullOrEmpty(text) || string.IsNullOrEmpty(identifier))
+            return false;
+
+        var normalizedStartLine = Math.Max(1, startLine);
+        var normalizedEndLine = Math.Max(normalizedStartLine, endLine);
+        text = MaskCSharpCommentsAndStrings(text);
+
+        var inRangeOccurrences = 0;
+        var lineNumber = 1;
+        var lineStart = 0;
+        while (lineStart <= text.Length)
+        {
+            var lineEnd = text.IndexOf('\n', lineStart);
+            if (lineEnd < 0)
+                lineEnd = text.Length;
+
+            var lineOccurrences = CountCSharpIdentifierOccurrencesInRange(text, identifier, lineStart, lineEnd);
+            if (lineOccurrences > 0)
+            {
+                if (lineNumber < normalizedStartLine || lineNumber > normalizedEndLine)
+                    return true;
+
+                inRangeOccurrences += lineOccurrences;
+                if (inRangeOccurrences > 1)
+                    return true;
+            }
+
+            if (lineEnd == text.Length)
+                break;
+
+            lineStart = lineEnd + 1;
+            lineNumber++;
+        }
+
+        return false;
+    }
+
+    private static int CountCSharpIdentifierOccurrencesInRange(string text, string identifier, int start, int end)
+    {
+        var count = 0;
+        var searchIndex = start;
+        while (searchIndex < end)
+        {
+            var index = text.IndexOf(identifier, searchIndex, end - searchIndex, StringComparison.Ordinal);
+            if (index < 0)
+                break;
+
+            var beforeIndex = index - 1;
+            var afterIndex = index + identifier.Length;
+            var hasIdentifierBefore = beforeIndex >= start && IsCSharpIdentifierPart(text[beforeIndex]);
+            var hasIdentifierAfter = afterIndex < end && IsCSharpIdentifierPart(text[afterIndex]);
+            if (!hasIdentifierBefore && !hasIdentifierAfter)
+                count++;
+
+            searchIndex = index + identifier.Length;
+        }
+
+        return count;
+    }
+
     private static bool IsCSharpIdentifierPart(char ch)
     {
         return ch == '_' || char.IsLetterOrDigit(ch);
