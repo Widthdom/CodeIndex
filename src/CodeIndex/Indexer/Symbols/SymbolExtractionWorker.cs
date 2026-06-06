@@ -124,6 +124,7 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
 
             if (response == null)
                 return Failure("worker returned an empty response.", stopwatch.ElapsedMilliseconds);
+            ForwardCapturedStderr(response.CapturedStderr);
             if (!string.IsNullOrWhiteSpace(response.WorkerError))
                 return Failure(response.WorkerError, stopwatch.ElapsedMilliseconds);
             if (response.Symbols == null)
@@ -309,6 +310,12 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
             return false;
         }
     }
+
+    private static void ForwardCapturedStderr(string? capturedStderr)
+    {
+        if (!string.IsNullOrEmpty(capturedStderr))
+            Console.Error.Write(capturedStderr);
+    }
 }
 
 internal static class SymbolExtractionWorker
@@ -317,6 +324,8 @@ internal static class SymbolExtractionWorker
     internal const int WorkerKillWaitMilliseconds = 5000;
     internal const string DelayEnvironmentVariable = "CDIDX_TEST_SYMBOL_EXTRACTION_WORKER_DELAY_MS";
     internal const string CompletionPathEnvironmentVariable = "CDIDX_TEST_SYMBOL_EXTRACTION_WORKER_DONE_PATH";
+    internal const string ConsoleStdoutEnvironmentVariable = "CDIDX_TEST_SYMBOL_EXTRACTION_WORKER_STDOUT";
+    private const int CapturedConsoleMaxChars = 32 * 1024;
     internal static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
@@ -448,19 +457,11 @@ internal static class SymbolExtractionWorker
                 {
                     var request = JsonSerializer.Deserialize<WorkerRequest>(requestJson, JsonOptions)
                         ?? throw new InvalidOperationException("worker request was empty.");
-                    DelayForTestingIfRequested();
-                    var symbols = SymbolExtractor.Extract(
-                        request.FileId,
-                        request.Lang,
-                        request.Content,
-                        request.FilePath,
-                        request.ProjectRoot,
-                        CancellationToken.None);
-                    response = new WorkerResponse(symbols, null);
+                    response = InvokeInsideWorker(request);
                 }
                 catch (Exception ex)
                 {
-                    response = new WorkerResponse(null, ex.Message);
+                    response = new WorkerResponse(null, ex.Message, null);
                 }
 
                 output.WriteLine(JsonSerializer.Serialize(response, JsonOptions));
@@ -474,6 +475,45 @@ internal static class SymbolExtractionWorker
             error.WriteLine(ex.Message);
             return 1;
         }
+    }
+
+    private static WorkerResponse InvokeInsideWorker(WorkerRequest request)
+    {
+        var originalOut = Console.Out;
+        var originalError = Console.Error;
+        using var capturedOut = new BoundedTextWriter(CapturedConsoleMaxChars);
+        using var capturedError = new BoundedTextWriter(CapturedConsoleMaxChars);
+        try
+        {
+            Console.SetOut(capturedOut);
+            Console.SetError(capturedError);
+            WriteConsoleOutputForTestingIfRequested();
+            DelayForTestingIfRequested();
+            var symbols = SymbolExtractor.Extract(
+                request.FileId,
+                request.Lang,
+                request.Content,
+                request.FilePath,
+                request.ProjectRoot,
+                CancellationToken.None);
+            return new WorkerResponse(symbols, null, capturedError.GetCapturedText());
+        }
+        catch (Exception ex)
+        {
+            return new WorkerResponse(null, ex.Message, capturedError.GetCapturedText());
+        }
+        finally
+        {
+            Console.SetOut(originalOut);
+            Console.SetError(originalError);
+        }
+    }
+
+    private static void WriteConsoleOutputForTestingIfRequested()
+    {
+        var stdout = Environment.GetEnvironmentVariable(ConsoleStdoutEnvironmentVariable);
+        if (!string.IsNullOrEmpty(stdout))
+            Console.Out.WriteLine(stdout);
     }
 
     private static void DelayForTestingIfRequested()
@@ -553,5 +593,66 @@ internal static class SymbolExtractionWorker
 
     internal sealed record WorkerResponse(
         List<SymbolRecord>? Symbols,
-        string? WorkerError);
+        string? WorkerError,
+        string? CapturedStderr);
+
+    private sealed class BoundedTextWriter(int maxChars) : TextWriter
+    {
+        private readonly StringBuilder builder = new();
+        private bool truncated;
+
+        public override Encoding Encoding => Encoding.UTF8;
+
+        public override void Write(char value)
+        {
+            if (builder.Length < maxChars)
+            {
+                builder.Append(value);
+                return;
+            }
+
+            truncated = true;
+        }
+
+        public override void Write(string? value)
+        {
+            if (string.IsNullOrEmpty(value))
+                return;
+
+            Append(value.AsSpan());
+        }
+
+        public override void Write(char[] buffer, int index, int count)
+            => Append(buffer.AsSpan(index, count));
+
+        internal string GetCapturedText()
+        {
+            if (!truncated)
+                return builder.ToString();
+
+            return builder
+                .AppendLine()
+                .Append("[cdidx] captured worker console output truncated.")
+                .ToString();
+        }
+
+        private void Append(ReadOnlySpan<char> value)
+        {
+            var remaining = maxChars - builder.Length;
+            if (remaining <= 0)
+            {
+                truncated = true;
+                return;
+            }
+
+            if (value.Length <= remaining)
+            {
+                builder.Append(value);
+                return;
+            }
+
+            builder.Append(value[..remaining]);
+            truncated = true;
+        }
+    }
 }

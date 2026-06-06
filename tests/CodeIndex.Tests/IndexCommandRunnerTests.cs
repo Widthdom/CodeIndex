@@ -198,6 +198,50 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void SymbolExtractionWorker_CapturesStdoutAndForwardsStderrDiagnostics()
+    {
+        var projectRoot = CreateTempProject();
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture(SymbolExtractionWorker.ConsoleStdoutEnvironmentVariable);
+            try
+            {
+                WriteSymbolWorkerPatternConfig(
+                    projectRoot,
+                    "language: \"toydsl\"\nextensions:\n  - extension: \".toy\"\npatterns:\n  - kind: \"class\"\n    regex: \"^(a+)+$\"\n");
+                env.Set(SymbolExtractionWorker.ConsoleStdoutEnvironmentVariable, "not-json-protocol");
+                var slowLine = new string('a', 10_000) + "!";
+                SymbolExtractionWorkerResult? result = null;
+
+                var stderr = ConsoleCapture.CaptureError(() =>
+                {
+                    using var worker = new SymbolExtractionWorkerClient();
+                    result = worker.Invoke(
+                        0,
+                        "toydsl",
+                        slowLine,
+                        Path.Combine(projectRoot, "demo.toy"),
+                        projectRoot,
+                        TimeSpan.FromSeconds(5));
+                });
+
+                Assert.NotNull(result);
+                Assert.True(result.Success, result.WorkerError);
+                Assert.False(result.TimedOut);
+                Assert.Empty(result.Symbols!);
+                Assert.Contains("Pattern extractor", stderr, StringComparison.Ordinal);
+                Assert.Contains("timed out", stderr, StringComparison.Ordinal);
+                Assert.DoesNotContain("not-json-protocol", stderr, StringComparison.Ordinal);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
     public void SymbolExtractionWorker_StartInfo_UsesCurrentCdidxExecutableWhenAvailable()
     {
         var currentProcessPath = Path.Combine(Path.GetTempPath(), OperatingSystem.IsWindows() ? "cdidx.exe" : "cdidx");
@@ -9996,6 +10040,13 @@ public class IndexCommandRunnerTests
 
             Thread.Sleep(25);
         }
+    }
+
+    private static void WriteSymbolWorkerPatternConfig(string projectRoot, string content)
+    {
+        var path = Path.Combine(projectRoot, ".cdidx", "patterns", "toydsl.yaml");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, content);
     }
 
     private static string GetRepositoryRoot()
