@@ -932,6 +932,52 @@ public class McpServerTests : IDisposable
         Assert.Equal("text/x-csharp", resource["mimeType"]!.GetValue<string>());
     }
 
+    [Theory]
+    [InlineData("-1")]
+    [InlineData("not-a-cursor")]
+    public void ResourcesList_InvalidCursor_ReturnsInvalidParams_Issue3112(string cursor)
+    {
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "resources/list",
+            ["params"] = new JsonObject
+            {
+                ["cursor"] = cursor,
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal(-32602, response["error"]!["code"]!.GetValue<int>());
+        var data = response["error"]!["data"]!;
+        Assert.Equal("invalid_argument", data["category"]!.GetValue<string>());
+        Assert.Equal(McpServer.MaxMcpPaginationOffset, data["max_pagination_offset"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ResourcesList_CursorBeyondPaginationCap_ReturnsInvalidParams_Issue3112()
+    {
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "resources/list",
+            ["params"] = new JsonObject
+            {
+                ["cursor"] = (McpServer.MaxMcpPaginationOffset + 1).ToString(System.Globalization.CultureInfo.InvariantCulture),
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal(-32602, response["error"]!["code"]!.GetValue<int>());
+        var data = response["error"]!["data"]!;
+        Assert.Equal("invalid_argument", data["category"]!.GetValue<string>());
+        Assert.Equal(McpServer.MaxMcpPaginationOffset, data["max_pagination_offset"]!.GetValue<int>());
+    }
+
     [Fact]
     public void ResourcesList_DoesNotAdvertiseUrisTooLongToRead_Issue3122()
     {

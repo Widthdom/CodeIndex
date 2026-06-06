@@ -1881,17 +1881,31 @@ public partial class McpServer : IDisposable
     {
         const int pageSize = 200;
         var offset = 0;
-        if (listParams?["cursor"] is JsonValue cursorValue
-            && cursorValue.TryGetValue<string>(out var cursor)
-            && int.TryParse(cursor, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var parsed)
-            && parsed > 0)
+        if (listParams?["cursor"] is JsonNode cursorNode)
         {
-            offset = parsed;
+            if (cursorNode is not JsonValue cursorValue
+                || !cursorValue.TryGetValue<string>(out var cursor)
+                || !int.TryParse(cursor, NumberStyles.None, CultureInfo.InvariantCulture, out offset)
+                || offset < 0
+                || offset > MaxMcpPaginationOffset)
+            {
+                return CreateResourcesListCursorError(id);
+            }
+        }
+
+        int listLimit;
+        try
+        {
+            listLimit = checked(offset + pageSize + 1);
+        }
+        catch (OverflowException)
+        {
+            return CreateResourcesListCursorError(id);
         }
 
         return WithDbReader(id, args: null, reader =>
         {
-            var files = reader.ListFiles(limit: offset + pageSize + 1);
+            var files = reader.ListFiles(limit: listLimit);
             var page = files.Skip(offset).Take(pageSize).ToArray();
             var resources = new JsonArray();
             foreach (var file in page)
@@ -1918,6 +1932,17 @@ public partial class McpServer : IDisposable
             return CreateSuccessResponse(true, id, result);
         });
     }
+
+    private static JsonObject CreateResourcesListCursorError(JsonNode? id)
+        => CreateErrorResponse(hasId: true, id: id, code: -32602,
+            message: $"resources/list cursor must be a non-negative pagination offset no greater than {MaxMcpPaginationOffset}.",
+            category: McpErrorEnvelope.CategoryInvalidArgument,
+            suggestion: "Use the `nextCursor` value returned by the previous resources/list response, or omit params.cursor to start from the first page.",
+            retrySafe: false,
+            extraData: new JsonObject
+            {
+                ["max_pagination_offset"] = MaxMcpPaginationOffset,
+            });
 
     private JsonNode HandleResourcesRead(JsonNode? id, JsonNode? readParams)
     {
