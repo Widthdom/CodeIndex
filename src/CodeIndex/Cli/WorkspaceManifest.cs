@@ -29,6 +29,8 @@ internal static class WorkspaceManifestLoader
     internal const int MaxManifestBytes = 64 * 1024;
     internal const int MaxManifestDepth = 16;
     internal const int MaxManifestMembers = 1024;
+    internal const int MaxManifestMemberPathChars = 4096;
+    internal const int MaxDefaultDbNameChars = 255;
 
     internal static WorkspaceManifest? Find(string startingDirectory)
     {
@@ -94,6 +96,9 @@ internal static class WorkspaceManifestLoader
 
     private static string ValidateDefaultDbName(string dbName)
     {
+        if (dbName.Length > MaxDefaultDbNameChars)
+            throw new InvalidDataException($"Workspace manifest default_db_name exceeds the {MaxDefaultDbNameChars} character limit.");
+
         if (string.IsNullOrWhiteSpace(dbName)
             || dbName is "." or ".."
             || Path.IsPathRooted(dbName)
@@ -122,6 +127,9 @@ internal static class WorkspaceManifestLoader
             var value = member.GetString();
             if (string.IsNullOrWhiteSpace(value))
                 continue;
+
+            if (value.Length > MaxManifestMemberPathChars)
+                throw new InvalidDataException($"Workspace manifest member path exceeds the {MaxManifestMemberPathChars} character limit.");
 
             if (members.Count >= MaxManifestMembers)
                 throw new InvalidDataException($"Workspace manifest members exceed the {MaxManifestMembers} member limit.");

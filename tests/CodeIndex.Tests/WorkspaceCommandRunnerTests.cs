@@ -107,6 +107,30 @@ public class WorkspaceCommandRunnerTests
     }
 
     [Fact]
+    public void WorkspaceManifestLoader_Load_RejectsOverlongMemberPath()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_manifest_member_length");
+        try
+        {
+            var manifestPath = Path.Combine(root, "cdidx.workspace.json");
+            var member = new string('a', WorkspaceManifestLoader.MaxManifestMemberPathChars + 1);
+            File.WriteAllText(manifestPath, $$"""
+                {
+                  "members": [{{JsonSerializer.Serialize(member)}}]
+                }
+                """);
+
+            var ex = Assert.Throws<InvalidDataException>(() => WorkspaceManifestLoader.Load(manifestPath));
+
+            Assert.Contains($"{WorkspaceManifestLoader.MaxManifestMemberPathChars} character limit", ex.Message);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
     public void WorkspaceManifestLoader_Load_RejectsRootedMemberPath()
     {
         var root = TestProjectHelper.CreateTempProject("cdidx_workspace_manifest_rooted_member");
@@ -146,6 +170,30 @@ public class WorkspaceCommandRunnerTests
             var ex = Assert.Throws<InvalidDataException>(() => WorkspaceManifestLoader.Load(manifestPath));
 
             Assert.Contains("member path escapes the manifest root", ex.Message);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
+    public void WorkspaceManifestLoader_Load_RejectsOverlongDefaultDbName()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_manifest_db_name_length");
+        try
+        {
+            var manifestPath = Path.Combine(root, "cdidx.workspace.json");
+            var dbName = new string('a', WorkspaceManifestLoader.MaxDefaultDbNameChars + 1);
+            File.WriteAllText(manifestPath, $$"""
+                {
+                  "default_db_name": {{JsonSerializer.Serialize(dbName)}}
+                }
+                """);
+
+            var ex = Assert.Throws<InvalidDataException>(() => WorkspaceManifestLoader.Load(manifestPath));
+
+            Assert.Contains($"{WorkspaceManifestLoader.MaxDefaultDbNameChars} character limit", ex.Message);
         }
         finally
         {
