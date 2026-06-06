@@ -23,6 +23,7 @@ public static class ReportCommandRunner
     internal const int DefaultLogLines = 200;
     internal const int MaxLogLines = 2000;
     internal const int MaxLogFileTailBytes = 1024 * 1024;
+    internal const int MaxRecentLogFiles = 32;
     internal const int MaxSchemaTables = 64;
     internal const int MaxSchemaTableNameDisplayChars = 96;
     internal const int MaxSchemaRowCountScanRows = 1000;
@@ -175,7 +176,9 @@ public static class ReportCommandRunner
         sb.AppendLine("- `schema.txt` — capped SQLite table list and bounded row counts (no table row contents).");
         if (includeLog)
         {
-            sb.AppendLine("- `log/stderr-recent.log` — last N lines of the cdidx lifecycle log");
+            sb.AppendLine(
+                "- `log/stderr-recent.log` — up to the requested last N lifecycle-log lines, " +
+                $"selected from the {MaxRecentLogFiles} newest log files");
             sb.AppendLine(includeArgs
                 ? "  (includes literal `args=` lines; path-bearing lifecycle fields stay redacted)."
                 : "  (`args=` and path-bearing lifecycle fields are redacted; rerun with `--include-args` to keep arguments literal).");
@@ -282,10 +285,8 @@ public static class ReportCommandRunner
         if (string.IsNullOrWhiteSpace(logDir) || !Directory.Exists(logDir))
             return $"no cdidx lifecycle log directory found (looked at: {RedactedPlaceholder}).\n";
 
-        var logFiles = new DirectoryInfo(logDir)
-            .EnumerateFiles("stderr-*.log", SearchOption.TopDirectoryOnly)
-            .OrderByDescending(f => f.Name, StringComparer.Ordinal)
-            .ToList();
+        var logFiles = SelectRecentLogFiles(
+            new DirectoryInfo(logDir).EnumerateFiles("stderr-*.log", SearchOption.TopDirectoryOnly));
         if (logFiles.Count == 0)
             return $"no cdidx lifecycle log files found in: {RedactedPlaceholder}\n";
 
@@ -317,6 +318,28 @@ public static class ReportCommandRunner
         }
         linesIncluded = collected.Count;
         return sb.ToString();
+    }
+
+    private static IReadOnlyList<FileInfo> SelectRecentLogFiles(IEnumerable<FileInfo> files)
+    {
+        var recent = new List<FileInfo>(MaxRecentLogFiles);
+        foreach (var file in files)
+        {
+            var insertAt = recent.FindIndex(
+                existing => string.Compare(file.Name, existing.Name, StringComparison.Ordinal) > 0);
+            if (insertAt < 0)
+            {
+                if (recent.Count < MaxRecentLogFiles)
+                    recent.Add(file);
+                continue;
+            }
+
+            recent.Insert(insertAt, file);
+            if (recent.Count > MaxRecentLogFiles)
+                recent.RemoveAt(recent.Count - 1);
+        }
+
+        return recent;
     }
 
     internal static IReadOnlyList<string> ReadLogFileTailLines(string path, int maxLines)

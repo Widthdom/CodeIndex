@@ -618,12 +618,12 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
-    public async Task ProcessLineAsync_UnknownArgumentName_TruncatesTelemetryKeyMetadata_Issue3117()
+    public async Task ProcessLineAsync_UnknownArgumentName_TruncatesTelemetryKeyMetadata_Issue3117_Issue3105()
     {
         using var writer = new StringWriter();
         using var error = new StringWriter();
-        var argumentName = new string('k', McpBoundedText.MaxDiagnosticDisplayChars + 25);
-        var display = McpBoundedText.ForDisplay(argumentName);
+        var argumentName = new string('k', AuditLogSink.MaxAuditArgumentKeyChars + 25);
+        var display = McpBoundedText.ForDisplay(argumentName, AuditLogSink.MaxAuditArgumentKeyChars);
         var request = new JsonObject
         {
             ["jsonrpc"] = "2.0",
@@ -671,10 +671,11 @@ public class McpServerTests : IDisposable
         Assert.Contains(root.GetProperty("arg_keys").EnumerateArray(), key => key.GetString() == display.Text);
         Assert.Equal(argumentName.Length, root.GetProperty("arg_key_lengths").GetProperty(display.Text).GetInt32());
         Assert.True(root.GetProperty("arg_keys_truncated").GetBoolean());
+        Assert.Equal(1, root.GetProperty("arg_key_names_truncated_count").GetInt32());
     }
 
     [Fact]
-    public async Task ProcessLineAsync_CapsTelemetryArgumentKeyCount_Issue3237()
+    public async Task ProcessLineAsync_CapsTelemetryArgumentKeyCount_Issue3237_Issue3105()
     {
         using var writer = new StringWriter();
         using var error = new StringWriter();
@@ -722,6 +723,7 @@ public class McpServerTests : IDisposable
         Assert.True(root.GetProperty("arg_keys_truncated").GetBoolean());
         Assert.Contains(root.GetProperty("arg_key_truncation_reasons").EnumerateArray(),
             reason => reason.GetString() == "arg_key_count_limit");
+        Assert.Equal(3, root.GetProperty("arg_keys_omitted_count").GetInt32());
         Assert.DoesNotContain(root.GetProperty("arg_keys").EnumerateArray(),
             key => key.GetString() == $"arg{AuditLogSink.MaxAuditArgumentCount}");
     }
@@ -888,11 +890,196 @@ public class McpServerTests : IDisposable
         };
 
         _server.HandleMessage(request);
-        capabilities["experimental"] = new JsonObject { ["progress"] = false };
+        capabilities["experimental"]!["progress"] = false;
         var copy = _server.ClientCapabilitiesForTests!;
         copy["experimental"]!["progress"] = false;
 
         Assert.True(_server.ClientCapabilitiesForTests!["experimental"]!["progress"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public void ErrorEnvelope_ClonesExtraDataWithoutSerializeParseRoundTrip_Issue3055()
+    {
+        var details = new JsonObject
+        {
+            ["ok"] = true,
+        };
+        var extra = new JsonObject
+        {
+            ["details"] = details,
+            ["category"] = "shadow",
+        };
+
+        var data = McpErrorEnvelope.BuildData(
+            "custom_category",
+            "custom suggestion",
+            retrySafe: true,
+            extra);
+        details["ok"] = false;
+
+        Assert.Equal("custom_category", data["category"]!.GetValue<string>());
+        Assert.True(data["details"]!["ok"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public void Initialize_CapsClientRootsForSessionStatus_Issue3076()
+    {
+        var longRoot = "file:///" + new string('r', McpServer.MaxClientRootUriChars + 50);
+        var roots = new JsonArray();
+        for (var i = 0; i < McpServer.MaxClientRootCount + 3; i++)
+        {
+            roots.Add(new JsonObject
+            {
+                ["uri"] = i == 0 ? longRoot : $"file:///workspace/{i}",
+            });
+        }
+
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "initialize",
+            ["params"] = new JsonObject
+            {
+                ["rootUri"] = "file:///workspace",
+                ["roots"] = roots,
+            },
+        };
+        _server.HandleMessage(request);
+
+        Assert.Equal(McpServer.MaxClientRootCount + 4, _server.ClientRootsForTests.Length);
+        Assert.Contains(longRoot, _server.ClientRootsForTests);
+
+        var status = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
+        var response = _server.HandleMessage(status)!;
+        var session = response["result"]!["structuredContent"]!["mcp_session"]!;
+
+        Assert.True(session["roots_truncated"]!.GetValue<bool>());
+        Assert.Equal(McpServer.MaxClientRootCount + 4, session["root_count"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxClientRootCount, session["root_limit"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxClientRootUriChars, session["root_uri_length_limit"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxClientRootCount, session["roots"]!.AsArray().Count);
+        Assert.DoesNotContain(longRoot, response.ToJsonString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RefreshClientRoots_CapsSessionStatusDiagnostics_Issue3076()
+    {
+        var longRoot = "file:///" + new string('r', McpServer.MaxClientRootUriChars + 50);
+        var advertisedRoots = new JsonArray();
+        for (var i = 0; i < McpServer.MaxClientRootCount + 3; i++)
+        {
+            advertisedRoots.Add(new JsonObject
+            {
+                ["uri"] = i == 0 ? longRoot : $"file:///tmp/cdidx-not-this-workspace/{i}",
+            });
+        }
+
+        _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"capabilities":{"roots":{}}}}""")!);
+        _server.ClientRequestHandlerForTests = (method, _) =>
+        {
+            Assert.Equal("roots/list", method);
+            return new JsonObject { ["roots"] = advertisedRoots.DeepClone() };
+        };
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"index","arguments":{"path":"."}}}""")!;
+        var indexResponse = _server.HandleMessage(request)!;
+
+        Assert.True(indexResponse["result"]!["isError"]!.GetValue<bool>());
+        Assert.Equal(McpServer.MaxClientRootCount + 3, _server.ClientRootsForTests.Length);
+        Assert.Contains(longRoot, _server.ClientRootsForTests);
+
+        var status = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
+        var response = _server.HandleMessage(status)!;
+        var session = response["result"]!["structuredContent"]!["mcp_session"]!;
+
+        Assert.True(session["roots_truncated"]!.GetValue<bool>());
+        Assert.Equal(McpServer.MaxClientRootCount + 3, session["root_count"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxClientRootCount, session["roots"]!.AsArray().Count);
+        Assert.DoesNotContain(longRoot, response.ToJsonString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Initialize_CapsClientCapabilitiesByteSizeForSessionStatus_Issue3225()
+    {
+        var largeValue = new string('c', McpServer.MaxClientCapabilitiesJsonBytes + 100);
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "initialize",
+            ["params"] = new JsonObject
+            {
+                ["capabilities"] = new JsonObject
+                {
+                    ["roots"] = new JsonObject(),
+                    ["sampling"] = new JsonObject(),
+                    ["experimental"] = new JsonObject
+                    {
+                        ["large"] = largeValue,
+                    },
+                },
+            },
+        };
+        _server.HandleMessage(request);
+
+        Assert.Empty(_server.ClientCapabilitiesForTests!.AsObject());
+        Assert.True(_server.ClientSupportsRootsForTests);
+        Assert.True(_server.ClientSupportsSamplingForTests);
+
+        var status = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
+        var response = _server.HandleMessage(status)!;
+        var session = response["result"]!["structuredContent"]!["mcp_session"]!;
+
+        Assert.True(session["client_capabilities_truncated"]!.GetValue<bool>());
+        Assert.Equal("byte_limit", session["client_capabilities_truncation_reason"]!.GetValue<string>());
+        Assert.True(session["client_capabilities_serialized_bytes"]!.GetValue<int>() > McpServer.MaxClientCapabilitiesJsonBytes);
+        Assert.Equal(McpServer.MaxClientCapabilitiesJsonBytes, session["client_capabilities_byte_limit"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxClientCapabilitiesDepth, session["client_capabilities_depth_limit"]!.GetValue<int>());
+        Assert.Empty(session["client_capabilities"]!.AsObject());
+        Assert.DoesNotContain(largeValue, response.ToJsonString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Initialize_CapsClientCapabilitiesDepthForSessionStatus_Issue3225()
+    {
+        var capabilities = new JsonObject();
+        capabilities["roots"] = new JsonObject();
+        capabilities["sampling"] = new JsonObject();
+        var current = capabilities;
+        for (var i = 0; i < McpServer.MaxClientCapabilitiesDepth + 4; i++)
+        {
+            var next = new JsonObject();
+            current[$"level{i}"] = next;
+            current = next;
+        }
+
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "initialize",
+            ["params"] = new JsonObject
+            {
+                ["capabilities"] = capabilities,
+            },
+        };
+        _server.HandleMessage(request);
+
+        Assert.Empty(_server.ClientCapabilitiesForTests!.AsObject());
+        Assert.True(_server.ClientSupportsRootsForTests);
+        Assert.True(_server.ClientSupportsSamplingForTests);
+
+        var status = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
+        var response = _server.HandleMessage(status)!;
+        var session = response["result"]!["structuredContent"]!["mcp_session"]!;
+
+        Assert.True(session["client_capabilities_truncated"]!.GetValue<bool>());
+        Assert.Equal("depth_limit", session["client_capabilities_truncation_reason"]!.GetValue<string>());
+        Assert.Equal(McpServer.MaxClientCapabilitiesJsonBytes, session["client_capabilities_byte_limit"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxClientCapabilitiesDepth, session["client_capabilities_depth_limit"]!.GetValue<int>());
+        Assert.Empty(session["client_capabilities"]!.AsObject());
     }
 
     [Fact]
@@ -6429,6 +6616,42 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ClientResponsePayload_RejectsOversizedResultBeforeClone_Issue3098()
+    {
+        var payload = new JsonObject
+        {
+            ["value"] = new string('x', McpServer.MaxClientResponseJsonBytes + 1),
+        };
+
+        var withinLimit = _server.TryCloneClientResponsePayloadForTests(payload, out var clone, out var bytesWritten);
+
+        Assert.False(withinLimit);
+        Assert.Null(clone);
+        Assert.True(bytesWritten > McpServer.MaxClientResponseJsonBytes);
+        Assert.True(bytesWritten < McpServer.MaxClientResponseJsonBytes + 100);
+    }
+
+    [Fact]
+    public void ClientResponsePayload_RejectsOversizedErrorBeforeMessageMaterialization_Issue3098()
+    {
+        var oversized = new string('e', McpServer.MaxClientResponseJsonBytes + 1);
+        var error = new JsonObject
+        {
+            ["code"] = -32000,
+            ["message"] = oversized,
+        };
+
+        var withinLimit = _server.TrySerializeClientResponseErrorForTests(error, out var serialized, out var bytesWritten);
+        var log = McpServer.BuildClientResponseTooLargeLog("error", bytesWritten);
+
+        Assert.False(withinLimit);
+        Assert.Null(serialized);
+        Assert.True(bytesWritten > McpServer.MaxClientResponseJsonBytes);
+        Assert.True(bytesWritten < McpServer.MaxClientResponseJsonBytes + 100);
+        Assert.DoesNotContain(oversized, log, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ResponseLimitSerializer_ReturnsCapturedJsonWhenWithinLimit_Issue2860()
     {
         var payload = new JsonObject
@@ -8784,10 +9007,10 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
-    public void SanitizeArgs_TruncatesArgumentKeysForAuditAndTelemetry_Issue3117()
+    public void SanitizeArgs_TruncatesArgumentKeysForAuditAndTelemetry_Issue3117_Issue3105()
     {
-        var argumentName = new string('k', McpBoundedText.MaxDiagnosticDisplayChars + 1);
-        var display = McpBoundedText.ForDisplay(argumentName);
+        var argumentName = new string('k', AuditLogSink.MaxAuditArgumentKeyChars + 1);
+        var display = McpBoundedText.ForDisplay(argumentName, AuditLogSink.MaxAuditArgumentKeyChars);
         var args = new JsonObject
         {
             [argumentName] = "value",
@@ -8806,10 +9029,10 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
-    public void SanitizeArgs_TruncatesArgumentKeysInValuesEcho_Issue3117()
+    public void SanitizeArgs_TruncatesArgumentKeysInValuesEcho_Issue3117_Issue3105()
     {
-        var argumentName = new string('k', McpBoundedText.MaxDiagnosticDisplayChars + 25);
-        var display = McpBoundedText.ForDisplay(argumentName);
+        var argumentName = new string('k', AuditLogSink.MaxAuditArgumentKeyChars + 25);
+        var display = McpBoundedText.ForDisplay(argumentName, AuditLogSink.MaxAuditArgumentKeyChars);
         var args = new JsonObject
         {
             [argumentName] = "value",
@@ -8827,9 +9050,9 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
-    public void SanitizeArgs_DisambiguatesCollidingTruncatedKeys_Issue3117()
+    public void SanitizeArgs_DisambiguatesCollidingTruncatedKeys_Issue3117_Issue3105()
     {
-        var sharedPrefix = new string('c', McpBoundedText.MaxDiagnosticDisplayChars + 25);
+        var sharedPrefix = new string('c', AuditLogSink.MaxAuditArgumentKeyChars + 25);
         var firstArgumentName = sharedPrefix + "a";
         var secondArgumentName = sharedPrefix + "b";
         var args = new JsonObject
@@ -11887,6 +12110,51 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void SuggestImprovement_WhenSamplingClientResponseJsonIsTooLarge_IgnoresSampledMetadata_Issue3098()
+    {
+        _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"capabilities":{"sampling":{}}}}""")!);
+        _server.ClientRequestHandlerForTests = (method, _) =>
+        {
+            Assert.Equal("sampling/createMessage", method);
+            return new JsonObject
+            {
+                ["content"] = new JsonObject
+                {
+                    ["type"] = "text",
+                    ["text"] = new string('A', McpServer.MaxClientResponseJsonBytes + 1),
+                },
+            };
+        };
+        var uniqueDesc = $"Oversized sampling client response regression {Guid.NewGuid():N}";
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "suggest_improvement",
+                ["arguments"] = new JsonObject
+                {
+                    ["category"] = "other",
+                    ["description"] = uniqueDesc,
+                }
+            }
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal("recorded", structured["status"]!.GetValue<string>());
+        Assert.Null(structured["sampled_title"]);
+        var stored = new SuggestionStore(Path.GetDirectoryName(_dbPath)!, Path.GetFileNameWithoutExtension(_dbPath)).LoadAll()
+            .Single(s => s.Description == uniqueDesc);
+        Assert.Null(stored.SampledTitle);
+        Assert.Null(stored.SampledTags);
+    }
+
+    [Fact]
     public void SuggestImprovement_WhenSamplingResponseJsonIsTooDeep_IgnoresSampledMetadata()
     {
         _server.HandleMessage(JsonNode.Parse(
@@ -11926,83 +12194,6 @@ public class McpServerTests : IDisposable
         var structured = response["result"]!["structuredContent"]!;
         Assert.Equal("recorded", structured["status"]!.GetValue<string>());
         Assert.Null(structured["sampled_title"]);
-        var stored = new SuggestionStore(Path.GetDirectoryName(_dbPath)!, Path.GetFileNameWithoutExtension(_dbPath)).LoadAll()
-            .Single(s => s.Description == uniqueDesc);
-        Assert.Null(stored.SampledTitle);
-        Assert.Null(stored.SampledTags);
-    }
-
-    [Fact]
-    public async Task RunAsync_SamplingClientResultOverRetainedLimit_IgnoresOversizedPayload_Issue3098()
-    {
-        using var env = EnvironmentVariableScope.Capture("CDIDX_MCP_RESPONSE_MAX_BYTES");
-        env.Set("CDIDX_MCP_RESPONSE_MAX_BYTES", "4096");
-        using var server = new McpServer(_dbPath, "1.0", dbPathExplicit: true);
-        server.HandleMessage(JsonNode.Parse(
-            """{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"capabilities":{"sampling":{}}}}""")!);
-        var uniqueDesc = $"Oversized out-of-band result regression {Guid.NewGuid():N}";
-        var request = BuildSuggestImprovementRequest(uniqueDesc);
-        var transport = new ClientResponseTransport(request.ToJsonString(), id => new JsonObject
-        {
-            ["jsonrpc"] = "2.0",
-            ["id"] = id,
-            ["result"] = new JsonObject
-            {
-                ["content"] = new JsonObject
-                {
-                    ["type"] = "text",
-                    ["text"] = $$"""{"title":"Should not be retained","tags":["security"],"padding":"{{new string('r', 5000)}}"}""",
-                },
-            },
-        });
-
-        await server.RunAsync(transport, CancellationToken.None);
-
-        var response = JsonNode.Parse(transport.FinalResponse!)!;
-        var structured = response["result"]!["structuredContent"]!;
-        Assert.Equal("recorded", structured["status"]!.GetValue<string>());
-        Assert.Null(structured["sampled_title"]);
-        Assert.Contains(transport.WrittenFrames, frame =>
-            frame.Contains("\"method\":\"sampling/createMessage\"", StringComparison.Ordinal));
-        var stored = new SuggestionStore(Path.GetDirectoryName(_dbPath)!, Path.GetFileNameWithoutExtension(_dbPath)).LoadAll()
-            .Single(s => s.Description == uniqueDesc);
-        Assert.Null(stored.SampledTitle);
-        Assert.Null(stored.SampledTags);
-    }
-
-    [Fact]
-    public async Task RunAsync_SamplingClientErrorOverRetainedLimit_IgnoresOversizedPayload_Issue3098()
-    {
-        using var env = EnvironmentVariableScope.Capture("CDIDX_MCP_RESPONSE_MAX_BYTES");
-        env.Set("CDIDX_MCP_RESPONSE_MAX_BYTES", "4096");
-        using var server = new McpServer(_dbPath, "1.0", dbPathExplicit: true);
-        server.HandleMessage(JsonNode.Parse(
-            """{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"capabilities":{"sampling":{}}}}""")!);
-        var uniqueDesc = $"Oversized out-of-band error regression {Guid.NewGuid():N}";
-        var request = BuildSuggestImprovementRequest(uniqueDesc);
-        var transport = new ClientResponseTransport(request.ToJsonString(), id => new JsonObject
-        {
-            ["jsonrpc"] = "2.0",
-            ["id"] = id,
-            ["error"] = new JsonObject
-            {
-                ["code"] = -32000,
-                ["message"] = "client rejected sampling",
-                ["data"] = new JsonObject
-                {
-                    ["padding"] = new string('e', 5000),
-                },
-            },
-        });
-
-        await server.RunAsync(transport, CancellationToken.None);
-
-        var response = JsonNode.Parse(transport.FinalResponse!)!;
-        var structured = response["result"]!["structuredContent"]!;
-        Assert.Equal("recorded", structured["status"]!.GetValue<string>());
-        Assert.Null(structured["sampled_title"]);
-        Assert.DoesNotContain(transport.WrittenFrames, frame =>
-            frame.Contains(new string('e', 5000), StringComparison.Ordinal));
         var stored = new SuggestionStore(Path.GetDirectoryName(_dbPath)!, Path.GetFileNameWithoutExtension(_dbPath)).LoadAll()
             .Single(s => s.Description == uniqueDesc);
         Assert.Null(stored.SampledTitle);
@@ -13003,29 +13194,6 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
-    public void ErrorEnvelope_ClonesExtraDataWithoutSerializeParseRoundTrip_Issue3055()
-    {
-        var extra = new JsonObject
-        {
-            ["details"] = new JsonObject
-            {
-                ["safe"] = true,
-            },
-            ["category"] = "override",
-        };
-
-        var data = McpErrorEnvelope.BuildData(
-            McpErrorEnvelope.CategoryInvalidArgument,
-            "Fix the request.",
-            retrySafe: false,
-            extra);
-        extra["details"]!["safe"] = false;
-
-        Assert.Equal(McpErrorEnvelope.CategoryInvalidArgument, data["category"]!.GetValue<string>());
-        Assert.True(data["details"]!["safe"]!.GetValue<bool>());
-    }
-
-    [Fact]
     public void ErrorResponse_InvalidRequest_NotAnObject_CarriesEnvelope()
     {
         // #1581: every JSON-RPC error response must carry `data.{category, suggestion, retry_safe}`.
@@ -13587,63 +13755,6 @@ public class McpServerTests : IDisposable
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
-    private sealed class ClientResponseTransport : IMcpTransport
-    {
-        private readonly Queue<string?> _frames = new();
-        private readonly SemaphoreSlim _availableFrames = new(0, 1);
-        private readonly Func<string, JsonObject> _responseFactory;
-
-        public ClientResponseTransport(string request, Func<string, JsonObject> responseFactory)
-        {
-            _responseFactory = responseFactory;
-            EnqueueFrame(request);
-        }
-
-        public string Name => "stdio";
-        public string Endpoint => "memory://test";
-        public List<string> WrittenFrames { get; } = [];
-        public string? FinalResponse { get; private set; }
-
-        public async Task<string?> ReadFrameAsync(CancellationToken cancellationToken)
-        {
-            await _availableFrames.WaitAsync(cancellationToken).ConfigureAwait(false);
-            lock (_frames)
-            {
-                return _frames.Dequeue();
-            }
-        }
-
-        public Task WriteFrameAsync(string? frame, CancellationToken cancellationToken)
-        {
-            if (frame is null)
-                return Task.CompletedTask;
-
-            WrittenFrames.Add(frame);
-            var node = JsonNode.Parse(frame)!;
-            if (node["method"] is not null && node["id"] is JsonValue idNode && idNode.TryGetValue<string>(out var id))
-            {
-                EnqueueFrame(_responseFactory(id).ToJsonString());
-            }
-            else if (node["method"] is null)
-            {
-                FinalResponse = frame;
-                EnqueueFrame(null);
-            }
-            return Task.CompletedTask;
-        }
-
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
-
-        private void EnqueueFrame(string? frame)
-        {
-            lock (_frames)
-            {
-                _frames.Enqueue(frame);
-            }
-            _availableFrames.Release();
-        }
-    }
-
     // The shutdown helper is the heart of the #1573 fix: cancelling the CTS through Console.CancelKeyPress
     // (and PosixSignal.SIGTERM on Unix) must trip the loop. This test exercises the cross-platform
     // Ctrl+C path by raising the .NET CancelKeyPress event directly via reflection — the test cannot
@@ -13682,23 +13793,6 @@ public class McpServerTests : IDisposable
 
     private static JsonObject BuildRequiredPathArguments(string toolName, string pathValue)
         => BuildRequiredPathArguments(toolName, JsonValue.Create(pathValue)!);
-
-    private static JsonObject BuildSuggestImprovementRequest(string description)
-        => new()
-        {
-            ["jsonrpc"] = "2.0",
-            ["id"] = 1,
-            ["method"] = "tools/call",
-            ["params"] = new JsonObject
-            {
-                ["name"] = "suggest_improvement",
-                ["arguments"] = new JsonObject
-                {
-                    ["category"] = "other",
-                    ["description"] = description,
-                },
-            },
-        };
 
     private static JsonObject BuildRequiredPathArguments(string toolName, JsonNode pathValue)
     {

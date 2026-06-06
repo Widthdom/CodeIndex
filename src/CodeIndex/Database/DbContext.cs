@@ -235,8 +235,9 @@ public class DbContext : IDisposable
         }
     }
 
-    public DbContext(string dbPath)
+    public DbContext(string dbPath, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         _schemaCacheKey = TryCreateSchemaCacheKey(dbPath);
 
         // Explicit URI form (file:///abs/path?immutable=1 etc.) — the user has opted into
@@ -262,10 +263,11 @@ public class DbContext : IDisposable
                 try
                 {
                     _connection = new SqliteConnection(DbPathResolver.BuildSqliteConnectionString(dbPath, SqliteOpenMode.ReadOnly));
+                    cancellationToken.ThrowIfCancellationRequested();
                     _connection.Open();
                     Execute("PRAGMA busy_timeout=5000");
                     ApplyConnectionPerformancePragmas();
-                    RegisterConnectionFunctionsWithRetry(_connection);
+                    RegisterConnectionFunctionsWithRetry(_connection, cancellationToken: cancellationToken);
                     _isReadOnly = true;
                     WarnIfBatchInProgress();
                     return;
@@ -297,11 +299,11 @@ public class DbContext : IDisposable
             _connection = OpenSqliteConnectionWithRetry(
                 () => new SqliteConnection(builder.ConnectionString),
                 static connection => connection.Open(),
-                static milliseconds => System.Threading.Thread.Sleep(milliseconds),
-                dbPath: dbPath);
+                dbPath: dbPath,
+                cancellationToken: cancellationToken);
             Execute("PRAGMA busy_timeout=5000");
             ApplyConnectionPerformancePragmas();
-            RegisterConnectionFunctionsWithRetry(_connection);
+            RegisterConnectionFunctionsWithRetry(_connection, cancellationToken: cancellationToken);
             EnsureWritableUserVersionSupported(dbPath);
             ConfigureAutoVacuumForEmptyDatabase();
             Execute($"PRAGMA application_id={ApplicationId}");
@@ -329,7 +331,7 @@ public class DbContext : IDisposable
             // immutable=1 を付けないと SQLite は -shm/-wal を触ろうとして CANTOPEN で落ちることがある。
             _connection?.Dispose();
             _walCheckpointAttempted = true;
-            _walCheckpointSucceeded = TryCheckpointWalBeforeReadOnlyFallback(dbPath);
+            _walCheckpointSucceeded = TryCheckpointWalBeforeReadOnlyFallback(dbPath, cancellationToken);
             if (_walCheckpointSucceeded)
             {
                 try
@@ -337,11 +339,11 @@ public class DbContext : IDisposable
                     _connection = OpenSqliteConnectionWithRetry(
                         () => new SqliteConnection(builder.ConnectionString),
                         static connection => connection.Open(),
-                        static milliseconds => System.Threading.Thread.Sleep(milliseconds),
-                        dbPath: dbPath);
+                        dbPath: dbPath,
+                        cancellationToken: cancellationToken);
                     Execute("PRAGMA busy_timeout=5000");
                     ApplyConnectionPerformancePragmas();
-                    RegisterConnectionFunctionsWithRetry(_connection);
+                    RegisterConnectionFunctionsWithRetry(_connection, cancellationToken: cancellationToken);
                     EnsureWritableUserVersionSupported(dbPath);
                     ConfigureAutoVacuumForEmptyDatabase();
                     Execute($"PRAGMA application_id={ApplicationId}");
@@ -359,7 +361,7 @@ public class DbContext : IDisposable
                 {
                     _connection?.Dispose();
                     _readOnlyFallback = true;
-                    OpenReadOnlyFallback(dbPath);
+                    OpenReadOnlyFallback(dbPath, cancellationToken);
                 }
 
                 if (!_isReadOnly)
@@ -371,7 +373,7 @@ public class DbContext : IDisposable
             try
             {
                 _readOnlyFallback = true;
-                OpenReadOnlyFallback(dbPath);
+                OpenReadOnlyFallback(dbPath, cancellationToken);
             }
             catch
             {
@@ -393,17 +395,18 @@ public class DbContext : IDisposable
         _suppressWriteWorkTracking = false;
     }
 
-    private void OpenReadOnlyFallback(string dbPath)
+    private void OpenReadOnlyFallback(string dbPath, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         _connection = OpenReadOnly(dbPath);
         Execute("PRAGMA busy_timeout=5000");
         ApplyConnectionPerformancePragmas();
-        RegisterConnectionFunctionsWithRetry(_connection);
+        RegisterConnectionFunctionsWithRetry(_connection, cancellationToken: cancellationToken);
         _isReadOnly = true;
         WarnIfBatchInProgress();
     }
 
-    private static bool TryCheckpointWalBeforeReadOnlyFallback(string dbPath)
+    private static bool TryCheckpointWalBeforeReadOnlyFallback(string dbPath, CancellationToken cancellationToken)
     {
         try
         {
@@ -415,9 +418,9 @@ public class DbContext : IDisposable
             using var connection = OpenSqliteConnectionWithRetry(
                 () => new SqliteConnection(builder.ConnectionString),
                 static connection => connection.Open(),
-                static milliseconds => System.Threading.Thread.Sleep(milliseconds),
                 maxOpenAttempts: 1,
-                dbPath: dbPath);
+                dbPath: dbPath,
+                cancellationToken: cancellationToken);
             using var cmd = connection.CreateCommand();
             cmd.CommandText = "PRAGMA wal_checkpoint(TRUNCATE)";
             cmd.ExecuteNonQuery();
@@ -682,15 +685,18 @@ public class DbContext : IDisposable
         Action<SqliteConnection> openConnection,
         Action<int>? sleep = null,
         int maxOpenAttempts = 5,
-        string? dbPath = null)
+        string? dbPath = null,
+        CancellationToken cancellationToken = default)
     {
         if (maxOpenAttempts <= 0)
             throw new ArgumentOutOfRangeException(nameof(maxOpenAttempts), maxOpenAttempts, "Must be at least 1.");
 
+        cancellationToken.ThrowIfCancellationRequested();
         SqliteConnection? connection = null;
         SqliteException? lastBusyError = null;
         for (var attempt = 1; attempt <= maxOpenAttempts; attempt++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             connection?.Dispose();
             connection = createConnection();
             try
@@ -707,7 +713,17 @@ public class DbContext : IDisposable
                 // #1580: 末尾の throw を必ず通すために busy エラーを全試行で捕捉する。
                 lastBusyError = ex;
                 if (attempt < maxOpenAttempts)
-                    sleep?.Invoke(50 * attempt);
+                {
+                    try
+                    {
+                        SleepBeforeRetry(50 * attempt, sleep, cancellationToken);
+                    }
+                    catch
+                    {
+                        connection.Dispose();
+                        throw;
+                    }
+                }
             }
             catch (Exception)
             {
@@ -728,6 +744,26 @@ public class DbContext : IDisposable
             path: dbPath,
             hint: "Another process holds a write lock on the database. If another cdidx index is running, wait for it to finish; otherwise check for other SQLite clients (e.g. backup tools, DB browsers) accessing the file, then retry.",
             innerException: lastBusyError);
+    }
+
+    private static void SleepBeforeRetry(int milliseconds, Action<int>? sleep, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (sleep != null)
+        {
+            sleep(milliseconds);
+            cancellationToken.ThrowIfCancellationRequested();
+            return;
+        }
+
+        if (!cancellationToken.CanBeCanceled)
+        {
+            System.Threading.Thread.Sleep(milliseconds);
+            return;
+        }
+
+        if (cancellationToken.WaitHandle.WaitOne(milliseconds))
+            cancellationToken.ThrowIfCancellationRequested();
     }
 
     // Best-effort: extract the filesystem path from a SQLite URI so -wal checks can run.
@@ -1222,25 +1258,29 @@ public class DbContext : IDisposable
         }
     }
 
-    private static void RegisterConnectionFunctionsWithRetry(
+    internal static void RegisterConnectionFunctionsWithRetry(
         SqliteConnection connection,
         Action<int>? sleep = null,
-        int maxAttempts = 5)
+        int maxAttempts = 5,
+        CancellationToken cancellationToken = default,
+        Action<SqliteConnection>? registerConnectionFunctions = null)
     {
         if (maxAttempts <= 0)
             throw new ArgumentOutOfRangeException(nameof(maxAttempts), maxAttempts, "Must be at least 1.");
 
-        sleep ??= static milliseconds => System.Threading.Thread.Sleep(milliseconds);
+        cancellationToken.ThrowIfCancellationRequested();
+        registerConnectionFunctions ??= RegisterConnectionFunctions;
         for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             try
             {
-                RegisterConnectionFunctions(connection);
+                registerConnectionFunctions(connection);
                 return;
             }
             catch (SqliteException ex) when (IsTransientBusyError(ex) && attempt < maxAttempts)
             {
-                sleep(50 * attempt);
+                SleepBeforeRetry(50 * attempt, sleep, cancellationToken);
             }
         }
     }

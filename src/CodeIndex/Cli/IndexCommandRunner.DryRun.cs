@@ -137,17 +137,22 @@ public static partial class IndexCommandRunner
             // Git更新モード: コミットまたはref間の変更ファイル。
             var changedFiles = new HashSet<string>(StringComparer.Ordinal);
             var relevantIgnoreFileChanged = false;
-            var repoRoot = GitHelper.TryGetRepositoryRoot(projectPath) ?? Path.GetFullPath(projectPath);
+            var repoRoot = GitHelper.TryGetRepositoryRoot(projectPath, cancellationToken) ?? Path.GetFullPath(projectPath);
             try
             {
                 foreach (var commit in options.Commits)
                 {
-                    var changed = GitHelper.GetChangedFilesFromCommit(projectPath, commit);
+                    var changed = GitHelper.GetChangedFilesFromCommit(projectPath, commit, cancellationToken);
                     var normalized = NormalizeCommitFileTargets(projectPath, repoRoot, changed, out var commitTouchedRelevantIgnoreFile);
                     relevantIgnoreFileChanged |= commitTouchedRelevantIgnoreFile;
                     foreach (var path in normalized)
                         changedFiles.Add(path);
                 }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                exitCode = WriteDryRunInterrupted(options, jsonOptions);
+                return false;
             }
             catch (Exception ex)
             {
@@ -164,11 +169,16 @@ public static partial class IndexCommandRunner
             {
                 try
                 {
-                    var changed = GitHelper.GetChangedFilesBetweenRefs(projectPath, options.ChangedBetweenRefs[0], options.ChangedBetweenRefs[1]);
+                    var changed = GitHelper.GetChangedFilesBetweenRefs(projectPath, options.ChangedBetweenRefs[0], options.ChangedBetweenRefs[1], cancellationToken);
                     var normalized = NormalizeCommitFileTargets(projectPath, repoRoot, changed, out var rangeTouchedRelevantIgnoreFile);
                     relevantIgnoreFileChanged |= rangeTouchedRelevantIgnoreFile;
                     foreach (var path in normalized)
                         changedFiles.Add(path);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    exitCode = WriteDryRunInterrupted(options, jsonOptions);
+                    return false;
                 }
                 catch { /* ignore git errors in dry-run */ }
             }

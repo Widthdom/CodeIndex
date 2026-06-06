@@ -129,8 +129,17 @@ public static partial class IndexCommandRunner
         if (options.OptimizeOnly)
             return RunOptimizeFtsForDb(resolvedDbPath, options.Json, jsonOptions, options.ProjectPath);
 
-        var ignoreCase = GitHelper.ResolveIgnoreCase(options.ProjectPath);
-        var ignoreRuleRoot = GitHelper.TryGetRepositoryRoot(options.ProjectPath) ?? Path.GetFullPath(options.ProjectPath!);
+        bool ignoreCase;
+        string ignoreRuleRoot;
+        try
+        {
+            ignoreCase = GitHelper.ResolveIgnoreCase(options.ProjectPath, indexCancellation.Token);
+            ignoreRuleRoot = GitHelper.TryGetRepositoryRoot(options.ProjectPath, indexCancellation.Token) ?? Path.GetFullPath(options.ProjectPath!);
+        }
+        catch (OperationCanceledException) when (indexCancellation.IsCancellationRequested)
+        {
+            return WriteInterruptedResult(options.Json, jsonOptions, filesProcessed: 0, filesTotal: null);
+        }
 
         // --dry-run: scan files but do not write to database / --dry-run: ファイルスキャンのみでDBに書き込まない
         if (options.DryRun)
@@ -184,7 +193,7 @@ public static partial class IndexCommandRunner
 
             using (indexLock)
             {
-                using var db = new DbContext(dbPath);
+                using var db = new DbContext(dbPath, indexCancellation.Token);
                 if (db.ReadOnlyFallback)
                 {
                     return WriteCommandError(
@@ -233,7 +242,7 @@ public static partial class IndexCommandRunner
                 // `--rebuild` が DB を消す前に取り出す。incremental 経路で HEAD 差分を検知し、`status`
                 // (no `--check`) でも worktree の HEAD 切替検出に利用する。
                 var priorIndexedHeadCommit = db.GetMetaString(DbContext.IndexedHeadCommitMetaKey);
-                var currentHeadCommit = GitHelper.TryGetHeadCommit(options.ProjectPath);
+                var currentHeadCommit = GitHelper.TryGetHeadCommit(options.ProjectPath, indexCancellation.Token);
 
                 // Don't demote readiness yet. A transient usage error in update-mode preflight
                 // (bad --commits hash, git unavailable, etc.) would permanently downgrade a healthy
@@ -649,12 +658,12 @@ public static partial class IndexCommandRunner
     // the index data itself is valid; the metadata stamp is best-effort. Issue #1509.
     // #1509: 成功 index 末尾で HEAD / branch / timestamp を codeindex_meta に保存する。
     // git 不在時は NULL stamp、stamp 自体の例外は warn せず無視（index 本体は成功）。
-    private static void StampIndexedHeadMetadata(DbWriter writer, string projectRoot)
+    private static void StampIndexedHeadMetadata(DbWriter writer, string projectRoot, CancellationToken cancellationToken)
     {
         try
         {
-            var headSha = GitHelper.TryGetHeadCommit(projectRoot);
-            var headBranch = GitHelper.TryGetHeadBranch(projectRoot);
+            var headSha = GitHelper.TryGetHeadCommit(projectRoot, cancellationToken);
+            var headBranch = GitHelper.TryGetHeadBranch(projectRoot, cancellationToken);
             var timestamp = headSha != null
                 ? DateTime.UtcNow.ToString("o", System.Globalization.CultureInfo.InvariantCulture)
                 : null;
@@ -662,12 +671,16 @@ public static partial class IndexCommandRunner
             writer.SetMeta(DbContext.IndexedHeadBranchMetaKey, headBranch);
             writer.SetMeta(DbContext.IndexedHeadTimestampMetaKey, timestamp);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
         catch
         {
             // Best-effort metadata only; never fail an otherwise-successful index run.
             // best-effort であり、stamp の失敗で index 全体を失敗扱いにしない。
         }
-        StampWorkspacePathCaseSensitivity(writer, projectRoot);
+        StampWorkspacePathCaseSensitivity(writer, projectRoot, cancellationToken);
     }
 
     private static void StampCommitScopedFreshHeadMetadata(DbWriter writer, IndexCommandOptions options, string projectRoot, string? currentHeadCommit)
@@ -713,14 +726,18 @@ public static partial class IndexCommandRunner
     // an unwritable git config / temp probe never blocks an otherwise-successful index.
     // #1546: workspace FS の大小区別を実プローブして codeindex_meta に保存する。
     // probe 失敗時は黙って null stamp にして index 本体は成功扱いのままとする。
-    private static void StampWorkspacePathCaseSensitivity(DbWriter writer, string projectRoot)
+    private static void StampWorkspacePathCaseSensitivity(DbWriter writer, string projectRoot, CancellationToken cancellationToken)
     {
         try
         {
-            var ignoreCase = GitHelper.ResolveIgnoreCase(projectRoot);
+            var ignoreCase = GitHelper.ResolveIgnoreCase(projectRoot, cancellationToken);
             PathCasing.SeedFromWorkspace(projectRoot, ignoreCase);
             var caseSensitive = (!ignoreCase).ToString(System.Globalization.CultureInfo.InvariantCulture);
             writer.SetMeta(DbContext.WorkspacePathCaseSensitiveMetaKey, caseSensitive);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch
         {

@@ -9,6 +9,7 @@ public static partial class IndexCommandRunner
         IndexCommandOptions options,
         string[] spinnerFrames,
         JsonSerializerOptions jsonOptions,
+        CancellationToken cancellationToken,
         out HashSet<string> targetPaths,
         out bool relevantIgnoreFileChanged)
     {
@@ -22,15 +23,19 @@ public static partial class IndexCommandRunner
             {
                 if (!options.Json)
                     spinnerCts = ConsoleUi.StartSpinner("Resolving changed files...", spinnerFrames);
-                var repoRoot = GitHelper.TryGetRepositoryRoot(projectRoot) ?? Path.GetFullPath(projectRoot);
+                var repoRoot = GitHelper.TryGetRepositoryRoot(projectRoot, cancellationToken) ?? Path.GetFullPath(projectRoot);
                 foreach (var commit in options.Commits)
                 {
-                    var changedFiles = GitHelper.GetChangedFilesFromCommit(projectRoot, commit);
+                    var changedFiles = GitHelper.GetChangedFilesFromCommit(projectRoot, commit, cancellationToken);
                     var normalized = NormalizeCommitFileTargets(projectRoot, repoRoot, changedFiles, out var commitTouchedRelevantIgnoreFile);
                     relevantIgnoreFileChanged |= commitTouchedRelevantIgnoreFile;
                     foreach (var f in normalized)
                         targetPaths.Add(f);
                 }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
             }
             catch (Exception ex)
             {
@@ -62,12 +67,16 @@ public static partial class IndexCommandRunner
             {
                 if (!options.Json)
                     spinnerCts = ConsoleUi.StartSpinner("Resolving changed files between refs...", spinnerFrames);
-                var repoRoot = GitHelper.TryGetRepositoryRoot(projectRoot) ?? Path.GetFullPath(projectRoot);
-                var changedFiles = GitHelper.GetChangedFilesBetweenRefs(projectRoot, options.ChangedBetweenRefs[0], options.ChangedBetweenRefs[1]);
+                var repoRoot = GitHelper.TryGetRepositoryRoot(projectRoot, cancellationToken) ?? Path.GetFullPath(projectRoot);
+                var changedFiles = GitHelper.GetChangedFilesBetweenRefs(projectRoot, options.ChangedBetweenRefs[0], options.ChangedBetweenRefs[1], cancellationToken);
                 var normalized = NormalizeCommitFileTargets(projectRoot, repoRoot, changedFiles, out var rangeTouchedRelevantIgnoreFile);
                 relevantIgnoreFileChanged |= rangeTouchedRelevantIgnoreFile;
                 foreach (var f in normalized)
                     targetPaths.Add(f);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
             }
             catch (Exception ex)
             {

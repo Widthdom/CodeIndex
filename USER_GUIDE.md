@@ -403,7 +403,7 @@ be audited whenever the matching help text changes.
 | Status stale-after hint | `24h`, overridden by `--stale-after`, `CDIDX_STALE_AFTER`, or `.cdidxrc.json`; max `30d` | status runner |
 | Color mode | `auto`, overridden by `--color`, `CLICOLOR_FORCE`, `NO_COLOR`, or `CLICOLOR=0` | `ConsoleUi` |
 | ANSI palette | `basic` fallback, auto-upgraded from terminal hints unless overridden | `ConsoleUi` |
-| Report log tail | `200` lines (`--log-lines`), clamped to `2000` | report runner help |
+| Report log tail | `200` lines (`--log-lines`), clamped to `2000`, from at most the 32 newest lifecycle log files | report runner help |
 | Report per-log tail read | `1,048,576` bytes | `ReportCommandRunner` |
 | JSON envelope capture | `10,485,760` characters | `JsonEnvelopeWrapper` |
 | CLI batch line | `1,048,576` characters | `QueryCommandRunner` |
@@ -1166,7 +1166,7 @@ cdidx report --output report.tgz --json
 |---|---|---|
 | `--output <path>` / `-o <path>` | (required) | Destination `.tar.gz`. The directory is created if missing; on POSIX, the archive and tar entries are owner-readable/writable only. |
 | `--db <path>` | `.cdidx/codeindex.db` | Override the database whose schema is summarized. If absent, `schema.txt` records that no DB was found. Schema summaries cap table entries at 64, displayed table names at 96 characters, and row-count scans at 1000 rows per table. |
-| `--log-lines <n>` | `200` | How many trailing lifecycle-log lines to include (`0` disables the tail; values above `2000` are clamped). Each log file contributes from a bounded 1,048,576-byte tail window instead of being loaded fully. |
+| `--log-lines <n>` | `200` | How many trailing lifecycle-log lines to include (`0` disables the tail; values above `2000` are clamped). Report collection considers at most the 32 newest lifecycle log files; each file contributes from a bounded 1,048,576-byte tail window instead of being loaded fully. |
 | `--no-log` | | Skip the lifecycle log entirely. |
 | `--include-args` | | Keep literal `cwd=` and `args=` values in the log tail (opt-in; share only with trusted recipients). |
 | `--json` | | Print a stable summary envelope (`output_path`, `version`, `files`, `schema_tables`, `log_lines_included`, `log_included`, `db_included`, `db_path`) instead of the human-friendly output. |
@@ -2687,7 +2687,7 @@ render できます。
 | Status stale-after hint | `24h`。`--stale-after` / `CDIDX_STALE_AFTER` / `.cdidxrc.json` で上書き、最大 `30d` | status runner |
 | Color mode | `auto`。`--color` / `CLICOLOR_FORCE` / `NO_COLOR` / `CLICOLOR=0` で上書き | `ConsoleUi` |
 | ANSI palette | `basic` fallback。terminal hints で自動昇格、または明示上書き | `ConsoleUi` |
-| Report log tail | `200` lines（`--log-lines`）、最大 `2000` に clamp | report runner help |
+| Report log tail | `200` lines（`--log-lines`）、最大 `2000` に clamp、最新 32 件までの lifecycle log file から収集 | report runner help |
 | Report per-log tail read | `1,048,576` bytes | `ReportCommandRunner` |
 | JSON envelope capture | `10,485,760` 文字 | `JsonEnvelopeWrapper` |
 | CLI batch line | `1,048,576` 文字 | `QueryCommandRunner` |
@@ -3459,7 +3459,7 @@ cdidx report --output report.tgz --json
 |---|---|---|
 | `--output <path>` / `-o <path>` | （必須） | 出力先 `.tar.gz`。親ディレクトリが無ければ作成します。POSIX では archive と tar entry は owner の読み書きのみになります。 |
 | `--db <path>` | `.cdidx/codeindex.db` | スキーマ要約対象の DB を上書きします。存在しなければ `schema.txt` に「DB が見つからなかった」旨が記録されます。スキーマ要約は table entry を 64 件、表示 table 名を 96 文字、行数 scan を table ごとに 1000 行までに制限します。 |
-| `--log-lines <n>` | `200` | ライフサイクルログ末尾を何行含めるか（`0` で末尾を含めません。`2000` を超える値は clamp されます）。各ログファイルは全体を読み込まず、末尾 1,048,576 byte の範囲から収集します。 |
+| `--log-lines <n>` | `200` | ライフサイクルログ末尾を何行含めるか（`0` で末尾を含めません。`2000` を超える値は clamp されます）。report 収集は最新 32 件までの lifecycle log file を対象にし、各ログファイルは全体を読み込まず、末尾 1,048,576 byte の範囲から収集します。 |
 | `--no-log` | | ライフサイクルログを完全に省略します。 |
 | `--include-args` | | ログ末尾の `cwd=` / `args=` 値を伏字化せずそのまま含めます（信頼できる相手にだけ使用してください）。 |
 | `--json` | | 人間向け出力の代わりに、安定したサマリ JSON（`output_path` / `version` / `files` / `schema_tables` / `log_lines_included` / `log_included` / `db_included` / `db_path`）を出力します。 |

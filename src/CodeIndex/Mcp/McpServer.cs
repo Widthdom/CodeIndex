@@ -114,7 +114,14 @@ public partial class McpServer : IDisposable
     private BoundedMcpText? _clientNameDisplay;
     private BoundedMcpText? _clientVersionDisplay;
     private JsonNode? _clientCapabilities;
+    private int? _clientCapabilitiesSerializedBytes;
+    private string? _clientCapabilitiesTruncationReason;
+    private bool _clientSupportsRoots;
+    private bool _clientSupportsSampling;
     private JsonArray _clientRoots = [];
+    private JsonArray _clientRootDiagnostics = [];
+    private int _clientRootCount;
+    private bool _clientRootsTruncated;
     private string _mcpLogLevel = "info";
     // Opaque per-server-instance session id copied into suggestion attribution records (#1873).
     // #1873 の提案 attribution 用に保存する、サーバーインスタンス単位の不透明セッションID。
@@ -165,6 +172,7 @@ public partial class McpServer : IDisposable
     internal const int MaxLineByteLength = 1_048_576;
     internal const int DefaultMaxResponseBytes = 10 * 1024 * 1024;
     internal const int MaxConfiguredResponseBytes = 64 * 1024 * 1024;
+    internal const int MaxClientResponseJsonBytes = 1 * 1024 * 1024;
     internal const int MaxMcpPaginationOffset = 10_000;
     internal const double MinKeepAliveIntervalSeconds = 1.0;
     internal const double MaxKeepAliveIntervalSeconds = 300.0;
@@ -176,6 +184,10 @@ public partial class McpServer : IDisposable
     internal const int MaxBatchRequestCount = 100;
     internal const int MaxRequestIdCharacterCount = 128;
     internal const int MaxRequestIdByteLength = 256;
+    internal const int MaxClientRootCount = 16;
+    internal const int MaxClientRootUriChars = 512;
+    internal const int MaxClientCapabilitiesJsonBytes = 8 * 1024;
+    internal const int MaxClientCapabilitiesDepth = 8;
     // Stdio buffer for the JSON-RPC loop. Sized to fit typical large MCP payloads (e.g. batch_query)
     // in a single read so the StreamReader does not grow from its 1 KB default toward MaxLineCharacterCount.
     // JSON-RPCループのstdioバッファ。大きめのMCPペイロードを1回の読み取りで吸収し、
@@ -979,45 +991,39 @@ public partial class McpServer : IDisposable
 
         if (obj.TryGetPropertyValue("error", out var error) && error is not null)
         {
-            if (!TryCloneClientResponseNodeWithinLimit(error, "error", out var clonedError, out var exception))
-                pending.TrySetException(exception);
+            if (!TrySerializeClientResponseError(error, out var serializedError, out var errorBytes))
+            {
+                DeferFrameLog(BuildClientResponseTooLargeLog("error", errorBytes));
+                pending.TrySetException(new InvalidOperationException(BuildClientResponseTooLargeMessage(errorBytes)));
+            }
             else
-                pending.TrySetException(new InvalidOperationException(clonedError!.ToJsonString(_jsonOptions)));
+            {
+                pending.TrySetException(new InvalidOperationException(serializedError));
+            }
         }
-        else if (obj.TryGetPropertyValue("result", out var result) && result is not null)
+        else if (!TryCloneClientResponsePayload(obj["result"], out var resultClone, out var resultBytes))
         {
-            if (!TryCloneClientResponseNodeWithinLimit(result, "result", out var clonedResult, out var exception))
-                pending.TrySetException(exception);
-            else
-                pending.TrySetResult(clonedResult);
+            DeferFrameLog(BuildClientResponseTooLargeLog("result", resultBytes));
+            pending.TrySetException(new InvalidOperationException(BuildClientResponseTooLargeMessage(resultBytes)));
         }
         else
         {
-            pending.TrySetResult(null);
+            pending.TrySetResult(resultClone);
         }
         return true;
-    }
-
-    private bool TryCloneClientResponseNodeWithinLimit(JsonNode node, string memberName, out JsonNode? clone, out InvalidOperationException exception)
-    {
-        var responseLimit = GetMaxResponseBytes();
-        if (TryMeasureJsonUtf8BytesWithinLimit(node, _jsonOptions, responseLimit, out var responseBytes))
-        {
-            clone = McpJsonNode.Clone(node);
-            exception = null!;
-            return true;
-        }
-
-        clone = null;
-        exception = new InvalidOperationException(
-            $"MCP client response {memberName} exceeded the retained byte limit ({responseBytes} > {responseLimit}).");
-        return false;
     }
 
     private async Task<JsonNode?> SendClientRequestAsync(string method, JsonObject? @params, CancellationToken cancellationToken)
     {
         if (ClientRequestHandlerForTests is { } handler)
-            return handler(method, @params)?.DeepClone();
+        {
+            if (!TryCloneClientResponsePayload(handler(method, @params), out var handlerClone, out var handlerBytes))
+            {
+                DeferFrameLog(BuildClientResponseTooLargeLog("result", handlerBytes));
+                return null;
+            }
+            return handlerClone;
+        }
 
         var writer = _currentOutOfBandFrameWriter.Value;
         if (writer is null || !_canAwaitClientResponses.Value)
@@ -1065,6 +1071,29 @@ public partial class McpServer : IDisposable
             _pendingClientRequests.TryRemove(key, out var _);
         }
     }
+
+    internal bool TryCloneClientResponsePayloadForTests(JsonNode? payload, out JsonNode? clone, out int bytesWritten)
+        => TryCloneClientResponsePayload(payload, out clone, out bytesWritten);
+
+    internal bool TrySerializeClientResponseErrorForTests(JsonNode error, out string? serialized, out int bytesWritten)
+        => TrySerializeClientResponseError(error, out serialized, out bytesWritten);
+
+    private bool TryCloneClientResponsePayload(JsonNode? payload, out JsonNode? clone, out int bytesWritten)
+    {
+        clone = null;
+        bytesWritten = 0;
+        if (payload is null)
+            return true;
+
+        if (!TryMeasureJsonUtf8BytesWithinLimit(payload, _jsonOptions, MaxClientResponseJsonBytes, out bytesWritten))
+            return false;
+
+        clone = McpJsonNode.Clone(payload);
+        return true;
+    }
+
+    private bool TrySerializeClientResponseError(JsonNode error, out string? serialized, out int bytesWritten)
+        => TrySerializeJsonNodeWithinByteLimit(error, _jsonOptions, MaxClientResponseJsonBytes, captureSerialized: true, out serialized, out bytesWritten);
 
     private static string? TryGetMcpTraceParent(JsonNode request)
     {
@@ -1857,17 +1886,21 @@ public partial class McpServer : IDisposable
     private void CaptureClientSession(JsonNode? initializeParams)
     {
         _clientCapabilities = null;
-        _clientRoots = [];
+        _clientCapabilitiesSerializedBytes = null;
+        _clientCapabilitiesTruncationReason = null;
+        _clientSupportsRoots = false;
+        _clientSupportsSampling = false;
+        ResetClientRoots();
         if (initializeParams is not JsonObject obj)
             return;
 
         if (!obj.TryGetPropertyValue("capabilities", out var capabilities))
             obj.TryGetPropertyValue("clientCapabilities", out capabilities);
         if (capabilities is not null)
-            _clientCapabilities = McpJsonNode.Clone(capabilities);
+            CaptureClientCapabilities(capabilities);
 
         if (TryReadStringValue(obj["rootUri"]) is { Length: > 0 } rootUri)
-            _clientRoots.Add(rootUri);
+            CaptureClientRoot(rootUri);
 
         if (obj["roots"] is JsonArray roots)
         {
@@ -1875,9 +1908,97 @@ public partial class McpServer : IDisposable
             {
                 var uri = TryReadStringValue(root?["uri"]) ?? TryReadStringValue(root);
                 if (!string.IsNullOrWhiteSpace(uri))
-                    _clientRoots.Add(uri);
+                    CaptureClientRoot(uri);
             }
         }
+    }
+
+    private void CaptureClientCapabilities(JsonNode capabilities)
+    {
+        CaptureClientCapabilityFlags(capabilities);
+        if (!TryMeasureJsonUtf8BytesWithinLimit(capabilities, _jsonOptions, MaxClientCapabilitiesJsonBytes, out var serializedBytes))
+        {
+            _clientCapabilitiesSerializedBytes = serializedBytes;
+            TruncateClientCapabilities("byte_limit");
+            return;
+        }
+
+        _clientCapabilitiesSerializedBytes = serializedBytes;
+        if (!IsJsonNodeDepthWithinLimit(capabilities, MaxClientCapabilitiesDepth))
+        {
+            TruncateClientCapabilities("depth_limit");
+            return;
+        }
+
+        _clientCapabilities = McpJsonNode.Clone(capabilities);
+    }
+
+    private static bool IsJsonNodeDepthWithinLimit(JsonNode node, int maxDepth)
+        => IsJsonNodeDepthWithinLimit(node, depth: 0, maxDepth);
+
+    private static bool IsJsonNodeDepthWithinLimit(JsonNode? node, int depth, int maxDepth)
+    {
+        if (node is null)
+            return true;
+        if (depth > maxDepth)
+            return false;
+
+        if (node is JsonObject obj)
+        {
+            foreach (var kvp in obj)
+            {
+                if (!IsJsonNodeDepthWithinLimit(kvp.Value, depth + 1, maxDepth))
+                    return false;
+            }
+        }
+        else if (node is JsonArray array)
+        {
+            foreach (var item in array)
+            {
+                if (!IsJsonNodeDepthWithinLimit(item, depth + 1, maxDepth))
+                    return false;
+            }
+        }
+
+        return true;
+    }
+
+    private void TruncateClientCapabilities(string reason)
+    {
+        _clientCapabilities = new JsonObject();
+        _clientCapabilitiesTruncationReason = reason;
+    }
+
+    private void CaptureClientCapabilityFlags(JsonNode capabilities)
+    {
+        if (capabilities is not JsonObject obj)
+            return;
+
+        _clientSupportsRoots = obj.TryGetPropertyValue("roots", out var roots) && roots is not null;
+        _clientSupportsSampling = obj.TryGetPropertyValue("sampling", out var sampling) && sampling is not null;
+    }
+
+    private void CaptureClientRoot(string uri)
+    {
+        _clientRoots.Add(uri);
+        _clientRootCount++;
+        if (_clientRootDiagnostics.Count >= MaxClientRootCount)
+        {
+            _clientRootsTruncated = true;
+            return;
+        }
+
+        var display = McpBoundedText.ForDisplay(uri, MaxClientRootUriChars);
+        _clientRootDiagnostics.Add(display.Text);
+        _clientRootsTruncated |= display.Truncated;
+    }
+
+    private void ResetClientRoots()
+    {
+        _clientRoots = [];
+        _clientRootDiagnostics = [];
+        _clientRootCount = 0;
+        _clientRootsTruncated = false;
     }
 
     internal JsonNode? ClientCapabilitiesForTests => McpJsonNode.Clone(_clientCapabilities);
@@ -1887,6 +2008,10 @@ public partial class McpServer : IDisposable
         .Where(root => !string.IsNullOrWhiteSpace(root))
         .Cast<string>()
         .ToArray();
+
+    internal bool ClientSupportsRootsForTests => _clientSupportsRoots;
+
+    internal bool ClientSupportsSamplingForTests => _clientSupportsSampling;
 
     internal string McpLogLevelForTests => _mcpLogLevel;
 
@@ -2651,7 +2776,9 @@ public partial class McpServer : IDisposable
             out _,
             out _,
             out var argKeysTruncated,
-            out var argKeyTruncationReasons);
+            out var argKeyTruncationReasons,
+            out var argKeysOmittedCount,
+            out var argKeyNamesTruncatedCount);
         var toolDisplay = BoundToolNameForDisplay(toolName);
         var argsObject = new JsonObject();
         foreach (var pair in argLengths)
@@ -2673,7 +2800,7 @@ public partial class McpServer : IDisposable
             ["arg_lengths"] = argsObject,
         };
         toolDisplay.AddMetadata(evt, "tool");
-        AddArgKeyMetadata(evt, argKeyLengths);
+        AddArgKeyMetadata(evt, argKeyLengths, argKeysOmittedCount, argKeyNamesTruncatedCount);
         if (argKeysTruncated)
             evt["arg_keys_truncated"] = true;
         if (argKeyTruncationReasons.Count > 0)
@@ -2755,7 +2882,7 @@ public partial class McpServer : IDisposable
 
         var parameters = new JsonObject
         {
-            ["progressToken"] = progressToken.DeepClone(),
+            ["progressToken"] = McpJsonNode.Clone(progressToken),
             ["progress"] = progress,
         };
         if (total.HasValue)
@@ -2816,7 +2943,9 @@ public partial class McpServer : IDisposable
                     out var argValueTruncationReasons,
                     out var argValuesSerializedBytes,
                     out var argKeysTruncated,
-                    out var argKeyTruncationReasons);
+                    out var argKeyTruncationReasons,
+                    out var argKeysOmittedCount,
+                    out var argKeyNamesTruncatedCount);
             var toolDisplay = BoundToolNameForDisplay(toolName);
             var requestId = SerializeRequestId(id);
             BoundedMcpText? requestIdDisplay = requestId is null
@@ -2840,6 +2969,8 @@ public partial class McpServer : IDisposable
                 ArgKeyLengths: argKeyLengths,
                 ArgKeysTruncated: argKeysTruncated,
                 ArgKeyTruncationReasons: argKeyTruncationReasons,
+                ArgKeysOmittedCount: argKeysOmittedCount,
+                ArgKeyNamesTruncatedCount: argKeyNamesTruncatedCount,
                 ArgValuesRedacted: argValuesRedacted,
                 ArgValuesTruncated: argValuesTruncated,
                 ArgValueTruncationReasons: argValueTruncationReasons,
@@ -2927,7 +3058,7 @@ public partial class McpServer : IDisposable
     /// </summary>
     internal static (IReadOnlyList<string> Keys, IReadOnlyList<KeyValuePair<string, int>> Lengths, IReadOnlyList<KeyValuePair<string, int>> KeyLengths, JsonNode? ValuesEcho)
         SanitizeArgs(JsonNode? args, bool includeValues)
-        => SanitizeArgs(args, includeValues, out _, out _, out _, out _, out _, out _);
+        => SanitizeArgs(args, includeValues, out _, out _, out _, out _, out _, out _, out _, out _);
 
     private static (IReadOnlyList<string> Keys, IReadOnlyList<KeyValuePair<string, int>> Lengths, IReadOnlyList<KeyValuePair<string, int>> KeyLengths, JsonNode? ValuesEcho)
         SanitizeArgs(
@@ -2938,13 +3069,17 @@ public partial class McpServer : IDisposable
             out IReadOnlyList<string> argValueTruncationReasons,
             out int? argValuesSerializedBytes,
             out bool argKeysTruncated,
-            out IReadOnlyList<string> argKeyTruncationReasons)
+            out IReadOnlyList<string> argKeyTruncationReasons,
+            out int argKeysOmittedCount,
+            out int argKeyNamesTruncatedCount)
     {
         argValuesRedacted = false;
         argValuesTruncated = false;
         argValueTruncationReasons = Array.Empty<string>();
         argValuesSerializedBytes = null;
         argKeysTruncated = false;
+        argKeysOmittedCount = 0;
+        argKeyNamesTruncatedCount = 0;
         var argKeyReasons = new List<string>();
         argKeyTruncationReasons = argKeyReasons;
         if (args is not JsonObject argsObj)
@@ -2963,11 +3098,12 @@ public partial class McpServer : IDisposable
             if (argumentCount >= AuditLogSink.MaxAuditArgumentCount)
             {
                 argKeysTruncated = true;
+                argKeysOmittedCount = argsObj.Count - argumentCount;
                 AddUniqueReason(argKeyReasons, "arg_key_count_limit");
                 break;
             }
 
-            var keyDisplay = McpBoundedText.ForDisplay(key);
+            var keyDisplay = McpBoundedText.ForDisplay(key, AuditLogSink.MaxAuditArgumentKeyChars);
             var displayKey = MakeUniqueArgumentDisplayKey(key, keyDisplay, usedKeys);
             keys.Add(displayKey);
             lengths.Add(new KeyValuePair<string, int>(displayKey, AuditLogSink.MeasureArgLength(value)));
@@ -2975,6 +3111,7 @@ public partial class McpServer : IDisposable
             {
                 keyLengths.Add(new KeyValuePair<string, int>(displayKey, keyDisplay.OriginalLength));
                 argKeysTruncated = true;
+                argKeyNamesTruncatedCount++;
                 AddUniqueReason(argKeyReasons, "arg_key_length_limit");
             }
             if (echoObject is not null && !argValueBudgetExhausted)
@@ -3051,15 +3188,24 @@ public partial class McpServer : IDisposable
         return Convert.ToHexString(bytes.AsSpan(0, 4)).ToLowerInvariant();
     }
 
-    private static void AddArgKeyMetadata(JsonObject target, IReadOnlyList<KeyValuePair<string, int>> argKeyLengths)
+    private static void AddArgKeyMetadata(
+        JsonObject target,
+        IReadOnlyList<KeyValuePair<string, int>> argKeyLengths,
+        int argKeysOmittedCount,
+        int argKeyNamesTruncatedCount)
     {
-        if (argKeyLengths.Count == 0)
-            return;
-        var lengths = new JsonObject();
-        foreach (var pair in argKeyLengths)
-            lengths[pair.Key] = pair.Value;
-        target["arg_key_lengths"] = lengths;
-        target["arg_keys_truncated"] = true;
+        if (argKeyLengths.Count > 0)
+        {
+            var lengths = new JsonObject();
+            foreach (var pair in argKeyLengths)
+                lengths[pair.Key] = pair.Value;
+            target["arg_key_lengths"] = lengths;
+            target["arg_keys_truncated"] = true;
+        }
+        if (argKeysOmittedCount > 0)
+            target["arg_keys_omitted_count"] = argKeysOmittedCount;
+        if (argKeyNamesTruncatedCount > 0)
+            target["arg_key_names_truncated_count"] = argKeyNamesTruncatedCount;
     }
 
     private static string? SerializeRequestId(JsonNode? id)
@@ -3111,6 +3257,12 @@ public partial class McpServer : IDisposable
 
     internal static string BuildToolErrorLog(string toolName, string detail) =>
         $"[cdidx-mcp] Tool error ({BoundToolNameForDisplay(toolName).Text}): {detail}. Fix the tool arguments, refresh the index if needed, then retry.";
+
+    internal static string BuildClientResponseTooLargeLog(string member, int bytesWritten) =>
+        $"[cdidx-mcp] Client response {member} exceeded the server byte limit ({bytesWritten} > {MaxClientResponseJsonBytes}); rejecting without retaining the payload.";
+
+    private static string BuildClientResponseTooLargeMessage(int bytesWritten) =>
+        $"MCP client response exceeded the server byte limit ({bytesWritten} > {MaxClientResponseJsonBytes}).";
 
     // Stderr log emitted when the rate limiter denies a tool call. Mirrors the JSON-RPC
     // `-32000` payload (tool + caller + retry_after_ms) so operators tailing the MCP log
@@ -3222,7 +3374,7 @@ public partial class McpServer : IDisposable
         requestToken.ThrowIfCancellationRequested();
         if (_isolateDbForCurrentRequest.Value)
         {
-            using var isolatedDb = new DbContext(_dbPath);
+            using var isolatedDb = new DbContext(_dbPath, requestToken);
             isolatedDb.TryMigrateForRead();
             using var isolatedReader = new DbReader(isolatedDb, requestToken);
             isolatedReader.IncludeGenerated = args?["includeGenerated"]?.GetValue<bool>() ?? false;
@@ -3264,7 +3416,7 @@ public partial class McpServer : IDisposable
         if (_sharedDb != null)
             return _sharedDb;
 
-        _sharedDb = new DbContext(_dbPath);
+        _sharedDb = new DbContext(_dbPath, _currentRequestToken.Value);
         return _sharedDb;
     }
 

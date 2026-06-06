@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Reflection;
 using System.Text.Json;
 using CodeIndex;
@@ -205,6 +206,57 @@ public class CodeIndexExceptionTests
         Assert.Contains(dbPath, ex.Message);
         Assert.IsType<SqliteException>(ex.InnerException);
         Assert.Equal(3, attempts);
+    }
+
+    [Fact]
+    public void OpenSqliteConnectionWithRetry_CancelDuringRetrySleep_ThrowsOperationCanceled()
+    {
+        using var cts = new CancellationTokenSource();
+        cts.CancelAfter(TimeSpan.FromMilliseconds(10));
+        var attempts = 0;
+        var stopwatch = Stopwatch.StartNew();
+
+        var ex = Assert.Throws<OperationCanceledException>(() =>
+            DbContext.OpenSqliteConnectionWithRetry(
+                () => new SqliteConnection("Data Source=:memory:"),
+                _ =>
+                {
+                    attempts++;
+                    throw CreateTransientBusyException();
+                },
+                maxOpenAttempts: 5,
+                cancellationToken: cts.Token));
+
+        stopwatch.Stop();
+        Assert.Equal(cts.Token, ex.CancellationToken);
+        Assert.Equal(1, attempts);
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(1), $"Cancellation took {stopwatch.Elapsed}.");
+    }
+
+    [Fact]
+    public void RegisterConnectionFunctionsWithRetry_CancelDuringRetrySleep_ThrowsOperationCanceled()
+    {
+        using var connection = new SqliteConnection("Data Source=:memory:");
+        using var cts = new CancellationTokenSource();
+        cts.CancelAfter(TimeSpan.FromMilliseconds(10));
+        var attempts = 0;
+        var stopwatch = Stopwatch.StartNew();
+
+        var ex = Assert.Throws<OperationCanceledException>(() =>
+            DbContext.RegisterConnectionFunctionsWithRetry(
+                connection,
+                maxAttempts: 5,
+                cancellationToken: cts.Token,
+                registerConnectionFunctions: _ =>
+                {
+                    attempts++;
+                    throw CreateTransientBusyException();
+                }));
+
+        stopwatch.Stop();
+        Assert.Equal(cts.Token, ex.CancellationToken);
+        Assert.Equal(1, attempts);
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(1), $"Cancellation took {stopwatch.Elapsed}.");
     }
 
     private static SqliteException CreateTransientBusyException()

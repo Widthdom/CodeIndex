@@ -393,7 +393,18 @@ public static partial class IndexCommandRunner
             throw new IndexInterruptedException(0, null);
         }
 
-        var currentHeadForCheckpoint = GitHelper.TryGetHeadCommit(projectRoot);
+        string? currentHeadForCheckpoint;
+        try
+        {
+            ThrowIfDiscoveryCancelled();
+            currentHeadForCheckpoint = GitHelper.TryGetHeadCommit(projectRoot, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            ConsoleUi.StopSpinner(spinnerCts);
+            throw new IndexInterruptedException(0, null);
+        }
+
         var scanCheckpointPath = Path.Combine(projectRoot, ".cdidx", ScanCheckpointFileName);
         var checkpointedDirectories = LoadScanCheckpoint(scanCheckpointPath, currentHeadForCheckpoint);
         WriteFullScanJsonLiveness(options, "scanning files...");
@@ -1384,7 +1395,7 @@ public static partial class IndexCommandRunner
             // full scan が「直近 full scan からブランチが動いた」をきちんと検知できる。
             // 非 git workspace で null になった場合はキーごとクリアされる。Issue #1508。
             writer.SetMeta(DbContext.IndexedHeadCommitMetaKey, currentHeadCommit);
-            writer.SetMeta(DbContext.IndexedHeadCommitBranchMetaKey, GitHelper.TryGetHeadBranch(projectRoot));
+            writer.SetMeta(DbContext.IndexedHeadCommitBranchMetaKey, GitHelper.TryGetHeadBranch(projectRoot, cancellationToken));
             writer.SetMeta(
                 DbContext.LastFullScanElapsedMsMetaKey,
                 stopwatch.ElapsedMilliseconds.ToString(System.Globalization.CultureInfo.InvariantCulture));
@@ -1395,7 +1406,7 @@ public static partial class IndexCommandRunner
             // reflects the true HEAD at the time of the most recent successful index.
             // #1509: あらゆる成功 index の終端で更新する HEAD トリプル (SHA + branch + 時刻) も
             // ここで stamp する。full scan / partial update を問わず最新の HEAD を保存する。
-            StampIndexedHeadMetadata(writer, projectRoot);
+            StampIndexedHeadMetadata(writer, projectRoot, cancellationToken);
             if (options.MemoryTrace)
                 memorySamples.Add(CaptureMemorySample("finalize", stopwatch));
             var memoryTimelineForStamp = BuildMemoryTimeline(memorySamples);
