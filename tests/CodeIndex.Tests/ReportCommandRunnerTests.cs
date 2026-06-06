@@ -498,6 +498,43 @@ public class ReportCommandRunnerTests
     }
 
     [Fact]
+    public void BuildRecentLogTail_ManyLogFilesKeepsNewestBoundedCandidates_Issue3026()
+    {
+        var workDir = CreateWorkDir();
+        var logDir = Path.Combine(workDir, "logs");
+        Directory.CreateDirectory(logDir);
+        var fileCount = ReportCommandRunner.MaxRecentLogFiles + 3;
+        for (var i = 0; i < fileCount; i++)
+        {
+            File.WriteAllText(
+                Path.Combine(logDir, $"stderr-20260518-{i:D4}.log"),
+                $"line-{i:D4}\n");
+        }
+
+        var previousLogDir = Environment.GetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR");
+        Environment.SetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR", logDir);
+        try
+        {
+            var logText = ReportCommandRunner.BuildRecentLogTail(2, includeArgs: false, out var linesIncluded);
+
+            var secondNewest = $"line-{fileCount - 2:D4}";
+            var newest = $"line-{fileCount - 1:D4}";
+            Assert.Equal(2, linesIncluded);
+            Assert.Contains(secondNewest, logText);
+            Assert.Contains(newest, logText);
+            Assert.True(
+                logText.IndexOf(secondNewest, StringComparison.Ordinal) <
+                logText.IndexOf(newest, StringComparison.Ordinal));
+            Assert.DoesNotContain("line-0000", logText);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR", previousLogDir);
+            TryDeleteDirectory(workDir);
+        }
+    }
+
+    [Fact]
     public void Run_IncludeArgs_PreservesLiteralArgsButRedactsPaths()
     {
         var workDir = CreateWorkDir();
