@@ -195,8 +195,14 @@ internal sealed class IndexDryRunJsonResult
 {
     public string Status { get; init; } = string.Empty;
     public int FilesTotal { get; init; }
+    public List<string>? FileSamples { get; init; }
+    public bool FileSamplesTruncated { get; init; }
+    public int FileSampleLimit { get; init; }
     public Dictionary<string, int> Languages { get; init; } = new();
+    public int ErrorsTotal { get; init; }
     public List<CliJsonMessage>? Errors { get; init; }
+    public bool ErrorsTruncated { get; init; }
+    public int ErrorLimit { get; init; }
 }
 
 internal sealed class IndexWatchEventJsonResult

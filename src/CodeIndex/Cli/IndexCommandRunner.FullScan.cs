@@ -286,43 +286,76 @@ public static partial class IndexCommandRunner
         || ex is SqliteException { SqliteErrorCode: 5 or 6 or 8 or 10 or 14 };
 
     internal const int MaxScanCheckpointBytes = 1024 * 1024;
+    internal const int MaxScanCheckpointJsonDepth = 16;
+    internal const int MaxScanCheckpointDirectories = 4096;
+    internal const int MaxScanCheckpointDirectoryLength = 4096;
 
-    private static IReadOnlySet<string> LoadScanCheckpoint(string path, string? currentHead)
+    internal static IReadOnlySet<string> LoadScanCheckpoint(string path, string? currentHead)
     {
         try
         {
             if (string.IsNullOrWhiteSpace(currentHead) || !File.Exists(path))
-                return new HashSet<string>(StringComparer.Ordinal);
+                return EmptyScanCheckpointDirectories();
 
             var text = DataDirectorySecurity.ReadTextWithinLimit(path, MaxScanCheckpointBytes, FileShare.ReadWrite);
             if (text is null)
-                return new HashSet<string>(StringComparer.Ordinal);
+                return EmptyScanCheckpointDirectories();
 
-            var checkpoint = JsonSerializer.Deserialize<ScanCheckpoint>(text);
+            var checkpoint = JsonSerializer.Deserialize<ScanCheckpoint>(
+                text,
+                new JsonSerializerOptions { MaxDepth = MaxScanCheckpointJsonDepth });
             if (checkpoint is not { Version: ScanCheckpointVersion }
                 || !string.Equals(checkpoint.GitHead, currentHead, StringComparison.Ordinal)
-                || checkpoint.Directories is not { Count: > 0 })
+                || !TryBuildScanCheckpointDirectories(checkpoint.Directories, out var directories))
             {
-                return new HashSet<string>(StringComparer.Ordinal);
+                return EmptyScanCheckpointDirectories();
             }
 
-            return checkpoint.Directories
-                .Where(directory => directory.Length > 0)
-                .ToHashSet(StringComparer.Ordinal);
+            return directories;
         }
         catch (JsonException)
         {
-            return new HashSet<string>(StringComparer.Ordinal);
+            return EmptyScanCheckpointDirectories();
         }
         catch (IOException)
         {
-            return new HashSet<string>(StringComparer.Ordinal);
+            return EmptyScanCheckpointDirectories();
         }
         catch (UnauthorizedAccessException)
         {
-            return new HashSet<string>(StringComparer.Ordinal);
+            return EmptyScanCheckpointDirectories();
         }
     }
+
+    private static bool TryBuildScanCheckpointDirectories(IReadOnlyList<string>? rawDirectories, out IReadOnlySet<string> directories)
+    {
+        directories = EmptyScanCheckpointDirectories();
+        if (rawDirectories is not { Count: > 0 })
+            return false;
+        if (rawDirectories.Count > MaxScanCheckpointDirectories)
+            return false;
+
+        var result = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var directory in rawDirectories)
+        {
+            if (directory is null)
+                return false;
+            if (directory.Length == 0)
+                continue;
+            if (directory.Length > MaxScanCheckpointDirectoryLength)
+                return false;
+
+            result.Add(directory);
+        }
+
+        if (result.Count == 0)
+            return false;
+
+        directories = result;
+        return true;
+    }
+
+    private static HashSet<string> EmptyScanCheckpointDirectories() => new(StringComparer.Ordinal);
 
     private static void SaveScanCheckpoint(string path, string? currentHead, IReadOnlySet<string> directories)
     {

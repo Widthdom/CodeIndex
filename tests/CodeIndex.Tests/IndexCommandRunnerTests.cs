@@ -183,6 +183,88 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void LoadScanCheckpoint_ValidPayload_ReturnsBoundedDirectorySet()
+    {
+        var projectRoot = CreateTempProject();
+        var checkpointPath = Path.Combine(projectRoot, "scan-checkpoint.json");
+        try
+        {
+            File.WriteAllText(checkpointPath, JsonSerializer.Serialize(new
+            {
+                Version = 1,
+                GitHead = "abc123",
+                Directories = new[] { "src", string.Empty, "tests", "src" },
+            }));
+
+            var directories = IndexCommandRunner.LoadScanCheckpoint(checkpointPath, "abc123");
+
+            Assert.Equal(2, directories.Count);
+            Assert.Contains("src", directories);
+            Assert.Contains("tests", directories);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void LoadScanCheckpoint_DirectoryPayloadOutsideBounds_ReturnsEmpty()
+    {
+        var projectRoot = CreateTempProject();
+        var checkpointPath = Path.Combine(projectRoot, "scan-checkpoint.json");
+        try
+        {
+            File.WriteAllText(checkpointPath, JsonSerializer.Serialize(new
+            {
+                Version = 1,
+                GitHead = "abc123",
+                Directories = Enumerable.Range(0, IndexCommandRunner.MaxScanCheckpointDirectories + 1)
+                    .Select(i => $"dir{i}")
+                    .ToArray(),
+            }));
+            Assert.Empty(IndexCommandRunner.LoadScanCheckpoint(checkpointPath, "abc123"));
+
+            File.WriteAllText(checkpointPath, JsonSerializer.Serialize(new
+            {
+                Version = 1,
+                GitHead = "abc123",
+                Directories = new[] { new string('x', IndexCommandRunner.MaxScanCheckpointDirectoryLength + 1) },
+            }));
+            Assert.Empty(IndexCommandRunner.LoadScanCheckpoint(checkpointPath, "abc123"));
+
+            File.WriteAllText(checkpointPath, """{"Version":1,"GitHead":"abc123","Directories":[null]}""");
+            Assert.Empty(IndexCommandRunner.LoadScanCheckpoint(checkpointPath, "abc123"));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void LoadScanCheckpoint_JsonDepthOutsideBounds_ReturnsEmpty()
+    {
+        var projectRoot = CreateTempProject();
+        var checkpointPath = Path.Combine(projectRoot, "scan-checkpoint.json");
+        try
+        {
+            var depth = IndexCommandRunner.MaxScanCheckpointJsonDepth + 4;
+            var nestedStart = string.Concat(Enumerable.Repeat("[", depth));
+            var nestedEnd = string.Concat(Enumerable.Repeat("]", depth));
+            File.WriteAllText(
+                checkpointPath,
+                $$"""{"Version":1,"GitHead":"abc123","Directories":{{nestedStart}}"src"{{nestedEnd}}}""");
+
+            Assert.Empty(IndexCommandRunner.LoadScanCheckpoint(checkpointPath, "abc123"));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_NullByteFile_SkipsWithoutPersistingPartialRows()
     {
         var projectRoot = CreateTempProject();
@@ -7815,6 +7897,62 @@ public class IndexCommandRunnerTests
             using var document = JsonDocument.Parse(result.StdOut);
             Assert.Equal("dry_run", document.RootElement.GetProperty("status").GetString());
             Assert.Equal(0, document.RootElement.GetProperty("files_total").GetInt32());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_JsonCapsFileSamples()
+    {
+        var projectRoot = CreateTempProject();
+        var fileCount = IndexCommandRunner.DryRunFileSampleLimit + 3;
+        try
+        {
+            foreach (var i in Enumerable.Range(0, fileCount))
+                File.WriteAllText(Path.Combine(projectRoot, $"sample{i:D3}.cs"), $"public class Sample{i} {{ }}\n");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("dry_run", json.GetProperty("status").GetString());
+            Assert.Equal(fileCount, json.GetProperty("files_total").GetInt32());
+            Assert.Equal(fileCount, json.GetProperty("languages").GetProperty("csharp").GetInt32());
+            Assert.Equal(IndexCommandRunner.DryRunFileSampleLimit, json.GetProperty("file_sample_limit").GetInt32());
+            Assert.True(json.GetProperty("file_samples_truncated").GetBoolean());
+            Assert.Equal(IndexCommandRunner.DryRunFileSampleLimit, json.GetProperty("file_samples").GetArrayLength());
+            Assert.Equal(0, json.GetProperty("errors_total").GetInt32());
+            Assert.False(json.GetProperty("errors_truncated").GetBoolean());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_JsonCapsErrorSamples()
+    {
+        var projectRoot = CreateTempProject();
+        var fileCount = IndexCommandRunner.DryRunErrorSampleLimit + 3;
+        try
+        {
+            foreach (var i in Enumerable.Range(0, fileCount))
+                File.WriteAllText(Path.Combine(projectRoot, $"large{i:D3}.cs"), $"public class Large{i} {{ }}\n");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--dry-run", "--max-file-bytes", "1", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("dry_run", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("files_total").GetInt32());
+            Assert.Equal(fileCount, json.GetProperty("errors_total").GetInt32());
+            Assert.Equal(IndexCommandRunner.DryRunErrorSampleLimit, json.GetProperty("error_limit").GetInt32());
+            Assert.True(json.GetProperty("errors_truncated").GetBoolean());
+            Assert.Equal(IndexCommandRunner.DryRunErrorSampleLimit, json.GetProperty("errors").GetArrayLength());
+            Assert.Equal(IndexCommandRunner.DryRunFileSampleLimit, json.GetProperty("file_sample_limit").GetInt32());
+            Assert.False(json.GetProperty("file_samples_truncated").GetBoolean());
         }
         finally
         {
