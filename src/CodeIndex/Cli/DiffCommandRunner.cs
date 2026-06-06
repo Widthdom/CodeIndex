@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
@@ -8,6 +10,7 @@ namespace CodeIndex.Cli;
 public static class DiffCommandRunner
 {
     private const int DefaultDiffLimit = 20;
+    internal const int MaxDiffEncodedFieldSampleLength = 1024;
     internal static int MaxDiffLimit => QueryCommandRunner.NumericFlagUpperBounds["--limit"];
     private const int DriftExitCode = 1;
     private const int SchemaMismatchExitCode = 2;
@@ -426,8 +429,8 @@ public static class DiffCommandRunner
 
         var onlyInLeft = new List<string>(limit);
         var onlyInRight = new List<string>(limit);
-        var leftHasValue = TryReadEncodedRow(leftReader, out var leftValue);
-        var rightHasValue = TryReadEncodedRow(rightReader, out var rightValue);
+        var leftHasValue = TryReadRow(leftReader, out var leftValue);
+        var rightHasValue = TryReadRow(rightReader, out var rightValue);
         var equal = true;
 
         while (leftHasValue || rightHasValue)
@@ -438,8 +441,8 @@ public static class DiffCommandRunner
 
             if (comparison == 0)
             {
-                leftHasValue = TryReadEncodedRow(leftReader, out leftValue);
-                rightHasValue = TryReadEncodedRow(rightReader, out rightValue);
+                leftHasValue = TryReadRow(leftReader, out leftValue);
+                rightHasValue = TryReadRow(rightReader, out rightValue);
                 continue;
             }
 
@@ -447,14 +450,14 @@ public static class DiffCommandRunner
             if (comparison < 0)
             {
                 if (onlyInLeft.Count < limit)
-                    onlyInLeft.Add(leftValue.Encoded);
-                leftHasValue = TryReadEncodedRow(leftReader, out leftValue);
+                    onlyInLeft.Add(EncodeRow(leftValue.SortValues));
+                leftHasValue = TryReadRow(leftReader, out leftValue);
             }
             else
             {
                 if (onlyInRight.Count < limit)
-                    onlyInRight.Add(rightValue.Encoded);
-                rightHasValue = TryReadEncodedRow(rightReader, out rightValue);
+                    onlyInRight.Add(EncodeRow(rightValue.SortValues));
+                rightHasValue = TryReadRow(rightReader, out rightValue);
             }
 
             if (onlyInLeft.Count >= limit && onlyInRight.Count >= limit)
@@ -525,14 +528,14 @@ public static class DiffCommandRunner
         using var leftReader = leftCommand.ExecuteReader();
         using var rightReader = rightCommand.ExecuteReader();
 
-        var leftHasValue = TryReadEncodedRow(leftReader, out var leftValue);
-        var rightHasValue = TryReadEncodedRow(rightReader, out var rightValue);
+        var leftHasValue = TryReadRow(leftReader, out var leftValue);
+        var rightHasValue = TryReadRow(rightReader, out var rightValue);
         while (leftHasValue && rightHasValue)
         {
-            if (!string.Equals(leftValue.Encoded, rightValue.Encoded, StringComparison.Ordinal))
+            if (CompareRows(leftValue, rightValue) != 0)
                 return false;
-            leftHasValue = TryReadEncodedRow(leftReader, out leftValue);
-            rightHasValue = TryReadEncodedRow(rightReader, out rightValue);
+            leftHasValue = TryReadRow(leftReader, out leftValue);
+            rightHasValue = TryReadRow(rightReader, out rightValue);
         }
 
         return leftHasValue == rightHasValue;
@@ -560,11 +563,11 @@ public static class DiffCommandRunner
         return leftHasValue == rightHasValue;
     }
 
-    private static bool TryReadEncodedRow(SqliteDataReader reader, out EncodedDiffRow value)
+    private static bool TryReadRow(SqliteDataReader reader, out DiffRow value)
     {
         if (!reader.Read())
         {
-            value = EncodedDiffRow.Empty;
+            value = DiffRow.Empty;
             return false;
         }
 
@@ -572,11 +575,11 @@ public static class DiffCommandRunner
         for (var i = 0; i < reader.FieldCount; i++)
             sortValues[i] = reader.IsDBNull(i) ? null : reader.GetValue(i);
 
-        value = new EncodedDiffRow(EncodeRow(reader), sortValues);
+        value = new DiffRow(sortValues);
         return true;
     }
 
-    private static int CompareRows(EncodedDiffRow left, EncodedDiffRow right)
+    private static int CompareRows(DiffRow left, DiffRow right)
     {
         var count = Math.Min(left.SortValues.Length, right.SortValues.Length);
         for (var i = 0; i < count; i++)
@@ -698,22 +701,39 @@ public static class DiffCommandRunner
         return Convert.ToInt64(command.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
     }
 
-    private static string EncodeRow(SqliteDataReader reader)
+    private static string EncodeRow(object?[] values)
     {
-        var fields = new string[reader.FieldCount];
-        for (var i = 0; i < reader.FieldCount; i++)
+        var fields = new string[values.Length];
+        for (var i = 0; i < values.Length; i++)
         {
-            if (reader.IsDBNull(i))
+            var rawValue = values[i];
+            if (rawValue is null or DBNull)
             {
                 fields[i] = "-1:";
                 continue;
             }
 
-            var value = Convert.ToString(reader.GetValue(i), System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty;
-            fields[i] = value.Length.ToString(System.Globalization.CultureInfo.InvariantCulture) + ":" + value;
+            var value = Convert.ToString(rawValue, System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty;
+            var encodedValue = EncodeFieldValue(value);
+            fields[i] = encodedValue.Length.ToString(System.Globalization.CultureInfo.InvariantCulture) + ":" + encodedValue;
         }
 
         return string.Join("|", fields);
+    }
+
+    private static string EncodeFieldValue(string value)
+    {
+        if (value.Length <= MaxDiffEncodedFieldSampleLength)
+            return value;
+
+        var sample = value[..MaxDiffEncodedFieldSampleLength];
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
+        return sample
+            + "...[truncated original_length="
+            + value.Length.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            + " sha256="
+            + hash
+            + "]";
     }
 
     private static void WriteJson(DiffJsonResult result, JsonSerializerOptions jsonOptions)
@@ -791,11 +811,10 @@ public static class DiffCommandRunner
         List<string> OnlyInLeft,
         List<string> OnlyInRight);
 
-    private sealed record EncodedDiffRow(
-        string Encoded,
+    private sealed record DiffRow(
         object?[] SortValues)
     {
-        public static readonly EncodedDiffRow Empty = new(string.Empty, []);
+        public static readonly DiffRow Empty = new([]);
     }
 
     private sealed record DiffDbHeader(
