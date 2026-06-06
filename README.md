@@ -225,7 +225,7 @@ After a current full-repository scan, `unknown_extension_file_count` reports how
 
 `hooks[]` includes metadata-only hook candidates and `callback_budget_ms`; `status` does not load hook assemblies. `CDIDX_HOOK_CALLBACK_BUDGET_MS` bounds each post-extraction hook callback in milliseconds (default: 5000); callbacks that exceed the budget emit sanitized index warnings, drop timed-out mutations, and disable that hook for the current index run.
 
-For MCP `status`, `mcp_session` is session-scoped diagnostic data rather than persisted index state. It includes `log_level`, `roots`, optional `client_info`, and optional `client_capabilities`.
+For MCP `status`, `mcp_session` is session-scoped diagnostic data rather than persisted index state. It includes `log_level`, `roots`, optional `client_info`, and optional `client_capabilities`. Root diagnostics are bounded; when advertised roots are capped, `roots_truncated`, `root_count`, `root_limit`, and `root_uri_length_limit` describe the truncation.
 
 `process` is captured at status-call time and includes heap, GC collection, and working-set counters. `last_index_run` is persisted by successful CLI and MCP index runs with the run mode, duration, file counts, byte count, row-change counts, and optional peak-memory summary from CLI `--memory-trace`. `last_workspace_freshened_at` is the latest successful index/update run timestamp and can be newer than `indexed_at` when a partial or no-op update confirms freshness without rewriting indexed file rows.
 
@@ -531,7 +531,7 @@ readiness field のいずれかが degraded の場合、`degraded_root_cause` �
 
 `hooks[]` は metadata-only の hook candidate と `callback_budget_ms` を含み、`status` は hook assembly を読み込みません。`CDIDX_HOOK_CALLBACK_BUDGET_MS` は post-extraction hook callback ごとの上限ミリ秒を指定します（既定値: 5000）。上限を超えた callback は sanitized index warning を出し、timeout した変更を捨て、その index run 中は該当 hook を無効化します。
 
-MCP `status` の `mcp_session` は永続化された index 状態ではなく、セッション単位の診断情報です。`log_level`、`roots`、任意の `client_info`、任意の `client_capabilities` を含みます。
+MCP `status` の `mcp_session` は永続化された index 状態ではなく、セッション単位の診断情報です。`log_level`、`roots`、任意の `client_info`、任意の `client_capabilities` を含みます。root 診断は上限付きで、advertised root が切り詰められた場合は `roots_truncated`、`root_count`、`root_limit`、`root_uri_length_limit` が切り詰め内容を示します。
 
 `process` は status 呼び出し時点の heap、GC collection、working-set counters です。`last_index_run` は成功した CLI / MCP index 実行が永続化し、run mode、duration、file counts、byte count、row-change counts、CLI `--memory-trace` 由来の任意の peak-memory summary を含みます。
 

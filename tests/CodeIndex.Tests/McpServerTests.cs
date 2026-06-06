@@ -836,6 +836,47 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void Initialize_CapsClientRootsForSessionStatus_Issue3076()
+    {
+        var longRoot = "file:///" + new string('r', McpServer.MaxClientRootUriChars + 50);
+        var roots = new JsonArray();
+        for (var i = 0; i < McpServer.MaxClientRootCount + 3; i++)
+        {
+            roots.Add(new JsonObject
+            {
+                ["uri"] = i == 0 ? longRoot : $"file:///workspace/{i}",
+            });
+        }
+
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "initialize",
+            ["params"] = new JsonObject
+            {
+                ["rootUri"] = "file:///workspace",
+                ["roots"] = roots,
+            },
+        };
+        _server.HandleMessage(request);
+
+        Assert.Equal(McpServer.MaxClientRootCount, _server.ClientRootsForTests.Length);
+        Assert.DoesNotContain(longRoot, _server.ClientRootsForTests);
+
+        var status = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
+        var response = _server.HandleMessage(status)!;
+        var session = response["result"]!["structuredContent"]!["mcp_session"]!;
+
+        Assert.True(session["roots_truncated"]!.GetValue<bool>());
+        Assert.Equal(McpServer.MaxClientRootCount + 4, session["root_count"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxClientRootCount, session["root_limit"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxClientRootUriChars, session["root_uri_length_limit"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxClientRootCount, session["roots"]!.AsArray().Count);
+        Assert.DoesNotContain(longRoot, response.ToJsonString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Initialize_ClientInfo_TruncatesSessionStatusAndCallerIdentity_Issue3120()
     {
         var name = new string('n', McpBoundedText.MaxClientInfoChars + 25);

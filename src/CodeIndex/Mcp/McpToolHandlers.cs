@@ -2296,6 +2296,13 @@ public partial class McpServer
             ["log_level"] = _mcpLogLevel,
             ["roots"] = roots,
         };
+        if (_clientRootsTruncated)
+        {
+            session["roots_truncated"] = true;
+            session["root_count"] = _clientRootCount;
+            session["root_limit"] = MaxClientRootCount;
+            session["root_uri_length_limit"] = MaxClientRootUriChars;
+        }
         if (_clientName is not null || _clientVersion is not null)
         {
             var clientInfo = new JsonObject();
