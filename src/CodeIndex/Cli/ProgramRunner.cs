@@ -38,6 +38,7 @@ internal static class ProgramRunner
     private static readonly HashSet<string> TopLevelValueOptionNames =
         CliFlagSchema.GetTopLevelValueOptionNames();
     internal static TimeProvider TimeProvider { get; set; } = TimeProvider.System;
+    internal static Func<HttpClient> UpgradeHttpClientFactory { get; set; } = CreateUpgradeHttpClient;
 
     private sealed record CommandRunContext(
         JsonSerializerOptions JsonOptions,
@@ -3059,13 +3060,13 @@ internal static class ProgramRunner
         var scriptPath = Path.Combine(Path.GetTempPath(), $"cdidx-install-{Guid.NewGuid():N}.sh");
         try
         {
-            using (var client = new HttpClient { Timeout = TimeSpan.FromSeconds(20) })
+            using (var client = UpgradeHttpClientFactory())
             {
                 var checksumManifest = DownloadReleaseChecksumManifestAsync(
                         client,
                         result.LatestVersion,
                         TimeSpan.FromSeconds(20),
-                        CancellationToken.None)
+                        cancellationToken)
                     .GetAwaiter()
                     .GetResult();
                 var expectedInstallerSha256 = GetReleaseAssetChecksum(checksumManifest, InstallerScriptAssetName);
@@ -3075,7 +3076,7 @@ internal static class ProgramRunner
                         result.LatestVersion,
                         scriptPath,
                         TimeSpan.FromSeconds(20),
-                        CancellationToken.None)
+                        cancellationToken)
                     .GetAwaiter()
                     .GetResult();
                 VerifyFileSha256(scriptPath, expectedInstallerSha256, InstallerScriptAssetName);
@@ -3083,6 +3084,10 @@ internal static class ProgramRunner
 
             var startInfo = CreateInstallerProcessStartInfo(scriptPath, result.LatestVersion, installDir);
             return RunInstallerProcess(startInfo, InstallerRunTimeout);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -3139,6 +3144,9 @@ internal static class ProgramRunner
             ReleaseAssetUrlTemplate,
             Uri.EscapeDataString(releaseTag.Trim()),
             Uri.EscapeDataString(assetName));
+
+    private static HttpClient CreateUpgradeHttpClient()
+        => new() { Timeout = TimeSpan.FromSeconds(20) };
 
     internal static async Task<string> DownloadReleaseChecksumManifestAsync(
         HttpClient client,

@@ -952,6 +952,55 @@ sleep 5
     }
 
     [Fact]
+    public void RunUpgrade_PassesCallerCancellationToReleaseDownloads()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture("XDG_CACHE_HOME", UpdateChecker.DisableEnvVar);
+            var cacheRoot = Path.Combine(Path.GetTempPath(), $"cdidx_update_cache_{Guid.NewGuid():N}");
+            env.Set("XDG_CACHE_HOME", cacheRoot);
+            env.Set(UpdateChecker.DisableEnvVar, null);
+            WriteFreshUpdateCheckCache(cacheRoot, "v9.9.9");
+
+            var installerScript = "#!/bin/sh\nexit 0\n";
+            var installerSha256 = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(installerScript))).ToLowerInvariant();
+            var checksumManifest = $"{installerSha256}  install.sh\n";
+            var observedCanBeCanceled = new List<bool>();
+            var previousFactory = ProgramRunner.UpgradeHttpClientFactory;
+            ProgramRunner.UpgradeHttpClientFactory = () => new HttpClient(
+                new UpgradeAssetResponseHandler(
+                    checksumManifest,
+                    installerScript,
+                    token => observedCanBeCanceled.Add(token.CanBeCanceled)))
+            {
+                Timeout = Timeout.InfiniteTimeSpan,
+            };
+
+            using var cts = new CancellationTokenSource();
+            try
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                    ["upgrade"],
+                    appVersion: "1.10.0",
+                    cancellationToken: cts.Token));
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Empty(stdout);
+                Assert.Empty(stderr);
+                Assert.Equal([true, true], observedCanBeCanceled);
+            }
+            finally
+            {
+                ProgramRunner.UpgradeHttpClientFactory = previousFactory;
+                TestProjectHelper.DeleteDirectory(cacheRoot);
+            }
+        }
+    }
+
+    [Fact]
     public async Task DownloadReleaseChecksumManifestAsync_RejectsOverLimitResponse()
     {
         using var client = new HttpClient(new StaticResponseHandler(new ByteArrayContent(new byte[(int)ProgramRunner.MaxReleaseChecksumBytes + 1])))
@@ -2346,6 +2395,17 @@ sleep 5
     private static (int ExitCode, string Stdout, string Stderr) CaptureConsole(Func<int> action)
         => ConsoleCapture.Capture(action);
 
+    private static void WriteFreshUpdateCheckCache(string cacheRoot, string latestTag)
+    {
+        var cacheDir = Path.Combine(cacheRoot, "cdidx");
+        Directory.CreateDirectory(cacheDir);
+        File.WriteAllText(
+            Path.Combine(cacheDir, "update-check.json"),
+            $$"""
+            {"checked_at":"{{DateTimeOffset.UtcNow.UtcDateTime.ToString("O", CultureInfo.InvariantCulture)}}","latest_tag":"{{latestTag}}"}
+            """);
+    }
+
     private static void AssertCanonicalCommandError(string stderr)
     {
         var lines = stderr.TrimEnd().Split(Environment.NewLine);
@@ -2541,6 +2601,36 @@ sleep 5
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
             => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = _content });
+    }
+
+    private sealed class UpgradeAssetResponseHandler : HttpMessageHandler
+    {
+        private readonly string _checksumManifest;
+        private readonly string _installerScript;
+        private readonly Action<CancellationToken> _observeToken;
+
+        internal UpgradeAssetResponseHandler(
+            string checksumManifest,
+            string installerScript,
+            Action<CancellationToken> observeToken)
+        {
+            _checksumManifest = checksumManifest;
+            _installerScript = installerScript;
+            _observeToken = observeToken;
+        }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            _observeToken(cancellationToken);
+            var path = request.RequestUri?.AbsolutePath ?? string.Empty;
+            HttpContent content = path.EndsWith("/sha256sums.txt", StringComparison.Ordinal)
+                ? new StringContent(_checksumManifest, Encoding.UTF8, "text/plain")
+                : path.EndsWith("/install.sh", StringComparison.Ordinal)
+                    ? new StringContent(_installerScript, Encoding.UTF8, "text/x-shellscript")
+                    : new StringContent(string.Empty, Encoding.UTF8, "text/plain");
+
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = content });
+        }
     }
 
     private sealed class StalledContent : HttpContent
