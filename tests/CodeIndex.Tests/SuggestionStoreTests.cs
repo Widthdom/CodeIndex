@@ -304,6 +304,19 @@ public class SuggestionStoreTests : IDisposable
         Assert.True(File.Exists(filePath));
     }
 
+    [Fact]
+    public void TryAdd_OnPosixCreatesPrivateStoreFile()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var filePath = Path.Combine(_tempDir, "suggestions-codeindex.json");
+
+        Assert.True(_store.TryAdd(MakeRecord("other", null, "Private suggestion store")));
+
+        AssertPrivateFileMode(filePath);
+    }
+
     // --- LoadAll tests / LoadAll テスト ---
 
     [Fact]
