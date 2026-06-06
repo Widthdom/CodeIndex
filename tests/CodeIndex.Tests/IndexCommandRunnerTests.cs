@@ -1116,6 +1116,60 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void ResolveProjects_SkipsFallbackTraversalDirectoryErrors_Issue3214()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_solution_fallback_directory_error");
+        var lockedDirectory = Path.Combine(projectRoot, "locked");
+        var restoreLockedDirectory = false;
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src", "App"));
+            Directory.CreateDirectory(lockedDirectory);
+            File.WriteAllText(Path.Combine(projectRoot, "src", "App", "App.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+
+            try
+            {
+                File.SetUnixFileMode(lockedDirectory, UnixFileMode.None);
+                restoreLockedDirectory = true;
+                _ = Directory.EnumerateFiles(lockedDirectory).ToList();
+                return;
+            }
+            catch (Exception permissionEx) when (permissionEx is UnauthorizedAccessException or IOException)
+            {
+            }
+            catch (PlatformNotSupportedException)
+            {
+                return;
+            }
+
+            var diagnostics = new List<string>();
+            var projects = SolutionProjectResolver.ResolveProjects(
+                projectRoot,
+                solutionPath: null,
+                SolutionProjectResolverLimits.Default,
+                diagnostics);
+
+            Assert.Contains(projects, project => project.ProjectPath == "src/App/App.csproj");
+            Assert.Contains(diagnostics, diagnostic => diagnostic.Contains("locked", StringComparison.Ordinal)
+                && diagnostic.Contains("permissions", StringComparison.Ordinal));
+
+            var ex = Assert.Throws<InvalidOperationException>(
+                () => SolutionProjectResolver.ResolveProjectFiles(projectRoot, ["Missing"]));
+            Assert.Contains("Traversal diagnostics:", ex.Message);
+            Assert.Contains("locked", ex.Message);
+        }
+        finally
+        {
+            if (restoreLockedDirectory)
+                File.SetUnixFileMode(lockedDirectory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void ResolveProjects_SkipsSolutionProjectsOutsideWorkspaceRoot_Issue3063()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_solution_outside_root");
