@@ -1519,6 +1519,33 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void ParseArgs_CommitsRejectsTooManyRefs_Issue3177()
+    {
+        var refs = Enumerable
+            .Range(0, IndexCommandRunner.MaxCommitRefCount + 1)
+            .Select(i => $"HEAD~{i}")
+            .ToArray();
+        var args = new[] { ".", "--commits" }.Concat(refs).ToArray();
+
+        var options = IndexCommandRunner.ParseArgs(args);
+
+        Assert.Equal(IndexCommandRunner.MaxCommitRefCount, options.Commits.Count);
+        Assert.Contains($"at most {IndexCommandRunner.MaxCommitRefCount}", options.ParseError);
+    }
+
+    [Fact]
+    public void ParseArgs_CommitsRejectsOversizedRef_Issue3177()
+    {
+        var oversizedRef = new string('a', IndexCommandRunner.MaxCommitRefLength + 1);
+
+        var options = IndexCommandRunner.ParseArgs([".", "--commits", oversizedRef]);
+
+        Assert.Empty(options.Commits);
+        Assert.Contains("commit ref is too long", options.ParseError);
+        Assert.Contains($"max {IndexCommandRunner.MaxCommitRefLength}", options.ParseError);
+    }
+
+    [Fact]
     public void ParseArgs_ParallelismFlag_ParsesPositiveValue()
     {
         var options = IndexCommandRunner.ParseArgs([".", "--parallelism", "3"]);

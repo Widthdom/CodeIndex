@@ -141,7 +141,8 @@ public class ConsoleUiTests
         Assert.Contains("--count                    Count only; search/definition/references/callers/callees/symbols/files/find/unused ignore --limit, impact/hotspots still use visible page counts", output);
         Assert.Contains("--no-dedup                 search only: return every raw overlapping chunk hit (debug/density)", output);
         Assert.Contains("--commits <commit-ref> [commit-ref ...]", output);
-        Assert.Contains("Update only files changed in the specified git commits (preferred after commits)", output);
+        Assert.Contains("Update only files changed in the specified git", output);
+        Assert.Contains("commits (preferred after commits; max 64 refs, 256 chars each)", output);
         Assert.Contains("--files <path> [path ...]  Update only the specified files; old rename/delete paths are not purged unless also listed", output);
         Assert.Contains("--optimize                 index only: optimize the existing FTS5 table for this project's DB without scanning files", output);
         Assert.Contains("--duration-format <format> Index elapsed time format: `auto` (default), `seconds`, or `hms`; JSON keeps raw elapsed_ms", output);

@@ -943,7 +943,7 @@ public static class ConsoleUi
         WriteHelpLine("  --include-symbol-kind <kind>[,<kind>]  Keep only matching symbol kinds during indexing");
         WriteHelpLine("  --exclude-symbol-kind <kind>[,<kind>]  Drop matching symbol kinds during indexing");
         Console.WriteLine("  --commits <commit-ref> [commit-ref ...]");
-        Console.WriteLine("                              Update only files changed in the specified git commits (preferred after commits)");
+        Console.WriteLine($"                              Update only files changed in the specified git commits (preferred after commits; max {IndexCommandRunner.MaxCommitRefCount} refs, {IndexCommandRunner.MaxCommitRefLength} chars each)");
         Console.WriteLine("  --changed-between <old-ref> <new-ref>");
         Console.WriteLine("                              Update only files changed between two git refs (useful after branch switches)");
         Console.WriteLine("  --files <path> [path ...]  Update only the specified files; old rename/delete paths are not purged unless also listed");

@@ -177,7 +177,7 @@ public static partial class IndexCommandRunner
                     while (i + 1 < args.Length && !args[i + 1].StartsWith('-'))
                     {
                         var commit = args[++i];
-                        commits.Add(commit);
+                        AddCommitRef(commit, commits, ref parseError);
                     }
                     if (commits.Count == 0)
                         Console.Error.WriteLine("Warning: --commits specified but no commit refs provided / --commits が指定されましたがコミットrefがありません");
@@ -410,6 +410,23 @@ public static partial class IndexCommandRunner
         }
 
         return count;
+    }
+
+    private static void AddCommitRef(string commit, List<string> commits, ref string? parseError)
+    {
+        if (commits.Count >= MaxCommitRefCount)
+        {
+            parseError ??= $"--commits accepts at most {MaxCommitRefCount} commit refs";
+            return;
+        }
+
+        if (commit.Length > MaxCommitRefLength)
+        {
+            parseError ??= $"--commits commit ref is too long ({commit.Length} characters; max {MaxCommitRefLength})";
+            return;
+        }
+
+        commits.Add(commit);
     }
 
     internal static int DefaultIndexParallelism()

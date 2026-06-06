@@ -20,6 +20,8 @@ public static partial class IndexCommandRunner
     internal const string IncludeSymbolKindsEnvironmentVariable = "CDIDX_INDEX_INCLUDE_SYMBOL_KINDS";
     internal const string ExcludeSymbolKindsEnvironmentVariable = "CDIDX_INDEX_EXCLUDE_SYMBOL_KINDS";
     internal const int DefaultMaxSymbolsPerFile = 5000;
+    internal const int MaxCommitRefCount = 64;
+    internal const int MaxCommitRefLength = 256;
     internal const int MaxGitExcludeBytes = 256 * 1024;
     private const string SymbolKindFilterMetaKey = "index_symbol_kind_filter";
     private const int ScanCheckpointVersion = 1;
