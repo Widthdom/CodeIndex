@@ -1578,7 +1578,9 @@ public partial class McpServer : IDisposable
                     _isolateDbForCurrentRequest.Value = previousIsolation;
                 }
             }, requestCts.Token);
-            var completed = await Task.WhenAny(actionTask, Task.Delay(_requestTimeout)).ConfigureAwait(false);
+            using var timeoutDelayCts = new CancellationTokenSource();
+            var timeoutTask = Task.Delay(_requestTimeout, timeoutDelayCts.Token);
+            var completed = await Task.WhenAny(actionTask, timeoutTask).ConfigureAwait(false);
             if (completed != actionTask)
             {
                 try { requestCts.Cancel(); }
@@ -1593,6 +1595,7 @@ public partial class McpServer : IDisposable
                 return CreateRequestTimeoutResponse(id, stopwatch.Elapsed);
             }
 
+            timeoutDelayCts.Cancel();
             return await actionTask.ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (requestCts.IsCancellationRequested)
