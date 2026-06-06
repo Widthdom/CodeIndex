@@ -4254,6 +4254,58 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunHotspots_CountJson_IgnoresLimitForSymbolAndFileGroups()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_hotspots_count_limit");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            for (var i = 0; i < 3; i++)
+            {
+                TestProjectHelper.InsertIndexedFile(dbPath, $"src/Hotspot{i}.cs", "csharp",
+                    $$"""
+                    public class HotspotContainer{{i}}
+                    {
+                        private void Hotspot{{i}}()
+                        {
+                            Hotspot{{i}}();
+                        }
+                    }
+                    """);
+            }
+            MarkGraphAndFoldReady(dbPath);
+
+            var (symbolExitCode, symbolStdout, symbolStderr) = CaptureConsole(() => QueryCommandRunner.RunHotspots(
+                ["--db", dbPath, "--json", "--kind", "function", "--count", "--limit", "1"],
+                _jsonOptions));
+            var (fileExitCode, fileStdout, fileStderr) = CaptureConsole(() => QueryCommandRunner.RunHotspots(
+                ["--db", dbPath, "--json", "--kind", "function", "--group-by", "file", "--count", "--limit", "1"],
+                _jsonOptions));
+
+            using var symbolDocument = ParseJsonOutput(symbolStdout);
+            using var fileDocument = ParseJsonOutput(fileStdout);
+            var symbolJson = symbolDocument.RootElement;
+            var fileJson = fileDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, symbolExitCode);
+            Assert.Equal(string.Empty, symbolStderr);
+            Assert.Equal(3, symbolJson.GetProperty("count").GetInt32());
+            Assert.Equal(3, symbolJson.GetProperty("files").GetInt32());
+            Assert.Equal("symbol", symbolJson.GetProperty("grouped_by").GetString());
+
+            Assert.Equal(CommandExitCodes.Success, fileExitCode);
+            Assert.Equal(string.Empty, fileStderr);
+            Assert.Equal(3, fileJson.GetProperty("count").GetInt32());
+            Assert.Equal(3, fileJson.GetProperty("files").GetInt32());
+            Assert.Equal("file", fileJson.GetProperty("grouped_by").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunHotspots_GroupByName_CountJson_UsesGroupedSemantics()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_hotspots_group_count");
@@ -4284,10 +4336,20 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/UniqueHelper.cs", "csharp",
+                """
+                public class UniqueHelper
+                {
+                    private void UniqueHotspot()
+                    {
+                        UniqueHotspot();
+                    }
+                }
+                """);
             MarkGraphAndFoldReady(dbPath);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunHotspots(
-                ["--db", dbPath, "--json", "--group-by-name", "--count"],
+                ["--db", dbPath, "--json", "--group-by-name", "--count", "--limit", "1"],
                 _jsonOptions));
 
             using var document = ParseJsonOutput(stdout);
@@ -4295,9 +4357,9 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal(1, json.GetProperty("count").GetInt32());
-            Assert.Equal(2, json.GetProperty("definition_site_total").GetInt32());
-            Assert.Equal(2, json.GetProperty("files").GetInt32());
+            Assert.Equal(2, json.GetProperty("count").GetInt32());
+            Assert.Equal(3, json.GetProperty("definition_site_total").GetInt32());
+            Assert.Equal(3, json.GetProperty("files").GetInt32());
             Assert.Equal("name_kind", json.GetProperty("grouped_by").GetString());
         }
         finally
@@ -4432,6 +4494,48 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(5, json.GetProperty("definition_site_total").GetInt32());
             Assert.Contains(hotspots, h => h.GetProperty("name").GetString() == "SharedHelper");
             Assert.Contains(hotspots, h => h.GetProperty("name").GetString() == "UniqueHotspot");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunHotspots_GroupByNameJson_CapsPathSamples()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_hotspots_group_paths");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            for (var i = 0; i < 25; i++)
+            {
+                TestProjectHelper.InsertIndexedFile(dbPath, $"src/Helper{i:D2}.cs", "csharp",
+                    $$"""
+                    public class Helper{{i}}
+                    {
+                        private void SharedHelper()
+                        {
+                            SharedHelper();
+                        }
+                    }
+                    """);
+            }
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunHotspots(
+                ["--db", dbPath, "--json", "--kind", "function", "--group-by-name", "--limit", "1"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var hotspot = Assert.Single(json.GetProperty("hotspots").EnumerateArray());
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(25, hotspot.GetProperty("definition_sites").GetInt32());
+            Assert.Equal(20, hotspot.GetProperty("paths").GetArrayLength());
+            Assert.True(hotspot.GetProperty("paths_truncated").GetBoolean());
         }
         finally
         {

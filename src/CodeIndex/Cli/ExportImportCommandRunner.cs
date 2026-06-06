@@ -125,8 +125,8 @@ internal static class ExportImportCommandRunner
         }
         finally
         {
-            try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { }
-            try { DeleteSqliteSidecars(tempPath); } catch { }
+            TryDeleteFile(tempPath, "import temporary database");
+            DeleteSqliteSidecars(tempPath, "import temporary database sidecar");
         }
     }
 
@@ -206,8 +206,8 @@ internal static class ExportImportCommandRunner
         }
         finally
         {
-            try { if (File.Exists(snapshotPath)) File.Delete(snapshotPath); } catch { }
-            try { DeleteSqliteSidecars(snapshotPath); } catch { }
+            TryDeleteFile(snapshotPath, "export temporary database");
+            DeleteSqliteSidecars(snapshotPath, "export temporary database sidecar");
         }
     }
 
@@ -581,29 +581,34 @@ internal static class ExportImportCommandRunner
         DeleteSqliteSidecars(fullDbPath);
     }
 
-    private static void DeleteSqliteSidecars(string dbPath)
+    private static void DeleteSqliteSidecars(string dbPath, string? cleanupDescription = null)
     {
-        TryDeleteFile(dbPath + "-wal");
-        TryDeleteFile(dbPath + "-shm");
+        TryDeleteFile(dbPath + "-wal", cleanupDescription, DeleteSqliteSidecarForTesting);
+        TryDeleteFile(dbPath + "-shm", cleanupDescription, DeleteSqliteSidecarForTesting);
     }
 
-    private static void TryDeleteFile(string path)
+    private static void TryDeleteFile(string path, string? cleanupDescription = null, Action<string>? deleteOverride = null)
     {
         try
         {
             if (!File.Exists(path))
                 return;
 
-            if (DeleteSqliteSidecarForTesting != null)
-                DeleteSqliteSidecarForTesting(path);
+            if (deleteOverride != null)
+                deleteOverride(path);
+            else if (DeleteFileForTesting != null)
+                DeleteFileForTesting(path);
             else
                 File.Delete(path);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or PathTooLongException)
         {
+            if (!string.IsNullOrWhiteSpace(cleanupDescription))
+                Console.Error.WriteLine($"Warning: failed to delete {cleanupDescription} {ConsoleUi.FormatBoundedValue(path)} ({CommandErrorWriter.FormatSanitizedException(ex)}).");
         }
     }
 
+    internal static Action<string>? DeleteFileForTesting { get; set; }
     internal static Action<string>? DeleteSqliteSidecarForTesting { get; set; }
 
     private static bool IsSamePath(string left, string right)

@@ -12444,6 +12444,58 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void SuggestImprovement_WriteProbeCleanupFailureWarnsWithoutFailing_Issue3023()
+    {
+        var cdidxDir = Path.GetDirectoryName(_dbPath)!;
+        var uniqueDesc = $"Probe cleanup regression {Guid.NewGuid():N}";
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "suggest_improvement",
+                ["arguments"] = new JsonObject
+                {
+                    ["category"] = "other",
+                    ["description"] = uniqueDesc,
+                },
+            },
+        };
+
+        JsonNode response;
+        using var stderr = new StringWriter();
+        lock (TestConsoleLock.Gate)
+        {
+            var previousError = Console.Error;
+            Console.SetError(stderr);
+            try
+            {
+                McpServer.DeleteCdidxDirectoryWritableProbeForTesting = _ => throw new IOException("simulated probe cleanup failure");
+                response = _server.HandleMessage(request)!;
+            }
+            finally
+            {
+                McpServer.DeleteCdidxDirectoryWritableProbeForTesting = null;
+                Console.SetError(previousError);
+            }
+        }
+
+        try
+        {
+            Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
+            Assert.Contains("Warning: failed to delete .cdidx writable probe", stderr.ToString());
+            Assert.Contains("IOException", stderr.ToString());
+        }
+        finally
+        {
+            foreach (var leftover in Directory.GetFiles(cdidxDir, ".write_probe.*.tmp"))
+                DeleteFileRobust(leftover);
+        }
+    }
+
+    [Fact]
     public void SuggestImprovement_InvalidCategory_ReturnsError()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"suggest_improvement","arguments":{"category":"invalid_category","description":"Some description"}}}""")!;
