@@ -172,6 +172,52 @@ public sealed class DbSearchReaderIssueTests : IDisposable
         Assert.Equal([1, 2], result.GuardEvidence!.Select(evidence => evidence.Line).ToArray());
     }
 
+    [Fact]
+    public void Search_LiteralQueryAtLengthLimitRuns_Issue3081()
+    {
+        var query = new string('a', DbReader.MaxLiteralSearchQueryLength);
+        InsertIndexedFile("src/literal-length-limit.cs", "csharp", query);
+
+        var results = _reader.Search(query, pathPatterns: ["src/literal-length-limit.cs"], limit: 1);
+
+        var result = Assert.Single(results);
+        Assert.Equal("src/literal-length-limit.cs", result.Path);
+    }
+
+    [Fact]
+    public void Search_LiteralQueryOverLengthLimitThrows_Issue3081()
+    {
+        var query = new string('a', DbReader.MaxLiteralSearchQueryLength + 1);
+
+        var ex = Assert.Throws<SearchQueryLimitException>(() => _reader.Search(query, pathPatterns: ["src/*.cs"], limit: 1));
+
+        Assert.Contains("literal search query is too long", ex.Message, StringComparison.Ordinal);
+        Assert.Contains(DbReader.MaxLiteralSearchQueryLength.ToString(), ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Search_LiteralTokenCountAtLimitRuns_Issue3081()
+    {
+        var query = BuildLiteralTermQuery(DbReader.MaxLiteralSearchTokenCount);
+        InsertIndexedFile("src/literal-token-limit.cs", "csharp", query);
+
+        var results = _reader.Search(query, pathPatterns: ["src/literal-token-limit.cs"], limit: 1);
+
+        var result = Assert.Single(results);
+        Assert.Equal("src/literal-token-limit.cs", result.Path);
+    }
+
+    [Fact]
+    public void Search_LiteralTokenCountOverLimitThrows_Issue3081()
+    {
+        var query = BuildLiteralTermQuery(DbReader.MaxLiteralSearchTokenCount + 1);
+
+        var ex = Assert.Throws<SearchQueryLimitException>(() => _reader.Search(query, pathPatterns: ["src/*.cs"], limit: 1));
+
+        Assert.Contains("literal search query has too many terms", ex.Message, StringComparison.Ordinal);
+        Assert.Contains(DbReader.MaxLiteralSearchTokenCount.ToString(), ex.Message, StringComparison.Ordinal);
+    }
+
     private void InsertIndexedFile(string path, string lang, string content, DateTime? modified = null)
     {
         var normalized = content.Replace("\r\n", "\n");
@@ -194,6 +240,9 @@ public sealed class DbSearchReaderIssueTests : IDisposable
             Content = normalized,
         }]);
     }
+
+    private static string BuildLiteralTermQuery(int termCount)
+        => string.Join(' ', Enumerable.Range(0, termCount).Select(i => $"t{i:D3}"));
 
     public void Dispose()
     {

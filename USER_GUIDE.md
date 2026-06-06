@@ -876,6 +876,9 @@ Search normalizes literal FTS queries to Unicode NFC before matching. If every
 literal token exceeds SQLite FTS5 unicode61's 1000-character token cap,
 zero-result JSON includes `query_degraded_reason` and `tokens_dropped`. Index
 validation reports long unbroken FTS tokens as `fts_token_too_long`.
+Literal-safe `search` queries are capped at 1000 characters and 128 whitespace
+terms. Oversized generated input is rejected before FTS5 sanitization; split it
+into smaller searches or use narrower text.
 Guard-aware search filters primary `search` matches by nearby literal guards:
 `--require-before` / `--require-after` keep matches only when the guard query
 appears in the selected line window, while `--reject-before` / `--reject-after`
@@ -3175,6 +3178,9 @@ literal FTS クエリは照合前に Unicode NFC へ正規化されます。す�
 token が SQLite FTS5 unicode61 の 1000 文字 token 上限を超える場合、0 件
 JSON には `query_degraded_reason` と `tokens_dropped` が含まれます。index
 validation は長い連続 FTS token を `fts_token_too_long` として報告します。
+literal-safe な `search` query は 1000 文字、128 whitespace term までです。
+生成された大きすぎる入力は FTS5 sanitization 前に拒否されるため、小さな検索へ分割するか、
+より狭い text にしてください。
 guard-aware search は primary の `search` 一致を近傍の literal guard で絞り込みます:
 `--require-before` / `--require-after` は指定行窓内に guard query がある場合だけ残し、
 `--reject-before` / `--reject-after` は guard query がある一致を落とします。JSON の検索結果には

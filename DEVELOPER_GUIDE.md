@@ -779,6 +779,11 @@ WHERE fts_chunks MATCH 'content:authenticate'
 
 ### How the search works
 
+Literal-safe `search` queries are bounded in the reader before FTS5
+sanitization: maximum 1000 characters and 128 whitespace terms. Keep this guard
+in `DbReader` so CLI, MCP, and direct reader callers share the same failure mode;
+raw `--fts` queries continue to use the raw FTS complexity limits instead.
+
 When you run:
 ```sql
 SELECT f.path, c.start_line, c.content
@@ -3010,6 +3015,8 @@ MCPツール呼び出しは `structuredContent` に構造化JSON、`content` に
 exact-match flag の互換性は [USER_GUIDE.md](USER_GUIDE.md#フラグ互換性と移行) に記載しています。MCP schema はこの表と同期してください。`search.exact` は `exactSubstring` の legacy alias、name-based tools の `exact` は `exactName` の legacy alias です。新しい exact-match alias を追加する場合は、compatibility table、CLI help、MCP description、changelog fragment を同じ変更で更新してください。
 
 `search`、`definition`、`references`、`callers`、`callees`、`symbols`、`files` は `--path`、繰り返し指定できる `--exclude-path`、`--exclude-tests` による絞り込みを共有します。読み取り層は tests や docs より source を優先し、`search` はシンボル名やパスがクエリと正確に一致する候補をさらに上位に出して、AIクライアントが実装ファイルへ早く到達できるようにします。
+
+literal-safe な `search` query は reader 層で FTS5 sanitization 前に 1000 文字、128 whitespace term へ制限します。CLI、MCP、直接 reader caller の failure mode を揃えるため、この guard は `DbReader` に置きます。raw `--fts` query は別途 raw FTS complexity limit を使います。
 
 `search --json` と MCP の `search` は、フルチャンクを `chunk_start_line`、`chunk_end_line`、`snippet_start_line`、`snippet_end_line`、`snippet`、`match_lines`、`highlights`、`context_before`、`context_after`、`truncated_line_count`、`dropped_match_line_count`、`truncation_context` を持つ軽量スニペットへ投影します。`--snippet-lines` で抜粋長を先に制限でき（デフォルト: 8、最大: 20）、`--max-line-width`（CLI）/ `maxLineWidth`（MCP）は `find` / `references` / `excerpt` / `inspect` と同じ共有 `LineWidthFormatter.ClampLine` 契約（デフォルト: 512、最大: 4096、`0` で切り詰め解除）で各スニペット行を最初のマッチトークン周辺にクランプするため、minified / transpiled / 生成された 1 行ファイル内の 1 ヒットで数百 KB を返さなくなります。クランプされた行はスニペットに `...(+N)...` マーカーが入り、`truncation_context.char_counts`、`truncation_context.total_chars`、`highlights[].truncated`、`highlights[].original_line_length`、`highlights[].truncated_char_counts` で AI クライアントがクランプの有無と省略文字数を検出できます。`highlights[].terms` は互換性のため distinct な term list のまま残し、`highlights[].term_occurrences` は一致ごとの `term`、1-based の `line` / `column`、`length` を記録します。exact substring search では `highlights[].literal_terms` と `highlights[].literal_term_occurrences`（MCP では camelCase）も追加され、広めの診断 token list を残したまま、要求された literal phrase だけを render できます。exact ではない記号の多い code phrase 検索では、FTS tokenization が記号を失いやすい場合に exact substring semantics で再検索できるよう、CLI JSON compact result に `exact_substring_hint`、MCP `search` に `recovery_hint` を追加します。`dropped_match_line_count` は選択された snippet window 外に落ちた一致行数を示します。
 

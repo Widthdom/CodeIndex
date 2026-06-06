@@ -7586,6 +7586,12 @@ public static class QueryCommandRunner
             Console.Error.WriteLine("Hint: narrow the search with more specific query text, --lang, --path, or --exclude-tests, or reduce pagination offset before retrying guarded search.");
             return CommandExitCodes.UsageError;
         }
+        catch (SearchQueryLimitException ex)
+        {
+            Console.Error.WriteLine($"Error [{CommandErrorCodes.UsageError}]: {ex.Message}");
+            Console.Error.WriteLine("Hint: shorten the search text or split generated input into smaller literal queries.");
+            return CommandExitCodes.UsageError;
+        }
         catch (Exception ex)
         {
             if (JsonOutputFailure.TryHandle(ex, out var exitCode))
