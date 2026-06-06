@@ -1055,7 +1055,8 @@ public class FileIndexer
             if (TryCreateCaseVariant(normalizedRoot, out var rootVariant))
                 return Directory.Exists(LongPath.EnsureWindowsPrefix(rootVariant));
 
-            var probePath = Path.Combine(normalizedRoot, $".cdidx_case_probe_{Guid.NewGuid():N}");
+            using var probe = CaseSensitivityProbeDirectory.CreateProbePathScope(normalizedRoot, "case-probe-");
+            var probePath = probe.Path;
             var prefixedProbePath = LongPath.EnsureWindowsPrefix(probePath);
             File.WriteAllText(prefixedProbePath, string.Empty);
             try

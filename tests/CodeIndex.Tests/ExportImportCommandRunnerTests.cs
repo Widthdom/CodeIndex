@@ -132,6 +132,51 @@ public class ExportImportCommandRunnerTests
     }
 
     [Fact]
+    public void RunImport_TemporaryDatabaseCleanupFailureWarnsAndPreservesImportError_Issue3032()
+    {
+        var workDir = TestProjectHelper.CreateTempProject("import_temp_cleanup_warning");
+        string? cleanupPath = null;
+        try
+        {
+            var manifest = $$"""
+                {"format_version":"1","cdidx_version":"test","user_version":0,"database_sha256":"{{new string('0', 64)}}"}
+                """;
+            var archivePath = CreateArchiveWithManifestAndDatabase(workDir, manifest, [1, 2, 3, 4]);
+            var dbPath = Path.Combine(workDir, "codeindex.db");
+            var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
+            ExportImportCommandRunner.DeleteFileForTesting = path =>
+            {
+                if (Path.GetFileName(path).StartsWith(".codeindex-import-", StringComparison.Ordinal)
+                    && path.EndsWith(".db", StringComparison.Ordinal))
+                {
+                    cleanupPath = path;
+                    throw new IOException("simulated import temp cleanup failure");
+                }
+
+                File.Delete(path);
+            };
+
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
+                ExportImportCommandRunner.RunImport([archivePath, "--db", dbPath], jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains("archive manifest mismatch: database_sha256 does not match codeindex.db", stderr);
+            Assert.Contains("Warning: failed to delete import temporary database", stderr);
+            Assert.Contains("IOException", stderr);
+            Assert.NotNull(cleanupPath);
+            Assert.True(File.Exists(cleanupPath));
+        }
+        finally
+        {
+            ExportImportCommandRunner.DeleteFileForTesting = null;
+            if (cleanupPath != null && File.Exists(cleanupPath))
+                File.Delete(cleanupPath);
+            TestProjectHelper.DeleteDirectory(workDir);
+        }
+    }
+
+    [Fact]
     public void RunExportArchive_FailureOmitsRawExceptionMessage()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("export_error_sanitize");
@@ -152,6 +197,47 @@ public class ExportImportCommandRunnerTests
         }
         finally
         {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunExportArchive_TemporaryDatabaseCleanupFailureWarnsWithoutFailing_Issue3032()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("export_temp_cleanup_warning");
+        string? cleanupPath = null;
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var outputPath = Path.Combine(projectRoot, "codeindex.cdidx.zip");
+            ExportImportCommandRunner.DeleteFileForTesting = path =>
+            {
+                if (Path.GetFileName(path).StartsWith("codeindex-export-", StringComparison.Ordinal)
+                    && path.EndsWith(".db", StringComparison.Ordinal))
+                {
+                    cleanupPath = path;
+                    throw new IOException("simulated export temp cleanup failure");
+                }
+
+                File.Delete(path);
+            };
+
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
+                ExportImportCommandRunner.RunExport([outputPath, "--db", dbPath], new JsonSerializerOptions(), "test"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("Exported CodeIndex archive", stdout);
+            Assert.True(File.Exists(outputPath));
+            Assert.Contains("Warning: failed to delete export temporary database", stderr);
+            Assert.Contains("IOException", stderr);
+            Assert.NotNull(cleanupPath);
+            Assert.True(File.Exists(cleanupPath));
+        }
+        finally
+        {
+            ExportImportCommandRunner.DeleteFileForTesting = null;
+            if (cleanupPath != null && File.Exists(cleanupPath))
+                File.Delete(cleanupPath);
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
@@ -487,6 +573,21 @@ public class ExportImportCommandRunnerTests
         var entry = archive.CreateEntry("manifest.json");
         using var writer = new StreamWriter(entry.Open());
         writer.Write(manifest);
+        return archivePath;
+    }
+
+    private static string CreateArchiveWithManifestAndDatabase(string workDir, string manifest, byte[] databaseBytes)
+    {
+        var archivePath = Path.Combine(workDir, "codeindex-with-db.cdidx.zip");
+        using var archive = ZipFile.Open(archivePath, ZipArchiveMode.Create);
+        var manifestEntry = archive.CreateEntry("manifest.json");
+        using (var writer = new StreamWriter(manifestEntry.Open()))
+            writer.Write(manifest);
+
+        var databaseEntry = archive.CreateEntry("codeindex.db");
+        using (var stream = databaseEntry.Open())
+            stream.Write(databaseBytes, 0, databaseBytes.Length);
+
         return archivePath;
     }
 }

@@ -5048,12 +5048,13 @@ public partial class McpServer
     private static bool TryProbeCdidxDirectoryWritable(string cdidxDir, out string? error)
     {
         var probePath = Path.Combine(cdidxDir, $".write_probe.{Guid.NewGuid():N}.tmp");
+        var createdProbe = false;
         try
         {
             using (new FileStream(probePath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
             {
             }
-            File.Delete(probePath);
+            createdProbe = true;
             error = null;
             return true;
         }
@@ -5062,7 +5063,32 @@ public partial class McpServer
             error = $"Cannot write to .cdidx directory {cdidxDir}; check directory ownership, permissions, and read-only mounts. {ex.Message}";
             return false;
         }
+        finally
+        {
+            if (createdProbe)
+                TryDeleteCdidxDirectoryWritableProbe(probePath);
+        }
     }
+
+    private static void TryDeleteCdidxDirectoryWritableProbe(string probePath)
+    {
+        try
+        {
+            if (!File.Exists(probePath))
+                return;
+
+            if (DeleteCdidxDirectoryWritableProbeForTesting != null)
+                DeleteCdidxDirectoryWritableProbeForTesting(probePath);
+            else
+                File.Delete(probePath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Console.Error.WriteLine($"Warning: failed to delete .cdidx writable probe {ConsoleUi.FormatBoundedValue(probePath)} ({CommandErrorWriter.FormatSanitizedException(ex)}).");
+        }
+    }
+
+    internal static Action<string>? DeleteCdidxDirectoryWritableProbeForTesting { get; set; }
 
     private static CSharpStaticInterfaceWorkspaceSymbols BuildMcpCSharpStaticInterfaceWorkspaceSymbols(
         DbWriter writer,

@@ -916,7 +916,8 @@ public static class GitHelper
             if (TryProbeExistingDirectoryPath(normalizedRoot, out var ignoreCase))
                 return ignoreCase;
 
-            var probePath = Path.Combine(normalizedRoot, $".cdidx_case_probe_{Guid.NewGuid():N}");
+            using var probe = CaseSensitivityProbeDirectory.CreateProbePathScope(normalizedRoot, "case-probe-");
+            var probePath = probe.Path;
             var ioProbePath = LongPath.EnsureWindowsPrefix(probePath);
             File.WriteAllText(ioProbePath, string.Empty);
             try
@@ -944,7 +945,7 @@ public static class GitHelper
         if (!TryCreateCaseVariant(path, out var variant))
             return false;
 
-        ignoreCase = Directory.Exists(variant);
+        ignoreCase = Directory.Exists(LongPath.EnsureWindowsPrefix(variant));
         return true;
     }
 

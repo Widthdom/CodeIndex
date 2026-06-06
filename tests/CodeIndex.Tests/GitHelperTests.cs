@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using CodeIndex.Cli;
+using CodeIndex.Indexer;
 
 namespace CodeIndex.Tests;
 
@@ -840,6 +841,28 @@ public class GitHelperTests : IDisposable
         Assert.Equal(expected, resolved);
     }
 
+    [Fact]
+    public void ResolveIgnoreCase_NonRepoProbeAvoidsRootProbeArtifacts_Issue3174()
+    {
+        var nonRepoDir = Path.Combine(_tempDir, $"non_repo_probe_{Guid.NewGuid():N}");
+        var fakeHome = Path.Combine(_tempDir, $"fake_home_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(nonRepoDir);
+        Directory.CreateDirectory(fakeHome);
+        var environment = new Dictionary<string, string?>
+        {
+            ["HOME"] = fakeHome,
+            ["XDG_CONFIG_HOME"] = Path.Combine(fakeHome, ".config"),
+            ["GIT_CONFIG_NOSYSTEM"] = "1",
+        };
+
+        var resolved = GitHelper.ResolveIgnoreCase(nonRepoDir, environment);
+        var expected = ProbeDirectoryIgnoreCaseLikeProduction(nonRepoDir);
+
+        Assert.Equal(expected, resolved);
+        Assert.Empty(Directory.GetFiles(nonRepoDir, ".cdidx_case_probe_*", SearchOption.TopDirectoryOnly));
+        Assert.False(Directory.Exists(Path.Combine(nonRepoDir, CaseSensitivityProbeDirectory.DataDirectoryName)));
+    }
+
     private string CreateGitRepo()
     {
         var repoDir = Path.Combine(_tempDir, $"repo_{Guid.NewGuid():N}");
@@ -985,10 +1008,8 @@ exit 1
 
     private static bool ProbeDirectoryIgnoreCaseLikeProduction(string path)
     {
-        if (TryCreateCaseVariant(path, out var variant))
-            return Directory.Exists(variant);
-
-        var probePath = Path.Combine(path, $".cdidx_case_probe_test_{Guid.NewGuid():N}");
+        using var probe = CaseSensitivityProbeDirectory.CreateProbePathScope(path, "case-probe-test-");
+        var probePath = probe.Path;
         File.WriteAllText(probePath, string.Empty);
         try
         {

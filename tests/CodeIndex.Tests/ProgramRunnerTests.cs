@@ -104,6 +104,36 @@ public class ProgramRunnerTests
     }
 
     [Fact]
+    public void CanWriteDirectory_ProbeCleanupFailureWarnsWithoutFailing_Issue3024()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var directory = Path.Combine(Path.GetTempPath(), $"cdidx_install_probe_cleanup_{Guid.NewGuid():N}");
+            var originalError = Console.Error;
+            using var stderr = new StringWriter(CultureInfo.InvariantCulture);
+            try
+            {
+                Directory.CreateDirectory(directory);
+                ProgramRunner.DeleteInstallDirectoryWriteProbeForTesting = _ => throw new IOException("simulated probe cleanup failure");
+                Console.SetError(stderr);
+
+                Assert.True(ProgramRunner.CanWriteDirectory(directory));
+
+                var warning = stderr.ToString();
+                Assert.Contains("Warning: failed to delete install directory write probe", warning);
+                Assert.Contains("IOException", warning);
+                Assert.Single(Directory.GetFiles(directory, ".cdidx-write-test-*", SearchOption.TopDirectoryOnly));
+            }
+            finally
+            {
+                ProgramRunner.DeleteInstallDirectoryWriteProbeForTesting = null;
+                Console.SetError(originalError);
+                TestProjectHelper.DeleteDirectory(directory);
+            }
+        }
+    }
+
+    [Fact]
     public void RunSearch_FirstQueryLiteralMatchingPrettyFlag_IsNotConsumed_Issue2996()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_pretty_query_literal");
