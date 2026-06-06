@@ -10000,6 +10000,48 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_ProjectScopeUsesIndexedProjectRootWhenCurrentDirectoryDiffers_Issue3183()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_project_scope_indexed_root");
+        var otherRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_project_scope_other_cwd");
+        var originalCurrentDirectory = Environment.CurrentDirectory;
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src", "AppA"));
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src", "AppB"));
+            File.WriteAllText(Path.Combine(projectRoot, "Repo.sln"), """
+            Microsoft Visual Studio Solution File, Format Version 12.00
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AppA", "src\AppA\AppA.csproj", "{11111111-1111-1111-1111-111111111111}"
+            EndProject
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AppB", "src\AppB\AppB.csproj", "{22222222-2222-2222-2222-222222222222}"
+            EndProject
+            """);
+            File.WriteAllText(Path.Combine(projectRoot, "src", "AppA", "AppA.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "AppB", "AppB.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/AppA/ServiceA.cs", "csharp", "public class ServiceA { }\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/AppB/ServiceB.cs", "csharp", "public class ServiceB { }\n");
+
+            Environment.CurrentDirectory = otherRoot;
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion(), dbPathExplicit: true);
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"Service","project":"AppA","exactSubstring":true}}}""")!;
+            var response = server.HandleMessage(request)!;
+
+            Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
+            var results = response["result"]!["structuredContent"]!["results"]!.AsArray();
+            var result = Assert.Single(results);
+            Assert.Equal("src/AppA/ServiceA.cs", result!["path"]!.GetValue<string>());
+        }
+        finally
+        {
+            Environment.CurrentDirectory = originalCurrentDirectory;
+            TestProjectHelper.DeleteDirectory(otherRoot);
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void ToolsCall_Index_Rebuild_IgnoresUnreadableDirectoriesWhenCollectingMarkerFingerprints()
     {
         if (OperatingSystem.IsWindows())

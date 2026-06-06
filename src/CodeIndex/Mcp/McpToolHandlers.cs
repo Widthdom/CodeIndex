@@ -1014,7 +1014,7 @@ public partial class McpServer
         return string.IsNullOrWhiteSpace(value) ? null : new List<string> { value };
     }
 
-    private static List<string>? ReadScopedPathList(JsonNode? args)
+    private List<string>? ReadScopedPathList(JsonNode? args)
     {
         var paths = ReadPathList(args, "path") ?? [];
         var projects = ReadPathList(args, "project") ?? [];
@@ -1022,12 +1022,13 @@ public partial class McpServer
             return paths.Count == 0 ? null : paths;
 
         var solution = args?["solution"]?.GetValue<string>();
-        foreach (var glob in SolutionProjectResolver.ResolveProjectDirectoryGlobs(Environment.CurrentDirectory, projects, solution))
+        var projectRoot = ResolveProjectFilterRoot();
+        foreach (var glob in SolutionProjectResolver.ResolveProjectDirectoryGlobs(projectRoot, projects, solution))
             paths.Add(glob);
         return paths.Count == 0 ? null : paths;
     }
 
-    private static JsonObject? ValidateProjectFilterArguments(JsonNode? args)
+    private JsonObject? ValidateProjectFilterArguments(JsonNode? args)
     {
         var projects = ReadPathList(args, "project") ?? [];
         if (projects.Count == 0)
@@ -1036,7 +1037,7 @@ public partial class McpServer
         var solution = args?["solution"]?.GetValue<string>();
         try
         {
-            _ = SolutionProjectResolver.ResolveProjectDirectoryGlobs(Environment.CurrentDirectory, projects, solution);
+            _ = SolutionProjectResolver.ResolveProjectDirectoryGlobs(ResolveProjectFilterRoot(), projects, solution);
             return null;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
@@ -1052,6 +1053,10 @@ public partial class McpServer
             return error;
         }
     }
+
+    private string ResolveProjectFilterRoot()
+        => DbPathResolver.ResolveProjectRootForQuery(_dbPath, _dbPathExplicit)
+            ?? Environment.CurrentDirectory;
 
     private static bool TryReadSinceArgument(JsonNode? args, out DateTime? since, out string? error)
     {
