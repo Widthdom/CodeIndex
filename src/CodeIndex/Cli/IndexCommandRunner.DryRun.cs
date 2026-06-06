@@ -6,6 +6,10 @@ namespace CodeIndex.Cli;
 
 public static partial class IndexCommandRunner
 {
+    internal const int DryRunFileSampleLimit = 100;
+    internal const int DryRunErrorSampleLimit = 100;
+    private const int DryRunScanErrorKeyLimit = 2048;
+
     private static int RunDryRun(
         IndexCommandOptions options,
         bool ignoreCase,
@@ -17,18 +21,29 @@ public static partial class IndexCommandRunner
         var projectPath = options.ProjectPath!;
         var dryIndexer = new FileIndexer(projectPath, ignoreCase, ignoreRuleRoot, options.MaxFileSizeBytes, directoryIgnoreCaseProbe: null, symlinkPolicy: options.SymlinkPolicy);
         IReadOnlyList<string> dryCandidates;
-        var errorList = new List<CliJsonMessage>();
+        var errorSamples = new List<CliJsonMessage>();
+        var errorCount = 0;
         var dryScanErrorKeys = new HashSet<string>(StringComparer.Ordinal);
+
+        void RecordDryRunError(string file, string message)
+        {
+            errorCount++;
+            if (errorSamples.Count < DryRunErrorSampleLimit)
+                errorSamples.Add(new CliJsonMessage(file, message));
+        }
 
         void RecordDryRunScanErrors(IEnumerable<FileIndexer.ScanError> scanErrors)
         {
             foreach (var scanError in scanErrors)
             {
                 var key = $"{scanError.Path}\n{scanError.Message}";
-                if (!dryScanErrorKeys.Add(key))
-                    continue;
+                if (dryScanErrorKeys.Count < DryRunScanErrorKeyLimit)
+                {
+                    if (!dryScanErrorKeys.Add(key))
+                        continue;
+                }
 
-                errorList.Add(new CliJsonMessage(scanError.Path, scanError.Message));
+                RecordDryRunError(scanError.Path, scanError.Message);
                 if (!options.Json)
                     ConsoleUi.PrintWarning($"{scanError.Path}: {scanError.Message}");
             }
@@ -47,7 +62,8 @@ public static partial class IndexCommandRunner
             return exitCode;
         }
 
-        var dryFiles = new List<string>();
+        var dryFileSamples = new List<string>();
+        var dryFileCount = 0;
         var langCounts = new Dictionary<string, int>();
         foreach (var f in dryCandidates)
         {
@@ -61,14 +77,16 @@ public static partial class IndexCommandRunner
                 if (message != null)
                 {
                     var displayPath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectPath, f));
-                    errorList.Add(new CliJsonMessage(displayPath, message));
+                    RecordDryRunError(displayPath, message);
                     if (!options.Json && !options.Quiet)
                         ConsoleUi.PrintWarning($"{displayPath}: {message}");
                 }
                 continue;
             }
 
-            dryFiles.Add(f);
+            dryFileCount++;
+            if (dryFileSamples.Count < DryRunFileSampleLimit)
+                dryFileSamples.Add(FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectPath, f)));
             langCounts[lang] = langCounts.GetValueOrDefault(lang) + 1;
         }
         if (options.Json)
@@ -76,14 +94,20 @@ public static partial class IndexCommandRunner
             Console.WriteLine(JsonSerializer.Serialize(new IndexDryRunJsonResult
             {
                 Status = "dry_run",
-                FilesTotal = dryFiles.Count,
+                FilesTotal = dryFileCount,
+                FileSamples = dryFileSamples.Count > 0 ? dryFileSamples : null,
+                FileSamplesTruncated = dryFileCount > dryFileSamples.Count,
+                FileSampleLimit = DryRunFileSampleLimit,
                 Languages = langCounts,
-                Errors = errorList.Count > 0 ? errorList : null,
+                ErrorsTotal = errorCount,
+                Errors = errorSamples.Count > 0 ? errorSamples : null,
+                ErrorsTruncated = errorCount > errorSamples.Count,
+                ErrorLimit = DryRunErrorSampleLimit,
             }, jsonContext.IndexDryRunJsonResult));
         }
         else
         {
-            Console.WriteLine($"Dry run: {dryFiles.Count} files would be indexed");
+            Console.WriteLine($"Dry run: {dryFileCount} files would be indexed");
             foreach (var (lang, count) in langCounts.OrderByDescending(kv => kv.Value))
                 Console.WriteLine($"  {lang,-12} {count,6}");
         }

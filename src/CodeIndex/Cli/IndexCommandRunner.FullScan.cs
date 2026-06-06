@@ -105,44 +105,22 @@ public static partial class IndexCommandRunner
         string filePath,
         string projectRoot,
         string phasePath,
+        SymbolExtractionWorkerClient worker,
         CancellationToken cancellationToken)
     {
         var timeout = IndexExtractionStallTimeoutForTesting?.Invoke() ?? IndexExtractionStallTimeout;
         if (timeout <= TimeSpan.Zero)
             return SymbolExtractor.Extract(fileId, lang, content, filePath, projectRoot, cancellationToken);
 
-        using var extractionCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        var extractionToken = extractionCts.Token;
-        var task = Task.Run(
-            () => SymbolExtractor.Extract(fileId, lang, content, filePath, projectRoot, extractionToken),
-            CancellationToken.None);
-        try
-        {
-            if (task.Wait(timeout, cancellationToken))
-                return task.GetAwaiter().GetResult();
-        }
-        catch (AggregateException ex) when (ex.InnerExceptions.Count == 1)
-        {
-            throw ex.InnerExceptions[0];
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
+        cancellationToken.ThrowIfCancellationRequested();
+        var result = worker.Invoke(fileId, lang, content, filePath, projectRoot, timeout, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (result.TimedOut)
+            throw new IndexExtractionStalledException(0, null, timeout, phasePath);
+        if (!result.Success)
+            throw new InvalidOperationException(result.WorkerError ?? "isolated symbol extraction worker failed.");
 
-        extractionCts.Cancel();
-        try
-        {
-            task.Wait(TimeSpan.FromSeconds(1));
-        }
-        catch (AggregateException ex) when (ex.InnerExceptions.All(inner => inner is OperationCanceledException or TaskCanceledException))
-        {
-        }
-        catch (OperationCanceledException)
-        {
-        }
-
-        throw new IndexExtractionStalledException(0, null, timeout, phasePath);
+        return result.Symbols ?? [];
     }
 
     private static string CollapseLineBreaks(string value)
@@ -286,43 +264,76 @@ public static partial class IndexCommandRunner
         || ex is SqliteException { SqliteErrorCode: 5 or 6 or 8 or 10 or 14 };
 
     internal const int MaxScanCheckpointBytes = 1024 * 1024;
+    internal const int MaxScanCheckpointJsonDepth = 16;
+    internal const int MaxScanCheckpointDirectories = 4096;
+    internal const int MaxScanCheckpointDirectoryLength = 4096;
 
-    private static IReadOnlySet<string> LoadScanCheckpoint(string path, string? currentHead)
+    internal static IReadOnlySet<string> LoadScanCheckpoint(string path, string? currentHead)
     {
         try
         {
             if (string.IsNullOrWhiteSpace(currentHead) || !File.Exists(path))
-                return new HashSet<string>(StringComparer.Ordinal);
+                return EmptyScanCheckpointDirectories();
 
             var text = DataDirectorySecurity.ReadTextWithinLimit(path, MaxScanCheckpointBytes, FileShare.ReadWrite);
             if (text is null)
-                return new HashSet<string>(StringComparer.Ordinal);
+                return EmptyScanCheckpointDirectories();
 
-            var checkpoint = JsonSerializer.Deserialize<ScanCheckpoint>(text);
+            var checkpoint = JsonSerializer.Deserialize<ScanCheckpoint>(
+                text,
+                new JsonSerializerOptions { MaxDepth = MaxScanCheckpointJsonDepth });
             if (checkpoint is not { Version: ScanCheckpointVersion }
                 || !string.Equals(checkpoint.GitHead, currentHead, StringComparison.Ordinal)
-                || checkpoint.Directories is not { Count: > 0 })
+                || !TryBuildScanCheckpointDirectories(checkpoint.Directories, out var directories))
             {
-                return new HashSet<string>(StringComparer.Ordinal);
+                return EmptyScanCheckpointDirectories();
             }
 
-            return checkpoint.Directories
-                .Where(directory => directory.Length > 0)
-                .ToHashSet(StringComparer.Ordinal);
+            return directories;
         }
         catch (JsonException)
         {
-            return new HashSet<string>(StringComparer.Ordinal);
+            return EmptyScanCheckpointDirectories();
         }
         catch (IOException)
         {
-            return new HashSet<string>(StringComparer.Ordinal);
+            return EmptyScanCheckpointDirectories();
         }
         catch (UnauthorizedAccessException)
         {
-            return new HashSet<string>(StringComparer.Ordinal);
+            return EmptyScanCheckpointDirectories();
         }
     }
+
+    private static bool TryBuildScanCheckpointDirectories(IReadOnlyList<string>? rawDirectories, out IReadOnlySet<string> directories)
+    {
+        directories = EmptyScanCheckpointDirectories();
+        if (rawDirectories is not { Count: > 0 })
+            return false;
+        if (rawDirectories.Count > MaxScanCheckpointDirectories)
+            return false;
+
+        var result = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var directory in rawDirectories)
+        {
+            if (directory is null)
+                return false;
+            if (directory.Length == 0)
+                continue;
+            if (directory.Length > MaxScanCheckpointDirectoryLength)
+                return false;
+
+            result.Add(directory);
+        }
+
+        if (result.Count == 0)
+            return false;
+
+        directories = result;
+        return true;
+    }
+
+    private static HashSet<string> EmptyScanCheckpointDirectories() => new(StringComparer.Ordinal);
 
     private static void SaveScanCheckpoint(string path, string? currentHead, IReadOnlySet<string> directories)
     {
@@ -903,11 +914,13 @@ public static partial class IndexCommandRunner
 
             using var extractionResults = new BlockingCollection<FullScanFileWorkItem>(Math.Max(1, extractionParallelism * 4));
             using var extractionStallCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            using var mainSymbolExtractionWorker = new SymbolExtractionWorkerClient();
             var extractionCancellationToken = extractionStallCts.Token;
             var nextFileIndex = -1;
             var workers = Enumerable.Range(0, extractionParallelism)
                 .Select(workerIndex => Task.Factory.StartNew(() =>
                 {
+                    using var workerSymbolExtractionWorker = new SymbolExtractionWorkerClient();
                     while (true)
                     {
                         extractionCancellationToken.ThrowIfCancellationRequested();
@@ -937,6 +950,7 @@ public static partial class IndexCommandRunner
                                     filePath,
                                     Path.GetFullPath(options.ProjectPath!),
                                     activeJsonExtractionPhases[workerIndex],
+                                    workerSymbolExtractionWorker,
                                     extractionCancellationToken);
                                 if (symbols.Count > options.MaxSymbolsPerFile)
                                 {
@@ -1156,6 +1170,7 @@ public static partial class IndexCommandRunner
                             item.FilePath,
                             Path.GetFullPath(options.ProjectPath!),
                             currentJsonIndexFile,
+                            mainSymbolExtractionWorker,
                             cancellationToken)
                         : ReassignSymbolFileIds(item.Symbols, fileId);
                     if (symbols.Count > options.MaxSymbolsPerFile)

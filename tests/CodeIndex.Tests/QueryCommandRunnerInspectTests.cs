@@ -110,6 +110,50 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunInspect_Json_TruncatesRunawayDefinitionSignatures_Issue2989()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_signature_limit");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var parameters = string.Join(", ", Enumerable.Range(0, 90).Select(index => $"string parameter{index:D2}"));
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/HugeSignatures.cs",
+                "csharp",
+                $$"""
+                public class HugeSignatures
+                {
+                    public void Run({{parameters}}) { }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["Run", "--db", dbPath, "--json", "--exact"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var definition = document.RootElement
+                .GetProperty("definitions")
+                .EnumerateArray()
+                .Single(item => item.GetProperty("name").GetString() == "Run");
+            var signature = definition.GetProperty("signature").GetString();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.NotNull(signature);
+            Assert.True(signature!.Length <= 512);
+            Assert.EndsWith("...", signature, StringComparison.Ordinal);
+            Assert.True(definition.GetProperty("signature_truncated").GetBoolean());
+            Assert.True(definition.GetProperty("signature_original_length").GetInt32() > signature.Length);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunInspect_ParseFields_ImplyJsonAndCanonicalizeAliases_Issue3056()
     {
         var options = QueryCommandRunner.ParseArgs(
@@ -315,6 +359,52 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(QueryCommandRunner.DefaultCompactSectionLimit, symbolTruncation.GetProperty("returned").GetInt32());
             Assert.Equal(QueryCommandRunner.DefaultCompactSectionLimit + 3, symbolTruncation.GetProperty("source_count").GetInt32());
             Assert.True(symbolTruncation.GetProperty("truncated").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutline_Json_TruncatesRunawaySignatures_Issue2989()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_signature_limit");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var parameters = string.Join(", ", Enumerable.Range(0, 90).Select(index => $"string parameter{index:D2}"));
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/HugeSignatures.cs",
+                "csharp",
+                $$"""
+                public class HugeSignatures
+                {
+                    public void Run({{parameters}}) { }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/HugeSignatures.cs", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var symbol = document.RootElement
+                .GetProperty("symbols")
+                .EnumerateArray()
+                .Single(item => item.GetProperty("name").GetString() == "Run");
+            var signature = symbol.GetProperty("signature").GetString();
+            var displayName = symbol.GetProperty("display_name").GetString();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.NotNull(signature);
+            Assert.True(signature!.Length <= 512);
+            Assert.EndsWith("...", signature, StringComparison.Ordinal);
+            Assert.True(symbol.GetProperty("signature_truncated").GetBoolean());
+            Assert.True(symbol.GetProperty("signature_original_length").GetInt32() > signature.Length);
+            Assert.Equal($"Run@{symbol.GetProperty("line").GetInt32()}", displayName);
         }
         finally
         {

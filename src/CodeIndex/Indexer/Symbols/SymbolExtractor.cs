@@ -2335,11 +2335,14 @@ public static partial class SymbolExtractor
         var privateScopeColumns = lang is "javascript" or "typescript"
             ? BuildJavaScriptTypeScriptPrivateScopeColumns(lines, lang)
             : null;
-        var csharpSwitchExpressionLines = lang == "csharp"
-            ? FindCSharpSwitchExpressionLines(structuralLines)
-            : null;
         var csharpInsideTypeBody = lang == "csharp"
             ? BuildCSharpTypeBodyScope(structuralLines)
+            : null;
+        var csharpCallableParameterScope = lang == "csharp"
+            ? BuildCSharpCallableParameterScope(structuralLines, csharpInsideTypeBody!)
+            : null;
+        var csharpSwitchExpressionLines = lang == "csharp"
+            ? FindCSharpSwitchExpressionLines(structuralLines)
             : null;
         var cssQualifiedRuleAncestors = lang == "css"
             ? FindCssQualifiedRuleAncestors(cssScannerLines!)
@@ -2749,6 +2752,15 @@ public static partial class SymbolExtractor
                             && HasCSharpTokenBeforeIndex(matchLine, "when", absoluteStartColumn + match.Groups["name"].Index))
                         {
                             lineOffset = absoluteStartColumn + Math.Max(1, match.Length);
+                            continue;
+                        }
+                        if (lang == "csharp"
+                            && pattern.BodyStyle == BodyStyle.None
+                          && (pattern.Kind == "property" || IsCSharpFieldLikeFunctionPattern(pattern))
+                          && csharpCallableParameterScope != null
+                          && csharpCallableParameterScope.IsInsideParameterListAt(i, csharpGateRawStartColumn))
+                        {
+                            lineOffset = FindNextSameLineBraceStatementStart(matchLine, absoluteStartColumn + Math.Max(1, match.Length), lang);
                             continue;
                         }
                         if (lang == "csharp"
@@ -3678,17 +3690,6 @@ public static partial class SymbolExtractor
                             name,
                             pendingRecordPrimaryComponents,
                             symbols);
-
-                        if (lang == "csharp" && pattern.Kind == "function")
-                        {
-                            CollectCSharpCallableParameterSymbols(
-                                fileId,
-                                signature,
-                                startLine,
-                                kind,
-                                name,
-                                symbols);
-                        }
 
                         // C# plain-field (kind `property`, BodyStyle.None) matches need their own
                         // advance path. The generic `sameLineEndColumn`-based advance below resolves
@@ -6912,6 +6913,236 @@ public static partial class SymbolExtractor
         return new CSharpTypeBodyScope(lineStartInsideTypeBody, transitions);
     }
 
+    private sealed class CSharpCallableParameterScope
+    {
+        private readonly bool[] _lineStartInsideParameterList;
+        private readonly List<(int Column, bool IsInsideParameterList)>?[] _transitions;
+
+        public CSharpCallableParameterScope(bool[] lineStartInsideParameterList, List<(int Column, bool IsInsideParameterList)>?[] transitions)
+        {
+            _lineStartInsideParameterList = lineStartInsideParameterList;
+            _transitions = transitions;
+        }
+
+        public bool IsInsideParameterListAt(int lineIndex, int column)
+        {
+            var state = _lineStartInsideParameterList[lineIndex];
+            var transitions = _transitions[lineIndex];
+            if (transitions == null)
+                return state;
+
+            foreach (var (col, isInsideParameterList) in transitions)
+            {
+                if (col >= column)
+                    break;
+                state = isInsideParameterList;
+            }
+
+            return state;
+        }
+    }
+
+    private static CSharpCallableParameterScope BuildCSharpCallableParameterScope(
+        string[] structuralLines,
+        CSharpTypeBodyScope typeBodyScope)
+    {
+        var lineStartInsideParameterList = new bool[structuralLines.Length];
+        var transitions = new List<(int Column, bool IsInsideParameterList)>?[structuralLines.Length];
+        var declarationBuffer = new StringBuilder();
+        var parameterParenDepth = 0;
+
+        for (int lineIndex = 0; lineIndex < structuralLines.Length; lineIndex++)
+        {
+            lineStartInsideParameterList[lineIndex] = parameterParenDepth > 0;
+            var line = structuralLines[lineIndex];
+
+            for (int cursor = 0; cursor < line.Length; cursor++)
+            {
+                var ch = line[cursor];
+                if (parameterParenDepth > 0)
+                {
+                    if (ch == '(')
+                    {
+                        parameterParenDepth++;
+                    }
+                    else if (ch == ')')
+                    {
+                        parameterParenDepth--;
+                        if (parameterParenDepth == 0)
+                            (transitions[lineIndex] ??= new List<(int, bool)>()).Add((cursor, false));
+                    }
+
+                    declarationBuffer.Append(ch);
+                    continue;
+                }
+
+                if (ch == '('
+                    && typeBodyScope.IsInsideTypeBodyAt(lineIndex, cursor)
+                    && IsCSharpCallableHeaderBeforeParameterList(declarationBuffer.ToString()))
+                {
+                    parameterParenDepth = 1;
+                    (transitions[lineIndex] ??= new List<(int, bool)>()).Add((cursor, true));
+                    declarationBuffer.Append(ch);
+                    continue;
+                }
+
+                if (ch is '{' or '}' or ';')
+                {
+                    declarationBuffer.Clear();
+                    continue;
+                }
+
+                declarationBuffer.Append(ch);
+            }
+        }
+
+        return new CSharpCallableParameterScope(lineStartInsideParameterList, transitions);
+    }
+
+    private static bool IsCSharpCallableHeaderBeforeParameterList(string header)
+    {
+        var text = header.Trim();
+        if (text.Length == 0 || ContainsCSharpTopLevelAssignment(text))
+            return false;
+
+        var end = SkipCSharpTrailingGenericParameterList(text, text.Length);
+        while (end > 0 && char.IsWhiteSpace(text[end - 1]))
+            end--;
+        if (end <= 0)
+            return false;
+
+        var tokenEnd = end;
+        var tokenStart = tokenEnd;
+        while (tokenStart > 0 && IsCSharpIdentifierPart(text[tokenStart - 1]))
+            tokenStart--;
+        if (tokenStart == tokenEnd)
+            return false;
+
+        var token = text[tokenStart..tokenEnd];
+        if (token.StartsWith('@') && token.Length > 1)
+            return true;
+
+        return token.Length > 0 && !IsCSharpNonCallableHeaderTailToken(token);
+    }
+
+    private static int SkipCSharpTrailingGenericParameterList(string text, int end)
+    {
+        while (end > 0 && char.IsWhiteSpace(text[end - 1]))
+            end--;
+        if (end <= 0 || text[end - 1] != '>')
+            return end;
+
+        var depth = 0;
+        for (var index = end - 1; index >= 0; index--)
+        {
+            if (text[index] == '>')
+            {
+                depth++;
+                continue;
+            }
+
+            if (text[index] == '<')
+            {
+                depth--;
+                if (depth == 0)
+                    return index;
+            }
+        }
+
+        return end;
+    }
+
+    private static bool ContainsCSharpTopLevelAssignment(string text)
+    {
+        var angleDepth = 0;
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        for (var index = 0; index < text.Length; index++)
+        {
+            var ch = text[index];
+            switch (ch)
+            {
+                case '<':
+                    angleDepth++;
+                    continue;
+                case '>' when angleDepth > 0:
+                    angleDepth--;
+                    continue;
+                case '(':
+                    parenDepth++;
+                    continue;
+                case ')' when parenDepth > 0:
+                    parenDepth--;
+                    continue;
+                case '[':
+                    bracketDepth++;
+                    continue;
+                case ']' when bracketDepth > 0:
+                    bracketDepth--;
+                    continue;
+                case '=' when angleDepth == 0 && parenDepth == 0 && bracketDepth == 0:
+                    return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsCSharpIdentifierPart(char ch) =>
+        char.IsLetterOrDigit(ch) || ch is '_' or '$' or '@';
+
+    private static bool IsCSharpNonCallableHeaderTailToken(string token) =>
+        token is
+            "abstract" or
+            "async" or
+            "await" or
+            "base" or
+            "case" or
+            "catch" or
+            "const" or
+            "continue" or
+            "default" or
+            "delegate" or
+            "else" or
+            "event" or
+            "extern" or
+            "false" or
+            "file" or
+            "for" or
+            "foreach" or
+            "goto" or
+            "if" or
+            "internal" or
+            "lock" or
+            "nameof" or
+            "new" or
+            "null" or
+            "override" or
+            "private" or
+            "protected" or
+            "public" or
+            "readonly" or
+            "ref" or
+            "required" or
+            "return" or
+            "sealed" or
+            "sizeof" or
+            "stackalloc" or
+            "static" or
+            "switch" or
+            "this" or
+            "throw" or
+            "true" or
+            "typeof" or
+            "unsafe" or
+            "using" or
+            "var" or
+            "virtual" or
+            "volatile" or
+            "when" or
+            "while" or
+            "yield";
+
     private sealed class DartClassBodyScope
     {
         private readonly bool[] _lineStartInsideClassBody;
@@ -7722,157 +7953,6 @@ public static partial class SymbolExtractor
                 });
             }
         }
-    }
-
-    private static void CollectCSharpCallableParameterSymbols(
-        long fileId,
-        string signature,
-        int callableStartLine,
-        string callableKind,
-        string callableName,
-        List<SymbolRecord> symbols)
-    {
-        if (!TryGetCSharpCallableParameterList(signature, callableName, out var parameterList, out var parameterListStartLine))
-            return;
-
-        foreach (var rawParameter in SplitTopLevelRecordPrimaryComponents(parameterList, callableStartLine + parameterListStartLine))
-        {
-            if (!TryParseCSharpCallableParameter(rawParameter, out var parameter))
-                continue;
-
-            if (symbols.Any(symbol =>
-                symbol.FileId == fileId
-                && symbol.Kind == "property"
-                && symbol.Name == parameter.Name
-                && symbol.ContainerKind == callableKind
-                && symbol.ContainerName == callableName
-                && symbol.StartLine == parameter.Line))
-            {
-                continue;
-            }
-
-            symbols.Add(new SymbolRecord
-            {
-                FileId = fileId,
-                Kind = "property",
-                Name = parameter.Name,
-                Line = parameter.Line,
-                StartLine = parameter.Line,
-                EndLine = parameter.Line,
-                Signature = parameter.Signature,
-                ContainerKind = callableKind,
-                ContainerName = callableName,
-                ReturnType = parameter.Type,
-            });
-        }
-    }
-
-    private static bool TryGetCSharpCallableParameterList(
-        string signature,
-        string callableName,
-        out string parameterList,
-        out int parameterListStartLine)
-    {
-        parameterList = string.Empty;
-        parameterListStartLine = 0;
-
-        var parameterOpenIndex = FindCSharpCallableParameterListStart(signature, callableName);
-        if (parameterOpenIndex < 0)
-            return false;
-
-        var closeBracket = signature[parameterOpenIndex] == '[' ? ']' : ')';
-        var parameterCloseIndex = FindMatchingBracket(signature, parameterOpenIndex, signature[parameterOpenIndex], closeBracket);
-        if (parameterCloseIndex <= parameterOpenIndex)
-            return false;
-
-        parameterList = StripRecordComponentComments(signature[(parameterOpenIndex + 1)..parameterCloseIndex]);
-        parameterListStartLine = signature[..(parameterOpenIndex + 1)].Count(ch => ch == '\n');
-        return true;
-    }
-
-    private static int FindCSharpCallableParameterListStart(string signature, string callableName)
-    {
-        var searchIndex = 0;
-        while (searchIndex < signature.Length)
-        {
-            var nameIndex = signature.IndexOf(callableName, searchIndex, StringComparison.Ordinal);
-            if (nameIndex < 0)
-                return -1;
-
-            searchIndex = nameIndex + Math.Max(callableName.Length, 1);
-            if (!IsCSharpIdentifierBoundary(signature, nameIndex - 1)
-                || !IsCSharpIdentifierBoundary(signature, nameIndex + callableName.Length))
-            {
-                continue;
-            }
-
-            var index = nameIndex + callableName.Length;
-            while (index < signature.Length && char.IsWhiteSpace(signature[index]))
-                index++;
-
-            if (index < signature.Length && signature[index] == '<')
-            {
-                var genericCloseIndex = FindMatchingBracket(signature, index, '<', '>');
-                if (genericCloseIndex < 0)
-                    continue;
-
-                index = genericCloseIndex + 1;
-                while (index < signature.Length && char.IsWhiteSpace(signature[index]))
-                    index++;
-            }
-
-            if (index < signature.Length
-                && (signature[index] == '(' || (signature[index] == '[' && callableName == "this")))
-            {
-                return index;
-            }
-        }
-
-        return -1;
-    }
-
-    private static bool IsCSharpIdentifierBoundary(string text, int index) =>
-        index < 0
-        || index >= text.Length
-        || !(char.IsLetterOrDigit(text[index]) || text[index] is '_' or '@');
-
-    private static bool TryParseCSharpCallableParameter(RecordPrimaryComponentSlice rawParameter, out RecordPrimaryComponent parameter)
-    {
-        parameter = default;
-        if (string.IsNullOrWhiteSpace(rawParameter.Text))
-            return false;
-
-        var normalized = TrimAfterTopLevelEquals(rawParameter.Text).Trim();
-        if (normalized.Length == 0)
-            return false;
-
-        var parameterLine = rawParameter.Line;
-        var stripped = StripLeadingCSharpRecordComponentAttributes(normalized);
-        normalized = stripped.Text;
-        parameterLine += stripped.ConsumedNewlines;
-
-        var signature = normalized;
-        stripped = StripLeadingRecordComponentModifiers("csharp", normalized);
-        if (stripped.Text == normalized)
-            return false;
-
-        normalized = stripped.Text;
-        parameterLine += stripped.ConsumedNewlines;
-
-        if (normalized.Length == 0)
-            return false;
-
-        var nameMatch = Regex.Match(normalized, @"(?<name>@?[\p{L}_$][\p{L}\p{Nd}_$]*)\s*$", RegexOptions.CultureInvariant);
-        if (!nameMatch.Success)
-            return false;
-
-        var parameterName = nameMatch.Groups["name"].Value.TrimStart('@');
-        var parameterType = normalized[..nameMatch.Index].Trim();
-        if (parameterName.Length == 0 || parameterType.Length == 0)
-            return false;
-
-        parameter = new RecordPrimaryComponent(parameterName, parameterType, signature, parameterLine);
-        return true;
     }
 
     private static bool TryGetRecordPrimaryComponents(

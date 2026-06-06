@@ -71,6 +71,8 @@ public partial class DbReader
     private const int UnusedPublicCandidateBudget = 2048;
     private const int GroupedHotspotPathSampleLimit = 20;
     private const string SymbolLanguageFileIdFilter = " AND s.file_id IN (SELECT id FROM files WHERE lang = @lang)";
+    private const int QueryOutputSignatureMaxChars = 512;
+    private const string QueryOutputSignatureTruncationSuffix = "...";
 
     private sealed class UnusedCandidateSymbol
     {
@@ -1389,6 +1391,8 @@ public partial class DbReader
         var nearbySymbols = primaryDefinition != null
             ? GetNearbySymbols(primaryDefinition.Path, primaryDefinition.StartLine, Math.Min(limit, 10), primaryDefinition.Name, primaryDefinition.StartLine)
             : [];
+        ApplyQueryOutputSignatureLimits(definitions);
+        ApplyQueryOutputSignatureLimits(nearbySymbols);
 
         var result = new SymbolAnalysisResult
         {
@@ -1615,6 +1619,51 @@ public partial class DbReader
             && string.Equals(left.Kind, right.Kind, StringComparison.Ordinal);
     }
 
+    private static void ApplyQueryOutputSignatureLimits(IEnumerable<SymbolResult> symbols)
+    {
+        foreach (var symbol in symbols)
+            ApplyQueryOutputSignatureLimit(symbol);
+    }
+
+    private static void ApplyQueryOutputSignatureLimit(SymbolResult symbol)
+    {
+        if (!TryTruncateQueryOutputSignature(symbol.Signature, out var signature, out var originalLength))
+            return;
+
+        symbol.Signature = signature;
+        symbol.SignatureTruncated = true;
+        symbol.SignatureOriginalLength = originalLength;
+    }
+
+    private static void ApplyQueryOutputSignatureLimits(IEnumerable<OutlineSymbol> symbols)
+    {
+        foreach (var symbol in symbols)
+            ApplyQueryOutputSignatureLimit(symbol);
+    }
+
+    private static void ApplyQueryOutputSignatureLimit(OutlineSymbol symbol)
+    {
+        if (!TryTruncateQueryOutputSignature(symbol.Signature, out var signature, out var originalLength))
+            return;
+
+        symbol.Signature = signature;
+        symbol.SignatureTruncated = true;
+        symbol.SignatureOriginalLength = originalLength;
+    }
+
+    private static bool TryTruncateQueryOutputSignature(string? signature, out string? truncatedSignature, out int? originalLength)
+    {
+        truncatedSignature = signature;
+        originalLength = null;
+        if (signature == null || signature.Length <= QueryOutputSignatureMaxChars)
+            return false;
+
+        originalLength = signature.Length;
+        truncatedSignature = signature[..(QueryOutputSignatureMaxChars - QueryOutputSignatureTruncationSuffix.Length)]
+            + QueryOutputSignatureTruncationSuffix;
+        return true;
+    }
+
     /// <summary>
     /// Return a structured outline of symbols in a single file, ordered deterministically.
     /// 1ファイルのシンボルを決定的な順序の構造化アウトラインとして返す。
@@ -1688,6 +1737,7 @@ public partial class DbReader
         }
 
         PopulateOutlineDepths(symbols);
+        ApplyQueryOutputSignatureLimits(symbols);
         PopulateOutlineDisplayNames(symbols, lang);
 
         return new OutlineResult
@@ -1712,6 +1762,9 @@ public partial class DbReader
     {
         if (IsCallableOutlineSymbol(symbol.Kind))
         {
+            if (symbol.SignatureTruncated)
+                return $"{symbol.Name}@{symbol.Line}";
+
             var compactSignature = TryBuildCompactCallableSignature(symbol.Name, symbol.Signature, lang);
             if (!string.IsNullOrWhiteSpace(compactSignature))
                 return compactSignature!;
