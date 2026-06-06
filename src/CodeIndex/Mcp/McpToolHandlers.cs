@@ -2288,7 +2288,7 @@ public partial class McpServer
     private JsonObject BuildMcpSessionStatus()
     {
         var roots = new JsonArray();
-        foreach (var root in _clientRoots)
+        foreach (var root in _clientRootDiagnostics)
             roots.Add(root?.DeepClone());
 
         var session = new JsonObject
@@ -3729,14 +3729,13 @@ public partial class McpServer
         if (result?["roots"] is not JsonArray roots)
             return;
 
-        var refreshed = new JsonArray();
+        ResetClientRoots();
         foreach (var root in roots)
         {
             var uri = TryReadStringValue(root?["uri"]) ?? TryReadStringValue(root);
             if (!string.IsNullOrWhiteSpace(uri))
-                refreshed.Add(uri);
+                CaptureClientRoot(uri);
         }
-        _clientRoots = refreshed;
         _clientRootsStale = false;
     }
 

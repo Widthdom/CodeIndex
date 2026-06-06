@@ -861,8 +861,8 @@ public class McpServerTests : IDisposable
         };
         _server.HandleMessage(request);
 
-        Assert.Equal(McpServer.MaxClientRootCount, _server.ClientRootsForTests.Length);
-        Assert.DoesNotContain(longRoot, _server.ClientRootsForTests);
+        Assert.Equal(McpServer.MaxClientRootCount + 4, _server.ClientRootsForTests.Length);
+        Assert.Contains(longRoot, _server.ClientRootsForTests);
 
         var status = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
         var response = _server.HandleMessage(status)!;
@@ -872,6 +872,44 @@ public class McpServerTests : IDisposable
         Assert.Equal(McpServer.MaxClientRootCount + 4, session["root_count"]!.GetValue<int>());
         Assert.Equal(McpServer.MaxClientRootCount, session["root_limit"]!.GetValue<int>());
         Assert.Equal(McpServer.MaxClientRootUriChars, session["root_uri_length_limit"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxClientRootCount, session["roots"]!.AsArray().Count);
+        Assert.DoesNotContain(longRoot, response.ToJsonString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RefreshClientRoots_CapsSessionStatusDiagnostics_Issue3076()
+    {
+        var longRoot = "file:///" + new string('r', McpServer.MaxClientRootUriChars + 50);
+        var advertisedRoots = new JsonArray();
+        for (var i = 0; i < McpServer.MaxClientRootCount + 3; i++)
+        {
+            advertisedRoots.Add(new JsonObject
+            {
+                ["uri"] = i == 0 ? longRoot : $"file:///tmp/cdidx-not-this-workspace/{i}",
+            });
+        }
+
+        _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"capabilities":{"roots":{}}}}""")!);
+        _server.ClientRequestHandlerForTests = (method, _) =>
+        {
+            Assert.Equal("roots/list", method);
+            return new JsonObject { ["roots"] = advertisedRoots.DeepClone() };
+        };
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"index","arguments":{"path":"."}}}""")!;
+        var indexResponse = _server.HandleMessage(request)!;
+
+        Assert.True(indexResponse["result"]!["isError"]!.GetValue<bool>());
+        Assert.Equal(McpServer.MaxClientRootCount + 3, _server.ClientRootsForTests.Length);
+        Assert.Contains(longRoot, _server.ClientRootsForTests);
+
+        var status = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
+        var response = _server.HandleMessage(status)!;
+        var session = response["result"]!["structuredContent"]!["mcp_session"]!;
+
+        Assert.True(session["roots_truncated"]!.GetValue<bool>());
+        Assert.Equal(McpServer.MaxClientRootCount + 3, session["root_count"]!.GetValue<int>());
         Assert.Equal(McpServer.MaxClientRootCount, session["roots"]!.AsArray().Count);
         Assert.DoesNotContain(longRoot, response.ToJsonString(), StringComparison.Ordinal);
     }

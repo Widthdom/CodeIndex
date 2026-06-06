@@ -117,6 +117,7 @@ public partial class McpServer : IDisposable
     private int? _clientCapabilitiesSerializedBytes;
     private string? _clientCapabilitiesTruncationReason;
     private JsonArray _clientRoots = [];
+    private JsonArray _clientRootDiagnostics = [];
     private int _clientRootCount;
     private bool _clientRootsTruncated;
     private string _mcpLogLevel = "info";
@@ -1837,9 +1838,7 @@ public partial class McpServer : IDisposable
         _clientCapabilities = null;
         _clientCapabilitiesSerializedBytes = null;
         _clientCapabilitiesTruncationReason = null;
-        _clientRoots = [];
-        _clientRootCount = 0;
-        _clientRootsTruncated = false;
+        ResetClientRoots();
         if (initializeParams is not JsonObject obj)
             return;
 
@@ -1891,16 +1890,25 @@ public partial class McpServer : IDisposable
 
     private void CaptureClientRoot(string uri)
     {
+        _clientRoots.Add(uri);
         _clientRootCount++;
-        if (_clientRoots.Count >= MaxClientRootCount)
+        if (_clientRootDiagnostics.Count >= MaxClientRootCount)
         {
             _clientRootsTruncated = true;
             return;
         }
 
         var display = McpBoundedText.ForDisplay(uri, MaxClientRootUriChars);
-        _clientRoots.Add(display.Text);
+        _clientRootDiagnostics.Add(display.Text);
         _clientRootsTruncated |= display.Truncated;
+    }
+
+    private void ResetClientRoots()
+    {
+        _clientRoots = [];
+        _clientRootDiagnostics = [];
+        _clientRootCount = 0;
+        _clientRootsTruncated = false;
     }
 
     internal JsonNode? ClientCapabilitiesForTests => _clientCapabilities is null ? null : JsonNode.Parse(_clientCapabilities.ToJsonString());
