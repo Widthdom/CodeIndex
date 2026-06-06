@@ -3788,6 +3788,32 @@ public partial class QueryCommandRunnerTests
         }
     }
 
+    [Fact]
+    public void RunDeps_WorkspaceDbTooManyDistinctDatabases_ReturnsUsageError_Issue3154()
+    {
+        var primaryRoot = TestProjectHelper.CreateTempProject("cdidx_deps_workspace_fanout_primary");
+        try
+        {
+            var primaryDb = TestProjectHelper.CreateProjectDb(primaryRoot);
+            var args = new List<string> { "--db", primaryDb, "--json" };
+            for (var i = 0; i < QueryCommandRunner.MaxWorkspaceDependencyDatabaseCount; i++)
+                args.AddRange(["--workspace-db", Path.Combine(Path.GetTempPath(), $"cdidx_member_{Guid.NewGuid():N}.db")]);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+                args.ToArray(),
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains("deps --workspace-db accepts at most", stderr);
+            Assert.Contains("ordered cross-database pairs", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(primaryRoot);
+        }
+    }
+
     private static void InsertFileWithSymbol(string dbPath, string path, string symbolName)
         => InsertFileWithSymbols(dbPath, path, [symbolName]);
 

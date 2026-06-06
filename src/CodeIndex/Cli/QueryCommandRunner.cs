@@ -24,6 +24,8 @@ public static class QueryCommandRunner
     internal const int DefaultCompactSectionLimit = 5;
     internal const int DefaultImpactLimit = 50;
     internal const int DefaultDependencyCycleGraphLimit = 1_000;
+    internal const int MaxWorkspaceDependencyDatabaseCount = 8;
+    internal const int MaxWorkspaceDependencyDatabasePairCount = MaxWorkspaceDependencyDatabaseCount * (MaxWorkspaceDependencyDatabaseCount - 1);
     internal const int BatchMaxLineChars = 1024 * 1024;
     internal const int BatchMaxArgumentCount = 256;
     internal const int BatchMaxJsonDepth = 32;
@@ -4459,6 +4461,8 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteUnexpectedPositionals("deps", options))
             return CommandExitCodes.UsageError;
+        if (TryWriteWorkspaceDependencyFanOutError(options))
+            return CommandExitCodes.UsageError;
 
         return WithDb(options, jsonOptions, reader =>
         {
@@ -4821,12 +4825,8 @@ public static class QueryCommandRunner
         if (options.WorkspaceDbPaths.Count == 0)
             return results;
 
-        var primaryDb = Path.GetFullPath(DbPathResolver.NormalizeDbPath(options.DbPath));
-        var memberDbs = options.WorkspaceDbPaths
-            .Select(path => Path.GetFullPath(DbPathResolver.NormalizeDbPath(path)))
-            .Prepend(primaryDb)
-            .Distinct(StringComparer.Ordinal)
-            .ToList();
+        var memberDbs = BuildWorkspaceDependencyDatabaseList(options);
+        var primaryDb = memberDbs[0];
         TagFileDependencyResults(results, primaryDb);
         foreach (var normalizedDbPath in memberDbs.Skip(1))
         {
@@ -4854,6 +4854,34 @@ public static class QueryCommandRunner
             .ThenBy(result => result.TargetPath, StringComparer.Ordinal)
             .Take(limit)
             .ToList();
+    }
+
+    private static List<string> BuildWorkspaceDependencyDatabaseList(QueryCommandOptions options)
+    {
+        var primaryDb = Path.GetFullPath(DbPathResolver.NormalizeDbPath(options.DbPath));
+        return options.WorkspaceDbPaths
+            .Select(path => Path.GetFullPath(DbPathResolver.NormalizeDbPath(path)))
+            .Prepend(primaryDb)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+    }
+
+    private static bool TryWriteWorkspaceDependencyFanOutError(QueryCommandOptions options)
+    {
+        if (options.WorkspaceDbPaths.Count == 0)
+            return false;
+
+        var memberDbs = BuildWorkspaceDependencyDatabaseList(options);
+        var pairCount = memberDbs.Count * (memberDbs.Count - 1);
+        if (memberDbs.Count <= MaxWorkspaceDependencyDatabaseCount &&
+            pairCount <= MaxWorkspaceDependencyDatabasePairCount)
+            return false;
+
+        var maxAdditional = MaxWorkspaceDependencyDatabaseCount - 1;
+        var additionalCount = Math.Max(0, memberDbs.Count - 1);
+        Console.Error.WriteLine($"Error: deps --workspace-db accepts at most {maxAdditional} distinct additional databases ({MaxWorkspaceDependencyDatabaseCount} total including --db), which is {MaxWorkspaceDependencyDatabasePairCount} ordered cross-database pairs; got {additionalCount} additional ({memberDbs.Count} total, {pairCount} pairs).");
+        Console.Error.WriteLine("Hint: pass fewer --workspace-db values or run deps separately for smaller workspace member groups.");
+        return true;
     }
 
     private static List<FileDependencyResult> GetCrossDatabaseFileDependencies(string sourceDbPath, string targetDbPath, QueryCommandOptions options, bool reverse, int limit)
@@ -9462,7 +9490,7 @@ public static class QueryCommandRunner
     private static readonly Dictionary<string, string> MissingOptionValueHints = new(StringComparer.Ordinal)
     {
         ["--db"] = "pass a path to a CodeIndex SQLite database, e.g. `--db .cdidx/codeindex.db` or `--db file:///absolute/path/to/codeindex.db?immutable=1`, or omit `--db` to use `.cdidx/codeindex.db`.",
-        ["--workspace-db"] = "pass a path to another workspace member CodeIndex SQLite database. Repeat the flag to aggregate multiple member DBs.",
+        ["--workspace-db"] = "pass a path to another workspace member CodeIndex SQLite database. Repeat the flag up to 7 distinct additional DBs to aggregate multiple member DBs.",
         ["--data-dir"] = "pass a directory where cdidx should store `codeindex.db`, e.g. `--data-dir /var/cache/cdidx`.",
         ["--limit"] = "pass a positive integer, e.g. `--limit 20` (default 20).",
         ["--top"] = "pass a positive integer, e.g. `--top 20` (alias for `--limit`, default 20).",
