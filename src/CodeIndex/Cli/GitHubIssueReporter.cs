@@ -54,7 +54,9 @@ internal static class GitHubIssueReporter
     internal const int MaxGitHubApiErrorBodyBytes = 4 * 1024;
     internal const int MaxGitHubApiResponseBodyBytes = 256 * 1024;
     internal const int MaxGitHubApiResponseJsonDepth = 16;
+    internal const int MaxExistingSuggestionLookupPagesPerLabel = 5;
     private const int MaxGitHubApiErrorDetailLength = 500;
+    private const int MaxExistingSuggestionLookupWarningLabelLength = 80;
     private const string CodeExampleRemovedText = "[code example removed]";
     private const string ScrubInputTruncatedText = "\n[truncated]";
     private const string ApiErrorBodyTruncatedText = " [response body truncated]";
@@ -293,7 +295,7 @@ internal static class GitHubIssueReporter
     {
         foreach (var label in lookupLabels.Distinct(StringComparer.OrdinalIgnoreCase))
         {
-            for (var page = 1; ; page++)
+            for (var page = 1; page <= MaxExistingSuggestionLookupPagesPerLabel; page++)
             {
                 var labels = Uri.EscapeDataString(label);
                 var url = $"{ApiBase}/repos/{RepoOwner}/{RepoName}/issues?labels={labels}&state=open&per_page=100&page={page}";
@@ -332,10 +334,28 @@ internal static class GitHubIssueReporter
 
                 if (items.Count < 100)
                     break;
+
+                if (page == MaxExistingSuggestionLookupPagesPerLabel)
+                    WriteExistingSuggestionLookupPageCapWarning(label);
             }
         }
 
         return null;
+    }
+
+    private static void WriteExistingSuggestionLookupPageCapWarning(string label)
+    {
+        var boundedLabel = SanitizeExistingSuggestionLookupLabelForWarning(label);
+        ConsoleUi.TryWriteErrorLine(
+            $"[cdidx] GitHub existing-suggestion lookup reached the {MaxExistingSuggestionLookupPagesPerLabel}-page cap for label '{boundedLabel}'.");
+    }
+
+    private static string SanitizeExistingSuggestionLookupLabelForWarning(string label)
+    {
+        var sanitized = SanitizeIssueTitleText(label);
+        if (sanitized.Length <= MaxExistingSuggestionLookupWarningLabelLength)
+            return sanitized;
+        return sanitized[..MaxExistingSuggestionLookupWarningLabelLength] + "...";
     }
 
     private static string? TryGetOpenIssueUrl(JsonNode? item)

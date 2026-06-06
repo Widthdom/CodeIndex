@@ -15,10 +15,18 @@ public static class HookCommandRunner
     public static int Run(string[] args, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(args);
-        if (options.ShowHelp || options.Command == null)
+        if (options.ShowHelp || (options.Command == null && options.ParseError == null))
         {
             PrintUsage();
             return options.ShowHelp ? CommandExitCodes.Success : CommandExitCodes.UsageError;
+        }
+
+        if (options.ParseError != null)
+        {
+            var errorProjectPath = Path.GetFullPath(options.ProjectPath ?? Environment.CurrentDirectory);
+            if (!options.Json)
+                PrintUsage();
+            return WriteResult(options.Json, jsonOptions, "error", options.ParseError, errorProjectPath, null, null, CommandExitCodes.UsageError);
         }
 
         var projectPath = Path.GetFullPath(options.ProjectPath ?? Environment.CurrentDirectory);
@@ -46,6 +54,7 @@ public static class HookCommandRunner
         var json = false;
         var force = false;
         var showHelp = false;
+        string? parseError = null;
 
         for (var i = 0; i < args.Length; i++)
         {
@@ -67,7 +76,7 @@ public static class HookCommandRunner
                     if (args[i].StartsWith("-", StringComparison.Ordinal))
                     {
                         var displayValue = ConsoleUi.FormatBoundedValue(args[i]);
-                        Console.Error.WriteLine($"Warning: unknown option '{displayValue}' (ignored) / 不明なオプション '{displayValue}'（無視されます）");
+                        parseError ??= $"unknown option '{displayValue}'";
                     }
                     else if (command == null)
                         command = args[i];
@@ -77,7 +86,7 @@ public static class HookCommandRunner
             }
         }
 
-        return new HookCommandOptions(command, projectPath, json, force, showHelp);
+        return new HookCommandOptions(command, projectPath, json, force, showHelp, parseError);
     }
 
     private static int Install(HookCommandOptions options, JsonSerializerOptions jsonOptions, string projectPath, string hooksDir, string hookPath, string chainedHookPath)
@@ -93,12 +102,12 @@ public static class HookCommandRunner
                 if (File.Exists(ioChainedHookPath) && !options.Force)
                     return WriteResult(options.Json, jsonOptions, "error", $"chained hook already exists: {chainedHookPath}", projectPath, hookPath, chainedHookPath, CommandExitCodes.UsageError);
 
-                ReplaceCustomHookWithManagedHook(hooksDir, hookPath, chainedHookPath);
+                ReplaceCustomHookWithManagedHook(hooksDir, hookPath, chainedHookPath, projectPath);
                 return WriteResult(options.Json, jsonOptions, "installed", "cdidx pre-commit hook installed", projectPath, hookPath, chainedHookPath, CommandExitCodes.Success);
             }
         }
 
-        AtomicFileWriter.WriteText(hookPath, BuildHookScript(chainedHookPath), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), MakeExecutable);
+        AtomicFileWriter.WriteText(hookPath, BuildHookScript(chainedHookPath, projectPath), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), MakeExecutable);
 
         return WriteResult(options.Json, jsonOptions, "installed", "cdidx pre-commit hook installed", projectPath, hookPath, File.Exists(ioChainedHookPath) ? chainedHookPath : null, CommandExitCodes.Success);
     }
@@ -152,7 +161,7 @@ public static class HookCommandRunner
         return content is not null && IsManagedHook(content);
     }
 
-    private static void ReplaceCustomHookWithManagedHook(string hooksDir, string hookPath, string chainedHookPath)
+    private static void ReplaceCustomHookWithManagedHook(string hooksDir, string hookPath, string chainedHookPath, string projectPath)
     {
         var stagedHookPath = Path.Combine(hooksDir, $".{HookName}.{Guid.NewGuid():N}.tmp");
         var ioStagedHookPath = LongPath.EnsureWindowsPrefix(stagedHookPath);
@@ -162,7 +171,7 @@ public static class HookCommandRunner
 
         try
         {
-            WriteStagedHookScript(ioStagedHookPath, chainedHookPath);
+            WriteStagedHookScript(ioStagedHookPath, chainedHookPath, projectPath);
             File.Replace(ioStagedHookPath, ioHookPath, ioChainedHookPath, ignoreMetadataErrors: true);
             stagedHookMoved = true;
             MakeExecutable(ioHookPath);
@@ -174,7 +183,7 @@ public static class HookCommandRunner
         }
     }
 
-    private static void WriteStagedHookScript(string ioStagedHookPath, string chainedHookPath)
+    private static void WriteStagedHookScript(string ioStagedHookPath, string chainedHookPath, string projectPath)
     {
         using (var stream = new FileStream(ioStagedHookPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
         {
@@ -184,7 +193,7 @@ public static class HookCommandRunner
                 bufferSize: 1024,
                 leaveOpen: true))
             {
-                writer.Write(BuildHookScript(chainedHookPath));
+                writer.Write(BuildHookScript(chainedHookPath, projectPath));
                 writer.Flush();
             }
 
@@ -206,13 +215,14 @@ public static class HookCommandRunner
         }
     }
 
-    private static string BuildHookScript(string chainedHookPath)
+    private static string BuildHookScript(string chainedHookPath, string projectPath)
     {
         var quotedChainedHook = QuoteShell(chainedHookPath);
+        var quotedProjectPath = QuoteShell(projectPath);
         return $"""
 #!/bin/sh
 {BeginMarker}
-cdidx index . --quiet
+cdidx index {quotedProjectPath} --quiet
 cdidx_status=$?
 if [ "$cdidx_status" -ne 0 ]; then
   echo "cdidx pre-commit index failed; commit aborted. Use git commit --no-verify to bypass hooks." >&2
@@ -267,7 +277,7 @@ fi
         => Console.Error.WriteLine("Usage: cdidx hooks <install|uninstall|status> [--project <path>] [--force] [--json]");
 }
 
-public sealed record HookCommandOptions(string? Command, string? ProjectPath, bool Json, bool Force, bool ShowHelp);
+public sealed record HookCommandOptions(string? Command, string? ProjectPath, bool Json, bool Force, bool ShowHelp, string? ParseError);
 
 public sealed record HookCommandJsonResult(
     string Status,

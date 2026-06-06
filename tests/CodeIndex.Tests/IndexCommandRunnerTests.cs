@@ -111,6 +111,72 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void RunBackfillFold_UnknownOption_ReturnsUsageError()
+    {
+        var missingDb = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_unknown_{Guid.NewGuid():N}.db");
+
+        lock (TestConsoleLock.Gate)
+        {
+            var originalOut = Console.Out;
+            var originalErr = Console.Error;
+            using var stdout = new StringWriter();
+            using var stderr = new StringWriter();
+            try
+            {
+                Console.SetOut(stdout);
+                Console.SetError(stderr);
+                var exitCode = IndexCommandRunner.RunBackfillFold(["--db", missingDb, "--dryrun"], _jsonOptions);
+
+                Assert.Equal(CommandExitCodes.UsageError, exitCode);
+                Assert.Equal(string.Empty, stdout.ToString());
+                Assert.Contains("unknown option '--dryrun'", stderr.ToString());
+                Assert.Contains("Did you mean: --dry-run?", stderr.ToString());
+                Assert.DoesNotContain("Warning: unknown option", stderr.ToString());
+                Assert.DoesNotContain("database not found", stderr.ToString());
+            }
+            finally
+            {
+                Console.SetOut(originalOut);
+                Console.SetError(originalErr);
+            }
+        }
+    }
+
+    [Fact]
+    public void RunBackfillFold_UnknownOptionBeforeJson_ReturnsJsonUsageError()
+    {
+        var missingDb = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_unknown_json_{Guid.NewGuid():N}.db");
+
+        lock (TestConsoleLock.Gate)
+        {
+            var originalOut = Console.Out;
+            var originalErr = Console.Error;
+            using var stdout = new StringWriter();
+            using var stderr = new StringWriter();
+            try
+            {
+                Console.SetOut(stdout);
+                Console.SetError(stderr);
+                var exitCode = IndexCommandRunner.RunBackfillFold(["--db", missingDb, "--dryrun", "--json"], _jsonOptions);
+
+                Assert.Equal(CommandExitCodes.UsageError, exitCode);
+                Assert.Equal(string.Empty, stderr.ToString());
+                using var document = JsonDocument.Parse(stdout.ToString());
+                var json = document.RootElement;
+                Assert.Equal("error", json.GetProperty("status").GetString());
+                Assert.Contains("unknown option '--dryrun'", json.GetProperty("message").GetString());
+                Assert.Contains("Run `cdidx backfill-fold --help`", json.GetProperty("hint").GetString());
+                Assert.Equal(CommandErrorCodes.UsageError, json.GetProperty("error_code").GetString());
+            }
+            finally
+            {
+                Console.SetOut(originalOut);
+                Console.SetError(originalErr);
+            }
+        }
+    }
+
+    [Fact]
     public void FormatIndexFileException_RegexTimeout_UsesBoundedExtractionMessage()
     {
         var ex = new RegexMatchTimeoutException("raw-sensitive-content", "raw-sensitive-pattern", TimeSpan.FromSeconds(2));
@@ -6511,6 +6577,64 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_UpdateMode_WithChangedBetween_RemovesDeletedPath_2987()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            RunGit(projectRoot, "init");
+            var changelogDir = Path.Combine(projectRoot, "changelog.d", "unreleased");
+            Directory.CreateDirectory(changelogDir);
+            var deletedPath = Path.Combine(changelogDir, "+trimmed-release-json.fixed.md");
+
+            File.WriteAllText(
+                deletedPath,
+                """
+                ---
+                category: fixed
+                ---
+
+                ## English
+
+                - Placeholder.
+
+                ## 日本語
+
+                - プレースホルダー。
+                """);
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "initial");
+            RunGit(projectRoot, "branch", "before-delete");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.Delete(deletedPath);
+            RunGit(projectRoot, "add", "-A");
+            RunGit(projectRoot, "commit", "-m", "delete fragment");
+            RunGit(projectRoot, "branch", "after-delete");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--changed-between", "before-delete", "after-delete", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("removed").GetInt32());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.DoesNotContain("changelog.d/unreleased/+trimmed-release-json.fixed.md", indexedPaths);
+
+            var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", Path.Combine(projectRoot, ".cdidx", "codeindex.db"), "--check", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, statusExitCode);
+            Assert.True(statusJson.GetProperty("workspace_check").GetProperty("matches_workspace").GetBoolean());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_UpdateMode_WithChangedBetween_FallsBackToFullScanWhenIgnoreFilesChange()
     {
         var projectRoot = CreateTempProject();
@@ -6580,6 +6704,30 @@ public class IndexCommandRunnerTests
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
             Assert.Equal("error", json.GetProperty("status").GetString());
             Assert.Contains("--changed-between requires exactly two refs", json.GetProperty("message").GetString());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_WithChangedBetweenInvalidRef_ReturnsUsageError_3046()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            RunGit(projectRoot, "init");
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { }\n");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "initial");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--changed-between", "HEAD", "missing-ref", "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal("error", json.GetProperty("status").GetString());
+            Assert.Contains("failed to resolve changed files between git refs", json.GetProperty("message").GetString());
+            Assert.Contains("cdidx index <projectPath> --changed-between <old-ref> <new-ref>", json.GetProperty("hint").GetString());
         }
         finally
         {

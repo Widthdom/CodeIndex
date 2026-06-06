@@ -12,6 +12,9 @@ internal static class SuggestionsCommandRunner
     private const string Usage = "Usage: cdidx suggestions <list|show|export> [id] [--db <path>] [--json] [--status <all|draft|submitted_pending_triage|open_in_upstream|resolved_in_upstream|wont_fix|duplicate|superseded|submitted|unsubmitted>] [--language <lang>] [--category <category>] [--since <datetime>] [--agent <name>] [--limit <n>] [--offset <n>] [--format <json|markdown|issue-drafts>] [--open-issues <path>]";
     internal const int MaxOpenIssuesJsonBytes = IssueDuplicatePreflight.MaxOpenIssuesJsonBytes;
     internal const int MaxOpenIssuesJsonDepth = IssueDuplicatePreflight.MaxOpenIssuesJsonDepth;
+    internal const int MaxSuggestionExportTextFieldLength = 4096;
+    internal const int MaxSuggestionIssueDraftBodyLength = 24 * 1024;
+    private const string SuggestionOutputTruncationMarker = "\n[truncated]";
 
     public static int Run(string[] args, JsonSerializerOptions jsonOptions)
     {
@@ -153,7 +156,7 @@ internal static class SuggestionsCommandRunner
         var payload = new SuggestionExportJsonResult(
             JsonOutputContract.ApiVersion,
             records.Count,
-            records.Select(ToDetail).ToList());
+            records.Select(ToExportDetail).ToList());
         Console.WriteLine(JsonSerializer.Serialize(
             payload,
             CliJsonSerializerContextFactory.Create(jsonOptions).SuggestionExportJsonResult));
@@ -308,7 +311,11 @@ internal static class SuggestionsCommandRunner
         record.SubmitAttemptCount,
         record.LastSubmitError);
 
-    private static SuggestionDetailJsonResult ToDetail(SuggestionRecord record) => new(
+    private static SuggestionDetailJsonResult ToDetail(SuggestionRecord record) => ToDetail(record, capTextFields: false);
+
+    private static SuggestionDetailJsonResult ToExportDetail(SuggestionRecord record) => ToDetail(record, capTextFields: true);
+
+    private static SuggestionDetailJsonResult ToDetail(SuggestionRecord record, bool capTextFields) => new(
         JsonOutputContract.ApiVersion,
         record.Hash,
         record.CreatedAt,
@@ -321,12 +328,12 @@ internal static class SuggestionsCommandRunner
         record.ClientVersion,
         record.McpClientName,
         record.McpClientVersion,
-        record.ToolInvocationContext,
+        BoundSuggestionOutputValue(record.ToolInvocationContext, capTextFields),
         RedactSuggestionOutputValue(record.SampledTitle),
         RedactSuggestionOutputArray(record.SampledTags),
         NormalizeEvidencePaths(record),
-        record.Description,
-        record.Context,
+        BoundSuggestionOutputValue(record.Description, capTextFields) ?? string.Empty,
+        BoundSuggestionOutputValue(record.Context, capTextFields),
         IsSubmitted(record),
         record.UpstreamUrl,
         record.UpstreamIssueNumber,
@@ -385,7 +392,7 @@ internal static class SuggestionsCommandRunner
     {
         var sb = new StringBuilder();
         sb.AppendLine("## Summary");
-        sb.AppendLine(GitHubIssueReporter.ScrubInlineCode(record.Description));
+        sb.AppendLine(BoundSuggestionOutputValue(GitHubIssueReporter.ScrubInlineCode(record.Description), capTextFields: true));
         sb.AppendLine();
         sb.AppendLine("## Category");
         sb.AppendLine(record.Category);
@@ -405,12 +412,14 @@ internal static class SuggestionsCommandRunner
         }
         sb.AppendLine();
         sb.AppendLine("## Context");
-        sb.AppendLine(record.Context != null ? GitHubIssueReporter.ScrubInlineCode(record.Context) : "N/A");
+        sb.AppendLine(record.Context != null
+            ? BoundSuggestionOutputValue(GitHubIssueReporter.ScrubInlineCode(record.Context), capTextFields: true)
+            : "N/A");
         if (!string.IsNullOrWhiteSpace(record.ToolInvocationContext))
         {
             sb.AppendLine();
             sb.AppendLine("## Tool invocation context");
-            sb.AppendLine(GitHubIssueReporter.ScrubInlineCode(record.ToolInvocationContext));
+            sb.AppendLine(BoundSuggestionOutputValue(GitHubIssueReporter.ScrubInlineCode(record.ToolInvocationContext), capTextFields: true));
         }
         sb.AppendLine();
         sb.AppendLine("## Suggestion metadata");
@@ -422,7 +431,7 @@ internal static class SuggestionsCommandRunner
             sb.AppendLine($"- agent: `{agent}`");
         if (!string.IsNullOrWhiteSpace(record.ClientVersion) && record.ClientVersion != "unknown")
             sb.AppendLine($"- cdidx_version: `{record.ClientVersion}`");
-        return sb.ToString().TrimEnd();
+        return BoundSuggestionOutputValue(sb.ToString().TrimEnd(), MaxSuggestionIssueDraftBodyLength);
     }
 
     private static List<string> NormalizeEvidencePaths(SuggestionRecord record)
@@ -484,23 +493,40 @@ internal static class SuggestionsCommandRunner
             if (!string.IsNullOrWhiteSpace(record.LastSubmitError))
                 sb.AppendLine($"- last_submit_error: `{record.LastSubmitError}`");
             sb.AppendLine();
-            sb.AppendLine(record.Description);
+            sb.AppendLine(BoundSuggestionOutputValue(record.Description, capTextFields: true));
             if (!string.IsNullOrWhiteSpace(record.Context))
             {
                 sb.AppendLine();
                 sb.AppendLine("Context:");
                 sb.AppendLine();
-                sb.AppendLine(record.Context);
+                sb.AppendLine(BoundSuggestionOutputValue(record.Context, capTextFields: true));
             }
             if (!string.IsNullOrWhiteSpace(record.ToolInvocationContext))
             {
                 sb.AppendLine();
                 sb.AppendLine("Tool invocation context:");
                 sb.AppendLine();
-                sb.AppendLine(record.ToolInvocationContext);
+                sb.AppendLine(BoundSuggestionOutputValue(record.ToolInvocationContext, capTextFields: true));
             }
         }
         return sb.ToString().TrimEnd();
+    }
+
+    private static string? BoundSuggestionOutputValue(string? value, bool capTextFields) =>
+        !capTextFields || value == null
+            ? value
+            : BoundSuggestionOutputValue(value, MaxSuggestionExportTextFieldLength);
+
+    private static string BoundSuggestionOutputValue(string value, int maxLength)
+    {
+        if (value.Length <= maxLength)
+            return value;
+
+        if (maxLength <= SuggestionOutputTruncationMarker.Length)
+            return value[..maxLength];
+
+        var retainedLength = maxLength - SuggestionOutputTruncationMarker.Length;
+        return value[..retainedLength].TrimEnd() + SuggestionOutputTruncationMarker;
     }
 
     private static int WriteUsageError(string message)

@@ -261,10 +261,85 @@ public class ExtractorPluginRegistryTests
         }
     }
 
+    [Theory]
+    [InlineData("language")]
+    [InlineData("extension")]
+    [InlineData("kind")]
+    public void LoadPatternConfigs_RejectsOverlongScalarValues_3245(string scalarName)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject($"extractor_registry_scalar_cap_{scalarName}");
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                var content = BuildPatternConfigWithOverlongScalar(scalarName);
+                WritePatternConfig(projectRoot, $"{scalarName}.yaml", content);
+
+                ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(projectRoot);
+                var status = ExtractorPluginRegistry.GetStatusSnapshot();
+
+                Assert.Equal(0, status.PatternConfigCount);
+                Assert.Equal(1, status.SkippedFileCount);
+                Assert.Equal(1, status.DiagnosticCount);
+                var diagnostic = Assert.Single(status.Diagnostics!);
+                Assert.Equal("pattern", diagnostic.Kind);
+                Assert.Equal("error", diagnostic.Severity);
+                Assert.Contains($"{scalarName} scalar is too long", diagnostic.Message, StringComparison.Ordinal);
+                Assert.Contains("maximum", diagnostic.Message, StringComparison.Ordinal);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void LoadPatternConfigs_RejectsExtensionNormalizedBeyondLimit_3245()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_extension_normalized_cap");
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                var extension = new string('e', ExtractorPluginRegistry.MaxPatternExtensionLength);
+                WritePatternConfig(
+                    projectRoot,
+                    "extension-normalized.yaml",
+                    $"language: \"toydsl\"\nextensions:\n  - extension: \"{extension}\"\npatterns:\n  - kind: \"class\"\n    regex: \"^(?<name>\\\\w+)\"\n");
+
+                ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(projectRoot);
+                var diagnostic = Assert.Single(ExtractorPluginRegistry.GetStatusSnapshot().Diagnostics!);
+
+                Assert.Contains("extension scalar is too long", diagnostic.Message, StringComparison.Ordinal);
+                Assert.Contains((ExtractorPluginRegistry.MaxPatternExtensionLength + 1).ToString(), diagnostic.Message, StringComparison.Ordinal);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
     private static void WritePatternConfig(string projectRoot, string fileName, string content)
     {
         var path = Path.Combine(projectRoot, ".cdidx", "patterns", fileName);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllText(path, content);
+    }
+
+    private static string BuildPatternConfigWithOverlongScalar(string scalarName)
+    {
+        return scalarName switch
+        {
+            "language" => $"language: \"{new string('l', ExtractorPluginRegistry.MaxPatternLanguageLength + 1)}\"\nextensions:\n  - extension: \".toy\"\npatterns:\n  - kind: \"class\"\n    regex: \"^(?<name>\\\\w+)\"\n",
+            "extension" => $"language: \"toydsl\"\nextensions:\n  - extension: \".{new string('e', ExtractorPluginRegistry.MaxPatternExtensionLength)}\"\npatterns:\n  - kind: \"class\"\n    regex: \"^(?<name>\\\\w+)\"\n",
+            "kind" => $"language: \"toydsl\"\nextensions:\n  - extension: \".toy\"\npatterns:\n  - kind: \"{new string('k', ExtractorPluginRegistry.MaxPatternKindLength + 1)}\"\n    regex: \"^(?<name>\\\\w+)\"\n",
+            _ => throw new ArgumentOutOfRangeException(nameof(scalarName), scalarName, null),
+        };
     }
 }

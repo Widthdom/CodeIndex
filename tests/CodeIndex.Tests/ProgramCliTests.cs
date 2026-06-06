@@ -778,6 +778,55 @@ public class ProgramCliTests
     }
 
     [Fact]
+    public void Suggestions_ExportJsonCapsDetailedBodyFields()
+    {
+        using var fixture = SuggestionFixture.Create();
+        var sentinel = "JSON_EXPORT_TAIL_SHOULD_NOT_APPEAR";
+        var longDescription = new string('d', SuggestionsCommandRunner.MaxSuggestionExportTextFieldLength + 256) + sentinel;
+        var longContext = new string('c', SuggestionsCommandRunner.MaxSuggestionExportTextFieldLength + 256) + sentinel;
+        var longToolInvocation = new string('t', SuggestionsCommandRunner.MaxSuggestionExportTextFieldLength + 256) + sentinel;
+        fixture.Add(
+            "output_format",
+            "csharp",
+            longDescription,
+            submitted: false,
+            context: longContext,
+            toolInvocationContext: longToolInvocation);
+
+        var (exitCode, stdout, stderr) = RunCliInSubprocess(["suggestions", "export", "--db", fixture.DbPath]);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.DoesNotContain(sentinel, stdout);
+        using var doc = JsonDocument.Parse(stdout);
+        var suggestion = doc.RootElement.GetProperty("suggestions")[0];
+        AssertCappedSuggestionText(suggestion.GetProperty("description").GetString());
+        AssertCappedSuggestionText(suggestion.GetProperty("context").GetString());
+        AssertCappedSuggestionText(suggestion.GetProperty("tool_invocation_context").GetString());
+    }
+
+    [Fact]
+    public void Suggestions_ExportMarkdownCapsDetailedBodyFields()
+    {
+        using var fixture = SuggestionFixture.Create();
+        var sentinel = "MARKDOWN_EXPORT_TAIL_SHOULD_NOT_APPEAR";
+        fixture.Add(
+            "output_format",
+            "csharp",
+            new string('d', SuggestionsCommandRunner.MaxSuggestionExportTextFieldLength + 256) + sentinel,
+            submitted: false,
+            context: new string('c', SuggestionsCommandRunner.MaxSuggestionExportTextFieldLength + 256) + sentinel,
+            toolInvocationContext: new string('t', SuggestionsCommandRunner.MaxSuggestionExportTextFieldLength + 256) + sentinel);
+
+        var (exitCode, stdout, stderr) = RunCliInSubprocess(["suggestions", "export", "--db", fixture.DbPath, "--format", "markdown"]);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.DoesNotContain(sentinel, stdout);
+        Assert.Contains("[truncated]", stdout);
+    }
+
+    [Fact]
     public void Suggestions_ExportIssueDraftsIncludesEvidenceAndDuplicatePreflight()
     {
         using var fixture = SuggestionFixture.Create();
@@ -843,6 +892,35 @@ public class ProgramCliTests
         using var doc = JsonDocument.Parse(stdout);
         var title = doc.RootElement.GetProperty("drafts")[0].GetProperty("title").GetString();
         Assert.Contains("REDACTED:credential", title!);
+    }
+
+    [Fact]
+    public void Suggestions_ExportIssueDraftsCapsRenderedBody()
+    {
+        using var fixture = SuggestionFixture.Create();
+        var sentinel = "ISSUE_DRAFT_TAIL_SHOULD_NOT_APPEAR";
+        fixture.Add(
+            "output_format",
+            "csharp",
+            new string('d', 10_000) + sentinel,
+            submitted: false,
+            sampledTitle: "Cap long issue draft bodies",
+            context: new string('c', 10_000) + sentinel,
+            toolInvocationContext: new string('t', 10_000) + sentinel);
+        var openIssuesPath = fixture.WriteOpenIssuesJson("[]");
+
+        var (exitCode, stdout, stderr) = RunCliInSubprocess([
+            "suggestions", "export", "--db", fixture.DbPath, "--format", "issue-drafts", "--open-issues", openIssuesPath
+        ]);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.DoesNotContain(sentinel, stdout);
+        using var doc = JsonDocument.Parse(stdout);
+        var body = doc.RootElement.GetProperty("drafts")[0].GetProperty("body").GetString();
+        Assert.NotNull(body);
+        Assert.True(body!.Length <= SuggestionsCommandRunner.MaxSuggestionIssueDraftBodyLength);
+        Assert.Contains("[truncated]", body);
     }
 
     [Fact]
@@ -923,6 +1001,13 @@ public class ProgramCliTests
         var stdErr = process.StandardError.ReadToEnd();
         process.WaitForExit();
         return (process.ExitCode, stdOut, stdErr);
+    }
+
+    private static void AssertCappedSuggestionText(string? value)
+    {
+        Assert.NotNull(value);
+        Assert.True(value!.Length <= SuggestionsCommandRunner.MaxSuggestionExportTextFieldLength);
+        Assert.Contains("[truncated]", value);
     }
 
     private static string GetBuiltCliDllPath()
@@ -1033,14 +1118,16 @@ public class ProgramCliTests
             int submitAttemptCount = 0,
             string? lastSubmitError = null,
             string? sampledTitle = null,
-            string[]? evidencePaths = null)
+            string[]? evidencePaths = null,
+            string? context = null,
+            string? toolInvocationContext = null)
         {
             var record = new SuggestionRecord
             {
                 Category = category,
                 Language = language,
                 Description = description,
-                Context = "Agent noticed this during repository triage.",
+                Context = context ?? "Agent noticed this during repository triage.",
                 Hash = SuggestionStore.ComputeHash(category, language, description),
                 CreatedAt = new DateTime(2026, 5, 16, 12, _records.Count, 0, DateTimeKind.Utc),
                 SubmittedToGitHub = submitted,
@@ -1050,6 +1137,7 @@ public class ProgramCliTests
                 LastSubmitError = lastSubmitError,
                 SampledTitle = sampledTitle,
                 EvidencePaths = evidencePaths,
+                ToolInvocationContext = toolInvocationContext,
             };
             _records.Add(record);
             Write();

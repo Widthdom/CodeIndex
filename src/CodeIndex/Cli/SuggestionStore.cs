@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -33,6 +34,8 @@ public class SuggestionStore
     internal const int DefaultMaxAgeDays = 365;
     internal const int DefaultMaxCount = 5000;
     internal const int MaxSuggestionStoreBytes = 8 * 1024 * 1024;
+    internal const int MaxSuggestionArchiveBytes = MaxSuggestionStoreBytes;
+    internal const int MaxSuggestionArchiveRotations = 3;
     internal const int MaxSuggestionStoreJsonDepth = 16;
     internal const int MaximumMaxAgeDays = 3650;
     internal const int MaximumMaxCount = 100_000;
@@ -821,10 +824,13 @@ public class SuggestionStore
         if (pruned.Count == 0)
             return false;
 
-        ArchivePrunedRecords(pruned);
+        var archivedCount = ArchivePrunedRecords(pruned);
         try
         {
-            ConsoleUi.TryWriteErrorLine($"[cdidx] Pruned {pruned.Count} stale suggestion record(s) to {_archivePath}.");
+            var message = archivedCount == pruned.Count
+                ? $"[cdidx] Pruned {pruned.Count} stale suggestion record(s) to {_archivePath}."
+                : $"[cdidx] Pruned {pruned.Count} stale suggestion record(s); archived latest {archivedCount} to {_archivePath} after applying the {MaxSuggestionArchiveBytes} byte archive cap.";
+            ConsoleUi.TryWriteErrorLine(message);
         }
         catch (ObjectDisposedException)
         {
@@ -833,11 +839,18 @@ public class SuggestionStore
         return true;
     }
 
-    private void ArchivePrunedRecords(IEnumerable<SuggestionRecord> records)
+    private int ArchivePrunedRecords(IEnumerable<SuggestionRecord> records)
     {
         var dir = Path.GetDirectoryName(_archivePath);
         if (!string.IsNullOrEmpty(dir))
             DataDirectorySecurity.CreatePrivateDirectory(dir);
+
+        var archiveLines = BuildBoundedArchiveLines(records);
+        if (archiveLines.Count == 0)
+            return 0;
+
+        var pendingBytes = archiveLines.Sum(line => (long)line.Length);
+        RotateArchiveIfNeeded(pendingBytes);
 
         var options = new FileStreamOptions
         {
@@ -850,10 +863,67 @@ public class SuggestionStore
 
         using var stream = new FileStream(_archivePath, options);
         DataDirectorySecurity.ApplyPrivateFileMode(_archivePath);
-        using var writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
-        foreach (var record in records)
-            writer.WriteLine(JsonSerializer.Serialize(record, s_jsonOptions));
+        foreach (var line in archiveLines)
+            stream.Write(line, 0, line.Length);
+
+        return archiveLines.Count;
     }
+
+    private static List<byte[]> BuildBoundedArchiveLines(IEnumerable<SuggestionRecord> records)
+    {
+        var lines = new Queue<byte[]>();
+        var totalBytes = 0L;
+        foreach (var record in records)
+        {
+            var line = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(record, s_jsonOptions) + Environment.NewLine);
+            lines.Enqueue(line);
+            totalBytes += line.Length;
+
+            while (totalBytes > MaxSuggestionArchiveBytes && lines.Count > 0)
+                totalBytes -= lines.Dequeue().Length;
+        }
+
+        return lines.ToList();
+    }
+
+    private void RotateArchiveIfNeeded(long pendingBytes)
+    {
+        if (pendingBytes <= 0 || !File.Exists(_archivePath))
+            return;
+
+        var existingBytes = new FileInfo(_archivePath).Length;
+        if (existingBytes + pendingBytes <= MaxSuggestionArchiveBytes)
+            return;
+
+        RotateArchiveFiles();
+    }
+
+    private void RotateArchiveFiles()
+    {
+        var oldestPath = GetArchiveRotationPath(MaxSuggestionArchiveRotations);
+        if (File.Exists(oldestPath))
+            File.Delete(oldestPath);
+
+        for (var generation = MaxSuggestionArchiveRotations - 1; generation >= 1; generation--)
+        {
+            var sourcePath = GetArchiveRotationPath(generation);
+            if (!File.Exists(sourcePath))
+                continue;
+
+            var destinationPath = GetArchiveRotationPath(generation + 1);
+            File.Move(sourcePath, destinationPath, overwrite: true);
+            DataDirectorySecurity.ApplyPrivateFileMode(destinationPath);
+        }
+
+        if (File.Exists(_archivePath))
+        {
+            var firstRotationPath = GetArchiveRotationPath(1);
+            File.Move(_archivePath, firstRotationPath, overwrite: true);
+            DataDirectorySecurity.ApplyPrivateFileMode(firstRotationPath);
+        }
+    }
+
+    private string GetArchiveRotationPath(int generation) => $"{_archivePath}.{generation.ToString(CultureInfo.InvariantCulture)}";
 
     internal static TimeSpan ResolveMaxAge()
     {

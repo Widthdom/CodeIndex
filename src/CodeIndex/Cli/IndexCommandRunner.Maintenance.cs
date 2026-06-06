@@ -330,6 +330,7 @@ public static partial class IndexCommandRunner
         var json = false;
         var dryRun = false;
         var noCheckpoint = false;
+        string? parseError = null;
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -350,19 +351,14 @@ public static partial class IndexCommandRunner
                 case "--help" or "-h":
                     return new BackfillFoldCommandOptions { ShowHelp = true, DbPath = dbPath, Json = json, DryRun = dryRun, NoCheckpoint = noCheckpoint };
                 default:
-                    if (args[i].StartsWith('-'))
+                    if (args[i].StartsWith("-", StringComparison.Ordinal))
                     {
-                        Console.Error.WriteLine($"Warning: unknown option '{args[i]}' (ignored) / 不明なオプション '{args[i]}'（無視されます）");
-                        WriteUnknownBackfillFoldOptionSuggestion(args[i]);
+                        parseError ??= BuildUnknownBackfillFoldOptionError(args[i]);
                     }
                     else
-                        return new BackfillFoldCommandOptions
-                        {
-                            DbPath = dbPath,
-                            Json = json,
-                            DryRun = dryRun,
-                            ParseError = $"backfill-fold does not accept positional arguments: '{args[i]}'"
-                        };
+                    {
+                        parseError ??= $"backfill-fold does not accept positional arguments: '{args[i]}'";
+                    }
                     break;
             }
         }
@@ -373,14 +369,17 @@ public static partial class IndexCommandRunner
             Json = json,
             DryRun = dryRun,
             NoCheckpoint = noCheckpoint,
+            ParseError = parseError,
         };
     }
 
-    private static void WriteUnknownBackfillFoldOptionSuggestion(string token)
+    private static string BuildUnknownBackfillFoldOptionError(string token)
     {
         var name = TrimInlineValue(token);
         var suggestion = ConsoleUi.FindClosestMatch(name, AcceptedBackfillFoldFlags);
-        if (suggestion != null)
-            Console.Error.WriteLine($"Did you mean: {suggestion}?");
+        var displayToken = ConsoleUi.FormatBoundedValue(token);
+        return suggestion == null
+            ? $"unknown option '{displayToken}'"
+            : $"unknown option '{displayToken}'\nDid you mean: {suggestion}?";
     }
 }

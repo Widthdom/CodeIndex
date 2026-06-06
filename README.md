@@ -217,7 +217,10 @@ The documented `status --json` trust contract covers these fields:
 <tr><td><code>index_newer_than_reader_reason</code></td><td><code>unknown_extension_file_count</code></td><td><code>unknown_extension_files</code></td><td><code>unknown_extension_files_truncated</code></td></tr>
 <tr><td><code>unknown_extension_file_path_limit</code></td><td><code>path_case_sensitive</code></td><td><code>data_dir</code></td><td><code>data_dir_source</code></td></tr>
 <tr><td><code>data_dir_mode</code></td><td><code>mac_profile</code></td><td><code>db_size_bytes</code></td><td><code>wal_size_bytes</code></td></tr>
-<tr><td><code>db_pragma_settings</code></td><td><code>symbols_by_language</code></td><td><code>process</code></td><td><code>last_index_run</code></td></tr>
+<tr><td><code>db_pragma_settings</code></td><td><code>symbol_kinds</code></td><td><code>symbols_by_language</code></td><td><code>process</code></td></tr>
+<tr><td><code>last_index_run</code></td><td><code>symbol_kind_limit</code></td><td><code>symbol_kind_name_limit</code></td><td><code>symbol_kind_total_count</code></td></tr>
+<tr><td><code>symbol_kind_omitted_count</code></td><td><code>symbol_kind_names_truncated</code></td><td><code>symbols_by_language_kind_total_counts</code></td><td><code>symbols_by_language_kind_omitted_counts</code></td></tr>
+<tr><td><code>symbols_by_language_kind_names_truncated</code></td><td></td><td></td><td></td></tr>
 <tr><td><code>last_workspace_freshened_at</code></td><td><code>hooks</code></td><td><code>stale_after_seconds</code></td><td><code>index_age_seconds</code></td></tr>
 <tr><td><code>degraded_reason</code></td><td><code>recommended_action</code></td><td><code>alternative_action</code></td><td><code>mcp_session</code></td></tr>
 <tr><td><code>extractors</code></td><td></td><td></td><td></td></tr>
@@ -229,6 +232,8 @@ When any readiness field is degraded, `degraded_root_cause` identifies the prima
 After a current full-repository scan, `unknown_extension_file_count` reports how many skipped files had unmapped non-empty extensions, while `unknown_extension_files` lists a path sample capped by `unknown_extension_file_path_limit` items and the decoded-character budget. `unknown_extension_files_truncated` marks when more paths existed than were emitted for either cap; `unknown_extension_file_path_limit` is the item cap, not a guarantee that the sample always reaches that count.
 
 `extractors` reports runtime extractor plugin and pattern-config diagnostics, including loaded counts, skipped file counts, and a bounded diagnostics list for load failures. Diagnostic paths and messages are sanitized before they are surfaced.
+
+When symbol kind metadata exceeds status output caps, `symbol_kind_*` and `symbols_by_language_kind_*` fields describe the entry limit, kind-name length limit, total distinct kind counts, omitted kind counts, and languages whose kind names were truncated.
 
 `hooks[]` includes metadata-only hook candidates and `callback_budget_ms`; `status` does not load hook assemblies. `CDIDX_HOOK_CALLBACK_BUDGET_MS` bounds each post-extraction hook callback in milliseconds (default: 5000); callbacks that exceed the budget emit sanitized index warnings, drop timed-out mutations, and disable that hook for the current index run.
 
@@ -528,7 +533,10 @@ shell completion script、Homebrew install、.NET global-tool install は削除�
 <tr><td><code>index_newer_than_reader_reason</code></td><td><code>unknown_extension_file_count</code></td><td><code>unknown_extension_files</code></td><td><code>unknown_extension_files_truncated</code></td></tr>
 <tr><td><code>unknown_extension_file_path_limit</code></td><td><code>path_case_sensitive</code></td><td><code>data_dir</code></td><td><code>data_dir_source</code></td></tr>
 <tr><td><code>data_dir_mode</code></td><td><code>mac_profile</code></td><td><code>db_size_bytes</code></td><td><code>wal_size_bytes</code></td></tr>
-<tr><td><code>db_pragma_settings</code></td><td><code>symbols_by_language</code></td><td><code>process</code></td><td><code>last_index_run</code></td></tr>
+<tr><td><code>db_pragma_settings</code></td><td><code>symbol_kinds</code></td><td><code>symbols_by_language</code></td><td><code>process</code></td></tr>
+<tr><td><code>last_index_run</code></td><td><code>symbol_kind_limit</code></td><td><code>symbol_kind_name_limit</code></td><td><code>symbol_kind_total_count</code></td></tr>
+<tr><td><code>symbol_kind_omitted_count</code></td><td><code>symbol_kind_names_truncated</code></td><td><code>symbols_by_language_kind_total_counts</code></td><td><code>symbols_by_language_kind_omitted_counts</code></td></tr>
+<tr><td><code>symbols_by_language_kind_names_truncated</code></td><td></td><td></td><td></td></tr>
 <tr><td><code>last_workspace_freshened_at</code></td><td><code>hooks</code></td><td><code>stale_after_seconds</code></td><td><code>index_age_seconds</code></td></tr>
 <tr><td><code>degraded_reason</code></td><td><code>recommended_action</code></td><td><code>alternative_action</code></td><td><code>mcp_session</code></td></tr>
 <tr><td><code>extractors</code></td><td></td><td></td><td></td></tr>
@@ -542,6 +550,8 @@ readiness field のいずれかが degraded の場合、`degraded_root_cause` �
 現行の全体 scan 後、`unknown_extension_file_count` は未知の非空拡張子で skip された件数を返し、`unknown_extension_files` は `unknown_extension_file_path_limit` 件までの path sample、`unknown_extension_files_truncated` は sample より多くの path があることを示します。
 
 `extractors` は extractor plugin と pattern config の runtime 診断で、読み込み済み件数、skip されたファイル数、読み込み失敗の上限付き diagnostics list を含みます。diagnostic の path と message は表面化前に sanitization されます。
+
+symbol kind metadata が status output の上限を超えた場合、`symbol_kind_*` と `symbols_by_language_kind_*` field が entry 上限、kind 名の長さ上限、distinct kind 総数、省略された kind 数、kind 名が切り詰められた language を示します。
 
 `hooks[]` は metadata-only の hook candidate と `callback_budget_ms` を含み、`status` は hook assembly を読み込みません。`CDIDX_HOOK_CALLBACK_BUDGET_MS` は post-extraction hook callback ごとの上限ミリ秒を指定します（既定値: 5000）。上限を超えた callback は sanitized index warning を出し、timeout した変更を捨て、その index run 中は該当 hook を無効化します。
 
