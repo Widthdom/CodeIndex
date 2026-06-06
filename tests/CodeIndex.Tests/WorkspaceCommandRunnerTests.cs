@@ -637,6 +637,43 @@ public class WorkspaceCommandRunnerTests
     }
 
     [Fact]
+    public void WorkspaceUse_RejectsAmbiguousSameBasenameMembers()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_use_ambiguous");
+        var configHome = TestProjectHelper.CreateTempProject("cdidx_workspace_use_ambiguous_config");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(root, "src", "App"));
+            Directory.CreateDirectory(Path.Combine(root, "tests", "App"));
+            File.WriteAllText(Path.Combine(root, "cdidx.workspace.json"), """{ "members": ["src/App", "tests/App"] }""");
+            using var env = EnvironmentVariableScope.Capture("XDG_CONFIG_HOME");
+            Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
+
+            var previous = Environment.CurrentDirectory;
+            try
+            {
+                Environment.CurrentDirectory = root;
+                var (exitCode, _, stderr) = ConsoleCapture.Capture(() => WorkspaceCommandRunner.Run(["use", "App"], _jsonOptions));
+
+                Assert.Equal(CommandExitCodes.UsageError, exitCode);
+                Assert.Contains("workspace member name is ambiguous", stderr);
+                Assert.Contains(Path.Combine("src", "App"), stderr);
+                Assert.Contains(Path.Combine("tests", "App"), stderr);
+                Assert.False(File.Exists(ActiveWorkspace.StatePath));
+            }
+            finally
+            {
+                Environment.CurrentDirectory = previous;
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(root);
+            TestProjectHelper.DeleteDirectory(configHome);
+        }
+    }
+
+    [Fact]
     public void WorkspaceUse_RejectsNamedWorkspaceWithoutManifest()
     {
         var root = TestProjectHelper.CreateTempProject("cdidx_workspace_use_no_manifest");

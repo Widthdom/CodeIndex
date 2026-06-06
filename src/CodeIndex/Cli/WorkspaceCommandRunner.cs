@@ -4,6 +4,9 @@ namespace CodeIndex.Cli;
 
 internal static class WorkspaceCommandRunner
 {
+    private const int MaxAmbiguousMemberCandidates = 5;
+    private const int MaxAmbiguousMemberPathChars = 160;
+
     internal static int Run(string[] args, JsonSerializerOptions jsonOptions)
     {
         var json = args.Contains("--json", StringComparer.Ordinal);
@@ -69,11 +72,22 @@ internal static class WorkspaceCommandRunner
         if (manifest == null && !useDefault)
             return CommandErrorWriter.WriteJsonOrHuman(json, jsonOptions, "workspace manifest was not found.", CommandExitCodes.UsageError, "run `cdidx workspace use <name>` from a manifest member or pass `default`.");
 
-        var member = useDefault
-            ? null
-            : manifest?.Members.FirstOrDefault(m => string.Equals(Path.GetFileName(m.Path), name, StringComparison.OrdinalIgnoreCase));
-        if (manifest != null && member == null && !useDefault)
-            return CommandErrorWriter.WriteJsonOrHuman(json, jsonOptions, "workspace member was not found.", CommandExitCodes.UsageError, "run `cdidx workspace list` and pass one of the listed member directory names.");
+        WorkspaceMember? member = null;
+        if (manifest != null && !useDefault)
+        {
+            var matches = manifest.Members
+                .Where(m => string.Equals(Path.GetFileName(m.Path), name, StringComparison.OrdinalIgnoreCase))
+                .Take(MaxAmbiguousMemberCandidates + 1)
+                .ToArray();
+
+            if (matches.Length == 0)
+                return CommandErrorWriter.WriteJsonOrHuman(json, jsonOptions, "workspace member was not found.", CommandExitCodes.UsageError, "run `cdidx workspace list` and pass one of the listed member directory names.");
+            if (matches.Length > 1)
+                return CommandErrorWriter.WriteJsonOrHuman(json, jsonOptions, "workspace member name is ambiguous.", CommandExitCodes.UsageError, $"matching members: {FormatAmbiguousMemberCandidates(matches)}. Use unique member directory names in the workspace manifest.");
+
+            member = matches[0];
+        }
+
         if (member is { Exists: false })
             return CommandErrorWriter.WriteJsonOrHuman(json, jsonOptions, "workspace member is missing on disk.", CommandExitCodes.UsageError, "create the missing member directory or run `cdidx workspace list` and choose an existing member.");
 
@@ -87,4 +101,18 @@ internal static class WorkspaceCommandRunner
             Console.WriteLine($"Active workspace set to {state.Name}: {state.DbPath}");
         return CommandExitCodes.Success;
     }
+
+    private static string FormatAmbiguousMemberCandidates(IReadOnlyList<WorkspaceMember> matches)
+    {
+        var candidates = matches
+            .Take(MaxAmbiguousMemberCandidates)
+            .Select(member => TruncateAmbiguousMemberPath(member.Path));
+        var suffix = matches.Count > MaxAmbiguousMemberCandidates ? ", ..." : string.Empty;
+        return string.Join(", ", candidates) + suffix;
+    }
+
+    private static string TruncateAmbiguousMemberPath(string path)
+        => path.Length <= MaxAmbiguousMemberPathChars
+            ? path
+            : path[..(MaxAmbiguousMemberPathChars - 3)] + "...";
 }
