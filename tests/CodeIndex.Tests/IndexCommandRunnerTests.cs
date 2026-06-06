@@ -341,7 +341,8 @@ public class IndexCommandRunnerTests
             var (exitCode, stdout, stderr) = RunPublishedCli(publishedCli, projectRoot, projectRoot, "--db", dbPath, "--json", "--force");
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
+            Assert.Contains("cdidx: scanning files...", stderr);
+            Assert.Contains("cdidx: preparing index writes...", stderr);
             using (var document = JsonDocument.Parse(stdout))
                 Assert.Equal("success", document.RootElement.GetProperty("status").GetString());
             Assert.Equal(1, CountRows(dbPath, "files"));
