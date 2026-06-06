@@ -262,12 +262,12 @@ public class McpAuditLogTests : IDisposable
     }
 
     [Fact]
-    public void ToolsCall_IncludeValues_TruncatesArgumentKeysInAuditValues_Issue3117()
+    public void ToolsCall_IncludeValues_TruncatesArgumentKeysInAuditValues_Issue3117_Issue3105()
     {
         using var sink = new AuditLogSink(_auditPath, AuditLogSink.DefaultMaxBytes, includeValues: true);
         using var server = CreateServer(sink);
-        var argumentName = new string('k', McpBoundedText.MaxDiagnosticDisplayChars + 25);
-        var display = McpBoundedText.ForDisplay(argumentName);
+        var argumentName = new string('k', AuditLogSink.MaxAuditArgumentKeyChars + 25);
+        var display = McpBoundedText.ForDisplay(argumentName, AuditLogSink.MaxAuditArgumentKeyChars);
         var request = new JsonObject
         {
             ["jsonrpc"] = "2.0",
@@ -294,6 +294,7 @@ public class McpAuditLogTests : IDisposable
         Assert.Equal(display.Text, record.GetProperty("arg_keys")[1].GetString());
         Assert.Equal(argumentName.Length, record.GetProperty("arg_key_lengths").GetProperty(display.Text).GetInt32());
         Assert.True(record.GetProperty("arg_keys_truncated").GetBoolean());
+        Assert.Equal(1, record.GetProperty("arg_key_names_truncated_count").GetInt32());
         Assert.True(record.GetProperty("arg_values").TryGetProperty(display.Text, out _));
     }
 
@@ -432,7 +433,7 @@ public class McpAuditLogTests : IDisposable
     }
 
     [Fact]
-    public void ToolsCall_CapsAuditArgumentKeyCount_Issue3237()
+    public void ToolsCall_CapsAuditArgumentKeyCount_Issue3237_Issue3105()
     {
         using var sink = new AuditLogSink(_auditPath, AuditLogSink.DefaultMaxBytes, includeValues: true);
         using var server = CreateServer(sink);
@@ -458,6 +459,7 @@ public class McpAuditLogTests : IDisposable
         Assert.True(record.GetProperty("arg_keys_truncated").GetBoolean());
         Assert.Contains(record.GetProperty("arg_key_truncation_reasons").EnumerateArray(),
             reason => reason.GetString() == "arg_key_count_limit");
+        Assert.Equal(3, record.GetProperty("arg_keys_omitted_count").GetInt32());
         Assert.False(record.GetProperty("arg_values").TryGetProperty(
             $"arg{AuditLogSink.MaxAuditArgumentCount.ToString(CultureInfo.InvariantCulture)}", out _));
     }
