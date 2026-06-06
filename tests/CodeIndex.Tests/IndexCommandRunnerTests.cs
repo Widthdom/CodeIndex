@@ -111,6 +111,72 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void RunBackfillFold_UnknownOption_ReturnsUsageError()
+    {
+        var missingDb = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_unknown_{Guid.NewGuid():N}.db");
+
+        lock (TestConsoleLock.Gate)
+        {
+            var originalOut = Console.Out;
+            var originalErr = Console.Error;
+            using var stdout = new StringWriter();
+            using var stderr = new StringWriter();
+            try
+            {
+                Console.SetOut(stdout);
+                Console.SetError(stderr);
+                var exitCode = IndexCommandRunner.RunBackfillFold(["--db", missingDb, "--dryrun"], _jsonOptions);
+
+                Assert.Equal(CommandExitCodes.UsageError, exitCode);
+                Assert.Equal(string.Empty, stdout.ToString());
+                Assert.Contains("unknown option '--dryrun'", stderr.ToString());
+                Assert.Contains("Did you mean: --dry-run?", stderr.ToString());
+                Assert.DoesNotContain("Warning: unknown option", stderr.ToString());
+                Assert.DoesNotContain("database not found", stderr.ToString());
+            }
+            finally
+            {
+                Console.SetOut(originalOut);
+                Console.SetError(originalErr);
+            }
+        }
+    }
+
+    [Fact]
+    public void RunBackfillFold_UnknownOptionBeforeJson_ReturnsJsonUsageError()
+    {
+        var missingDb = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_unknown_json_{Guid.NewGuid():N}.db");
+
+        lock (TestConsoleLock.Gate)
+        {
+            var originalOut = Console.Out;
+            var originalErr = Console.Error;
+            using var stdout = new StringWriter();
+            using var stderr = new StringWriter();
+            try
+            {
+                Console.SetOut(stdout);
+                Console.SetError(stderr);
+                var exitCode = IndexCommandRunner.RunBackfillFold(["--db", missingDb, "--dryrun", "--json"], _jsonOptions);
+
+                Assert.Equal(CommandExitCodes.UsageError, exitCode);
+                Assert.Equal(string.Empty, stderr.ToString());
+                using var document = JsonDocument.Parse(stdout.ToString());
+                var json = document.RootElement;
+                Assert.Equal("error", json.GetProperty("status").GetString());
+                Assert.Contains("unknown option '--dryrun'", json.GetProperty("message").GetString());
+                Assert.Contains("Run `cdidx backfill-fold --help`", json.GetProperty("hint").GetString());
+                Assert.Equal(CommandErrorCodes.UsageError, json.GetProperty("error_code").GetString());
+            }
+            finally
+            {
+                Console.SetOut(originalOut);
+                Console.SetError(originalErr);
+            }
+        }
+    }
+
+    [Fact]
     public void FormatIndexFileException_RegexTimeout_UsesBoundedExtractionMessage()
     {
         var ex = new RegexMatchTimeoutException("raw-sensitive-content", "raw-sensitive-pattern", TimeSpan.FromSeconds(2));
