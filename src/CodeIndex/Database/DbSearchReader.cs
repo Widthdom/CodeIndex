@@ -1149,6 +1149,15 @@ public partial class DbReader
         Dictionary<string, HashSet<int>> keptMatchLines,
         Dictionary<string, IntervalSet> keptIntervals)
     {
+        if (!keptIntervals.TryGetValue(result.Path, out var intervals))
+        {
+            intervals = new IntervalSet();
+            keptIntervals[result.Path] = intervals;
+        }
+
+        if (intervals.Contains(result.StartLine, result.EndLine))
+            return false;
+
         var matchLines = FindPrimarySearchMatchLines(result, matchContext)
             .Select(match => match.LineNumber)
             .Distinct()
@@ -1168,13 +1177,8 @@ public partial class DbReader
                     added = true;
             }
 
-            return added;
-        }
-
-        if (!keptIntervals.TryGetValue(result.Path, out var intervals))
-        {
-            intervals = new IntervalSet();
-            keptIntervals[result.Path] = intervals;
+            if (!added)
+                return false;
         }
 
         return intervals.AddIfAddsCoverage(result.StartLine, result.EndLine);
@@ -1185,6 +1189,29 @@ public partial class DbReader
         private readonly List<(int Start, int End)> _intervals = [];
 
         public int Count => _intervals.Count;
+
+        public bool Contains(int start, int end)
+        {
+            if (end < start)
+                (start, end) = (end, start);
+
+            var insertIndex = FindInsertIndex(start);
+            if (insertIndex < _intervals.Count)
+            {
+                var current = _intervals[insertIndex];
+                if (current.Start <= start && current.End >= end)
+                    return true;
+            }
+
+            if (insertIndex > 0)
+            {
+                var previous = _intervals[insertIndex - 1];
+                if (previous.Start <= start && previous.End >= end)
+                    return true;
+            }
+
+            return false;
+        }
 
         public bool AddIfAddsCoverage(int start, int end)
         {
