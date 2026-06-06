@@ -139,6 +139,13 @@ performed. Set `CDIDX_RELEASE_GPG_FINGERPRINT=<fingerprint>` to pin the
 expected release signing key; strict mode requires this fingerprint once GPG
 verification succeeds.
 
+`cdidx upgrade --json` keeps stdout machine-readable even when an update is
+available. `--check-only --json` and no-update checks keep the update-check
+shape (`current_version`, `latest_version`, `update_available`, `from_cache`,
+`error`); install attempts suppress installer stdout/stderr and add
+`install_attempted`, `install_exit_code`, and `install_succeeded` to the single
+JSON document written to stdout.
+
 See [DISTRIBUTION.md](DISTRIBUTION.md) for the full channel matrix and
 [isolated network install notes](USER_GUIDE.md#isolated-networks-and-proxies).
 For database compatibility across `cdidx` upgrades and downgrades, see
@@ -439,6 +446,13 @@ installer は `sha256sums.txt.asc` も取得して GnuPG がある場合は
 期待する release signing key を固定するには
 `CDIDX_RELEASE_GPG_FINGERPRINT=<fingerprint>` を設定します。strict mode では、
 GPG 検証が成功した後にこの fingerprint の設定も必須です。
+
+`cdidx upgrade --json` は update が見つかった場合も stdout を機械処理向けに保ちます。
+`--check-only --json` と no-update の check は update-check shape
+(`current_version`, `latest_version`, `update_available`, `from_cache`, `error`)
+を維持します。install を試行する場合は installer stdout/stderr を抑制し、stdout に書く
+1 個の JSON document に `install_attempted`、`install_exit_code`、
+`install_succeeded` を追加します。
 
 ### Validate
 
