@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.Json;
 
 namespace CodeIndex.Cli;
 
@@ -67,7 +68,14 @@ public static class ConsoleUi
     public const string DisableProgressEnvironmentVariable = "CDIDX_DISABLE_PROGRESS";
     public const string PrefersReducedMotionEnvironmentVariable = "PREFERS_REDUCED_MOTION";
     public const int SummaryLabelWidth = 9;
+    internal const int MaxVersionJsonBytes = 16 * 1024;
+    internal const int MaxVersionJsonDepth = 8;
     private const string FallbackVersion = "0.0.0";
+
+    private static readonly JsonDocumentOptions VersionJsonDocumentOptions = new()
+    {
+        MaxDepth = MaxVersionJsonDepth,
+    };
 
     private static readonly (string Command, string Usage)[] CommandUsageLines =
     [
@@ -724,14 +732,17 @@ public static class ConsoleUi
     {
         try
         {
-            var json = File.ReadAllText(ioPath);
-            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            var json = DataDirectorySecurity.ReadTextWithinLimit(ioPath, MaxVersionJsonBytes);
+            if (json is null)
+                return FallbackVersion;
+
+            using var doc = JsonDocument.Parse(json, VersionJsonDocumentOptions);
             if (doc.RootElement.TryGetProperty("version", out var ver))
                 return ver.GetString() ?? FallbackVersion;
         }
         catch (Exception ex) when (ex is IOException
             or UnauthorizedAccessException
-            or System.Text.Json.JsonException
+            or JsonException
             or InvalidOperationException)
         {
             return FallbackVersion;

@@ -676,6 +676,40 @@ public class ConsoleUiTests
         Assert.Equal("0.0.0", ConsoleUi.LoadVersionFromFile(path));
     }
 
+    [Fact]
+    public void LoadVersionFromFile_OversizedJson_ReturnsFallback()
+    {
+        var path = WriteTempVersionJson("{\"version\":\"" + new string('1', ConsoleUi.MaxVersionJsonBytes) + "\"}");
+        try
+        {
+            Assert.Equal("0.0.0", ConsoleUi.LoadVersionFromFile(path));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void LoadVersionFromFile_TooDeepJson_ReturnsFallback()
+    {
+        var nesting = ConsoleUi.MaxVersionJsonDepth + 1;
+        var path = WriteTempVersionJson(
+            """{"version":"1.2.3","nested":"""
+            + new string('[', nesting)
+            + "0"
+            + new string(']', nesting)
+            + "}");
+        try
+        {
+            Assert.Equal("0.0.0", ConsoleUi.LoadVersionFromFile(path));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
     private static string WriteTempVersionJson(string content)
     {
         var path = Path.Combine(Path.GetTempPath(), $"cdidx_version_{Guid.NewGuid():N}.json");
