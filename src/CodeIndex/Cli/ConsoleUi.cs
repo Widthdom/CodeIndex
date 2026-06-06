@@ -1031,7 +1031,7 @@ public static class ConsoleUi
         Console.WriteLine("  --limit <n>, --top <n>     Max results to return (default: 20)");
         Console.WriteLine("  --lang <lang>              Filter by language (aliases: bat, cmd, cshtml, razor, ts, tsx, cts, mts)");
         Console.WriteLine("  --path <glob>              Restrict matches to glob-style path patterns (* and ?)");
-        WriteHelpLine($"  --query <query>            Pass a query literal, useful when the query starts with '-' (`search` max {QueryLimits.MaxQueryLength} chars)");
+        WriteHelpLine($"  --query <query>            Pass a query literal, useful when the query starts with '-' (`search`/`find` max {QueryLimits.MaxQueryLength} chars)");
         Console.WriteLine("  --exclude-path <glob>      Exclude glob-style path patterns (* and ?) (repeatable)");
         Console.WriteLine("  --exclude-tests            Exclude likely test files");
         Console.WriteLine("  --include-generated        Include generated files in query results");

@@ -11,6 +11,8 @@ public partial class DbReader
 {
     internal const int FtsUnicode61MaxTokenLength = 1000;
     internal const string AllTokensFilteredByLengthReason = "all_tokens_filtered_by_length";
+    internal const int MaxLiteralSearchQueryLength = 1000;
+    internal const int MaxLiteralSearchTokenCount = 128;
     internal const int MaxRawFtsQueryLength = 2000;
     internal const int MaxRawFtsBooleanOperators = 64;
     internal const int MaxRawFtsNearOperators = 16;
@@ -44,7 +46,7 @@ public partial class DbReader
         // クエリ内のダブルクォートをエスケープし、各トークンをダブルクォートで囲む。
         // ユーザー入力末尾の `*` は prefix 検索の shorthand として保持し、`auth*` で
         // `authenticate` を raw FTS5 構文なしに検索できるようにする。
-        var tokens = query.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        var tokens = SplitLiteralSearchTokens(query);
         if (tokens.Length == 0)
             return "\"\"";
         return string.Join(" ", tokens.Select(token => FormatFtsToken(token, prefix)));
@@ -56,7 +58,7 @@ public partial class DbReader
             return FtsQueryDiagnostics.None;
 
         var normalizedQuery = NormalizeLiteralSearchQuery(query, NormalizeQueryLanguage(lang));
-        var tokens = normalizedQuery.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
+        var tokens = SplitLiteralSearchTokens(normalizedQuery)
             .Select(token => token.Length > 1 && token.EndsWith('*') ? token[..^1] : token)
             .Where(token => token.Length > 0)
             .ToArray();
@@ -114,6 +116,8 @@ public partial class DbReader
             return [];
 
         lang = NormalizeQueryLanguage(lang);
+        if (!rawQuery)
+            ValidateLiteralSearchQueryLength(query);
         var normalizedQuery = rawQuery ? query : NormalizeLiteralSearchQuery(query, lang);
         var coverageTokens = exact ? new List<string>() : GetSearchCoverageTokens(normalizedQuery, rawQuery);
         var hasGuardFilters = guardFilters is { Count: > 0 };
@@ -408,6 +412,9 @@ public partial class DbReader
         if (string.IsNullOrWhiteSpace(query))
             return new QueryCountResult(0, 0);
 
+        if (!rawQuery)
+            ValidateLiteralSearchQueryLength(query);
+
         if (guardFilters is { Count: > 0 })
         {
             var guardedResults = Search(query, int.MaxValue, lang, rawQuery, pathPatterns, excludePathPatterns, excludeTests, deduplicate, since, exact, prefix, visibilityRank, guardFilters: guardFilters, guardWindow: guardWindow);
@@ -614,7 +621,7 @@ public partial class DbReader
     private static string[] BuildPrimarySearchMatchTerms(string query, string normalizedQuery, bool rawQuery, bool exact)
     {
         IEnumerable<string> rawTerms = !exact && !rawQuery
-            ? normalizedQuery.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
+            ? SplitLiteralSearchTokens(normalizedQuery)
             : [rawQuery ? query.Trim() : normalizedQuery.Trim()];
         var terms = rawTerms.Select(NormalizeGuardSearchTerm).ToList();
         if (!exact && rawQuery)
@@ -791,6 +798,25 @@ public partial class DbReader
         return string.Equals(lang, "csharp", StringComparison.OrdinalIgnoreCase)
             ? CSharpVerbatimNameNormalizer.Normalize(normalized)
             : normalized;
+    }
+
+    private static void ValidateLiteralSearchQueryLength(string query)
+    {
+        if (query.Length <= MaxLiteralSearchQueryLength)
+            return;
+
+        throw new SearchQueryLimitException(
+            $"literal search query is too long ({query.Length} characters); maximum is {MaxLiteralSearchQueryLength}. Split generated input into smaller queries.");
+    }
+
+    private static string[] SplitLiteralSearchTokens(string query)
+    {
+        var tokens = query.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        if (tokens.Length <= MaxLiteralSearchTokenCount)
+            return tokens;
+
+        throw new SearchQueryLimitException(
+            $"literal search query has too many terms ({tokens.Length}); maximum is {MaxLiteralSearchTokenCount}. Split generated input into smaller queries.");
     }
 
     internal static string ValidateRawFtsQuery(string query)
@@ -1230,7 +1256,7 @@ public partial class DbReader
 
     private static List<string> GetSearchCoverageTokens(string query, bool rawQuery)
     {
-        var tokens = rawQuery ? ExtractRawFtsCoverageTokens(query) : query.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        var tokens = rawQuery ? ExtractRawFtsCoverageTokens(query) : SplitLiteralSearchTokens(query);
         if (tokens.Length <= 1)
             return [];
 

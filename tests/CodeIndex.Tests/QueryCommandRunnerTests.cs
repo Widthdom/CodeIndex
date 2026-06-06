@@ -779,6 +779,56 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunBatch_ArgumentAtLimitParsesBeforeDispatch_Issue3231()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_batch_arg_at_limit");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var commandName = new string('x', QueryCommandRunner.BatchMaxArgumentChars);
+            var input = JsonSerializer.Serialize(new[] { commandName }) + "\n";
+
+            var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
+                input,
+                () => QueryCommandRunner.RunBatch(["--db", dbPath], _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains("batch only supports query commands", stderr);
+            Assert.DoesNotContain("character limit", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunBatch_ArgumentExceedsLimitReturnsUsageError_Issue3231()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_batch_arg_too_long");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var commandName = new string('x', QueryCommandRunner.BatchMaxArgumentChars + 1);
+            var input = JsonSerializer.Serialize(new[] { commandName }) + "\n";
+
+            var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
+                input,
+                () => QueryCommandRunner.RunBatch(["--db", dbPath], _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains($"argument 1 exceeds the {QueryCommandRunner.BatchMaxArgumentChars} character limit", stderr);
+            Assert.DoesNotContain("batch only supports query commands", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunBatch_TooDeepJsonLine_ReturnsUsageError_Issue3022()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_batch_json_depth");

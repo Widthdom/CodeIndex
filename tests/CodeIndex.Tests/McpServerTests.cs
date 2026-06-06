@@ -869,6 +869,59 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void Initialize_CapturesClientCapabilitiesAsDetachedClone_Issue3055()
+    {
+        var capabilities = new JsonObject
+        {
+            ["experimental"] = new JsonObject
+            {
+                ["progress"] = true,
+            },
+        };
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "initialize",
+            ["params"] = new JsonObject
+            {
+                ["capabilities"] = capabilities,
+            },
+        };
+
+        _server.HandleMessage(request);
+        capabilities["experimental"]!["progress"] = false;
+        var copy = _server.ClientCapabilitiesForTests!;
+        copy["experimental"]!["progress"] = false;
+
+        Assert.True(_server.ClientCapabilitiesForTests!["experimental"]!["progress"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public void ErrorEnvelope_ClonesExtraDataWithoutSerializeParseRoundTrip_Issue3055()
+    {
+        var details = new JsonObject
+        {
+            ["ok"] = true,
+        };
+        var extra = new JsonObject
+        {
+            ["details"] = details,
+            ["category"] = "shadow",
+        };
+
+        var data = McpErrorEnvelope.BuildData(
+            "custom_category",
+            "custom suggestion",
+            retrySafe: true,
+            extra);
+        details["ok"] = false;
+
+        Assert.Equal("custom_category", data["category"]!.GetValue<string>());
+        Assert.True(data["details"]!["ok"]!.GetValue<bool>());
+    }
+
+    [Fact]
     public void Initialize_CapsClientRootsForSessionStatus_Issue3076()
     {
         var longRoot = "file:///" + new string('r', McpServer.MaxClientRootUriChars + 50);

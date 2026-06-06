@@ -1272,6 +1272,10 @@ public partial class McpServer
                 {
                     countResults = reader.Search(query, MaxLimit, lang, rawQuery, pathPatterns, excludePaths, excludeTests, deduplicate, since, exact, prefix, guardFilters: guardFilters, guardWindow: guardWindow);
                 }
+                catch (SearchQueryLimitException ex)
+                {
+                    return CreateToolErrorResponse(id, ex.Message);
+                }
                 catch (SearchGuardCandidateLimitException ex)
                 {
                     return CreateToolErrorResponse(id, $"guarded search is too broad: {ex.Message} Narrow the search with more specific query text, lang/path filters, or a smaller cursor offset.");
@@ -1294,6 +1298,10 @@ public partial class McpServer
             try
             {
                 results = reader.Search(query, FetchLimitForEnvelope(limit), lang, rawQuery, pathPatterns, excludePaths, excludeTests, deduplicate, since, exact, prefix, cursor: cursor, guardFilters: guardFilters, guardWindow: guardWindow);
+            }
+            catch (SearchQueryLimitException ex)
+            {
+                return CreateToolErrorResponse(id, ex.Message);
             }
             catch (SearchGuardCandidateLimitException ex)
             {
