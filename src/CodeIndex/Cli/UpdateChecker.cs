@@ -12,6 +12,7 @@ internal static class UpdateChecker
     internal const long MaxLatestReleaseResponseBytes = 64 * 1024;
     internal const int MaxLatestReleaseJsonDepth = 16;
     internal const int MaxUpdateCheckCacheBytes = 8 * 1024;
+    internal const int MaxUpdateCheckCacheJsonDepth = 8;
     private static readonly TimeSpan CacheTtl = TimeSpan.FromHours(24);
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(2);
 
@@ -200,7 +201,9 @@ internal static class UpdateChecker
             if (text is null)
                 return null;
 
-            using var doc = JsonDocument.Parse(text);
+            using var doc = JsonDocument.Parse(
+                text,
+                new JsonDocumentOptions { MaxDepth = MaxUpdateCheckCacheJsonDepth });
             var root = doc.RootElement;
             if (!root.TryGetProperty("checked_at", out var checkedAtElement)
                 || !DateTimeOffset.TryParse(
