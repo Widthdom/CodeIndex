@@ -330,6 +330,7 @@ public static partial class IndexCommandRunner
         var json = false;
         var dryRun = false;
         var noCheckpoint = false;
+        string? parseError = null;
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -351,22 +352,14 @@ public static partial class IndexCommandRunner
                     return new BackfillFoldCommandOptions { ShowHelp = true, DbPath = dbPath, Json = json, DryRun = dryRun, NoCheckpoint = noCheckpoint };
                 default:
                     if (args[i].StartsWith("-", StringComparison.Ordinal))
-                        return new BackfillFoldCommandOptions
-                        {
-                            DbPath = dbPath,
-                            Json = json,
-                            DryRun = dryRun,
-                            NoCheckpoint = noCheckpoint,
-                            ParseError = BuildUnknownBackfillFoldOptionError(args[i]),
-                        };
+                    {
+                        parseError ??= BuildUnknownBackfillFoldOptionError(args[i]);
+                    }
                     else
-                        return new BackfillFoldCommandOptions
-                        {
-                            DbPath = dbPath,
-                            Json = json,
-                            DryRun = dryRun,
-                            ParseError = $"backfill-fold does not accept positional arguments: '{args[i]}'"
-                        };
+                    {
+                        parseError ??= $"backfill-fold does not accept positional arguments: '{args[i]}'";
+                    }
+                    break;
             }
         }
 
@@ -376,6 +369,7 @@ public static partial class IndexCommandRunner
             Json = json,
             DryRun = dryRun,
             NoCheckpoint = noCheckpoint,
+            ParseError = parseError,
         };
     }
 
