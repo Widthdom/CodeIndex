@@ -4176,6 +4176,45 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetSymbolHotspots_CSharpPropertyDoesNotUseRepoWideBareNameCounts()
+    {
+        InsertIndexedFile("src/Diff.cs", "csharp",
+            """
+            public sealed record OrderedRowsDiff(bool Equal);
+
+            public class DiffUse
+            {
+                public bool Use(OrderedRowsDiff diff)
+                {
+                    return diff.Equal;
+                }
+            }
+            """);
+        InsertIndexedFile("src/Unrelated.cs", "csharp",
+            """
+            public class Unrelated
+            {
+                public bool Run()
+                {
+                    var equal = true;
+                    equal = equal && true;
+                    return equal;
+                }
+            }
+            """);
+
+        var results = _reader.GetSymbolHotspots(
+            limit: 10,
+            kind: "property",
+            lang: "csharp",
+            pathPatterns: ["src/"],
+            excludePathPatterns: null,
+            excludeTests: false);
+
+        Assert.DoesNotContain(results, result => result.Symbol.Name == "Equal");
+    }
+
+    [Fact]
     public void GetSymbolHotspots_DoesNotMergePartialFamiliesAcrossProjectRoots()
     {
         InsertIndexedFile("projA/src/Api.Part1.cs", "csharp",

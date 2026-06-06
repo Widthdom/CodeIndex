@@ -2331,14 +2331,20 @@ public partial class DbReader
             reference_counts AS (
                 SELECT gr.symbol_id,
                        CASE
-                            WHEN nc.defs = 1
-                              OR (nc.count_safe_defs = nc.defs AND nc.count_safe_groups = 1)
+                            WHEN (gr.lang != 'csharp' OR gr.kind != 'property')
+                              AND (
+                                  nc.defs = 1
+                                  OR (nc.count_safe_defs = nc.defs AND nc.count_safe_groups = 1)
+                              )
                                 THEN COALESCE(gerc.ref_count, 0) + COALESCE(glrc.ref_count, 0)
                             ELSE COALESCE(crc.ref_count, 0)
                         END AS ref_count,
                        CASE
-                            WHEN nc.defs = 1
-                              OR (nc.count_safe_defs = nc.defs AND nc.count_safe_groups = 1)
+                            WHEN (gr.lang != 'csharp' OR gr.kind != 'property')
+                              AND (
+                                  nc.defs = 1
+                                  OR (nc.count_safe_defs = nc.defs AND nc.count_safe_groups = 1)
+                              )
                                 THEN COALESCE(gerc.ref_score, 0.0) + COALESCE(glrc.ref_score, 0.0)
                             ELSE COALESCE(crc.ref_score, 0.0)
                         END AS ref_score
@@ -2593,14 +2599,20 @@ public partial class DbReader
             site_reference_counts AS (
                 SELECT fc.id AS symbol_id,
                        CASE
-                           WHEN nc.defs = 1
-                             OR (nc.count_safe_defs = nc.defs AND nc.count_safe_groups = 1)
+                           WHEN (fc.lang != 'csharp' OR fc.kind != 'property')
+                             AND (
+                                 nc.defs = 1
+                                 OR (nc.count_safe_defs = nc.defs AND nc.count_safe_groups = 1)
+                             )
                                THEN COALESCE(grc.ref_count, 0)
                            ELSE COALESCE(crc.ref_count, 0)
                        END AS ref_count,
                        CASE
-                           WHEN nc.defs = 1
-                             OR (nc.count_safe_defs = nc.defs AND nc.count_safe_groups = 1)
+                           WHEN (fc.lang != 'csharp' OR fc.kind != 'property')
+                             AND (
+                                 nc.defs = 1
+                                 OR (nc.count_safe_defs = nc.defs AND nc.count_safe_groups = 1)
+                             )
                                THEN COALESCE(grc.ref_score, 0.0)
                            ELSE COALESCE(crc.ref_score, 0.0)
                        END AS ref_score
