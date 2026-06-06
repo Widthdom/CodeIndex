@@ -537,11 +537,31 @@ jobs:
       - name: Write curated release notes
         if: ${{ !inputs.allow_generated_notes }}
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
         run: |
           set -euo pipefail
           version="${TAG_NAME#v}"
-          dotnet run --project tools/CodeIndex.Changelog -- release-notes --version "${version}" > release-notes.md
+          previous_tag="$(
+            gh release list \
+              --exclude-drafts \
+              --exclude-pre-releases \
+              --limit 20 \
+              --json tagName \
+              --jq ".[] | select(.tagName != \"${TAG_NAME}\") | .tagName" \
+              | sed -n '1p'
+          )"
+          if [ -z "${previous_tag}" ]; then
+            echo "No previous non-draft, non-prerelease GitHub release was found before ${TAG_NAME}." >&2
+            exit 1
+          fi
+          if [[ ! "${previous_tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Latest GitHub release tag is not a v-prefixed SemVer version: ${previous_tag}" >&2
+            exit 1
+          fi
+
+          previous_version="${previous_tag#v}"
+          dotnet run --project tools/CodeIndex.Changelog -- release-notes --version "${version}" --previous-version "${previous_version}" > release-notes.md
 
       - name: Create GitHub release
         env:

@@ -285,7 +285,7 @@ public sealed class ChangelogToolTests
     }
 
     [Fact]
-    public void RenderReleaseNotesUsesGitHubTemplateWithCompareFooter()
+    public void RenderReleaseNotesUsesProvidedPreviousVersion()
     {
         using var scope = new TestRepositoryScope();
         scope.WriteFile("CHANGELOG.md", SampleChangelog);
@@ -299,7 +299,7 @@ public sealed class ChangelogToolTests
         var tool = new ChangelogTool(scope.Root);
         tool.Prepare(new Version(1, 17, 0), new DateOnly(2026, 5, 1), writeChanges: true);
 
-        var notes = tool.RenderReleaseNotes(new Version(1, 17, 0));
+        var notes = tool.RenderReleaseNotes(new Version(1, 17, 0), new Version(1, 16, 0));
 
         Assert.Equal("""
             ## What's Changed
@@ -328,7 +328,7 @@ public sealed class ChangelogToolTests
     }
 
     [Fact]
-    public void RenderReleaseNotesRequiresTargetCompareFooter()
+    public void RenderReleaseNotesDoesNotRequireTargetCompareFooter()
     {
         using var scope = new TestRepositoryScope();
         scope.WriteFile("CHANGELOG.md", """
@@ -355,9 +355,10 @@ public sealed class ChangelogToolTests
             """);
 
         var tool = new ChangelogTool(scope.Root);
-        var ex = Assert.Throws<ChangelogException>(() => tool.RenderReleaseNotes(new Version(1, 17, 0)));
+        var notes = tool.RenderReleaseNotes(new Version(1, 17, 0), new Version(1, 16, 0));
 
-        Assert.Contains("CHANGELOG.md is missing compare-link footer for v1.17.0", ex.Message);
+        Assert.Contains("Full Changelog: https://github.com/Widthdom/CodeIndex/compare/v1.16.0...v1.17.0", notes);
+        Assert.DoesNotContain("CHANGELOG.md is missing compare-link footer", notes);
     }
 
     [Fact]

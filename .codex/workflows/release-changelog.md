@@ -52,15 +52,16 @@ received new fragments after the last `prepare` run.
 ## GitHub release notes
 
 The release workflow publishes a fixed GitHub release-note template instead of
-GitHub's generated commit summary. Before creating the release it runs:
+GitHub's generated commit summary. Before creating the release, it asks GitHub
+Releases for the latest non-draft, non-prerelease tag, excludes the target tag
+itself for idempotent reruns, and passes that existing release version to:
 
 ```bash
-dotnet run --project tools/CodeIndex.Changelog -- release-notes --version 1.17.0
+dotnet run --project tools/CodeIndex.Changelog -- release-notes --version 1.17.0 --previous-version 1.16.0
 ```
 
 The command validates that the matching English and 日本語 `### [1.17.0]`
-blocks exist in `CHANGELOG.md`, fails if both are empty, reads the previous
-release version from the `[1.17.0]` compare-link footer, and emits:
+blocks exist in `CHANGELOG.md`, fails if both are empty, and emits:
 
 ````md
 ## What's Changed
