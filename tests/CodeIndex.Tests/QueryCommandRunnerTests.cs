@@ -2694,7 +2694,8 @@ public partial class QueryCommandRunnerTests
     private void AssertBodyExcerpt(
         Func<string[], JsonSerializerOptions, int> command,
         string[] args,
-        string expectedContent)
+        string expectedContent,
+        bool? expectedContentTruncated = null)
     {
         var (exitCode, stdout, stderr) = CaptureConsole(() => command(args, _jsonOptions));
 
@@ -2702,6 +2703,8 @@ public partial class QueryCommandRunnerTests
         Assert.Equal(string.Empty, stderr);
         using var document = ParseJsonOutput(stdout);
         Assert.Contains(expectedContent, document.RootElement.GetProperty("body_content").GetString());
+        if (expectedContentTruncated.HasValue)
+            Assert.Equal(expectedContentTruncated.Value, document.RootElement.GetProperty("body_content_truncated").GetBoolean());
     }
 
     private static int CountLines(string text) => text.Split('\n').Length;
