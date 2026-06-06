@@ -341,7 +341,28 @@ internal static class SymbolExtractionWorker
 
     internal static bool TryCreateStartInfo(out ProcessStartInfo startInfo, out string error)
     {
-        var runnerAssemblyPath = typeof(SymbolExtractionWorker).Assembly.Location;
+        return TryCreateStartInfo(
+            Environment.ProcessPath,
+            typeof(SymbolExtractionWorker).Assembly.Location,
+            out startInfo,
+            out error);
+    }
+
+    internal static bool TryCreateStartInfo(
+        string? currentProcessPath,
+        string? runnerAssemblyPath,
+        out ProcessStartInfo startInfo,
+        out string error)
+    {
+        startInfo = CreateStartInfo();
+        if (ShouldStartCurrentExecutable(currentProcessPath, runnerAssemblyPath))
+        {
+            startInfo.FileName = currentProcessPath!;
+            startInfo.ArgumentList.Add(CommandName);
+            error = string.Empty;
+            return true;
+        }
+
         if (string.IsNullOrWhiteSpace(runnerAssemblyPath))
         {
             startInfo = new ProcessStartInfo();
@@ -349,9 +370,18 @@ internal static class SymbolExtractionWorker
             return false;
         }
 
-        startInfo = new ProcessStartInfo
+        startInfo.FileName = ResolveDotnetHostPath();
+        startInfo.ArgumentList.Add(runnerAssemblyPath);
+        startInfo.ArgumentList.Add(CommandName);
+        ApplyCurrentRuntimeRollForward(startInfo);
+
+        error = string.Empty;
+        return true;
+    }
+
+    private static ProcessStartInfo CreateStartInfo()
+        => new()
         {
-            FileName = ResolveDotnetHostPath(),
             UseShellExecute = false,
             RedirectStandardInput = true,
             RedirectStandardOutput = true,
@@ -361,12 +391,21 @@ internal static class SymbolExtractionWorker
             StandardErrorEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
             CreateNoWindow = true,
         };
-        startInfo.ArgumentList.Add(runnerAssemblyPath);
-        startInfo.ArgumentList.Add(CommandName);
-        ApplyCurrentRuntimeRollForward(startInfo);
 
-        error = string.Empty;
-        return true;
+    private static bool ShouldStartCurrentExecutable(string? currentProcessPath, string? runnerAssemblyPath)
+    {
+        if (string.IsNullOrWhiteSpace(currentProcessPath) || IsDotnetHostPath(currentProcessPath))
+            return false;
+
+        var processName = Path.GetFileNameWithoutExtension(currentProcessPath);
+        var appName = typeof(SymbolExtractionWorker).Assembly.GetName().Name;
+        if (!string.IsNullOrWhiteSpace(appName)
+            && string.Equals(processName, appName, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return string.IsNullOrWhiteSpace(runnerAssemblyPath);
     }
 
     internal static void TryKillProcess(Process process)
@@ -459,14 +498,16 @@ internal static class SymbolExtractionWorker
             return dotnetHostPath;
 
         var processPath = Environment.ProcessPath;
-        if (!string.IsNullOrWhiteSpace(processPath)
-            && string.Equals(Path.GetFileNameWithoutExtension(processPath), "dotnet", StringComparison.OrdinalIgnoreCase))
+        if (!string.IsNullOrWhiteSpace(processPath) && IsDotnetHostPath(processPath))
         {
             return processPath;
         }
 
         return "dotnet";
     }
+
+    private static bool IsDotnetHostPath(string path)
+        => string.Equals(Path.GetFileNameWithoutExtension(path), "dotnet", StringComparison.OrdinalIgnoreCase);
 
     private static void ApplyCurrentRuntimeRollForward(ProcessStartInfo startInfo)
     {

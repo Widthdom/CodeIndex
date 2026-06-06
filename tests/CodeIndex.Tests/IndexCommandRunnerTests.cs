@@ -198,6 +198,75 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void SymbolExtractionWorker_StartInfo_UsesCurrentCdidxExecutableWhenAvailable()
+    {
+        var currentProcessPath = Path.Combine(Path.GetTempPath(), OperatingSystem.IsWindows() ? "cdidx.exe" : "cdidx");
+
+        var created = SymbolExtractionWorker.TryCreateStartInfo(
+            currentProcessPath,
+            runnerAssemblyPath: string.Empty,
+            out var startInfo,
+            out var error);
+
+        Assert.True(created, error);
+        Assert.Equal(currentProcessPath, startInfo.FileName);
+        Assert.Equal([SymbolExtractionWorker.CommandName], startInfo.ArgumentList);
+        Assert.True(startInfo.RedirectStandardInput);
+        Assert.True(startInfo.RedirectStandardOutput);
+        Assert.True(startInfo.RedirectStandardError);
+    }
+
+    [Fact]
+    public void SymbolExtractionWorker_StartInfo_UsesFrameworkDependentDllWhenProcessIsNotCdidx()
+    {
+        var currentProcessPath = Path.Combine(Path.GetTempPath(), OperatingSystem.IsWindows() ? "testhost.exe" : "testhost");
+        var runnerAssemblyPath = Path.Combine(Path.GetTempPath(), "cdidx.dll");
+
+        var created = SymbolExtractionWorker.TryCreateStartInfo(
+            currentProcessPath,
+            runnerAssemblyPath,
+            out var startInfo,
+            out var error);
+
+        Assert.True(created, error);
+        Assert.NotEqual(currentProcessPath, startInfo.FileName);
+        Assert.Equal([runnerAssemblyPath, SymbolExtractionWorker.CommandName], startInfo.ArgumentList);
+    }
+
+    [SkipOnMacOsArm64Fact]
+    public void Run_PublishedSingleFileBinary_IndexesWithIsolatedSymbolWorker()
+    {
+        var projectRoot = CreateTempProject();
+        var publishDir = Path.Combine(Path.GetTempPath(), $"cdidx_single_file_publish_{Guid.NewGuid():N}");
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_single_file_index_{Guid.NewGuid():N}.db");
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "App.cs"),
+                "public class PublishedSingleFileApp { public void Run() { } }\n");
+
+            var publishedCli = PublishTrimmedCli(publishDir, publishSingleFile: true);
+
+            var (exitCode, stdout, stderr) = RunPublishedCli(publishedCli, projectRoot, projectRoot, "--db", dbPath, "--json", "--force");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using (var document = JsonDocument.Parse(stdout))
+                Assert.Equal("success", document.RootElement.GetProperty("status").GetString());
+            Assert.Equal(1, CountRows(dbPath, "files"));
+            Assert.True(CountRows(dbPath, "symbols") >= 1);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+            DeleteDirectory(publishDir);
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
     public void GetJsonIndexHeartbeatPath_UsesWorkerPhaseWhenMainThreadIsIdle()
     {
         var message = IndexCommandRunner.GetJsonIndexHeartbeatPath(
@@ -9810,7 +9879,7 @@ public class IndexCommandRunnerTests
         return (process.ExitCode, stdOut, stdErr);
     }
 
-    private static string PublishTrimmedCli(string outputDir)
+    private static string PublishTrimmedCli(string outputDir, bool publishSingleFile = false)
     {
         Directory.CreateDirectory(outputDir);
         var buildOutputDir = Path.Combine(outputDir, "bin", "publish") + Path.DirectorySeparatorChar;
@@ -9837,7 +9906,7 @@ public class IndexCommandRunnerTests
         psi.ArgumentList.Add(outputDir);
         psi.ArgumentList.Add("-p:PublishTrimmed=true");
         psi.ArgumentList.Add("-p:SelfContained=true");
-        psi.ArgumentList.Add("-p:PublishSingleFile=false");
+        psi.ArgumentList.Add($"-p:PublishSingleFile={publishSingleFile.ToString().ToLowerInvariant()}");
         psi.ArgumentList.Add($"-p:OutputPath={buildOutputDir}");
         psi.ArgumentList.Add($"-p:IntermediateOutputPath={intermediateDir}");
         psi.ArgumentList.Add($"-p:NuGetLockFilePath={lockFilePath}");
