@@ -223,7 +223,7 @@ public partial class DbReader
         if (hasGuardFilters)
             raw = FilterBySearchGuards(raw, SearchPrimaryMatchContext.Create(query, normalizedQuery, rawQuery, exact, lang), guardFilters!, guardWindow);
 
-        var results = deduplicate ? DeduplicateOverlappingResults(raw) : raw;
+        var results = deduplicate ? DeduplicateOverlappingResults(raw, SearchPrimaryMatchContext.Create(query, normalizedQuery, rawQuery, exact, lang)) : raw;
         if (guardCandidateLimitReached && results.Count < GetGuardedSearchRequestedPageEnd(limit, cursor))
             throw new SearchGuardCandidateLimitException(guardedCandidateLimit, limit, cursor?.Offset ?? 0);
 
@@ -423,7 +423,7 @@ public partial class DbReader
         if (exact)
         {
             sql = $@"
-                SELECT f.path, c.start_line, c.end_line,
+                SELECT f.path, f.lang, c.start_line, c.end_line, c.content,
                        0.0 AS rank
                 FROM chunks c
                 JOIN files f ON c.file_id = f.id{SearchSymbolMatchJoinsSql}
@@ -438,7 +438,7 @@ public partial class DbReader
             if (rawQuery)
                 ValidateRawFtsNearDistance(sanitizedQuery);
             sql = $@"
-                SELECT f.path, c.start_line, c.end_line,
+                SELECT f.path, f.lang, c.start_line, c.end_line, c.content,
                        rank
                 FROM fts_chunks
                 JOIN chunks c ON fts_chunks.rowid = c.id
@@ -467,41 +467,37 @@ public partial class DbReader
             cmd.Parameters.AddWithValue("@since", since.Value);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
 
+        var keptMatchLines = new Dictionary<string, HashSet<int>>(StringComparer.Ordinal);
         var keptIntervals = new Dictionary<string, IntervalSet>(StringComparer.Ordinal);
+        var keptFiles = new HashSet<string>(StringComparer.Ordinal);
+        var matchContext = deduplicate ? SearchPrimaryMatchContext.Create(query, normalizedQuery, rawQuery, exact, lang) : null;
         var count = 0;
-        var fileCount = 0;
         try
         {
             using var reader = cmd.ExecuteTrackedReader();
             while (reader.TrackedRead())
             {
                 var path = reader.GetString(0);
-                var startLine = reader.GetInt32(1);
-                var endLine = reader.GetInt32(2);
+                var result = new SearchResult
+                {
+                    Path = path,
+                    Lang = GetNullableString(reader, 1),
+                    StartLine = reader.GetInt32(2),
+                    EndLine = reader.GetInt32(3),
+                    Content = reader.GetString(4),
+                };
                 if (!deduplicate)
                 {
                     count++;
-                    if (!keptIntervals.ContainsKey(path))
-                    {
-                        keptIntervals[path] = new IntervalSet();
-                        fileCount++;
-                    }
+                    keptFiles.Add(path);
                     continue;
                 }
 
-                if (!keptIntervals.TryGetValue(path, out var intervals))
-                {
-                    intervals = new IntervalSet();
-                    keptIntervals[path] = intervals;
-                }
-
-                var hadCoverage = intervals.Count > 0;
-                if (!intervals.AddIfAddsCoverage(startLine, endLine))
+                if (!AddSearchResultDedupCoverage(result, matchContext!, keptMatchLines, keptIntervals))
                     continue;
 
                 count++;
-                if (!hadCoverage)
-                    fileCount++;
+                keptFiles.Add(path);
             }
         }
         catch (SqliteException ex) when (rawQuery && IsFtsQuerySyntaxError(ex))
@@ -509,7 +505,7 @@ public partial class DbReader
             throw new FtsQuerySyntaxException(ex.Message, ex);
         }
 
-        return new QueryCountResult(count, fileCount);
+        return new QueryCountResult(count, keptFiles.Count);
     }
 
     private List<SearchResult> FilterBySearchGuards(
@@ -1083,27 +1079,59 @@ public partial class DbReader
     /// 同じファイル内で上位の結果に完全包含される結果を除去する。
     /// チャンクは10行重複するが、後続チャンクは重複範囲外の正当なヒットを含みうる。
     /// </summary>
-    private static List<SearchResult> DeduplicateOverlappingResults(List<SearchResult> results)
+    private static List<SearchResult> DeduplicateOverlappingResults(List<SearchResult> results, SearchPrimaryMatchContext matchContext)
     {
         if (results.Count <= 1)
             return results;
 
+        var keptMatchLines = new Dictionary<string, HashSet<int>>(StringComparer.Ordinal);
         var keptIntervals = new Dictionary<string, IntervalSet>(StringComparer.Ordinal);
         var deduped = new List<SearchResult>();
         foreach (var r in results)
         {
-            if (!keptIntervals.TryGetValue(r.Path, out var intervals))
-            {
-                intervals = new IntervalSet();
-                keptIntervals[r.Path] = intervals;
-            }
-
-            if (!intervals.AddIfAddsCoverage(r.StartLine, r.EndLine))
+            if (!AddSearchResultDedupCoverage(r, matchContext, keptMatchLines, keptIntervals))
                 continue;
 
             deduped.Add(r);
         }
         return deduped;
+    }
+
+    private static bool AddSearchResultDedupCoverage(
+        SearchResult result,
+        SearchPrimaryMatchContext matchContext,
+        Dictionary<string, HashSet<int>> keptMatchLines,
+        Dictionary<string, IntervalSet> keptIntervals)
+    {
+        var matchLines = FindPrimarySearchMatchLines(result, matchContext)
+            .Select(match => match.LineNumber)
+            .Distinct()
+            .ToArray();
+        if (matchLines.Length > 0)
+        {
+            if (!keptMatchLines.TryGetValue(result.Path, out var lines))
+            {
+                lines = [];
+                keptMatchLines[result.Path] = lines;
+            }
+
+            var added = false;
+            foreach (var line in matchLines)
+            {
+                if (lines.Add(line))
+                    added = true;
+            }
+
+            return added;
+        }
+
+        if (!keptIntervals.TryGetValue(result.Path, out var intervals))
+        {
+            intervals = new IntervalSet();
+            keptIntervals[result.Path] = intervals;
+        }
+
+        return intervals.AddIfAddsCoverage(result.StartLine, result.EndLine);
     }
 
     private sealed class IntervalSet

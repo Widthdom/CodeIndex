@@ -2260,6 +2260,93 @@ jobs:
     }
 
     [Fact]
+    public void RunSearch_FtsJsonDeduplicatesOverlappingChunkFileLineHits_Issue2997()
+    {
+        static string BuildChunkContent(int startLine, int endLine)
+        {
+            return string.Join('\n', Enumerable.Range(startLine, (endLine - startLine) + 1)
+                .Select(line => line == 75
+                    ? "var value = JsonDocument.Parse(payload);"
+                    : $"// filler {line}"));
+        }
+
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_fts_dedup_2997");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                var fileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/json.cs",
+                    Lang = "csharp",
+                    Size = 4096,
+                    Lines = 120,
+                    Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                    Checksum = "overlap-fts-chunk-fixture",
+                });
+                writer.InsertChunks(
+                [
+                    new ChunkRecord
+                    {
+                        FileId = fileId,
+                        ChunkIndex = 0,
+                        StartLine = 1,
+                        EndLine = 80,
+                        Content = BuildChunkContent(1, 80),
+                    },
+                    new ChunkRecord
+                    {
+                        FileId = fileId,
+                        ChunkIndex = 1,
+                        StartLine = 71,
+                        EndLine = 120,
+                        Content = BuildChunkContent(71, 120),
+                    },
+                ]);
+            }
+
+            var dedup = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["JsonDocument.Parse", "--db", dbPath, "--json=array", "--snippet-lines", "2"],
+                _jsonOptions));
+            var raw = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["JsonDocument.Parse", "--db", dbPath, "--json=array", "--snippet-lines", "2", "--no-dedup"],
+                _jsonOptions));
+            var count = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["JsonDocument.Parse", "--db", dbPath, "--count"],
+                _jsonOptions));
+            var rawCount = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["JsonDocument.Parse", "--db", dbPath, "--count", "--no-dedup"],
+                _jsonOptions));
+
+            using var dedupDocument = ParseJsonOutput(dedup.Stdout);
+            using var rawDocument = ParseJsonOutput(raw.Stdout);
+            var dedupRows = dedupDocument.RootElement.EnumerateArray().ToList();
+            var rawRows = rawDocument.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, dedup.Result);
+            Assert.Equal(string.Empty, dedup.Stderr);
+            var dedupRow = Assert.Single(dedupRows);
+            Assert.Equal(75, dedupRow.GetProperty("match_lines")[0].GetInt32());
+
+            Assert.Equal(CommandExitCodes.Success, raw.Result);
+            Assert.Equal(string.Empty, raw.Stderr);
+            Assert.Equal(2, rawRows.Count);
+            Assert.All(rawRows, row => Assert.Equal(75, row.GetProperty("match_lines")[0].GetInt32()));
+
+            Assert.Equal(CommandExitCodes.Success, count.Result);
+            Assert.Equal("1", count.Stdout.Trim());
+            Assert.Equal(CommandExitCodes.Success, rawCount.Result);
+            Assert.Equal("2", rawCount.Stdout.Trim());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_ExcludeTestsSkipsPythonConftestFiles()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_conftest_exclude");
