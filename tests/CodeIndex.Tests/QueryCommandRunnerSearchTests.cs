@@ -2357,7 +2357,21 @@ jobs:
                 dbPath,
                 "src/match.cs",
                 "csharp",
-                "var created = new Builder();\nvar matcher = Regex.Match(input, pattern);\nvar regex = new Regex(pattern);\n");
+                """
+                class Demo
+                {
+                    void Noise()
+                    {
+                        var created = new Builder();
+                    }
+
+                    void Match()
+                    {
+                        var matcher = Regex.Match(input, pattern);
+                        var regex = new Regex(pattern);
+                    }
+                }
+                """);
             TestProjectHelper.InsertIndexedFile(
                 dbPath,
                 "src/noise.cs",
@@ -2378,9 +2392,11 @@ jobs:
             Assert.Equal(string.Empty, json.Stderr);
             Assert.Equal("src/match.cs", row.GetProperty("path").GetString());
             var matchLines = row.GetProperty("match_lines").EnumerateArray().Select(line => line.GetInt32()).ToArray();
-            Assert.Equal([3], matchLines);
+            Assert.Equal([11], matchLines);
             var highlight = Assert.Single(row.GetProperty("highlights").EnumerateArray());
-            Assert.Equal(3, highlight.GetProperty("line").GetInt32());
+            Assert.Equal(11, highlight.GetProperty("line").GetInt32());
+            Assert.Equal("Match", row.GetProperty("enclosing_symbol_name").GetString());
+            Assert.Equal(8, row.GetProperty("enclosing_symbol_start_line").GetInt32());
 
             Assert.Equal(CommandExitCodes.Success, count.Result);
             Assert.Equal("1", count.Stdout.Trim());

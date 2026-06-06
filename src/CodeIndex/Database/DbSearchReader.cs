@@ -381,8 +381,7 @@ public partial class DbReader
         public static SearchMatchLineTerms Create(string query, string? lang, bool caseSensitive)
         {
             var normalizedQuery = ExactSourceSearchNormalizer.Normalize(query.Trim(), lang);
-            var tokens = query
-                .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
+            var tokens = SplitLiteralSearchTerms(query)
                 .Select(NormalizeSearchSnippetToken)
                 .Where(token => token.Length > 0)
                 .Where(token => token is not "AND" and not "OR" and not "NOT" and not "NEAR")
