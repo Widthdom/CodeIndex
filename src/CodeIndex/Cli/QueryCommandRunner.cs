@@ -28,6 +28,7 @@ public static class QueryCommandRunner
     internal const int MaxWorkspaceDependencyDatabasePairCount = MaxWorkspaceDependencyDatabaseCount * (MaxWorkspaceDependencyDatabaseCount - 1);
     internal const int BatchMaxLineChars = 1024 * 1024;
     internal const int BatchMaxArgumentCount = 256;
+    internal const int BatchMaxArgumentChars = 8192;
     internal const int BatchMaxJsonDepth = 32;
     internal const string DefaultLimitEnvironmentVariable = "CDIDX_DEFAULT_LIMIT";
     internal const string DefaultSnippetLinesEnvironmentVariable = "CDIDX_DEFAULT_SNIPPET_LINES";
@@ -429,7 +430,13 @@ public static class QueryCommandRunner
                     Console.Error.WriteLine($"Error: batch line {lineNumber} must contain only strings.");
                     return false;
                 }
-                values.Add(element.GetString() ?? string.Empty);
+                var value = element.GetString() ?? string.Empty;
+                if (value.Length > BatchMaxArgumentChars)
+                {
+                    Console.Error.WriteLine($"Error: batch line {lineNumber} argument {values.Count + 1} exceeds the {BatchMaxArgumentChars} character limit.");
+                    return false;
+                }
+                values.Add(value);
             }
 
             commandName = values[0];
@@ -2717,6 +2724,13 @@ public static class QueryCommandRunner
         if (string.IsNullOrWhiteSpace(options.Query))
         {
             Console.Error.WriteLine("Error: find requires a query argument");
+            Console.Error.WriteLine(FindUsage);
+            return CommandExitCodes.UsageError;
+        }
+        if (options.Query.Length > QueryLimits.MaxQueryLength)
+        {
+            Console.Error.WriteLine($"Error: {QueryLimits.FormatQueryTooLongError()}");
+            Console.Error.WriteLine("Hint: Shorten the find text or split generated input into smaller queries before running `cdidx find`.");
             Console.Error.WriteLine(FindUsage);
             return CommandExitCodes.UsageError;
         }
@@ -7570,6 +7584,12 @@ public static class QueryCommandRunner
         {
             Console.Error.WriteLine($"Error [{CommandErrorCodes.UsageError}]: guarded search is too broad: {ex.Message}");
             Console.Error.WriteLine("Hint: narrow the search with more specific query text, --lang, --path, or --exclude-tests, or reduce pagination offset before retrying guarded search.");
+            return CommandExitCodes.UsageError;
+        }
+        catch (SearchQueryLimitException ex)
+        {
+            Console.Error.WriteLine($"Error [{CommandErrorCodes.UsageError}]: {ex.Message}");
+            Console.Error.WriteLine("Hint: shorten the search text or split generated input into smaller literal queries.");
             return CommandExitCodes.UsageError;
         }
         catch (Exception ex)

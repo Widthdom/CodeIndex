@@ -1088,7 +1088,7 @@ public partial class McpServer : IDisposable
         if (!TryMeasureJsonUtf8BytesWithinLimit(payload, _jsonOptions, MaxClientResponseJsonBytes, out bytesWritten))
             return false;
 
-        clone = payload.DeepClone();
+        clone = McpJsonNode.Clone(payload);
         return true;
     }
 
@@ -1212,7 +1212,7 @@ public partial class McpServer : IDisposable
         if (request is JsonObject obj)
         {
             if (TryGetRequestId(obj, out hasId, out var requestId))
-                id = requestId is null ? null : JsonNode.Parse(requestId.ToJsonString());
+                id = McpJsonNode.Clone(requestId);
             else
                 id = null;
             return;
@@ -1916,23 +1916,51 @@ public partial class McpServer : IDisposable
     private void CaptureClientCapabilities(JsonNode capabilities)
     {
         CaptureClientCapabilityFlags(capabilities);
-        var json = capabilities.ToJsonString();
-        var serializedBytes = Encoding.UTF8.GetByteCount(json);
-        _clientCapabilitiesSerializedBytes = serializedBytes;
-        if (serializedBytes > MaxClientCapabilitiesJsonBytes)
+        if (!TryMeasureJsonUtf8BytesWithinLimit(capabilities, _jsonOptions, MaxClientCapabilitiesJsonBytes, out var serializedBytes))
         {
+            _clientCapabilitiesSerializedBytes = serializedBytes;
             TruncateClientCapabilities("byte_limit");
             return;
         }
 
-        try
-        {
-            _clientCapabilities = JsonNode.Parse(json, documentOptions: new JsonDocumentOptions { MaxDepth = MaxClientCapabilitiesDepth });
-        }
-        catch (JsonException)
+        _clientCapabilitiesSerializedBytes = serializedBytes;
+        if (!IsJsonNodeDepthWithinLimit(capabilities, MaxClientCapabilitiesDepth))
         {
             TruncateClientCapabilities("depth_limit");
+            return;
         }
+
+        _clientCapabilities = McpJsonNode.Clone(capabilities);
+    }
+
+    private static bool IsJsonNodeDepthWithinLimit(JsonNode node, int maxDepth)
+        => IsJsonNodeDepthWithinLimit(node, depth: 0, maxDepth);
+
+    private static bool IsJsonNodeDepthWithinLimit(JsonNode? node, int depth, int maxDepth)
+    {
+        if (node is null)
+            return true;
+        if (depth > maxDepth)
+            return false;
+
+        if (node is JsonObject obj)
+        {
+            foreach (var kvp in obj)
+            {
+                if (!IsJsonNodeDepthWithinLimit(kvp.Value, depth + 1, maxDepth))
+                    return false;
+            }
+        }
+        else if (node is JsonArray array)
+        {
+            foreach (var item in array)
+            {
+                if (!IsJsonNodeDepthWithinLimit(item, depth + 1, maxDepth))
+                    return false;
+            }
+        }
+
+        return true;
     }
 
     private void TruncateClientCapabilities(string reason)
@@ -1973,7 +2001,7 @@ public partial class McpServer : IDisposable
         _clientRootsTruncated = false;
     }
 
-    internal JsonNode? ClientCapabilitiesForTests => _clientCapabilities is null ? null : JsonNode.Parse(_clientCapabilities.ToJsonString());
+    internal JsonNode? ClientCapabilitiesForTests => McpJsonNode.Clone(_clientCapabilities);
 
     internal string[] ClientRootsForTests => _clientRoots
         .Select(root => root?.GetValue<string>())
@@ -2426,7 +2454,7 @@ public partial class McpServer : IDisposable
         {
             ["jsonrpc"] = "2.0",
             ["error"] = error,
-            ["id"] = id is null ? JsonNode.Parse("null") : JsonNode.Parse(id.ToJsonString())
+            ["id"] = McpJsonNode.Clone(id)
         };
         return response;
     }
@@ -2503,7 +2531,7 @@ public partial class McpServer : IDisposable
         {
             ["jsonrpc"] = "2.0",
             ["error"] = error,
-            ["id"] = id is null ? JsonNode.Parse("null") : JsonNode.Parse(id.ToJsonString())
+            ["id"] = McpJsonNode.Clone(id)
         };
         return response;
     }
@@ -2790,7 +2818,7 @@ public partial class McpServer : IDisposable
             return null;
 
         return TryMeasureJsonUtf8BytesWithinLimit(token, _jsonOptions, McpBoundedText.MaxProgressTokenJsonBytes, out _)
-            ? token.DeepClone()
+            ? McpJsonNode.Clone(token)
             : null;
     }
 
@@ -2854,7 +2882,7 @@ public partial class McpServer : IDisposable
 
         var parameters = new JsonObject
         {
-            ["progressToken"] = progressToken.DeepClone(),
+            ["progressToken"] = McpJsonNode.Clone(progressToken),
             ["progress"] = progress,
         };
         if (total.HasValue)
@@ -3578,7 +3606,7 @@ public partial class McpServer : IDisposable
             ["result"] = result
         };
         if (hasId)
-            response["id"] = id is null ? JsonNode.Parse("null") : JsonNode.Parse(id.ToJsonString());
+            response["id"] = McpJsonNode.Clone(id);
         return response;
     }
 
@@ -3676,7 +3704,7 @@ public partial class McpServer : IDisposable
             }
         };
         if (hasId)
-            response["id"] = id is null ? JsonNode.Parse("null") : JsonNode.Parse(id.ToJsonString());
+            response["id"] = McpJsonNode.Clone(id);
         return response;
     }
 
