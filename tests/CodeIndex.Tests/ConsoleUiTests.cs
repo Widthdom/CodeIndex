@@ -138,7 +138,7 @@ public class ConsoleUiTests
         Assert.Contains("                              run `cdidx backfill-fold` or check fold_ready.", output);
         Assert.Contains("--kind <kind>              definition/symbols/hotspots/unused: symbol kind; references: reference kind (call/instantiate/subscribe/attribute/annotation); callers/callees: call-graph kinds only (call/instantiate/subscribe — metadata kinds rejected, use references instead); validate: issue kind", output);
         Assert.Contains("--severity <s>             validate only: filter issues by severity: info, warning, error", output);
-        Assert.Contains("--count                    Count only; search/definition/references/callers/callees/symbols/files/find/unused ignore --limit, impact/hotspots still use visible page counts", output);
+        Assert.Contains("--count                    Count only; search/definition/references/callers/callees/symbols/files/find/unused/hotspots ignore --limit, impact still uses visible page counts", output);
         Assert.Contains("--no-dedup                 search only: return every raw overlapping chunk hit (debug/density)", output);
         Assert.Contains("--commits <commit-ref> [commit-ref ...]", output);
         Assert.Contains("Update only files changed in the specified git", output);
