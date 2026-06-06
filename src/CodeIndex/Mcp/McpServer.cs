@@ -165,6 +165,7 @@ public partial class McpServer : IDisposable
     internal const int MaxLineByteLength = 1_048_576;
     internal const int DefaultMaxResponseBytes = 10 * 1024 * 1024;
     internal const int MaxConfiguredResponseBytes = 64 * 1024 * 1024;
+    internal const int MaxClientResponseJsonBytes = 1 * 1024 * 1024;
     internal const int MaxMcpPaginationOffset = 10_000;
     internal const double MinKeepAliveIntervalSeconds = 1.0;
     internal const double MaxKeepAliveIntervalSeconds = 300.0;
@@ -978,16 +979,40 @@ public partial class McpServer : IDisposable
             return false;
 
         if (obj.TryGetPropertyValue("error", out var error) && error is not null)
-            pending.TrySetException(new InvalidOperationException(error.ToJsonString(_jsonOptions)));
+        {
+            if (!TrySerializeClientResponseError(error, out var serializedError, out var errorBytes))
+            {
+                DeferFrameLog(BuildClientResponseTooLargeLog("error", errorBytes));
+                pending.TrySetException(new InvalidOperationException(BuildClientResponseTooLargeMessage(errorBytes)));
+            }
+            else
+            {
+                pending.TrySetException(new InvalidOperationException(serializedError));
+            }
+        }
+        else if (!TryCloneClientResponsePayload(obj["result"], out var resultClone, out var resultBytes))
+        {
+            DeferFrameLog(BuildClientResponseTooLargeLog("result", resultBytes));
+            pending.TrySetException(new InvalidOperationException(BuildClientResponseTooLargeMessage(resultBytes)));
+        }
         else
-            pending.TrySetResult(obj["result"]?.DeepClone());
+        {
+            pending.TrySetResult(resultClone);
+        }
         return true;
     }
 
     private async Task<JsonNode?> SendClientRequestAsync(string method, JsonObject? @params, CancellationToken cancellationToken)
     {
         if (ClientRequestHandlerForTests is { } handler)
-            return handler(method, @params)?.DeepClone();
+        {
+            if (!TryCloneClientResponsePayload(handler(method, @params), out var handlerClone, out var handlerBytes))
+            {
+                DeferFrameLog(BuildClientResponseTooLargeLog("result", handlerBytes));
+                return null;
+            }
+            return handlerClone;
+        }
 
         var writer = _currentOutOfBandFrameWriter.Value;
         if (writer is null || !_canAwaitClientResponses.Value)
@@ -1035,6 +1060,29 @@ public partial class McpServer : IDisposable
             _pendingClientRequests.TryRemove(key, out var _);
         }
     }
+
+    internal bool TryCloneClientResponsePayloadForTests(JsonNode? payload, out JsonNode? clone, out int bytesWritten)
+        => TryCloneClientResponsePayload(payload, out clone, out bytesWritten);
+
+    internal bool TrySerializeClientResponseErrorForTests(JsonNode error, out string? serialized, out int bytesWritten)
+        => TrySerializeClientResponseError(error, out serialized, out bytesWritten);
+
+    private bool TryCloneClientResponsePayload(JsonNode? payload, out JsonNode? clone, out int bytesWritten)
+    {
+        clone = null;
+        bytesWritten = 0;
+        if (payload is null)
+            return true;
+
+        if (!TryMeasureJsonUtf8BytesWithinLimit(payload, _jsonOptions, MaxClientResponseJsonBytes, out bytesWritten))
+            return false;
+
+        clone = payload.DeepClone();
+        return true;
+    }
+
+    private bool TrySerializeClientResponseError(JsonNode error, out string? serialized, out int bytesWritten)
+        => TrySerializeJsonNodeWithinByteLimit(error, _jsonOptions, MaxClientResponseJsonBytes, captureSerialized: true, out serialized, out bytesWritten);
 
     private static string? TryGetMcpTraceParent(JsonNode request)
     {
@@ -3102,6 +3150,12 @@ public partial class McpServer : IDisposable
 
     internal static string BuildToolErrorLog(string toolName, string detail) =>
         $"[cdidx-mcp] Tool error ({BoundToolNameForDisplay(toolName).Text}): {detail}. Fix the tool arguments, refresh the index if needed, then retry.";
+
+    internal static string BuildClientResponseTooLargeLog(string member, int bytesWritten) =>
+        $"[cdidx-mcp] Client response {member} exceeded the server byte limit ({bytesWritten} > {MaxClientResponseJsonBytes}); rejecting without retaining the payload.";
+
+    private static string BuildClientResponseTooLargeMessage(int bytesWritten) =>
+        $"MCP client response exceeded the server byte limit ({bytesWritten} > {MaxClientResponseJsonBytes}).";
 
     // Stderr log emitted when the rate limiter denies a tool call. Mirrors the JSON-RPC
     // `-32000` payload (tool + caller + retry_after_ms) so operators tailing the MCP log
