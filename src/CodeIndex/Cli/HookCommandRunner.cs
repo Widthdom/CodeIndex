@@ -15,10 +15,18 @@ public static class HookCommandRunner
     public static int Run(string[] args, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(args);
-        if (options.ShowHelp || options.Command == null)
+        if (options.ShowHelp || (options.Command == null && options.ParseError == null))
         {
             PrintUsage();
             return options.ShowHelp ? CommandExitCodes.Success : CommandExitCodes.UsageError;
+        }
+
+        if (options.ParseError != null)
+        {
+            var errorProjectPath = Path.GetFullPath(options.ProjectPath ?? Environment.CurrentDirectory);
+            if (!options.Json)
+                PrintUsage();
+            return WriteResult(options.Json, jsonOptions, "error", options.ParseError, errorProjectPath, null, null, CommandExitCodes.UsageError);
         }
 
         var projectPath = Path.GetFullPath(options.ProjectPath ?? Environment.CurrentDirectory);
@@ -46,6 +54,7 @@ public static class HookCommandRunner
         var json = false;
         var force = false;
         var showHelp = false;
+        string? parseError = null;
 
         for (var i = 0; i < args.Length; i++)
         {
@@ -67,7 +76,7 @@ public static class HookCommandRunner
                     if (args[i].StartsWith("-", StringComparison.Ordinal))
                     {
                         var displayValue = ConsoleUi.FormatBoundedValue(args[i]);
-                        Console.Error.WriteLine($"Warning: unknown option '{displayValue}' (ignored) / 不明なオプション '{displayValue}'（無視されます）");
+                        parseError ??= $"unknown option '{displayValue}'";
                     }
                     else if (command == null)
                         command = args[i];
@@ -77,7 +86,7 @@ public static class HookCommandRunner
             }
         }
 
-        return new HookCommandOptions(command, projectPath, json, force, showHelp);
+        return new HookCommandOptions(command, projectPath, json, force, showHelp, parseError);
     }
 
     private static int Install(HookCommandOptions options, JsonSerializerOptions jsonOptions, string projectPath, string hooksDir, string hookPath, string chainedHookPath)
@@ -267,7 +276,7 @@ fi
         => Console.Error.WriteLine("Usage: cdidx hooks <install|uninstall|status> [--project <path>] [--force] [--json]");
 }
 
-public sealed record HookCommandOptions(string? Command, string? ProjectPath, bool Json, bool Force, bool ShowHelp);
+public sealed record HookCommandOptions(string? Command, string? ProjectPath, bool Json, bool Force, bool ShowHelp, string? ParseError);
 
 public sealed record HookCommandJsonResult(
     string Status,

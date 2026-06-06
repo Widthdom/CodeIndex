@@ -76,6 +76,19 @@ public class HookCommandRunnerTests
         Assert.Contains("unknown option", stderr);
         Assert.Contains("<truncated; original length", stderr);
         Assert.DoesNotContain(token, stderr);
+        Assert.DoesNotContain("Warning: unknown option", stderr);
+    }
+
+    [Fact]
+    public void Hooks_CommandUnknownOption_ReturnsUsageError()
+    {
+        var (exitCode, stdout, stderr) = RunHooksAndCaptureStreams(["status", "--bogus"]);
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("Usage: cdidx hooks", stderr);
+        Assert.Contains("unknown option '--bogus'", stderr);
+        Assert.DoesNotContain("Warning: unknown option", stderr);
     }
 
     [Fact]
