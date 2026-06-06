@@ -5714,6 +5714,60 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetFileDependencies_CapsDenseSymbolSample_Issue3155()
+    {
+        var sourceFileId = InsertSyntheticDependencyFile("src/DenseCaller.cs");
+        var targetFileId = InsertSyntheticDependencyFile("src/DenseTarget.cs");
+        var symbolNames = Enumerable
+            .Range(0, DbReader.DependencySymbolSampleLimit + 5)
+            .Select(index => $"DenseTarget{index:D2}")
+            .ToArray();
+
+        _writer.InsertSymbols(symbolNames.Select((name, index) => new SymbolRecord
+        {
+            FileId = targetFileId,
+            Kind = "class",
+            Name = name,
+            Line = index + 1,
+            StartLine = index + 1,
+            EndLine = index + 1,
+        }).ToArray());
+        _writer.InsertReferences(symbolNames.Select((name, index) => new ReferenceRecord
+        {
+            FileId = sourceFileId,
+            SymbolName = name,
+            ReferenceKind = "type_reference",
+            Line = index + 1,
+            Column = 1,
+            Context = name,
+        }).ToArray());
+
+        var dependency = Assert.Single(_reader.GetFileDependencies(
+            limit: 10,
+            lang: "csharp",
+            pathPatterns: ["DenseCaller.cs"],
+            excludePathPatterns: null,
+            excludeTests: false));
+
+        Assert.Equal(symbolNames.Length, dependency.ReferenceCount);
+        Assert.Equal(DbReader.DependencySymbolSampleLimit, dependency.Symbols.Split(',').Length);
+        Assert.DoesNotContain(symbolNames[^1], dependency.Symbols);
+    }
+
+    private long InsertSyntheticDependencyFile(string path)
+    {
+        return _writer.UpsertFile(new FileRecord
+        {
+            Path = path,
+            Lang = "csharp",
+            Size = 1,
+            Lines = 1,
+            Modified = new DateTime(2026, 6, 6, 0, 0, 0, DateTimeKind.Utc),
+            Checksum = Guid.NewGuid().ToString("N"),
+        });
+    }
+
+    [Fact]
     public void SqlQualifiedNames_SameLineCrossSchemaCallStillReachesReaders()
     {
         InsertIndexedFile("src/sql_same_line_cross_schema.sql", "sql",

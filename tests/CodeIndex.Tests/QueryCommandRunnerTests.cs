@@ -3716,7 +3716,47 @@ public partial class QueryCommandRunnerTests
         }
     }
 
+    [Fact]
+    public void RunDeps_WorkspaceDbJson_CapsCrossDatabaseSymbolSample_Issue3155()
+    {
+        var primaryRoot = TestProjectHelper.CreateTempProject("cdidx_deps_workspace_symbols_primary");
+        var memberRoot = TestProjectHelper.CreateTempProject("cdidx_deps_workspace_symbols_member");
+        try
+        {
+            var primaryDb = TestProjectHelper.CreateProjectDb(primaryRoot);
+            var memberDb = TestProjectHelper.CreateProjectDb(memberRoot);
+            var symbolNames = Enumerable
+                .Range(0, DbReader.DependencySymbolSampleLimit + 5)
+                .Select(index => $"SharedTarget{index:D2}")
+                .ToArray();
+            InsertFileWithReferences(primaryDb, "src/PrimaryCaller.cs", symbolNames);
+            InsertFileWithSymbols(memberDb, "src/SharedTargets.cs", symbolNames);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+                ["--db", primaryDb, "--workspace-db", memberDb, "--json", "--limit", "10", "--lang", "csharp"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var edge = Assert.Single(document.RootElement.GetProperty("edges").EnumerateArray());
+            var sampledSymbols = edge.GetProperty("symbols").GetString()!.Split(',');
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.NotNull(stderr);
+            Assert.Equal(symbolNames.Length, edge.GetProperty("reference_count").GetInt32());
+            Assert.Equal(DbReader.DependencySymbolSampleLimit, sampledSymbols.Length);
+            Assert.DoesNotContain(symbolNames[^1], sampledSymbols);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(primaryRoot);
+            TestProjectHelper.DeleteDirectory(memberRoot);
+        }
+    }
+
     private static void InsertFileWithSymbol(string dbPath, string path, string symbolName)
+        => InsertFileWithSymbols(dbPath, path, [symbolName]);
+
+    private static void InsertFileWithSymbols(string dbPath, string path, IReadOnlyList<string> symbolNames)
     {
         using var db = new DbContext(dbPath);
         var writer = new DbWriter(db.Connection);
@@ -3729,20 +3769,22 @@ public partial class QueryCommandRunnerTests
             Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
             Checksum = Guid.NewGuid().ToString("N"),
         });
-        writer.InsertSymbols([
+        writer.InsertSymbols(symbolNames.Select((symbolName, index) =>
             new SymbolRecord
             {
                 FileId = fileId,
                 Kind = "class",
                 Name = symbolName,
-                Line = 1,
-                StartLine = 1,
-                EndLine = 1,
-            }
-        ]);
+                Line = index + 1,
+                StartLine = index + 1,
+                EndLine = index + 1,
+            }).ToArray());
     }
 
     private static void InsertFileWithReference(string dbPath, string path, string symbolName)
+        => InsertFileWithReferences(dbPath, path, [symbolName]);
+
+    private static void InsertFileWithReferences(string dbPath, string path, IReadOnlyList<string> symbolNames)
     {
         using var db = new DbContext(dbPath);
         var writer = new DbWriter(db.Connection);
@@ -3755,17 +3797,16 @@ public partial class QueryCommandRunnerTests
             Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
             Checksum = Guid.NewGuid().ToString("N"),
         });
-        writer.InsertReferences([
+        writer.InsertReferences(symbolNames.Select((symbolName, index) =>
             new ReferenceRecord
             {
                 FileId = fileId,
                 SymbolName = symbolName,
                 ReferenceKind = "type_reference",
-                Line = 1,
+                Line = index + 1,
                 Column = 1,
                 Context = symbolName,
-            }
-        ]);
+            }).ToArray());
     }
 
 

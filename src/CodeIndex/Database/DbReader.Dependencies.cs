@@ -7,6 +7,8 @@ namespace CodeIndex.Database;
 
 public partial class DbReader
 {
+    internal const int DependencySymbolSampleLimit = 32;
+
     private string ReferenceContextSql(string referenceAlias, string referenceLineAlias = "rl")
         => _canUseReferenceLines
             ? $"COALESCE({referenceAlias}.context, {referenceLineAlias}.context)"
@@ -491,14 +493,35 @@ public partial class DbReader
                   -- (multiple same-name attribute / annotation classes) are dropped.
                   -- metadata エッジは同名 class 系 target が 1 つだけのときのみ残す。
                   AND (snc.is_metadata = 0 OR COALESCE(ta.class_like_target_count, 0) <= 1)
+            ),
+            edge_totals AS (
+                SELECT source_path,
+                       target_path,
+                       SUM(ref_count) AS reference_count
+                FROM edges
+                GROUP BY source_path, target_path
+            ),
+            distinct_edge_symbols AS (
+                SELECT DISTINCT source_path, target_path, symbol_name
+                FROM edges
+            ),
+            ranked_edge_symbols AS (
+                SELECT source_path,
+                       target_path,
+                       symbol_name,
+                       ROW_NUMBER() OVER (PARTITION BY source_path, target_path ORDER BY symbol_name) AS symbol_rank
+                FROM distinct_edge_symbols
             )
-            SELECT source_path,
-                   target_path,
-                   SUM(ref_count) AS reference_count,
-                   GROUP_CONCAT(symbol_name) AS symbols
-            FROM edges
-            GROUP BY source_path, target_path
-            ORDER BY reference_count DESC, source_path, target_path
+            SELECT edge_totals.source_path,
+                   edge_totals.target_path,
+                   edge_totals.reference_count,
+                   COALESCE(GROUP_CONCAT(CASE WHEN ranked_edge_symbols.symbol_rank <= @symbolSampleLimit THEN ranked_edge_symbols.symbol_name END), '') AS symbols
+            FROM edge_totals
+            LEFT JOIN ranked_edge_symbols
+              ON ranked_edge_symbols.source_path = edge_totals.source_path
+             AND ranked_edge_symbols.target_path = edge_totals.target_path
+            GROUP BY edge_totals.source_path, edge_totals.target_path, edge_totals.reference_count
+            ORDER BY edge_totals.reference_count DESC, edge_totals.source_path, edge_totals.target_path
             LIMIT @limit";
 
         cmd.CommandText = sql;
@@ -515,6 +538,7 @@ public partial class DbReader
                 cmd.Parameters.AddWithValue($"@excludePath{i}", BuildPathLikePattern(excludePathPatterns[i]));
         }
         cmd.Parameters.AddWithValue("@limit", limit);
+        cmd.Parameters.AddWithValue("@symbolSampleLimit", DependencySymbolSampleLimit);
 
         var results = new List<FileDependencyResult>();
         using var reader = cmd.ExecuteTrackedReader();

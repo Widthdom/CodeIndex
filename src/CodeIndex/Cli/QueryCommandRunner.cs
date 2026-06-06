@@ -4847,10 +4847,10 @@ public static class QueryCommandRunner
         var sourcePathExpr = reverse ? "dst.path" : "src.path";
         var targetPathExpr = reverse ? "src.path" : "dst.path";
         cmd.CommandText = $@"
+            WITH edges AS (
             SELECT {sourcePathExpr} AS source_path,
                    {targetPathExpr} AS target_path,
-                   COUNT(*) AS reference_count,
-                   GROUP_CONCAT(DISTINCT r.symbol_name) AS symbols
+                   r.symbol_name
             FROM symbol_references r
             JOIN files src ON src.id = r.file_id
             JOIN targetdb.symbols s ON s.name = r.symbol_name
@@ -4870,10 +4870,38 @@ public static class QueryCommandRunner
                 ? " AND dst.path NOT LIKE '%test%' COLLATE NOCASE"
                 : " AND src.path NOT LIKE '%test%' COLLATE NOCASE";
         cmd.CommandText += @"
-            GROUP BY source_path, target_path
-            ORDER BY reference_count DESC, source_path, target_path
+            ),
+            edge_totals AS (
+                SELECT source_path,
+                       target_path,
+                       COUNT(*) AS reference_count
+                FROM edges
+                GROUP BY source_path, target_path
+            ),
+            distinct_edge_symbols AS (
+                SELECT DISTINCT source_path, target_path, symbol_name
+                FROM edges
+            ),
+            ranked_edge_symbols AS (
+                SELECT source_path,
+                       target_path,
+                       symbol_name,
+                       ROW_NUMBER() OVER (PARTITION BY source_path, target_path ORDER BY symbol_name) AS symbol_rank
+                FROM distinct_edge_symbols
+            )
+            SELECT edge_totals.source_path,
+                   edge_totals.target_path,
+                   edge_totals.reference_count,
+                   COALESCE(GROUP_CONCAT(CASE WHEN ranked_edge_symbols.symbol_rank <= @symbolSampleLimit THEN ranked_edge_symbols.symbol_name END), '') AS symbols
+            FROM edge_totals
+            LEFT JOIN ranked_edge_symbols
+              ON ranked_edge_symbols.source_path = edge_totals.source_path
+             AND ranked_edge_symbols.target_path = edge_totals.target_path
+            GROUP BY edge_totals.source_path, edge_totals.target_path, edge_totals.reference_count
+            ORDER BY edge_totals.reference_count DESC, edge_totals.source_path, edge_totals.target_path
             LIMIT @limit";
         cmd.Parameters.AddWithValue("@limit", options.Limit);
+        cmd.Parameters.AddWithValue("@symbolSampleLimit", DbReader.DependencySymbolSampleLimit);
 
         var results = new List<FileDependencyResult>();
         using var reader = cmd.ExecuteReader();
