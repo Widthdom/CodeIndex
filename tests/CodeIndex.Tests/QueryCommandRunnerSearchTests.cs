@@ -1078,6 +1078,30 @@ jobs:
     }
 
     [Fact]
+    public void RunSearch_LiteralTokenCountTooHighReturnsUsageError_Issue3081()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_literal_terms_too_many");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var query = string.Join(' ', Enumerable.Range(0, DbReader.MaxLiteralSearchTokenCount + 1).Select(i => $"t{i:D3}"));
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [query, "--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("literal search query has too many terms", stderr);
+            Assert.Contains("smaller literal queries", stderr);
+            Assert.DoesNotContain("database error:", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_RawFtsTooManyNearOperatorsReturnsUsageError()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_raw_fts_too_many_near");
@@ -3779,6 +3803,30 @@ jobs:
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
         Assert.Contains("Error: find requires a query argument", stderr);
         Assert.DoesNotContain("query cannot be empty or whitespace-only", stderr);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RunFind_QueryTooLongReturnsUsageError_Issue3100(bool countOnly)
+    {
+        var args = new List<string>
+        {
+            new('x', QueryLimits.MaxQueryLength + 1),
+            "--path",
+            "src/**/*.cs",
+        };
+        if (countOnly)
+            args.Add("--count");
+
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+            [.. args],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains($"Error: {QueryLimits.FormatQueryTooLongError()}", stderr);
+        Assert.Contains("Hint: Shorten the find text", stderr);
+        Assert.Contains("Usage: cdidx find", stderr);
     }
 
     [Fact]

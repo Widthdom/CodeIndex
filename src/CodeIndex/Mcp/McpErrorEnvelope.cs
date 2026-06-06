@@ -76,7 +76,7 @@ internal static class McpErrorEnvelope
                 // canonical キーは extra でも上書きさせない。
                 if (kvp.Key is "category" or "suggestion" or "retry_safe")
                     continue;
-                data[kvp.Key] = kvp.Value is null ? null : JsonNode.Parse(kvp.Value.ToJsonString());
+                data[kvp.Key] = McpJsonNode.Clone(kvp.Value);
             }
         }
         return data;

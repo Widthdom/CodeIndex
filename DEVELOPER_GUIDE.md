@@ -217,7 +217,7 @@ Interactive terminal controls are allowed only when stdout is not redirected or 
 
 Query commands that accept path filters (`search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `deps`, `impact`, `unused`, `hotspots`, and `validate`) expand `--project` into the matching project directory glob before hitting `DbReader`, so all existing SQL path predicates keep working. `index --project` expands to the files under the selected project directory and reuses the existing `--files` update path, but rejects expansions above 65,536 files for one project or 131,072 unique files across all requested projects with an explicit-files recovery hint.
 
-`cdidx batch` is a CLI-side query loop for editor integrations and scripts that need several query commands against the same DB without spawning `cdidx` repeatedly. It opens one `DbContext` / `DbReader`, reads newline-delimited JSON string arrays from stdin, and dispatches only query commands through the existing `QueryCommandRunner` paths so output and validation stay identical to the standalone command shape.
+`cdidx batch` is a CLI-side query loop for editor integrations and scripts that need several query commands against the same DB without spawning `cdidx` repeatedly. It opens one `DbContext` / `DbReader`, reads newline-delimited JSON string arrays from stdin, caps each decoded string argument at 8,192 characters, and dispatches only query commands through the existing `QueryCommandRunner` paths so output and validation stay identical to the standalone command shape.
 
 Editor integrations can request standard location shapes directly. `definition`, `references`, `search`, `find`, and `validate` accept `--format <text|json|lsp|qf|sarif>`; `lsp` emits LSP `Location` arrays, `qf` emits Vim quickfix lines, and `sarif` emits SARIF 2.1.0. `goto <symbol>` returns the single unambiguous definition as one LSP `Location`, while `goto --all <symbol>` returns all matching locations.
 
@@ -778,6 +778,11 @@ WHERE fts_chunks MATCH 'content:authenticate'
 ```
 
 ### How the search works
+
+Literal-safe `search` queries are bounded in the reader before FTS5
+sanitization: maximum 1000 characters and 128 whitespace terms. Keep this guard
+in `DbReader` so CLI, MCP, and direct reader callers share the same failure mode;
+raw `--fts` queries continue to use the raw FTS complexity limits instead.
 
 When you run:
 ```sql
@@ -2355,7 +2360,7 @@ override が文書化されていない限り ANSI/progress control を抑止す
 
 path filter を受け付ける query コマンド（`search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `deps`, `impact`, `unused`, `hotspots`, `validate`）は、`--project` を対応する project directory glob に展開してから `DbReader` に渡す。これにより既存の SQL path predicate をそのまま利用できる。`index --project` は選択された project directory 配下のファイルに展開し、既存の `--files` 更新経路を再利用する。ただし 1 project で 65,536 files、requested projects 全体で 131,072 unique files を超える展開は拒否し、明示的な `--files` を使う recovery hint を返す。
 
-`cdidx batch` は、同じ DB に複数の query command を投げる editor integration や script 向けの CLI 側 query loop である。1 つの `DbContext` / `DbReader` を開き、stdin から newline-delimited JSON 文字列配列を読み、query command だけを既存の `QueryCommandRunner` 経路へ dispatch するため、出力と validation は単発コマンドと同じ形を保つ。
+`cdidx batch` は、同じ DB に複数の query command を投げる editor integration や script 向けの CLI 側 query loop である。1 つの `DbContext` / `DbReader` を開き、stdin から newline-delimited JSON 文字列配列を読み、デコード後の各文字列引数を 8,192 文字に制限し、query command だけを既存の `QueryCommandRunner` 経路へ dispatch するため、出力と validation は単発コマンドと同じ形を保つ。
 
 editor integration は標準的な location 形状を直接要求できる。`definition`、`references`、`search`、`find`、`validate` は `--format <text|json|lsp|qf|sarif>` を受け付け、`lsp` は LSP `Location` 配列、`qf` は Vim quickfix 行、`sarif` は SARIF 2.1.0 を出力する。`goto <symbol>` は曖昧でない単一定義を 1 つの LSP `Location` として返し、`goto --all <symbol>` は一致する全 location を返す。
 
@@ -3010,6 +3015,8 @@ MCPツール呼び出しは `structuredContent` に構造化JSON、`content` に
 exact-match flag の互換性は [USER_GUIDE.md](USER_GUIDE.md#フラグ互換性と移行) に記載しています。MCP schema はこの表と同期してください。`search.exact` は `exactSubstring` の legacy alias、name-based tools の `exact` は `exactName` の legacy alias です。新しい exact-match alias を追加する場合は、compatibility table、CLI help、MCP description、changelog fragment を同じ変更で更新してください。
 
 `search`、`definition`、`references`、`callers`、`callees`、`symbols`、`files` は `--path`、繰り返し指定できる `--exclude-path`、`--exclude-tests` による絞り込みを共有します。読み取り層は tests や docs より source を優先し、`search` はシンボル名やパスがクエリと正確に一致する候補をさらに上位に出して、AIクライアントが実装ファイルへ早く到達できるようにします。
+
+literal-safe な `search` query は reader 層で FTS5 sanitization 前に 1000 文字、128 whitespace term へ制限します。CLI、MCP、直接 reader caller の failure mode を揃えるため、この guard は `DbReader` に置きます。raw `--fts` query は別途 raw FTS complexity limit を使います。
 
 `search --json` と MCP の `search` は、フルチャンクを `chunk_start_line`、`chunk_end_line`、`snippet_start_line`、`snippet_end_line`、`snippet`、`match_lines`、`highlights`、`context_before`、`context_after`、`truncated_line_count`、`dropped_match_line_count`、`truncation_context` を持つ軽量スニペットへ投影します。`--snippet-lines` で抜粋長を先に制限でき（デフォルト: 8、最大: 20）、`--max-line-width`（CLI）/ `maxLineWidth`（MCP）は `find` / `references` / `excerpt` / `inspect` と同じ共有 `LineWidthFormatter.ClampLine` 契約（デフォルト: 512、最大: 4096、`0` で切り詰め解除）で各スニペット行を最初のマッチトークン周辺にクランプするため、minified / transpiled / 生成された 1 行ファイル内の 1 ヒットで数百 KB を返さなくなります。クランプされた行はスニペットに `...(+N)...` マーカーが入り、`truncation_context.char_counts`、`truncation_context.total_chars`、`highlights[].truncated`、`highlights[].original_line_length`、`highlights[].truncated_char_counts` で AI クライアントがクランプの有無と省略文字数を検出できます。`highlights[].terms` は互換性のため distinct な term list のまま残し、`highlights[].term_occurrences` は一致ごとの `term`、1-based の `line` / `column`、`length` を記録します。exact substring search では `highlights[].literal_terms` と `highlights[].literal_term_occurrences`（MCP では camelCase）も追加され、広めの診断 token list を残したまま、要求された literal phrase だけを render できます。exact ではない記号の多い code phrase 検索では、FTS tokenization が記号を失いやすい場合に exact substring semantics で再検索できるよう、CLI JSON compact result に `exact_substring_hint`、MCP `search` に `recovery_hint` を追加します。`dropped_match_line_count` は選択された snippet window 外に落ちた一致行数を示します。
 

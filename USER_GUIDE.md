@@ -876,6 +876,9 @@ Search normalizes literal FTS queries to Unicode NFC before matching. If every
 literal token exceeds SQLite FTS5 unicode61's 1000-character token cap,
 zero-result JSON includes `query_degraded_reason` and `tokens_dropped`. Index
 validation reports long unbroken FTS tokens as `fts_token_too_long`.
+Literal-safe `search` queries are capped at 1000 characters and 128 whitespace
+terms. Oversized generated input is rejected before FTS5 sanitization; split it
+into smaller searches or use narrower text.
 Guard-aware search filters primary `search` matches by nearby literal guards:
 `--require-before` / `--require-after` keep matches only when the guard query
 appears in the selected line window, while `--reject-before` / `--reject-after`
@@ -927,8 +930,9 @@ For scripts or editor integrations that need several queries against the same
 index, `cdidx batch --db <path>` keeps one SQLite connection open and reads one
 JSON string array per stdin line. Each array starts with a query command name,
 followed by that command's normal arguments. Each stdin line is capped at
-1,048,576 characters, and each command can carry at most 256 arguments after
-the command name:
+1,048,576 characters, each decoded string argument is capped at 8,192
+characters, and each command can carry at most 256 arguments after the command
+name:
 
 ```bash
 printf '%s\n' \
@@ -1069,7 +1073,7 @@ cdidx find "graph table" --path src/CodeIndex/Cli/QueryCommandRunner.cs
 cdidx find "Graph Table" --path src/CodeIndex/Cli/QueryCommandRunner.cs --exact --before 1 --after 1 --json
 ```
 
-`find` fills the gap between repo-wide `search` and line-number-based `excerpt`: when you already know the target file, it returns matching line numbers, columns, and short surrounding context from the indexed file without falling back to raw-text tools.
+`find` fills the gap between repo-wide `search` and line-number-based `excerpt`: when you already know the target file, it returns matching line numbers, columns, and short surrounding context from the indexed file without falling back to raw-text tools. The query text is capped at 1,000 characters, matching `search`.
 
 ### List files
 
@@ -3176,6 +3180,9 @@ literal FTS クエリは照合前に Unicode NFC へ正規化されます。す�
 token が SQLite FTS5 unicode61 の 1000 文字 token 上限を超える場合、0 件
 JSON には `query_degraded_reason` と `tokens_dropped` が含まれます。index
 validation は長い連続 FTS token を `fts_token_too_long` として報告します。
+literal-safe な `search` query は 1000 文字、128 whitespace term までです。
+生成された大きすぎる入力は FTS5 sanitization 前に拒否されるため、小さな検索へ分割するか、
+より狭い text にしてください。
 guard-aware search は primary の `search` 一致を近傍の literal guard で絞り込みます:
 `--require-before` / `--require-after` は指定行窓内に guard query がある場合だけ残し、
 `--reject-before` / `--reject-after` は guard query がある一致を落とします。JSON の検索結果には
@@ -3223,7 +3230,8 @@ cdidx search "authenticate" --json --verbose
 同じインデックスに対して複数の query を投げる script や editor integration では、
 `cdidx batch --db <path>` を使うと 1 つの SQLite connection を開いたまま処理できます。
 stdin の各行は JSON 文字列配列で、先頭に query command 名、その後ろに通常の引数を並べます。
-各 stdin 行は 1,048,576 文字まで、各 command は command 名の後ろに最大 256 引数までです:
+各 stdin 行は 1,048,576 文字まで、デコード後の各文字列引数は 8,192 文字まで、
+各 command は command 名の後ろに最大 256 引数までです:
 
 ```bash
 printf '%s\n' \
@@ -3362,7 +3370,7 @@ cdidx find "graph table" --path src/CodeIndex/Cli/QueryCommandRunner.cs
 cdidx find "Graph Table" --path src/CodeIndex/Cli/QueryCommandRunner.cs --exact --before 1 --after 1 --json
 ```
 
-`find` は、リポジトリ全体を対象にする `search` と、行番号が必要な `excerpt` の間を埋めるコマンドです。対象ファイルが既に分かっているときに、raw text ツールへ戻らずに、インデックス済みファイルから一致行番号・列番号・短い前後文脈を返します。
+`find` は、リポジトリ全体を対象にする `search` と、行番号が必要な `excerpt` の間を埋めるコマンドです。対象ファイルが既に分かっているときに、raw text ツールへ戻らずに、インデックス済みファイルから一致行番号・列番号・短い前後文脈を返します。query text は `search` と同じく 1,000 文字までです。
 
 ### ファイル一覧
 
