@@ -1927,8 +1927,9 @@ public partial class McpServer : IDisposable
             {
                 ["resources"] = resources,
             };
-            if (offset + pageSize < files.Count)
-                result["nextCursor"] = (offset + pageSize).ToString(System.Globalization.CultureInfo.InvariantCulture);
+            var nextOffset = offset + pageSize;
+            if (nextOffset <= MaxMcpPaginationOffset && nextOffset < files.Count)
+                result["nextCursor"] = nextOffset.ToString(CultureInfo.InvariantCulture);
             return CreateSuccessResponse(true, id, result);
         });
     }

@@ -1010,6 +1010,40 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ResourcesList_AtPaginationCap_DoesNotEmitSelfInvalidNextCursor_Issue3112()
+    {
+        var writer = new DbWriter(_db.Connection);
+        using var transaction = writer.BeginTransaction();
+        for (var i = 0; i < McpServer.MaxMcpPaginationOffset + 200; i++)
+        {
+            writer.UpsertFile(new FileRecord
+            {
+                Path = $"zz/paged-{i:D5}.cs",
+                Lang = "csharp",
+                Size = 1,
+                Lines = 1,
+                Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime,
+                Checksum = $"bulk-{i}",
+            });
+        }
+        transaction.Commit();
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "resources/list",
+            ["params"] = new JsonObject
+            {
+                ["cursor"] = McpServer.MaxMcpPaginationOffset.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Null(response["result"]!["nextCursor"]);
+    }
+
+    [Fact]
     public void ResourcesList_DoesNotAdvertiseUrisTooLongToRead_Issue3122()
     {
         var longPath = "src/" + new string('x', McpBoundedText.MaxResourceUriChars) + ".cs";
