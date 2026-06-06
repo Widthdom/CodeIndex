@@ -102,12 +102,12 @@ public static class HookCommandRunner
                 if (File.Exists(ioChainedHookPath) && !options.Force)
                     return WriteResult(options.Json, jsonOptions, "error", $"chained hook already exists: {chainedHookPath}", projectPath, hookPath, chainedHookPath, CommandExitCodes.UsageError);
 
-                ReplaceCustomHookWithManagedHook(hooksDir, hookPath, chainedHookPath);
+                ReplaceCustomHookWithManagedHook(hooksDir, hookPath, chainedHookPath, projectPath);
                 return WriteResult(options.Json, jsonOptions, "installed", "cdidx pre-commit hook installed", projectPath, hookPath, chainedHookPath, CommandExitCodes.Success);
             }
         }
 
-        AtomicFileWriter.WriteText(hookPath, BuildHookScript(chainedHookPath), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), MakeExecutable);
+        AtomicFileWriter.WriteText(hookPath, BuildHookScript(chainedHookPath, projectPath), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), MakeExecutable);
 
         return WriteResult(options.Json, jsonOptions, "installed", "cdidx pre-commit hook installed", projectPath, hookPath, File.Exists(ioChainedHookPath) ? chainedHookPath : null, CommandExitCodes.Success);
     }
@@ -161,7 +161,7 @@ public static class HookCommandRunner
         return content is not null && IsManagedHook(content);
     }
 
-    private static void ReplaceCustomHookWithManagedHook(string hooksDir, string hookPath, string chainedHookPath)
+    private static void ReplaceCustomHookWithManagedHook(string hooksDir, string hookPath, string chainedHookPath, string projectPath)
     {
         var stagedHookPath = Path.Combine(hooksDir, $".{HookName}.{Guid.NewGuid():N}.tmp");
         var ioStagedHookPath = LongPath.EnsureWindowsPrefix(stagedHookPath);
@@ -171,7 +171,7 @@ public static class HookCommandRunner
 
         try
         {
-            WriteStagedHookScript(ioStagedHookPath, chainedHookPath);
+            WriteStagedHookScript(ioStagedHookPath, chainedHookPath, projectPath);
             File.Replace(ioStagedHookPath, ioHookPath, ioChainedHookPath, ignoreMetadataErrors: true);
             stagedHookMoved = true;
             MakeExecutable(ioHookPath);
@@ -183,7 +183,7 @@ public static class HookCommandRunner
         }
     }
 
-    private static void WriteStagedHookScript(string ioStagedHookPath, string chainedHookPath)
+    private static void WriteStagedHookScript(string ioStagedHookPath, string chainedHookPath, string projectPath)
     {
         using (var stream = new FileStream(ioStagedHookPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
         {
@@ -193,7 +193,7 @@ public static class HookCommandRunner
                 bufferSize: 1024,
                 leaveOpen: true))
             {
-                writer.Write(BuildHookScript(chainedHookPath));
+                writer.Write(BuildHookScript(chainedHookPath, projectPath));
                 writer.Flush();
             }
 
@@ -215,13 +215,14 @@ public static class HookCommandRunner
         }
     }
 
-    private static string BuildHookScript(string chainedHookPath)
+    private static string BuildHookScript(string chainedHookPath, string projectPath)
     {
         var quotedChainedHook = QuoteShell(chainedHookPath);
+        var quotedProjectPath = QuoteShell(projectPath);
         return $"""
 #!/bin/sh
 {BeginMarker}
-cdidx index . --quiet
+cdidx index {quotedProjectPath} --quiet
 cdidx_status=$?
 if [ "$cdidx_status" -ne 0 ]; then
   echo "cdidx pre-commit index failed; commit aborted. Use git commit --no-verify to bypass hooks." >&2

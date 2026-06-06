@@ -28,7 +28,7 @@ public class HookCommandRunnerTests
             Assert.True(File.Exists(hookPath));
             var hook = File.ReadAllText(hookPath);
             Assert.Contains("BEGIN CDIDX MANAGED PRE-COMMIT", hook);
-            Assert.Contains("cdidx index . --quiet", hook);
+            Assert.Contains($"cdidx index {QuoteShellForTest(projectRoot)} --quiet", hook);
 
             var statusExit = RunHooksAndCaptureStreams(["status", "--project", projectRoot]).ExitCode;
             Assert.Equal(CommandExitCodes.Success, statusExit);
@@ -40,6 +40,30 @@ public class HookCommandRunnerTests
         finally
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Hooks_Install_QuotesSelectedProjectPathInGeneratedHook()
+    {
+        var parent = TestProjectHelper.CreateTempProject("hook_project_quote");
+        var projectRoot = Path.Combine(parent, "repo with ' quote");
+        try
+        {
+            Directory.CreateDirectory(projectRoot);
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+
+            var exitCode = RunHooksAndCaptureStreams(["install", "--project", projectRoot]).ExitCode;
+            var hookPath = Path.Combine(projectRoot, ".git", "hooks", "pre-commit");
+            var hook = File.ReadAllText(hookPath);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains($"cdidx index {QuoteShellForTest(projectRoot)} --quiet", hook);
+            Assert.DoesNotContain("cdidx index . --quiet", hook);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(parent);
         }
     }
 
@@ -279,4 +303,7 @@ public class HookCommandRunnerTests
 
     private static void AssertNoHookTempFiles(string hooksDir)
         => Assert.Empty(Directory.GetFiles(hooksDir, ".pre-commit.*.tmp"));
+
+    private static string QuoteShellForTest(string value)
+        => "'" + value.Replace("'", "'\"'\"'", StringComparison.Ordinal) + "'";
 }

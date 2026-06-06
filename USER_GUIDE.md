@@ -216,7 +216,7 @@ local index automatically:
 
 | Hook behavior | Detail |
 |---|---|
-| Refresh command | The installed hook runs `cdidx index . --quiet` before the commit completes. |
+| Refresh command | The installed hook runs `cdidx index <selected-project-path> --quiet` before the commit completes. When `--project` is omitted, the selected path is the current directory at install time. |
 | Quiet mode | `--quiet` suppresses normal progress and success output for hook contexts while still printing indexing errors to stderr and returning a non-zero exit code. |
 | Existing hooks | If `.git/hooks/pre-commit` already exists, `cdidx hooks install` moves it to `.git/hooks/pre-commit.cdidx-chain` and calls it after the cdidx refresh, preserving tools such as Husky, pre-commit, and lefthook. |
 | Intentional skip | Use `git commit --no-verify` when you intentionally need to skip all pre-commit hooks. |
@@ -2514,7 +2514,7 @@ pre-commit hook をインストールします:
 
 | hook の動作 | 詳細 |
 |---|---|
-| 更新コマンド | インストールされた hook はコミット完了前に `cdidx index . --quiet` を実行します。 |
+| 更新コマンド | インストールされた hook はコミット完了前に `cdidx index <selected-project-path> --quiet` を実行します。`--project` を省略した場合、選択パスはインストール時のカレントディレクトリです。 |
 | quiet mode | `--quiet` は hook 環境向けに通常の進捗・成功出力を抑制しつつ、indexing エラーは引き続き stderr に出力し、非ゼロの終了コードを返します。 |
 | 既存 hook の扱い | リポジトリに `.git/hooks/pre-commit` がある場合、`cdidx hooks install` はそれを `.git/hooks/pre-commit.cdidx-chain` に移動し、cdidx の更新後に呼び出すため、Husky、pre-commit、lefthook などのツールも維持されます。 |
 | 意図的な skip | すべての pre-commit hook を意図的にスキップする必要があるときは `git commit --no-verify` を使ってください。 |
@@ -4141,7 +4141,8 @@ cdidx hooks status
 cdidx hooks uninstall
 ```
 
-インストールされた hook は commit 完了前に `cdidx index . --quiet` を実行します。
+インストールされた hook は commit 完了前に `cdidx index <selected-project-path> --quiet` を実行します。
+`--project` を省略した場合、選択パスはインストール時のカレントディレクトリです。
 `--quiet` は hook 向けに通常の進捗と成功出力を抑制しますが、indexing error は
 stderr に出し、失敗時は非ゼロ終了します。既存の `.git/hooks/pre-commit` がある
 場合、`cdidx hooks install` はそれを `.git/hooks/pre-commit.cdidx-chain` に退避し、
