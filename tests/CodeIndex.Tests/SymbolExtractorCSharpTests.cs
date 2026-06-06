@@ -109,7 +109,7 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_CSharp_DetectsScopedMethodParametersAsProperties()
+    public void Extract_CSharp_DoesNotClassifyScopedMethodParametersAsProperties()
     {
         var content = """
             public class RefService
@@ -126,27 +126,13 @@ public partial class SymbolExtractorTests
             """;
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
-        Assert.Contains(symbols, s =>
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Update");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Buffer");
+        Assert.DoesNotContain(symbols, s =>
             s.Kind == "property"
-            && s.Name == "value"
             && s.ContainerKind == "function"
-            && s.ContainerName == "Update"
-            && s.ReturnType == "T"
-            && s.Signature == "scoped ref T value");
-        Assert.Contains(symbols, s =>
-            s.Kind == "property"
-            && s.Name == "data"
-            && s.ContainerKind == "function"
-            && s.ContainerName == "Update"
-            && s.ReturnType == "Span<int>"
-            && s.Signature == "scoped Span<int> data");
-        Assert.Contains(symbols, s =>
-            s.Kind == "property"
-            && s.Name == "value"
-            && s.ContainerKind == "function"
-            && s.ContainerName == "Buffer"
-            && s.ReturnType == "int"
-            && s.Signature == "scoped ref int value");
+            && s.ContainerName is "Update" or "Buffer"
+            && s.Name is "value" or "data");
     }
 
     [Fact]
@@ -2376,6 +2362,45 @@ public partial class SymbolExtractorTests
         Assert.Equal("public void M<T>( T value) {", overloads[0].Signature);
         Assert.Equal("public void M<T, U>( T first, U second) {", overloads[1].Signature);
         Assert.NotEqual(overloads[0].Signature, overloads[1].Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_MultilineCallableParameters_DoNotBecomeProperties()
+    {
+        var content = """
+            using System.Text.Json;
+            using System.Threading;
+
+            public sealed class Runner
+            {
+                private readonly string _name;
+
+                public Runner(
+                    string appVersion,
+                    JsonSerializerOptions jsonOptions,
+                    CancellationToken cancellationToken)
+                {
+                }
+
+                public void Run(
+                    IActiveWorkspaceLoader activeWorkspaceLoader,
+                    CancellationToken cancellationToken)
+                {
+                }
+            }
+
+            public interface IActiveWorkspaceLoader
+            {
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Runner");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Run");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "_name");
+        foreach (var parameterName in new[] { "appVersion", "jsonOptions", "cancellationToken", "activeWorkspaceLoader" })
+            Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == parameterName);
     }
 
     [Fact]
