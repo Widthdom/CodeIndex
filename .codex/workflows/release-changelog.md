@@ -51,17 +51,41 @@ received new fragments after the last `prepare` run.
 
 ## GitHub release notes
 
-The release workflow publishes the curated `CHANGELOG.md` section for the tag,
-not GitHub's generated commit summary. Before creating the release it runs:
+The release workflow publishes a fixed GitHub release-note template instead of
+GitHub's generated commit summary. Before creating the release it runs:
 
 ```bash
 dotnet run --project tools/CodeIndex.Changelog -- release-notes --version 1.17.0
 ```
 
-The command extracts the matching English and 日本語 `### [1.17.0]` blocks from
-`CHANGELOG.md` and fails if either section is missing or both are empty. This
-means the release-preparation PR must land before the `v*` tag is pushed. The
-workflow keeps GitHub-generated notes only as an explicit
+The command validates that the matching English and 日本語 `### [1.17.0]`
+blocks exist in `CHANGELOG.md`, fails if both are empty, reads the previous
+release version from the `[1.17.0]` compare-link footer, and emits:
+
+````md
+## What's Changed
+
+Full Changelog: https://github.com/Widthdom/CodeIndex/compare/v1.16.0...v1.17.0
+
+## Install or update
+
+Homebrew:
+
+```bash
+brew install widthdom/tap/codeindex
+brew upgrade widthdom/tap/codeindex
+```
+
+NuGet:
+
+```bash
+dotnet tool install -g cdidx
+dotnet tool update -g cdidx
+```
+````
+
+This means the release-preparation PR must land before the `v*` tag is pushed.
+The workflow keeps GitHub-generated notes only as an explicit
 `workflow_dispatch` fallback via `allow_generated_notes`.
 
 ## Compare-link footer

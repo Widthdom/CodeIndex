@@ -117,6 +117,17 @@ public class ReleaseWorkflowTests
         Assert.DoesNotContain("--skip-duplicate", workflow);
     }
 
+    [Fact]
+    public void ReleaseWorkflow_UsesChangelogToolForTemplatedReleaseNotes()
+    {
+        var workflow = File.ReadAllText(Path.Combine(GetRepositoryRoot(), ".github", "workflows", "release.yml"));
+
+        Assert.Contains("dotnet run --project tools/CodeIndex.Changelog -- release-notes", workflow);
+        Assert.Contains("--notes-file release-notes.md", workflow);
+        Assert.Contains("--notes-file release-install-notes.md", workflow);
+        Assert.DoesNotContain("cat release-install-notes.md >> release-notes.md", workflow);
+    }
+
     // Issue #2756: NuGet emits the core-properties OPC part with a random
     // *.psmdcp entry name, so two otherwise identical pack runs can produce
     // different .nupkg/.snupkg bytes. The release workflow normalizes that

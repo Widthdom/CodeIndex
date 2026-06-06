@@ -298,18 +298,36 @@ public sealed class ChangelogTool
         if (englishBlock.BodyLines.Count == 0 && japaneseBlock.BodyLines.Count == 0)
             throw new ChangelogException($"CHANGELOG.md release notes for v{targetVersion} are empty.");
 
+        var targetVersionText = targetVersion.ToString();
+        var compareEntry = changelog.FooterEntries.FirstOrDefault(entry =>
+            !entry.IsTagLink &&
+            entry.Label == targetVersionText &&
+            entry.TargetVersion == targetVersionText);
+        if (compareEntry is null)
+            throw new ChangelogException($"CHANGELOG.md is missing compare-link footer for v{targetVersion}.");
+
         var output = new List<string>
         {
-            $"## CodeIndex v{targetVersion}",
+            "## What's Changed",
             string.Empty,
-            "### English",
+            $"Full Changelog: https://github.com/Widthdom/CodeIndex/compare/v{compareEntry.BaseVersion}...v{targetVersion}",
             string.Empty,
+            "## Install or update",
+            string.Empty,
+            "Homebrew:",
+            string.Empty,
+            "```bash",
+            "brew install widthdom/tap/codeindex",
+            "brew upgrade widthdom/tap/codeindex",
+            "```",
+            string.Empty,
+            "NuGet:",
+            string.Empty,
+            "```bash",
+            "dotnet tool install -g cdidx",
+            "dotnet tool update -g cdidx",
+            "```",
         };
-        output.AddRange(englishBlock.BodyLines);
-        output.Add(string.Empty);
-        output.Add("### 日本語");
-        output.Add(string.Empty);
-        output.AddRange(japaneseBlock.BodyLines);
 
         return string.Join('\n', output).TrimEnd() + Environment.NewLine;
     }
