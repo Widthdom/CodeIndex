@@ -7,6 +7,7 @@ using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
 using CodeIndex.Indexer.Extensibility;
+using CodeIndex.Indexer.Hooks;
 using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
 
@@ -159,6 +160,201 @@ public class IndexCommandRunnerTests
             IndexCommandRunner.IndexExtractionStallTimeoutForTesting = priorTimeout;
             SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void SymbolExtractionWorker_TimeoutKillsWorkerBeforeDelayedExtractionContinues()
+    {
+        var projectRoot = CreateTempProject();
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture(
+                SymbolExtractionWorker.DelayEnvironmentVariable,
+                SymbolExtractionWorker.CompletionPathEnvironmentVariable);
+            try
+            {
+                var completionPath = Path.Combine(projectRoot, "symbol-worker.done");
+                env.Set(SymbolExtractionWorker.DelayEnvironmentVariable, "500");
+                env.Set(SymbolExtractionWorker.CompletionPathEnvironmentVariable, completionPath);
+
+                using var worker = new SymbolExtractionWorkerClient();
+                var result = worker.Invoke(
+                    0,
+                    "csharp",
+                    "public class App { }\n",
+                    Path.Combine(projectRoot, "App.cs"),
+                    projectRoot,
+                    TimeSpan.FromMilliseconds(50));
+
+                Assert.True(result.TimedOut);
+                Assert.False(result.Success);
+                AssertFileDoesNotAppear(completionPath, TimeSpan.FromMilliseconds(1000));
+            }
+            finally
+            {
+                DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void SymbolExtractionWorker_CapturesStdoutAndForwardsStderrDiagnostics()
+    {
+        var projectRoot = CreateTempProject();
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture(SymbolExtractionWorker.ConsoleStdoutEnvironmentVariable);
+            try
+            {
+                WriteSymbolWorkerPatternConfig(
+                    projectRoot,
+                    "language: \"toydsl\"\nextensions:\n  - extension: \".toy\"\npatterns:\n  - kind: \"class\"\n    regex: \"^(a+)+$\"\n");
+                env.Set(SymbolExtractionWorker.ConsoleStdoutEnvironmentVariable, "not-json-protocol");
+                var slowLine = new string('a', 10_000) + "!";
+                SymbolExtractionWorkerResult? result = null;
+
+                var stderr = ConsoleCapture.CaptureError(() =>
+                {
+                    using var worker = new SymbolExtractionWorkerClient();
+                    result = worker.Invoke(
+                        0,
+                        "toydsl",
+                        slowLine,
+                        Path.Combine(projectRoot, "demo.toy"),
+                        projectRoot,
+                        TimeSpan.FromSeconds(5));
+                });
+
+                Assert.NotNull(result);
+                Assert.True(result.Success, result.WorkerError);
+                Assert.False(result.TimedOut);
+                Assert.Empty(result.Symbols!);
+                Assert.Contains("Pattern extractor", stderr, StringComparison.Ordinal);
+                Assert.Contains("timed out", stderr, StringComparison.Ordinal);
+                Assert.DoesNotContain("not-json-protocol", stderr, StringComparison.Ordinal);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void SymbolExtractionWorker_StartInfo_UsesCurrentCdidxExecutableWhenAvailable()
+    {
+        var currentProcessPath = Path.Combine(Path.GetTempPath(), OperatingSystem.IsWindows() ? "cdidx.exe" : "cdidx");
+
+        var created = SymbolExtractionWorker.TryCreateStartInfo(
+            currentProcessPath,
+            runnerAssemblyPath: string.Empty,
+            out var startInfo,
+            out var error);
+
+        Assert.True(created, error);
+        Assert.Equal(currentProcessPath, startInfo.FileName);
+        Assert.Equal([SymbolExtractionWorker.CommandName], startInfo.ArgumentList);
+        Assert.True(startInfo.RedirectStandardInput);
+        Assert.True(startInfo.RedirectStandardOutput);
+        Assert.True(startInfo.RedirectStandardError);
+    }
+
+    [Fact]
+    public void SymbolExtractionWorker_StartInfo_UsesFrameworkDependentDllWhenProcessIsNotCdidx()
+    {
+        var currentProcessPath = Path.Combine(Path.GetTempPath(), OperatingSystem.IsWindows() ? "testhost.exe" : "testhost");
+        var runnerAssemblyPath = Path.Combine(Path.GetTempPath(), "cdidx.dll");
+
+        var created = SymbolExtractionWorker.TryCreateStartInfo(
+            currentProcessPath,
+            runnerAssemblyPath,
+            out var startInfo,
+            out var error);
+
+        Assert.True(created, error);
+        Assert.NotEqual(currentProcessPath, startInfo.FileName);
+        Assert.Equal([runnerAssemblyPath, SymbolExtractionWorker.CommandName], startInfo.ArgumentList);
+    }
+
+    [Fact]
+    public void PostExtractionHookCallbackWorker_StartInfo_UsesCurrentCdidxExecutableWhenAvailable()
+    {
+        var hook = new PostExtractionHookInfo(
+            "demo",
+            Path.Combine(Path.GetTempPath(), "demo-hook.dll"),
+            "Demo.Hook");
+        var currentProcessPath = Path.Combine(Path.GetTempPath(), OperatingSystem.IsWindows() ? "cdidx.exe" : "cdidx");
+
+        var created = PostExtractionHookCallbackWorker.TryCreateStartInfo(
+            hook,
+            currentProcessPath,
+            runnerAssemblyPath: string.Empty,
+            out var startInfo,
+            out var error);
+
+        Assert.True(created, error);
+        Assert.Equal(currentProcessPath, startInfo.FileName);
+        Assert.Equal([PostExtractionHookCallbackWorker.CommandName, hook.AssemblyPath, hook.TypeName], startInfo.ArgumentList);
+        Assert.True(startInfo.RedirectStandardInput);
+        Assert.True(startInfo.RedirectStandardOutput);
+        Assert.True(startInfo.RedirectStandardError);
+    }
+
+    [Fact]
+    public void PostExtractionHookCallbackWorker_StartInfo_UsesFrameworkDependentDllWhenProcessIsNotCdidx()
+    {
+        var hook = new PostExtractionHookInfo(
+            "demo",
+            Path.Combine(Path.GetTempPath(), "demo-hook.dll"),
+            "Demo.Hook");
+        var currentProcessPath = Path.Combine(Path.GetTempPath(), OperatingSystem.IsWindows() ? "testhost.exe" : "testhost");
+        var runnerAssemblyPath = Path.Combine(Path.GetTempPath(), "cdidx.dll");
+
+        var created = PostExtractionHookCallbackWorker.TryCreateStartInfo(
+            hook,
+            currentProcessPath,
+            runnerAssemblyPath,
+            out var startInfo,
+            out var error);
+
+        Assert.True(created, error);
+        Assert.NotEqual(currentProcessPath, startInfo.FileName);
+        Assert.Equal([runnerAssemblyPath, PostExtractionHookCallbackWorker.CommandName, hook.AssemblyPath, hook.TypeName], startInfo.ArgumentList);
+    }
+
+    [SkipOnMacOsArm64Fact]
+    public void Run_PublishedSingleFileBinary_IndexesWithIsolatedSymbolWorker()
+    {
+        var projectRoot = CreateTempProject();
+        var publishDir = Path.Combine(Path.GetTempPath(), $"cdidx_single_file_publish_{Guid.NewGuid():N}");
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_single_file_index_{Guid.NewGuid():N}.db");
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "App.cs"),
+                "public class PublishedSingleFileApp { public void Run() { } }\n");
+
+            var publishedCli = PublishTrimmedCli(publishDir, publishSingleFile: true);
+
+            var (exitCode, stdout, stderr) = RunPublishedCli(publishedCli, projectRoot, projectRoot, "--db", dbPath, "--json", "--force");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("cdidx: scanning files...", stderr);
+            Assert.Contains("cdidx: preparing index writes...", stderr);
+            using (var document = JsonDocument.Parse(stdout))
+                Assert.Equal("success", document.RootElement.GetProperty("status").GetString());
+            Assert.Equal(1, CountRows(dbPath, "files"));
+            Assert.True(CountRows(dbPath, "symbols") >= 1);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+            DeleteDirectory(publishDir);
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
         }
     }
 
@@ -9913,7 +10109,7 @@ public class IndexCommandRunnerTests
         return (process.ExitCode, stdOut, stdErr);
     }
 
-    private static string PublishTrimmedCli(string outputDir)
+    private static string PublishTrimmedCli(string outputDir, bool publishSingleFile = false)
     {
         Directory.CreateDirectory(outputDir);
         var buildOutputDir = Path.Combine(outputDir, "bin", "publish") + Path.DirectorySeparatorChar;
@@ -9940,7 +10136,7 @@ public class IndexCommandRunnerTests
         psi.ArgumentList.Add(outputDir);
         psi.ArgumentList.Add("-p:PublishTrimmed=true");
         psi.ArgumentList.Add("-p:SelfContained=true");
-        psi.ArgumentList.Add("-p:PublishSingleFile=false");
+        psi.ArgumentList.Add($"-p:PublishSingleFile={publishSingleFile.ToString().ToLowerInvariant()}");
         psi.ArgumentList.Add($"-p:OutputPath={buildOutputDir}");
         psi.ArgumentList.Add($"-p:IntermediateOutputPath={intermediateDir}");
         psi.ArgumentList.Add($"-p:NuGetLockFilePath={lockFilePath}");
@@ -10018,6 +10214,25 @@ public class IndexCommandRunnerTests
         }
 
         throw new InvalidOperationException("Could not locate built cdidx.dll from test output path / テスト出力パスから cdidx.dll を特定できませんでした");
+    }
+
+    private static void AssertFileDoesNotAppear(string path, TimeSpan duration)
+    {
+        var deadline = DateTimeOffset.UtcNow.Add(duration);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            if (File.Exists(path))
+                throw new InvalidOperationException("The timed-out symbol extraction worker continued running after the callback returned.");
+
+            Thread.Sleep(25);
+        }
+    }
+
+    private static void WriteSymbolWorkerPatternConfig(string projectRoot, string content)
+    {
+        var path = Path.Combine(projectRoot, ".cdidx", "patterns", "toydsl.yaml");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, content);
     }
 
     private static string GetRepositoryRoot()

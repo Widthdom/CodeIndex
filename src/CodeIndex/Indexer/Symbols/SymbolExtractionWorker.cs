@@ -1,49 +1,35 @@
 using System.Diagnostics;
 using System.Reflection;
-using System.Runtime.Loader;
 using System.Runtime.Versioning;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using CodeIndex.Models;
 
-namespace CodeIndex.Indexer.Hooks;
+namespace CodeIndex.Indexer;
 
-internal enum PostExtractionHookCallbackKind
-{
-    Symbols,
-    References,
-}
-
-internal sealed record PostExtractionHookCallbackResult(
+internal sealed record SymbolExtractionWorkerResult(
     bool Success,
     bool TimedOut,
     string? WorkerError,
-    string? CallbackError,
     long DurationMs,
-    List<SymbolRecord>? Symbols,
-    List<ReferenceRecord>? References);
+    List<SymbolRecord>? Symbols);
 
-internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
+internal sealed class SymbolExtractionWorkerClient : IDisposable
 {
-    private readonly PostExtractionHookInfo hook;
     private readonly object gate = new();
     private Process? process;
     private StringBuilder stderr = new();
     private bool disposed;
 
-    internal PostExtractionHookCallbackWorkerClient(PostExtractionHookInfo hook)
-    {
-        this.hook = hook;
-    }
-
-    internal PostExtractionHookCallbackResult Invoke(
-        PostExtractionHookCallbackKind kind,
-        string callback,
-        FileContext context,
-        IReadOnlyList<SymbolRecord>? symbols,
-        IReadOnlyList<ReferenceRecord>? references,
-        TimeSpan callbackBudget)
+    internal SymbolExtractionWorkerResult Invoke(
+        long fileId,
+        string? lang,
+        string content,
+        string filePath,
+        string projectRoot,
+        TimeSpan callbackBudget,
+        CancellationToken cancellationToken = default)
     {
         lock (gate)
         {
@@ -55,12 +41,8 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
                 return Failure(startError, stopwatch.ElapsedMilliseconds);
             }
 
-            var request = new PostExtractionHookCallbackWorker.WorkerRequest(
-                callback,
-                context,
-                symbols?.ToList(),
-                references?.ToList());
-            var requestJson = JsonSerializer.Serialize(request, PostExtractionHookCallbackWorker.JsonOptions);
+            var request = new SymbolExtractionWorker.WorkerRequest(fileId, lang, content, filePath, projectRoot);
+            var requestJson = JsonSerializer.Serialize(request, SymbolExtractionWorker.JsonOptions);
             var waitMilliseconds = GetRemainingWaitMilliseconds(stopwatch, callbackBudget);
             if (waitMilliseconds <= 0)
             {
@@ -80,10 +62,10 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
             {
                 KillWorker();
                 stopwatch.Stop();
-                return Failure($"failed to send worker request: {ex.Message}", stopwatch.ElapsedMilliseconds);
+                return Failure($"failed to send symbol extraction request: {ex.Message}", stopwatch.ElapsedMilliseconds);
             }
 
-            if (!WaitForTask(sendTask, waitMilliseconds, out var sendException))
+            if (!WaitForTask(sendTask, waitMilliseconds, cancellationToken, out var sendException))
             {
                 KillWorker();
                 stopwatch.Stop();
@@ -94,11 +76,11 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
             {
                 KillWorker();
                 stopwatch.Stop();
-                return Failure($"failed to send worker request: {sendException.Message}", stopwatch.ElapsedMilliseconds);
+                return Failure($"failed to send symbol extraction request: {sendException.Message}", stopwatch.ElapsedMilliseconds);
             }
 
             waitMilliseconds = GetRemainingWaitMilliseconds(stopwatch, callbackBudget);
-            if (waitMilliseconds <= 0 || !WaitForTask(responseTask, waitMilliseconds, out var responseException))
+            if (waitMilliseconds <= 0 || !WaitForTask(responseTask, waitMilliseconds, cancellationToken, out var responseException))
             {
                 KillWorker();
                 stopwatch.Stop();
@@ -109,7 +91,7 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
             {
                 KillWorker();
                 stopwatch.Stop();
-                return Failure($"failed to read worker response: {responseException.Message}", stopwatch.ElapsedMilliseconds);
+                return Failure($"failed to read symbol extraction response: {responseException.Message}", stopwatch.ElapsedMilliseconds);
             }
 
             if (CallbackBudgetExceeded(stopwatch, callbackBudget))
@@ -128,12 +110,12 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
                 return Failure(workerError, stopwatch.ElapsedMilliseconds);
             }
 
-            PostExtractionHookCallbackWorker.WorkerResponse? response;
+            SymbolExtractionWorker.WorkerResponse? response;
             try
             {
-                response = JsonSerializer.Deserialize<PostExtractionHookCallbackWorker.WorkerResponse>(
+                response = JsonSerializer.Deserialize<SymbolExtractionWorker.WorkerResponse>(
                     responseJson,
-                    PostExtractionHookCallbackWorker.JsonOptions);
+                    SymbolExtractionWorker.JsonOptions);
             }
             catch (JsonException ex)
             {
@@ -143,21 +125,18 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
 
             if (response == null)
                 return Failure("worker returned an empty response.", stopwatch.ElapsedMilliseconds);
+            ForwardCapturedStderr(response.CapturedStderr);
             if (!string.IsNullOrWhiteSpace(response.WorkerError))
                 return Failure(response.WorkerError, stopwatch.ElapsedMilliseconds);
-            if (kind == PostExtractionHookCallbackKind.Symbols && response.Symbols == null)
+            if (response.Symbols == null)
                 return Failure("worker response omitted symbols.", stopwatch.ElapsedMilliseconds);
-            if (kind == PostExtractionHookCallbackKind.References && response.References == null)
-                return Failure("worker response omitted references.", stopwatch.ElapsedMilliseconds);
 
-            return new PostExtractionHookCallbackResult(
+            return new SymbolExtractionWorkerResult(
                 Success: true,
                 TimedOut: false,
                 WorkerError: null,
-                CallbackError: response.CallbackError,
                 DurationMs: stopwatch.ElapsedMilliseconds,
-                Symbols: response.Symbols,
-                References: response.References);
+                Symbols: response.Symbols);
         }
     }
 
@@ -198,7 +177,7 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
 
         ClearExitedWorker();
         stderr = new StringBuilder();
-        if (!PostExtractionHookCallbackWorker.TryCreateStartInfo(hook, out var startInfo, out error))
+        if (!SymbolExtractionWorker.TryCreateStartInfo(out var startInfo, out error))
             return false;
 
         var next = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
@@ -212,7 +191,7 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
         {
             if (!next.Start())
             {
-                error = "worker process did not start.";
+                error = "symbol extraction worker process did not start.";
                 next.Dispose();
                 return false;
             }
@@ -224,7 +203,7 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
         }
         catch (Exception ex)
         {
-            error = $"failed to start worker process: {ex.Message}";
+            error = $"failed to start symbol extraction worker process: {ex.Message}";
             next.Dispose();
             return false;
         }
@@ -235,7 +214,7 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
         if (process == null)
             return;
 
-        PostExtractionHookCallbackWorker.TryKillProcess(process);
+        SymbolExtractionWorker.TryKillProcess(process);
         ClearExitedWorker();
     }
 
@@ -248,25 +227,21 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
         process = null;
     }
 
-    private static PostExtractionHookCallbackResult Failure(string? message, long durationMs)
+    private static SymbolExtractionWorkerResult Failure(string? message, long durationMs)
         => new(
             Success: false,
             TimedOut: false,
-            WorkerError: string.IsNullOrWhiteSpace(message) ? "isolated hook callback worker failed." : message,
-            CallbackError: null,
+            WorkerError: string.IsNullOrWhiteSpace(message) ? "isolated symbol extraction worker failed." : message,
             DurationMs: Math.Max(0, durationMs),
-            Symbols: null,
-            References: null);
+            Symbols: null);
 
-    private static PostExtractionHookCallbackResult TimedOut(long durationMs)
+    private static SymbolExtractionWorkerResult TimedOut(long durationMs)
         => new(
             Success: false,
             TimedOut: true,
             WorkerError: null,
-            CallbackError: null,
             DurationMs: Math.Max(0, durationMs),
-            Symbols: null,
-            References: null);
+            Symbols: null);
 
     private static async Task SendRequestAsync(TextWriter input, string requestJson)
     {
@@ -274,11 +249,11 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
         await input.FlushAsync().ConfigureAwait(false);
     }
 
-    private static bool WaitForTask(Task task, int milliseconds, out Exception? exception)
+    private bool WaitForTask(Task task, int milliseconds, CancellationToken cancellationToken, out Exception? exception)
     {
         try
         {
-            if (!task.Wait(milliseconds))
+            if (!task.Wait(milliseconds, cancellationToken))
             {
                 exception = null;
                 return false;
@@ -291,6 +266,11 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
         {
             exception = ex.GetBaseException();
             return true;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            KillWorker();
+            throw;
         }
         catch (Exception ex)
         {
@@ -331,13 +311,23 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
             return false;
         }
     }
+
+    private static void ForwardCapturedStderr(string? capturedStderr)
+    {
+        if (!string.IsNullOrEmpty(capturedStderr))
+            Console.Error.Write(capturedStderr);
+    }
 }
 
-internal static class PostExtractionHookCallbackWorker
+internal static class SymbolExtractionWorker
 {
-    internal const string CommandName = "__cdidx-post-extraction-hook-callback";
+    internal const string CommandName = "__cdidx-symbol-extraction";
     internal const int WorkerKillWaitMilliseconds = 5000;
-    internal static readonly JsonSerializerOptions JsonOptions = PostExtractionHookCallbackWorkerJsonContext.Default.Options;
+    internal const string DelayEnvironmentVariable = "CDIDX_TEST_SYMBOL_EXTRACTION_WORKER_DELAY_MS";
+    internal const string CompletionPathEnvironmentVariable = "CDIDX_TEST_SYMBOL_EXTRACTION_WORKER_DONE_PATH";
+    internal const string ConsoleStdoutEnvironmentVariable = "CDIDX_TEST_SYMBOL_EXTRACTION_WORKER_STDOUT";
+    private const int CapturedConsoleMaxChars = 32 * 1024;
+    internal static readonly JsonSerializerOptions JsonOptions = SymbolExtractionWorkerJsonContext.Default.Options;
 
     internal static bool TryRunCommand(
         string[] args,
@@ -356,13 +346,9 @@ internal static class PostExtractionHookCallbackWorker
         return true;
     }
 
-    internal static bool TryCreateStartInfo(
-        PostExtractionHookInfo hook,
-        out ProcessStartInfo startInfo,
-        out string error)
+    internal static bool TryCreateStartInfo(out ProcessStartInfo startInfo, out string error)
     {
         return TryCreateStartInfo(
-            hook,
             Environment.ProcessPath,
             ResolveCurrentRunnerAssemblyPath(),
             out startInfo,
@@ -370,7 +356,6 @@ internal static class PostExtractionHookCallbackWorker
     }
 
     internal static bool TryCreateStartInfo(
-        PostExtractionHookInfo hook,
         string? currentProcessPath,
         string? runnerAssemblyPath,
         out ProcessStartInfo startInfo,
@@ -381,8 +366,6 @@ internal static class PostExtractionHookCallbackWorker
         {
             startInfo.FileName = currentProcessPath!;
             startInfo.ArgumentList.Add(CommandName);
-            startInfo.ArgumentList.Add(hook.AssemblyPath);
-            startInfo.ArgumentList.Add(hook.TypeName);
             error = string.Empty;
             return true;
         }
@@ -390,19 +373,46 @@ internal static class PostExtractionHookCallbackWorker
         if (string.IsNullOrWhiteSpace(runnerAssemblyPath))
         {
             startInfo = new ProcessStartInfo();
-            error = "could not resolve the cdidx assembly path for isolated hook callback execution.";
+            error = "could not resolve the cdidx assembly path for isolated symbol extraction.";
             return false;
         }
 
         startInfo.FileName = ResolveDotnetHostPath();
         startInfo.ArgumentList.Add(runnerAssemblyPath);
         startInfo.ArgumentList.Add(CommandName);
-        startInfo.ArgumentList.Add(hook.AssemblyPath);
-        startInfo.ArgumentList.Add(hook.TypeName);
         ApplyCurrentRuntimeRollForward(startInfo);
 
         error = string.Empty;
         return true;
+    }
+
+    private static ProcessStartInfo CreateStartInfo()
+        => new()
+        {
+            UseShellExecute = false,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            StandardInputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+            StandardOutputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+            StandardErrorEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+            CreateNoWindow = true,
+        };
+
+    private static bool ShouldStartCurrentExecutable(string? currentProcessPath, string? runnerAssemblyPath)
+    {
+        if (string.IsNullOrWhiteSpace(currentProcessPath) || IsDotnetHostPath(currentProcessPath))
+            return false;
+
+        var processName = Path.GetFileNameWithoutExtension(currentProcessPath);
+        var appName = typeof(SymbolExtractionWorker).Assembly.GetName().Name;
+        if (!string.IsNullOrWhiteSpace(appName)
+            && string.Equals(processName, appName, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return string.IsNullOrWhiteSpace(runnerAssemblyPath);
     }
 
     internal static void TryKillProcess(Process process)
@@ -429,17 +439,14 @@ internal static class PostExtractionHookCallbackWorker
 
     private static int RunCommand(string[] args, TextReader input, TextWriter output, TextWriter error)
     {
-        if (args.Length != 3)
+        if (args.Length != 1)
         {
-            error.WriteLine("post-extraction hook callback worker requires assembly path and type name.");
+            error.WriteLine("symbol extraction worker does not accept positional arguments.");
             return 2;
         }
 
-        var hookAssemblyPath = args[1];
-        var hookTypeName = args[2];
         try
         {
-            IPostExtractionHook? hook = null;
             string? requestJson;
             while ((requestJson = input.ReadLine()) != null)
             {
@@ -448,12 +455,11 @@ internal static class PostExtractionHookCallbackWorker
                 {
                     var request = JsonSerializer.Deserialize<WorkerRequest>(requestJson, JsonOptions)
                         ?? throw new InvalidOperationException("worker request was empty.");
-                    hook ??= CreateHook(hookAssemblyPath, hookTypeName);
-                    response = InvokeInsideWorker(hook, request);
+                    response = InvokeInsideWorker(request);
                 }
                 catch (Exception ex)
                 {
-                    response = new WorkerResponse(null, null, null, ex.Message);
+                    response = new WorkerResponse(null, ex.Message, null);
                 }
 
                 output.WriteLine(JsonSerializer.Serialize(response, JsonOptions));
@@ -469,54 +475,58 @@ internal static class PostExtractionHookCallbackWorker
         }
     }
 
-    private static IPostExtractionHook CreateHook(string hookAssemblyPath, string hookTypeName)
-    {
-        var assembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(Path.GetFullPath(hookAssemblyPath));
-        var type = assembly.GetType(hookTypeName, throwOnError: true)
-            ?? throw new InvalidOperationException($"hook type `{hookTypeName}` was not found.");
-        return Activator.CreateInstance(type) as IPostExtractionHook
-            ?? throw new InvalidOperationException($"hook type `{hookTypeName}` could not be instantiated as `{nameof(IPostExtractionHook)}`.");
-    }
-
-    private static WorkerResponse InvokeInsideWorker(IPostExtractionHook hook, WorkerRequest request)
+    private static WorkerResponse InvokeInsideWorker(WorkerRequest request)
     {
         var originalOut = Console.Out;
         var originalError = Console.Error;
-        using var capturedOut = new StringWriter();
-        using var capturedError = new StringWriter();
-        Exception? callbackFailure = null;
+        using var capturedOut = new BoundedTextWriter(CapturedConsoleMaxChars);
+        using var capturedError = new BoundedTextWriter(CapturedConsoleMaxChars);
         try
         {
             Console.SetOut(capturedOut);
             Console.SetError(capturedError);
-            if (request.Callback == nameof(IPostExtractionHook.OnSymbolsExtracted))
-            {
-                if (request.Symbols == null)
-                    throw new InvalidOperationException("symbol callback request omitted symbols.");
-                hook.OnSymbolsExtracted(request.Context, request.Symbols);
-            }
-            else if (request.Callback == nameof(IPostExtractionHook.OnReferencesExtracted))
-            {
-                if (request.References == null)
-                    throw new InvalidOperationException("reference callback request omitted references.");
-                hook.OnReferencesExtracted(request.Context, request.References);
-            }
-            else
-            {
-                throw new InvalidOperationException($"unknown hook callback `{request.Callback}`.");
-            }
+            WriteConsoleOutputForTestingIfRequested();
+            DelayForTestingIfRequested();
+            var symbols = SymbolExtractor.Extract(
+                request.FileId,
+                request.Lang,
+                request.Content,
+                request.FilePath,
+                request.ProjectRoot,
+                CancellationToken.None);
+            return new WorkerResponse(symbols, null, capturedError.GetCapturedText());
         }
         catch (Exception ex)
         {
-            callbackFailure = ex is TargetInvocationException { InnerException: not null } ? ex.InnerException : ex;
+            return new WorkerResponse(null, ex.Message, capturedError.GetCapturedText());
         }
         finally
         {
             Console.SetOut(originalOut);
             Console.SetError(originalError);
         }
+    }
 
-        return new WorkerResponse(request.Symbols, request.References, callbackFailure?.Message, null);
+    private static void WriteConsoleOutputForTestingIfRequested()
+    {
+        var stdout = Environment.GetEnvironmentVariable(ConsoleStdoutEnvironmentVariable);
+        if (!string.IsNullOrEmpty(stdout))
+            Console.Out.WriteLine(stdout);
+    }
+
+    private static void DelayForTestingIfRequested()
+    {
+        var raw = Environment.GetEnvironmentVariable(DelayEnvironmentVariable);
+        if (!int.TryParse(raw, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var milliseconds)
+            || milliseconds <= 0)
+        {
+            return;
+        }
+
+        Thread.Sleep(milliseconds);
+        var completionPath = Environment.GetEnvironmentVariable(CompletionPathEnvironmentVariable);
+        if (!string.IsNullOrWhiteSpace(completionPath))
+            File.WriteAllText(completionPath, "completed");
     }
 
     private static string ResolveDotnetHostPath()
@@ -526,8 +536,7 @@ internal static class PostExtractionHookCallbackWorker
             return dotnetHostPath;
 
         var processPath = Environment.ProcessPath;
-        if (!string.IsNullOrWhiteSpace(processPath)
-            && string.Equals(Path.GetFileNameWithoutExtension(processPath), "dotnet", StringComparison.OrdinalIgnoreCase))
+        if (!string.IsNullOrWhiteSpace(processPath) && IsDotnetHostPath(processPath))
         {
             return processPath;
         }
@@ -535,38 +544,9 @@ internal static class PostExtractionHookCallbackWorker
         return "dotnet";
     }
 
-    private static ProcessStartInfo CreateStartInfo()
-        => new()
-        {
-            UseShellExecute = false,
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            StandardInputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
-            StandardOutputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
-            StandardErrorEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
-            CreateNoWindow = true,
-        };
-
-    private static bool ShouldStartCurrentExecutable(string? currentProcessPath, string? runnerAssemblyPath)
-    {
-        if (string.IsNullOrWhiteSpace(currentProcessPath) || IsDotnetHostPath(currentProcessPath))
-            return false;
-
-        var processName = Path.GetFileNameWithoutExtension(currentProcessPath);
-        var appName = typeof(PostExtractionHookCallbackWorker).Assembly.GetName().Name;
-        if (!string.IsNullOrWhiteSpace(appName)
-            && string.Equals(processName, appName, StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        return string.IsNullOrWhiteSpace(runnerAssemblyPath);
-    }
-
     private static string? ResolveCurrentRunnerAssemblyPath()
     {
-        var assemblyName = typeof(PostExtractionHookCallbackWorker).Assembly.GetName().Name;
+        var assemblyName = typeof(SymbolExtractionWorker).Assembly.GetName().Name;
         if (string.IsNullOrWhiteSpace(assemblyName))
             return null;
 
@@ -586,7 +566,7 @@ internal static class PostExtractionHookCallbackWorker
 
     private static int? GetRunnerTargetFrameworkMajor()
     {
-        var frameworkName = typeof(PostExtractionHookCallbackWorker)
+        var frameworkName = typeof(SymbolExtractionWorker)
             .Assembly
             .GetCustomAttribute<TargetFrameworkAttribute>()
             ?.FrameworkName;
@@ -613,19 +593,79 @@ internal static class PostExtractionHookCallbackWorker
     }
 
     internal sealed record WorkerRequest(
-        string Callback,
-        FileContext Context,
-        List<SymbolRecord>? Symbols,
-        List<ReferenceRecord>? References);
+        long FileId,
+        string? Lang,
+        string Content,
+        string FilePath,
+        string ProjectRoot);
 
     internal sealed record WorkerResponse(
         List<SymbolRecord>? Symbols,
-        List<ReferenceRecord>? References,
-        string? CallbackError,
-        string? WorkerError);
+        string? WorkerError,
+        string? CapturedStderr);
+
+    private sealed class BoundedTextWriter(int maxChars) : TextWriter
+    {
+        private readonly StringBuilder builder = new();
+        private bool truncated;
+
+        public override Encoding Encoding => Encoding.UTF8;
+
+        public override void Write(char value)
+        {
+            if (builder.Length < maxChars)
+            {
+                builder.Append(value);
+                return;
+            }
+
+            truncated = true;
+        }
+
+        public override void Write(string? value)
+        {
+            if (string.IsNullOrEmpty(value))
+                return;
+
+            Append(value.AsSpan());
+        }
+
+        public override void Write(char[] buffer, int index, int count)
+            => Append(buffer.AsSpan(index, count));
+
+        internal string GetCapturedText()
+        {
+            if (!truncated)
+                return builder.ToString();
+
+            return builder
+                .AppendLine()
+                .Append("[cdidx] captured worker console output truncated.")
+                .ToString();
+        }
+
+        private void Append(ReadOnlySpan<char> value)
+        {
+            var remaining = maxChars - builder.Length;
+            if (remaining <= 0)
+            {
+                truncated = true;
+                return;
+            }
+
+            if (value.Length <= remaining)
+            {
+                builder.Append(value);
+                return;
+            }
+
+            builder.Append(value[..remaining]);
+            truncated = true;
+        }
+    }
 }
 
 [JsonSourceGenerationOptions(PropertyNameCaseInsensitive = true)]
-[JsonSerializable(typeof(PostExtractionHookCallbackWorker.WorkerRequest))]
-[JsonSerializable(typeof(PostExtractionHookCallbackWorker.WorkerResponse))]
-internal partial class PostExtractionHookCallbackWorkerJsonContext : JsonSerializerContext;
+[JsonSerializable(typeof(SymbolExtractionWorker.WorkerRequest))]
+[JsonSerializable(typeof(SymbolExtractionWorker.WorkerResponse))]
+internal partial class SymbolExtractionWorkerJsonContext : JsonSerializerContext;

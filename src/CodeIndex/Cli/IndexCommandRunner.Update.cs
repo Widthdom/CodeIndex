@@ -318,6 +318,7 @@ public static partial class IndexCommandRunner
             () => currentUpdatePath == null
                 ? $"{updated + removed + skipped:N0}/{targetPaths.Count:N0} files processed"
                 : $"{updated + removed + skipped:N0}/{targetPaths.Count:N0} files processed, current {currentUpdatePath}");
+        using var symbolExtractionWorker = new SymbolExtractionWorkerClient();
         try
         {
             foreach (var relPath in targetPaths)
@@ -668,6 +669,7 @@ public static partial class IndexCommandRunner
                         absPath,
                         Path.GetFullPath(options.ProjectPath!),
                         currentUpdatePath,
+                        symbolExtractionWorker,
                         cancellationToken);
                     if (symbols.Count > options.MaxSymbolsPerFile)
                     {
