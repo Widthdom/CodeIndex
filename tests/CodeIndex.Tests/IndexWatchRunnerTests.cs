@@ -309,6 +309,62 @@ public class IndexWatchRunnerTests
     }
 
     [Fact]
+    public void FormatHumanSummary_BoundedSubRunJson_ExtractsCounts()
+    {
+        var summary = InvokeFormatHumanSummary(
+            "updated",
+            2,
+            123,
+            """{"summary":{"updated":1,"removed":2,"errors":3}}""" + Environment.NewLine,
+            CommandExitCodes.Success);
+
+        Assert.Contains("[watch] updated 2 paths", summary);
+        Assert.Contains("exit code 0", summary);
+        Assert.Contains("updated 1", summary);
+        Assert.Contains("removed 2", summary);
+        Assert.Contains("errors 3", summary);
+    }
+
+    [Fact]
+    public void FormatHumanSummary_OversizedSubRunJson_UsesTerseSummary()
+    {
+        var oversized = $$"""{"summary":{"updated":1,"removed":2,"errors":3},"padding":"{{new string('x', IndexWatchRunner.MaxHumanSummarySubRunJsonChars + 1)}}"}""";
+
+        var summary = InvokeFormatHumanSummary(
+            "updated",
+            2,
+            123,
+            oversized,
+            CommandExitCodes.Success);
+
+        Assert.Contains("exit code 0", summary);
+        Assert.DoesNotContain("updated 1", summary);
+        Assert.DoesNotContain("removed 2", summary);
+        Assert.DoesNotContain("errors 3", summary);
+    }
+
+    [Fact]
+    public void FormatHumanSummary_DeepSubRunJson_UsesTerseSummary()
+    {
+        var depth = IndexWatchRunner.MaxHumanSummaryJsonDepth + 4;
+        var nestedStart = string.Concat(Enumerable.Repeat("[", depth));
+        var nestedEnd = string.Concat(Enumerable.Repeat("]", depth));
+        var deepJson = $$"""{"summary":{"updated":1,"removed":2,"errors":3},"deep":{{nestedStart}}0{{nestedEnd}}}""";
+
+        var summary = InvokeFormatHumanSummary(
+            "updated",
+            2,
+            123,
+            deepJson,
+            CommandExitCodes.Success);
+
+        Assert.Contains("exit code 0", summary);
+        Assert.DoesNotContain("updated 1", summary);
+        Assert.DoesNotContain("removed 2", summary);
+        Assert.DoesNotContain("errors 3", summary);
+    }
+
+    [Fact]
     public void RunCore_CancellationToken_StopsImmediately()
     {
         var projectRoot = CreateTempProject();
@@ -477,6 +533,18 @@ public class IndexWatchRunnerTests
             CancellationToken.None,
             TaskCreationOptions.LongRunning,
             TaskScheduler.Default);
+    }
+
+    private static string InvokeFormatHumanSummary(
+        string status,
+        int? batchSize,
+        long elapsedMs,
+        string subRunJson,
+        int exitCode)
+    {
+        var method = typeof(IndexWatchRunner).GetMethod("FormatHumanSummary", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(method);
+        return Assert.IsType<string>(method.Invoke(null, [status, batchSize, elapsedMs, subRunJson, exitCode]));
     }
 
     private string RunIndexAndCapture(string[] args, out int exitCode)

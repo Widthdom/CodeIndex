@@ -16,6 +16,8 @@ internal static class IndexWatchRunner
 {
     internal const int DefaultDebounceMs = 500;
     internal const int MaxDebounceMs = 60_000;
+    internal const int MaxHumanSummarySubRunJsonChars = 64 * 1024;
+    internal const int MaxHumanSummaryJsonDepth = 16;
     private const int InternalBufferSize = 64 * 1024;
     private const int PollIntervalMs = 50;
 
@@ -302,10 +304,12 @@ internal static class IndexWatchRunner
         };
         try
         {
-            var trimmed = subRunJson.TrimEnd('\r', '\n');
-            if (!string.IsNullOrEmpty(trimmed))
+            var trimmedLength = TrimTrailingLineBreaks(subRunJson);
+            if (trimmedLength > 0 && trimmedLength <= MaxHumanSummarySubRunJsonChars)
             {
-                using var doc = JsonDocument.Parse(trimmed);
+                using var doc = JsonDocument.Parse(
+                    subRunJson.AsMemory(0, trimmedLength),
+                    new JsonDocumentOptions { MaxDepth = MaxHumanSummaryJsonDepth });
                 var root = doc.RootElement;
                 if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("summary", out var summary)
                     && summary.ValueKind == JsonValueKind.Object)
@@ -325,6 +329,15 @@ internal static class IndexWatchRunner
 
         var detail = details.Count > 0 ? $" ({string.Join(", ", details)})" : string.Empty;
         return $"{prefix}{batchLabel}{detail} in {elapsedMs.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)} ms";
+    }
+
+    private static int TrimTrailingLineBreaks(string value)
+    {
+        var length = value.Length;
+        while (length > 0 && (value[length - 1] == '\r' || value[length - 1] == '\n'))
+            length--;
+
+        return length;
     }
 
     private static void EmitWatchStarted(
