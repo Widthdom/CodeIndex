@@ -640,9 +640,33 @@ public class StatusResult
     public int? CommitsAheadOfIndexedHead { get; set; }
     public Dictionary<string, long> Languages { get; set; } = new();
     public Dictionary<string, long>? SymbolKinds { get; set; }
+    [JsonPropertyName("symbol_kind_limit")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? SymbolKindLimit { get; set; }
+    [JsonPropertyName("symbol_kind_name_limit")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? SymbolKindNameLimit { get; set; }
+    [JsonPropertyName("symbol_kind_total_count")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? SymbolKindTotalCount { get; set; }
+    [JsonPropertyName("symbol_kind_omitted_count")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? SymbolKindOmittedCount { get; set; }
+    [JsonPropertyName("symbol_kind_names_truncated")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? SymbolKindNamesTruncated { get; set; }
     [JsonPropertyName("symbols_by_language")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Dictionary<string, Dictionary<string, long>>? SymbolsByLanguage { get; set; }
+    [JsonPropertyName("symbols_by_language_kind_total_counts")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Dictionary<string, int>? SymbolsByLanguageKindTotalCounts { get; set; }
+    [JsonPropertyName("symbols_by_language_kind_omitted_counts")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Dictionary<string, int>? SymbolsByLanguageKindOmittedCounts { get; set; }
+    [JsonPropertyName("symbols_by_language_kind_names_truncated")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? SymbolsByLanguageKindNamesTruncated { get; set; }
     public List<string>? GraphSupportedLanguages { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<PostExtractionHookStatus>? Hooks { get; set; }

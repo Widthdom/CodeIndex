@@ -29,6 +29,8 @@ public static class QueryCommandRunner
     internal const int BatchMaxLineChars = 1024 * 1024;
     internal const int BatchMaxArgumentCount = 256;
     internal const int BatchMaxJsonDepth = 32;
+    internal const int MaxStatusSymbolKindEntries = 32;
+    internal const int MaxStatusSymbolKindNameLength = 64;
     internal const string DefaultLimitEnvironmentVariable = "CDIDX_DEFAULT_LIMIT";
     internal const string DefaultSnippetLinesEnvironmentVariable = "CDIDX_DEFAULT_SNIPPET_LINES";
     internal const string DefaultMaxLineWidthEnvironmentVariable = "CDIDX_DEFAULT_MAX_LINE_WIDTH";
@@ -3770,7 +3772,7 @@ public static class QueryCommandRunner
                     status.IndexAgeSeconds = Math.Max(0, (long)Math.Round((GetUtcNow() - status.IndexedAt.Value).TotalSeconds, MidpointRounding.AwayFromZero));
             }
             // Attach runtime metadata / ランタイムメタデータを付加
-            status.SymbolKinds = reader.GetSymbolKindCounts();
+            ApplyStatusSymbolKindLimits(status, reader.GetSymbolKindCounts());
             ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(status.ProjectRoot);
             status.GraphSupportedLanguages = ReferenceExtractor.GetSupportedLanguages().OrderBy(l => l).ToList();
             status.Extractors = ExtractorPluginRegistry.GetStatusSnapshot();
@@ -3885,6 +3887,15 @@ public static class QueryCommandRunner
                     Console.WriteLine("Kinds:");
                     foreach (var (kind, count) in status.SymbolKinds)
                         Console.WriteLine($"  {kind,-12} {count,6}");
+                    if (status.SymbolKindOmittedCount is > 0)
+                    {
+                        Console.WriteLine(
+                            $"  ... {ConsoleUi.Counted(status.SymbolKindOmittedCount.Value, "kind")} omitted (limit {status.SymbolKindLimit}, names capped at {status.SymbolKindNameLimit} chars)");
+                    }
+                    else if (status.SymbolKindNamesTruncated == true)
+                    {
+                        Console.WriteLine($"  ... kind names capped at {status.SymbolKindNameLimit} chars");
+                    }
                 }
                 if (status.GraphSupportedLanguages is { Count: > 0 })
                     Console.WriteLine(ConsoleUi.FormatSummaryLine("Graph", $"{status.GraphSupportedLanguages.Count} languages ({string.Join(", ", status.GraphSupportedLanguages)})"));
@@ -3952,6 +3963,92 @@ public static class QueryCommandRunner
                 return CommandExitCodes.Success;
             return GetStatusCheckExitCode(checkFailures);
         }, cancellationToken: cancellationToken);
+    }
+
+    private readonly record struct LimitedStatusKindCounts(
+        Dictionary<string, long> Counts,
+        int TotalCount,
+        int OmittedCount,
+        bool NamesTruncated);
+
+    private static void ApplyStatusSymbolKindLimits(StatusResult status, Dictionary<string, long> symbolKinds)
+    {
+        var limitedSymbolKinds = LimitStatusKindCounts(symbolKinds);
+        status.SymbolKinds = limitedSymbolKinds.Counts;
+        if (limitedSymbolKinds.OmittedCount > 0 || limitedSymbolKinds.NamesTruncated)
+        {
+            status.SymbolKindLimit = MaxStatusSymbolKindEntries;
+            status.SymbolKindNameLimit = MaxStatusSymbolKindNameLength;
+            status.SymbolKindTotalCount = limitedSymbolKinds.TotalCount;
+            status.SymbolKindOmittedCount = limitedSymbolKinds.OmittedCount;
+            status.SymbolKindNamesTruncated = limitedSymbolKinds.NamesTruncated;
+        }
+
+        if (status.SymbolsByLanguage is not { Count: > 0 })
+            return;
+
+        Dictionary<string, int>? totalCounts = null;
+        Dictionary<string, int>? omittedCounts = null;
+        List<string>? truncatedLanguages = null;
+        foreach (var (language, kinds) in status.SymbolsByLanguage.ToArray())
+        {
+            var limited = LimitStatusKindCounts(kinds);
+            status.SymbolsByLanguage[language] = limited.Counts;
+            if (limited.OmittedCount == 0 && !limited.NamesTruncated)
+                continue;
+
+            totalCounts ??= new Dictionary<string, int>(StringComparer.Ordinal);
+            totalCounts[language] = limited.TotalCount;
+            if (limited.OmittedCount > 0)
+            {
+                omittedCounts ??= new Dictionary<string, int>(StringComparer.Ordinal);
+                omittedCounts[language] = limited.OmittedCount;
+            }
+
+            if (limited.NamesTruncated)
+            {
+                truncatedLanguages ??= [];
+                truncatedLanguages.Add(language);
+            }
+        }
+
+        status.SymbolsByLanguageKindTotalCounts = totalCounts;
+        status.SymbolsByLanguageKindOmittedCounts = omittedCounts;
+        status.SymbolsByLanguageKindNamesTruncated = truncatedLanguages;
+    }
+
+    private static LimitedStatusKindCounts LimitStatusKindCounts(IReadOnlyDictionary<string, long> counts)
+    {
+        var limited = new Dictionary<string, long>(StringComparer.Ordinal);
+        var consumed = 0;
+        var namesTruncated = false;
+        foreach (var (kind, count) in counts
+                     .OrderByDescending(kv => kv.Value)
+                     .ThenBy(kv => kv.Key, StringComparer.Ordinal)
+                     .Take(MaxStatusSymbolKindEntries))
+        {
+            consumed++;
+            var displayKind = LimitStatusSymbolKindName(kind, ref namesTruncated);
+            if (limited.TryGetValue(displayKind, out var existing))
+                limited[displayKind] = existing + count;
+            else
+                limited[displayKind] = count;
+        }
+
+        return new LimitedStatusKindCounts(
+            limited,
+            counts.Count,
+            Math.Max(0, counts.Count - consumed),
+            namesTruncated);
+    }
+
+    private static string LimitStatusSymbolKindName(string kind, ref bool namesTruncated)
+    {
+        if (kind.Length <= MaxStatusSymbolKindNameLength)
+            return kind;
+
+        namesTruncated = true;
+        return kind[..(MaxStatusSymbolKindNameLength - 3)] + "...";
     }
 
     private static JsonObject BuildEffectiveConfigJson(QueryCommandOptions options, string[] cmdArgs, string? appVersion)

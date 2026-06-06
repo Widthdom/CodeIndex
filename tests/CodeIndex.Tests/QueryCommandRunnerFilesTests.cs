@@ -179,6 +179,68 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunStatus_Json_CapsSymbolKindCountsAndNames_3134()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_symbol_kind_caps_3134");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            InsertStatusKindCapFixture(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath, "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var symbolKinds = json.GetProperty("symbol_kinds");
+            var symbolsByLanguage = json.GetProperty("symbols_by_language").GetProperty("csharp");
+
+            Assert.Equal(QueryCommandRunner.MaxStatusSymbolKindEntries, symbolKinds.EnumerateObject().Count());
+            Assert.Equal(QueryCommandRunner.MaxStatusSymbolKindEntries, symbolsByLanguage.EnumerateObject().Count());
+            Assert.Equal(QueryCommandRunner.MaxStatusSymbolKindEntries, json.GetProperty("symbol_kind_limit").GetInt32());
+            Assert.Equal(QueryCommandRunner.MaxStatusSymbolKindNameLength, json.GetProperty("symbol_kind_name_limit").GetInt32());
+            Assert.Equal(SymbolKindCatalog.SymbolKinds.Length + 1, json.GetProperty("symbol_kind_total_count").GetInt32());
+            Assert.Equal(SymbolKindCatalog.SymbolKinds.Length + 1 - QueryCommandRunner.MaxStatusSymbolKindEntries, json.GetProperty("symbol_kind_omitted_count").GetInt32());
+            Assert.True(json.GetProperty("symbol_kind_names_truncated").GetBoolean());
+            Assert.Equal(SymbolKindCatalog.SymbolKinds.Length + 1, json.GetProperty("symbols_by_language_kind_total_counts").GetProperty("csharp").GetInt32());
+            Assert.Equal(SymbolKindCatalog.SymbolKinds.Length + 1 - QueryCommandRunner.MaxStatusSymbolKindEntries, json.GetProperty("symbols_by_language_kind_omitted_counts").GetProperty("csharp").GetInt32());
+            Assert.Contains("csharp", json.GetProperty("symbols_by_language_kind_names_truncated").EnumerateArray().Select(value => value.GetString()));
+            Assert.Contains(symbolKinds.EnumerateObject(), property => property.Name.EndsWith("...", StringComparison.Ordinal));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunStatus_Human_MarksOmittedSymbolKinds_3134()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_symbol_kind_human_3134");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            InsertStatusKindCapFixture(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Contains("Kinds:", stdout, StringComparison.Ordinal);
+            Assert.Contains("kinds omitted (limit 32, names capped at 64 chars)", stdout, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunStatus_Json_ReportsFoldOnlyRemediationHint()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_fold_only_json");
@@ -216,6 +278,53 @@ public partial class QueryCommandRunnerTests
         finally
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    private static void InsertStatusKindCapFixture(string dbPath)
+    {
+        using var db = new DbContext(dbPath);
+        db.InitializeSchema();
+        var writer = new DbWriter(db.Connection);
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/StatusKinds.cs",
+            Lang = "csharp",
+            Size = 1,
+            Lines = 1,
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            Checksum = "status-kind-cap-fixture",
+        });
+
+        writer.InsertSymbols(SymbolKindCatalog.SymbolKinds
+            .Select((kind, index) => new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = kind,
+                Name = $"S{index}",
+                Line = index + 1,
+                StartLine = index + 1,
+                EndLine = index + 1,
+            })
+            .ToList());
+
+        using var pragma = db.Connection.CreateCommand();
+        pragma.CommandText = "PRAGMA ignore_check_constraints=ON";
+        pragma.ExecuteNonQuery();
+
+        using var insert = db.Connection.CreateCommand();
+        insert.CommandText = @"
+            INSERT INTO symbols (file_id, kind, name, line, start_line, end_line)
+            VALUES (@file_id, @kind, @name, @line, @line, @line)";
+        var longKind = new string('k', QueryCommandRunner.MaxStatusSymbolKindNameLength + 16);
+        for (var i = 0; i < 4; i++)
+        {
+            insert.Parameters.Clear();
+            insert.Parameters.AddWithValue("@file_id", fileId);
+            insert.Parameters.AddWithValue("@kind", longKind);
+            insert.Parameters.AddWithValue("@name", $"LongKind{i}");
+            insert.Parameters.AddWithValue("@line", SymbolKindCatalog.SymbolKinds.Length + i + 1);
+            insert.ExecuteNonQuery();
         }
     }
 
