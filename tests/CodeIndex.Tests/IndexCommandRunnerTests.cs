@@ -183,6 +183,88 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void LoadScanCheckpoint_ValidPayload_ReturnsBoundedDirectorySet()
+    {
+        var projectRoot = CreateTempProject();
+        var checkpointPath = Path.Combine(projectRoot, "scan-checkpoint.json");
+        try
+        {
+            File.WriteAllText(checkpointPath, JsonSerializer.Serialize(new
+            {
+                Version = 1,
+                GitHead = "abc123",
+                Directories = new[] { "src", string.Empty, "tests", "src" },
+            }));
+
+            var directories = IndexCommandRunner.LoadScanCheckpoint(checkpointPath, "abc123");
+
+            Assert.Equal(2, directories.Count);
+            Assert.Contains("src", directories);
+            Assert.Contains("tests", directories);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void LoadScanCheckpoint_DirectoryPayloadOutsideBounds_ReturnsEmpty()
+    {
+        var projectRoot = CreateTempProject();
+        var checkpointPath = Path.Combine(projectRoot, "scan-checkpoint.json");
+        try
+        {
+            File.WriteAllText(checkpointPath, JsonSerializer.Serialize(new
+            {
+                Version = 1,
+                GitHead = "abc123",
+                Directories = Enumerable.Range(0, IndexCommandRunner.MaxScanCheckpointDirectories + 1)
+                    .Select(i => $"dir{i}")
+                    .ToArray(),
+            }));
+            Assert.Empty(IndexCommandRunner.LoadScanCheckpoint(checkpointPath, "abc123"));
+
+            File.WriteAllText(checkpointPath, JsonSerializer.Serialize(new
+            {
+                Version = 1,
+                GitHead = "abc123",
+                Directories = new[] { new string('x', IndexCommandRunner.MaxScanCheckpointDirectoryLength + 1) },
+            }));
+            Assert.Empty(IndexCommandRunner.LoadScanCheckpoint(checkpointPath, "abc123"));
+
+            File.WriteAllText(checkpointPath, """{"Version":1,"GitHead":"abc123","Directories":[null]}""");
+            Assert.Empty(IndexCommandRunner.LoadScanCheckpoint(checkpointPath, "abc123"));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void LoadScanCheckpoint_JsonDepthOutsideBounds_ReturnsEmpty()
+    {
+        var projectRoot = CreateTempProject();
+        var checkpointPath = Path.Combine(projectRoot, "scan-checkpoint.json");
+        try
+        {
+            var depth = IndexCommandRunner.MaxScanCheckpointJsonDepth + 4;
+            var nestedStart = string.Concat(Enumerable.Repeat("[", depth));
+            var nestedEnd = string.Concat(Enumerable.Repeat("]", depth));
+            File.WriteAllText(
+                checkpointPath,
+                $$"""{"Version":1,"GitHead":"abc123","Directories":{{nestedStart}}"src"{{nestedEnd}}}""");
+
+            Assert.Empty(IndexCommandRunner.LoadScanCheckpoint(checkpointPath, "abc123"));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_NullByteFile_SkipsWithoutPersistingPartialRows()
     {
         var projectRoot = CreateTempProject();
