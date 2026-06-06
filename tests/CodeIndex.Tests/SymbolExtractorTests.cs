@@ -15292,6 +15292,75 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Dockerfile_JsonVolumeCapsArrayItems()
+    {
+        var maxItems = SymbolExtractor.DockerfileJsonFormMaxItems;
+        var items = Enumerable.Range(0, maxItems)
+            .Select(i => $"/vol{i}")
+            .Concat(["/too-many"]);
+        var content = "VOLUME [" + string.Join(", ", items.Select(item => JsonSerializer.Serialize(item))) + "]\n";
+
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Equal(maxItems, symbols.Count);
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "/vol0");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "/vol" + (maxItems - 1));
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "/too-many");
+    }
+
+    [Fact]
+    public void Extract_Dockerfile_JsonVolumeSkipsOverlongStrings()
+    {
+        var tooLong = "/" + new string('v', SymbolExtractor.DockerfileJsonFormMaxStringLength);
+        var content = "VOLUME [" + JsonSerializer.Serialize(tooLong) + ", \"/ok\"]\n";
+
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "/ok");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == tooLong);
+        Assert.Single(symbols);
+    }
+
+    [Fact]
+    public void Extract_Dockerfile_JsonShellSkipsOverlongExecutable()
+    {
+        var tooLong = "/" + new string('s', SymbolExtractor.DockerfileJsonFormMaxStringLength);
+        var content = "SHELL [" + JsonSerializer.Serialize(tooLong) + ", \"-c\"]\n";
+
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Empty(symbols);
+    }
+
+    [Theory]
+    [InlineData("COPY")]
+    [InlineData("ADD")]
+    public void Extract_Dockerfile_JsonCopyAddSkipOverlongDestinations(string instruction)
+    {
+        var tooLong = "/" + new string('d', SymbolExtractor.DockerfileJsonFormMaxStringLength);
+        var content = instruction + " [\"source\", " + JsonSerializer.Serialize(tooLong) + "]\n";
+
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Empty(symbols);
+    }
+
+    [Theory]
+    [InlineData("COPY")]
+    [InlineData("ADD")]
+    public void Extract_Dockerfile_JsonCopyAddSkipArraysBeyondItemBudget(string instruction)
+    {
+        var maxItems = SymbolExtractor.DockerfileJsonFormMaxItems;
+        var items = Enumerable.Range(0, maxItems + 1)
+            .Select(i => $"/src{i}");
+        var content = instruction + " [" + string.Join(", ", items.Select(item => JsonSerializer.Serialize(item))) + "]\n";
+
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        Assert.Empty(symbols);
+    }
+
+    [Fact]
     public void Extract_Dockerfile_DetectsOnbuildCopyDestinationPathSymbols()
     {
         var content = "ONBUILD COPY /src/app /usr/local/bin/app\n";

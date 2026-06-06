@@ -7,6 +7,8 @@ namespace CodeIndex.Indexer;
 public static partial class SymbolExtractor
 {
     internal const int DockerfileJsonFormMaxDepth = 8;
+    internal const int DockerfileJsonFormMaxItems = 128;
+    internal const int DockerfileJsonFormMaxStringLength = 4096;
     private static readonly JsonDocumentOptions DockerfileJsonFormDocumentOptions = new()
     {
         MaxDepth = DockerfileJsonFormMaxDepth,
@@ -313,13 +315,14 @@ public static partial class SymbolExtractor
             if (document.RootElement.ValueKind != JsonValueKind.Array)
                 return;
 
+            var itemCount = 0;
             foreach (var item in document.RootElement.EnumerateArray())
             {
-                if (item.ValueKind != JsonValueKind.String)
-                    continue;
+                if (itemCount >= DockerfileJsonFormMaxItems)
+                    break;
+                itemCount++;
 
-                var name = item.GetString();
-                if (string.IsNullOrWhiteSpace(name))
+                if (!TryGetDockerfileJsonFormString(item, out var name))
                     continue;
 
                 AddSymbolRecord(
@@ -342,6 +345,23 @@ public static partial class SymbolExtractor
         catch (JsonException)
         {
         }
+    }
+
+    private static bool TryGetDockerfileJsonFormString(JsonElement item, out string value)
+    {
+        value = string.Empty;
+        if (item.ValueKind != JsonValueKind.String)
+            return false;
+
+        var text = item.GetString();
+        if (string.IsNullOrWhiteSpace(text)
+            || text.Length > DockerfileJsonFormMaxStringLength)
+        {
+            return false;
+        }
+
+        value = text;
+        return true;
     }
 
     private static void AddDockerfileNamedStageBaseImageSymbol(
@@ -400,11 +420,7 @@ public static partial class SymbolExtractor
                 return;
 
             var first = document.RootElement.EnumerateArray().FirstOrDefault();
-            if (first.ValueKind != JsonValueKind.String)
-                return;
-
-            var name = first.GetString();
-            if (string.IsNullOrWhiteSpace(name))
+            if (!TryGetDockerfileJsonFormString(first, out var name))
                 return;
 
             AddSymbolRecord(
@@ -531,11 +547,14 @@ public static partial class SymbolExtractor
             var count = 0;
             foreach (var item in document.RootElement.EnumerateArray())
             {
-                if (item.ValueKind != JsonValueKind.String)
+                if (count >= DockerfileJsonFormMaxItems)
+                    return null;
+                count++;
+
+                if (!TryGetDockerfileJsonFormString(item, out var value))
                     return null;
 
-                last = item.GetString();
-                count++;
+                last = value;
             }
 
             return count >= 2 ? last : null;
