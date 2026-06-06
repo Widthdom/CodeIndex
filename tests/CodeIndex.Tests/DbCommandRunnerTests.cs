@@ -437,6 +437,46 @@ public class DbCommandRunnerTests
     }
 
     [Fact]
+    public void Run_CheckpointTempCleanupFailurePreservesOriginalFailure_Issue3029()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_cleanup_{Guid.NewGuid():N}");
+        var dbPath = Path.Combine(root, "codeindex.db");
+        string? cleanupPath = null;
+        try
+        {
+            Directory.CreateDirectory(root);
+            using (var db = new DbContext(dbPath))
+                db.InitializeSchema();
+            SqliteConnection.ClearAllPools();
+
+            var checkpointRoot = dbPath + ".checkpoints";
+            Directory.CreateDirectory(checkpointRoot);
+            File.WriteAllText(Path.Combine(checkpointRoot, "saved"), "checkpoint path blocker");
+            DbCommandRunner.DeleteTemporaryDirectoryForTesting = path =>
+            {
+                cleanupPath = path;
+                throw new IOException("simulated checkpoint temp cleanup failure");
+            };
+
+            var (exitCode, _, stderr) = RunAndCaptureStreams(["checkpoint", "saved", "--db", dbPath]);
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.Contains("failed to create database checkpoint", stderr);
+            Assert.Contains("Warning: failed to delete checkpoint temporary directory", stderr);
+            Assert.Contains("IOException", stderr);
+            Assert.NotNull(cleanupPath);
+            Assert.True(Directory.Exists(cleanupPath));
+        }
+        finally
+        {
+            DbCommandRunner.DeleteTemporaryDirectoryForTesting = null;
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Run_CheckpointsList_JsonIncludesCreatedCheckpoint()
     {
         var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_list_{Guid.NewGuid():N}");

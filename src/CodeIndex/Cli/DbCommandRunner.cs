@@ -23,6 +23,7 @@ public static class DbCommandRunner
     internal const int SchemaSqlTextLimit = 8192;
     private static readonly char[] InvalidCheckpointNameChars = Path.GetInvalidFileNameChars();
     internal static Action? RestoreFailureAfterBackupForTesting { get; set; }
+    internal static Action<string>? DeleteTemporaryDirectoryForTesting { get; set; }
     internal static Func<IEnumerable<string>>? IntegrityCheckRowsForTesting { get; set; }
 
     public static int Run(string[] cmdArgs, JsonSerializerOptions jsonOptions)
@@ -690,8 +691,7 @@ public static class DbCommandRunner
         }
         catch
         {
-            if (Directory.Exists(tempPath))
-                Directory.Delete(tempPath, recursive: true);
+            TryDeleteTemporaryDirectory(tempPath, "checkpoint temporary directory");
             throw;
         }
 
@@ -883,6 +883,24 @@ public static class DbCommandRunner
     {
         if (File.Exists(LongPath.EnsureWindowsPrefix(path)))
             File.Delete(LongPath.EnsureWindowsPrefix(path));
+    }
+
+    private static void TryDeleteTemporaryDirectory(string path, string cleanupDescription)
+    {
+        try
+        {
+            if (!Directory.Exists(path))
+                return;
+
+            if (DeleteTemporaryDirectoryForTesting != null)
+                DeleteTemporaryDirectoryForTesting(path);
+            else
+                Directory.Delete(path, recursive: true);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            Console.Error.WriteLine($"Warning: failed to delete {cleanupDescription} {ConsoleUi.FormatBoundedValue(path)} ({CommandErrorWriter.FormatSanitizedException(ex)}).");
+        }
     }
 
     internal static DbCommandOptions ParseArgs(string[] args)
