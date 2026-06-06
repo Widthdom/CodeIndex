@@ -69,6 +69,7 @@ public partial class DbReader
     private const int UnusedPublicOverfetchMinimum = 64;
     private const int UnusedPublicOverfetchMaximum = 1024;
     private const int UnusedPublicCandidateBudget = 2048;
+    private const int GroupedHotspotPathSampleLimit = 20;
     private const string SymbolLanguageFileIdFilter = " AND s.file_id IN (SELECT id FROM files WHERE lang = @lang)";
 
     private sealed class UnusedCandidateSymbol
@@ -2695,6 +2696,7 @@ public partial class DbReader
                            WHERE hs2.name = g.name
                              AND hs2.kind = g.kind
                            ORDER BY path
+                           LIMIT @groupedPathSampleLimit
                        )
                    ) AS grouped_paths
             FROM grouped g
@@ -2721,6 +2723,7 @@ public partial class DbReader
         AddVisibilityFilterParameters(cmd, visibilityFilters, excludeVisibilityFilters);
         for (int i = 0; i < hotspotFamilyLangs.Count; i++)
             cmd.Parameters.AddWithValue($"@hotspotFamilyLang{i}", hotspotFamilyLangs[i]);
+        cmd.Parameters.AddWithValue("@groupedPathSampleLimit", GroupedHotspotPathSampleLimit + 1);
 
         var results = new List<GroupedHotspotResult>();
         using var reader = cmd.ExecuteTrackedReader();
@@ -2729,6 +2732,9 @@ public partial class DbReader
             var paths = GetNullableString(reader, 10)?
                 .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .ToList() ?? [];
+            var pathsTruncated = paths.Count > GroupedHotspotPathSampleLimit;
+            if (pathsTruncated)
+                paths = paths.Take(GroupedHotspotPathSampleLimit).ToList();
             results.Add(new GroupedHotspotResult
             {
                 Symbol = new SymbolResult
@@ -2745,6 +2751,7 @@ public partial class DbReader
                 ReferenceScore = reader.GetDouble(3),
                 DefinitionSites = reader.GetInt32(4),
                 Paths = paths,
+                PathsTruncated = pathsTruncated,
             });
         }
 

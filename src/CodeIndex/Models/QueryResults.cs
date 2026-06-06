@@ -115,6 +115,7 @@ public class GroupedHotspotResult
     public double ReferenceScore { get; set; }
     public int DefinitionSites { get; set; }
     public List<string> Paths { get; set; } = [];
+    public bool PathsTruncated { get; set; }
 }
 
 public class SymbolHotspotResult

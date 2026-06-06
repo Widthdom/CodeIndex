@@ -5141,7 +5141,8 @@ public static class QueryCommandRunner
                             g.Symbol.Visibility,
                             g.Symbol.ContainerName,
                             g.DefinitionSites,
-                            g.Paths))
+                            g.Paths,
+                            g.PathsTruncated))
                         .ToList();
                     var payload = new JsonObject
                     {

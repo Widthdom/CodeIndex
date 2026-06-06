@@ -4440,6 +4440,48 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunHotspots_GroupByNameJson_CapsPathSamples()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_hotspots_group_paths");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            for (var i = 0; i < 25; i++)
+            {
+                TestProjectHelper.InsertIndexedFile(dbPath, $"src/Helper{i:D2}.cs", "csharp",
+                    $$"""
+                    public class Helper{{i}}
+                    {
+                        private void SharedHelper()
+                        {
+                            SharedHelper();
+                        }
+                    }
+                    """);
+            }
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunHotspots(
+                ["--db", dbPath, "--json", "--kind", "function", "--group-by-name", "--limit", "1"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var hotspot = Assert.Single(json.GetProperty("hotspots").EnumerateArray());
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(25, hotspot.GetProperty("definition_sites").GetInt32());
+            Assert.Equal(20, hotspot.GetProperty("paths").GetArrayLength());
+            Assert.True(hotspot.GetProperty("paths_truncated").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunHotspots_GroupByName_CountsSameFileOverloadsAsSeparateDefinitionSites()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_hotspots_group_overloads");
