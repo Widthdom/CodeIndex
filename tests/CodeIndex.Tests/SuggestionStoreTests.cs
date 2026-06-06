@@ -979,6 +979,28 @@ public class SuggestionStoreTests : IDisposable
     }
 
     [Fact]
+    public void TryAdd_RotatesArchiveWhenCapWouldBeExceeded()
+    {
+        var clock = new ManualTimeProvider(new DateTimeOffset(2031, 1, 1, 0, 0, 0, TimeSpan.Zero));
+        var store = new SuggestionStore(_tempDir, null, clock);
+        var old = MakeRecord("other", null, "Old suggestion");
+        Assert.True(store.TryAdd(old));
+
+        var archivePath = Path.Combine(_tempDir, "suggestions-codeindex.archive.jsonl");
+        File.WriteAllBytes(archivePath, new byte[SuggestionStore.MaxSuggestionArchiveBytes]);
+
+        clock.SetUtcNow(new DateTimeOffset(2032, 2, 5, 0, 0, 0, TimeSpan.Zero));
+        var fresh = MakeRecord("other", null, "Fresh suggestion");
+        Assert.True(store.TryAdd(fresh));
+
+        var rotatedPath = archivePath + ".1";
+        Assert.True(File.Exists(rotatedPath));
+        Assert.Equal(SuggestionStore.MaxSuggestionArchiveBytes, new FileInfo(rotatedPath).Length);
+        Assert.Contains("Old suggestion", File.ReadAllText(archivePath));
+        Assert.True(new FileInfo(archivePath).Length <= SuggestionStore.MaxSuggestionArchiveBytes);
+    }
+
+    [Fact]
     public void TryAdd_PrunesOldestRecordsOverConfiguredMaxCount()
     {
         using var env = EnvironmentVariableScope.Capture(SuggestionStore.MaxCountEnvironmentVariable);

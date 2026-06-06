@@ -9,6 +9,12 @@ internal sealed class IssueDuplicatePreflight
 {
     internal const int MaxOpenIssuesJsonBytes = 8 * 1024 * 1024;
     internal const int MaxOpenIssuesJsonDepth = 32;
+    internal const int MaxOpenIssueCount = 1000;
+    internal const int MaxLabelsPerOpenIssue = 32;
+    internal const int MaxOpenIssueTitleLength = GitHubIssueReporter.MaxGitHubIssueTitleLength;
+    internal const int MaxOpenIssueUrlLength = 2048;
+    internal const int MaxOpenIssueLabelLength = 128;
+    internal const int MaxTitleTokenizationInputLength = MaxOpenIssueTitleLength;
 
     private static readonly HashSet<string> StopTitleTokens = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -147,15 +153,20 @@ internal sealed class IssueDuplicatePreflight
             return [];
 
         var issues = new List<OpenIssue>();
+        var entriesRead = 0;
         foreach (var item in array)
         {
-            var title = TryReadString(item?["title"]);
+            if (entriesRead >= MaxOpenIssueCount)
+                break;
+
+            entriesRead++;
+            var title = TryReadString(item?["title"], MaxOpenIssueTitleLength);
             if (string.IsNullOrWhiteSpace(title))
                 continue;
             issues.Add(new OpenIssue(
                 TryReadInt(item?["number"]),
                 title,
-                TryReadString(item?["url"]) ?? TryReadString(item?["html_url"]),
+                TryReadString(item?["url"], MaxOpenIssueUrlLength) ?? TryReadString(item?["html_url"], MaxOpenIssueUrlLength),
                 ReadLabels(item?["labels"])));
         }
 
@@ -168,9 +179,15 @@ internal sealed class IssueDuplicatePreflight
             return [];
 
         var result = new List<string>();
+        var labelsRead = 0;
         foreach (var labelNode in labels)
         {
-            var label = TryReadString(labelNode) ?? TryReadString(labelNode?["name"]);
+            if (labelsRead >= MaxLabelsPerOpenIssue)
+                break;
+
+            labelsRead++;
+            var label = TryReadString(labelNode, MaxOpenIssueLabelLength)
+                ?? TryReadString(labelNode?["name"], MaxOpenIssueLabelLength);
             if (!string.IsNullOrWhiteSpace(label))
                 result.Add(label.Trim());
         }
@@ -178,13 +195,14 @@ internal sealed class IssueDuplicatePreflight
         return result.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
     }
 
-    private static string? TryReadString(JsonNode? node)
+    private static string? TryReadString(JsonNode? node, int maxLength)
     {
         if (node == null)
             return null;
         try
         {
-            return node.GetValue<string>();
+            var value = node.GetValue<string>();
+            return value.Length <= maxLength ? value : value[..maxLength];
         }
         catch (InvalidOperationException)
         {
@@ -202,7 +220,7 @@ internal sealed class IssueDuplicatePreflight
         }
         catch (InvalidOperationException)
         {
-            var value = TryReadString(node);
+            var value = TryReadString(node, int.MaxValue);
             return int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed)
                 ? parsed
                 : null;
@@ -211,6 +229,7 @@ internal sealed class IssueDuplicatePreflight
 
     private static string NormalizeTitleText(string title)
     {
+        title = BoundTitleProcessingInput(title);
         var builder = new StringBuilder(title.Length);
         var previousWasSpace = true;
         foreach (var c in title)
@@ -232,6 +251,7 @@ internal sealed class IssueDuplicatePreflight
 
     private static HashSet<string> TokenizeTitle(string title)
     {
+        title = BoundTitleProcessingInput(title);
         var tokens = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var current = new StringBuilder();
         foreach (var c in title)
@@ -248,6 +268,11 @@ internal sealed class IssueDuplicatePreflight
         AddToken(tokens, current);
         return tokens;
     }
+
+    private static string BoundTitleProcessingInput(string title) =>
+        title.Length <= MaxTitleTokenizationInputLength
+            ? title
+            : title[..MaxTitleTokenizationInputLength];
 
     private static void AddToken(HashSet<string> tokens, StringBuilder current)
     {
