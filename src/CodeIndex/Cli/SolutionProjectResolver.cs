@@ -8,17 +8,23 @@ internal readonly record struct SolutionProjectResolverLimits(
     int MaxAutomaticSolutionCandidates,
     int MaxFallbackDiscoveryDirectories,
     int MaxFallbackDiscoveryFiles,
+    int MaxProjectExpansionFilesPerProject,
+    int MaxProjectExpansionFilesTotal,
     int MaxTraversalDiagnostics)
 {
     internal const int DefaultMaxAutomaticSolutionCandidates = 128;
     internal const int DefaultMaxFallbackDiscoveryDirectories = 4096;
     internal const int DefaultMaxFallbackDiscoveryFiles = 65536;
+    internal const int DefaultMaxProjectExpansionFilesPerProject = 65536;
+    internal const int DefaultMaxProjectExpansionFilesTotal = 131072;
     internal const int DefaultMaxTraversalDiagnostics = 8;
 
     public static SolutionProjectResolverLimits Default { get; } = new(
         DefaultMaxAutomaticSolutionCandidates,
         DefaultMaxFallbackDiscoveryDirectories,
         DefaultMaxFallbackDiscoveryFiles,
+        DefaultMaxProjectExpansionFilesPerProject,
+        DefaultMaxProjectExpansionFilesTotal,
         DefaultMaxTraversalDiagnostics);
 
     public void Validate()
@@ -29,6 +35,10 @@ internal readonly record struct SolutionProjectResolverLimits(
             throw new ArgumentOutOfRangeException(nameof(MaxFallbackDiscoveryDirectories), MaxFallbackDiscoveryDirectories, "Limit must be positive.");
         if (MaxFallbackDiscoveryFiles <= 0)
             throw new ArgumentOutOfRangeException(nameof(MaxFallbackDiscoveryFiles), MaxFallbackDiscoveryFiles, "Limit must be positive.");
+        if (MaxProjectExpansionFilesPerProject <= 0)
+            throw new ArgumentOutOfRangeException(nameof(MaxProjectExpansionFilesPerProject), MaxProjectExpansionFilesPerProject, "Limit must be positive.");
+        if (MaxProjectExpansionFilesTotal <= 0)
+            throw new ArgumentOutOfRangeException(nameof(MaxProjectExpansionFilesTotal), MaxProjectExpansionFilesTotal, "Limit must be positive.");
         if (MaxTraversalDiagnostics <= 0)
             throw new ArgumentOutOfRangeException(nameof(MaxTraversalDiagnostics), MaxTraversalDiagnostics, "Limit must be positive.");
     }
@@ -115,15 +125,24 @@ internal static class SolutionProjectResolver
         string workspaceRoot,
         IReadOnlyList<string> requestedProjects,
         string? solutionPath = null)
+        => ResolveProjectFiles(workspaceRoot, requestedProjects, solutionPath, SolutionProjectResolverLimits.Default);
+
+    internal static IReadOnlyList<string> ResolveProjectFiles(
+        string workspaceRoot,
+        IReadOnlyList<string> requestedProjects,
+        string? solutionPath,
+        SolutionProjectResolverLimits limits)
     {
         if (requestedProjects.Count == 0)
             return [];
 
+        limits.Validate();
         var root = Path.GetFullPath(workspaceRoot);
         var indexer = CreateIndexerWithWorkspacePolicy(root);
         var traversalDiagnostics = new List<string>();
-        var projects = ResolveProjects(root, solutionPath, indexer, SolutionProjectResolverLimits.Default, traversalDiagnostics);
+        var projects = ResolveProjects(root, solutionPath, indexer, limits, traversalDiagnostics);
         var files = new SortedSet<string>(StringComparer.Ordinal);
+        var totalExpandedFiles = 0;
         foreach (var requested in requestedProjects)
         {
             var match = MatchProject(projects, requested);
@@ -134,16 +153,41 @@ internal static class SolutionProjectResolver
                     traversalDiagnostics));
             }
 
-            foreach (var file in EnumerateFilesUsingIndexerPolicy(root, match.DirectoryPath, indexer, SolutionProjectResolverLimits.Default, budget: null, traversalDiagnostics))
+            var projectExpandedFiles = 0;
+            foreach (var file in EnumerateFilesUsingIndexerPolicy(root, match.DirectoryPath, indexer, limits, budget: null, traversalDiagnostics))
             {
                 var relative = Path.GetRelativePath(root, file)
                     .Replace(Path.DirectorySeparatorChar, '/')
                     .Replace(Path.AltDirectorySeparatorChar, '/');
-                files.Add(relative);
+                projectExpandedFiles++;
+                if (projectExpandedFiles > limits.MaxProjectExpansionFilesPerProject)
+                    ThrowProjectExpansionPerProjectLimitExceeded(limits, requested, match);
+
+                if (files.Add(relative))
+                {
+                    totalExpandedFiles++;
+                    if (totalExpandedFiles > limits.MaxProjectExpansionFilesTotal)
+                        ThrowProjectExpansionTotalLimitExceeded(limits);
+                }
             }
         }
 
         return files.ToList();
+    }
+
+    private static void ThrowProjectExpansionPerProjectLimitExceeded(
+        SolutionProjectResolverLimits limits,
+        string requested,
+        DotNetProjectInfo match)
+    {
+        throw new InvalidOperationException(
+            $"project filter expansion for {requested} ({match.ProjectPath}) materialized more than {limits.MaxProjectExpansionFilesPerProject} files; narrow --project/--solution or pass explicit --files.");
+    }
+
+    private static void ThrowProjectExpansionTotalLimitExceeded(SolutionProjectResolverLimits limits)
+    {
+        throw new InvalidOperationException(
+            $"project filter expansion materialized more than {limits.MaxProjectExpansionFilesTotal} unique files across requested projects; narrow --project/--solution or pass explicit --files.");
     }
 
     private static FileIndexer CreateIndexerWithWorkspacePolicy(string workspaceRoot)

@@ -1368,6 +1368,70 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void ResolveProjectFiles_RejectsPerProjectExpansionFileLimit_Issue3066()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_index_project_filter_per_project_limit");
+        try
+        {
+            var libDir = Path.Combine(projectRoot, "src", "Lib");
+            Directory.CreateDirectory(libDir);
+            File.WriteAllText(Path.Combine(projectRoot, "Repo.sln"), """
+            Microsoft Visual Studio Solution File, Format Version 12.00
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Lib", "src\Lib\Lib.csproj", "{11111111-1111-1111-1111-111111111111}"
+            EndProject
+            """);
+            File.WriteAllText(Path.Combine(libDir, "Lib.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+            File.WriteAllText(Path.Combine(libDir, "Class1.cs"), "class Class1 {}");
+            var limits = SolutionProjectResolverLimits.Default with { MaxProjectExpansionFilesPerProject = 1 };
+
+            var ex = Assert.Throws<InvalidOperationException>(
+                () => SolutionProjectResolver.ResolveProjectFiles(projectRoot, ["Lib"], "Repo.sln", limits));
+
+            Assert.Contains("project filter expansion for Lib (src/Lib/Lib.csproj) materialized more than 1 files", ex.Message);
+            Assert.Contains("explicit --files", ex.Message);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ResolveProjectFiles_RejectsTotalExpansionFileLimit_Issue3066()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_index_project_filter_total_limit");
+        try
+        {
+            var libDir = Path.Combine(projectRoot, "src", "Lib");
+            var appDir = Path.Combine(projectRoot, "src", "App");
+            Directory.CreateDirectory(libDir);
+            Directory.CreateDirectory(appDir);
+            File.WriteAllText(Path.Combine(projectRoot, "Repo.sln"), """
+            Microsoft Visual Studio Solution File, Format Version 12.00
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Lib", "src\Lib\Lib.csproj", "{11111111-1111-1111-1111-111111111111}"
+            EndProject
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "App", "src\App\App.csproj", "{22222222-2222-2222-2222-222222222222}"
+            EndProject
+            """);
+            File.WriteAllText(Path.Combine(libDir, "Lib.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+            File.WriteAllText(Path.Combine(libDir, "Class1.cs"), "class Class1 {}");
+            File.WriteAllText(Path.Combine(appDir, "App.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+            File.WriteAllText(Path.Combine(appDir, "Class2.cs"), "class Class2 {}");
+            var limits = SolutionProjectResolverLimits.Default with { MaxProjectExpansionFilesTotal = 3 };
+
+            var ex = Assert.Throws<InvalidOperationException>(
+                () => SolutionProjectResolver.ResolveProjectFiles(projectRoot, ["Lib", "App"], "Repo.sln", limits));
+
+            Assert.Contains("project filter expansion materialized more than 3 unique files across requested projects", ex.Message);
+            Assert.Contains("explicit --files", ex.Message);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void ResolveProjectFiles_SkipsDirectorySymlinkLoops_Issue2862()
     {
         if (OperatingSystem.IsWindows())
