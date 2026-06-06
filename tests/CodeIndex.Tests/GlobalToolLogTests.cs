@@ -80,6 +80,42 @@ public class GlobalToolLogTests
     }
 
     [Fact]
+    public void PrivateLogFile_PruneOldFiles_KeepsNewestFilesWithoutMaterializingAll_Issue3028()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"cdidx_private_log_prune_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        const int retainedFileCount = 5;
+        const int fileCount = retainedFileCount + 17;
+        var timestamp = DateTime.UtcNow.AddHours(-1);
+        try
+        {
+            for (var i = 0; i < fileCount; i++)
+            {
+                var path = Path.Combine(directory, $"stderr-{i:D4}.log");
+                File.WriteAllText(path, "x");
+                File.SetLastWriteTimeUtc(path, timestamp);
+            }
+
+            PrivateLogFile.PruneOldFiles(directory, "stderr-*.log", retainedFileCount);
+
+            var remaining = Directory.GetFiles(directory, "stderr-*.log")
+                .Select(Path.GetFileName)
+                .OrderBy(name => name, StringComparer.Ordinal)
+                .ToArray();
+            var expected = Enumerable.Range(fileCount - retainedFileCount, retainedFileCount)
+                .Select(i => $"stderr-{i:D4}.log")
+                .OrderBy(name => name, StringComparer.Ordinal)
+                .ToArray();
+            Assert.Equal(expected, remaining);
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public void FormatArgs_RedactsSensitiveArgumentsByDefault()
     {
         using var env = EnvironmentVariableScope.Capture("CDIDX_LOG_REDACT");
