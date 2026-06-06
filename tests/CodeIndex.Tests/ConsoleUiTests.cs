@@ -138,7 +138,7 @@ public class ConsoleUiTests
         Assert.Contains("                              run `cdidx backfill-fold` or check fold_ready.", output);
         Assert.Contains("--kind <kind>              definition/symbols/hotspots/unused: symbol kind; references: reference kind (call/instantiate/subscribe/attribute/annotation); callers/callees: call-graph kinds only (call/instantiate/subscribe — metadata kinds rejected, use references instead); validate: issue kind", output);
         Assert.Contains("--severity <s>             validate only: filter issues by severity: info, warning, error", output);
-        Assert.Contains("--count                    Count only; search/definition/references/callers/callees/symbols/files/find/unused ignore --limit, impact/hotspots still use visible page counts", output);
+        Assert.Contains("--count                    Count only; search/definition/references/callers/callees/symbols/files/find/unused/hotspots ignore --limit, impact still uses visible page counts", output);
         Assert.Contains("--no-dedup                 search only: return every raw overlapping chunk hit (debug/density)", output);
         Assert.Contains("--commits <commit-ref> [commit-ref ...]", output);
         Assert.Contains("Update only files changed in the specified git", output);
@@ -163,7 +163,7 @@ public class ConsoleUiTests
         Assert.Contains("--lang <lang>              Filter by language (aliases: bat, cmd, cshtml, razor, ts, tsx, cts, mts)", output);
         Assert.Contains("--bytes                    files: sort by size and show raw byte counts in human", output);
         Assert.Contains("map: show raw byte counts; JSON always keeps raw", output);
-        Assert.Contains("--group-by-name            hotspots: collapse rows sharing (name, kind) across files; JSON count is the number of name/kind groups, not reference, file, or definition-site count", output);
+        Assert.Contains("--group-by-name            hotspots: collapse rows sharing (name, kind) across files; JSON paths are capped per group with paths_truncated", output);
         Assert.Contains("cdidx search \"Run();\" --exact-substring        Case-sensitive exact substring search", output);
         Assert.Contains("cdidx search --query --path --path README.md   Search for a literal option token", output);
         Assert.Contains("cdidx hotspots --group-by-name --exclude-tests", output);
@@ -878,7 +878,7 @@ public class ConsoleUiTests
 
     [Theory]
     [InlineData("bash", "if [ \"$cmd\" = \"hotspots\" ]", "--group-by-name", "--exact-name")]
-    [InlineData("zsh", "elif [[ $subcmd == hotspots ]]; then", "--group-by-name[Hotspots: collapse same-name rows; count is name/kind groups]", "--exact-name[Exact symbol-name equality]")]
+    [InlineData("zsh", "elif [[ $subcmd == hotspots ]]; then", "--group-by-name[Hotspots: collapse same-name rows; JSON paths capped per group]", "--exact-name[Exact symbol-name equality]")]
     public void PrintCompletions_BashAndZshScopeGroupByNameToHotspots(string shell, string hotspotsBranchMarker, string groupedFlagToken, string genericExactNameToken)
     {
         var output = ConsoleUi.GetCompletionScript(shell);
