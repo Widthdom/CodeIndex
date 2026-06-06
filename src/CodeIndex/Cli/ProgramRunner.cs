@@ -3083,7 +3083,7 @@ internal static class ProgramRunner
             }
 
             var startInfo = CreateInstallerProcessStartInfo(scriptPath, result.LatestVersion, installDir);
-            return RunInstallerProcess(startInfo, InstallerRunTimeout);
+            return RunInstallerProcess(startInfo, InstallerRunTimeout, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -3114,7 +3114,10 @@ internal static class ProgramRunner
         return startInfo;
     }
 
-    internal static int RunInstallerProcess(ProcessStartInfo startInfo, TimeSpan timeout)
+    internal static int RunInstallerProcess(
+        ProcessStartInfo startInfo,
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default)
     {
         using var process = Process.Start(startInfo);
         if (process == null)
@@ -3123,7 +3126,25 @@ internal static class ProgramRunner
             return CommandExitCodes.DatabaseError;
         }
 
-        if (process.WaitForExit(ToWaitMilliseconds(timeout)))
+        try
+        {
+            var waitTask = process.WaitForExitAsync(cancellationToken);
+            var timeoutTask = Task.Delay(ToWaitMilliseconds(timeout));
+            if (Task.WhenAny(waitTask, timeoutTask).GetAwaiter().GetResult() == waitTask)
+            {
+                waitTask.GetAwaiter().GetResult();
+                return process.ExitCode;
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            TryKillProcessTree(process);
+            if (!process.WaitForExit(ToWaitMilliseconds(InstallerKillWaitTimeout)))
+                Console.Error.WriteLine("Error: install.sh was cancelled and did not exit after cancellation.");
+            throw;
+        }
+
+        if (process.HasExited)
             return process.ExitCode;
 
         TryKillProcessTree(process);

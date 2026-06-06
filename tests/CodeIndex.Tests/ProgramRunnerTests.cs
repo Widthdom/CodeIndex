@@ -927,6 +927,43 @@ sleep 5
     }
 
     [Fact]
+    public void RunInstallerProcess_CancelsHungInstaller()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        lock (TestConsoleLock.Gate)
+        {
+            var root = Path.Combine(Path.GetTempPath(), $"cdidx_installer_cancel_{Guid.NewGuid():N}");
+            Directory.CreateDirectory(root);
+            var script = Path.Combine(root, "install.sh");
+            var pidFile = Path.Combine(root, "installer.pid");
+            try
+            {
+                File.WriteAllText(script, $"""
+#!/bin/sh
+echo $$ > {ShellQuote(pidFile)}
+sleep 30
+""");
+                File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+                var startInfo = ProgramRunner.CreateInstallerProcessStartInfo(script, "v1.27.0", root);
+                using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+
+                Assert.ThrowsAny<OperationCanceledException>(() =>
+                    ProgramRunner.RunInstallerProcess(startInfo, TimeSpan.FromSeconds(30), cts.Token));
+
+                Assert.True(File.Exists(pidFile));
+                var pid = int.Parse(File.ReadAllText(pidFile), CultureInfo.InvariantCulture);
+                Assert.False(IsProcessRunning(pid));
+            }
+            finally
+            {
+                TestProjectHelper.DeleteDirectory(root);
+            }
+        }
+    }
+
+    [Fact]
     public async Task DownloadInstallerScriptAsync_CancelsStalledBody()
     {
         var path = Path.Combine(Path.GetTempPath(), $"cdidx-install-timeout-{Guid.NewGuid():N}.sh");
@@ -2404,6 +2441,26 @@ sleep 5
             $$"""
             {"checked_at":"{{DateTimeOffset.UtcNow.UtcDateTime.ToString("O", CultureInfo.InvariantCulture)}}","latest_tag":"{{latestTag}}"}
             """);
+    }
+
+    private static string ShellQuote(string value)
+        => "'" + value.Replace("'", "'\\''", StringComparison.Ordinal) + "'";
+
+    private static bool IsProcessRunning(int pid)
+    {
+        try
+        {
+            using var process = System.Diagnostics.Process.GetProcessById(pid);
+            return !process.HasExited;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
     }
 
     private static void AssertCanonicalCommandError(string stderr)
