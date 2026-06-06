@@ -1,3 +1,4 @@
+using CodeIndex.Cli;
 using CodeIndex.Database;
 using Microsoft.Data.Sqlite;
 using System.Diagnostics;
@@ -9,6 +10,12 @@ public class DbDebugTests
 {
     private static string CaptureStderr(Action action)
         => ConsoleCapture.CaptureError(action);
+
+    private static string BuildUnionAllQuery(int count)
+        => string.Join(" UNION ALL ", Enumerable.Range(0, count).Select(i => $"SELECT {i} AS value"));
+
+    private static string QuoteSqlIdentifier(string identifier)
+        => "\"" + identifier.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"";
 
     [Fact]
     public void ExecuteTrackedReader_EmitsActivityAndSlowQueryLog()
@@ -40,6 +47,110 @@ public class DbDebugTests
         var activity = Assert.Single(stopped.Where(activity => activity.OperationName == "db.query"));
         Assert.Equal("sqlite", activity.GetTagItem("db.system"));
         Assert.Equal("SELECT", activity.GetTagItem("db.operation"));
+    }
+
+    [Fact]
+    public void ExecuteTrackedReader_ProfileCapsQueryPlanRows()
+    {
+        DbDebug.ResetForTesting();
+        try
+        {
+            using var conn = new SqliteConnection("Data Source=:memory:");
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = BuildUnionAllQuery(120);
+
+            DbDebug.BeginProfile();
+            using (var reader = cmd.ExecuteTrackedReader())
+            {
+                while (reader.TrackedRead()) { }
+            }
+
+            var entry = Assert.Single(DbDebug.EndProfile());
+            Assert.True(entry.QueryPlan.Count <= DbDebug.MaxQueryPlanRows + 1);
+            Assert.Contains(entry.QueryPlan, row => row.Detail.Contains("truncated after", StringComparison.Ordinal));
+        }
+        finally
+        {
+            DbDebug.EndProfile();
+        }
+    }
+
+    [Fact]
+    public void ExecuteTrackedReader_ProfileTruncatesLongQueryPlanDetails()
+    {
+        DbDebug.ResetForTesting();
+        try
+        {
+            using var conn = new SqliteConnection("Data Source=:memory:");
+            conn.Open();
+            var tableName = "t_" + new string('a', DbDebug.MaxQueryPlanDetailChars * 2);
+            var quotedTableName = QuoteSqlIdentifier(tableName);
+            using (var create = conn.CreateCommand())
+            {
+                create.CommandText = $"CREATE TABLE {quotedTableName} (id INTEGER)";
+                create.ExecuteNonQuery();
+            }
+
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = $"SELECT id FROM {quotedTableName}";
+
+            DbDebug.BeginProfile();
+            using (var reader = cmd.ExecuteTrackedReader())
+            {
+                while (reader.TrackedRead()) { }
+            }
+
+            var entry = Assert.Single(DbDebug.EndProfile());
+            var detail = Assert.Single(entry.QueryPlan).Detail;
+            Assert.True(detail.Length <= DbDebug.MaxQueryPlanDetailChars, $"Detail was {detail.Length} chars.");
+            Assert.EndsWith("...<truncated>", detail, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DbDebug.EndProfile();
+        }
+    }
+
+    [Fact]
+    public void QueryProfileEntry_SlowQueryGlobalToolLogTruncatesSql()
+    {
+        var logDir = Path.Combine(Path.GetTempPath(), $"cdidx_slow_query_log_{Guid.NewGuid():N}");
+        using var env = EnvironmentVariableScope.Capture(
+            "CDIDX_FORCE_GLOBAL_TOOL_LOG",
+            "CDIDX_DISABLE_PERSISTENT_LOG",
+            "CDIDX_GLOBAL_TOOL_LOG_DIR",
+            GlobalToolLog.LogFormatEnvironmentVariable);
+        try
+        {
+            env.Set("CDIDX_FORCE_GLOBAL_TOOL_LOG", "1");
+            env.Set("CDIDX_DISABLE_PERSISTENT_LOG", null);
+            env.Set("CDIDX_GLOBAL_TOOL_LOG_DIR", logDir);
+            env.Set(GlobalToolLog.LogFormatEnvironmentVariable, "text");
+
+            using var session = GlobalToolLog.TryStartForTesting(["status"], "1.10.0");
+            Assert.NotNull(session);
+            var sql = "SELECT " + new string('x', 5000) + Environment.NewLine + "FROM very_large_query";
+            var entry = new QueryProfileEntry(sql, []);
+            entry.AddElapsed(TimeSpan.FromMilliseconds(10));
+            entry.MarkCompletedIfSlow(0);
+            session!.Dispose();
+
+            var logPath = Assert.Single(Directory.GetFiles(logDir, "stderr-*.log"));
+            var content = File.ReadAllText(logPath);
+            var slowLine = Assert.Single(content.Split('\n').Where(line => line.Contains("slow_query", StringComparison.Ordinal)));
+            Assert.Contains("sql=SELECT ", slowLine);
+            Assert.Contains("...<truncated>", slowLine);
+            Assert.DoesNotContain(new string('x', 1000), content);
+            var sqlText = slowLine[(slowLine.IndexOf(" sql=", StringComparison.Ordinal) + " sql=".Length)..].TrimEnd('\r');
+            Assert.True(sqlText.Length <= DbDebug.MaxSlowQuerySqlChars, $"SQL text was {sqlText.Length} chars.");
+            Assert.DoesNotContain('\r', sqlText);
+            Assert.DoesNotContain('\n', sqlText);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(logDir);
+        }
     }
 
     [Fact]
@@ -192,6 +303,38 @@ public class DbDebugTests
             Assert.Contains("[content] = <str len=24 sha256=", output);
             Assert.DoesNotContain("/home/user/private/src/secret_module.cs", output);
             Assert.DoesNotContain("SECRET_SOURCE_CODE_TOKEN", output);
+        }
+        finally
+        {
+            DbDebug.ResetContext();
+        }
+    }
+
+    [Fact]
+    public void DumpToStderr_RedactedMode_HashesLargeStringsWithBoundedShape()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_DEBUG");
+        env.Set("CDIDX_DEBUG", "1");
+        try
+        {
+            DbDebug.ResetContext();
+            var largeValue = new string('x', 100_000) + "tail";
+            using var conn = new SqliteConnection("Data Source=:memory:");
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT @value AS content";
+            cmd.Parameters.AddWithValue("@value", largeValue);
+            using (var reader = cmd.ExecuteTrackedReader())
+            {
+                Assert.True(reader.TrackedRead());
+                _ = reader.GetString(0);
+            }
+
+            var output = CaptureStderr(() => DbDebug.DumpToStderr(new InvalidOperationException("boom")));
+            Assert.Contains($"@value = <str len={largeValue.Length} sha256=", output);
+            Assert.Contains($"[content] = <str len={largeValue.Length} sha256=", output);
+            Assert.DoesNotContain(new string('x', 1000), output);
+            Assert.DoesNotContain("tail", output);
         }
         finally
         {
