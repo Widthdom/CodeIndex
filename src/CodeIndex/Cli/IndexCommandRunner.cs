@@ -184,7 +184,7 @@ public static partial class IndexCommandRunner
 
             using (indexLock)
             {
-                using var db = new DbContext(dbPath);
+                using var db = new DbContext(dbPath, indexCancellation.Token);
                 if (db.ReadOnlyFallback)
                 {
                     return WriteCommandError(

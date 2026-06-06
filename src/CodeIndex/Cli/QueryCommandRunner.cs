@@ -3951,7 +3951,7 @@ public static class QueryCommandRunner
             if (!options.CheckWorkspace)
                 return CommandExitCodes.Success;
             return GetStatusCheckExitCode(checkFailures);
-        });
+        }, cancellationToken: cancellationToken);
     }
 
     private static JsonObject BuildEffectiveConfigJson(QueryCommandOptions options, string[] cmdArgs, string? appVersion)
@@ -7463,7 +7463,12 @@ public static class QueryCommandRunner
            && analysis.Callers.Count == 0
            && analysis.Callees.Count == 0;
 
-    private static int WithDb(QueryCommandOptions options, JsonSerializerOptions jsonOptions, Func<DbReader, int> action, Action<int>? afterProfile = null)
+    private static int WithDb(
+        QueryCommandOptions options,
+        JsonSerializerOptions jsonOptions,
+        Func<DbReader, int> action,
+        Action<int>? afterProfile = null,
+        CancellationToken cancellationToken = default)
     {
         var dbPath = options.DbPath;
         if (s_batchReader == null)
@@ -7521,7 +7526,7 @@ public static class QueryCommandRunner
             }
             else
             {
-                db = new DbContext(dbPath);
+                db = new DbContext(dbPath, cancellationToken);
                 if (!db.TryValidateIsCodeIndexDb(out var validationReason))
                     return WriteInvalidCodeIndexDbError(dbPath, validationReason);
                 db.TryMigrateForRead();
