@@ -100,6 +100,96 @@ public class McpToolContractTests
             "MCP tools/list schema and argument type validator drift detected:\n" + string.Join('\n', failures));
     }
 
+    [Fact]
+    public void ToolsList_SearchCursorHasSharedArgumentContract_Issue3192()
+    {
+        var searchProperties = GetAdvertisedToolSchemas()["search"];
+        var allowed = GetAllowedToolArguments("search");
+        var (hasValidator, validatorType) = TryGetExpectedJsonType("search", "cursor");
+
+        Assert.True(searchProperties.ContainsKey("cursor"));
+        Assert.Contains("cursor", allowed);
+        Assert.Equal("string", ExpectedTypeFromSchema(searchProperties["cursor"]));
+        Assert.True(hasValidator);
+        Assert.Equal("string", validatorType);
+    }
+
+    [Fact]
+    public void ToolsList_DepsArgumentsHaveSharedArgumentContract_Issue3196()
+    {
+        var depsProperties = GetAdvertisedToolSchemas()["deps"];
+        var allowed = GetAllowedToolArguments("deps");
+
+        foreach (var argumentName in new[] { "reverse", "format", "cycles" })
+        {
+            Assert.True(depsProperties.ContainsKey(argumentName));
+            Assert.Contains(argumentName, allowed);
+        }
+
+        Assert.False(depsProperties.ContainsKey("direction"));
+        Assert.DoesNotContain("direction", allowed);
+        Assert.False(depsProperties.ContainsKey("includeGenerated"));
+        Assert.DoesNotContain("includeGenerated", allowed);
+
+        Assert.Equal("boolean", ExpectedTypeFromSchema(depsProperties["reverse"]));
+        Assert.Equal("string", ExpectedTypeFromSchema(depsProperties["format"]));
+        Assert.Equal("boolean", ExpectedTypeFromSchema(depsProperties["cycles"]));
+        Assert.Equal((true, "boolean"), TryGetExpectedJsonType("deps", "reverse"));
+        Assert.Equal((true, "string"), TryGetExpectedJsonType("deps", "format"));
+        Assert.Equal((true, "boolean"), TryGetExpectedJsonType("deps", "cycles"));
+    }
+
+    [Fact]
+    public void ToolsList_MapSectionsAndDepthHaveSharedArgumentContract_Issue3197()
+    {
+        var mapProperties = GetAdvertisedToolSchemas()["map"];
+        var allowed = GetAllowedToolArguments("map");
+
+        Assert.True(mapProperties.ContainsKey("sections"));
+        Assert.Contains("sections", allowed);
+        Assert.Equal("array", ExpectedTypeFromSchema(mapProperties["sections"]));
+        Assert.Contains("sections", SpecializedListValidatedArguments);
+        Assert.Equal((false, string.Empty), TryGetExpectedJsonType("map", "sections"));
+
+        Assert.True(mapProperties.ContainsKey("depth"));
+        Assert.Contains("depth", allowed);
+        Assert.Equal("integer", ExpectedTypeFromSchema(mapProperties["depth"]));
+        Assert.Equal((true, "integer"), TryGetExpectedJsonType("map", "depth"));
+    }
+
+    [Fact]
+    public void ToolsList_OutlineAndValidateDoNotExposeHiddenNoopArguments_Issue3198()
+    {
+        var advertisedSchemas = GetAdvertisedToolSchemas();
+
+        AssertToolArgumentsExactly(advertisedSchemas, "outline", ["path"]);
+        AssertToolArgumentsExactly(advertisedSchemas, "validate", ["kind", "path", "excludePaths", "excludeTests", "project", "solution"]);
+
+        foreach (var toolName in new[] { "outline", "validate" })
+        {
+            var advertised = advertisedSchemas[toolName].Keys.ToHashSet(StringComparer.Ordinal);
+            var allowed = GetAllowedToolArguments(toolName);
+            foreach (var noopArgument in new[] { "limit", "includeImports", "maxLineWidth", "lang" })
+            {
+                Assert.DoesNotContain(noopArgument, advertised);
+                Assert.DoesNotContain(noopArgument, allowed);
+            }
+        }
+
+        static void AssertToolArgumentsExactly(
+            Dictionary<string, Dictionary<string, JsonObject>> advertisedSchemas,
+            string toolName,
+            string[] expectedArguments)
+        {
+            var expected = expectedArguments.ToHashSet(StringComparer.Ordinal);
+            var advertised = advertisedSchemas[toolName].Keys.ToHashSet(StringComparer.Ordinal);
+            var allowed = GetAllowedToolArguments(toolName);
+
+            Assert.Equal(expected.Order(StringComparer.Ordinal), advertised.Order(StringComparer.Ordinal));
+            Assert.Equal(expected.Order(StringComparer.Ordinal), allowed.Order(StringComparer.Ordinal));
+        }
+    }
+
     private static Dictionary<string, Dictionary<string, JsonObject>> GetAdvertisedToolSchemas()
     {
         using var server = new McpServer("unused.db", "test", dbPathExplicit: false, McpToolFilter.AllowAll());

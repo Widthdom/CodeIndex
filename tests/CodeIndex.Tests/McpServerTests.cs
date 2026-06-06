@@ -1293,6 +1293,70 @@ public class McpServerTests : IDisposable
     }
 
     [Theory]
+    [InlineData("definition")]
+    [InlineData("symbols")]
+    public void ToolCall_InvalidSince_ReturnsInvalidArgument_Issue3194(string toolName)
+    {
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = toolName,
+                ["arguments"] = new JsonObject
+                {
+                    ["query"] = "App",
+                    ["since"] = "not-a-timestamp",
+                },
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        var result = response["result"]!;
+        Assert.True(result["isError"]!.GetValue<bool>());
+        Assert.Contains("Invalid 'since' timestamp", result["content"]![0]!["text"]!.GetValue<string>());
+        Assert.Equal(McpErrorEnvelope.CategoryInvalidArgument, result["structuredContent"]!["category"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_ProjectFilterResolverFailure_ReturnsInvalidArgument_Issue3160()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"App","project":"DefinitelyMissingProject3160"}}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+
+        var result = response["result"]!;
+        Assert.True(result["isError"]!.GetValue<bool>(), response.ToJsonString());
+        var text = result["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("Project filter could not be resolved", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("Tool 'search' failed", text, StringComparison.Ordinal);
+        Assert.DoesNotContain(nameof(InvalidOperationException), text, StringComparison.Ordinal);
+        var structured = result["structuredContent"]!;
+        Assert.Equal(McpErrorEnvelope.CategoryInvalidArgument, structured["category"]!.GetValue<string>());
+        Assert.Equal("project", structured["parameter"]!.GetValue<string>());
+        Assert.Contains("DefinitelyMissingProject3160", structured["diagnostic"]!.GetValue<string>(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ToolsCall_BatchQuery_ProjectFilterResolverFailure_ReturnsSlotError_Issue3160()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[{"tool":"search","arguments":{"query":"App","project":"DefinitelyMissingProject3160"}}]}}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(1, structured["metadata"]!["errors"]!.GetValue<int>());
+        var slot = Assert.Single(structured["results"]!.AsArray());
+        Assert.False(slot!["ok"]!.GetValue<bool>());
+        Assert.Contains("Project filter could not be resolved", slot["error"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Equal(McpErrorEnvelope.CategoryInvalidArgument, slot["category"]!.GetValue<string>());
+        Assert.Equal("project", slot["parameter"]!.GetValue<string>());
+    }
+
+    [Theory]
     [InlineData("outline")]
     [InlineData("excerpt")]
     [InlineData("index")]
@@ -1303,6 +1367,84 @@ public class McpServerTests : IDisposable
 
         Assert.Equal("Missing required parameter: path", missing);
         Assert.Equal("Parameter \"path\" cannot be empty or whitespace-only", blank);
+    }
+
+    [Theory]
+    [InlineData("outline")]
+    [InlineData("excerpt")]
+    [InlineData("index")]
+    public void ToolCall_RequiredPath_RejectsNonStringType_Issue3186(string toolName)
+    {
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = toolName,
+                ["arguments"] = BuildRequiredPathArguments(toolName, new JsonArray { "src/app.cs" }),
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        var error = response["error"]!;
+        Assert.Equal(-32602, error["code"]!.GetValue<int>());
+        Assert.Contains("Invalid type for argument 'path'", error["message"]!.GetValue<string>());
+        Assert.Equal("path", error["data"]!["parameter"]!.GetValue<string>());
+    }
+
+    [Theory]
+    [InlineData("outline", "../outside.cs", "`..` path traversal")]
+    [InlineData("excerpt", "/tmp/outside.cs", "workspace-relative")]
+    [InlineData("index", "TOO_LONG", "must be no longer than")]
+    [InlineData("outline", "TOO_LONG", "must be no longer than")]
+    public void ToolCall_RequiredPath_RejectsInvalidPathValues_Issue3186(
+        string toolName,
+        string pathValue,
+        string expectedText)
+    {
+        if (pathValue == "TOO_LONG")
+            pathValue = new string('a', QueryCommandRunner.MaxQueryPathFilterLength + 1);
+
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = toolName,
+                ["arguments"] = BuildRequiredPathArguments(toolName, pathValue),
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        var result = response["result"]!;
+        Assert.True(result["isError"]!.GetValue<bool>(), response.ToJsonString());
+        var text = result["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains(expectedText, text, StringComparison.Ordinal);
+        Assert.DoesNotContain("file not found in index", text, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Directory not found", text, StringComparison.Ordinal);
+        Assert.Equal(McpErrorEnvelope.CategoryInvalidArgument, result["structuredContent"]!["category"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsList_IndexPathSchemaReflectsProjectPathContract_Issue3186()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var tools = response["result"]!["tools"]!.AsArray();
+        var indexTool = tools.First(t => t!["name"]!.GetValue<string>() == "index")!;
+        var pathSchema = indexTool["inputSchema"]!["properties"]!["path"]!;
+
+        Assert.Equal("string", pathSchema["type"]!.GetValue<string>());
+        Assert.Equal(QueryCommandRunner.MaxQueryPathFilterLength, pathSchema["maxLength"]!.GetValue<int>());
+        Assert.DoesNotContain("(?!/)", pathSchema["pattern"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Contains("absolute or relative", pathSchema["description"]!.GetValue<string>(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -3352,8 +3494,14 @@ public class McpServerTests : IDisposable
         Assert.Equal(200, searchProperties["limit"]!["maximum"]!.GetValue<int>());
 
         var pathStringSchema = searchProperties["path"]!["oneOf"]!.AsArray()[0]!;
-        Assert.Equal(4096, pathStringSchema["maxLength"]!.GetValue<int>());
+        Assert.Equal(QueryCommandRunner.MaxQueryPathFilterLength, pathStringSchema["maxLength"]!.GetValue<int>());
         Assert.NotNull(pathStringSchema["pattern"]);
+        var pathArraySchema = searchProperties["path"]!["oneOf"]!.AsArray()[1]!;
+        Assert.Equal(QueryCommandRunner.MaxQueryPathFilterCount, pathArraySchema["maxItems"]!.GetValue<int>());
+        Assert.Equal(QueryCommandRunner.MaxQueryPathFilterLength, pathArraySchema["items"]!["maxLength"]!.GetValue<int>());
+        var excludePathsSchema = searchProperties["excludePaths"]!;
+        Assert.Equal(QueryCommandRunner.MaxQueryPathFilterCount, excludePathsSchema["maxItems"]!.GetValue<int>());
+        Assert.Equal(QueryCommandRunner.MaxQueryPathFilterLength, excludePathsSchema["items"]!["maxLength"]!.GetValue<int>());
 
         var referencesTool = tools.First(t => t!["name"]!.GetValue<string>() == "references")!;
         var kindEnum = referencesTool["inputSchema"]!["properties"]!["kind"]!["enum"]!.AsArray()
@@ -3361,6 +3509,46 @@ public class McpServerTests : IDisposable
             .ToArray();
         Assert.Contains("call", kindEnum);
         Assert.Contains("type_reference", kindEnum);
+
+        var mapTool = tools.First(t => t!["name"]!.GetValue<string>() == "map")!;
+        var sectionsSchema = mapTool["inputSchema"]!["properties"]!["sections"]!;
+        Assert.Equal(QueryCommandRunner.MaxQueryPathFilterCount, sectionsSchema["maxItems"]!.GetValue<int>());
+        Assert.Equal(QueryCommandRunner.MaxQueryPathFilterLength, sectionsSchema["items"]!["maxLength"]!.GetValue<int>());
+    }
+
+    [Theory]
+    [InlineData("search", """{"query":"App","limit":0}""", "limit", 1, 0)]
+    [InlineData("definition", """{"query":"App","limit":-1}""", "limit", 1, -1)]
+    [InlineData("references", """{"query":"App","offset":-1}""", "offset", 0, -1)]
+    public void ToolsCall_InvalidLimitOrOffsetBounds_ReturnsInvalidParams_Issue3195(
+        string toolName,
+        string argumentsJson,
+        string parameter,
+        int minimum,
+        int actual)
+    {
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = toolName,
+                ["arguments"] = JsonNode.Parse(argumentsJson),
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        var error = response["error"]!;
+        Assert.Equal(-32602, error["code"]!.GetValue<int>());
+        Assert.Contains($"Argument '{parameter}'", error["message"]!.GetValue<string>());
+        var data = error["data"]!;
+        Assert.Equal(McpErrorEnvelope.CategoryInvalidArgument, data["category"]!.GetValue<string>());
+        Assert.Equal(parameter, data["parameter"]!.GetValue<string>());
+        Assert.Equal(minimum, data["minimum"]!.GetValue<int>());
+        Assert.Equal(actual, data["actual"]!.GetValue<int>());
     }
 
     [Fact]
@@ -4012,6 +4200,32 @@ public class McpServerTests : IDisposable
         Assert.True(response["result"]!["isError"]!.GetValue<bool>());
         var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
         Assert.Contains("bare verbatim prefixes like `@` are not valid queries", text);
+    }
+
+    [Fact]
+    public void ToolsCall_ImpactAnalysis_RejectsOversizedQuery_Issue3184()
+    {
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "impact_analysis",
+                ["arguments"] = new JsonObject
+                {
+                    ["query"] = new string('a', QueryLimits.MaxQueryLength + 1),
+                },
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        var result = response["result"]!;
+        Assert.True(result["isError"]!.GetValue<bool>());
+        Assert.Equal(QueryLimits.FormatQueryTooLongError(), result["content"]![0]!["text"]!.GetValue<string>());
+        Assert.Equal(McpErrorEnvelope.CategoryInvalidArgument, result["structuredContent"]!["category"]!.GetValue<string>());
     }
 
     [Fact]
@@ -7853,6 +8067,70 @@ public class McpServerTests : IDisposable
         var structured = response["result"]!["structuredContent"]!;
         Assert.Equal(McpErrorEnvelope.CategoryInvalidArgument, structured["category"]!.GetValue<string>());
         Assert.Equal(1, structured["invalid_count"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsCall_PathListArgumentsUseCliBounds_Issue3182()
+    {
+        Assert.Equal(QueryCommandRunner.MaxQueryPathFilterCount, McpServer.MaxMcpArrayFilterCount);
+        Assert.Equal(QueryCommandRunner.MaxQueryPathFilterLength, McpServer.MaxMcpArrayFilterStringLength);
+
+        var tooManyPaths = new JsonArray();
+        for (var i = 0; i < QueryCommandRunner.MaxQueryPathFilterCount + 1; i++)
+            tooManyPaths.Add($"src/{i}.cs");
+        AssertListError(
+            "search",
+            new JsonObject
+            {
+                ["query"] = "App",
+                ["path"] = tooManyPaths,
+            },
+            "path must contain at most",
+            expectedInvalidCount: 1);
+
+        AssertListError(
+            "search",
+            new JsonObject
+            {
+                ["query"] = "App",
+                ["excludePaths"] = new JsonArray { new string('a', QueryCommandRunner.MaxQueryPathFilterLength + 1) },
+            },
+            $"Entries must be non-empty strings no longer than {QueryCommandRunner.MaxQueryPathFilterLength} characters.",
+            expectedInvalidCount: 1);
+
+        AssertListError(
+            "map",
+            new JsonObject
+            {
+                ["sections"] = new JsonArray { 42 },
+            },
+            "sections contains 1 invalid entry",
+            expectedInvalidCount: 1);
+
+        void AssertListError(string toolName, JsonObject arguments, string expectedText, int expectedInvalidCount)
+        {
+            var request = new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = 1,
+                ["method"] = "tools/call",
+                ["params"] = new JsonObject
+                {
+                    ["name"] = toolName,
+                    ["arguments"] = arguments,
+                },
+            };
+
+            var response = _server.HandleMessage(request)!;
+
+            var result = response["result"]!;
+            Assert.True(result["isError"]!.GetValue<bool>(), response.ToJsonString());
+            var text = result["content"]![0]!["text"]!.GetValue<string>();
+            Assert.Contains(expectedText, text);
+            var structured = result["structuredContent"]!;
+            Assert.Equal(McpErrorEnvelope.CategoryInvalidArgument, structured["category"]!.GetValue<string>());
+            Assert.Equal(expectedInvalidCount, structured["invalid_count"]!.GetValue<int>());
+        }
     }
 
     [Fact]
@@ -12097,6 +12375,27 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_RateLimitPrecedesProjectFilterResolution_Issue3160()
+    {
+        InstallRateLimiter(_server, new RateLimiterOptions { RefillTokensPerSecond = 1.0, BurstCapacity = 1.0 });
+
+        var initialize = JsonNode.Parse("""{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"clientInfo":{"name":"client-a","version":"1.2.3"}}}""")!;
+        _server.HandleMessage(initialize);
+
+        var first = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"App"}}}""")!)!;
+        Assert.Null(first["error"]);
+
+        var second = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"search","arguments":{"query":"App","project":"DefinitelyMissingProject3160"}}}""")!)!;
+
+        var error = second["error"]!;
+        Assert.Equal(-32000, error["code"]!.GetValue<int>());
+        Assert.Contains("Rate limit exceeded", error["message"]!.GetValue<string>());
+        Assert.DoesNotContain("Project filter could not be resolved", second.ToJsonString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Initialize_CapturesClientInfoAsCallerIdentity()
     {
         // The caller identity is read from `clientInfo.name` on `initialize` so the
@@ -12860,6 +13159,20 @@ public class McpServerTests : IDisposable
         RaiseConsoleCancelKeyPress();
 
         Assert.False(cts.IsCancellationRequested);
+    }
+
+    private static JsonObject BuildRequiredPathArguments(string toolName, string pathValue)
+        => BuildRequiredPathArguments(toolName, JsonValue.Create(pathValue)!);
+
+    private static JsonObject BuildRequiredPathArguments(string toolName, JsonNode pathValue)
+    {
+        var arguments = new JsonObject
+        {
+            ["path"] = pathValue,
+        };
+        if (toolName == "excerpt")
+            arguments["startLine"] = 1;
+        return arguments;
     }
 
     private string CallToolAndReadErrorMessage(string toolName, JsonObject arguments)

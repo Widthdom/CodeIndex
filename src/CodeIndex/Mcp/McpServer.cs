@@ -2479,6 +2479,15 @@ public partial class McpServer : IDisposable
                     DeferFrameLog(BuildRateLimitedLog(toolName, _caller, decision.RetryAfterMs));
                     response = CreateRateLimitedErrorResponse(id, toolName, _caller, decision.RetryAfterMs);
                 }
+                else if (ValidateProjectFilterArguments(args) is JsonObject projectFilterError)
+                {
+                    metricsError = "invalid_project_filter";
+                    response = CreateToolErrorResponse(id, projectFilterError["message"]!.GetValue<string>(),
+                        category: McpErrorEnvelope.CategoryInvalidArgument,
+                        suggestion: "Use a project name or project path from the current workspace, or correct the solution filter.",
+                        retrySafe: false,
+                        extraData: projectFilterError);
+                }
                 else
                 {
                     response = toolName switch

@@ -5,6 +5,8 @@ namespace CodeIndex.Diagnostics;
 internal static class DiagnosticSanitizer
 {
     private const int MaxDiagnosticFieldLength = 240;
+    private const int MaxSanitizerInputLength = MaxDiagnosticFieldLength * 8;
+    internal const string RegexTimeoutFallbackMessage = "[message omitted after sanitization timeout]";
     private static readonly Regex AbsolutePathPattern = new(
         @"(?:[A-Za-z]:)?[/\\][^\s'"";:,)]+",
         RegexOptions.Compiled | RegexOptions.CultureInvariant,
@@ -32,6 +34,9 @@ internal static class DiagnosticSanitizer
         => string.IsNullOrWhiteSpace(value) ? value : ForMessage(value);
 
     public static string ForMessage(string? message)
+        => ForMessage(message, value => AbsolutePathPattern.Replace(value, "<path>"));
+
+    internal static string ForMessage(string? message, Func<string, string> redactPaths)
     {
         if (string.IsNullOrWhiteSpace(message))
             return string.Empty;
@@ -40,8 +45,18 @@ internal static class DiagnosticSanitizer
             .Replace('\r', ' ')
             .Replace('\n', ' ')
             .Replace('\t', ' ');
-        var withoutPaths = AbsolutePathPattern.Replace(singleLine, "<path>");
-        return Truncate(Regex.Replace(withoutPaths, @"\s{2,}", " ", RegexOptions.None, TimeSpan.FromMilliseconds(50)).Trim());
+        if (singleLine.Length > MaxSanitizerInputLength)
+            singleLine = singleLine[..MaxSanitizerInputLength] + " ...";
+
+        try
+        {
+            var withoutPaths = redactPaths(singleLine);
+            return Truncate(CollapseWhitespace(withoutPaths).Trim());
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            return RegexTimeoutFallbackMessage;
+        }
     }
 
     private static string TryGetFullPath(string path)
@@ -58,6 +73,27 @@ internal static class DiagnosticSanitizer
 
     private static string NormalizeSeparators(string value)
         => value.Replace('\\', '/');
+
+    private static string CollapseWhitespace(string value)
+    {
+        var collapsed = new System.Text.StringBuilder(value.Length);
+        var previousWasWhitespace = false;
+        foreach (var character in value)
+        {
+            if (char.IsWhiteSpace(character))
+            {
+                if (!previousWasWhitespace)
+                    collapsed.Append(' ');
+                previousWasWhitespace = true;
+                continue;
+            }
+
+            collapsed.Append(character);
+            previousWasWhitespace = false;
+        }
+
+        return collapsed.ToString();
+    }
 
     private static string Truncate(string value)
         => value.Length <= MaxDiagnosticFieldLength

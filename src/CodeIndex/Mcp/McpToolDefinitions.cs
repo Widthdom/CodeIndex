@@ -643,13 +643,48 @@ public partial class McpServer
             case "path":
             case "project":
             case "solution":
-                obj.TryAdd("minLength", 1);
-                obj.TryAdd("maxLength", 4096);
-                obj.TryAdd("pattern", @"^(?!/)(?![A-Za-z]:)(?!.*(^|/)\.\.(/|$))(?!.*\u0000).*$");
-                AppendConstraintDescription(obj, "Must be workspace-relative, non-empty, and must not contain NUL bytes or `..` path traversal segments.");
+                if (obj["type"]?.GetValue<string>() == "array")
+                {
+                    obj.TryAdd("maxItems", MaxMcpArrayFilterCount);
+                }
+                else if (name == "path" && toolName == "index")
+                {
+                    obj.TryAdd("minLength", 1);
+                    obj.TryAdd("maxLength", MaxMcpArrayFilterStringLength);
+                    obj.TryAdd("pattern", @"^(?!.*\u0000).+$");
+                    AppendConstraintDescription(obj, "May be absolute or relative, but must be non-empty and must not contain NUL bytes.");
+                }
+                else
+                {
+                    obj.TryAdd("minLength", 1);
+                    obj.TryAdd("maxLength", MaxMcpArrayFilterStringLength);
+                    obj.TryAdd("pattern", @"^(?!/)(?![A-Za-z]:)(?!.*(^|/)\.\.(/|$))(?!.*\u0000).*$");
+                    AppendConstraintDescription(obj, "Must be workspace-relative, non-empty, and must not contain NUL bytes or `..` path traversal segments.");
+                }
                 break;
             case "excludePaths":
-                obj.TryAdd("maxItems", 100);
+                if (obj["type"]?.GetValue<string>() == "array")
+                {
+                    obj.TryAdd("maxItems", MaxMcpArrayFilterCount);
+                }
+                else
+                {
+                    obj.TryAdd("minLength", 1);
+                    obj.TryAdd("maxLength", MaxMcpArrayFilterStringLength);
+                    obj.TryAdd("pattern", @"^(?!/)(?![A-Za-z]:)(?!.*(^|/)\.\.(/|$))(?!.*\u0000).*$");
+                    AppendConstraintDescription(obj, "Must be workspace-relative, non-empty, and must not contain NUL bytes or `..` path traversal segments.");
+                }
+                break;
+            case "sections":
+                if (obj["type"]?.GetValue<string>() == "array")
+                {
+                    obj.TryAdd("maxItems", MaxMcpArrayFilterCount);
+                }
+                else
+                {
+                    obj.TryAdd("minLength", 1);
+                    obj.TryAdd("maxLength", MaxMcpArrayFilterStringLength);
+                }
                 break;
             case "limit":
                 obj.TryAdd("minimum", 1);

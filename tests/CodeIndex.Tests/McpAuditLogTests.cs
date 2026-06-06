@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using CodeIndex.Cli;
@@ -126,7 +127,7 @@ public class McpAuditLogTests : IDisposable
     }
 
     [Fact]
-    public void ToolsCall_OversizedRequestId_IsRejectedBeforeAuditRecord_Issue3104()
+    public void ToolsCall_OversizedRequestId_IsRejectedBeforeAuditRecord_Issue3104_3308()
     {
         using var sink = new AuditLogSink(_auditPath, AuditLogSink.DefaultMaxBytes, includeValues: false);
         using var server = CreateServer(sink);
@@ -462,12 +463,13 @@ public class McpAuditLogTests : IDisposable
     }
 
     [Fact]
-    public void ToolsCall_MaxLengthRequestId_PreservesAuditRequestId_Issue3237()
+    public void ToolsCall_MaxLengthRequestId_PreservesAuditRequestId_Issue3237_3307()
     {
         using var sink = new AuditLogSink(_auditPath, AuditLogSink.DefaultMaxBytes, includeValues: false);
         using var server = CreateServer(sink);
         var id = new string('r', McpServer.MaxRequestIdCharacterCount);
         var serializedId = JsonSerializer.Serialize(id);
+        Assert.True(serializedId.Length <= AuditLogSink.MaxRequestIdChars);
         var request = new JsonObject
         {
             ["jsonrpc"] = "2.0",
@@ -490,6 +492,39 @@ public class McpAuditLogTests : IDisposable
         Assert.Equal(serializedId, record.GetProperty("request_id").GetString());
         Assert.False(record.TryGetProperty("request_id_length", out _));
         Assert.False(record.TryGetProperty("request_id_truncated", out _));
+    }
+
+    [Fact]
+    public void ToolsCall_EscapedRequestId_TruncatesAuditRequestId_Issue3306()
+    {
+        using var sink = new AuditLogSink(_auditPath, AuditLogSink.DefaultMaxBytes, includeValues: false);
+        using var server = CreateServer(sink);
+        var id = new string('\u3042', 43);
+        Assert.True(id.Length <= McpServer.MaxRequestIdCharacterCount);
+        Assert.True(Encoding.UTF8.GetByteCount(id) <= McpServer.MaxRequestIdByteLength);
+        var serializedId = JsonSerializer.Serialize(id);
+        Assert.True(serializedId.Length > AuditLogSink.MaxRequestIdChars);
+        var requestIdDisplay = McpBoundedText.ForDisplay(serializedId, AuditLogSink.MaxRequestIdChars);
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = id,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "ping",
+                ["arguments"] = new JsonObject(),
+            },
+        };
+
+        var response = server.HandleMessage(request)!;
+
+        Assert.False(response.AsObject().ContainsKey("error"));
+        Assert.NotNull(response["result"]);
+        var record = ReadOnlyRecord();
+        Assert.Equal(requestIdDisplay.Text, record.GetProperty("request_id").GetString());
+        Assert.Equal(serializedId.Length, record.GetProperty("request_id_length").GetInt32());
+        Assert.True(record.GetProperty("request_id_truncated").GetBoolean());
     }
 
     [Fact]

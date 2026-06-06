@@ -23,8 +23,8 @@ public partial class McpServer
     internal const int MaxBatchQueryResponseByteLimit = 10 * 1024 * 1024;
     private const int DefaultExcerptOutputByteLimit = MaxLineByteLength;
     private const string BatchQueryResponseByteLimitEnvVar = "CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES";
-    internal const int MaxMcpArrayFilterCount = 100;
-    internal const int MaxMcpArrayFilterStringLength = 4096;
+    internal const int MaxMcpArrayFilterCount = QueryCommandRunner.MaxQueryPathFilterCount;
+    internal const int MaxMcpArrayFilterStringLength = QueryCommandRunner.MaxQueryPathFilterLength;
     private static readonly HashSet<string> BoundedEnumLikeScalarArguments = new(StringComparer.Ordinal)
     {
         "category",
@@ -536,11 +536,39 @@ public partial class McpServer
         if (ValidateToolArgumentTypes(toolName, obj) is JsonObject typeError)
             return typeError;
 
+        if (ValidateToolArgumentRanges(toolName, obj) is JsonObject rangeError)
+            return rangeError;
+
         if (ValidateBoundedEnumLikeScalarArguments(toolName, obj) is JsonObject scalarError)
             return scalarError;
 
         return null;
     }
+
+    private static JsonObject? ValidateToolArgumentRanges(string toolName, JsonObject args)
+    {
+        if (args["limit"] is JsonValue limitValue
+            && limitValue.TryGetValue<int>(out var limit)
+            && limit <= 0)
+            return CreateIntegerMinimumArgumentError(toolName, "limit", minimum: 1, actual: limit);
+
+        if (args["offset"] is JsonValue offsetValue
+            && offsetValue.TryGetValue<int>(out var offset)
+            && offset < 0)
+            return CreateIntegerMinimumArgumentError(toolName, "offset", minimum: 0, actual: offset);
+
+        return null;
+    }
+
+    private static JsonObject CreateIntegerMinimumArgumentError(string toolName, string argumentName, int minimum, int actual) => new()
+    {
+        ["message"] = $"Argument '{argumentName}' on tool '{toolName}' must be greater than or equal to {minimum}; got {actual}.",
+        ["tool"] = toolName,
+        ["parameter"] = argumentName,
+        ["minimum"] = minimum,
+        ["actual"] = actual,
+        ["jsonrpc_invalid_params"] = true,
+    };
 
     private static JsonObject? ValidateBoundedEnumLikeScalarArguments(string toolName, JsonObject args)
     {
@@ -999,6 +1027,54 @@ public partial class McpServer
         return paths.Count == 0 ? null : paths;
     }
 
+    private static JsonObject? ValidateProjectFilterArguments(JsonNode? args)
+    {
+        var projects = ReadPathList(args, "project") ?? [];
+        if (projects.Count == 0)
+            return null;
+
+        var solution = args?["solution"]?.GetValue<string>();
+        try
+        {
+            _ = SolutionProjectResolver.ResolveProjectDirectoryGlobs(Environment.CurrentDirectory, projects, solution);
+            return null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            var diagnostic = McpBoundedText.ForDisplay(ex.Message);
+            var error = new JsonObject
+            {
+                ["message"] = $"Project filter could not be resolved: {diagnostic.Text}",
+                ["parameter"] = "project",
+                ["diagnostic"] = diagnostic.Text,
+            };
+            diagnostic.AddMetadata(error, "diagnostic");
+            return error;
+        }
+    }
+
+    private static bool TryReadSinceArgument(JsonNode? args, out DateTime? since, out string? error)
+    {
+        var sinceStr = args?["since"]?.GetValue<string>();
+        if (sinceStr == null)
+        {
+            since = null;
+            error = null;
+            return true;
+        }
+
+        if (QueryCommandRunner.TryParseIso8601Since(sinceStr, out var parsedSince))
+        {
+            since = parsedSince;
+            error = null;
+            return true;
+        }
+
+        since = null;
+        error = $"Invalid 'since' timestamp: '{sinceStr}'. Use ISO 8601 format (e.g. 2024-01-01 or 2024-01-01T00:00:00Z).";
+        return false;
+    }
+
     private static bool TryReadRequiredStringParameter(JsonNode? args, string propertyName, out string value, out string? error)
     {
         var node = args?[propertyName];
@@ -1019,6 +1095,57 @@ public partial class McpServer
         error = null;
         return true;
     }
+
+    private static bool TryReadRequiredPathParameter(JsonNode? args, string propertyName, out string value, out string? error)
+    {
+        if (!TryReadRequiredStringParameter(args, propertyName, out value, out error))
+            return false;
+
+        if (value.Length > MaxMcpArrayFilterStringLength)
+        {
+            error = $"Parameter \"{propertyName}\" must be no longer than {MaxMcpArrayFilterStringLength} characters.";
+            return false;
+        }
+
+        var normalized = value.Replace("\\", "/", StringComparison.Ordinal);
+        if (value.IndexOf("\0", StringComparison.Ordinal) >= 0
+            || normalized.StartsWith("/", StringComparison.Ordinal)
+            || HasWindowsDrivePrefix(normalized)
+            || normalized.Split(new[] { '/' }, StringSplitOptions.None).Any(segment => segment == ".."))
+        {
+            error = $"Parameter \"{propertyName}\" must be workspace-relative and must not contain NUL bytes or `..` path traversal segments.";
+            return false;
+        }
+
+        error = null;
+        return true;
+    }
+
+    private static bool TryReadRequiredIndexPathParameter(JsonNode? args, string propertyName, out string value, out string? error)
+    {
+        if (!TryReadRequiredStringParameter(args, propertyName, out value, out error))
+            return false;
+
+        if (value.Length > MaxMcpArrayFilterStringLength)
+        {
+            error = $"Parameter \"{propertyName}\" must be no longer than {MaxMcpArrayFilterStringLength} characters.";
+            return false;
+        }
+
+        if (value.IndexOf("\0", StringComparison.Ordinal) >= 0)
+        {
+            error = $"Parameter \"{propertyName}\" must not contain NUL bytes.";
+            return false;
+        }
+
+        error = null;
+        return true;
+    }
+
+    private static bool HasWindowsDrivePrefix(string path)
+        => path.Length >= 2
+            && path[1] == ':'
+            && ((path[0] >= 'A' && path[0] <= 'Z') || (path[0] >= 'a' && path[0] <= 'z'));
 
     private static bool HasBlankPathFilter(JsonNode? args)
     {
@@ -1119,15 +1246,8 @@ public partial class McpServer
         var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
-        var sinceStr = args?["since"]?.GetValue<string>();
-        DateTime? since = null;
-        if (sinceStr != null)
-        {
-            if (QueryCommandRunner.TryParseIso8601Since(sinceStr, out var parsedSince))
-                since = parsedSince;
-            else
-                return CreateToolErrorResponse(id, $"Invalid 'since' timestamp: '{sinceStr}'. Use ISO 8601 format (e.g. 2024-01-01 or 2024-01-01T00:00:00Z).");
-        }
+        if (!TryReadSinceArgument(args, out var since, out var sinceError))
+            return CreateToolErrorResponse(id, sinceError!);
         var deduplicate = !(args?["noDedup"]?.GetValue<bool>() ?? false);
         var format = ReadResponseFormat(args);
         if (ValidateResponseFormat(format) is string formatError)
@@ -1278,10 +1398,8 @@ public partial class McpServer
         var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
-        var sinceStr = args?["since"]?.GetValue<string>();
-        DateTime? since = null;
-        if (sinceStr != null && QueryCommandRunner.TryParseIso8601Since(sinceStr, out var parsedSince))
-            since = parsedSince;
+        if (!TryReadSinceArgument(args, out var since, out var sinceError))
+            return CreateToolErrorResponse(id, sinceError!);
         if (!TryResolveNameExactArgument(args, "symbols", out var exact, out var exactError))
             return CreateToolErrorResponse(id, exactError!);
 
@@ -1373,10 +1491,8 @@ public partial class McpServer
         var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
-        var sinceStr = args?["since"]?.GetValue<string>();
-        DateTime? since = null;
-        if (sinceStr != null && QueryCommandRunner.TryParseIso8601Since(sinceStr, out var parsedDefSince))
-            since = parsedDefSince;
+        if (!TryReadSinceArgument(args, out var since, out var sinceError))
+            return CreateToolErrorResponse(id, sinceError!);
         if (!TryResolveNameExactArgument(args, "definition", out var exact, out var exactError))
             return CreateToolErrorResponse(id, exactError!);
         var format = ReadResponseFormat(args);
@@ -1738,15 +1854,8 @@ public partial class McpServer
         var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
-        var sinceStr = args?["since"]?.GetValue<string>();
-        DateTime? since = null;
-        if (sinceStr != null)
-        {
-            if (QueryCommandRunner.TryParseIso8601Since(sinceStr, out var parsedSince))
-                since = parsedSince;
-            else
-                return CreateToolErrorResponse(id, $"Invalid 'since' timestamp: '{sinceStr}'. Use ISO 8601 format (e.g. 2024-01-01 or 2024-01-01T00:00:00Z).");
-        }
+        if (!TryReadSinceArgument(args, out var since, out var sinceError))
+            return CreateToolErrorResponse(id, sinceError!);
 
         return WithDbReader(id, args, reader =>
         {
@@ -2243,7 +2352,7 @@ public partial class McpServer
 
     private JsonNode ExecuteOutline(JsonNode? id, JsonNode? args)
     {
-        if (!TryReadRequiredStringParameter(args, "path", out var path, out var requiredError))
+        if (!TryReadRequiredPathParameter(args, "path", out var path, out var requiredError))
             return CreateToolErrorResponse(id, requiredError!);
 
         return WithDbReader(id, args, reader =>
@@ -2267,7 +2376,7 @@ public partial class McpServer
 
     private JsonNode ExecuteExcerpt(JsonNode? id, JsonNode? args)
     {
-        if (!TryReadRequiredStringParameter(args, "path", out var path, out var requiredError))
+        if (!TryReadRequiredPathParameter(args, "path", out var path, out var requiredError))
             return CreateToolErrorResponse(id, requiredError!);
 
         var startLine = args?["startLine"]?.GetValue<int>();
@@ -2785,6 +2894,16 @@ public partial class McpServer
                 continue;
             }
 
+            if (ValidateProjectFilterArguments(toolArgs) is JsonObject projectFilterError)
+            {
+                AppendSlotError(requestIndex, toolName, toolArgs, slotStopwatch, projectFilterError["message"]!.GetValue<string>(),
+                    category: McpErrorEnvelope.CategoryInvalidArgument,
+                    suggestion: "Use a project name or project path from the current workspace, or correct the solution filter.",
+                    retrySafe: false,
+                    extraData: projectFilterError);
+                continue;
+            }
+
             try
             {
                 // Execute the tool and extract the structured content / ツールを実行し構造化コンテンツを抽出
@@ -3113,6 +3232,8 @@ public partial class McpServer
     {
         if (!TryReadRequiredStringParameter(args, "query", out var query, out var requiredError))
             return CreateToolErrorResponse(id, requiredError!);
+        if (query.Length > QueryLimits.MaxQueryLength)
+            return CreateToolErrorResponse(id, QueryLimits.FormatQueryTooLongError());
         if (IsBareVerbatimQueryToken(query))
             return CreateToolErrorResponse(id, "Add a real symbol name after the command; bare verbatim prefixes like `@` are not valid queries.");
 
@@ -3618,7 +3739,7 @@ public partial class McpServer
 
     private async Task<JsonNode> ExecuteIndexAsync(JsonNode? id, JsonNode? args, JsonNode? progressToken = null)
     {
-        if (!TryReadRequiredStringParameter(args, "path", out var path, out var requiredError))
+        if (!TryReadRequiredIndexPathParameter(args, "path", out var path, out var requiredError))
             return CreateToolErrorResponse(id, requiredError!);
 
         var rebuild = args?["rebuild"]?.GetValue<bool>() ?? false;

@@ -164,8 +164,8 @@ public class PostExtractionHookTests
             var originalBudget = PostExtractionHookRunner.CallbackBudgetForTesting;
             try
             {
-                env.Set(SlowHookDelayEnvironmentVariable, "200");
-                PostExtractionHookRunner.CallbackBudgetForTesting = () => TimeSpan.FromMilliseconds(50);
+                env.Set(SlowHookDelayEnvironmentVariable, "500");
+                PostExtractionHookRunner.CallbackBudgetForTesting = () => TimeSpan.FromMilliseconds(100);
                 var hooksDir = Path.Combine(projectRoot, "hooks");
                 var completionPath = Path.Combine(projectRoot, "slow-hook.done");
                 env.Set(SlowHookCompletionPathEnvironmentVariable, completionPath);
@@ -178,7 +178,7 @@ public class PostExtractionHookTests
                     var symbols = new List<SymbolRecord>();
 
                     runner.OnSymbolsExtracted(context, symbols);
-                    AssertFileDoesNotAppear(completionPath, TimeSpan.FromMilliseconds(750));
+                    AssertFileDoesNotAppear(completionPath, TimeSpan.FromMilliseconds(1000));
 
                     Assert.DoesNotContain(symbols, symbol => symbol.Name == "SlowHookTag");
                     var diagnostic = Assert.Single(
@@ -191,7 +191,7 @@ public class PostExtractionHookTests
                     // The worker wait can time out at the budget boundary before
                     // ElapsedMilliseconds rounds up to the full budget on some CI hosts.
                     Assert.True(diagnostic.DurationMs > 0);
-                    Assert.Equal(50, (long)Math.Round(runner.CallbackBudget.TotalMilliseconds, MidpointRounding.AwayFromZero));
+                    Assert.Equal(100, (long)Math.Round(runner.CallbackBudget.TotalMilliseconds, MidpointRounding.AwayFromZero));
                 }
                 CollectUnloadedHookAssemblies();
             }
