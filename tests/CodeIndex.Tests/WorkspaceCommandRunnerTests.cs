@@ -279,6 +279,30 @@ public class WorkspaceCommandRunnerTests
     }
 
     [Fact]
+    public void WorkspaceManifestLoader_Load_RejectsUnknownIndexStrategy()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_manifest_index_strategy");
+        try
+        {
+            var manifestPath = Path.Combine(root, "cdidx.workspace.json");
+            File.WriteAllText(manifestPath, """
+                {
+                  "members": ["src/A"],
+                  "index_strategy": "singel"
+                }
+                """);
+
+            var ex = Assert.Throws<InvalidDataException>(() => WorkspaceManifestLoader.Load(manifestPath));
+
+            Assert.Contains("index_strategy must be 'per_member' or 'single'", ex.Message);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
     public void WorkspaceErrors_HonorJsonFlag()
     {
         var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() => WorkspaceCommandRunner.Run(["nope", "--json"], _jsonOptions));

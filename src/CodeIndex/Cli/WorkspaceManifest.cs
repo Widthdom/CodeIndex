@@ -73,7 +73,7 @@ internal static class WorkspaceManifestLoader
         });
 
         var element = document.RootElement;
-        var strategy = ReadString(element, "index_strategy") ?? "per_member";
+        var strategy = ValidateIndexStrategy(ReadString(element, "index_strategy") ?? "per_member");
         var dbName = ValidateDefaultDbName(ReadString(element, "default_db_name") ?? "codeindex.db");
         var rawMembers = ReadMembers(element);
 
@@ -93,6 +93,17 @@ internal static class WorkspaceManifestLoader
         => element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
             ? value.GetString()
             : null;
+
+    private static string ValidateIndexStrategy(string strategy)
+    {
+        if (string.Equals(strategy, "per_member", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(strategy, "single", StringComparison.OrdinalIgnoreCase))
+        {
+            return strategy;
+        }
+
+        throw new InvalidDataException($"Workspace manifest index_strategy must be 'per_member' or 'single': {strategy}");
+    }
 
     private static string ValidateDefaultDbName(string dbName)
     {
