@@ -67,6 +67,7 @@ public static class ConsoleUi
     public const string DisableProgressEnvironmentVariable = "CDIDX_DISABLE_PROGRESS";
     public const string PrefersReducedMotionEnvironmentVariable = "PREFERS_REDUCED_MOTION";
     public const int SummaryLabelWidth = 9;
+    private const string FallbackVersion = "0.0.0";
 
     private static readonly (string Command, string Usage)[] CommandUsageLines =
     [
@@ -714,13 +715,29 @@ public static class ConsoleUi
         }
         var ioPath = LongPath.EnsureWindowsPrefix(path);
         if (File.Exists(ioPath))
+            return LoadVersionFromFile(ioPath);
+
+        return FallbackVersion;
+    }
+
+    internal static string LoadVersionFromFile(string ioPath)
+    {
+        try
         {
             var json = File.ReadAllText(ioPath);
             using var doc = System.Text.Json.JsonDocument.Parse(json);
             if (doc.RootElement.TryGetProperty("version", out var ver))
-                return ver.GetString() ?? "0.0.0";
+                return ver.GetString() ?? FallbackVersion;
         }
-        return "0.0.0";
+        catch (Exception ex) when (ex is IOException
+            or UnauthorizedAccessException
+            or System.Text.Json.JsonException
+            or InvalidOperationException)
+        {
+            return FallbackVersion;
+        }
+
+        return FallbackVersion;
     }
 
     /// <summary>

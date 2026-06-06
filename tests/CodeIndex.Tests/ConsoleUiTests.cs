@@ -641,6 +641,49 @@ public class ConsoleUiTests
     }
 
     [Fact]
+    public void LoadVersionFromFile_MalformedJson_ReturnsFallback()
+    {
+        var path = WriteTempVersionJson("""{"version":""");
+        try
+        {
+            Assert.Equal("0.0.0", ConsoleUi.LoadVersionFromFile(path));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void LoadVersionFromFile_NonStringVersion_ReturnsFallback()
+    {
+        var path = WriteTempVersionJson("""{"version":{}}""");
+        try
+        {
+            Assert.Equal("0.0.0", ConsoleUi.LoadVersionFromFile(path));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void LoadVersionFromFile_MissingFile_ReturnsFallback()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"cdidx_missing_version_{Guid.NewGuid():N}.json");
+
+        Assert.Equal("0.0.0", ConsoleUi.LoadVersionFromFile(path));
+    }
+
+    private static string WriteTempVersionJson(string content)
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"cdidx_version_{Guid.NewGuid():N}.json");
+        File.WriteAllText(path, content, Encoding.UTF8);
+        return path;
+    }
+
+    [Fact]
     public void LoadBuildMetadata_PopulatesAllFields()
     {
         // #1550: build metadata (commit SHA, build date, dirty flag) is stamped
