@@ -2604,6 +2604,43 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetDefinitions_IncludeBodyCapsBodyLinesAndMarksTruncated_Issue3131()
+    {
+        var bodyLines = Enumerable.Range(1, DbReader.DefinitionBodyMaxLines + 5)
+            .Select(i => $"    value_{i:D2} = {i}");
+        InsertIndexedFile(
+            "src/long_body.py",
+            "python",
+            "def long_body():\n" + string.Join('\n', bodyLines) + "\n    return value_01\n");
+
+        var definition = Assert.Single(_reader.GetDefinitions("long_body", lang: "python", includeBody: true, exact: true));
+
+        Assert.NotNull(definition.BodyContent);
+        Assert.True(definition.BodyContentTruncated);
+        Assert.Null(definition.Complexity);
+        Assert.True(definition.BodyContent!.Split('\n').Length <= DbReader.DefinitionBodyMaxLines);
+        Assert.Contains("value_01", definition.BodyContent);
+        Assert.DoesNotContain("value_25", definition.BodyContent);
+    }
+
+    [Fact]
+    public void GetDefinitions_IncludeBodyCapsBodyBytesAndMarksTruncated_Issue3131()
+    {
+        var longLiteral = new string('a', DbReader.DefinitionBodyMaxBytes + 1024);
+        InsertIndexedFile(
+            "src/huge_body.py",
+            "python",
+            $"def huge_body():\n    value = \"{longLiteral}\"\n    return value\n");
+
+        var definition = Assert.Single(_reader.GetDefinitions("huge_body", lang: "python", includeBody: true, exact: true));
+
+        Assert.NotNull(definition.BodyContent);
+        Assert.True(definition.BodyContentTruncated);
+        Assert.Null(definition.Complexity);
+        Assert.True(Encoding.UTF8.GetByteCount(definition.BodyContent!) <= DbReader.DefinitionBodyMaxBytes);
+    }
+
+    [Fact]
     public void GetDefinitions_CSharpAddsDefinitionDisambiguators()
     {
         InsertIndexedFile("src/disambiguators.cs", "csharp",

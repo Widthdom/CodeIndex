@@ -230,6 +230,9 @@ public class DefinitionResult : SymbolResult
     public string? Disambiguator { get; set; }
     public string Content { get; set; } = string.Empty;
     public string? BodyContent { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool BodyContentTruncated { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? Complexity { get; set; }
 }
 

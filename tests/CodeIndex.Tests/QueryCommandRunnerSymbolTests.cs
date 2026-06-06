@@ -9,6 +9,40 @@ namespace CodeIndex.Tests;
 public partial class QueryCommandRunnerTests
 {
     [Fact]
+    public void RunDefinition_JsonBodyIncludesTruncationMetadata_Issue3131()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_definition_body_truncated_issue3131");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var bodyLines = Enumerable.Range(1, DbReader.DefinitionBodyMaxLines + 3)
+                .Select(i => $"    value_{i:D2} = {i}");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/long_body.py",
+                "python",
+                "def long_body():\n" + string.Join('\n', bodyLines) + "\n    return value_01\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                ["long_body", "--db", dbPath, "--json", "--body", "--lang", "python", "--exact-name"],
+                _jsonOptions));
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(json.GetProperty("body_content_truncated").GetBoolean());
+            Assert.False(json.TryGetProperty("complexity", out _));
+            Assert.True(CountLines(json.GetProperty("body_content").GetString()!) <= DbReader.DefinitionBodyMaxLines);
+            Assert.DoesNotContain("value_23", json.GetProperty("body_content").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSymbols_ExactNameFindsPythonDottedImportPrefixes()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_python_dotted_import_prefix");

@@ -175,15 +175,18 @@ public partial class QueryCommandRunnerTests
             AssertBodyExcerpt(
                 QueryCommandRunner.RunReferences,
                 ["Run", "--db", dbPath, "--json", "--body", "--snippet-lines", "1"],
-                "int Login(int user)");
+                "int Login(int user)",
+                expectedContentTruncated: true);
             AssertBodyExcerpt(
                 QueryCommandRunner.RunCallers,
                 ["Run", "--db", dbPath, "--json", "--body", "--snippet-lines", "2"],
-                "int Login(int user)");
+                "int Login(int user)",
+                expectedContentTruncated: true);
             AssertBodyExcerpt(
                 QueryCommandRunner.RunCallees,
                 ["Login", "--db", dbPath, "--json", "--body", "--snippet-lines", "1"],
-                "int Run(int user)");
+                "int Run(int user)",
+                expectedContentTruncated: true);
 
             var (impactExitCode, impactStdout, impactStderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
                 ["Run", "--db", dbPath, "--json", "--body", "--snippet-lines", "2"],
@@ -195,6 +198,7 @@ public partial class QueryCommandRunnerTests
             var impactCaller = impactDocument.RootElement.GetProperty("callers")[0];
             Assert.Contains("int Login(int user)", impactCaller.GetProperty("body_content").GetString());
             Assert.Equal(2, CountLines(impactCaller.GetProperty("body_content").GetString()!));
+            Assert.True(impactCaller.GetProperty("body_content_truncated").GetBoolean());
         }
         finally
         {

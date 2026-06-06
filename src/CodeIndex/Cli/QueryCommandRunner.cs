@@ -2172,25 +2172,27 @@ public static class QueryCommandRunner
 
     private static FileExcerptResult? BuildSymbolBodyExcerpt(DbReader reader, string path, string? lang, string symbolName, int snippetLines, int maxLineWidth)
     {
-        var definitions = reader.GetDefinitions(
+        var symbols = reader.SearchSymbols(
             symbolName,
             limit: 1,
             kind: null,
             lang: lang,
-            includeBody: true,
             pathPatterns: [path],
             excludePathPatterns: null,
             excludeTests: false,
             since: null,
             exact: true);
-        var definition = definitions.FirstOrDefault();
-        if (definition == null)
+        var symbol = symbols.FirstOrDefault();
+        if (symbol == null)
             return null;
 
-        var startLine = definition.StartLine;
-        var naturalEndLine = definition.BodyEndLine ?? definition.EndLine;
+        var startLine = symbol.StartLine;
+        var naturalEndLine = symbol.BodyEndLine ?? symbol.EndLine;
         var cappedEndLine = (int)Math.Min(naturalEndLine, (long)startLine + SearchSnippetFormatter.ClampSnippetLines(snippetLines) - 1);
-        return reader.GetExcerpt(path, startLine, cappedEndLine, maxLineWidth: maxLineWidth, focusLine: startLine);
+        var excerpt = reader.GetExcerpt(path, startLine, cappedEndLine, maxLineWidth: maxLineWidth, focusLine: startLine);
+        if (excerpt != null && cappedEndLine < naturalEndLine)
+            excerpt.ContentTruncated = true;
+        return excerpt;
     }
 
     private static FileExcerptResult? BuildBodyExcerpt(DbReader reader, string path, int line, int snippetLines, int maxLineWidth, int? focusColumn = null, int focusLength = 1)
