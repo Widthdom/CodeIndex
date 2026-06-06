@@ -2052,6 +2052,45 @@ public partial class DbReader
         return results;
     }
 
+    public HotspotCountResult CountSymbolHotspots(string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)
+    {
+        if (!_hasReferencesTable) return new HotspotCountResult(0, 0);
+        var query = BuildSymbolHotspotRowsQuery(kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters);
+        var sql = query.Sql + @"
+            SELECT COUNT(*),
+                   COUNT(DISTINCT gr.path)
+            FROM grouped_rows gr
+            JOIN reference_counts rc ON rc.symbol_id = gr.symbol_id
+            WHERE rc.ref_count > 0";
+
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = sql;
+        AddSymbolHotspotParameters(cmd, query, limit: null, kind, lang, pathPatterns, excludePathPatterns, visibilityFilters, excludeVisibilityFilters);
+        return ExecuteHotspotCountSummary(cmd);
+    }
+
+    public HotspotCountResult CountFileSymbolHotspots(string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)
+    {
+        if (!_hasReferencesTable) return new HotspotCountResult(0, 0);
+        var query = BuildSymbolHotspotRowsQuery(kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters);
+        var sql = query.Sql + @"
+            SELECT COUNT(*),
+                   COUNT(*)
+            FROM (
+                SELECT gr.path,
+                       gr.lang
+                FROM grouped_rows gr
+                JOIN reference_counts rc ON rc.symbol_id = gr.symbol_id
+                WHERE rc.ref_count > 0
+                GROUP BY gr.path, gr.lang
+            ) file_groups";
+
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = sql;
+        AddSymbolHotspotParameters(cmd, query, limit: null, kind, lang, pathPatterns, excludePathPatterns, visibilityFilters, excludeVisibilityFilters);
+        return ExecuteHotspotCountSummary(cmd);
+    }
+
     private SymbolHotspotRowsQuery BuildSymbolHotspotRowsQuery(string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<string>? visibilityFilters, IReadOnlyList<string>? excludeVisibilityFilters)
     {
         var containerNameSql = GetSymbolColumnSql("container_name");
@@ -2388,9 +2427,10 @@ public partial class DbReader
         return new SymbolHotspotRowsQuery(sql, graphLangs, hotspotFamilyLangs);
     }
 
-    private static void AddSymbolHotspotParameters(SqliteCommand command, SymbolHotspotRowsQuery query, int limit, string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, IReadOnlyList<string>? visibilityFilters, IReadOnlyList<string>? excludeVisibilityFilters)
+    private static void AddSymbolHotspotParameters(SqliteCommand command, SymbolHotspotRowsQuery query, int? limit, string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, IReadOnlyList<string>? visibilityFilters, IReadOnlyList<string>? excludeVisibilityFilters)
     {
-        command.Parameters.AddWithValue("@limit", limit);
+        if (limit.HasValue)
+            command.Parameters.AddWithValue("@limit", limit.Value);
         if (lang != null)
             command.Parameters.AddWithValue("@lang", lang);
         else
@@ -2408,16 +2448,22 @@ public partial class DbReader
 
     private sealed record SymbolHotspotRowsQuery(string Sql, List<string> GraphLanguages, List<string> HotspotFamilyLanguages);
 
-    /// <summary>
-    /// Return grouped hotspot rows collapsed by (name, kind) after the full filtered site set
-    /// has been considered, keeping the representative site deterministic.
-    /// フィルタ済みの全 definition site を見た上で、(name, kind) 単位に hotspot を集約して返す。
-    /// 代表 site は決定的な順序で選ぶ。
-    /// </summary>
-    public List<GroupedHotspotResult> GetGroupedSymbolHotspots(int limit, string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)
+    private static HotspotCountResult ExecuteHotspotCountSummary(SqliteCommand command)
     {
-        if (!_hasReferencesTable) return [];
+        using var reader = command.ExecuteTrackedReader();
+        if (!reader.TrackedRead())
+            return new HotspotCountResult(0, 0);
 
+        var count = Convert.ToInt32(reader.GetValue(0));
+        var fileCount = Convert.ToInt32(reader.GetValue(1));
+        var definitionSiteTotal = reader.FieldCount > 2 && !reader.IsDBNull(2)
+            ? Convert.ToInt32(reader.GetValue(2))
+            : 0;
+        return new HotspotCountResult(count, fileCount, definitionSiteTotal);
+    }
+
+    private SymbolHotspotRowsQuery BuildGroupedSymbolHotspotRowsQuery(string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<string>? visibilityFilters, IReadOnlyList<string>? excludeVisibilityFilters)
+    {
         var containerNameSql = GetSymbolColumnSql("container_name");
         var containerQualifiedNameSql = GetSymbolColumnSql("container_qualified_name");
         var familyKeySql = GetSymbolColumnSql("family_key");
@@ -2685,7 +2731,39 @@ public partial class DbReader
                   ON grc.name = hs.name
                  AND grc.kind = hs.kind
                 GROUP BY hs.name, hs.kind
-            )
+            )";
+
+        return new SymbolHotspotRowsQuery(sql, graphLangs, hotspotFamilyLangs);
+    }
+
+    public HotspotCountResult CountGroupedSymbolHotspots(string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)
+    {
+        if (!_hasReferencesTable) return new HotspotCountResult(0, 0);
+        var query = BuildGroupedSymbolHotspotRowsQuery(kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters);
+        var sql = query.Sql + @"
+            SELECT COUNT(*),
+                   (SELECT COUNT(DISTINCT path) FROM ranked_sites),
+                   COALESCE(SUM(definition_sites), 0)
+            FROM grouped";
+
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = sql;
+        AddSymbolHotspotParameters(cmd, query, limit: null, kind, lang, pathPatterns, excludePathPatterns, visibilityFilters, excludeVisibilityFilters);
+        return ExecuteHotspotCountSummary(cmd);
+    }
+
+    /// <summary>
+    /// Return grouped hotspot rows collapsed by (name, kind) after the full filtered site set
+    /// has been considered, keeping the representative site deterministic.
+    /// フィルタ済みの全 definition site を見た上で、(name, kind) 単位に hotspot を集約して返す。
+    /// 代表 site は決定的な順序で選ぶ。
+    /// </summary>
+    public List<GroupedHotspotResult> GetGroupedSymbolHotspots(int limit, string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)
+    {
+        if (!_hasReferencesTable) return [];
+
+        var query = BuildGroupedSymbolHotspotRowsQuery(kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters);
+        var sql = query.Sql + @"
             SELECT g.name, g.kind, g.ref_count, g.ref_score, g.definition_sites,
                    rep.path, rep.lang, rep.line, rep.visibility, rep.container_name,
                    (
@@ -2709,20 +2787,7 @@ public partial class DbReader
 
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = sql;
-        cmd.Parameters.AddWithValue("@limit", limit);
-        if (lang != null)
-            cmd.Parameters.AddWithValue("@lang", lang);
-        else
-        {
-            for (int i = 0; i < graphLangs.Count; i++)
-                cmd.Parameters.AddWithValue($"@gl{i}", graphLangs[i]);
-        }
-        if (kind != null)
-            cmd.Parameters.AddWithValue("@kind", kind);
-        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
-        AddVisibilityFilterParameters(cmd, visibilityFilters, excludeVisibilityFilters);
-        for (int i = 0; i < hotspotFamilyLangs.Count; i++)
-            cmd.Parameters.AddWithValue($"@hotspotFamilyLang{i}", hotspotFamilyLangs[i]);
+        AddSymbolHotspotParameters(cmd, query, limit, kind, lang, pathPatterns, excludePathPatterns, visibilityFilters, excludeVisibilityFilters);
         cmd.Parameters.AddWithValue("@groupedPathSampleLimit", GroupedHotspotPathSampleLimit + 1);
 
         var results = new List<GroupedHotspotResult>();

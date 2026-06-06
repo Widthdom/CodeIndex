@@ -41,6 +41,8 @@ public readonly record struct SearchCursor(double Score, long ChunkId, int Offse
 
 public readonly record struct QueryCountResult(int Count, int FileCount, bool IncludesSql = false);
 
+public readonly record struct HotspotCountResult(int Count, int FileCount, int DefinitionSiteTotal = 0);
+
 public enum SearchGuardRole
 {
     Require,

@@ -1058,7 +1058,7 @@ public static class ConsoleUi
         Console.WriteLine("  --severity <s>             validate only: filter issues by severity: info, warning, error");
         Console.WriteLine("  --visibility <v[,v]>       Filter symbols/definitions/unused/hotspots by visibility: public, protected, internal, private");
         WriteHelpLine("  --exclude-visibility <v[,v]> Exclude symbols/definitions/unused/hotspots by visibility");
-        WriteHelpLine("  --count                    Count only; search/definition/references/callers/callees/symbols/files/find/unused ignore --limit, impact/hotspots still use visible page counts");
+        WriteHelpLine("  --count                    Count only; search/definition/references/callers/callees/symbols/files/find/unused/hotspots ignore --limit, impact still uses visible page counts");
         Console.WriteLine("  --since <datetime>         Filter to files modified since this timestamp (ISO 8601)");
         Console.WriteLine("  --no-dedup                 search only: return every raw overlapping chunk hit (debug/density)");
         WriteHelpLine($"  --require-before/--require-after <query>  search only: keep primary matches only when the guard query appears within --guard-window lines before/after the match (default {DbReader.DefaultSearchGuardWindow}, max {DbReader.MaxSearchGuardWindow})");
