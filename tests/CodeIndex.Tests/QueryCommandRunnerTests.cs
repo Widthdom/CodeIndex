@@ -299,6 +299,42 @@ public partial class QueryCommandRunnerTests
         }
     }
 
+    [Fact]
+    public void ParseArgs_ProjectFilterUsesIndexedProjectRootForExplicitDb_Issue3189()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_solution_filter_explicit_db");
+        var otherRoot = TestProjectHelper.CreateTempProject("cdidx_solution_filter_other_cwd");
+        var originalCurrentDirectory = Environment.CurrentDirectory;
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src", "App"));
+            File.WriteAllText(Path.Combine(projectRoot, "CodeIndex.sln"), """
+            Microsoft Visual Studio Solution File, Format Version 12.00
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "App", "src\App\App.csproj", "{11111111-1111-1111-1111-111111111111}"
+            EndProject
+            """);
+            File.WriteAllText(Path.Combine(projectRoot, "src", "App", "App.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+
+            Environment.CurrentDirectory = otherRoot;
+            var options = QueryCommandRunner.ParseArgs(
+                ["Auth", "--db", dbPath, "--project", "App"],
+                jsonDefault: false,
+                allowNamedQuery: true);
+
+            Assert.Equal("Auth", options.Query);
+            Assert.Equal(["App"], options.ProjectFilters);
+            Assert.Equal(["src/App/*"], options.PathPatterns);
+            Assert.Null(options.ParseError);
+        }
+        finally
+        {
+            Environment.CurrentDirectory = originalCurrentDirectory;
+            TestProjectHelper.DeleteDirectory(otherRoot);
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Theory]
     [InlineData("30m", 30 * 60)]
     [InlineData("2h", 2 * 60 * 60)]
