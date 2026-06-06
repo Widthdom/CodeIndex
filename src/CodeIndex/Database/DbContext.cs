@@ -267,7 +267,7 @@ public class DbContext : IDisposable
                     _connection.Open();
                     Execute("PRAGMA busy_timeout=5000");
                     ApplyConnectionPerformancePragmas();
-                    RegisterConnectionFunctionsWithRetry(_connection);
+                    RegisterConnectionFunctionsWithRetry(_connection, cancellationToken: cancellationToken);
                     _isReadOnly = true;
                     WarnIfBatchInProgress();
                     return;
@@ -303,7 +303,7 @@ public class DbContext : IDisposable
                 cancellationToken: cancellationToken);
             Execute("PRAGMA busy_timeout=5000");
             ApplyConnectionPerformancePragmas();
-            RegisterConnectionFunctionsWithRetry(_connection);
+            RegisterConnectionFunctionsWithRetry(_connection, cancellationToken: cancellationToken);
             EnsureWritableUserVersionSupported(dbPath);
             ConfigureAutoVacuumForEmptyDatabase();
             Execute($"PRAGMA application_id={ApplicationId}");
@@ -343,7 +343,7 @@ public class DbContext : IDisposable
                         cancellationToken: cancellationToken);
                     Execute("PRAGMA busy_timeout=5000");
                     ApplyConnectionPerformancePragmas();
-                    RegisterConnectionFunctionsWithRetry(_connection);
+                    RegisterConnectionFunctionsWithRetry(_connection, cancellationToken: cancellationToken);
                     EnsureWritableUserVersionSupported(dbPath);
                     ConfigureAutoVacuumForEmptyDatabase();
                     Execute($"PRAGMA application_id={ApplicationId}");
@@ -401,7 +401,7 @@ public class DbContext : IDisposable
         _connection = OpenReadOnly(dbPath);
         Execute("PRAGMA busy_timeout=5000");
         ApplyConnectionPerformancePragmas();
-        RegisterConnectionFunctionsWithRetry(_connection);
+        RegisterConnectionFunctionsWithRetry(_connection, cancellationToken: cancellationToken);
         _isReadOnly = true;
         WarnIfBatchInProgress();
     }
@@ -1258,25 +1258,29 @@ public class DbContext : IDisposable
         }
     }
 
-    private static void RegisterConnectionFunctionsWithRetry(
+    internal static void RegisterConnectionFunctionsWithRetry(
         SqliteConnection connection,
         Action<int>? sleep = null,
-        int maxAttempts = 5)
+        int maxAttempts = 5,
+        CancellationToken cancellationToken = default,
+        Action<SqliteConnection>? registerConnectionFunctions = null)
     {
         if (maxAttempts <= 0)
             throw new ArgumentOutOfRangeException(nameof(maxAttempts), maxAttempts, "Must be at least 1.");
 
-        sleep ??= static milliseconds => System.Threading.Thread.Sleep(milliseconds);
+        cancellationToken.ThrowIfCancellationRequested();
+        registerConnectionFunctions ??= RegisterConnectionFunctions;
         for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             try
             {
-                RegisterConnectionFunctions(connection);
+                registerConnectionFunctions(connection);
                 return;
             }
             catch (SqliteException ex) when (IsTransientBusyError(ex) && attempt < maxAttempts)
             {
-                sleep(50 * attempt);
+                SleepBeforeRetry(50 * attempt, sleep, cancellationToken);
             }
         }
     }
