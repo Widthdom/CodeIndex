@@ -416,8 +416,8 @@ public static class SearchSnippetFormatter
         Math.Clamp(maxLines, 1, MaxSnippetLines);
 
     private static string[] BuildQueryTokens(string query, bool normalizeCSharpVerbatimNames) =>
-        query
-            .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
+        DbReader
+            .SplitLiteralSearchTerms(query)
             .Select(NormalizeToken)
             .Where(t => t.Length > 0)
             .Where(t => t is not "AND" and not "OR" and not "NOT" and not "NEAR")

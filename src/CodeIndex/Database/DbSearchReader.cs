@@ -25,8 +25,8 @@ public partial class DbReader
     private const int MaxSearchGuardLineWindowCacheEntries = 256;
 
     /// <summary>
-    /// Sanitize user input for FTS5 MATCH by quoting each token as a phrase.
-    /// FTS5 MATCH用にユーザー入力をサニタイズ（各トークンをフレーズとして引用）。
+    /// Sanitize user input for FTS5 MATCH by quoting each literal term or phrase.
+    /// FTS5 MATCH用にユーザー入力をサニタイズ（各リテラル語句をフレーズとして引用）。
     /// Prevents FTS5 syntax errors from special characters (*, ", AND, OR, NOT, NEAR, etc.).
     /// 特殊文字（*, ", AND, OR, NOT, NEAR等）によるFTS5構文エラーを防止する。
     /// When <paramref name="prefix"/> is true, every token is treated as an FTS5 prefix phrase
@@ -37,11 +37,12 @@ public partial class DbReader
     /// </summary>
     internal static string SanitizeFtsQuery(string query, bool prefix)
     {
-        // Escape double quotes inside the query, then wrap each whitespace-separated
-        // token in double quotes so FTS5 treats them as literal phrases. A trailing
+        // Escape double quotes inside the query, then wrap each literal term in double
+        // quotes so FTS5 treats quoted spans as phrases and unquoted terms literally. A trailing
         // `*` on the user-supplied token is preserved as a prefix-search shorthand so
         // `auth*` can match `authenticate` without requiring raw FTS5 syntax.
-        // クエリ内のダブルクォートをエスケープし、各トークンをダブルクォートで囲む。
+        // クエリ内のダブルクォートをエスケープし、quoted span をフレーズとして扱いながら
+        // リテラル語句をダブルクォートで囲む。
         // ユーザー入力末尾の `*` は prefix 検索の shorthand として保持し、`auth*` で
         // `authenticate` を raw FTS5 構文なしに検索できるようにする。
         var tokens = SplitLiteralSearchTerms(query);
@@ -50,7 +51,7 @@ public partial class DbReader
         return string.Join(" ", tokens.Select(token => FormatFtsToken(token, prefix)));
     }
 
-    private static List<string> SplitLiteralSearchTerms(string query)
+    internal static List<string> SplitLiteralSearchTerms(string query)
     {
         var tokens = new List<string>();
         for (var i = 0; i < query.Length;)
@@ -656,7 +657,7 @@ public partial class DbReader
     private static string[] BuildPrimarySearchMatchTerms(string query, string normalizedQuery, bool rawQuery, bool exact)
     {
         IEnumerable<string> rawTerms = !exact && !rawQuery
-            ? normalizedQuery.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
+            ? SplitLiteralSearchTerms(normalizedQuery)
             : [rawQuery ? query.Trim() : normalizedQuery.Trim()];
         var terms = rawTerms.Select(NormalizeGuardSearchTerm).ToList();
         if (!exact && rawQuery)
