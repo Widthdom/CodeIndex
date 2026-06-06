@@ -114,6 +114,8 @@ public partial class McpServer : IDisposable
     private BoundedMcpText? _clientNameDisplay;
     private BoundedMcpText? _clientVersionDisplay;
     private JsonNode? _clientCapabilities;
+    private int? _clientCapabilitiesSerializedBytes;
+    private string? _clientCapabilitiesTruncationReason;
     private JsonArray _clientRoots = [];
     private int _clientRootCount;
     private bool _clientRootsTruncated;
@@ -180,6 +182,8 @@ public partial class McpServer : IDisposable
     internal const int MaxRequestIdByteLength = 256;
     internal const int MaxClientRootCount = 16;
     internal const int MaxClientRootUriChars = 512;
+    internal const int MaxClientCapabilitiesJsonBytes = 8 * 1024;
+    internal const int MaxClientCapabilitiesDepth = 8;
     // Stdio buffer for the JSON-RPC loop. Sized to fit typical large MCP payloads (e.g. batch_query)
     // in a single read so the StreamReader does not grow from its 1 KB default toward MaxLineCharacterCount.
     // JSON-RPCループのstdioバッファ。大きめのMCPペイロードを1回の読み取りで吸収し、
@@ -1831,6 +1835,8 @@ public partial class McpServer : IDisposable
     private void CaptureClientSession(JsonNode? initializeParams)
     {
         _clientCapabilities = null;
+        _clientCapabilitiesSerializedBytes = null;
+        _clientCapabilitiesTruncationReason = null;
         _clientRoots = [];
         _clientRootCount = 0;
         _clientRootsTruncated = false;
@@ -1840,7 +1846,7 @@ public partial class McpServer : IDisposable
         if (!obj.TryGetPropertyValue("capabilities", out var capabilities))
             obj.TryGetPropertyValue("clientCapabilities", out capabilities);
         if (capabilities is not null)
-            _clientCapabilities = JsonNode.Parse(capabilities.ToJsonString());
+            CaptureClientCapabilities(capabilities);
 
         if (TryReadStringValue(obj["rootUri"]) is { Length: > 0 } rootUri)
             CaptureClientRoot(rootUri);
@@ -1854,6 +1860,33 @@ public partial class McpServer : IDisposable
                     CaptureClientRoot(uri);
             }
         }
+    }
+
+    private void CaptureClientCapabilities(JsonNode capabilities)
+    {
+        var json = capabilities.ToJsonString();
+        var serializedBytes = Encoding.UTF8.GetByteCount(json);
+        _clientCapabilitiesSerializedBytes = serializedBytes;
+        if (serializedBytes > MaxClientCapabilitiesJsonBytes)
+        {
+            TruncateClientCapabilities("byte_limit");
+            return;
+        }
+
+        try
+        {
+            _clientCapabilities = JsonNode.Parse(json, documentOptions: new JsonDocumentOptions { MaxDepth = MaxClientCapabilitiesDepth });
+        }
+        catch (JsonException)
+        {
+            TruncateClientCapabilities("depth_limit");
+        }
+    }
+
+    private void TruncateClientCapabilities(string reason)
+    {
+        _clientCapabilities = new JsonObject();
+        _clientCapabilitiesTruncationReason = reason;
     }
 
     private void CaptureClientRoot(string uri)

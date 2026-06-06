@@ -2320,6 +2320,15 @@ public partial class McpServer
         }
         if (_clientCapabilities is not null)
             session["client_capabilities"] = _clientCapabilities.DeepClone();
+        if (_clientCapabilitiesTruncationReason is not null)
+        {
+            session["client_capabilities_truncated"] = true;
+            session["client_capabilities_truncation_reason"] = _clientCapabilitiesTruncationReason;
+            if (_clientCapabilitiesSerializedBytes is { } serializedBytes)
+                session["client_capabilities_serialized_bytes"] = serializedBytes;
+            session["client_capabilities_byte_limit"] = MaxClientCapabilitiesJsonBytes;
+            session["client_capabilities_depth_limit"] = MaxClientCapabilitiesDepth;
+        }
         return session;
     }
 
