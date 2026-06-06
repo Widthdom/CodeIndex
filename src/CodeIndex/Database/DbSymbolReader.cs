@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.RegularExpressions;
 using CodeIndex.Indexer;
 using Microsoft.Data.Sqlite;
@@ -10,6 +11,9 @@ namespace CodeIndex.Database;
 /// </summary>
 public partial class DbReader
 {
+    internal const int DefinitionBodyMaxLines = 20;
+    internal const int DefinitionBodyMaxBytes = 16 * 1024;
+
     private const string UnusedBucketLikelyPrivate = "likely_unused_private";
     private const string UnusedBucketMaybeNonPublic = "maybe_unused_nonpublic";
     private const string UnusedBucketPublicOrExported = "public_or_exported_no_refs";
@@ -783,9 +787,20 @@ public partial class DbReader
                 continue;
 
             string? bodyContent = null;
+            var bodyContentTruncated = false;
             if (includeBody && symbol.BodyStartLine != null && symbol.BodyEndLine != null)
             {
-                bodyContent = GetExcerpt(symbol.Path, symbol.BodyStartLine.Value, symbol.BodyEndLine.Value)?.Content;
+                var cappedBodyEndLine = Math.Min(
+                    symbol.BodyEndLine.Value,
+                    symbol.BodyStartLine.Value + DefinitionBodyMaxLines - 1);
+                var bodyExcerpt = GetExcerpt(symbol.Path, symbol.BodyStartLine.Value, cappedBodyEndLine);
+                if (bodyExcerpt != null)
+                {
+                    bodyContent = bodyExcerpt.Content;
+                    bodyContentTruncated = bodyExcerpt.ContentTruncated || cappedBodyEndLine < symbol.BodyEndLine.Value;
+                    (bodyContent, var byteTruncated) = ClampDefinitionBodyBytes(bodyContent);
+                    bodyContentTruncated |= byteTruncated;
+                }
             }
 
             results.Add(new DefinitionResult
@@ -808,12 +823,30 @@ public partial class DbReader
                 Disambiguator = BuildDefinitionDisambiguator(symbol),
                 Content = definitionExcerpt.Content,
                 BodyContent = bodyContent,
-                Complexity = bodyContent != null ? SymbolExtractor.EstimateComplexity(bodyContent) : null,
+                BodyContentTruncated = bodyContentTruncated,
+                Complexity = bodyContent != null && !bodyContentTruncated
+                    ? SymbolExtractor.EstimateComplexity(bodyContent)
+                    : null,
             });
         }
 
         return results;
     }
+
+    private static (string Content, bool Truncated) ClampDefinitionBodyBytes(string content)
+    {
+        var bytes = Encoding.UTF8.GetBytes(content);
+        if (bytes.Length <= DefinitionBodyMaxBytes)
+            return (content, false);
+
+        var byteCount = DefinitionBodyMaxBytes;
+        while (byteCount > 0 && IsUtf8ContinuationByte(bytes[byteCount]))
+            byteCount--;
+
+        return (Encoding.UTF8.GetString(bytes, 0, byteCount), true);
+    }
+
+    private static bool IsUtf8ContinuationByte(byte value) => (value & 0xC0) == 0x80;
 
     private static string? BuildDefinitionDisambiguator(SymbolResult symbol)
     {

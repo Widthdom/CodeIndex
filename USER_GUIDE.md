@@ -1003,6 +1003,8 @@ With `--json`, symbol results also include definition ranges, optional body rang
 {"path":"src/Services/UserService.cs","lang":"csharp","kind":"function","name":"GetUserById","line":24,"start_line":24,"end_line":41,"body_start_line":26,"body_end_line":41,"signature":"public async Task<User> GetUserById(int id)","container_kind":"class","container_name":"UserService","visibility":"public","return_type":"Task<User>"}
 ```
 
+When `definition --body` is combined with `--json`, `body_content` is capped to a bounded excerpt and `body_content_truncated` is true when the stored body exceeds the returned payload.
+
 `symbols`, `definition`, `unused`, and `hotspots` accept `--visibility <public|protected|internal|private[,..]>` and `--exclude-visibility <...>` to include or exclude symbols by stored visibility. `public` also matches language-specific exported forms such as Rust/Zig `pub`, Swift `open`, and JavaScript/TypeScript `export`; `private` also matches Swift `fileprivate`.
 
 `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, and `find` also share repeatable `--path <glob>` glob-style path filters (multiple values are OR'd together), repeatable `--exclude-path <glob>`, and `--exclude-tests`. Use `*` and `?` to match path segments, and plain text still behaves like a substring filter when you do not include wildcards. Search results prefer source files over tests and docs, and `search` boosts files whose symbol names or paths match the query exactly.
@@ -1862,7 +1864,7 @@ If the checkout changed because of `git reset`, `git rebase`, `git commit --amen
 - Start by checking freshness with `status --check --json` when search correctness matters. If the index does not match the workspace, run `cdidx .` before trusting symbol or graph results. Use `map` / `map --json` for a quick overview of languages, modules, likely entrypoints, and high-activity areas.
 - Use `languages` as the source of truth for canonical `--lang` values and current symbol / graph support. Avoid relying on memorized per-language extraction details in prompts or agent instructions; support changes over time and the CLI reports `graph_supported`, `graph_support_reason`, and related trust metadata where it matters.
 - When you have a likely symbol name, run `symbols` first to resolve candidates. Add `--exact-name` once the intended symbol is known. Use `outline` for a single file's structure and `inspect` when you want bundled definition, reference, caller, and callee context in one request.
-- Use `definition --body` for implementation text, then `references --body`, `callers --body`, `callees --body`, or `impact --body` when graph results need inline excerpts. Prefer `--exact` after a candidate has been resolved so names such as `Run` do not expand to `RunAsync` or `RunImpact`. Treat graph fallback and degraded metadata as guidance about confidence, not as decoration.
+- Use `definition --body` for bounded implementation text, then `references --body`, `callers --body`, `callees --body`, or `impact --body` when graph results need inline excerpts. Check `body_content_truncated` before assuming the returned body is complete. Prefer `--exact` after a candidate has been resolved so names such as `Run` do not expand to `RunAsync` or `RunImpact`. Treat graph fallback and degraded metadata as guidance about confidence, not as decoration.
 - Use `search` for raw text, comments, strings, option names, generated code, or languages where the current `languages` output says structured graph support is unavailable. Use `--include-generated` when generated code is the target. Use `--exact-substring` for punctuation-heavy literals and `--fts` only when you intentionally want raw FTS5 syntax such as `NEAR` or `OR`.
 - Scope broad searches early with `--path <text>`, repeatable `--exclude-path <text>`, and `--exclude-tests` unless tests are the target. Generated files are hidden from query results by default; pass `--include-generated` when needed. For noisy minified or transpiled files, reduce payload size with `--snippet-lines <n>` and `--max-line-width <n>`.
 - Use `files` to discover candidate paths, `find` to re-locate exact text within known files, and `excerpt` to fetch only the needed lines instead of opening entire files.
@@ -3294,6 +3296,8 @@ function   CreateUser                               src/Services/UserService.cs:
 {"path":"src/Services/UserService.cs","lang":"csharp","kind":"function","name":"GetUserById","line":24,"start_line":24,"end_line":41,"body_start_line":26,"body_end_line":41,"signature":"public async Task<User> GetUserById(int id)","container_kind":"class","container_name":"UserService","visibility":"public","return_type":"Task<User>"}
 ```
 
+`definition --body` と `--json` を組み合わせた場合、`body_content` は bounded excerpt に cap され、保存された body が返却 payload を超えると `body_content_truncated` が true になります。
+
 `symbols`、`definition`、`unused`、`hotspots` は `--visibility <public|protected|internal|private[,..]>` と `--exclude-visibility <...>` で、保存された可視性に基づく include / exclude ができます。`public` は Rust/Zig の `pub`、Swift の `open`、JavaScript/TypeScript の `export` などの exported 表現にも一致し、`private` は Swift の `fileprivate` にも一致します。
 
 `search`、`definition`、`references`、`callers`、`callees`、`symbols`、`files` は共通で繰り返し指定できる `--path <glob>` の glob 形式パスフィルタ（複数値は OR で結合）、繰り返し指定できる `--exclude-path <glob>`、`--exclude-tests` に対応しています。`*` と `?` でパスパターンを指定でき、ワイルドカードを含めない場合は従来どおり部分文字列として扱われます。検索結果は tests や docs より source を優先し、`search` はシンボル名やパスがクエリと正確に一致するファイルを上に出します。
@@ -4147,7 +4151,7 @@ system では、同じ `cdidx index . --quiet` を step として追加してく
 - 検索結果の正しさが重要な場合は、まず `status --check --json` で鮮度を確認する。インデックスが workspace と一致していなければ、symbol / graph 結果を信頼する前に `cdidx .` を実行する。全体像の把握には `map` / `map --json` を使い、言語、モジュール、entrypoint 候補、活動量の高い領域を先に見る。
 - `--lang` に渡す正式名と現在の symbol / graph 対応状況は `languages` を正とする。プロンプトやエージェント向け手順に言語別抽出仕様を細かく固定しない。対応範囲は更新されるため、必要な場所では CLI が返す `graph_supported`、`graph_support_reason`、関連する trust metadata を読む。
 - 候補シンボル名がある場合は、まず `symbols` で候補を固める。対象が決まったら `--exact-name` を付ける。1ファイルの構造だけ見たいときは `outline`、定義・参照・caller・callee のまとまった文脈が欲しいときは `inspect` を使う。
-- 実装本文が必要なら `definition --body` を使い、graph 結果にもインライン抜粋が必要なら `references --body`、`callers --body`、`callees --body`、`impact --body` を使う。候補が解決済みなら `--exact` を付け、`Run` が `RunAsync` や `RunImpact` に広がらないようにする。graph fallback や degraded metadata は信頼度の情報として扱う。
+- 実装本文が必要なら bounded な `definition --body` を使い、graph 結果にもインライン抜粋が必要なら `references --body`、`callers --body`、`callees --body`、`impact --body` を使う。返却 body が完全かどうかを判断する前に `body_content_truncated` を確認する。候補が解決済みなら `--exact` を付け、`Run` が `RunAsync` や `RunImpact` に広がらないようにする。graph fallback や degraded metadata は信頼度の情報として扱う。
 - 生テキスト、コメント、文字列、オプション名、生成コード、または現在の `languages` 出力で構造化 graph 対応がない言語には `search` を使う。記号を多く含む literal には `--exact-substring`、`NEAR` や `OR` などの FTS5 構文を意図して使う場合だけ `--fts` を使う。
 - 広い検索は早い段階で `--path <text>`、繰り返し指定できる `--exclude-path <text>`、テストが目的でない場合の `--exclude-tests` で絞る。生成・minified・transpiled などノイズの大きいファイルでは `--snippet-lines <n>` と `--max-line-width <n>` で payload を小さくする。
 - 候補パスの把握には `files`、既知ファイル内の再探索には `find`、必要行だけ読むときは `excerpt` を使い、ファイル全体を開かない。
