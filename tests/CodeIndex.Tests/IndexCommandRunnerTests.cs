@@ -6368,6 +6368,30 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_DryRun_WithChangedBetweenInvalidRef_ReturnsUsageError_3046()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            RunGit(projectRoot, "init");
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { }\n");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "initial");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--changed-between", "HEAD", "missing-ref", "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal("error", json.GetProperty("status").GetString());
+            Assert.Contains("failed to resolve changed files between git refs", json.GetProperty("message").GetString());
+            Assert.Contains("cdidx index <projectPath> --changed-between <old-ref> <new-ref>", json.GetProperty("hint").GetString());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_UpdateMode_WithFiles_RemovesIndexedScriptThatLosesShebang()
     {
         var projectRoot = CreateTempProject();
