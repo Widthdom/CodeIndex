@@ -297,6 +297,37 @@ public class McpServerTests : IDisposable
             second["results"]!.AsArray()[0]!["path"]!.GetValue<string>());
     }
 
+    [Theory]
+    [InlineData("NaN:1:0")]
+    [InlineData("Infinity:1:0")]
+    [InlineData("1:-1:0")]
+    [InlineData("1:1:-1")]
+    public void ToolsCall_Search_InvalidCursorDomain_ReturnsInvalidCursorError_Issue3193(string cursor)
+    {
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "search",
+                ["arguments"] = new JsonObject
+                {
+                    ["query"] = "Run",
+                    ["cursor"] = cursor,
+                },
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        var result = response["result"]!;
+        Assert.True(result["isError"]!.GetValue<bool>());
+        Assert.Contains("'cursor' must be a search pagination cursor", result["content"]![0]!["text"]!.GetValue<string>());
+        Assert.Equal("invalid_argument", result["structuredContent"]!["category"]!.GetValue<string>());
+    }
+
     [Fact]
     public void ToolsCall_Callers_TruncatedResponseIncludesNextOffsetAndPages()
     {
