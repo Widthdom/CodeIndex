@@ -14500,9 +14500,9 @@ public class DbReaderTests : IDisposable
                 FileId = fileId,
                 Kind = "function",
                 Name = "HiddenInterpolated",
-                Line = 6,
-                StartLine = 6,
-                EndLine = 6,
+                Line = 7,
+                StartLine = 7,
+                EndLine = 7,
                 Signature = "private void HiddenInterpolated() { }",
                 Visibility = "private",
                 ContainerKind = "class",
@@ -14513,9 +14513,9 @@ public class DbReaderTests : IDisposable
                 FileId = fileId,
                 Kind = "function",
                 Name = "RawInterpolated",
-                Line = 7,
-                StartLine = 7,
-                EndLine = 7,
+                Line = 8,
+                StartLine = 8,
+                EndLine = 8,
                 Signature = "private void RawInterpolated() { }",
                 Visibility = "private",
                 ContainerKind = "class",
@@ -14526,9 +14526,9 @@ public class DbReaderTests : IDisposable
                 FileId = fileId,
                 Kind = "function",
                 Name = "CommentOnly",
-                Line = 9,
-                StartLine = 9,
-                EndLine = 9,
+                Line = 10,
+                StartLine = 10,
+                EndLine = 10,
                 Signature = "private void CommentOnly() { }",
                 Visibility = "private",
                 ContainerKind = "class",
@@ -14539,9 +14539,9 @@ public class DbReaderTests : IDisposable
                 FileId = fileId,
                 Kind = "function",
                 Name = "StringOnly",
-                Line = 10,
-                StartLine = 10,
-                EndLine = 10,
+                Line = 11,
+                StartLine = 11,
+                EndLine = 11,
                 Signature = "private void StringOnly() { _ = \"StringOnly\"; }",
                 Visibility = "private",
                 ContainerKind = "class",
@@ -14552,9 +14552,9 @@ public class DbReaderTests : IDisposable
                 FileId = fileId,
                 Kind = "function",
                 Name = "RawStringOnly",
-                Line = 11,
-                StartLine = 11,
-                EndLine = 11,
+                Line = 12,
+                StartLine = 12,
+                EndLine = 12,
                 Signature = "private void RawStringOnly() { _ = \"\"\"RawStringOnly\"\"\"; }",
                 Visibility = "private",
                 ContainerKind = "class",
@@ -14565,9 +14565,9 @@ public class DbReaderTests : IDisposable
                 FileId = fileId,
                 Kind = "function",
                 Name = "Hidden",
-                Line = 4,
-                StartLine = 4,
-                EndLine = 4,
+                Line = 6,
+                StartLine = 6,
+                EndLine = 6,
                 Signature = "private void Hidden() { }",
                 Visibility = "private",
                 ContainerKind = "class",
@@ -14584,6 +14584,92 @@ public class DbReaderTests : IDisposable
         Assert.Contains(unused, symbol => symbol.Name == "CommentOnly");
         Assert.Contains(unused, symbol => symbol.Name == "StringOnly");
         Assert.Contains(unused, symbol => symbol.Name == "RawStringOnly");
+    }
+
+    [Fact]
+    public void GetUnusedSymbols_PrivateConstUseAfterRawStringChunkBoundary_IsNotReported()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/chunked_raw_string_fixture.cs",
+            Lang = "csharp",
+            Size = 512,
+            Lines = 10,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 5,
+                Content = """"
+                public class ChunkedRawStringFixture
+                {
+                    private const string UsedRowsSql = "SELECT 1";
+                    private const string FillerSql = """
+                        SELECT
+                """",
+            },
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 1,
+                StartLine = 5,
+                EndLine = 10,
+                Content = """"
+                        SELECT
+                            value
+                        """;
+                    public void Compare() { _ = UsedRowsSql; }
+                    private const string ActuallyUnused = "unused";
+                }
+                """",
+            },
+        ]);
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "UsedRowsSql",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 3,
+                Signature = "private const string UsedRowsSql = \"SELECT 1\";",
+                Visibility = "private",
+                ReturnType = "string",
+                ContainerKind = "class",
+                ContainerName = "ChunkedRawStringFixture",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "ActuallyUnused",
+                Line = 9,
+                StartLine = 9,
+                EndLine = 9,
+                Signature = "private const string ActuallyUnused = \"unused\";",
+                Visibility = "private",
+                ReturnType = "string",
+                ContainerKind = "class",
+                ContainerName = "ChunkedRawStringFixture",
+            },
+        ]);
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
+            pathPatterns: ["chunked_raw_string_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+        var count = _reader.CountUnusedSymbols(kind: null, lang: "csharp",
+            pathPatterns: ["chunked_raw_string_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+
+        Assert.DoesNotContain(unused, symbol => symbol.Name == "UsedRowsSql");
+        Assert.Contains(unused, symbol => symbol.Name == "ActuallyUnused");
+        Assert.Equal(1, count.Count);
+        Assert.Equal(1, count.FileCount);
     }
 
     [Fact]
