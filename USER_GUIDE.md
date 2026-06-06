@@ -927,8 +927,9 @@ For scripts or editor integrations that need several queries against the same
 index, `cdidx batch --db <path>` keeps one SQLite connection open and reads one
 JSON string array per stdin line. Each array starts with a query command name,
 followed by that command's normal arguments. Each stdin line is capped at
-1,048,576 characters, and each command can carry at most 256 arguments after
-the command name:
+1,048,576 characters, each decoded string argument is capped at 8,192
+characters, and each command can carry at most 256 arguments after the command
+name:
 
 ```bash
 printf '%s\n' \
@@ -3221,7 +3222,8 @@ cdidx search "authenticate" --json --verbose
 同じインデックスに対して複数の query を投げる script や editor integration では、
 `cdidx batch --db <path>` を使うと 1 つの SQLite connection を開いたまま処理できます。
 stdin の各行は JSON 文字列配列で、先頭に query command 名、その後ろに通常の引数を並べます。
-各 stdin 行は 1,048,576 文字まで、各 command は command 名の後ろに最大 256 引数までです:
+各 stdin 行は 1,048,576 文字まで、デコード後の各文字列引数は 8,192 文字まで、
+各 command は command 名の後ろに最大 256 引数までです:
 
 ```bash
 printf '%s\n' \

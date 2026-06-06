@@ -217,7 +217,7 @@ Interactive terminal controls are allowed only when stdout is not redirected or 
 
 Query commands that accept path filters (`search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `deps`, `impact`, `unused`, `hotspots`, and `validate`) expand `--project` into the matching project directory glob before hitting `DbReader`, so all existing SQL path predicates keep working. `index --project` expands to the files under the selected project directory and reuses the existing `--files` update path, but rejects expansions above 65,536 files for one project or 131,072 unique files across all requested projects with an explicit-files recovery hint.
 
-`cdidx batch` is a CLI-side query loop for editor integrations and scripts that need several query commands against the same DB without spawning `cdidx` repeatedly. It opens one `DbContext` / `DbReader`, reads newline-delimited JSON string arrays from stdin, and dispatches only query commands through the existing `QueryCommandRunner` paths so output and validation stay identical to the standalone command shape.
+`cdidx batch` is a CLI-side query loop for editor integrations and scripts that need several query commands against the same DB without spawning `cdidx` repeatedly. It opens one `DbContext` / `DbReader`, reads newline-delimited JSON string arrays from stdin, caps each decoded string argument at 8,192 characters, and dispatches only query commands through the existing `QueryCommandRunner` paths so output and validation stay identical to the standalone command shape.
 
 Editor integrations can request standard location shapes directly. `definition`, `references`, `search`, `find`, and `validate` accept `--format <text|json|lsp|qf|sarif>`; `lsp` emits LSP `Location` arrays, `qf` emits Vim quickfix lines, and `sarif` emits SARIF 2.1.0. `goto <symbol>` returns the single unambiguous definition as one LSP `Location`, while `goto --all <symbol>` returns all matching locations.
 
@@ -2355,7 +2355,7 @@ override が文書化されていない限り ANSI/progress control を抑止す
 
 path filter を受け付ける query コマンド（`search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `deps`, `impact`, `unused`, `hotspots`, `validate`）は、`--project` を対応する project directory glob に展開してから `DbReader` に渡す。これにより既存の SQL path predicate をそのまま利用できる。`index --project` は選択された project directory 配下のファイルに展開し、既存の `--files` 更新経路を再利用する。ただし 1 project で 65,536 files、requested projects 全体で 131,072 unique files を超える展開は拒否し、明示的な `--files` を使う recovery hint を返す。
 
-`cdidx batch` は、同じ DB に複数の query command を投げる editor integration や script 向けの CLI 側 query loop である。1 つの `DbContext` / `DbReader` を開き、stdin から newline-delimited JSON 文字列配列を読み、query command だけを既存の `QueryCommandRunner` 経路へ dispatch するため、出力と validation は単発コマンドと同じ形を保つ。
+`cdidx batch` は、同じ DB に複数の query command を投げる editor integration や script 向けの CLI 側 query loop である。1 つの `DbContext` / `DbReader` を開き、stdin から newline-delimited JSON 文字列配列を読み、デコード後の各文字列引数を 8,192 文字に制限し、query command だけを既存の `QueryCommandRunner` 経路へ dispatch するため、出力と validation は単発コマンドと同じ形を保つ。
 
 editor integration は標準的な location 形状を直接要求できる。`definition`、`references`、`search`、`find`、`validate` は `--format <text|json|lsp|qf|sarif>` を受け付け、`lsp` は LSP `Location` 配列、`qf` は Vim quickfix 行、`sarif` は SARIF 2.1.0 を出力する。`goto <symbol>` は曖昧でない単一定義を 1 つの LSP `Location` として返し、`goto --all <symbol>` は一致する全 location を返す。
 

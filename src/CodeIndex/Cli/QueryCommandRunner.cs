@@ -28,6 +28,7 @@ public static class QueryCommandRunner
     internal const int MaxWorkspaceDependencyDatabasePairCount = MaxWorkspaceDependencyDatabaseCount * (MaxWorkspaceDependencyDatabaseCount - 1);
     internal const int BatchMaxLineChars = 1024 * 1024;
     internal const int BatchMaxArgumentCount = 256;
+    internal const int BatchMaxArgumentChars = 8192;
     internal const int BatchMaxJsonDepth = 32;
     internal const string DefaultLimitEnvironmentVariable = "CDIDX_DEFAULT_LIMIT";
     internal const string DefaultSnippetLinesEnvironmentVariable = "CDIDX_DEFAULT_SNIPPET_LINES";
@@ -429,7 +430,13 @@ public static class QueryCommandRunner
                     Console.Error.WriteLine($"Error: batch line {lineNumber} must contain only strings.");
                     return false;
                 }
-                values.Add(element.GetString() ?? string.Empty);
+                var value = element.GetString() ?? string.Empty;
+                if (value.Length > BatchMaxArgumentChars)
+                {
+                    Console.Error.WriteLine($"Error: batch line {lineNumber} argument {values.Count + 1} exceeds the {BatchMaxArgumentChars} character limit.");
+                    return false;
+                }
+                values.Add(value);
             }
 
             commandName = values[0];
