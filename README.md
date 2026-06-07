@@ -120,6 +120,22 @@ versioned surfaces are the `cdidx` CLI, CLI JSON output, and `cdidx mcp`
 JSON-RPC interface. There is no public library / SDK API. See
 [INTEGRATION_POLICY.md](INTEGRATION_POLICY.md#api-surface-and-library-use).
 
+## Status JSON Contract
+
+`cdidx status --json` exposes trust, freshness, compatibility, and remediation
+fields for scripts, MCP clients, and release checks. Detailed semantics live in
+the [Developer Guide](DEVELOPER_GUIDE.md#ai-integration); README keeps the field
+names visible so documentation and tests stay synchronized.
+
+| Field group | Fields |
+|---|---|
+| Readiness and graph trust | `fold_ready`, `fold_ready_reason`, `graph_table_available`, `issues_table_available`, `file_issues_data_current`, `migration_in_progress`, `sql_graph_contract_ready`, `sql_graph_contract_degraded_reason`, `hotspot_family_ready`, `hotspot_family_degraded_reason`, `language_readiness`, `csharp_symbol_name_ready`, `csharp_metadata_target_ready`, `csharp_metadata_target_degraded_reason`. |
+| Workspace and HEAD freshness | `indexed_head_commit`, `worktree_head_changed`, `indexed_head_sha`, `indexed_head_branch`, `indexed_head_timestamp`, `commits_ahead_of_indexed_head`. |
+| Version and forward compatibility | `index_writer_version`, `index_newer_than_reader`, `index_newer_than_reader_reason`. |
+| Unknown-extension and runtime diagnostics | `unknown_extension_file_count`, `unknown_extension_files`, `unknown_extension_files_truncated`, `unknown_extension_file_path_limit`, `extractors`, `path_case_sensitive`, `data_dir_mode`, `mac_profile`, `stale_after_seconds`, `index_age_seconds`. |
+| Remediation fields | `degraded_root_cause`, `degraded_reason`, `recommended_action`, `alternative_action`, `readiness_degradations`. |
+| MCP-only session diagnostics | `mcp_session`. |
+
 ## Verifying Releases
 
 GitHub releases ship checksums, a detached checksum signature, SBOM assets, and
@@ -130,10 +146,10 @@ and [Platform Support](docs/platform-support.md).
 
 ## License and Fair Source Use
 
-CodeIndex and official `cdidx` binaries are source-available / Fair Source-style
-software under [FSL-1.1-ALv2](LICENSE), unless a specific file or directory says
-otherwise. Integration materials may be [Apache-2.0](LICENSES/Apache-2.0.txt)
-where marked.
+CodeIndex and official `cdidx` binaries are Fair Source-style software,
+source-available under [FSL-1.1-ALv2](LICENSE), unless a specific file or
+directory says otherwise. Integration materials may be
+[Apache-2.0](LICENSES/Apache-2.0.txt) where marked.
 
 See [COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md),
 [INTEGRATION_POLICY.md](INTEGRATION_POLICY.md), and [TRADEMARKS.md](TRADEMARKS.md)
@@ -259,6 +275,22 @@ cdidx lsp --db .cdidx/codeindex.db
 バージョニング契約の対象は、`cdidx` CLI、CLI JSON 出力、`cdidx mcp` の
 JSON-RPC interface です。公開 library / SDK API は提供していません。詳細は
 [INTEGRATION_POLICY.md](INTEGRATION_POLICY.md#api-surface-and-library-use) を参照してください。
+
+## Status JSON 契約
+
+`cdidx status --json` は script、MCP client、release check 向けに trust、
+freshness、compatibility、remediation field を返します。詳細な意味は
+[開発者ガイド](DEVELOPER_GUIDE.md#ai連携) にあり、README では docs と test を
+同期するため field 名を明示します。
+
+| field group | fields |
+|---|---|
+| readiness / graph trust | `fold_ready`, `fold_ready_reason`, `graph_table_available`, `issues_table_available`, `file_issues_data_current`, `migration_in_progress`, `sql_graph_contract_ready`, `sql_graph_contract_degraded_reason`, `hotspot_family_ready`, `hotspot_family_degraded_reason`, `language_readiness`, `csharp_symbol_name_ready`, `csharp_metadata_target_ready`, `csharp_metadata_target_degraded_reason`。 |
+| workspace / HEAD freshness | `indexed_head_commit`, `worktree_head_changed`, `indexed_head_sha`, `indexed_head_branch`, `indexed_head_timestamp`, `commits_ahead_of_indexed_head`。 |
+| version / forward compatibility | `index_writer_version`, `index_newer_than_reader`, `index_newer_than_reader_reason`。 |
+| unknown-extension / runtime diagnostics | `unknown_extension_file_count`, `unknown_extension_files`, `unknown_extension_files_truncated`, `unknown_extension_file_path_limit`, `extractors`, `path_case_sensitive`, `data_dir_mode`, `mac_profile`, `stale_after_seconds`, `index_age_seconds`。 |
+| remediation fields | `degraded_root_cause`, `degraded_reason`, `recommended_action`, `alternative_action`, `readiness_degradations`。 |
+| MCP-only session diagnostics | `mcp_session`。 |
 
 ## リリース成果物の検証
 
