@@ -43,6 +43,17 @@ CodeIndex is not an AI editor, coding agent, or chat application. Conversation, 
 
 Embeddings, vector search, and LLM-based semantic ranking are not assumptions of CodeIndex core. If supported in the future, they should be positioned as optional extensions or separate layers built on top of the local index, rather than as part of the core retrieval model.
 
+## Contribution Policy
+
+Issue reports, feature requests, and improvement suggestions are welcome.
+
+This repository currently does not accept external pull requests. Pull request
+creation is restricted to collaborators only, and implementation changes are
+handled by the maintainer or trusted collaborators.
+
+This policy helps keep the repository's code style, changelog format, review
+quality, and maintenance cost consistent. It may be revisited in the future.
+
 ## Quick Start
 
 ```bash
@@ -362,6 +373,17 @@ CodeIndex は、人間のユーザーと AI エージェント向けの local-fi
 CodeIndex は AI editor、coding agent、chat application ではありません。会話、編集、コミット、pull request、自律的な変更判断は、cdidx を呼び出す外部 agent または editor の責務です。Symbol extraction / reference extraction は、速度、ローカル完結、説明可能性、retrieval の有用性に集中するための lightweight indexing hints です。compiler-accurate semantic analysis、full type resolution、exact call graph を目的とするものではありません。
 
 Embedding、vector search、LLM-based semantic ranking は CodeIndex core の前提機能ではありません。将来的に扱う場合も、core に組み込むのではなく、local index の上に置く optional extension または separate layer として位置づけます。
+
+## コントリビューション方針
+
+不具合報告、機能要望、改善提案の Issue は歓迎します。
+
+このリポジトリでは、現在外部からの Pull Request は受け付けていません。
+Pull Request の作成は collaborator のみに制限しており、実装変更は maintainer
+または信頼済み collaborator が行います。
+
+この方針は、コードスタイル、changelog 形式、レビュー品質、保守コストを
+一定に保つためのものです。将来的に見直す可能性があります。
 
 ## すぐに試す
 

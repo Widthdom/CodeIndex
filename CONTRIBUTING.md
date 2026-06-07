@@ -2,6 +2,31 @@
 
 Thanks for improving CodeIndex.
 
+## Contribution Policy
+
+Issue reports, feature requests, and improvement suggestions are welcome.
+Please open an Issue first if you want to report a bug, request a feature, or
+propose an improvement.
+
+This repository currently does not accept external pull requests. Pull request
+creation is restricted to collaborators only, and implementation work is handled
+by the maintainer or trusted collaborators.
+
+This policy keeps code style, changelog format, review quality, and maintenance
+cost consistent. It may be revisited in the future.
+
+## コントリビューション方針
+
+不具合報告、機能要望、改善提案の Issue は歓迎します。バグ報告、機能要望、
+改善提案がある場合は、まず Issue を作成してください。
+
+このリポジトリでは、現在外部からの Pull Request は受け付けていません。
+Pull Request の作成は collaborator のみに制限しており、実装作業は maintainer
+または信頼済み collaborator が行います。
+
+この方針は、コードスタイル、changelog 形式、レビュー品質、保守コストを
+一定に保つためのものです。将来的に見直す可能性があります。
+
 ## Licensing of Contributions
 
 By submitting a pull request, patch, issue attachment, or other contribution,
@@ -42,8 +67,8 @@ Start from the shared project guidance:
   platform alternatives.
 - `AGENT_GUIDE.md` for repository workflow rules used by coding agents.
 
-For a normal change, create a topic branch from the latest `origin/main`.
-Use a short, descriptive branch name. For issue fixes, use
+For a normal collaborator change, create a topic branch from the latest
+`origin/main`. Use a short, descriptive branch name. For issue fixes, use
 `fix-issue<issue-number>` unless the issue or maintainer asks for a different
 name.
 
@@ -76,8 +101,8 @@ When adding a new file that can affect release artifact contents, signing,
 publishing, installer behavior, or package restore trust, add it to
 `.github/CODEOWNERS` in the same change.
 
-Before opening a pull request, run the checks that match the change. For code
-changes, the default full validation is:
+Before a collaborator opens a pull request, run the checks that match the
+change. For code changes, the default full validation is:
 
 ```bash
 make lint
@@ -103,7 +128,7 @@ Issue-based changes should use a filename like `<issue>.docs.md` or
 
 ## Pull Request Checklist
 
-Before requesting review, confirm:
+Before collaborators request review, confirm:
 
 - the branch is based on the latest practical `origin/main`;
 - commits are focused and use English messages;
