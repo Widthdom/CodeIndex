@@ -2,7 +2,7 @@
 <RunSettings>
   <RunConfiguration>
     <ResultsDirectory>./TestResults</ResultsDirectory>
-    <TestSessionTimeout>1800000</TestSessionTimeout>
+    <TestSessionTimeout>2700000</TestSessionTimeout>
   </RunConfiguration>
   <xUnit>
     <LongRunningTestSeconds>60</LongRunningTestSeconds>

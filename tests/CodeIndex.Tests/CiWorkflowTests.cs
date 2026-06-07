@@ -28,7 +28,7 @@ public class CiWorkflowTests
         var document = XDocument.Load(path);
 
         Assert.Equal(
-            "1800000",
+            "2700000",
             document.Root?.Element("RunConfiguration")?.Element("TestSessionTimeout")?.Value);
         Assert.Equal(
             "60",

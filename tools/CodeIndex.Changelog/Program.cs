@@ -45,8 +45,8 @@ public static class Program
                     }
                 case "release-notes":
                     {
-                        var options = ParseOptions(args[1..], requireDate: false);
-                        Console.Out.Write(tool.RenderReleaseNotes(options.Version));
+                        var options = ParseOptions(args[1..], requireDate: false, requirePreviousVersion: true);
+                        Console.Out.Write(tool.RenderReleaseNotes(options.Version, options.PreviousVersion!));
                         return 0;
                     }
                 default:
@@ -68,7 +68,7 @@ public static class Program
         Console.Out.WriteLine("  dotnet run --project tools/CodeIndex.Changelog -- check");
         Console.Out.WriteLine("  dotnet run --project tools/CodeIndex.Changelog -- prepare --version X.Y.Z --date YYYY-MM-DD");
         Console.Out.WriteLine("  dotnet run --project tools/CodeIndex.Changelog -- render --version X.Y.Z --date YYYY-MM-DD");
-        Console.Out.WriteLine("  dotnet run --project tools/CodeIndex.Changelog -- release-notes --version X.Y.Z");
+        Console.Out.WriteLine("  dotnet run --project tools/CodeIndex.Changelog -- release-notes --version Y.Y.Y --previous-version X.X.X");
         Console.Out.WriteLine();
         Console.Out.WriteLine("Limits:");
         Console.Out.WriteLine($"  unreleased fragments: {ChangelogTool.MaxFragmentCount}");
@@ -77,9 +77,10 @@ public static class Program
         Console.Out.WriteLine($"  version.json size: {ChangelogTool.MaxVersionJsonBytes} bytes");
     }
 
-    private static ParsedOptions ParseOptions(string[] args, bool requireDate)
+    private static ParsedOptions ParseOptions(string[] args, bool requireDate, bool requirePreviousVersion = false)
     {
         Version? version = null;
+        Version? previousVersion = null;
         DateOnly? releaseDate = null;
 
         for (var i = 0; i < args.Length; i++)
@@ -103,6 +104,15 @@ public static class Program
                 continue;
             }
 
+            if (arg == "--previous-version")
+            {
+                if (i + 1 >= args.Length)
+                    throw new ChangelogException("Missing value for --previous-version.");
+
+                previousVersion = Version.Parse(args[++i]);
+                continue;
+            }
+
             throw new ChangelogException($"Unknown option '{arg}'.");
         }
 
@@ -112,7 +122,10 @@ public static class Program
         if (requireDate && releaseDate is null)
             throw new ChangelogException("Missing required option --date.");
 
-        return new ParsedOptions(version, releaseDate ?? default);
+        if (requirePreviousVersion && previousVersion is null)
+            throw new ChangelogException("Missing required option --previous-version.");
+
+        return new ParsedOptions(version, releaseDate ?? default, previousVersion);
     }
 
     private static string FindRepositoryRoot()
@@ -147,7 +160,7 @@ public static class Program
         return null;
     }
 
-    private sealed record ParsedOptions(Version Version, DateOnly ReleaseDate);
+    private sealed record ParsedOptions(Version Version, DateOnly ReleaseDate, Version? PreviousVersion);
 }
 
 public sealed class ChangelogTool
@@ -283,8 +296,11 @@ public sealed class ChangelogTool
         return new PrepareResult(summary.ToString().TrimEnd(), writeChanges ? null : updatedChangelog);
     }
 
-    public string RenderReleaseNotes(Version targetVersion)
+    public string RenderReleaseNotes(Version targetVersion, Version previousVersion)
     {
+        if (previousVersion.CompareTo(targetVersion) >= 0)
+            throw new ChangelogException($"Previous version v{previousVersion} must be older than target version v{targetVersion}.");
+
         var changelogPath = Path.Combine(_repositoryRoot, "CHANGELOG.md");
         var changelogText = ReadAllTextBounded(changelogPath, _repositoryRoot, MaxChangelogBytes).Replace("\r\n", "\n", StringComparison.Ordinal);
         var changelog = ParsedChangelog.Parse(changelogText);
@@ -300,16 +316,26 @@ public sealed class ChangelogTool
 
         var output = new List<string>
         {
-            $"## CodeIndex v{targetVersion}",
+            "## What's Changed",
             string.Empty,
-            "### English",
+            $"Full Changelog: https://github.com/Widthdom/CodeIndex/compare/v{previousVersion}...v{targetVersion}",
             string.Empty,
+            "## Install or update",
+            string.Empty,
+            "Homebrew:",
+            string.Empty,
+            "```bash",
+            "brew install widthdom/tap/codeindex",
+            "brew upgrade widthdom/tap/codeindex",
+            "```",
+            string.Empty,
+            "NuGet:",
+            string.Empty,
+            "```bash",
+            "dotnet tool install -g cdidx",
+            "dotnet tool update -g cdidx",
+            "```",
         };
-        output.AddRange(englishBlock.BodyLines);
-        output.Add(string.Empty);
-        output.Add("### 日本語");
-        output.Add(string.Empty);
-        output.AddRange(japaneseBlock.BodyLines);
 
         return string.Join('\n', output).TrimEnd() + Environment.NewLine;
     }
