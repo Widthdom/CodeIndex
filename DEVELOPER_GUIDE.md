@@ -2374,13 +2374,98 @@ editor integration は標準的な location 形状を直接要求できる。`de
 
 ### シンボル種別分類
 
-`symbols.kind`、`symbols.container_kind`、`symbol_references.container_kind` は公開 symbol kind
-taxonomy に従います。新しい extractor が kind 値を追加する場合は、書き込み前に
-`SymbolKindCatalog` へ登録し、schema check、writer validation、CLI filter、downstream
-JSON consumer が同じ値を理解できるようにしてください。`symbol_references.reference_kind`
-は別 taxonomy で、`call`、`type_reference`、`import`、`implement`、`metadata` などの
-graph edge 意味を表します。端末表示、JSON 出力、MCP contract の kind 値を変える場合は、
-英語側の taxonomy table と downstream contract を同じ変更で更新します。
+`symbols.kind`、`symbols.container_kind`、`symbol_references.container_kind` は
+以下の公開 symbol kind taxonomy に従います。新しい extractor が kind 値を追加する場合は、
+書き込み前に `SymbolKindCatalog` へ登録し、schema check、writer validation、CLI
+filter、downstream JSON consumer が同じ値を理解できるようにしてください。
+
+| Kind | 現在の producer / 意味 | Graph behavior |
+|---|---|---|
+| `accessor` | owning property から別 symbol として抽出される accessor declaration | Search/filter symbol |
+| `annotation` | annotation declaration または annotation-like な言語構文 | Metadata/search symbol |
+| `async_function` | JavaScript / TypeScript の async function declaration | Callable definition。reference row 経由で callers/callees に参加 |
+| `async_generator` | JavaScript / TypeScript の async generator declaration | Callable definition。reference row 経由で callers/callees に参加 |
+| `attribute` | Razor attribute と metadata-like declaration | Context/search symbol。単独では call edge ではない |
+| `associatedtype` | Swift associated type declaration | Type-like definition target |
+| `class` | object-oriented language 全般の class declaration | Definition target and container |
+| `class_hook` | Python dunder hook など、function から再分類された class hook method | Callable/search symbol |
+| `code` | Markdown fenced code block または structured code block | Search/outline symbol |
+| `constant` | 言語が区別する constant declaration | Search/filter symbol |
+| `delegate` | C# / F# delegate declaration | Callable type definition and container-like target |
+| `enum` | enum declaration | Definition target and container |
+| `event` | event declaration | Search/filter symbol |
+| `field` | property と区別される field declaration | Search/filter symbol |
+| `file_module` | file-scoped module / package declaration | Namespace-like context symbol |
+| `function` | 関数、method、constructor、delegate、task、およびより狭い kind がない callable binding | Primary callable definition。reference row 経由で callers/callees に参加 |
+| `generator` | JavaScript / TypeScript generator declaration | Callable definition。reference row 経由で callers/callees に参加 |
+| `heading` | Markdown heading、C# region、Python module docstring、JavaScript / TypeScript `@module` docblock などの language section marker | Outline symbol |
+| `hook` | JavaScript / TypeScript React custom hook binding | Callable-like search/filter symbol |
+| `implements` | Razor `@implements` directive | Context/search symbol |
+| `import` | import、using directive、alias、package include | Search/filter symbol |
+| `interface` | interface declaration | Definition target and container |
+| `lambda` | named lambda / arrow binding | Callable definition。reference row 経由で callers/callees に参加 |
+| `layout` | Razor layout directive | Context/search symbol |
+| `method` | function と method を明示的に区別する言語または hook | Callable definition。reference row 経由で callers/callees に参加 |
+| `module` | module declaration | Definition target and container |
+| `namespace` | namespace declaration | Definition target and container |
+| `operator` | C# operator overload と conversion operator declaration | Callable definition。reference row 経由で callers/callees に参加 |
+| `object` | nested extracted symbol が使う object-literal / object container context | Container context |
+| `package` | package declaration | Namespace-like context symbol |
+| `property` | property、property-like field、GraphQL input field | Definition target。単独では call edge として扱わない |
+| `procedure` | Fortran などの procedure declaration | Callable definition |
+| `program` | Fortran などの program block declaration | Definition target and container |
+| `protocol` | protocol を interface と区別する言語の protocol declaration | Definition target and container |
+| `protocol_impl` | Elixir `defimpl` protocol implementation declaration | Definition target and implementation block container |
+| `reference` | HTML class、metadata key、GraphQL union variant などの secondary extracted symbolic reference | Search/filter symbol |
+| `rule` | nested reference が使う CSS / SCSS rule container context | Container context |
+| `route` | Razor route directive | Context/search symbol |
+| `service` | IDL / protobuf-like language の service declaration | Definition target and container |
+| `specialization` | C++ template specialization declaration | specialized type / function form の definition target |
+| `struct` | struct declaration | Definition target and container |
+| `submodule` | Fortran submodule declaration | Namespace/module-like definition target |
+| `subroutine` | Fortran subroutine declaration | Callable definition |
+| `test.method` | test-aware extraction が検出した test method | Callable definition。reference row 経由で callers/callees に参加 |
+| `trait` | trait を interface と区別する言語の trait declaration | Definition target and container |
+| `type` | より狭い class / interface / struct / enum kind が使えない type declaration | Definition target |
+| `typealias` | type alias declaration | alias name の definition target |
+| `union` | union declaration | Definition target and container |
+| `block data` | Fortran block data declaration | Definition target |
+| `variable` | variable binding | Search/filter symbol |
+
+`symbol_references.reference_kind` は別の reference taxonomy を使います。
+
+| Reference kind | 意味 |
+|---|---|
+| `annotation` | annotation と attribute を区別する言語での annotation 使用 |
+| `attribute` | metadata / attribute 使用 |
+| `augmentation` | TypeScript declaration / interface merge edge |
+| `call` | function、method、operator、macro、command の呼び出し |
+| `capture` | impact analysis で使う callback / delegate capture 関係 |
+| `column_reference` | statement-specific context 内の SQL column reference |
+| `consumes_hook` | React hook consumption relationship |
+| `const_assertion` | TypeScript `as const` assertion edge |
+| `const_generic_reference` | Rust const generic argument reference |
+| `copy_from` | Dockerfile `COPY --from=<stage>` stage dependency |
+| `cte_body_reference` | SQL common table expression body reference |
+| `decorator` | Python decorator 使用 |
+| `extends` | inheritance または type-extension relationship |
+| `from` | Dockerfile `FROM <stage>` dependency |
+| `friend` | C++ friend declaration relationship |
+| `generic_type_argument` | explicit invocation に付随する generic type argument |
+| `implement` | interface implementation relationship |
+| `implicit_implementation` | C# implicit interface implementation relationship |
+| `import` | module system 経由の import / include / reference |
+| `instantiate` | constructor または object creation |
+| `join_condition_reference` | SQL join / merge condition column reference |
+| `lifetime_reference` | Rust / C# 風 lifetime または lifetime-like type reference |
+| `metadata` | metadata-only reference |
+| `reference` | より狭い edge kind を持たない fixture / extractor 用の generic persisted reference row |
+| `razor_event_binding` | Razor event binding relationship |
+| `stage` | build-stage relationship |
+| `subscribe` | event subscription relationship |
+| `type_reference` | type annotation、generic constraint、その他 type-position reference |
+| `unsubscribe` | event unsubscription relationship |
+| `use` | より狭い reference kind がない generic usage relationship |
 
 ### status 鮮度の経過時間しきい値
 
@@ -2418,11 +2503,29 @@ update-check fields に `install_attempted`、`install_exit_code`、`install_suc
 
 readiness degradation reason code は `DegradationReasonCodes` に集約します。reader、CLI、
 MCP payload から新しい code を emit する前に、human text、recommended action、
-alternative action を同じ場所へ追加してください。代表例は `missing_fold_backfill`、
-`stale_fold_key_version`、`fold_ready=false`、`sql_graph_contract_ready=false`、
-`hotspot_family_ready=false`、`index_newer_than_reader=true` などです。復旧手順が
-`cdidx backfill-fold` で足りるのか、`cdidx index <projectPath> --rebuild` が必要なのかを
-安定した code として区別できることが contract です。
+alternative action を同じ場所へ追加してください。
+
+現在の stable code と trigger:
+
+| Code | Trigger | Recovery |
+|---|---|---|
+| `missing_fold_backfill` | legacy row に folded-name value が無い | `cdidx backfill-fold` または full rebuild |
+| `stale_fold_key_version` | folded row が古い fold-key version で stamp されている | `cdidx backfill-fold` または full rebuild |
+| `stale_fold_key_fingerprint` | folded row が古い runtime fingerprint で stamp されている | `cdidx backfill-fold` または full rebuild |
+| `fold_rows_not_restamped` | fold metadata は current だが、1 件以上の folded row が restamp されていない | `cdidx backfill-fold` または full rebuild |
+| `fold_ready_bit_set_but_rows_incomplete` | fold-ready bit が立っているのに row-level verification で NULL folded-name value が見つかった | `cdidx backfill-fold` または full rebuild |
+| `fold_ready=false` | aggregate fold readiness bit が degraded | `cdidx backfill-fold` または full rebuild |
+| `sql_graph_contract_ready=false` | SQL graph row が現在の call-column / qualified-name contract と一致しない | `cdidx index <projectPath>` |
+| `hotspot_family_ready=false` | 1 つ以上の hotspot-family language で current authoritative family stamp が不足している | `cdidx index <projectPath> --rebuild` |
+| `hotspot_family_marker_fingerprint_incomplete` | hotspot-family marker fingerprint traversal が safety cap に到達し、family trust が authoritative に stamp されなかった | generated / ignored marker tree を減らすか code 側の cap を上げてから `cdidx index <projectPath> --rebuild` |
+| `partial_family_key_population` | hotspot-family metadata は stamp 済みだが、一部の indexed symbol で `family_key` が NULL | `cdidx index <projectPath> --rebuild` |
+| `graph_table_available=false` | `symbol_references` が無い、または graph-ready ではない | `cdidx index <projectPath>` |
+| `issues_table_available=false` | `file_issues` が無い、または issue-ready ではない | `cdidx index <projectPath>` |
+| `csharp_symbol_name_ready=false` | C# canonical symbol-name stamp が stale | `cdidx index <projectPath>` |
+| `csharp_metadata_target_ready=false` | C# metadata-target stamp が stale | `cdidx index <projectPath>` |
+| `csharp_metadata_target_missing_column` | `symbols.is_metadata_target` が無い | `cdidx index <projectPath> --rebuild` |
+| `csharp_metadata_target_stamp_outdated` | C# metadata-target version stamp が無い、または stale | `cdidx index <projectPath>` |
+| `index_newer_than_reader=true` | DB が、この reader が理解する上限より新しい persisted contract で書かれている | current `cdidx` binary を使うか、この version で rebuild |
 
 ### SQLite WAL の耐久性ポリシー
 
@@ -2624,11 +2727,23 @@ files 1──N symbol_references
 | `call`, `instantiate` | `invoke` | 実行される呼び出しエッジ。 |
 | `goroutine_spawn` | `goroutine_spawn` | Go の `go f()` による非同期 spawn edge。呼び出し先には通常の `call` edge も併せて出力する。 |
 | `channel_send`, `channel_receive` | raw label | Go の channel send / receive 式を表す通信エッジ。既定の invocation graph からは除外する。 |
+| `razor_event_binding` | `event` | Razor の `@on...="Handler"` event binding から C# handler 名への edge。 |
 | `subscribe`, `unsubscribe` | `event` | call-graph query で可視化するイベント配線エッジ。 |
 | `friend` | `friend` | C++ friend の access/coupling edge。依存関係寄りの graph query で可視化する。 |
+| `system_variable` | raw label | T-SQL `@@ROWCOUNT` / `@@IDENTITY` や MySQL `@@session.sql_mode` / `@@global.max_connections` など、SQL 実行 context variable。intrinsic variable なので definition site は持たない。 |
 | `attribute`, `annotation`, `type_reference`, `implicit_implementation` | raw label | 依存関係 / reference 専用の metadata、型位置エッジ、および C# async iterator の `GetAsyncEnumerator` / `MoveNextAsync` のようなコンパイラ合成の実装エッジ。既定の call-graph 行からは除外する。 |
 
 TypeScript decorator は decorator 名を `annotation` 行として出力し、decorated declaration の型位置エッジを隠してはならない。たとえば `constructor(@Inject() svc: Service)` は `Inject` を `annotation`、`Service` を `type_reference` として記録し、`@Input() profile: UserProfile` も decorator と field type の両方を記録する。
+
+### Python シンボル分類
+
+Python 抽出は、通常の関数と method を `function`、class declaration と dynamic
+class factory を `class`、class attribute、`@property` descriptor、accessor
+decorator、`Final` constant、walrus assignment の名前を `property` として扱う。
+`__init_subclass__`、`__class_getitem__`、`__set_name__`、
+`__class_subclasses__` のような lifecycle dunder hook は `class_hook` として記録する。
+`SubKind` は Python property accessor を `getter` / `setter` / `deleter`、
+walrus assignment を `walrus`、class hook を `dunder` として細分化する。
 
 ### Scala シンボル分類
 

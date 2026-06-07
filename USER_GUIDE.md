@@ -4419,6 +4419,26 @@ cdidx backfill-fold
 
 全 MCP ツールは `annotations`（`readOnlyHint`、`destructiveHint`、`idempotentHint`、`openWorldHint`）を含み、AIクライアントがユーザーへの確認なしに安全な読み取り専用クエリを自動承認できるようにしています。
 
+#### MCP エラー応答
+
+MCP JSON-RPC の失敗は標準の `error` object を使います。クライアントは
+`error.code` と、存在する場合は `error.data.category` で分岐してください。
+`error.message` は人間向け診断テキストなので parse しないでください。
+
+| Code | 意味 | クライアント側の対応 |
+|---|---|---|
+| `-32700` | Parse error または frame 過大 | retry 前に JSON / frame size を修正 |
+| `-32600` | 不正な JSON-RPC request | retry 前に request shape を修正 |
+| `-32601` | Method not found または disabled tool | server version と `tools/list` を確認 |
+| `-32602` | 不正な params、unknown tool、または protocol version 不一致 | 引数を修正、または対応 version を negotiate |
+| `-32603` | Internal error | 失敗を表示し server stderr を確認 |
+| `-32000` | Rate limited | 報告された delay 後に retry |
+| `-32001` | Permission denied | 設定済み auth token を渡す |
+| `-32010` | Index missing | 先に `cdidx index <projectPath>` を実行 |
+| `-32011` | Index stale / schema mismatch | index を rebuild または refresh |
+| `-32012` | Index corrupted / unreadable | source から index を作り直す |
+| `-32015` | Request cancelled | client がまだ必要なら retry |
+
 #### オプションの HTTP トランスポート
 
 既定では `cdidx mcp` は stdin/stdout 上で JSON-RPC を扱います（上の設定例はすべて stdio 前提）。AI クライアント側で「1 本のサーバーを温めたまま複数リクエストを捌きたい」「呼び出しごとにサブプロセスを起動したくない」というユースケースでは、トランスポートを HTTP に切り替えられます:
@@ -4508,8 +4528,25 @@ cdidx には、AI エージェントがギャップや不具合に気づいた�
 
 4. **データベースが書き込み不可**（`E004_DB_NOT_WRITABLE`）
    - 症状: `cdidx index` が `Error [E004_DB_NOT_WRITABLE]: ...` で失敗。読み取り専用ファイルシステム（read-only バインドマウント、コンテナレイヤー等）では SQLite の `CANTOPEN(14)` を併発する。
-   - 原因: DB パスが読み取り専用ファイルシステム上にある、または現在のユーザーで書き込み権限が無い。WAL モードは一部の読み取り経路でも書き込みを要求する。
-   - 復旧: `--db <writable-path>` で書き込み可能なパスへ移す、権限を直す、または書き込み可能で再マウントする。書き込み可能なマウントへの読み取りクエリは通常どおり動く。
+   - 原因: DB パスが読み取り専用ファイルシステム上にある、現在のユーザーで書き込み権限が無い、または Linux mandatory access control が AppArmor / SELinux profile で SQLite の WAL / SHM sidecar 作成をブロックしている。WAL モードは一部の読み取り経路でも書き込みを要求する。
+   - 復旧: `--db <writable-path>` で書き込み可能なパスへ移す、権限を直す、または書き込み可能で再マウントする。AppArmor / SELinux 環境では `cdidx status --json` の `mac_profile` を確認してから、AppArmor は `aa-status` / snap・flatpak 権限 / audit log、SELinux は `getenforce`、`ausearch`、`audit2why` を確認する。policy が DB file 読み取りだけを許し sidecar write を拒む場合、読み取り専用 query では `--db 'file:///abs/path/codeindex.db?immutable=1'` の SQLite URI を使えることがある。
+
+#### Sandbox diagnostics
+
+SQLite が `SQLITE_AUTH`、`SQLITE_PERM`、`SQLITE_IOERR`、`SQLITE_CANTOPEN`
+などの permission 系エラーを返した場合、Linux では
+`/proc/self/attr/current` または `/proc/self/attr/exec` から AppArmor /
+SELinux profile が取れれば confinement-aware hint を追加します。
+`status --json` にも同じ best-effort signal として `mac_profile` が入り、
+例として `apparmor:snap.cdidx.cdidx` や `selinux:user_u:user_r:user_t:s0`
+が返ります。
+
+- Snap / AppArmor: `aa-status`、snap interface grant、`codeindex.db-wal`
+  や `codeindex.db-shm` 作成拒否の audit log を確認する。
+- Flatpak: filesystem portal 権限と、host policy が app を confine している
+  場合は AppArmor / audit log を確認する。
+- SELinux: `getenforce` を実行し、`ausearch -m avc -ts recent` で denial を
+  調べ、`audit2why` で説明する。
 
 5. **DB ファイルが破損 / 整合性チェック失敗**（`E005_DB_INTEGRITY_FAILED`）
    - 症状: クエリが `database disk image is malformed` で落ちる、または `cdidx db --integrity-check` が `Error [E005_DB_INTEGRITY_FAILED]: ...` を表示し exit `3` で `PRAGMA integrity_check` の失敗行を列挙する。
@@ -4547,9 +4584,9 @@ cdidx には、AI エージェントがギャップや不具合に気づいた�
     - 復旧: ファイル／ディレクトリ権限を直すか、`.cdidxignore` で除外する。インデックスはツリーの他の部分は走査を続けるので、権限修正後は通常の `cdidx index .` で取り込まれ、`--rebuild` は不要。
 
 12. **ファイルが拒否される: サイズ超過**
-    - 症状: `--verbose` が `[ERR ] <path>: File too large (N MB > M MB limit)` を表示し（このファイルは run の `errors` カウントに加算される）、検索には現れない。
+    - 症状: `validate --kind file_too_large` が `File too large (N MiB > M MiB limit). Override with --max-file-bytes <bytes> or CDIDX_MAX_FILE_BYTES=<bytes> when this source file is intentionally indexable.` を報告する。対象 file は `files` に載るが、chunk、symbol、reference は index されないため search には現れない。
     - 原因: ファイルが設定された 1 ファイルあたりサイズ上限を超えている。巨大な生成ファイルを索引化するとトークンを浪費し DB が肥大化する。
-    - 復旧: ファイルを縮小／分割する、`.cdidxignore` に追加する、または拒否を受け入れる。生成物は基本的に `.gitignore` 対象でもあるはず。なお run に `[ERR ]` が 1 件でもあると readiness フラグは未 stamp のままになるため、`graph_table_available` / `issues_table_available` を信頼したい場合はサイズ超過エントリを先に解決すること。
+    - 復旧: ファイルを縮小／分割する、`.cdidxignore` に追加する、または正当な source file なら `cdidx index . --max-file-bytes 50M` / `CDIDX_MAX_FILE_BYTES=50M` で上限を上げる。生成物は基本的に `.gitignore` 対象でもあるはず。
 
 13. **トリム / AOT ビルドで機能が無い**（`E009_FEATURE_UNAVAILABLE`）
     - 症状: `--json` などのフラグで `Error [E009_FEATURE_UNAVAILABLE]: ...` が出る。
