@@ -11,6 +11,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.29.1] - 2026-06-07
+
+#### Documentation
+
+- **README release-test contracts are synchronized** — README now lists the `status --json` trust fields and keeps the Fair Source wording stable across both language sections, so release and CI documentation guard tests pass consistently.
+
 ### [1.29.0] - 2026-06-07
 
 #### Added
@@ -3639,6 +3645,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.29.1] - 2026-06-07
+
+#### ドキュメント
+
+- **README の release test contract を同期しました** — README に `status --json` の trust field 一覧を追加し、Fair Source の文言を両言語セクションで安定させたため、release / CI の documentation guard test が一貫して通るようになりました。
+
 ### [1.29.0] - 2026-06-07
 
 #### 追加
@@ -7256,7 +7268,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.29.0...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.29.1...HEAD
+[1.29.1]: https://github.com/Widthdom/CodeIndex/compare/v1.29.0...v1.29.1
 [1.29.0]: https://github.com/Widthdom/CodeIndex/compare/v1.28.5...v1.29.0
 [1.28.5]: https://github.com/Widthdom/CodeIndex/compare/v1.28.4...v1.28.5
 [1.28.4]: https://github.com/Widthdom/CodeIndex/compare/v1.28.3...v1.28.4
