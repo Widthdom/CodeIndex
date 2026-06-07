@@ -396,14 +396,17 @@ public class IndexWatchRunnerTests
             lock (TestConsoleLock.Gate)
             {
                 var originalOut = Console.Out;
-                using var stdout = new StringWriter();
+                using var stdout = new SignalingStringWriter(
+                    line => line.Contains("\"status\":\"watching\"", StringComparison.Ordinal));
+                Task<int>? loopTask = null;
                 Console.SetOut(stdout);
                 try
                 {
-                    var loopTask = StartWatchLoop(options, projectRoot, dbPath, cts.Token);
-                    // Give the watcher a moment to emit the "watching" event.
-                    Thread.Sleep(500);
+                    loopTask = StartWatchLoop(options, projectRoot, dbPath, cts.Token);
+                    var started = stdout.WaitForSignal(TimeSpan.FromSeconds(10));
                     cts.Cancel();
+                    Assert.True(started,
+                        "Watch loop did not emit the watching event before cancellation / 取り消し前に watching イベントが出力されなかった");
                     // Blocking wait is intentional: this test verifies the loop terminates within
                     // a wall-clock budget while holding the redirected Console.Out under a lock.
                     // 同期的に待機しているのは、Console.Out リダイレクトを保持したまま停止時間を検証するため。
@@ -415,6 +418,7 @@ public class IndexWatchRunnerTests
                 }
                 finally
                 {
+                    CancelAndDrainWatchLoop(cts, loopTask);
                     Console.SetOut(originalOut);
                 }
                 capturedOut = stdout.ToString();
@@ -469,15 +473,19 @@ public class IndexWatchRunnerTests
             {
                 var originalErr = Console.Error;
                 var originalOut = Console.Out;
-                using var stderr = new StringWriter();
+                using var stderr = new SignalingStringWriter(
+                    line => line.Contains("[watch] Watching", StringComparison.Ordinal));
                 using var stdout = new StringWriter();
+                Task<int>? loopTask = null;
                 Console.SetError(stderr);
                 Console.SetOut(stdout);
                 try
                 {
-                    var loopTask = StartWatchLoop(options, projectRoot, dbPath, cts.Token);
-                    Thread.Sleep(500);
+                    loopTask = StartWatchLoop(options, projectRoot, dbPath, cts.Token);
+                    var started = stderr.WaitForSignal(TimeSpan.FromSeconds(10));
                     cts.Cancel();
+                    Assert.True(started,
+                        "Watch loop did not emit the human start line before cancellation / 取り消し前に human start 行が出力されなかった");
 #pragma warning disable xUnit1031
                     Assert.True(loopTask.Wait(TimeSpan.FromSeconds(10)));
                     exitCode = loopTask.Result;
@@ -485,6 +493,7 @@ public class IndexWatchRunnerTests
                 }
                 finally
                 {
+                    CancelAndDrainWatchLoop(cts, loopTask);
                     Console.SetError(originalErr);
                     Console.SetOut(originalOut);
                 }
@@ -547,6 +556,13 @@ public class IndexWatchRunnerTests
         return Assert.IsType<string>(method.Invoke(null, [status, batchSize, elapsedMs, subRunJson, exitCode]));
     }
 
+    private static void CancelAndDrainWatchLoop(CancellationTokenSource cts, Task<int>? loopTask)
+    {
+        cts.Cancel();
+        if (loopTask is { IsCompleted: false })
+            SpinWait.SpinUntil(() => loopTask.IsCompleted, TimeSpan.FromSeconds(10));
+    }
+
     private string RunIndexAndCapture(string[] args, out int exitCode)
     {
         lock (TestConsoleLock.Gate)
@@ -587,6 +603,34 @@ public class IndexWatchRunnerTests
         }
         catch (UnauthorizedAccessException)
         {
+        }
+    }
+
+    private sealed class SignalingStringWriter : StringWriter
+    {
+        private readonly Func<string, bool> _predicate;
+        private readonly ManualResetEventSlim _signal = new();
+
+        internal SignalingStringWriter(Func<string, bool> predicate)
+        {
+            _predicate = predicate;
+        }
+
+        internal bool WaitForSignal(TimeSpan timeout)
+            => _signal.Wait(timeout);
+
+        public override void WriteLine(string? value)
+        {
+            base.WriteLine(value);
+            if (value is not null && _predicate(value))
+                _signal.Set();
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+                _signal.Dispose();
+            base.Dispose(disposing);
         }
     }
 }
