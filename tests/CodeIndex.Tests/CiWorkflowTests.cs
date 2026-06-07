@@ -10,15 +10,20 @@ public class CiWorkflowTests
         var workflow = File.ReadAllText(Path.Combine(GetRepositoryRoot(), ".github", "workflows", "dotnet.yml"));
 
         Assert.Contains("--settings\", \"tests/CodeIndex.Tests/CodeIndex.Tests.runsettings", workflow);
+        Assert.Contains("Skipping XPlat Code Coverage for windows-latest/net9.0", workflow);
         Assert.Contains("--blame-crash", workflow);
         Assert.Contains("--blame-hang", workflow);
         Assert.Contains("--blame-hang-timeout\", \"5m", workflow);
+        Assert.Contains("test-output-first.txt", workflow);
+        Assert.Contains("Initial test run hit TestSessionTimeout; skipping flaky retry", workflow);
         Assert.Contains("Rerunning once to classify possible flakiness.", workflow);
         Assert.Contains("flaky-retry.txt", workflow);
         Assert.Contains("TestResults/**/*.trx", workflow);
+        Assert.Contains("TestResults/**/*.txt", workflow);
         Assert.Contains("TestResults/**/*Sequence*.xml", workflow);
         Assert.Contains("TestResults/**/*.dmp", workflow);
         Assert.Contains("TestResults/**/*.dump", workflow);
+        Assert.Contains("always() && !(matrix.os == 'windows-latest' && matrix.test-framework == 'net9.0')", workflow);
     }
 
     [Fact]

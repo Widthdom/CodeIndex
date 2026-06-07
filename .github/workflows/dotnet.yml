@@ -203,7 +203,6 @@ jobs:
             "--no-build",
             "--nologo",
             "--settings", "tests/CodeIndex.Tests/CodeIndex.Tests.runsettings",
-            "--collect", "XPlat Code Coverage",
             "--blame-crash",
             "--blame-hang",
             "--blame-hang-timeout", "5m",
@@ -211,17 +210,31 @@ jobs:
             "--results-directory", "./TestResults"
           )
 
-          dotnet @testArgs
+          $collectCoverage = "${{ matrix.os }}" -ne "windows-latest" -or "${{ matrix.test-framework }}" -ne "net9.0"
+          if ($collectCoverage) {
+            $testArgs += @("--collect", "XPlat Code Coverage")
+          } else {
+            Write-Host "Skipping XPlat Code Coverage for windows-latest/net9.0 to keep the slowest matrix lane under the test session timeout; see #3358."
+          }
+
+          New-Item -ItemType Directory -Force -Path ./TestResults | Out-Null
+          $firstLogPath = Join-Path "./TestResults" "test-output-first.txt"
+          dotnet @testArgs 2>&1 | Tee-Object -FilePath $firstLogPath
           $firstExitCode = $LASTEXITCODE
           if ($firstExitCode -eq 0) {
             exit 0
           }
 
+          if (Select-String -Path $firstLogPath -SimpleMatch "test run timeout" -Quiet) {
+            Write-Warning "Initial test run hit TestSessionTimeout; skipping flaky retry to keep CI bounded. Inspect uploaded TRX/blame artifacts."
+            exit $firstExitCode
+          }
+
           Write-Warning "Initial test run failed with exit code $firstExitCode. Rerunning once to classify possible flakiness."
-          dotnet @testArgs
+          $retryLogPath = Join-Path "./TestResults" "test-output-retry.txt"
+          dotnet @testArgs 2>&1 | Tee-Object -FilePath $retryLogPath
           $retryExitCode = $LASTEXITCODE
           if ($retryExitCode -eq 0) {
-            New-Item -ItemType Directory -Force -Path ./TestResults | Out-Null
             "Initial test run failed, but the single retry passed. Treat this run as flaky and inspect TRX/blame artifacts." |
               Set-Content -Encoding UTF8 ./TestResults/flaky-retry.txt
             Write-Warning "Tests passed on retry; uploaded TestResults include flaky-retry.txt."
@@ -251,7 +264,7 @@ jobs:
             TestResults/**/*.hangdump
 
       - name: Upload coverage reports
-        if: always()
+        if: always() && !(matrix.os == 'windows-latest' && matrix.test-framework == 'net9.0')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: Coverage-${{ matrix.os }}-${{ matrix.test-framework }}
