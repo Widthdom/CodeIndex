@@ -2138,17 +2138,17 @@ MCP JSON-RPC failures use the standard `error` object. Clients should route on
 
 | Code | Meaning | Client action |
 |---|---|---|
-| `-32700` | Parse error or frame too large | Fix the JSON/frame size before retrying |
-| `-32600` | Invalid JSON-RPC request | Fix request shape before retrying |
-| `-32601` | Method not found or disabled tool | Check server version and `tools/list` |
-| `-32602` | Invalid params, unknown tool, or bad protocol version | Fix arguments or negotiate a supported version |
-| `-32603` | Internal error | Surface the failure and inspect server stderr |
 | `-32000` | Rate limited | Retry after the reported delay |
 | `-32001` | Permission denied | Provide the configured auth token |
 | `-32010` | Index missing | Run `cdidx index <projectPath>` first |
 | `-32011` | Index stale/schema mismatch | Rebuild or refresh the index |
 | `-32012` | Index corrupted/unreadable | Rebuild the index from source |
 | `-32015` | Request cancelled | Retry if the client still needs the result |
+| `-32600` | Invalid JSON-RPC request | Fix request shape before retrying |
+| `-32601` | Method not found or disabled tool | Check server version and `tools/list` |
+| `-32602` | Invalid params, unknown tool, or bad protocol version | Fix arguments or negotiate a supported version |
+| `-32603` | Internal error | Surface the failure and inspect server stderr |
+| `-32700` | Parse error or frame too large | Fix the JSON/frame size before retrying |
 
 #### Optional HTTP transport
 
@@ -4427,17 +4427,17 @@ MCP JSON-RPC の失敗は標準の `error` object を使います。クライア
 
 | Code | 意味 | クライアント側の対応 |
 |---|---|---|
-| `-32700` | Parse error または frame 過大 | retry 前に JSON / frame size を修正 |
-| `-32600` | 不正な JSON-RPC request | retry 前に request shape を修正 |
-| `-32601` | Method not found または disabled tool | server version と `tools/list` を確認 |
-| `-32602` | 不正な params、unknown tool、または protocol version 不一致 | 引数を修正、または対応 version を negotiate |
-| `-32603` | Internal error | 失敗を表示し server stderr を確認 |
 | `-32000` | Rate limited | 報告された delay 後に retry |
 | `-32001` | Permission denied | 設定済み auth token を渡す |
 | `-32010` | Index missing | 先に `cdidx index <projectPath>` を実行 |
 | `-32011` | Index stale / schema mismatch | index を rebuild または refresh |
 | `-32012` | Index corrupted / unreadable | source から index を作り直す |
 | `-32015` | Request cancelled | client がまだ必要なら retry |
+| `-32600` | 不正な JSON-RPC request | retry 前に request shape を修正 |
+| `-32601` | Method not found または disabled tool | server version と `tools/list` を確認 |
+| `-32602` | 不正な params、unknown tool、または protocol version 不一致 | 引数を修正、または対応 version を negotiate |
+| `-32603` | Internal error | 失敗を表示し server stderr を確認 |
+| `-32700` | Parse error または frame 過大 | retry 前に JSON / frame size を修正 |
 
 #### オプションの HTTP トランスポート
 
