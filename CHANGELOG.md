@@ -11,6 +11,290 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.29.0] - 2026-06-07
+
+#### Added
+
+- **`files` now supports `--json=array` (#2993)** — `cdidx files --json=array` emits a single JSON array for machine consumers, while plain `--json` and `--json=ndjson` keep the existing newline-delimited output.
+- **JSON commands can now pretty-print output (#2996)** — `--pretty` enables indented JSON for commands that share the CLI JSON serializer, making large JSON payloads easier to inspect and diff.
+- **`languages` can now filter by indexed languages and capability (#3000)** — `cdidx languages` accepts `--indexed-only` to show only languages present in the current database and `--capability graph|symbols|references` to narrow language audits to a specific structured capability.
+- **`map`, `inspect`, and `outline` now support compact JSON section caps (#3009)** — `--compact` emits AI-oriented JSON, caps list sections to 5 items by default or the explicit `--limit` / `--top` value, and adds `truncation.sections.*` metadata for bounded payloads.
+- **`inspect --json` can now select compact evidence fields (#3056)** — `--fields <csv>` emits only requested top-level evidence groups, while `--body-only` is a shortcut for definition bodies without graph context.
+- **Search can now run reusable audit recipes (#3144)** — `cdidx search --list-recipes` exposes built-in risky-code audit searches with descriptions, labels, and false-positive guidance, while `cdidx search --recipe risky-code --json` emits grouped results using the normal search filters.
+- **Search audit recipes can now export issue drafts (#3145)** — `cdidx search --recipe risky-code --format issue-drafts` emits draft issue objects with titles, labels, evidence paths, source-free bodies, and optional duplicate preflight from `--open-issues`.
+- **`suggestions list` and `suggestions export` now support output paging (#3234)** — pass `--limit <n>` and `--offset <n>` to cap or page large suggestion stores while preserving the existing newest-first default output.
+
+#### Changed
+
+- **GitHub release notes now use the install-focused template** — `release-notes` now emits the `What's Changed` compare link plus Homebrew and NuGet install/update commands, using the previous version supplied by the release workflow from the latest non-draft, non-prerelease GitHub Release.
+- **`files --bytes` now surfaces largest files first (#2994)** — `cdidx files --bytes --limit <n>` orders by descending byte size before applying the limit, making large-file audits easier in human and JSON output.
+
+#### Fixed
+
+- **Changed-between deletion purges stay covered (#2987)** — Added regression coverage that `cdidx index --changed-between` removes indexed rows for files deleted between refs, including changelog fragments whose paths begin with `+`.
+- **C# multiline callable parameters no longer appear as properties (#2988)** — method, constructor, delegate, and primary-constructor parameter continuations are now excluded from field-style property extraction, while real fields and record primary component properties remain indexed.
+- **Runaway inspect/outline signatures are capped (#2989)** — JSON output now limits oversized symbol signatures, reports `signature_truncated` plus `signature_original_length` metadata, and falls back to concise outline labels for truncated callable signatures.
+- **`unused` no longer reports referenced C# private constants as likely unused (#2990)** — C# same-file validation now reconstructs file text across chunk boundaries before masking comments and strings, so private constants used after multiline raw strings are not mistaken for dead code.
+- **C# property hotspots no longer use repo-wide bare-name counts for common member names (#2991)** — `hotspots` now keeps C# properties such as record component `Equal` on the conservative in-target counting path, so unrelated same-name local references no longer inflate property rankings.
+- **`validate` now supports explicit result limits (#2992)** — pass `--limit <n>` or `--top <n>` to cap reported validation issues for large repositories and agent audit loops while preserving the existing all-results default.
+- **`status --explain` now supports JSON output (#2995)** — `cdidx status --explain <field> --json` returns a machine-readable readiness explanation instead of rejecting the flag combination.
+- **Search deduplicates overlapping chunk hits by file line (#2997)** — default `search` results and counts now collapse repeated matches for the same file and line across overlapping chunks, while `--no-dedup` still exposes raw chunk hits.
+- **Punctuation-heavy search phrases now rank exact substring hits first (#2998)** - ordinary `search` results now boost literal substring matches for code-like punctuation queries such as `catch {`, reducing punctuation-only noise before users need to fall back to `--exact-substring`.
+- **Quoted search phrases now preserve phrase semantics (#2999)** — literal-safe `search` treats double-quoted spans like `"new Regex"` as one FTS5 phrase token, so phrase searches no longer widen into independent token matches unless raw `--fts` syntax is requested.
+- **`unused` can now filter by bucket and confidence (#3001)** - CLI users can pass `--bucket <name>` or `--min-confidence <medium|low>`, and MCP `unused_symbols` accepts matching `bucket` and `minConfidence` arguments for focused dead-code audits.
+- **`validate` can filter findings by severity (#3008)** — `--severity warning` focuses JSON and human output on warning-level findings such as likely decode replacements while hiding informational source literals.
+- **`validate` supports JSON array shaping (#3010)** — `--json=array` now returns a bare issue array, including `[]` for clean indexes, while plain `--json` keeps the existing `{ count, issues }` object.
+- **Upgrade release downloads now honor caller cancellation (#3011)** — `cdidx upgrade` passes the active cancellation token into release checksum and installer script downloads instead of waiting for download timeouts after cancellation.
+- **JSON envelope parsing no longer splits the entire raw output (#3015)** — wrapped NDJSON output is scanned line by line so large captures avoid the extra full-output split allocation.
+- **GitHub suggestion success responses are now size-bounded (#3017)** — `GitHubIssueReporter` now reads successful GitHub API JSON responses through a fixed byte cap instead of materializing unbounded response bodies.
+- **GitHub suggestion response JSON parsing now has an explicit depth cap (#3018)** — `GitHubIssueReporter` now parses GitHub API JSON responses with a fixed maximum depth so malformed responses cannot force excessive parser work.
+- **GitHelper now caps captured git output at stream level (#3019)** — stdout and stderr are drained with bounded stream readers so newline-free process output cannot bypass the capture limit through line buffering.
+- **MCP request timeout races now cancel unused delay timers (#3020)** — isolated MCP request dispatch now cancels and disposes the timeout delay when the request work finishes first, avoiding unnecessary timer churn after fast requests.
+- **MCP writable-directory probes now clean up best-effort (#3023)** — `suggest_improvement` keeps writable `.cdidx` probes from turning cleanup failures into false unwritable-directory errors and reports cleanup failures as warnings instead.
+- **Install-dir write probes now clean up best-effort (#3024)** — Upgrade preflight write checks now delete their temporary probe in a `finally` block and warn if cleanup fails without turning a writable directory into a false negative.
+- **Version metadata loading now falls back on invalid files (#3025)** — malformed, missing, unreadable, or schema-invalid `version.json` files no longer throw from CLI version-display paths and instead return the existing `0.0.0` fallback.
+- **Report log tails now keep a bounded recent-file candidate set (#3026)** — `cdidx report` no longer sorts and materializes every `stderr-*.log` file before reading the latest lifecycle log lines.
+- **Private log hardening now caps best-effort startup work (#3027)** — lifecycle log permission hardening stops after a bounded number of existing files so startup does not scan an unbounded log directory.
+- **Private log pruning now keeps only a bounded retained-file set in memory (#3028)** — lifecycle log cleanup no longer sorts and materializes every matching log file before deleting older entries.
+- **Checkpoint temporary cleanup no longer masks the original failure (#3029)** — Failed checkpoint creation now reports cleanup deletion failures as warnings while preserving the checkpoint error that caused rollback.
+- **Restore temporary cleanup no longer masks restore outcomes (#3030)** — Restore temp directory deletion failures now emit stderr warnings instead of overriding a successful restore or the original restore error.
+- **Restore staging and backup directory names now include a collision-resistant suffix (#3031)** — Restore temp and backup paths keep their timestamp while adding a GUID suffix to avoid same-millisecond collisions.
+- **Import/export temporary database cleanup failures are now visible (#3032)** — Archive import/export now emits stderr warnings when deleting temporary database files or their SQLite sidecars fails, while preserving the original command result.
+- **Post-extraction hook discovery now caps DLL candidates (#3035)** — hook discovery stops after the `CDIDX_HOOK_DISCOVERY_MAX_DLLS` candidate budget and reports a diagnostic instead of enumerating and probing an unbounded hook directory.
+- **Workspace manifests now enforce a JSON depth limit (#3037)** - `WorkspaceManifestLoader` now caps manifest parsing at 16 JSON nesting levels, preventing deeply nested input from consuming unnecessary parser work before schema validation.
+- **Workspace manifests now cap member counts before probing paths (#3038)** - `WorkspaceManifestLoader` rejects manifests with more than 1024 non-empty string members before resolving or probing member directories.
+- **Workspace manifest members must stay under the manifest root (#3039, #3215)** - member paths are now rejected when they are rooted or normalize outside the manifest directory, keeping workspace entries and per-member DB paths inside the declared workspace boundary.
+- **Workspace manifest DB names must be plain file names (#3040)** - `default_db_name` now rejects rooted paths, traversal values, and directory separators before constructing workspace DB paths.
+- **Workspace manifests now reject unknown `index_strategy` values (#3041)** - typos such as `singel` now fail manifest validation instead of silently using per-member DB behavior.
+- **Watch-mode human summaries now bound sub-run JSON parsing (#3044)** — oversized or deeply nested sub-run payloads fall back to an exit-code-only summary instead of being parsed for informational counts.
+- **Dry-run changed-between now reports git range failures (#3046)** — `cdidx index --dry-run --changed-between` returns a usage error when git cannot resolve the requested refs, instead of silently reporting an empty candidate set.
+- **Full-scan symbol extraction timeouts now stop isolated extractor work (#3048)** — full-scan symbol extraction runs through a reusable worker process and kills that worker on timeout, so a timed-out extractor cannot keep consuming CPU inside the indexing process after `cdidx index` reports the stall.
+- **SQLite connection-function retry sleeps now honor cancellation (#3049)** — transient failures while registering SQLite connection functions now use token-aware retry backoff so cancelled CLI and MCP work can stop promptly.
+- **SQLite connection-open retries now honor caller cancellation (#3050)** — `DbContext` open retry backoff now observes cancellation tokens passed by `index`, `status`, and MCP DB-open paths, so cancelled operations no longer wait for retry sleeps to finish.
+- **MCP JSON node cloning no longer serializes and reparses valid nodes (#3055)** — MCP response ids, session capabilities, progress tokens, and structured error extra data now use `JsonNode.DeepClone()` through a shared helper instead of `ToJsonString()` plus `JsonNode.Parse(...)`.
+- **Import manifests now enforce size and JSON depth limits (#3057, #3207)** — `cdidx import` rejects oversized or deeply nested `manifest.json` entries before deserialization can consume disproportionate memory or parser work.
+- **Upgrade installer runs now honor caller cancellation (#3058)** — `cdidx upgrade` observes cancellation while waiting for `install.sh` and terminates the installer process tree instead of blocking until the installer timeout.
+- **Git helper process execution now honors caller cancellation (#3059)** — git-backed update target resolution now passes cancellation into `GitHelper`, which kills the child process tree and returns promptly when the caller cancels.
+- **Extractor plugin discovery now caps DLL candidates (#3061)** — plugin assembly discovery stops after bounded per-directory and total candidate budgets, and reports truncation in `extractors.diagnostics` instead of probing an unbounded plugin directory.
+- **Solution project discovery now rejects project references outside the workspace root (#3063)** — `.sln` project entries that normalize outside the active workspace are ignored before filesystem probing or path-filter evaluation, so `--solution` / `--project` discovery stays within the intended workspace boundary.
+- **Solution parsing now has bounded work limits (#3064)** — `.sln` project discovery now rejects solution files above 8 MiB, lines above 16,384 characters, and more than 4096 .NET project references, and parses `Project(...)` entries without regex matching so malformed solutions cannot force unbounded regex runtime.
+- **Automatic solution discovery now caps root `.sln` candidates before sorting (#3065)** — workspaces with more than 128 root-level solution files now get a clear `--solution <path>` diagnostic instead of materializing and sorting an unbounded candidate list.
+- **`index --project` now caps materialized project-file targets (#3066)** — project expansion rejects more than 65,536 files for one project or 131,072 unique files across requested projects and points users to explicit `--files` input.
+- **SourceCodeDetector now avoids whole-text line splitting and timeout-free regexes (#3068)** — source-code leak heuristics scan lines incrementally and use bounded regex matching.
+- **Workspace version pins are now read with startup-safe bounds (#3072)** — `.cdidx-version` files now have small byte, leading blank-line, and per-line caps, and malformed pins are warned about and ignored instead of making every command scan excessive input.
+- **MCP search guard filters now stop at the configured limit (#3073)** - guard filter arrays now track the combined filter budget while they are read and reject the ninth filter immediately instead of materializing the remaining entries first.
+- **Update-check cache parsing now enforces a JSON depth cap (#3074)** — malformed over-depth local cache files are ignored as cache misses instead of forcing unbounded parser depth work.
+- **test-extractor now enforces the input byte cap while reading (#3075)** — fixture and expectation files that grow after the initial length check are rejected instead of being read past the configured byte limit.
+- **MCP session status now caps retained client roots (#3076)** — `initialize` root diagnostics keep a bounded root list, cap individual root URI text, and expose `roots_truncated` metadata in MCP `status` when advertised roots are shortened.
+- **DbDebug redaction now hashes large strings through a bounded path (#3078)** — redacted diagnostic string hashes use fixed-size string segments plus length metadata, avoiding full UTF-8 materialization for oversized values.
+- **Query profiling now caps captured query-plan diagnostics (#3079)** — `--profile` limits captured `EXPLAIN QUERY PLAN` rows, truncates oversized detail strings, and emits a truncation marker when additional plan rows are omitted.
+- **Slow-query GlobalToolLog SQL text is now consistently truncated (#3080)** — slow-query diagnostics share the bounded SQL formatter before writing to stderr or the persistent global tool log.
+- **Literal search sanitization now rejects oversized generated input (#3081)** — literal-safe `search` queries are capped at 1,000 characters and 128 whitespace terms in the database reader before FTS5 sanitization, with CLI and MCP returning usage errors instead of falling through to database failures.
+- **Guarded search now bounds candidate collection before pagination (#3082)** - searches using guard filters now apply a capped over-fetch budget in SQL instead of collecting every matching chunk in memory, and return a validation error when a guarded query is too broad to satisfy the requested page within that budget.
+- **Guarded search precomputes primary match terms and scans candidate lines lazily (#3083)** — guard evaluation no longer rebuilds stable primary query terms or splits every candidate chunk into a full line array before choosing focus lines.
+- **Guarded search caches line-window reads within each request (#3084)** — guard evaluation now reuses bounded path/window reads for repeated filters or nearby candidates while keeping the cache scoped and capped.
+- **Guarded search reads only requested line windows from matching chunks (#3085)** — guard context extraction now materializes only the focused line range instead of splitting every overlapping chunk into all lines.
+- **Search enclosing-symbol lookup reuses prepared match-line context (#3086)** — search enrichment now caches normalized query terms per language and streams candidate content to the first matching line instead of rebuilding normalized line arrays per result.
+- **Search snippets avoid full-content line splitting for bounded excerpts (#3087)** — snippet formatting now scans content lines without materializing the entire split array before building the requested snippet window.
+- **Search snippets cap tracked match indexes for repetitive content (#3088)** — snippet matching now keeps only match-line indexes needed for the selected snippet window while still reporting the total dropped match-line count.
+- **MCP rate-limiter environment warnings now truncate oversized values (#3090)** — invalid or clamped `CDIDX_MCP_RATE_LIMIT_*` diagnostics bound the echoed environment value before writing warnings.
+- **MCP keep-alive interval warnings now truncate oversized environment values (#3091)** — invalid `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S` diagnostics bound the echoed raw value before writing stderr.
+- **CLI option diagnostics now bound user-supplied values (#3092)** — index, query, and hooks warnings/errors now use the shared bounded display formatter before echoing option tokens or values, truncating oversized input and flattening control characters.
+- **Batch-row skip warnings now truncate oversized row details (#3094)** — `DbWriter` bounds row identifiers and batch/row exception messages before emitting skipped-row diagnostics.
+- **MAC profile detection now bounds proc-attr reads and hint output (#3095)** — `/proc/self/attr/*` reads are capped, and oversized AppArmor/SELinux profile strings are truncated before appearing in database-access hints.
+- **Dependency JSON graph output avoids duplicate full graph array materialization (#3097)** — CLI graph output now writes JSON incrementally, and MCP graph payload construction fills bounded arrays without LINQ `ToArray` copies.
+- **`find` and `find --count` now stream indexed chunks while matching (#3099)** — both paths share the same incremental line matcher, avoiding full per-file line-map reconstruction and keeping overlap handling consistent.
+- **`find` now enforces the shared query length limit (#3100)** — `cdidx find` and `cdidx find --count` reject query text above 1,000 characters before opening the database reader.
+- **MCP audit argument metadata now reports bounded key truncation counters (#3105)** — audit and telemetry events cap argument key count and key display length with explicit omitted/truncated counters so large argument maps cannot silently inflate record metadata.
+- **MCP audit log events are now serialized through a per-record byte cap (#3107)** — oversized audit records are reduced with an explicit `event_truncated` marker before writing, preventing one event from bypassing rotation by forcing a large serialized line.
+- **Visibility-filtered symbol and definition count queries no longer materialize full result lists (#3111)** — count-only paths apply visibility filters directly in SQL while preserving the existing result counts.
+- **MCP resources/list now rejects unsafe cursors (#3112)** - `resources/list` now validates cursor offsets against the MCP pagination cap, computes page limits with checked arithmetic, and only returns `nextCursor` values that remain within the accepted cursor range.
+- **MCP graph count-only handlers no longer use `int.MaxValue` row probes (#3115)** — references, callers, and callees now use total-count queries for count-only and paginated-total metadata.
+- **Database checkpoint names now have a predictable length cap (#3124)** — checkpoint and restore reject names above `128` characters before constructing checkpoint paths, and diagnostics truncate echoed names.
+- **`import` no longer reports failure after successful DB replacement solely because sidecar cleanup failed (#3125)** — destination WAL/SHM cleanup after the main database move is now best-effort.
+- **Capped suggestions export and issue-draft body fields (#3126)** — `suggestions export` now bounds long description/context/tool-invocation text in JSON, Markdown, and issue-draft bodies with a `[truncated]` marker while `suggestions show` remains available for full local record inspection.
+- **Definition bodies are returned as bounded excerpts (#3131)** — `definition --body` now caps `body_content` to 20 lines and 16 KiB, and sets `body_content_truncated` when the indexed body is longer than the returned payload.
+- **Reference and caller body previews avoid full definition body loads (#3132)** — `references --body`, `callers --body`, `callees --body`, and `impact --body` now use symbol body-range metadata before reading only the capped preview excerpt, and mark line-capped previews with `body_content_truncated`.
+- **Index dry-run JSON now reports bounded file and error samples (#3133)** — dry-run output keeps total counts while capping file and error sample arrays so large repositories do not require unbounded result lists.
+- **Status symbol kind metadata is capped (#3134)** — `status` now caps symbol-kind maps and long kind labels, and reports overflow/truncation metadata in JSON plus an omitted-kind marker in human output.
+- **Invalid `CDIDX_NOTIFY` values now warn before falling back (#3135)** — index argument parsing reports bounded stderr warnings for unsupported notification modes instead of silently ignoring the environment value.
+- **`export` archive and ctags output now use the absolutized output path (#3138)** — export validation, directory creation, atomic writes, and final reporting now share the same resolved destination path.
+- **`status --check` now compares freshness without materializing the full workspace snapshot (#3139)** — indexed snapshots stream from the database, and workspace files are checked as they are scanned while unmatched indexed rows remain for missing-file classification.
+- **`status` now reports hook candidates without loading hook assemblies (#3142)** — CLI and MCP status use metadata-only hook discovery so lightweight status calls do not inspect or instantiate post-extraction hook assemblies.
+- **Workspace plugin and pattern discovery now uses the active project root (#3143, #3190)** — workspace-local `.cdidx/plugins` and `.cdidx/patterns` discovery no longer falls back to the process current directory when indexing or reporting status for an explicit project root.
+- **`report` now writes bundles through the same absolutized output path it reports (#3147)** — relative report bundle paths are fixed before bundle writing so current-directory drift cannot split summary metadata from the actual write target.
+- **`report --db file:...` now reads existing SQLite file URI databases (#3148)** — report schema collection normalizes SQLite file URI inputs before filesystem checks and read-only SQLite opens.
+- **Repo map now keeps bounded file-summary rankings instead of materializing every file stat before limits (#3149)** — map aggregation streams file stats, maintains top-N lists as it scans, and resolves Java module grouping without mutating a full file list.
+- **`unused` fallback queries no longer load every referenced symbol name into memory (#3150)** — non-SQL resolver paths now exclude referenced symbols in the candidate SQL before applying their bounded result loops.
+- **CLI LSP locations now resolve indexed relative paths from the indexed project root (#3151)** - `--format lsp` now builds file URIs from the active indexed project root when indexed paths are relative, falling back to the current directory only when no indexed root is available.
+- **CLI structured format helpers no longer duplicate full result arrays for LSP, compact, and SARIF output (#3152)** — formatted writers now stream array items to stdout while preserving their JSON schemas.
+- **`hotspots --count` now ignores display limits (#3153)** — count-only hotspots use dedicated total-count queries for symbol, file, and same-name group modes, so `--limit` no longer caps `count`, `files`, or grouped `definition_site_total`.
+- **Capped explicit workspace DB dependency fan-out (#3154)** — `deps --workspace-db` now rejects oversized distinct database lists before opening member DBs, limiting cross-database dependency aggregation to 8 total DBs / 56 ordered pairs.
+- **Capped dependency symbol samples before result construction (#3155)** — `deps` now keeps full reference counts while limiting the per-edge `symbols` aggregate for single-DB and workspace cross-DB dependency queries.
+- **HTTP MCP limit environment variables now enforce hard maximums (#3157, #3227)** - `CDIDX_MCP_HTTP_MAX_REQUEST_BYTES` and `CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH` now reject values above their documented caps before the HTTP listener starts, preventing oversized buffers or request queues from being configured accidentally.
+- **Grouped hotspot path samples are now bounded (#3159)** — `hotspots --group-by-name --json` caps each group's `paths` array at 20 entries and reports `paths_truncated` when additional definition paths exist, keeping same-name aggregates from producing very large JSON payloads.
+- **MCP project filter resolver failures now return structured invalid-argument errors (#3160)** — unresolved or inaccessible project filters now fail before tool execution with a bounded diagnostic instead of falling through to a generic sanitized tool failure.
+- **Rotated pruned suggestion archives (#3161)** — pruned `.cdidx/suggestions-*.archive.jsonl` records now write to an 8 MiB active archive with three retained rotation generations instead of growing without bound.
+- **`diff --limit` now enforces the shared result maximum (#3162)** — values above `10000` are rejected before result lists are allocated.
+- **Detailed diff row output now caps large field samples (#3163)** - `cdidx diff --detailed` now truncates oversized encoded row fields with the original length and a stable SHA-256 fingerprint, so large signatures or contexts do not inflate diff reports while full-value comparison still detects drift.
+- **`workspace use` now rejects ambiguous same-basename members (#3165)** - when multiple manifest members share the requested directory name, the command now reports a bounded candidate list instead of selecting the first match.
+- **hooks and backfill-fold now reject unknown options (#3170)** — `cdidx hooks ...` and `cdidx backfill-fold` now return a usage error for unsupported flags instead of warning and continuing.
+- **hooks install now preserves the selected project path (#3171)** — generated pre-commit hooks now run `cdidx index` against the resolved install-time project path instead of always indexing `.`.
+- **`index --max-symbols-per-file` now enforces a hard maximum (#3172)** — values above `50000` are rejected instead of allowing callers to disable the per-file symbol safety guard.
+- **`index --watch --debounce` now rejects impractical intervals (#3173)** — debounce values above `60000` ms fail as command-line errors instead of making watch mode look alive while deferring updates indefinitely.
+- **Case-sensitivity probes no longer write hidden files at workspace roots (#3174)** — Git and file-indexer filesystem probes now prefer a read-only root path-variant check, fall back to `.cdidx/probes` only when a write probe is needed, and remove probe-only files/directories after detection.
+- **DB path metadata probes now stay best-effort on filesystem errors (#3175)** — resolver metadata reads now suppress expected filesystem and path exceptions in addition to SQLite exceptions.
+- **`status --stale-after` now has a practical maximum (#3176)** — CLI, environment, and config stale thresholds above `30d` are rejected instead of making stale indexes look fresh indefinitely.
+- **`index --commits` now bounds commit-ref inputs (#3177)** — `--commits` rejects excessive ref counts and oversized ref tokens before invoking git, keeping validation work and diagnostics bounded.
+- **DbWriter now bounds the TypeScript module-syntax fallback read (#3179)** — the augmentation fallback no longer scans reopened TypeScript files without byte and line limits.
+- **Did-you-mean suggestions now reject oversized inputs before distance matching (#3181)** — command, flag, language, and kind suggestions skip values beyond the diagnostic display limit so typo matching does not allocate large edit-distance matrices for malformed input.
+- **MCP path/list argument validation now shares CLI path-filter bounds (#3182)** — path-like arrays now use the CLI count and length limits, and `tools/list` advertises those bounds for client-side validation.
+- **MCP project filters now resolve against the indexed project root (#3183)** - MCP tools that accept `project` now expand solution project filters from the database's active indexed project root instead of the server process current directory.
+- **MCP `impact_analysis` now enforces the shared query length limit (#3184)** — oversized impact queries now fail with the same structured invalid-argument response used by other query tools before impact analysis runs.
+- **Detected dependency cycles beyond the display edge limit (#3185)** — CLI and MCP `deps` cycle detection now uses a separate bounded graph candidate budget before applying the requested output limit to cycle graph edges.
+- **MCP required `path` arguments now fail before lookup when invalid (#3186)** — `outline` and `excerpt` now reject invalid indexed-file paths before database lookup, while `index` rejects non-string, overlong, or NUL-containing project paths before filesystem checks.
+- **CLI project filters now resolve against the indexed project root (#3189)** - query commands with `--project` now expand solution project filters from the active indexed project root, so explicit `--db` queries launched from another current directory do not inspect the wrong workspace.
+- **`cdidx upgrade --json` now keeps stdout as JSON when installing updates (#3191)** — update-available upgrade runs suppress installer console noise and emit a structured install result with the update-check fields.
+- **MCP `search.cursor` contract is now regression-locked (#3192)** — `cursor` stays advertised, allowlisted, and string-typed across `tools/list` and server-side argument validation.
+- **MCP search now rejects malformed cursor domains (#3193)** - search cursors now reject non-finite scores and negative chunk or offset fields before pagination continues.
+- **MCP `definition` and `symbols` now reject invalid `since` values (#3194)** — invalid ISO 8601 timestamps now return the same structured invalid-argument response used by other MCP tools instead of silently dropping the freshness filter.
+- **MCP pagination now rejects invalid lower bounds (#3195)** — non-positive `limit` values and negative `offset` values now return structured invalid-params errors instead of being silently clamped.
+- **MCP `deps` argument contract is now regression-locked (#3196)** — `reverse`, `format`, and `cycles` stay advertised, allowlisted, and typed, while stale hidden arguments such as `direction` and `includeGenerated` stay absent.
+- **MCP `map` argument contract is now regression-locked (#3197)** — `sections` and `depth` stay advertised, allowlisted, and validated with their documented JSON shapes.
+- **MCP `outline` and `validate` no-op argument contracts are now regression-locked (#3198)** — hidden no-op arguments stay absent and advertised arguments stay aligned with server-side allowlists.
+- **MCP `backfill_fold` errors now use the central sanitizer (#3201)** — `backfill_fold` no longer returns raw exception messages in tool-result errors and instead emits the standard sanitized MCP error envelope while keeping detailed exception data on the server diagnostic path.
+- **MCP index per-file failures now use sanitized bounded messages (#3202)** — MCP `index` file failure entries no longer forward raw exception messages to tool responses or the persistent first-error log field, and failure messages now include truncation metadata.
+- **Export/import catch-all errors no longer echo raw exception messages (#3208)** — `cdidx export`, `cdidx import`, and `cdidx export ctags` now report sanitized exception types instead of messages that can include absolute paths or provider-specific details.
+- **Export snapshot temp databases are now private on POSIX (#3209)** — `cdidx export` reapplies owner-only file permissions to the temporary SQLite snapshot before it is archived.
+- **Imported database replacements now reapply private permissions (#3210)** — `cdidx import` hardens the moved `codeindex.db` file after replacement so broad temporary-file modes are not inherited.
+- **Dockerfile JSON-form symbol extraction now enforces item and string budgets (#3211)** — `VOLUME`, `SHELL`, `COPY`, and `ADD` JSON-form parsing now caps processed array entries and string lengths in addition to the existing JSON depth limit.
+- **TypeScript path alias parsing now has explicit JSON and alias-map budgets tied to #3212** — `tsconfig.json` / `jsconfig.json` path alias extraction is covered for JSON depth, alias rule counts, per-rule and total targets, and overlong pattern/target strings.
+- **SolutionProjectResolver fallback discovery now caps traversal work (#3213)** — fallback project discovery stops after 4096 directories or 65,536 files and reports a clear `--solution <path>` recovery hint instead of walking unbounded workspace trees.
+- **Solution project fallback traversal now handles long paths and per-directory failures (#3214)** — project discovery and expansion use long-path-safe enumeration, skip unreadable subtrees, and report bounded traversal diagnostics when a project filter cannot be resolved.
+- **Workspace manifests now reject overlong member paths and default DB names (#3216)** - manifest loading now bounds member path strings and `default_db_name` before resolving paths or materializing DB locations.
+- **`workspace use` now rejects missing manifest members (#3217)** - selecting a listed member that is absent on disk now fails with a usage error instead of persisting an active workspace pointing at the missing root.
+- **DB and diff commands now preserve SQLite file URI display values (#3221)** — `cdidx db` and `cdidx diff` no longer pass `file:` URI inputs through filesystem path normalization when reporting human or JSON database paths.
+- **GitHub suggestion search and create success responses now share bounded, depth-capped JSON handling (#3222)** — oversized or deeply nested GitHub success payloads no longer force unbounded reads or parser work during suggestion submission.
+- **Capped GitHub suggestion existing-issue lookup per label (#3223)** — the direct labeled-issue backstop now stops after a bounded number of pages per label and emits a short warning when that cap is reached.
+- **Metrics JSONL events now bound string fields (#3108, #3224)** — `--metrics` and `CDIDX_METRICS` records now clamp oversized string fields, emit `*_length` / `*_truncated` metadata, and keep each serialized event within a fixed byte budget.
+- **MCP session status now caps retained client capabilities (#3225)** — `initialize` capabilities diagnostics are bounded by serialized byte size and JSON depth, and MCP `status` now reports explicit `client_capabilities_truncated` metadata when capabilities are shortened.
+- **Top-level global log flags are now covered by the CLI schema and completion contracts (#3226)** - `--log-format`, `--log-retain-count`, and `--log-max-size-mb` are covered by the shared top-level flag schema, documented in help, and surfaced in shell completions, with tests guarding parser drift.
+- **Batch query arguments are now individually capped (#3231)** — `cdidx batch` rejects any decoded JSON string argument longer than 8,192 characters before dispatching the query command.
+- **Bounded `suggestions --open-issues` duplicate preflight inputs (#3233)** — open-issue preflight parsing now caps issue entries, labels per issue, title/URL/label string lengths, and title tokenization input in addition to the existing file-size and JSON-depth limits.
+- **`status` now distinguishes workspace freshening from indexed file timestamps (#3238)** — `status --json` includes `last_workspace_freshened_at`, and human output prints `Freshened`, so no-op or partial updates can be read separately from file-row `indexed_at`.
+- **Extractor plugin discovery now skips oversized DLL candidates (#3239)** — plugin assembly loading now checks each candidate size before loading it and records a bounded diagnostic when a DLL exceeds the size budget.
+- **Post-extraction hook discovery now skips oversized DLL candidates (#3242)** — hook discovery checks each DLL candidate against `CDIDX_HOOK_DISCOVERY_MAX_BYTES` before loading it and reports a diagnostic when the size budget is exceeded.
+- **Version metadata reads are now bounded (#3244)** — `version.json` loading now reads at most 16 KiB and parses with an explicit JSON depth limit before falling back to `0.0.0` on invalid metadata.
+- **Pattern config scalar metadata is length-bounded (#3245)** — pattern config `language`, `extension`, and `kind` values now have explicit length limits and over-limit configs are rejected with sanitized diagnostics.
+- **Post-extraction hook callbacks now reject late over-budget responses (#3252)** — hook worker responses are discarded when the measured callback elapsed time already exceeds `CDIDX_HOOK_CALLBACK_BUDGET_MS`, preventing timed-out mutations from being accepted under full-suite scheduler contention.
+- **PostExtractionHookTests now use wider callback-budget timing margins (#3261)** — the slow hook budget test now keeps the hook delay well beyond the test budget under full-suite load while still checking that timed-out workers are killed before they can signal completion.
+- **Diagnostic sanitization no longer leaks regex timeout exceptions (#3292)** — plugin and pattern diagnostics now fall back to a generic sanitized message if path redaction hits its bounded regex timeout, so full-suite runs do not fail while reporting plugin registry status.
+- **MCP audit request-id truncation coverage now uses a protocol-valid escaped id (#3306, #3307, #3308)**: the regression test now keeps the JSON-RPC id within request validation limits while still making the serialized audit request id exceed the audit display cap.
+- **MCP telemetry cap test now ignores unrelated invocation events (#3325)** — the argument-key cap regression test filters telemetry by a unique request id, so full-suite runs no longer fail when another invocation event appears in the captured error stream.
+- **IndexWatchRunner cancellation coverage now waits for watch startup (#3343)** — the cancellation regression tests now cancel only after observing the watch loop's start event, so full Debug test runs do not race a delayed watcher task and report cancellation exceptions through the wait path.
+- **Windows/net9.0 CI no longer retries test-session timeouts (#3358)** — the slowest matrix leg skips XPlat Code Coverage collection, and the workflow now treats a `TestSessionTimeout` abort as a bounded failure instead of starting a second full-suite retry.
+
+#### Security
+
+- **`suggestions export --open-issues` now rejects oversized preflight files (#3002)** — duplicate preflight JSON is read through a bounded buffer and returns a clear usage error when the file exceeds the supported size.
+- **HTTP MCP now bounds concurrent request handlers (#3003)** — accepted HTTP contexts are gated by a configurable handler semaphore, and extra requests receive 429/Retry-After instead of creating unbounded handler tasks.
+- **`cdidx upgrade` now verifies the downloaded installer script (#3004)** — releases publish `install.sh` in the checksum manifest, and `upgrade` checks the downloaded script SHA-256 before executing it.
+- **Global tool logs now redact underscore-separated secret options (#3005)** — lifecycle argument logging now treats `--api_key` and `--access_key` forms like existing API/access key spellings, so both assignment and split-value forms are redacted.
+- **Suggestion persistence now redacts common key assignments (#3006)** — suggestion storage and GitHub submission scrubbing now covers low-entropy `token=`, `api_key=`, and access-key assignment forms, including hyphen and underscore variants.
+- **MCP response-frame detection now enforces the JSON depth cap (#3012)** — response-frame probing rejects over-depth JSON before classification, matching the guarded MCP request and cancellation parsing paths.
+- **HTTP MCP cancellation probes now enforce the shared JSON depth limit (#3013)** — cancellation notifications inspected before normal HTTP MCP request handling now parse with the same bounded JSON depth used by stdio MCP frames.
+- **HTTP MCP JSON-RPC id probing is covered by the JSON depth cap (#3014)** — over-depth HTTP request bodies no longer expose request-id extraction to unbounded JSON parsing work.
+- **JSON envelope raw-item parsing now caps JSON depth (#3016)** — `--json-envelope` keeps over-depth raw output lines as strings instead of parsing them without an explicit nesting limit.
+- **LSP JSON message parsing now enforces a depth cap (#3021)** — deeply nested LSP payloads are rejected as parse errors instead of being parsed without an explicit nesting limit.
+- **Batch query JSON input now enforces a depth cap (#3022)** — `cdidx batch` rejects over-depth JSON lines during parsing before command argument processing.
+- **TypeScript path alias config parsing now reports malformed JSON and enforces a depth cap (#3033)** — `tsconfig.json` / `jsconfig.json` alias parsing emits the existing path-alias warning when JSON cannot be parsed and rejects excessively nested config JSON with a bounded `JsonDocument` depth.
+- **Dockerfile JSON-form extraction now enforces a parser depth limit (#3034)** — Dockerfile `VOLUME`, `SHELL`, `COPY`, and `ADD` JSON forms now use extractor-local `JsonDocumentOptions` so deeply nested JSON is rejected before symbol extraction work continues.
+- **Active workspace state parsing now enforces a JSON depth cap (#3036)** — deeply nested `active.json` files are ignored with the existing warning path instead of overriding workspace DB resolution.
+- **Config JSON parsing now caps `.cdidxrc.json` nesting depth (#3042)** — project-local config parsing rejects excessively deep JSON before normal schema validation runs.
+- **MCP index-run lock metadata parsing now enforces a JSON depth cap (#3043)** — deeply nested lock holder metadata is treated as unavailable diagnostics instead of being parsed without an explicit nesting limit.
+- **Persisted JSON string-list metadata now enforces bounded parsing (#3045)** — string-list metadata now rejects over-deep JSON, oversized arrays, oversized raw payloads, and excessive decoded string content instead of allocating unbounded parsed values from corrupted database rows.
+- **Pattern config discovery is now streamed and capped per directory (#3051)** — `cdidx` now streams `.yaml` and `.yml` pattern sidecar discovery, accepts at most 128 pattern config candidates per directory, and emits a diagnostic when the directory cap is reached.
+- **Pattern config loading now avoids newline split arrays (#3052)** — configured extractor YAML is parsed line-by-line from bounded UTF-8 text, avoiding whole-file `Split('\n')` allocations for configs with many tiny lines.
+- **Built-in reference extractor regex enumeration is timeout-bounded (#3053)** — shared match enumeration now forces and catches regex timeouts before built-in extractors iterate matches from repository-controlled source text.
+- **TypeScript namespace alias references no longer build per-line dynamic regexes (#3054)** — namespace alias qualified usages are now found with a bounded scanner that preserves identifier boundaries without compiling one regex per alias per line.
+- **Full-scan checkpoint loading now bounds JSON depth and directory payloads (#3060)** — malformed scan checkpoints are ignored before oversized completed-directory sets can be trusted.
+- **Suggestion store reads now cap JSON depth and record count (#3062)** — local suggestion store reads reject overly deep JSON and stores with more than the supported record limit, preserving the rejected file as `.bak` instead of allocating an unbounded in-memory record set.
+- **MCP audit-log include-values now redacts secret-like values (#3067)** — include-values audit records replace secret-like argument keys and known token patterns with `[REDACTED]` and mark the record with `arg_values_redacted`.
+- **TypeScript path alias configs now bound path rule and target work (#3069)** — `compilerOptions.paths` loading and resolution now cap accepted alias rules, target entries, alias/target string lengths, oversized module specifiers, and substituted target lengths, with bounded warnings when excess entries are truncated, ignored, or skipped.
+- **Global tool log redaction is now bounded (#3070)** — lifecycle argument scrubbing now uses timeout-bounded regexes and caps each argument before expensive redaction passes, replacing overlong suffixes with a truncation marker instead of logging them.
+- **Suggestion text redaction is now bounded (#3071)** — suggestion persistence and GitHub submission scrubbing now uses timeout-bounded regexes and caps each text field before redaction, replacing overlong suffixes with an explicit truncation marker.
+- **Database path diagnostics now truncate oversized `--db` values (#3093)** — query and batch database errors keep the URI/path kind visible while bounding echoed database paths before writing stderr.
+- **MCP token authentication now rejects oversized tokens before hashing (#3096)** — stdio auth tokens and HTTP bearer tokens now share a fixed length cap so hostile clients cannot force unbounded token hashing work.
+- **MCP out-of-band client responses are capped before cloning (#3098)** — client-supplied result and error payloads are measured with a bounded JSON writer before they are retained, and oversized responses are rejected with payload-free diagnostics.
+- **C# import alias registration now uses timeout-bounded signature regexes (#3101)** — `DbWriter` no longer calls the BCL regex APIs directly when classifying C# `using` signatures from indexed content.
+- **MCP progress tokens are now bounded before echoing (#3103)** — `index` and `backfill_fold` validate `_meta.progressToken` with scalar/object shape, node, depth, string, and serialized-byte budgets before cloning it for progress notifications, ignoring oversized or unsupported tokens instead of amplifying them.
+- **MCP JSON-RPC request ids are now length-limited before echoing (#3104)** — oversized string or numeric `id` values are rejected with a bounded `id:null` invalid-request response before response metadata, telemetry, or audit records can retain them.
+- **MCP audit-log include-values now budgets argument payloads (#3106)** — audit argument values are cloned through depth, count, string, and serialized-byte budgets before they are written, with truncation metadata recorded on oversized payloads.
+- **Doctor output now truncates oversized environment values (#3109)** — `cdidx doctor` bounds terminal and `CDIDX_*` environment values before printing them, with an explicit original-length marker when truncation occurs.
+- **Query default environment parse errors now truncate raw values (#3110)** — invalid `CDIDX_DEFAULT_*` numeric defaults report a bounded display value instead of embedding an arbitrarily long environment string.
+- **LSP request ids now reject oversized raw JSON before echoing (#3113)** — JSON-RPC ids above the LSP raw byte limit are rejected without parsing them into retained response state or reflecting the oversized value.
+- **HTTP MCP request logging now caps extracted JSON-RPC ids (#3114)** — request ids are truncated with a marker before they are stored in request log records, preventing oversized ids from inflating persistent logs.
+- **MCP enum-like scalar arguments are bounded before normalization (#3116)** — oversized `format`, `groupBy`, and related scalar option values are rejected before trimming or lowercasing, and diagnostics echo only a bounded display value with truncation metadata.
+- **MCP unknown argument diagnostics truncate property names (#3117)** — unknown argument names now use bounded display values in errors and audit/telemetry key sketches, with original length metadata when truncation occurs.
+- **MCP unknown tool diagnostics truncate tool names (#3118)** — unknown tool names now use bounded display values in JSON-RPC errors, rate-limit responses, batch slot results, telemetry, and audit logs, with original length metadata when truncation occurs.
+- **MCP unsupported protocol diagnostics truncate requested versions (#3119)** — unsupported `protocolVersion` values are bounded during negotiation before appearing in initialize errors, structured data, or stderr logs, with original length metadata when truncation occurs.
+- **MCP clientInfo fields are bounded before reuse (#3120)** — `clientInfo.name` and `clientInfo.version` are captured as bounded display values before status output, caller identity, rate-limit diagnostics, caller-swap logs, and audit records reuse them, with truncation metadata where values are shortened.
+- **MCP prompt names and arguments are bounded before prompt generation (#3121)** — `prompts/get` now rejects oversized prompt names or argument strings before embedding them in prompt text or diagnostics, and errors return bounded display values with truncation metadata.
+- **MCP resource URIs are capped consistently (#3122)** — `resources/read` now rejects oversized URIs before URI parsing or unescaping, `resources/list` omits URIs that would exceed the same readable limit, and invalid/not-found diagnostics echo bounded URI display values.
+- **Query trace parameters now cap captured values and path arrays (#3123)** — trace JSON bounds parameter strings and repeated `--path` / `--exclude-path` arrays, and emits truncation metadata when values or counts are reduced.
+- **LSP unknown method diagnostics truncate method names (#3127)** — unknown JSON-RPC method names now use bounded diagnostic text before being echoed in `Method not found` responses.
+- **LSP `workspace/symbol` queries now enforce the shared query length limit (#3128)** — oversized symbol queries are rejected before database search work starts.
+- **LSP text-document URIs are length-capped before parsing (#3129)** — LSP handlers now reject oversized `textDocument.uri` values before URI parsing or path normalization and keep the JSON-RPC error bounded.
+- **LSP `documentSymbol` responses now bound detail and response size (#3130)** — symbol details are truncated with an explicit marker and response arrays stop before exceeding the JSON byte budget.
+- **LSP position lookups now cap target line length (#3136)** — definition and references requests stop reading oversized source lines before token extraction and return an empty result.
+- **LSP document path fallback now caps basename candidates (#3137)** — exact indexed path resolution still wins, while basename fallback stops after a small bounded candidate set.
+- **SQLite file URI parsing now rejects oversized inputs before normalization (#3140)** — `file:` database URIs and query strings are capped before query slicing, percent unescaping, or `Uri` parsing, and rejected diagnostics are bounded.
+- **Python logical reference remapping now caps header and statement maps (#3141)** — oversized multiline Python headers or continuation statements now skip logical remapping instead of growing unbounded text and line/column arrays.
+- **Report schema summaries now bound arbitrary SQLite table work (#3146)** — `cdidx report --db` caps schema table entries, displayed table-name length, and per-table row-count scans so malformed or oversized databases cannot force unbounded schema-summary collection.
+- **HTTP MCP now has a single bearer-token precedence model (#3156)** — HTTP transport authentication now uses `CDIDX_MCP_HTTP_TOKEN` first and falls back to `CDIDX_MCP_AUTH_TOKEN` when the HTTP-specific variable is unset, so HTTP clients authenticate with one `Authorization: Bearer` header instead of needing a second `params.auth.token` body token.
+- **HTTP MCP `/events` streams now have a concurrent stream cap (#3158)** — extra SSE clients are rejected with 429/Retry-After once the configured stream limit is reached.
+- **Active workspace environment loading now caps and validates paths (#3164)** — oversized or invalid `CDIDX_ACTIVE_WORKSPACE` values are ignored with bounded warnings instead of throwing or leaking huge paths.
+- **Persistent stderr mirroring now truncates oversized writes (#3166)** — global tool logs bound each mirrored stderr string write while preserving the original console stderr output.
+- **Checked-in config files document and test the JSON depth bound (#3167)** — `.cdidx/config.json` now has explicit regression coverage for excessive nesting, and the docs describe the bounded parser contract for both supported config filenames.
+- **Config string arrays are now bounded before environment expansion (#3168)** — include/exclude symbol-kind lists and MCP tool allow/deny lists reject excessive item counts or oversized entries before materializing joined environment values.
+- **Checked-in config output paths now stay inside the workspace (#3169)** — config-sourced `metrics_path` and `global_tool_log_dir` values resolve from the config workspace root and reject paths outside that workspace.
+- **HTTP MCP request logs now cap request metadata fields (#3178)** — method, path, and remote peer values are truncated with a marker before persistent request logging so oversized client metadata cannot inflate tool logs.
+- **MCP audit-log rotation now rejects oversized caps (#3180)** — `--audit-log-max-bytes` now enforces a documented 1 GiB upper bound while preserving the existing 4 KiB lower bound.
+- **Installer curl stderr diagnostics are now bounded (#3187)** — `install.sh` now prints only a capped stderr sample from failed curl calls and reports when the diagnostic stream was truncated, preventing oversized proxy or endpoint errors from being loaded or emitted in full.
+- **Installer latest-release responses are now capped before parsing (#3188)** — `install.sh` now rejects oversized GitHub latest-release API bodies before loading them into shell variables, matching the bounded update-checker behavior and keeping diagnostics small.
+- **LSP errors no longer expose raw exception messages (#3200)** — LSP invalid-params and internal-failure responses now return stable JSON-RPC messages instead of forwarding implementation exception text to clients.
+- **LSP `textDocument.uri` now has explicit type validation (#3203)** — document handlers reject non-string URI values before URI parsing or path resolution while keeping the JSON-RPC error bounded.
+- **LSP request IDs are validated before cloning (#3204)** — request IDs are now limited to bounded JSON-RPC scalar values before the server copies them into responses.
+- **LSP unknown-method diagnostics keep method names capped (#3205)** — coverage and documentation now explicitly lock the existing 240-character echo limit for method-not-found responses.
+- **LSP document operations reject non-file URIs (#3206)** — document handlers no longer treat `untitled:` or other non-`file:` URI schemes as workspace-relative paths.
+- **`.cdidx-version` read warnings now avoid raw paths and exception messages (#3218)** — version-pin read failures and malformed pin warnings now report sanitized reasons without printing full local paths.
+- **Active workspace state warnings now avoid raw paths and exception messages (#3219)** — malformed state files now produce sanitized warnings with reset guidance instead of printing the state path or provider exception text.
+- **SQLite file URI database opens now avoid connection-string injection (#3220)** — user-supplied `file:` URI database paths are built with `SqliteConnectionStringBuilder`, so `;Mode=...` payloads stay inside the data source value instead of becoming connection options.
+- **HTTP MCP response probes now enforce the shared JSON depth limit (#3228)** — JSON-RPC responses inspected out of band by the HTTP MCP transport now parse with the same bounded JSON depth used by stdio MCP frames.
+- **LSP frame parsing rejects duplicate `Content-Length` headers (#3229)** — duplicate length headers are no longer accepted even when they repeat the same value.
+- **LSP frame headers now have count and aggregate byte limits (#3230)** — the LSP parser rejects excessive header lines or aggregate header bytes before reading the message body.
+- **`suggestions export --open-issues` now caps JSON nesting depth (#3232)** — duplicate preflight parsing uses an explicit JSON depth limit and reports a validation error for deeply nested inputs.
+- **Suggestion archive JSONL files are forced owner-only on POSIX systems (#3235)** — pruned suggestion archives now use private file creation and hardening so archived local suggestion records do not inherit permissive default modes.
+- **Corrupt suggestion backups are re-hardened after preservation (#3236)** — `.bak` files created from corrupt suggestion stores now have owner-only POSIX permissions reapplied after the move.
+- **MCP audit log events now cap field and record sizes (#3237)** — audit records now bound request ids, argument key lists, nested include-values keys, and oversized event payloads while marking truncation explicitly.
+- **Plugin and hook diagnostics now sanitize paths and exception text (#3240)** — diagnostics exposed through status or index warnings use bounded, redacted paths and generic failure messages instead of raw local paths or exception messages.
+- **Timed-out post-extraction hooks no longer keep running in the background (#3241)** — each loaded hook now runs in an isolated worker process that is killed when `CDIDX_HOOK_CALLBACK_BUDGET_MS` is exceeded, so timed-out hooks cannot continue mutating scratch state after the indexer moves on.
+- **Pattern config diagnostics now sanitize paths and rejection reasons (#3243)** — rejected pattern configs report bounded `.cdidx`-relative paths and normalized reasons instead of raw absolute paths or parser details.
+- **Suggestion store JSON files now use private POSIX permissions (#3267)** — primary `suggestions-*.json` stores are written through the atomic private-file mode path so persisted triage context stays owner-only on POSIX systems.
+
+#### Documentation
+
+- **Bilingual documentation sections were brought back into parity** — Japanese guide sections now include the MCP error response table, sandbox diagnostics, current file-size recovery guidance, symbol/reference taxonomy details, Python symbol taxonomy, and degradation reason code table already present in the English sections.
+- **External pull request policy is now documented** — the repository now states that issue reports and feature requests are welcome, while external pull requests are currently not accepted and pull request creation is restricted to collaborators only.
+- **README now stays focused on first-run onboarding**: detailed command, output, status, release, and implementation contracts are linked out to the user and developer guides instead of being duplicated in the entry page.
+- **Tracked the large-file decomposition plan (#3007)** - added a developer plan for splitting the largest command, extractor, reference-support, MCP, and file-indexing ownership boundaries into reviewable and testable follow-up PRs.
+
+#### Internal
+
+- **CI test sessions now allow 45 minutes** — the shared VSTest runsettings timeout now has enough headroom for the Windows net9 full suite when runner variance pushes execution past 30 minutes.
+- **Compact search formatting now reuses prepared query context (#3089)** — compact CLI and MCP search result formatting now prepares query token context once and reuses it across result snippets while preserving language-aware matching.
+- **Added MCP tool contract drift tests (#3199)** — MCP tests now compare advertised `tools/list` input properties against the server allowlist and JSON type validator, catching schema, validation, and hidden argument drift before release.
+
 ### [1.28.5] - 2026-06-04
 
 #### Fixed
@@ -3355,6 +3639,290 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.29.0] - 2026-06-07
+
+#### 追加
+
+- **`files` が `--json=array` に対応しました (#2993)** — `cdidx files --json=array` は機械処理向けに単一の JSON 配列を出力し、従来の `--json` と `--json=ndjson` は既存の newline-delimited 出力を維持します。
+- **JSON コマンドが整形出力に対応しました (#2996)** — `--pretty` により CLI の JSON serializer を共有するコマンドでインデント付き JSON を出力でき、大きな JSON payload の確認や diff がしやすくなりました。
+- **`languages` が indexed language と capability で絞り込めるようになりました (#3000)** — `cdidx languages` は現在のデータベースに存在する言語だけを表示する `--indexed-only` と、特定の構造化 capability に絞る `--capability graph|symbols|references` を受け付けるようになりました。
+- **`map`、`inspect`、`outline` が compact JSON section cap に対応しました (#3009)** — `--compact` は AI 向け JSON を出力し、list section を既定 5 件または明示した `--limit` / `--top` 値で cap し、上限付き payload 用の `truncation.sections.*` metadata を追加します。
+- **`inspect --json` が compact evidence field selection に対応しました (#3056)** — `--fields <csv>` は要求した top-level evidence group だけを出力し、`--body-only` は graph context なしで definition body を取得する shortcut として使えます。
+- **search が再利用可能な audit recipe を実行できるようになりました (#3144)** — `cdidx search --list-recipes` は built-in の risky-code audit search を説明、label、false-positive guidance 付きで表示し、`cdidx search --recipe risky-code --json` は通常の search filter を使って grouped result を出力します。
+- **search audit recipe が issue draft export に対応しました (#3145)** — `cdidx search --recipe risky-code --format issue-drafts` は title、label、evidence path、source snippet を含まない body、任意の `--open-issues` duplicate preflight を持つ issue draft object を出力します。
+- **`suggestions list` と `suggestions export` が出力ページングに対応しました (#3234)** — 大きな suggestion store では `--limit <n>` と `--offset <n>` を渡すことで、既存の新しい順の既定出力を保ったまま出力件数の上限指定やページングができます。
+
+#### 変更
+
+- **GitHub Release notes が install 重視のテンプレートを使うようになりました** — `release-notes` は `What's Changed` の compare link と Homebrew / NuGet の install/update command を出力し、前回リリースバージョンは release workflow が最新の draft / prerelease ではない GitHub Release から渡します。
+- **`files --bytes` が大きいファイルから表示するようになりました (#2994)** — `cdidx files --bytes --limit <n>` は limit 適用前に byte size の降順で並べるため、human / JSON 出力で大きいファイルを監査しやすくなりました。
+
+#### 修正
+
+- **changed-between の削除 purge を回帰テストで固定しました (#2987)** — `cdidx index --changed-between` が ref 間で削除されたファイルの indexed row を削除することを、`+` で始まる changelog fragment の path も含めて回帰テストで確認するようにしました。
+- **C# の複数行 callable 引数が property として出なくなりました (#2988)** — メソッド、コンストラクタ、delegate、primary constructor の引数継続行を field 形式の property 抽出から除外し、本物のフィールドと record primary component の property は引き続きインデックスします。
+- **inspect/outline の runaway signature を上限制御しました (#2989)** — JSON 出力で過大な symbol signature を切り詰め、`signature_truncated` と `signature_original_length` のメタデータを出し、切り詰めた callable signature の outline label は簡潔な形式へフォールバックするようにしました。
+- **参照されている C# private 定数を `unused` が likely unused として報告しないようにしました (#2990)** — C# の同一ファイル内検証は chunk 境界をまたいでファイル本文を復元してからコメントと文字列をマスクするため、複数行 raw string の後で使われる private 定数を dead code と誤判定しなくなりました。
+- **C# property hotspot が一般的なメンバー名をリポジトリ全体の bare-name 件数で過集約しないよう修正しました (#2991)** — `hotspots` は record component の `Equal` のような C# property を保守的な in-target counting 経路に保つため、無関係な同名ローカル参照で property ranking が膨らまなくなりました。
+- **`validate` が明示的な結果件数制限に対応しました (#2992)** — `--limit <n>` または `--top <n>` で、大きなリポジトリや agent audit loop の validation issue 表示件数を制限できます。既定の全件表示は維持されます。
+- **`status --explain` が JSON 出力に対応しました (#2995)** — `cdidx status --explain <field> --json` はフラグの組み合わせを拒否せず、機械可読な readiness 説明を返すようになりました。
+- **search が重複チャンクの同一ファイル行ヒットを dedup します (#2997)** — 既定の `search` 結果と件数は、重複チャンクにまたがる同一ファイル・同一行の一致を 1 件にまとめ、`--no-dedup` では引き続き raw chunk hit を確認できます。
+- **句読点を多く含む search phrase で exact substring hit を優先するようになりました (#2998)** - `catch {` のような code-like punctuation query では通常の `search` 結果でも literal substring match を上位に寄せ、`--exact-substring` に切り替える前の punctuation-only noise を減らします。
+- **引用符付き search phrase が phrase semantics を保持します (#2999)** — literal-safe `search` は `"new Regex"` のようなダブルクォート範囲を単一の FTS5 phrase token として扱うため、raw `--fts` 構文を明示しない限り、phrase 検索が独立トークン一致へ広がらなくなりました。
+- **`unused` が bucket と confidence で絞り込めるようになりました (#3001)** - CLI では `--bucket <name>` または `--min-confidence <medium|low>` を指定でき、MCP `unused_symbols` も対応する `bucket` / `minConfidence` 引数で dead-code audit の対象を絞り込めます。
+- **`validate` で finding の severity filter を指定できるようにしました (#3008)** — `--severity warning` により、informational な source literal を隠し、decode replacement の可能性がある warning-level finding に集中できます。
+- **`validate` が JSON array shaping に対応しました (#3010)** — `--json=array` は clean index では `[]`、finding がある場合は bare issue array を返し、通常の `--json` は従来どおり `{ count, issues }` object を維持します。
+- **upgrade のリリース download が caller cancellation を尊重するようになりました (#3011)** — `cdidx upgrade` は release checksum と installer script の download に active cancellation token を渡し、キャンセル後に download timeout まで待ち続けないようになりました。
+- **JSON envelope parser が raw output 全体を split しないようになりました (#3015)** — wrap 対象の NDJSON output を行ごとに走査し、大きな capture で追加の全体 split allocation を避けます。
+- **GitHub 提案送信の成功レスポンス本文にサイズ上限を設けました (#3017)** — `GitHubIssueReporter` は GitHub API の成功 JSON レスポンスを無制限に文字列化せず、固定バイト上限付きで読み取るようになりました。
+- **GitHub 提案送信のレスポンスJSON解析に明示的な深度上限を設けました (#3018)** — `GitHubIssueReporter` は GitHub API JSON レスポンスを固定の最大深度で解析し、不正な深いレスポンスによる過剰な parser work を防ぐようになりました。
+- **GitHelper が git output capture を stream level で上限制御するようになりました (#3019)** — stdout / stderr を上限付き stream reader で汲み出し、改行なしの process output が line buffering 経由で capture limit を迂回しないようにしました。
+- **MCP request timeout の race が未使用 delay timer をキャンセルするようになりました (#3020)** — isolated MCP request dispatch は request work が先に完了した場合に timeout delay をキャンセルして破棄するため、高速な request 後の不要な timer churn を避けます。
+- **MCP の writable-directory probe を best-effort cleanup にしました (#3023)** — `suggest_improvement` は `.cdidx` の書き込み probe で cleanup 失敗を誤った書き込み不可エラーにせず、warning として報告するようになりました。
+- **install-dir の書き込み probe を best-effort cleanup にしました (#3024)** — upgrade の事前書き込み確認で一時 probe を `finally` で削除し、cleanup 失敗は警告にして書き込み可能な directory を失敗扱いにしないようにしました。
+- **不正な version metadata 読み込み時に fallback するようになりました (#3025)** — malformed、missing、unreadable、schema-invalid な `version.json` でも CLI の version 表示経路で例外を投げず、既存の `0.0.0` fallback を返します。
+- **report のログ末尾収集が最新ファイル候補を bounded に保持するようになりました (#3026)** — `cdidx report` は最新の lifecycle log 行を読む前にすべての `stderr-*.log` をソートして materialize しなくなりました。
+- **private log hardening の起動時 best-effort 作業を cap しました (#3027)** — lifecycle log の permission hardening は既存ファイルを bounded 件数で止めるため、巨大なログディレクトリを無制限に走査しなくなりました。
+- **private log pruning が保持対象だけを bounded にメモリへ載せるようになりました (#3028)** — lifecycle log cleanup は古いエントリを削除する前に一致する全ログファイルをソートして materialize しなくなりました。
+- **checkpoint 一時 cleanup 失敗が元の失敗を隠さないようにしました (#3029)** — checkpoint 作成失敗時の一時 directory 削除失敗は警告として出し、rollback の原因になった checkpoint error を保ちます。
+- **restore 一時 cleanup 失敗が restore 結果を隠さないようにしました (#3030)** — restore の一時 directory 削除失敗は、成功した restore や元の restore error を上書きせず stderr 警告として出します。
+- **restore の staging / backup directory 名に衝突耐性のある suffix を追加しました (#3031)** — restore の一時 path と backup path は timestamp を維持しつつ GUID suffix を加え、同一 millisecond の衝突を避けます。
+- **import/export の一時 DB cleanup 失敗を可視化しました (#3032)** — archive import/export で一時 database file や SQLite sidecar の削除に失敗した場合、元の command 結果を保ったまま stderr に警告を出します。
+- **Post-extraction hook discovery が DLL 候補数を制限するようになりました (#3035)** — hook discovery は `CDIDX_HOOK_DISCOVERY_MAX_DLLS` の候補数上限で停止し、無制限の hook directory を enumerate / probe し続ける代わりに diagnostic を報告します。
+- **workspace manifest が JSON depth limit を強制するようになりました (#3037)** - `WorkspaceManifestLoader` は manifest parsing を JSON nesting 16 level で制限し、深くネストした入力が schema validation 前に不要な parser work を消費しないようにしました。
+- **workspace manifest が path probe 前に member count を制限するようになりました (#3038)** - `WorkspaceManifestLoader` は non-empty string member が 1024 件を超える manifest を、member directory の解決や probe の前に拒否します。
+- **workspace manifest の member は manifest root 配下に制限されるようになりました (#3039, #3215)** - member path が rooted path の場合や正規化後に manifest directory の外へ出る場合は拒否し、workspace entry と per-member DB path を宣言された workspace boundary 内に保ちます。
+- **workspace manifest の DB 名は plain file name に制限されるようになりました (#3040)** - `default_db_name` は workspace DB path を構築する前に rooted path、traversal value、directory separator 入りの値を拒否します。
+- **Workspace manifest が未知の `index_strategy` 値を拒否するようになりました (#3041)** - `singel` のような typo は per-member DB 動作へ黙って落ちず、manifest 検証エラーになります。
+- **watch mode の human summary で sub-run JSON parsing を制限しました (#3044)** — 過大または深くネストした sub-run payload は情報用 counts を解析せず、exit code だけの要約にフォールバックします。
+- **dry-run の changed-between が git range 失敗を報告するようになりました (#3046)** — `cdidx index --dry-run --changed-between` は指定 ref を git が解決できない場合、空の candidate set を黙って返すのではなく usage error を返すようになりました。
+- **full-scan の symbol extraction timeout が分離された抽出処理を停止するようになりました (#3048)** — full-scan の symbol extraction は再利用可能な worker process 経由で実行され、timeout 時にはその worker を kill するため、`cdidx index` が stall を報告した後に timeout した extractor が indexing process 内で CPU を消費し続けることを防ぎます。
+- **SQLite connection function 登録の retry sleep が cancellation を尊重するようになりました (#3049)** — SQLite connection function 登録中の transient failure は token-aware な retry backoff を使うようになり、キャンセルされた CLI / MCP 処理が速やかに停止できます。
+- **SQLite connection open の retry が呼び出し元の cancellation を尊重するようになりました (#3050)** — `DbContext` の open retry backoff は `index`、`status`、MCP の DB open 経路から渡された cancellation token を監視し、キャンセル済みの操作が retry sleep の終了まで待たなくなりました。
+- **MCP の JSON node clone が有効な node を文字列化して再 parse しなくなりました (#3055)** — MCP response id、session capabilities、progress token、structured error の追加データは、`ToJsonString()` と `JsonNode.Parse(...)` の組み合わせではなく、共有 helper 経由の `JsonNode.DeepClone()` を使うようになりました。
+- **import manifest にサイズ上限と JSON depth 上限を適用しました (#3057, #3207)** — `cdidx import` は過大または深くネストされた `manifest.json` を deserialization 前に拒否し、過剰なメモリ消費や parser 作業を防ぎます。
+- **upgrade の installer 実行が caller cancellation を尊重するようになりました (#3058)** — `cdidx upgrade` は `install.sh` の終了待機中にもキャンセルを監視し、installer timeout までブロックせず installer process tree を終了します。
+- **Git helper の process 実行が呼び出し元の cancellation を尊重するようになりました (#3059)** — git ベースの update target 解決は cancellation を `GitHelper` に渡し、呼び出し元がキャンセルした場合は子プロセスツリーを終了して速やかに戻ります。
+- **Extractor plugin discovery が DLL 候補数を制限するようになりました (#3061)** — plugin assembly discovery は directory ごとおよび全体の候補数上限で停止し、無制限の plugin directory を probe し続ける代わりに `extractors.diagnostics` へ truncation を報告します。
+- **solution project discovery が workspace root 外の project reference を拒否するようになりました (#3063)** — `.sln` の project entry が active workspace の外側へ正規化される場合、filesystem probe や path-filter 評価の前に無視するため、`--solution` / `--project` discovery が意図した workspace 境界内に留まります。
+- **solution parsing に作業量上限を追加しました (#3064)** — `.sln` project discovery は 8 MiB を超える solution file、16,384 文字を超える行、4096 件を超える .NET project reference を拒否し、`Project(...)` entry を regex matching なしで parse するため、壊れた solution が無制限の regex runtime を強制できなくなりました。
+- **自動 solution 検出が root 直下の `.sln` candidate を sort 前に上限管理するようになりました (#3065)** — root 直下の solution file が 128 件を超える workspace では、無制限に materialize / sort せず、`--solution <path>` を促す明確な diagnostic を返します。
+- **`index --project` が materialize する project-file targets を上限管理するようになりました (#3066)** — project expansion は 1 project で 65,536 files、requested projects 全体で 131,072 unique files を超える場合に拒否し、明示的な `--files` 入力を案内します。
+- **SourceCodeDetector が全文 line split と timeout なし regex を避けるようになりました (#3068)** — source-code leak heuristic は行を逐次走査し、上限付き regex matching を使います。
+- **ワークスペースのバージョン固定を起動時に安全な上限付きで読むようにしました (#3072)** — `.cdidx-version` は小さな byte 上限、先頭 blank line 上限、行長上限付きで読み、壊れた pin は警告して無視するため、各コマンドが過剰な入力を走査し続けることを防ぎます。
+- **MCP search guard filter が設定上限で即時停止するようになりました (#3073)** - guard filter 配列は読み取り中に合計filter数の予算を追跡し、残りの要素を materialize する前に9件目を即時拒否するようになりました。
+- **update-check cache の JSON parse が depth cap を適用するようになりました (#3074)** — 深すぎる malformed local cache file は unbounded な parser depth work を発生させず、cache miss として無視されます。
+- **test-extractor が読み込み中も入力 byte 上限を強制するようになりました (#3075)** — 初回の長さチェック後に fixture / expectation file が増えた場合でも、設定された byte 上限を超えて読み込まず拒否します。
+- **MCP session status が保持する client root を上限付きにしました (#3076)** — `initialize` の root 診断は root 一覧と個別 root URI の長さを上限付きで保持し、advertised root が短縮された場合は MCP `status` に `roots_truncated` metadata を出すようになりました。
+- **DbDebug redaction が巨大文字列を bounded path でハッシュするようになりました (#3078)** — redacted diagnostic string hash は固定長の文字列セグメントと長さ metadata を使い、巨大な値の UTF-8 全体 materialization を避けます。
+- **query profiling の query-plan diagnostics を制限するようになりました (#3079)** — `--profile` は取得する `EXPLAIN QUERY PLAN` 行数を制限し、巨大な detail 文字列を切り詰め、追加の plan 行を省略した場合は truncation marker を出します。
+- **slow-query の GlobalToolLog SQL text を一貫して切り詰めるようになりました (#3080)** — slow-query diagnostics は stderr と永続 global tool log に書き込む前に、共通の bounded SQL formatter を使います。
+- **literal search sanitization が大きすぎる生成入力を拒否するようになりました (#3081)** — literal-safe な `search` query は FTS5 sanitization 前の database reader 層で 1,000 文字、128 whitespace term に制限され、CLI/MCP は database failure へ落とさず usage error を返します。
+- **guard filter 付き search が pagination 前の候補収集を制限するようになりました (#3082)** - guard filter を使う検索は、全一致 chunk を memory に集める代わりに SQL 側で capped over-fetch budget を適用し、その budget 内で要求ページを満たせないほど広い guarded query には validation error を返します。
+- **guard付き検索がprimary match語を事前計算し、候補行を遅延スキャンするようになりました (#3083)** — guard評価は安定したprimary query語を候補ごとに再構築せず、focus line選択前に候補chunk全体を行配列へ分割しなくなりました。
+- **guard付き検索がリクエスト内でline-window読み取りをcacheするようになりました (#3084)** — guard評価は、繰り返しfilterや近接候補で同じpath/windowの読み取りを再利用し、cacheはリクエスト内かつ上限付きに保ちます。
+- **guard付き検索が一致chunkから要求された行windowだけを読み取るようになりました (#3085)** — guard文脈抽出は、重なったchunk全体を全行分割せず、focusされた行範囲だけをmaterializeします。
+- **検索のenclosing symbol lookupが準備済みmatch-line contextを再利用するようになりました (#3086)** — 検索結果の補強は、言語ごとの正規化query語をcacheし、候補本文を最初の一致行までstreamして、結果ごとに正規化済み行配列を再構築しなくなりました。
+- **検索スニペットが範囲限定excerptのために本文全体を行分割しないようになりました (#3087)** — スニペット整形は、要求されたsnippet windowを構築する前に本文全体の分割配列を作らず、行をスキャンするようになりました。
+- **反復の多い本文で検索スニペットが保持する一致indexを制限しました (#3088)** — スニペット照合は選択済みsnippet windowに必要な一致行indexだけを保持しつつ、dropされた一致行数の合計は引き続き報告します。
+- **MCP rate limiter の環境変数 warning は過大な値を切り詰めるようになりました (#3090)** — invalid / clamp される `CDIDX_MCP_RATE_LIMIT_*` 診断は、warning に出す環境変数値を上限付き表示にします。
+- **MCP keep-alive interval warning は過大な環境変数値を切り詰めるようになりました (#3091)** — invalid な `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S` 診断は、stderr に出す raw 値を上限付き表示にします。
+- **CLI option 診断はユーザー指定値を上限付き表示にするようになりました (#3092)** — index / query / hooks の warning / error は option token や値を表示する前に共有の bounded display formatter を通し、過大入力を切り詰めて制御文字を空白化します。
+- **batch-row skip warning は過大な row 詳細を切り詰めるようになりました (#3094)** — `DbWriter` は skipped-row 診断を出す前に row identifier と batch / row exception message を上限付き表示にします。
+- **MAC profile 検出は proc-attr 読み取りと hint 出力を上限付きにしました (#3095)** — `/proc/self/attr/*` の読み取りを制限し、過大な AppArmor / SELinux profile 文字列は database-access hint に出す前に切り詰めます。
+- **dependency JSON graph 出力が graph 配列全体の重複 materialization を避けるようになりました (#3097)** — CLI graph 出力は JSON を逐次書き込み、MCP graph payload は LINQ `ToArray` のコピーを作らず bounded array を構築します。
+- **`find` と `find --count` が照合時にインデックス済みチャンクをストリーム処理するようになりました (#3099)** — 両経路が同じ増分行 matcher を共有し、ファイル全体の行マップ再構成を避けつつ重複チャンクの扱いを揃えます。
+- **`find` が共通の query 長上限を適用するようになりました (#3100)** — `cdidx find` と `cdidx find --count` は、query text が 1,000 文字を超える場合、database reader を開く前に拒否します。
+- **MCP audit の引数メタデータが bounded なキー切り詰めカウンタを報告するようになりました (#3105)** — audit / telemetry event は引数キー数とキー表示長を上限内に収め、省略数と切り詰めキー数を明示するため、大きな引数 map がレコードメタデータを静かに膨らませないようになります。
+- **MCP audit log event をレコード単位の byte 上限内で serialize するようになりました (#3107)** — 過大な audit record は書き込み前に明示的な `event_truncated` marker 付きで縮小され、単一eventが大きなserialized lineを作ってrotationを迂回することを防ぎます。
+- **visibility filter 付きの symbol / definition count query が全結果リストを materialize しなくなりました (#3111)** — count-only 経路で visibility filter を SQL に直接適用し、既存の件数結果を維持します。
+- **MCP resources/list が危険な cursor を拒否するようになりました (#3112)** - `resources/list` は cursor offset を MCP pagination 上限で検証し、page limit を checked 演算で計算し、受理可能な範囲内の `nextCursor` だけを返すようになりました。
+- **MCP graph の count-only handler が `int.MaxValue` の行取得 probe を使わなくなりました (#3115)** — references / callers / callees は count-only と paginated total metadata に total-count query を使います。
+- **Database checkpoint name に予測可能な長さ上限を設けました (#3124)** — checkpoint / restore は `128` 文字を超える名前を checkpoint path 作成前に拒否し、診断に出す名前は切り詰めます。
+- **DB 本体の置換成功後に sidecar cleanup だけで `import` が失敗扱いにならなくなりました (#3125)** — main database move 後の destination WAL/SHM cleanup は best-effort として扱われます。
+- **suggestions export と issue draft の本文フィールドを上限化しました (#3126)** — `suggestions export` は JSON、Markdown、issue draft body 内の長い description / context / tool-invocation text を `[truncated]` marker 付きで制限し、ローカルレコード全体の確認には引き続き `suggestions show` を使えるようにしました。
+- **definition body は bounded excerpt として返されるようになりました (#3131)** — `definition --body` は `body_content` を 20 行かつ 16 KiB に cap し、indexed body が返却 payload より長い場合は `body_content_truncated` を付けるようになりました。
+- **参照・caller の body preview が定義本文全体を読み込まないようになりました (#3132)** — `references --body`、`callers --body`、`callees --body`、`impact --body` は symbol の body range metadata で範囲を決めてから cap 済み preview だけを読み込み、行数 cap がかかった場合は `body_content_truncated` を付けるようになりました。
+- **index dry-run JSON が file / error の bounded sample を返すようになりました (#3133)** — dry-run output は総数を保持しつつ file / error sample array を制限し、大規模リポジトリで無制限の結果リストを必要としないようにしました。
+- **status の symbol kind metadata に上限を設けました (#3134)** — `status` は symbol-kind map と長い kind label を上限付きにし、JSON では overflow / truncation metadata、人間向け出力では省略 kind marker を表示するようになりました。
+- **無効な `CDIDX_NOTIFY` 値は fallback 前に warning を出すようになりました (#3135)** — index の引数解析は未対応の notification mode を黙って無視せず、上限付きの stderr warning として報告します。
+- **`export` の archive / ctags 出力が absolute output path を使うようになりました (#3138)** — export の検証、ディレクトリ作成、atomic write、最終報告が同じ解決済み出力先を共有します。
+- **`status --check` が workspace snapshot 全体を materialize せずに freshness を比較するようになりました (#3139)** — indexed snapshot は DB から streaming し、workspace file は scan しながら照合し、未照合の indexed row だけを missing file 分類に回します。
+- **`status` が hook assembly を読み込まずに hook candidate を報告するようになりました (#3142)** — CLI と MCP の status は metadata-only hook discovery を使うため、軽量な status 呼び出しで post-extraction hook assembly を inspect / instantiate しなくなりました。
+- **workspace plugin / pattern discovery が active project root を使うようになりました (#3143, #3190)** — 明示 project root を index または status reporting する際、workspace-local な `.cdidx/plugins` と `.cdidx/patterns` の discovery が process current directory へ fallback しなくなりました。
+- **`report` が表示する absolute output path と同じパスで bundle を書き込むようになりました (#3147)** — report bundle の相対パスは書き込み前に固定されるため、カレントディレクトリの変化で summary metadata と実際の書き込み先がずれなくなりました。
+- **`report --db file:...` が既存の SQLite file URI DB を読めるようになりました (#3148)** — report の schema 収集は filesystem check と read-only SQLite open の前に SQLite file URI 入力を正規化します。
+- **repo map が limit 適用前に全 file stat を materialize せず、bounded な file-summary ranking を保持するようになりました (#3149)** — map 集約は file stat を streaming しながら top-N を更新し、Java module grouping も全 file list を mutate せずに解決します。
+- **`unused` fallback query が参照済み symbol 名を全件メモリへ読み込まなくなりました (#3150)** — 非 SQL resolver 経路では、bounded result loop の前に候補 SQL 側で参照済み symbol を除外します。
+- **CLI LSP location が indexed relative path を indexed project root から解決するようになりました (#3151)** - `--format lsp` は indexed path が相対パスの場合に active な indexed project root から file URI を構築し、indexed root が利用できない場合だけ current directory にフォールバックします。
+- **CLI structured format helper が LSP / compact / SARIF 出力で全 result array を重複保持しなくなりました (#3152)** — formatted writer は JSON schema を保ったまま array item を stdout へ逐次書き込みます。
+- **`hotspots --count` が表示上限に制限されないよう修正しました (#3153)** — count-only hotspots は symbol、file、same-name group の各 mode で専用の総件数 query を使うため、`--limit` が `count`、`files`、grouped `definition_site_total` を切り詰めなくなりました。
+- **明示的なworkspace DB依存集計のfan-outに上限を設けました (#3154)** — `deps --workspace-db` はmember DBを開く前に過大なdistinct DBリストを拒否し、cross-database依存集計を合計8 DB / ordered pair 56件までに制限します。
+- **依存関係の symbol サンプルを結果生成前に上限付きにしました (#3155)** — `deps` は参照数を全件のまま保持しつつ、単一DBおよびworkspace cross-DB依存クエリのedgeごとの `symbols` 集計を制限するようになりました。
+- **HTTP MCP の limit 環境変数がハード上限を強制するようになりました (#3157, #3227)** - `CDIDX_MCP_HTTP_MAX_REQUEST_BYTES` と `CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH` は、HTTP listener 起動前にドキュメント化された上限を超える値を拒否するようになり、過大な buffer や request queue が誤設定されることを防ぎます。
+- **Grouped hotspot の path sample に上限を設けました (#3159)** — `hotspots --group-by-name --json` は各 group の `paths` 配列を 20 件に制限し、追加の definition path がある場合は `paths_truncated` を返すため、同名集約で JSON payload が過大にならなくなりました。
+- **MCP project filter resolver failure が structured invalid-argument error を返すようになりました (#3160)** — 解決できない、またはアクセスできない project filter は tool 実行前に bounded diagnostic 付きで失敗し、generic な sanitized tool failure に落ちないようになりました。
+- **prune 済み suggestion archive をローテーションするようにしました (#3161)** — prune された `.cdidx/suggestions-*.archive.jsonl` records は、無制限に増え続ける代わりに 8 MiB の active archive と 3 世代の rotation に収まるようになりました。
+- **`diff --limit` が共有 result maximum を適用するようになりました (#3162)** — `10000` を超える値は結果リストを確保する前に拒否されます。
+- **詳細 diff の行出力で大きなフィールドサンプルを上限付きにしました (#3163)** - `cdidx diff --detailed` は巨大な encoded row フィールドを元の長さと安定した SHA-256 fingerprint 付きで切り詰めるため、大きな signature や context が diff レポートを肥大化させず、full value 比較による drift 検出は維持されます。
+- **`workspace use` が同じ basename の曖昧な member を拒否するようになりました (#3165)** - 要求された directory name に一致する manifest member が複数ある場合、先頭を選ばず bounded な候補一覧を含むエラーを返します。
+- **hooks と backfill-fold が未知のオプションを拒否するようになりました (#3170)** — `cdidx hooks ...` と `cdidx backfill-fold` は、未対応フラグを warning のみで続行せず usage error として終了します。
+- **hooks install が選択された project path を保持するようになりました (#3171)** — 生成される pre-commit hook は常に `.` を index するのではなく、インストール時に解決した project path を対象に `cdidx index` を実行します。
+- **`index --max-symbols-per-file` に hard maximum を設けました (#3172)** — `50000` を超える値は拒否し、1 ファイルあたりの symbol safety guard を実質的に無効化できないようにしました。
+- **`index --watch --debounce` が実用的でない間隔を拒否するようになりました (#3173)** — `60000` ms を超える debounce 値は command-line error になり、watch mode が動いているように見えながら更新を実質的に先送りする状態を防ぎます。
+- **case-sensitivity probe が workspace root 直下に隠しファイルを書かないようにしました (#3174)** — Git と file-indexer の filesystem probe は read-only の root path-variant check を優先し、write probe が必要な場合だけ `.cdidx/probes` に fallback して、判定後に probe 専用の file/directory を削除します。
+- **DB path metadata probe が filesystem error でも best-effort のままになりました (#3175)** — resolver の metadata read は SQLite 例外に加えて、想定される filesystem / path 例外も握って上位の解決処理を落とさなくなりました。
+- **`status --stale-after` に実用上限を設けました (#3176)** — CLI / 環境変数 / config の stale threshold が `30d` を超える場合は拒否し、stale な index が実質無期限に fresh と見なされることを防ぎます。
+- **`index --commits` の commit ref 入力に上限を設けました (#3177)** — `--commits` は git を呼び出す前に過剰な ref 数と長すぎる ref token を拒否し、検証処理と診断出力を bounded に保ちます。
+- **DbWriter の TypeScript module-syntax fallback 読み込みに上限を設けました (#3179)** — augmentation fallback が再オープンした TypeScript file を byte / line 上限なしで走査しないようになりました。
+- **Did-you-mean 候補は距離計算前に過大入力を拒否するようになりました (#3181)** — command / flag / language / kind の候補提示は診断表示上限を超える値をスキップし、不正な入力で巨大な編集距離行列を割り当てないようになりました。
+- **MCP path/list 引数検証が CLI の path-filter 上限を共有するようになりました (#3182)** — path 系配列は CLI と同じ件数・長さ上限を使い、`tools/list` でもクライアント側検証用にその上限を広告します。
+- **MCP の project filter が indexed project root 基準で解決されるようになりました (#3183)** - `project` を受け取る MCP tool は server process の current directory ではなく、database の active indexed project root から solution project filter を展開します。
+- **MCP `impact_analysis` が共有 query 長上限を適用するようになりました (#3184)** — 長すぎる impact query は impact analysis 実行前に、他の query tool と同じ structured invalid-argument response で失敗します。
+- **表示edge上限の外にある依存cycleも検出するようにしました (#3185)** — CLI / MCP の `deps` cycle検出は、要求された出力上限をcycle graph edgeへ適用する前に、別の上限付きgraph候補予算を使うようになりました。
+- **MCP の必須 `path` 引数が不正な場合 lookup 前に失敗するようになりました (#3186)** — `outline` と `excerpt` は不正な indexed-file path を database lookup 前に拒否し、`index` は non-string、長すぎる値、NUL を含む project path を filesystem check 前に拒否します。
+- **CLI の project filter が indexed project root 基準で解決されるようになりました (#3189)** - `--project` 付き query コマンドは active な indexed project root から solution project filter を展開するため、別の current directory から明示 `--db` query を実行しても誤った workspace を参照しません。
+- **`cdidx upgrade --json` が update install 時も stdout を JSON のまま保つようになりました (#3191)** — update available の upgrade 実行は installer の console 出力を混ぜず、update-check fields を含む構造化された install result を出力します。
+- **MCP `search.cursor` contract を regression lock しました (#3192)** — `cursor` が `tools/list` と server-side argument validation の両方で advertised / allowlisted / string-typed のまま保たれるよう確認します。
+- **MCP search が不正な cursor ドメインを拒否するようになりました (#3193)** - search cursor は pagination を継続する前に、非有限の score と負の chunk / offset フィールドを拒否するようになりました。
+- **MCP `definition` / `symbols` が不正な `since` 値を拒否するようになりました (#3194)** — 不正な ISO 8601 timestamp は freshness filter を黙って無視せず、他の MCP tool と同じ structured invalid-argument response を返します。
+- **MCP pagination が不正な下限値を拒否するようになりました (#3195)** — 非正の `limit` と負の `offset` は、黙って補正されず structured invalid-params error を返すようになりました。
+- **MCP `deps` argument contract を regression lock しました (#3196)** — `reverse`、`format`、`cycles` が advertised / allowlisted / typed のまま保たれ、`direction` や `includeGenerated` のような古い hidden 引数が戻らないことを確認します。
+- **MCP `map` argument contract を regression lock しました (#3197)** — `sections` と `depth` が advertised / allowlisted され、documented JSON shape のまま検証されることを確認します。
+- **MCP `outline` / `validate` の no-op 引数 contract を regression lock しました (#3198)** — hidden no-op 引数が戻らず、advertised 引数と server-side allowlist が一致し続けることを確認します。
+- **MCP `backfill_fold` のエラーが中央 sanitizer を使うようになりました (#3201)** — `backfill_fold` は tool-result error に生の例外メッセージを返さず、標準の sanitized MCP error envelope を返しつつ、詳細な例外情報はサーバー診断経路に残すようになりました。
+- **MCP index のファイル単位 failure が sanitized かつ bounded な message を使うようになりました (#3202)** — MCP `index` のファイル単位 failure entry は、tool response や永続ログの first-error 欄へ生の例外メッセージを転送せず、failure message に truncation metadata を含めるようになりました。
+- **export/import の catch-all error が生の例外メッセージを出さないようになりました (#3208)** — `cdidx export`、`cdidx import`、`cdidx export ctags` は絶対パスや provider 固有情報を含みうるメッセージではなく、sanitize された例外型を表示します。
+- **export snapshot の一時 DB を POSIX で private にしました (#3209)** — `cdidx export` は archive 化前の一時 SQLite snapshot に owner-only の file permission を再適用します。
+- **import で置き換えた DB に private permission を再適用しました (#3210)** — `cdidx import` は移動後の `codeindex.db` を harden し、一時ファイルの広い permission を引き継がないようにします。
+- **Dockerfile JSON form の symbol extraction が item 数と文字列長の上限を適用するようになりました (#3211)** — `VOLUME`、`SHELL`、`COPY`、`ADD` の JSON form parse は、既存の JSON depth 上限に加えて、処理する配列要素数と文字列長にも上限を適用します。
+- **TypeScript path alias parse が #3212 の JSON / alias map 予算を明示的に扱うようになりました** — `tsconfig.json` / `jsconfig.json` の path alias extraction は、JSON depth、alias rule 数、rule ごとおよび合計 target 数、過長な pattern / target 文字列の上限をカバーします。
+- **SolutionProjectResolver の fallback discovery が traversal 作業を上限管理するようになりました (#3213)** — fallback project discovery は 4096 directories または 65,536 files で停止し、workspace tree を無制限に走査せず `--solution <path>` を示す明確な recovery hint を返します。
+- **solution project fallback traversal が long path と directory 単位の失敗を扱うようになりました (#3214)** — project discovery / expansion は long-path-safe な列挙を使い、読めない subtree を skip し、project filter を解決できない場合は bounded traversal diagnostics を返します。
+- **Workspace manifest が長すぎる member path と default DB 名を拒否するようになりました (#3216)** - manifest 読み込み時に path 解決や DB 位置の materialize 前に member path 文字列と `default_db_name` の長さを制限します。
+- **`workspace use` が存在しない manifest member を拒否するようになりました (#3217)** - manifest にある member がディスク上に存在しない場合、missing root を指す active workspace を保存せず usage error を返します。
+- **DB / diff コマンドが SQLite file URI の表示値を保持するようになりました (#3221)** — `cdidx db` と `cdidx diff` は human / JSON の database path 表示時に `file:` URI 入力を filesystem path 正規化へ渡さなくなりました。
+- **GitHub 提案送信の検索・作成成功レスポンスで、サイズ上限とJSON深度上限を共通適用しました (#3222)** — 過大または深すぎる GitHub 成功 payload が、提案送信中に無制限の読み取りや parser work を引き起こさないようになりました。
+- **GitHub suggestion の既存 issue 検索を label ごとに上限化しました (#3223)** — label 付き issue の直接一覧 backstop は label ごとに一定ページで停止し、上限到達時は短い警告を出すようになりました。
+- **Metrics JSONL event の文字列フィールドを制限するようになりました (#3108, #3224)** — `--metrics` と `CDIDX_METRICS` のレコードは巨大な文字列フィールドを切り詰め、`*_length` / `*_truncated` metadata を出力し、各 serialized event を固定 byte budget 内に収めます。
+- **MCP session status が保持する client capabilities を上限付きにしました (#3225)** — `initialize` の capabilities 診断は serialized byte size と JSON depth で上限管理され、capabilities が短縮された場合は MCP `status` に明示的な `client_capabilities_truncated` metadata を出すようになりました。
+- **トップレベルの global log flags を CLI schema と completion contract で検証するようになりました (#3226)** - `--log-format`、`--log-retain-count`、`--log-max-size-mb` は共有 top-level flag schema で管理し、help に記載して shell completion に出すようになり、parser との drift をテストで検出します。
+- **batch query の各引数に個別上限を追加しました (#3231)** — `cdidx batch` は、デコード後の JSON 文字列引数が 8,192 文字を超える場合、query command へ dispatch する前に拒否します。
+- **`suggestions --open-issues` の重複 preflight 入力を上限化しました (#3233)** — open issue preflight の解析は既存のファイルサイズ / JSON depth 上限に加えて、issue entry 件数、issue ごとの label 件数、title / URL / label 文字列長、title tokenization 入力も制限します。
+- **`status` が workspace 鮮度更新時刻と indexed file timestamp を区別するようになりました (#3238)** — `status --json` は `last_workspace_freshened_at` を含み、human output は `Freshened` を表示するため、no-op / partial update を file row 由来の `indexed_at` と分けて読めます。
+- **Extractor plugin discovery が過大な DLL 候補を skip するようになりました (#3239)** — plugin assembly loading は各候補のサイズを読み込み前に確認し、DLL が size budget を超えた場合は bounded diagnostic を記録します。
+- **Post-extraction hook discovery が過大な DLL 候補を skip するようになりました (#3242)** — hook discovery は読み込み前に各 DLL 候補を `CDIDX_HOOK_DISCOVERY_MAX_BYTES` と照合し、size budget を超えた場合は diagnostic を報告します。
+- **version metadata の読み込みに上限を設定しました (#3244)** — `version.json` の読み込みは最大 16 KiB になり、明示的な JSON depth 上限で parse したうえで、不正な metadata では `0.0.0` に fallback します。
+- **pattern config の scalar metadata に長さ上限を設けました (#3245)** — pattern config の `language`、`extension`、`kind` 値に明示的な長さ上限を設け、上限を超えた config は sanitization 済み診断付きで拒否するようになりました。
+- **post-extraction hook callback が遅れて返した budget 超過 response を拒否するようになりました (#3252)** — 測定済み callback elapsed time が `CDIDX_HOOK_CALLBACK_BUDGET_MS` を超えている場合は hook worker response を破棄し、full suite の scheduler contention 下で timeout 済み mutation が採用されないようにしました。
+- **`PostExtractionHookTests` の callback budget test がより広い timing margin を使うようになりました (#3261)** — slow hook budget test は full suite load 下でも hook delay が test budget を十分に超える余裕を持たせつつ、timeout した worker が completion を通知する前に kill されることを引き続き検証します。
+- **診断 sanitization が regex timeout 例外を漏らさないようになりました (#3292)** — plugin / pattern 診断の path redaction が上限付き regex timeout に達した場合は汎用の sanitized message に fallback するため、plugin registry status の報告中に full suite が失敗しなくなりました。
+- **MCP audit request-id truncation のカバレッジが protocol-valid な escaped id を使うようになりました (#3306, #3307, #3308)**: 回帰テストは JSON-RPC id を request validation の上限内に保ちつつ、serialized audit request id が audit 表示上限を超える入力で検証するようになりました。
+- **MCP telemetry cap test が無関係な invocation event を無視するようになりました (#3325)** — argument-key cap の regression test は一意な request id で telemetry を絞り込むため、full-suite 実行時に別の invocation event が捕捉されても失敗しなくなりました。
+- **IndexWatchRunner の cancellation カバレッジが watch 起動を待つようになりました (#3343)** — cancellation 回帰テストは watch loop の起動イベントを観測してから取り消すようになり、Debug のフルテスト実行で watcher task の起動遅延と競合して待機経路に cancellation 例外が出ることを防ぎます。
+- **Windows/net9.0 CI がテストセッションタイムアウトを再実行しないようになりました (#3358)** — 最も遅い matrix leg では XPlat Code Coverage 収集を省略し、`TestSessionTimeout` による中断は2回目のフルスイート再実行ではなく bounded failure として扱います。
+
+#### セキュリティ
+
+- **`suggestions export --open-issues` が過大な preflight ファイルを拒否するようになりました (#3002)** — 重複確認用 JSON は上限付きバッファで読み込まれ、対応サイズを超えるファイルでは明確な usage error を返します。
+- **HTTP MCP が同時 request handler 数を制限するようになりました (#3003)** — accepted HTTP context を設定可能な handler semaphore で制御し、上限超過時は無制限に handler task を作らず 429/Retry-After を返します。
+- **`cdidx upgrade` がダウンロードした installer script を検証するようになりました (#3004)** — release は `install.sh` を checksum manifest に含め、`upgrade` は実行前にダウンロード済み script の SHA-256 を照合します。
+- **グローバルツールログが underscore 区切りの secret option を redact するようになりました (#3005)** — lifecycle 引数ログは `--api_key` と `--access_key` 形式も既存の API/access key 表記と同様に扱い、assignment 形式と値分離形式の両方を redact します。
+- **Suggestion の永続化が一般的な key assignment を redact するようになりました (#3006)** — suggestion storage と GitHub submission の scrub は、低エントロピーの `token=`、`api_key=`、access-key assignment 形式を hyphen / underscore variants も含めて処理します。
+- **MCP response frame 判定で JSON 深さ上限を適用しました (#3012)** — response frame の事前判定でも過深 JSON を分類前に拒否し、MCP request / cancellation の保護済み parse 経路と揃えました。
+- **HTTP MCP の cancellation probe が共有 JSON 深さ制限を適用するようになりました (#3013)** — 通常の HTTP MCP リクエスト処理前に検査される cancellation notification は、stdio MCP frame と同じ bounded JSON depth で parse されるようになりました。
+- **HTTP MCP の JSON-RPC id 抽出に JSON 深さ上限を適用しました (#3014)** — 過深な HTTP request body によって request id 抽出が無制限の JSON parse 作業を行わないようにしました。
+- **JSON envelope の raw item parse に JSON 深さ上限を適用しました (#3016)** — `--json-envelope` は過深な raw output 行を、明示的な入れ子上限なしで parse せず従来どおり文字列として保持します。
+- **LSP JSON message parse に深さ上限を適用しました (#3021)** — 過深な LSP payload は、明示的な入れ子上限なしで parse されず parse error として拒否されます。
+- **batch query の JSON 入力に深さ上限を適用しました (#3022)** — `cdidx batch` は過深な JSON 行を command argument 処理前の parse 段階で拒否します。
+- **TypeScript path alias config の JSON parse 失敗を警告し depth 上限を適用するようになりました (#3033)** — `tsconfig.json` / `jsconfig.json` の alias 解析で JSON を parse できない場合は既存の path-alias warning を出し、過度にネストした config JSON は `JsonDocument` の depth 上限で拒否します。
+- **Dockerfile JSON form の抽出でパーサー深さ制限を適用しました (#3034)** — Dockerfile の `VOLUME`、`SHELL`、`COPY`、`ADD` の JSON form は extractor ローカルの `JsonDocumentOptions` を使うようになり、深くネストした JSON をシンボル抽出処理の継続前に拒否します。
+- **active workspace state の parse に JSON 深さ上限を適用しました (#3036)** — 過深な `active.json` は既存の warning 経路で無視され、workspace DB 解決を上書きしません。
+- **`.cdidxrc.json` の JSON ネスト深度に上限を設けました (#3042)** — プロジェクト固有設定の解析は、通常のスキーマ検証に進む前に過度に深い JSON を拒否するようになりました。
+- **MCP index-run lock metadata の parse に JSON 深さ上限を適用しました (#3043)** — 過深な lock holder metadata は、明示的な入れ子上限なしで parse せず diagnostic 不明として扱います。
+- **永続化 JSON string-list metadata の parse に上限を適用しました (#3045)** — string-list metadata は、壊れた database row から無制限に parse 結果を確保せず、過深な JSON、過大な配列、過大な raw payload、過大な decoded string 内容を拒否するようになりました。
+- **pattern config の探索を streaming 化し directory ごとの上限を追加しました (#3051)** — `cdidx` は `.yaml` / `.yml` の pattern sidecar 探索を streaming で行い、pattern config 候補を directory ごとに最大 128 件まで受け付け、上限に達した場合は diagnostic を出力します。
+- **pattern config 読み込みで改行 Split 配列を作らないようにしました (#3052)** — configured extractor YAML を上限付き UTF-8 テキストから行ごとに解析し、小さな行が多い config でファイル全体の `Split('\n')` 割り当てを避けるようにしました。
+- **組み込み reference extractor の正規表現列挙をタイムアウト付きにしました (#3053)** — リポジトリ由来のソース文字列から組み込み extractor が match を列挙する前に、共有の列挙処理で正規表現タイムアウトを強制・捕捉するようにしました。
+- **TypeScript namespace alias 参照で行ごとの動的正規表現を生成しないようにしました (#3054)** — namespace alias の qualified usage は、alias ごと・行ごとの regex を組み立てず、識別子境界を保つ bounded scanner で検出するようになりました。
+- **full-scan checkpoint の読み込みで JSON 深さと directory payload を制限しました (#3060)** — 破損した scan checkpoint は、過大な完了済み directory set として信頼される前に無視されます。
+- **suggestion store の読み込みで JSON depth と record 数を制限するようになりました (#3062)** — ローカル suggestion store の読み込みは深すぎる JSON や対応上限を超える record 数のストアを拒否し、無制限のメモリ上 record 集合を作らず対象ファイルを `.bak` として保存します。
+- **MCP 監査ログの include-values が secret 風の値を redaction するようになりました (#3067)** — include-values の監査レコードは secret 風の引数キーや既知 token pattern を `[REDACTED]` に置き換え、`arg_values_redacted` で記録します。
+- **TypeScript path alias 設定の rule / target 処理量を制限しました (#3069)** — `compilerOptions.paths` の読み込みと解決で受理する alias rule 数、target entry 数、alias / target 文字列長、過大な module specifier、置換後 target 長に上限を設け、超過分を切り詰める・無視する・スキップする場合は bounded warning を出すようにしました。
+- **グローバルツールログの redaction が bounded になりました (#3070)** — lifecycle 引数の scrub は timeout 付き regex と引数ごとの入力長 cap を使い、長大な suffix はログへ残さず truncation marker に置き換えます。
+- **Suggestion text redaction が bounded になりました (#3071)** — suggestion persistence と GitHub submission の scrub は timeout 付き regex とフィールドごとの入力長 cap を使い、長大な suffix を明示的な truncation marker に置き換えます。
+- **database path 診断は過大な `--db` 値を切り詰めるようになりました (#3093)** — query / batch の database error は URI/path の種別を残しつつ、stderr に出す database path を上限付き表示にしました。
+- **MCP token 認証が oversized token を hash 前に拒否するようになりました (#3096)** — stdio auth token と HTTP bearer token に共通の長さ上限を設け、悪意あるクライアントが無制限の token hash 処理を強制できないようにしました。
+- **MCP の out-of-band client response を clone 前に上限チェックするようになりました (#3098)** — client supplied な result / error payload は保持前に bounded JSON writer で測定され、過大な応答は payload を含まない診断で拒否されます。
+- **C# import alias 登録で timeout 付き signature regex を使うようにしました (#3101)** — `DbWriter` は indexed content 由来の C# `using` signature を分類するとき、BCL の regex API を直接呼び出さなくなりました。
+- **MCP progress token を echo 前に bounded にしました (#3103)** — `index` と `backfill_fold` は progress notification 用に clone する前に `_meta.progressToken` を scalar/object 形状、node、depth、string、serialized-byte budget で検証し、上限超過または未対応 token は増幅せず無視します。
+- **MCP JSON-RPC request id を echo 前に長さ制限するようになりました (#3104)** — 過大な文字列または数値の `id` は、レスポンスメタデータ、telemetry、audit record に保持される前に、境界付きの `id:null` invalid-request response として拒否されます。
+- **MCP 監査ログの include-values が引数 payload に budget を適用するようになりました (#3106)** — 監査ログの引数値は書き出し前に depth / count / string / serialized-byte budget を通して clone され、過大 payload では truncation metadata を記録します。
+- **doctor 出力で過大な環境変数値を短縮するようになりました (#3109)** — `cdidx doctor` は terminal および `CDIDX_*` 環境変数値を表示前に制限し、短縮時は元の長さを示す marker を付けます。
+- **query default 環境変数の parse error で raw 値を短縮するようになりました (#3110)** — 不正な `CDIDX_DEFAULT_*` 数値 default は、任意長の環境変数文字列をそのまま埋め込まず、制限済みの表示値を報告します。
+- **LSP request id は oversized raw JSON を echo 前に拒否するようになりました (#3113)** — LSP の raw byte 上限を超える JSON-RPC id は、レスポンス保持用の状態へ parse したり oversized value を反映したりせず拒否されます。
+- **HTTP MCP request logging が抽出した JSON-RPC id を上限付きで保持するようになりました (#3114)** — request id を request log record に保存する前に marker 付きで切り詰め、巨大な id が永続 log を肥大化させないようにしました。
+- **MCP の enum 風 scalar 引数を正規化前に制限するようになりました (#3116)** — `format`、`groupBy` などの scalar option 値が大きすぎる場合は trim / lowercase の前に拒否し、診断には切り詰めた表示値と truncation metadata だけを返します。
+- **MCP の未知argument診断でproperty名を切り詰めるようになりました (#3117)** — 未知argument名はエラーおよび audit / telemetry のkey概要でbounded display値を使い、切り詰め時は元の長さmetadataも返します。
+- **MCP の未知tool診断でtool名を切り詰めるようになりました (#3118)** — 未知tool名は JSON-RPC error、rate-limit response、batch slot結果、telemetry、audit log で bounded display 値を使い、切り詰め時は元の長さmetadataも返します。
+- **MCP の非対応 protocol 診断で要求versionを切り詰めるようになりました (#3119)** — 非対応の `protocolVersion` は交渉時に bounded display 化し、initialize error、structured data、stderr log には切り詰めた値と長さmetadataだけを返します。
+- **MCP の clientInfo フィールドを再利用前に制限するようになりました (#3120)** — `clientInfo.name` と `clientInfo.version` は status 出力、caller identity、rate-limit 診断、caller-swap log、audit record で再利用する前に bounded display 化し、切り詰め時は metadata も出力します。
+- **MCP prompt の name と argument を生成前に制限するようになりました (#3121)** — `prompts/get` は巨大な prompt name や argument 文字列を prompt text / 診断へ埋め込む前に拒否し、エラーには bounded display 値と truncation metadata を返します。
+- **MCP resource URI の長さ制限が一貫するようになりました (#3122)** — `resources/read` は巨大 URI を URI parse / unescape 前に拒否し、`resources/list` は同じ読み取り可能上限を超える URI を返さず、invalid / not-found 診断には bounded URI display 値を返します。
+- **query trace parameter が取得値と path 配列を制限するようになりました (#3123)** — trace JSON は parameter 文字列と繰り返し指定された `--path` / `--exclude-path` 配列を制限し、値や件数が削減された場合は truncation metadata を出します。
+- **LSP の未知 method 診断で method 名を切り詰めるようになりました (#3127)** — 未知 JSON-RPC method 名は `Method not found` response に埋め込む前に bounded diagnostic text へ変換されます。
+- **LSP `workspace/symbol` query に共通の query 長上限を適用しました (#3128)** — 過大な symbol query は database search を開始する前に拒否されます。
+- **LSP の text-document URI を parse 前に長さ制限するようになりました (#3129)** — LSP handler は過大な `textDocument.uri` を URI parse や path normalization の前に拒否し、JSON-RPC error を bounded に保ちます。
+- **LSP `documentSymbol` response の detail と response size に上限を追加しました (#3130)** — symbol detail は明示的な marker 付きで切り詰め、response array は JSON byte 予算を超える前に打ち切ります。
+- **LSP position lookup の対象行長に上限を追加しました (#3136)** — definition / references request は token extraction の前に過大な source line の読み取りを止め、空の result を返します。
+- **LSP document path fallback の basename candidate 数に上限を追加しました (#3137)** — exact indexed path resolution を優先しつつ、basename fallback は小さな bounded candidate set で打ち切ります。
+- **SQLite file URI 解析が正規化前に過大入力を拒否するようになりました (#3140)** — `file:` DB URI と query 文字列を、query 切り出し、percent unescape、`Uri` 解析より前に上限チェックし、拒否時の診断も bounded にしました。
+- **Python logical reference remap の header / statement map に上限を設けました (#3141)** — 巨大な複数行 header や continuation statement では、text と line/column 配列を無制限に増やさず logical remap をスキップします。
+- **report の schema summary が任意 SQLite DB で行う table 処理に上限を設けました (#3146)** — `cdidx report --db` は schema table entry、表示 table 名の長さ、table ごとの行数 scan を制限し、壊れた DB や巨大 DB が schema summary 収集を無制限に走らせないようにしました。
+- **HTTP MCP の bearer token precedence を一本化しました (#3156)** — HTTP transport の認証は `CDIDX_MCP_HTTP_TOKEN` を優先し、HTTP 固有の変数が未設定の場合だけ `CDIDX_MCP_AUTH_TOKEN` に fallback するようになりました。これにより HTTP クライアントは `Authorization: Bearer` ヘッダー 1 つで認証でき、追加の `params.auth.token` body token は不要です。
+- **HTTP MCP `/events` stream に同時接続上限を追加しました (#3158)** — 設定された stream 上限に達した後の追加 SSE client は 429/Retry-After で拒否されます。
+- **active workspace の環境変数読み込みで path を制限・検証するようになりました (#3164)** — 過大または不正な `CDIDX_ACTIVE_WORKSPACE` 値は、例外や巨大 path の露出ではなく、制限済み warning とともに無視されます。
+- **永続 stderr mirror で過大な write を短縮するようになりました (#3166)** — global tool log は console stderr の元出力を維持しつつ、mirror される stderr 文字列 write ごとにサイズを制限します。
+- **checked-in config file の JSON 深度上限をテストと文書に反映しました (#3167)** — `.cdidx/config.json` に過度なネストの回帰テストを追加し、対応する 2 種類の設定ファイル名に対して bounded parser contract を文書化しました。
+- **config の string array を環境変数展開前に制限するようになりました (#3168)** — symbol-kind の include/exclude list と MCP tool の allow/deny list は、結合済み環境変数値を作る前に過剰な件数や大きすぎる要素を拒否します。
+- **checked-in config の出力 path を workspace 内に制限しました (#3169)** — config 由来の `metrics_path` と `global_tool_log_dir` は設定ファイルの workspace root から解決され、その workspace 外の path を拒否します。
+- **HTTP MCP request log が request metadata field を上限付きで記録するようになりました (#3178)** — method、path、remote peer を永続 request log に書く前に marker 付きで切り詰め、巨大な client metadata が tool log を肥大化させないようにしました。
+- **MCP 監査ログのローテーション上限が過大値を拒否するようになりました (#3180)** — `--audit-log-max-bytes` は既存の 4 KiB 下限を維持しつつ、ドキュメント化された 1 GiB 上限を超える値を拒否します。
+- **installer の curl stderr 診断を上限付きにしました (#3187)** — `install.sh` は失敗した curl 呼び出しの stderr を上限付きサンプルだけ表示し、診断ストリームを切り詰めた場合はその旨を出すため、巨大な proxy / endpoint エラーを丸ごと読み込んだり出力したりしなくなりました。
+- **installer の latest-release response を parse 前に上限検査するようにしました (#3188)** — `install.sh` は GitHub latest-release API body が大きすぎる場合に shell 変数へ読み込む前に拒否し、上限付き update checker と同じ方針で診断出力を小さく保ちます。
+- **LSP エラーが raw 例外メッセージを公開しなくなりました (#3200)** — LSP の invalid params / internal failure 応答は、実装内部の例外文をクライアントへ転送せず、安定した JSON-RPC メッセージを返すようになりました。
+- **LSP `textDocument.uri` の型検証を明示しました (#3203)** — document handler は URI parse や path resolution の前に string 以外の URI 値を拒否し、JSON-RPC error を bounded に保ちます。
+- **LSP request ID を複製前に検証するようになりました (#3204)** — request ID は response へコピーされる前に、bounded な JSON-RPC scalar value に制限されます。
+- **LSP unknown-method diagnostic の method name echo 上限を明示しました (#3205)** — method-not-found response が既存の 240 文字上限を維持することを test と documentation で固定しました。
+- **LSP document 操作が non-file URI を拒否するようになりました (#3206)** — document handler は `untitled:` など `file:` 以外の URI scheme を workspace-relative path として扱わなくなりました。
+- **`.cdidx-version` 読み取り warning が raw path と例外 message を避けるようになりました (#3218)** — version pin の読み取り失敗や不正 pin warning は、完全なローカル path を出さずに sanitize 済みの理由を報告します。
+- **active workspace state warning が raw path と例外 message を避けるようになりました (#3219)** — 不正な state file は、state path や provider 例外 text を出さず、reset guidance 付きの sanitize 済み warning を出します。
+- **SQLite file URI の DB open で connection-string injection を防止しました (#3220)** — ユーザー指定の `file:` URI DB パスは `SqliteConnectionStringBuilder` で組み立て、`;Mode=...` payload が接続オプションではなく data source 値に留まるようにしました。
+- **HTTP MCP の response probe が共有 JSON 深さ制限を適用するようになりました (#3228)** — HTTP MCP transport が out-of-band で検査する JSON-RPC response は、stdio MCP frame と同じ bounded JSON depth で parse されるようになりました。
+- **LSP frame parsing が重複した `Content-Length` header を拒否するようになりました (#3229)** — 同じ値の繰り返しであっても、length header の重複は受理されません。
+- **LSP frame header に行数と合計 byte 数の上限を追加しました (#3230)** — LSP parser は message body を読む前に過大な header 行数または合計 header byte 数を拒否します。
+- **`suggestions export --open-issues` が JSON のネスト深さを制限するようになりました (#3232)** — 重複確認用 preflight の parse では明示的な JSON depth 上限を使い、深くネストした入力には validation error を返します。
+- **suggestion archive JSONL ファイルを POSIX で owner-only に強制するようになりました (#3235)** — prune された suggestion archive は private file creation と hardening を使うため、保存されたローカル suggestion record が permissive な既定 mode を継承しなくなりました。
+- **破損 suggestion backup の保存後に permission を再 harden するようになりました (#3236)** — 破損した suggestion store から作られる `.bak` ファイルは、move 後に POSIX の owner-only permission を再適用します。
+- **MCP 監査ログイベントが field と record size を制限するようになりました (#3237)** — audit record は request id、引数キー一覧、include-values 内の nested key、過大 event payload を制限し、truncation を明示的に記録します。
+- **plugin / hook diagnostics が path と exception text を sanitize するようになりました (#3240)** — status や index warning に出る diagnostics は raw local path や exception message ではなく、上限付きで redaction された path と generic failure message を使います。
+- **timeout した post-extraction hook が background で走り続けないようになりました (#3241)** — 各 loaded hook は isolated worker process で実行され、`CDIDX_HOOK_CALLBACK_BUDGET_MS` を超えると kill されるため、timeout 後に indexer が先へ進んだ裏で scratch state を mutation し続けることがなくなりました。
+- **pattern config diagnostics が path と rejection reason を sanitize するようになりました (#3243)** — reject された pattern config は raw absolute path や parser details ではなく、上限付きの `.cdidx` relative path と normalized reason を報告します。
+- **suggestion store JSON file が POSIX の private permission を使うようになりました (#3267)** — primary `suggestions-*.json` store は atomic な private-file mode 経路で書き込まれ、永続化された triage context が POSIX で owner-only のままになります。
+
+#### ドキュメント
+
+- **バイリンガルドキュメントの片落ちを補正しました** — 日本語ガイド側に、英語側へ既にあった MCP エラー応答表、sandbox 診断、現行のファイルサイズ超過 recovery、symbol/reference taxonomy 詳細、Python シンボル分類、劣化理由コード表を追加しました。
+- **外部 Pull Request の受け付け方針を文書化しました** — 不具合報告や機能要望の Issue は歓迎しつつ、現在は外部 Pull Request を受け付けず、Pull Request の作成を collaborator のみに制限していることを明記しました。
+- **README を初回利用者向けの入口に絞りました**: command、output、status、release、implementation contract の詳細は entry page に重複掲載せず、ユーザーガイドと開発者ガイドへの動線に寄せました。
+- **巨大ファイルの分割計画を追跡可能にしました (#3007)** - 最大級の command、extractor、reference-support、MCP、file-indexing の ownership boundary を、review しやすく test しやすい後続 PR に分けるための developer plan を追加しました。
+
+#### 内部変更
+
+- **CI test session の上限を45分にしました** — Windows net9 の full suite が runner のばらつきで30分を超える場合に備え、共有 VSTest runsettings の timeout に余裕を持たせました。
+- **compact search formatting が準備済み query context を再利用するようになりました (#3089)** — CLI / MCP の compact 検索結果整形では query token context を一度だけ準備し、言語別の一致処理を維持したまま各結果スニペットで再利用します。
+- **MCP ツール契約の drift テストを追加しました (#3199)** — MCP テストが `tools/list` で広告される入力プロパティとサーバーの allowlist / JSON 型バリデータを突き合わせ、schema・validation・隠れ引数のずれをリリース前に検出します。
+
 ### [1.28.5] - 2026-06-04
 
 #### 修正
@@ -6688,7 +7256,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.28.5...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.29.0...HEAD
+[1.29.0]: https://github.com/Widthdom/CodeIndex/compare/v1.28.5...v1.29.0
 [1.28.5]: https://github.com/Widthdom/CodeIndex/compare/v1.28.4...v1.28.5
 [1.28.4]: https://github.com/Widthdom/CodeIndex/compare/v1.28.3...v1.28.4
 [1.28.3]: https://github.com/Widthdom/CodeIndex/compare/v1.28.2...v1.28.3
