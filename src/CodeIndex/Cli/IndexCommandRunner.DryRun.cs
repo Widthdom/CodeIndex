@@ -135,13 +135,22 @@ public static partial class IndexCommandRunner
 
             dryFileCount++;
             retainedRelativePaths.Add(relativePath);
-            if (!authoritativeFullScan && projectRootWritten)
+            if (!authoritativeFullScan)
             {
-                AddProjectedPartialStalePurges(
+                AddProjectedPartialChecksumPurges(
                     projectedPurgePaths,
                     dbSnapshot,
                     projectPath,
-                    relativePath);
+                    relativePath,
+                    probe.Checksum);
+                if (projectRootWritten)
+                {
+                    AddProjectedPartialStalePurges(
+                        projectedPurgePaths,
+                        dbSnapshot,
+                        projectPath,
+                        relativePath);
+                }
             }
             AddEstimatedUpdateMutation(estimatedTableMutations, dbSnapshot, relativePath);
             if (dryFileSamples.Count < DryRunFileSampleLimit)
@@ -438,6 +447,30 @@ public static partial class IndexCommandRunner
         }
     }
 
+    private static void AddProjectedPartialChecksumPurges(
+        HashSet<string> projectedPurgePaths,
+        DryRunDbSnapshot dbSnapshot,
+        string projectPath,
+        string retainedRelativePath,
+        string? checksum)
+    {
+        if (string.IsNullOrEmpty(checksum))
+            return;
+
+        foreach (var (relativePath, rows) in dbSnapshot.Files)
+        {
+            if (string.Equals(relativePath, retainedRelativePath, StringComparison.Ordinal)
+                || !string.Equals(rows.Checksum, checksum, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var absolutePath = Path.Combine(projectPath, relativePath.Replace('/', Path.DirectorySeparatorChar));
+            if (!File.Exists(LongPath.EnsureWindowsPrefix(absolutePath)))
+                projectedPurgePaths.Add(relativePath);
+        }
+    }
+
     private static void AddProjectedPartialStalePurges(
         HashSet<string> projectedPurgePaths,
         DryRunDbSnapshot dbSnapshot,
@@ -519,7 +552,7 @@ public static partial class IndexCommandRunner
         try
         {
             var (record, _, _, warning) = indexer.BuildRecordWithRawBytes(absolutePath);
-            return new DryRunFileProbe(true, record.Lang ?? "unknown", warning, Unsupported: false, UnknownExtension: false);
+            return new DryRunFileProbe(true, record.Lang ?? "unknown", record.Checksum, warning, Unsupported: false, UnknownExtension: false);
         }
         catch (Exception ex)
         {
@@ -594,6 +627,7 @@ public static partial class IndexCommandRunner
             using var command = connection.CreateCommand();
             command.CommandText = $"""
                 SELECT f.path,
+                       f.checksum,
                        {(hasChunks ? "(SELECT COUNT(*) FROM chunks c WHERE c.file_id = f.id)" : "0")} AS chunks_count,
                        {(hasSymbols ? "(SELECT COUNT(*) FROM symbols s WHERE s.file_id = f.id)" : "0")} AS symbols_count,
                        {(hasSymbolReferences ? "(SELECT COUNT(*) FROM symbol_references r WHERE r.file_id = f.id)" : "0")} AS symbol_references_count,
@@ -607,11 +641,12 @@ public static partial class IndexCommandRunner
             while (reader.Read())
             {
                 files[reader.GetString(0)] = new DryRunExistingFileRows(
-                    reader.GetInt64(1),
+                    reader.IsDBNull(1) ? null : reader.GetString(1),
                     reader.GetInt64(2),
                     reader.GetInt64(3),
                     reader.GetInt64(4),
-                    reader.GetInt64(5));
+                    reader.GetInt64(5),
+                    reader.GetInt64(6));
             }
 
             return new DryRunDbSnapshot(files, indexedProjectRoot);
@@ -663,6 +698,7 @@ public static partial class IndexCommandRunner
     }
 
     private readonly record struct DryRunExistingFileRows(
+        string? Checksum,
         long Chunks,
         long Symbols,
         long SymbolReferences,
@@ -694,12 +730,13 @@ public static partial class IndexCommandRunner
     private readonly record struct DryRunFileProbe(
         bool Supported,
         string Language,
+        string? Checksum,
         string? Error,
         bool Unsupported,
         bool UnknownExtension)
     {
-        public static DryRunFileProbe FromError(string message) => new(false, string.Empty, message, Unsupported: false, UnknownExtension: false);
-        public static DryRunFileProbe FromUnsupported() => new(false, string.Empty, null, Unsupported: true, UnknownExtension: false);
-        public static DryRunFileProbe FromUnknownExtension() => new(false, string.Empty, null, Unsupported: false, UnknownExtension: true);
+        public static DryRunFileProbe FromError(string message) => new(false, string.Empty, null, message, Unsupported: false, UnknownExtension: false);
+        public static DryRunFileProbe FromUnsupported() => new(false, string.Empty, null, null, Unsupported: true, UnknownExtension: false);
+        public static DryRunFileProbe FromUnknownExtension() => new(false, string.Empty, null, null, Unsupported: false, UnknownExtension: true);
     }
 }
