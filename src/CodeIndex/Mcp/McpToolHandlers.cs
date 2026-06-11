@@ -41,6 +41,7 @@ public partial class McpServer
         "snippetFocus",
         "visibility",
         "excludeVisibility",
+        "followSymlinks",
     };
     internal const int MaxMcpIndexFailureMessageLength = 512;
 
@@ -509,7 +510,7 @@ public partial class McpServer
 
     private static JsonObject? ValidateCommonListArguments(JsonNode? args)
     {
-        foreach (var propertyName in new[] { "path", "project", "excludePaths", "names", "sections", "capability", "scopes", "visibility", "excludeVisibility" })
+        foreach (var propertyName in new[] { "path", "project", "excludePaths", "names", "sections", "capability", "scopes", "visibility", "excludeVisibility", "includeSymbolKind", "excludeSymbolKind", "commits", "changedBetween", "files" })
         {
             if (ValidateStringListArgument(args, propertyName) is JsonObject error)
                 return error;
@@ -581,6 +582,21 @@ public partial class McpServer
             && offset < 0)
             return CreateIntegerMinimumArgumentError(toolName, "offset", minimum: 0, actual: offset);
 
+        if (args["maxSymbolsPerFile"] is JsonValue maxSymbolsValue
+            && maxSymbolsValue.TryGetValue<int>(out var maxSymbolsPerFile)
+            && (maxSymbolsPerFile <= 0 || maxSymbolsPerFile > IndexCommandRunner.MaxSymbolsPerFileLimit))
+            return CreateIntegerRangeArgumentError(toolName, "maxSymbolsPerFile", 1, IndexCommandRunner.MaxSymbolsPerFileLimit, maxSymbolsPerFile);
+
+        if (args["parallelism"] is JsonValue parallelismValue
+            && parallelismValue.TryGetValue<int>(out var parallelism)
+            && (parallelism <= 0 || parallelism > IndexCommandRunner.MaxIndexParallelism))
+            return CreateIntegerRangeArgumentError(toolName, "parallelism", 1, IndexCommandRunner.MaxIndexParallelism, parallelism);
+
+        if (args["debounce"] is JsonValue debounceValue
+            && debounceValue.TryGetValue<int>(out var debounce)
+            && (debounce < 0 || debounce > IndexWatchRunner.MaxDebounceMs))
+            return CreateIntegerRangeArgumentError(toolName, "debounce", 0, IndexWatchRunner.MaxDebounceMs, debounce);
+
         return null;
     }
 
@@ -590,6 +606,17 @@ public partial class McpServer
         ["tool"] = toolName,
         ["parameter"] = argumentName,
         ["minimum"] = minimum,
+        ["actual"] = actual,
+        ["jsonrpc_invalid_params"] = true,
+    };
+
+    private static JsonObject CreateIntegerRangeArgumentError(string toolName, string argumentName, int minimum, int maximum, int actual) => new()
+    {
+        ["message"] = $"Argument '{argumentName}' on tool '{toolName}' must be between {minimum} and {maximum}; got {actual}.",
+        ["tool"] = toolName,
+        ["parameter"] = argumentName,
+        ["minimum"] = minimum,
+        ["maximum"] = maximum,
         ["actual"] = actual,
         ["jsonrpc_invalid_params"] = true,
     };
@@ -670,18 +697,18 @@ public partial class McpServer
         {
             "limit" or "offset" or "snippetLines" or "maxLineWidth" or "before" or "after" or
                 "focusLine" or "focusColumn" or "focusLength" or "startLine" or "endLine" or
-                "maxHops" or "maxDepth" or "depth" or "parallelism" or "maxFileBytes" or
+                "maxHops" or "maxDepth" or "depth" or "parallelism" or "maxFileBytes" or "maxSymbolsPerFile" or "debounce" or
                 "staleAfterSeconds" or
                 "guardWindow" or "maxOutputBytes" => "integer",
             "check" or "excludeTests" or "includeGenerated" or "indexedOnly" or "rawQuery" or "noDedup" or "exactSubstring" or
                 "exactName" or "exact" or "prefix" or "countOnly" or "includeBody" or "lsp_compatible" or
                 "regex" or "withPaths" or "rebuild" or "dryRun" or "dry_run" or "force" or
                 "optimize" or "reverse" or "cycles" or "config" or "logPath" or "updateCheck" or
-                "rawKinds" or "orderBySize" or "rawBytes" or "byBucket" => "boolean",
-            "project" or "capability" or "scopes" or "visibility" or "excludeVisibility" or "requireBefore" or "requireAfter" or "rejectBefore" or "rejectAfter" => "string_or_array",
+                "rawKinds" or "orderBySize" or "rawBytes" or "byBucket" or "memoryTrace" or "watch" => "boolean",
+            "project" or "capability" or "scopes" or "visibility" or "excludeVisibility" or "includeSymbolKind" or "excludeSymbolKind" or "requireBefore" or "requireAfter" or "rejectBefore" or "rejectAfter" => "string_or_array",
             "query" or "lang" or "kind" or "format" or "rankBy" or "since" or "cursor" or
                 "solution" or "symbol" or "groupBy" or "category" or "language" or "severity" or "explain" or "snippetFocus" or
-                "bucket" or "minConfidence" or "extension" or "alias" or "description" or "context" or "toolInvocationContext" or "db" => "string",
+                "bucket" or "minConfidence" or "extension" or "alias" or "description" or "context" or "toolInvocationContext" or "db" or "followSymlinks" => "string",
             "minEntrypointConfidence" => "number",
             "queries" or "evidencePaths" or "evidence_paths" => "array",
             _ => string.Empty,
@@ -759,7 +786,7 @@ public partial class McpServer
         "validate" => new HashSet<string>(StringComparer.Ordinal) { "kind", "severity", "limit", "path", "excludePaths", "excludeTests", "countOnly", "format", "project", "solution" },
         "unused_symbols" => new HashSet<string>(StringComparer.Ordinal) { "kind", "lang", "limit", "visibility", "excludeVisibility", "path", "excludePaths", "excludeTests", "bucket", "minConfidence", "byBucket", "project", "solution" },
         "symbol_hotspots" => new HashSet<string>(StringComparer.Ordinal) { "kind", "lang", "limit", "visibility", "excludeVisibility", "groupBy", "path", "excludePaths", "excludeTests", "project", "solution" },
-        "index" => new HashSet<string>(StringComparer.Ordinal) { "path", "rebuild", "maxFileBytes" },
+        "index" => new HashSet<string>(StringComparer.Ordinal) { "path", "rebuild", "dryRun", "dry_run", "maxFileBytes", "maxSymbolsPerFile", "followSymlinks", "includeSymbolKind", "excludeSymbolKind", "memoryTrace", "parallelism", "commits", "changedBetween", "files", "watch", "debounce" },
         "backfill_fold" => new HashSet<string>(StringComparer.Ordinal) { "dry_run", "dryRun", "force" },
         "suggest_improvement" => new HashSet<string>(StringComparer.Ordinal) { "category", "language", "description", "context", "toolInvocationContext", "evidencePaths", "evidence_paths" },
         _ => new HashSet<string>(StringComparer.Ordinal),
@@ -4408,6 +4435,130 @@ public partial class McpServer
     private JsonNode ExecuteIndex(JsonNode? id, JsonNode? args, JsonNode? progressToken = null)
         => ExecuteIndexAsync(id, args, progressToken).GetAwaiter().GetResult();
 
+    private sealed record McpIndexUnsupportedMode(string Name, string Reason, bool BlocksIndexing);
+
+    private static FileIssue BuildMcpSymbolCountExceededIssue(string path, int symbolCount, int maxSymbolsPerFile) =>
+        new()
+        {
+            Path = path,
+            Kind = "symbol_count_exceeded",
+            Line = 0,
+            Message = $"Symbol extraction produced {symbolCount:N0} symbols, exceeding the maxSymbolsPerFile limit of {maxSymbolsPerFile:N0}; file content, symbols, and references were not indexed. Exclude the generated/pathological file or raise maxSymbolsPerFile if this is expected.",
+        };
+
+    private static bool TryReadMcpIndexSymlinkPolicy(JsonNode? args, out FileIndexer.SymlinkPolicy symlinkPolicy, out string? error)
+    {
+        symlinkPolicy = FileIndexer.SymlinkPolicy.None;
+        error = null;
+        var value = args?["followSymlinks"]?.GetValue<string>()?.Trim().ToLowerInvariant();
+        if (string.IsNullOrEmpty(value) || value == "none")
+            return true;
+        if (value == "internal")
+        {
+            symlinkPolicy = FileIndexer.SymlinkPolicy.Internal;
+            return true;
+        }
+        if (value == "all")
+        {
+            symlinkPolicy = FileIndexer.SymlinkPolicy.All;
+            return true;
+        }
+
+        error = "followSymlinks must be one of none, internal, all";
+        return false;
+    }
+
+    private static string FormatMcpIndexSymlinkPolicy(FileIndexer.SymlinkPolicy symlinkPolicy)
+        => symlinkPolicy switch
+        {
+            FileIndexer.SymlinkPolicy.Internal => "internal",
+            FileIndexer.SymlinkPolicy.All => "all",
+            _ => "none",
+        };
+
+    private static List<McpIndexUnsupportedMode> BuildMcpIndexUnsupportedModes(JsonNode? args, int? requestedParallelism, int? requestedDebounce)
+    {
+        var modes = new List<McpIndexUnsupportedMode>();
+        if (requestedParallelism.HasValue && requestedParallelism.Value != 1)
+            modes.Add(new McpIndexUnsupportedMode("parallelism", "MCP index currently runs serially; requested parallelism is reported but effective_parallelism remains 1.", false));
+        if (ReadStringOrArrayList(args, "commits").Count > 0)
+            modes.Add(new McpIndexUnsupportedMode("commits", "Commit-scoped MCP indexing is not implemented; use CLI `cdidx index --commits ...` for this scope.", true));
+        if (ReadStringOrArrayList(args, "changedBetween").Count > 0)
+            modes.Add(new McpIndexUnsupportedMode("changedBetween", "Changed-between MCP indexing is not implemented; use CLI `cdidx index --changed-between ...` for this scope.", true));
+        if (ReadStringOrArrayList(args, "files").Count > 0)
+            modes.Add(new McpIndexUnsupportedMode("files", "File-scoped MCP indexing is not implemented; use CLI `cdidx index --files ...` for this scope.", true));
+
+        var watchRequested = args?["watch"]?.GetValue<bool>() ?? false;
+        if (watchRequested)
+        {
+            modes.Add(new McpIndexUnsupportedMode("watch", "Long-running watch mode is intentionally disabled for MCP tool calls; use the CLI watch command instead.", true));
+        }
+        else if (requestedDebounce.HasValue)
+        {
+            modes.Add(new McpIndexUnsupportedMode("debounce", "debounce only applies to watch mode, which is disabled for MCP tool calls.", false));
+        }
+        return modes;
+    }
+
+    private static JsonArray BuildMcpIndexUnsupportedModesJson(IEnumerable<McpIndexUnsupportedMode> unsupportedModes)
+    {
+        var array = new JsonArray();
+        foreach (var mode in unsupportedModes)
+        {
+            array.Add(new JsonObject
+            {
+                ["name"] = mode.Name,
+                ["reason"] = mode.Reason,
+                ["blocks_indexing"] = mode.BlocksIndexing,
+            });
+        }
+        return array;
+    }
+
+    private static bool HasBlockingMcpIndexUnsupportedMode(IEnumerable<McpIndexUnsupportedMode> unsupportedModes)
+        => unsupportedModes.Any(mode => mode.BlocksIndexing);
+
+    private static JsonObject CaptureMcpIndexMemorySample(string stage, Stopwatch stopwatch)
+    {
+        using var process = Process.GetCurrentProcess();
+        return new JsonObject
+        {
+            ["stage"] = stage,
+            ["elapsed_ms"] = stopwatch.ElapsedMilliseconds,
+            ["managed_bytes"] = GC.GetTotalMemory(forceFullCollection: false),
+            ["working_set_bytes"] = process.WorkingSet64,
+            ["private_bytes"] = process.PrivateMemorySize64,
+        };
+    }
+
+    private static JsonObject BuildMcpIndexOptionsPayload(
+        bool dryRun,
+        bool rebuild,
+        long? maxFileBytes,
+        int maxSymbolsPerFile,
+        FileIndexer.SymlinkPolicy symlinkPolicy,
+        IReadOnlyList<string> includeSymbolKinds,
+        IReadOnlyList<string> excludeSymbolKinds,
+        bool memoryTrace,
+        int? requestedParallelism,
+        int? requestedDebounce,
+        JsonNode? args)
+        => new()
+        {
+            ["dryRun"] = dryRun,
+            ["rebuild"] = rebuild,
+            ["maxFileBytes"] = maxFileBytes.HasValue ? JsonValue.Create(maxFileBytes.Value) : null,
+            ["maxSymbolsPerFile"] = maxSymbolsPerFile,
+            ["followSymlinks"] = FormatMcpIndexSymlinkPolicy(symlinkPolicy),
+            ["includeSymbolKind"] = ToJsonStringArray(includeSymbolKinds),
+            ["excludeSymbolKind"] = ToJsonStringArray(excludeSymbolKinds),
+            ["memoryTrace"] = memoryTrace,
+            ["parallelism_requested"] = requestedParallelism.HasValue ? JsonValue.Create(requestedParallelism.Value) : null,
+            ["effective_parallelism"] = 1,
+            ["watch_requested"] = args?["watch"]?.GetValue<bool>() ?? false,
+            ["debounce"] = requestedDebounce.HasValue ? JsonValue.Create(requestedDebounce.Value) : null,
+        };
+
     private async Task RefreshClientRootsIfNeededAsync()
     {
         if (!_clientRootsStale || !HasClientCapability("roots"))
@@ -4471,6 +4622,21 @@ public partial class McpServer
             return CreateToolErrorResponse(id, requiredError!);
 
         var rebuild = args?["rebuild"]?.GetValue<bool>() ?? false;
+        var dryRun = args?["dryRun"]?.GetValue<bool>() ?? args?["dry_run"]?.GetValue<bool>() ?? false;
+        var memoryTrace = args?["memoryTrace"]?.GetValue<bool>() ?? false;
+        var requestedParallelism = args?["parallelism"]?.GetValue<int>();
+        var requestedDebounce = args?["debounce"]?.GetValue<int>();
+        var maxSymbolsPerFile = args?["maxSymbolsPerFile"]?.GetValue<int>() ?? IndexCommandRunner.DefaultMaxSymbolsPerFile;
+        if (maxSymbolsPerFile <= 0 || maxSymbolsPerFile > IndexCommandRunner.MaxSymbolsPerFileLimit)
+            return CreateToolErrorResponse(id, $"maxSymbolsPerFile must be between 1 and {IndexCommandRunner.MaxSymbolsPerFileLimit}");
+        if (!TryReadMcpIndexSymlinkPolicy(args, out var symlinkPolicy, out var symlinkPolicyError))
+            return CreateToolErrorResponse(id, symlinkPolicyError!);
+        var includeSymbolKinds = ReadStringOrCommaSeparatedList(args, "includeSymbolKind");
+        var excludeSymbolKinds = ReadStringOrCommaSeparatedList(args, "excludeSymbolKind");
+        var symbolKindFilter = SymbolKindFilter.Create(includeSymbolKinds, excludeSymbolKinds, parseError: null);
+        if (symbolKindFilter.ParseError != null)
+            return CreateToolErrorResponse(id, symbolKindFilter.ParseError);
+        var unsupportedModes = BuildMcpIndexUnsupportedModes(args, requestedParallelism, requestedDebounce);
         long? maxFileBytes = null;
         if (args?["maxFileBytes"] is { } maxFileBytesNode)
         {
@@ -4488,6 +4654,21 @@ public partial class McpServer
         var projectPath = Path.GetFullPath(path);
         var runStartedAtUtc = DateTime.UtcNow;
         var runStopwatch = Stopwatch.StartNew();
+        var memorySamples = memoryTrace
+            ? new JsonArray { CaptureMcpIndexMemorySample("start", runStopwatch) }
+            : null;
+        var optionsPayload = BuildMcpIndexOptionsPayload(
+            dryRun,
+            rebuild,
+            maxFileBytes,
+            maxSymbolsPerFile,
+            symlinkPolicy,
+            includeSymbolKinds,
+            excludeSymbolKinds,
+            memoryTrace,
+            requestedParallelism,
+            requestedDebounce,
+            args);
 
         // Prevent path traversal — only allow indexing within current working directory
         // パストラバーサル防止 — カレントディレクトリ配下のみインデックスを許可
@@ -4500,6 +4681,66 @@ public partial class McpServer
 
         if (!Directory.Exists(projectPath))
             return CreateToolErrorResponse(id, "Directory not found");
+
+        var unsupportedModesJson = BuildMcpIndexUnsupportedModesJson(unsupportedModes);
+        if (dryRun)
+        {
+            var ignoreCase = GitHelper.ResolveIgnoreCase(projectPath, _currentRequestToken.Value);
+            var dryRunIndexer = new FileIndexer(
+                projectPath,
+                ignoreCase,
+                GitHelper.TryGetRepositoryRoot(projectPath, _currentRequestToken.Value) ?? Path.GetFullPath(projectPath),
+                maxFileBytes,
+                directoryIgnoreCaseProbe: null,
+                symlinkPolicy: symlinkPolicy);
+            var scan = dryRunIndexer.ScanFilesDetailed(cancellationToken: _currentRequestToken.Value);
+            if (memorySamples != null)
+                memorySamples.Add(CaptureMcpIndexMemorySample("scan", runStopwatch));
+            var dryRunFatalScanErrors = scan.Errors.Where(error => error.IsFatal).ToList();
+            var dryRunPayload = new JsonObject
+            {
+                ["path"] = projectPath,
+                ["dry_run"] = true,
+                ["would_rebuild"] = rebuild,
+                ["max_file_bytes"] = maxFileBytes,
+                ["index_options"] = optionsPayload,
+                ["unsupported_modes"] = unsupportedModesJson,
+                ["summary"] = new JsonObject
+                {
+                    ["files_scanned"] = scan.Files.Count,
+                    ["scan_errors"] = scan.Errors.Count,
+                    ["fatal_scan_errors"] = dryRunFatalScanErrors.Count,
+                    ["unknown_extension_file_count"] = scan.UnknownExtensionFiles.Count,
+                    ["would_mutate_database"] = false,
+                },
+                ["duration_ms"] = runStopwatch.ElapsedMilliseconds,
+                ["started_at"] = runStartedAtUtc.ToString("o", System.Globalization.CultureInfo.InvariantCulture),
+                ["completed_at"] = GetUtcNow().ToString("o", System.Globalization.CultureInfo.InvariantCulture),
+            };
+            if (memorySamples != null)
+            {
+                memorySamples.Add(CaptureMcpIndexMemorySample("finalize", runStopwatch));
+                dryRunPayload["memory_trace"] = memorySamples;
+            }
+            return CreateToolResult(id, "Index dry run complete.", dryRunPayload);
+        }
+
+        if (HasBlockingMcpIndexUnsupportedMode(unsupportedModes))
+        {
+            var unsupportedData = new JsonObject
+            {
+                ["unsupported_modes"] = unsupportedModesJson,
+                ["index_options"] = optionsPayload,
+                ["index_started"] = false,
+            };
+            return CreateToolErrorResponse(
+                id,
+                "MCP index does not support the requested scoped or watch indexing mode; no indexing started.",
+                category: McpErrorEnvelope.CategoryInvalidArgument,
+                suggestion: "Use dryRun:true to inspect the plan, remove unsupported scope/watch arguments, or run the equivalent cdidx index command in the CLI.",
+                retrySafe: false,
+                extraData: unsupportedData);
+        }
 
         if (!McpIndexRunLock.TryAcquire(_dbPath, out var indexLock, out var lockError))
             return CreateToolErrorResponse(id, lockError!);
@@ -4553,7 +4794,9 @@ public partial class McpServer
             projectPath,
             GitHelper.ResolveIgnoreCase(projectPath, requestToken),
             GitHelper.TryGetRepositoryRoot(projectPath, requestToken) ?? Path.GetFullPath(projectPath),
-            maxFileBytes);
+            maxFileBytes,
+            directoryIgnoreCaseProbe: null,
+            symlinkPolicy: symlinkPolicy);
         using var postExtractionHooks = PostExtractionHookRunner.DiscoverDefault();
         var currentHotspotFamilyMarkerFingerprints = GetHotspotFamilyMarkerFingerprints(indexer, requestToken);
         var currentCSharpSymbolNameContractVersion = DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -4625,6 +4868,8 @@ public partial class McpServer
 
         // Scan and index / スキャン・インデックス
         var scanResult = indexer.ScanFilesDetailed(cancellationToken: requestToken);
+        if (memorySamples != null)
+            memorySamples.Add(CaptureMcpIndexMemorySample("scan", runStopwatch));
         var files = scanResult.Files;
         EmitProgressNotification(progressToken, 0, files.Count, "Index scan complete; indexing files.");
         var csharpWorkspace = BuildMcpCSharpStaticInterfaceWorkspaceSymbols(writer, indexer, projectPath, files, requestToken);
@@ -4638,6 +4883,7 @@ public partial class McpServer
             .Select(BuildScanFailure)
             .ToList();
         var reusedHotspotFamilyLanguages = new HashSet<string>(StringComparer.Ordinal);
+        var symbolsDroppedByKindFilter = 0;
 
         foreach (var filePath in files)
         {
@@ -4671,26 +4917,37 @@ public partial class McpServer
                 using var txn = writer.BeginTransaction();
                 var fileId = writer.UpsertFile(record);
                 var chunks = ChunkSplitter.Split(fileId, content);
-                writer.InsertChunks(chunks);
-                var symbols = SymbolExtractor.Extract(fileId, record.Lang, content, filePath, projectPath, requestToken);
+                var symbols = SymbolExtractor.Extract(fileId, record.Lang, content, filePath, projectPath, requestToken).ToList();
                 SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(filePath, record.Lang));
                 var fileContext = new FileContext(projectPath, record.Path, filePath, record.Lang);
                 postExtractionHooks.OnSymbolsExtracted(fileContext, symbols);
-                writer.InsertSymbols(symbols);
-                var references = ReferenceExtractor.Extract(
-                    fileId,
-                    record.Lang,
-                    content,
-                    symbols,
-                    record.Path,
-                    record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
-                    requestToken);
-                postExtractionHooks.OnReferencesExtracted(fileContext, references);
-                writer.InsertReferences(references);
-                // Keep MCP index parity with CLI index: persist file-level validation issues too.
-                // MCPインデックスもCLIインデックスと同等に、ファイル検証issueを保存する。
-                var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
-                writer.InsertIssues(fileId, issues);
+                symbolsDroppedByKindFilter += symbolKindFilter.Apply(symbols);
+                if (symbols.Count > maxSymbolsPerFile)
+                {
+                    var issue = BuildMcpSymbolCountExceededIssue(record.Path, symbols.Count, maxSymbolsPerFile);
+                    writer.InsertSymbols([]);
+                    writer.InsertReferences([]);
+                    writer.InsertIssues(fileId, [issue]);
+                }
+                else
+                {
+                    writer.InsertChunks(chunks);
+                    writer.InsertSymbols(symbols);
+                    var references = ReferenceExtractor.Extract(
+                        fileId,
+                        record.Lang,
+                        content,
+                        symbols,
+                        record.Path,
+                        record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
+                        requestToken);
+                    postExtractionHooks.OnReferencesExtracted(fileContext, references);
+                    writer.InsertReferences(references);
+                    // Keep MCP index parity with CLI index: persist file-level validation issues too.
+                    // MCPインデックスもCLIインデックスと同等に、ファイル検証issueを保存する。
+                    var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
+                    writer.InsertIssues(fileId, issues);
+                }
                 WriteProjectRootOnce();
                 writer.ClearBatchInProgress();
                 txn.Commit();
@@ -4900,12 +5157,17 @@ public partial class McpServer
         }
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
         EmitProgressNotification(progressToken, files.Count, files.Count, errors == 0 ? "Indexing complete." : "Indexing completed with errors.");
+        if (memorySamples != null)
+            memorySamples.Add(CaptureMcpIndexMemorySample("finalize", runStopwatch));
 
         var structured = new JsonObject
         {
             ["path"] = projectPath,
             ["rebuild"] = rebuild,
+            ["dry_run"] = false,
             ["max_file_bytes"] = maxFileBytes,
+            ["index_options"] = optionsPayload,
+            ["unsupported_modes"] = unsupportedModesJson,
             ["summary"] = new JsonObject
             {
                 ["files"] = totalFiles,
@@ -4917,8 +5179,18 @@ public partial class McpServer
                 ["purged"] = purged,
                 ["unknown_extension_file_count"] = scanResult.UnknownExtensionFiles.Count,
                 ["errors"] = errors,
-                ["failed_count"] = failures.Count
+                ["failed_count"] = failures.Count,
+                ["symbols_dropped_by_kind_filter"] = symbolsDroppedByKindFilter
             },
+            ["symbol_kind_filter"] = new JsonObject
+            {
+                ["include"] = ToJsonStringArray(symbolKindFilter.Include),
+                ["exclude"] = ToJsonStringArray(symbolKindFilter.Exclude),
+                ["active"] = symbolKindFilter.IsActive,
+            },
+            ["duration_ms"] = runStopwatch.ElapsedMilliseconds,
+            ["started_at"] = runStartedAtUtc.ToString("o", System.Globalization.CultureInfo.InvariantCulture),
+            ["completed_at"] = GetUtcNow().ToString("o", System.Globalization.CultureInfo.InvariantCulture),
             ["sql_graph_contract_ready"] = sqlGraphContractReadyAfter,
             ["csharp_symbol_name_ready"] = csharpSymbolNameReadyAfter,
             ["csharp_metadata_target_ready"] = csharpMetadataTargetReadyAfter,
@@ -4927,6 +5199,8 @@ public partial class McpServer
             ["fold_ready"] = foldReadyAfter,
             ["fold_ready_reason"] = foldReadyReason
         };
+        if (memorySamples != null)
+            structured["memory_trace"] = memorySamples;
         if (failures.Count > 0)
         {
             var failureArray = new JsonArray();

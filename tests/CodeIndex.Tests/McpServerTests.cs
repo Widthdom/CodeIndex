@@ -9038,11 +9038,6 @@ public class McpServerTests : IDisposable
 
     [Theory]
     [InlineData("db")]
-    [InlineData("parallelism")]
-    [InlineData("files")]
-    [InlineData("commits")]
-    [InlineData("changedBetween")]
-    [InlineData("dryRun")]
     [InlineData("optimize")]
     public void ToolsCall_Index_RejectsUnsupportedArguments_Issue2848(string argumentName)
     {
@@ -9052,11 +9047,6 @@ public class McpServerTests : IDisposable
             [argumentName] = argumentName switch
             {
                 "db" => JsonValue.Create("alternate.db"),
-                "parallelism" => JsonValue.Create(2),
-                "files" => new JsonArray(JsonValue.Create("src/app.cs")),
-                "commits" => new JsonArray(JsonValue.Create("HEAD")),
-                "changedBetween" => new JsonArray(JsonValue.Create("HEAD~1"), JsonValue.Create("HEAD")),
-                "dryRun" => JsonValue.Create(true),
                 "optimize" => JsonValue.Create(true),
                 _ => throw new ArgumentOutOfRangeException(nameof(argumentName), argumentName, null),
             },
@@ -9080,6 +9070,139 @@ public class McpServerTests : IDisposable
         Assert.Contains($"Unknown argument '{argumentName}' for tool 'index'.", text);
         var structured = response["result"]!["structuredContent"]!;
         Assert.Equal(argumentName, structured["unknown_argument"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Index_DryRunReportsAdvancedControlsAndUnsupportedModes_Issue3543()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_dryrun_advanced_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(fixtureDir);
+        try
+        {
+            File.WriteAllText(Path.Combine(fixtureDir, "app.py"), "class App:\n    def run(self):\n        return 1\n");
+            var request = new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = 1,
+                ["method"] = "tools/call",
+                ["params"] = new JsonObject
+                {
+                    ["name"] = "index",
+                    ["arguments"] = new JsonObject
+                    {
+                        ["path"] = fixtureDir,
+                        ["dryRun"] = true,
+                        ["maxSymbolsPerFile"] = 12,
+                        ["followSymlinks"] = "internal",
+                        ["includeSymbolKind"] = new JsonArray(JsonValue.Create("function")),
+                        ["excludeSymbolKind"] = "class",
+                        ["memoryTrace"] = true,
+                        ["parallelism"] = 2,
+                        ["commits"] = new JsonArray(JsonValue.Create("HEAD")),
+                        ["watch"] = true,
+                        ["debounce"] = 25,
+                    },
+                },
+            };
+
+            var response = _server.HandleMessage(request)!;
+
+            var structured = response["result"]!["structuredContent"]!;
+            Assert.False(response["result"]?["isError"]?.GetValue<bool>() ?? false);
+            Assert.True(structured["dry_run"]!.GetValue<bool>());
+            Assert.False(structured["summary"]!["would_mutate_database"]!.GetValue<bool>());
+            Assert.Equal("internal", structured["index_options"]!["followSymlinks"]!.GetValue<string>());
+            Assert.Equal(1, structured["index_options"]!["effective_parallelism"]!.GetValue<int>());
+            Assert.NotNull(structured["memory_trace"]);
+            var unsupportedNames = structured["unsupported_modes"]!.AsArray()
+                .Select(mode => mode!["name"]!.GetValue<string>())
+                .ToHashSet(StringComparer.Ordinal);
+            Assert.Contains("parallelism", unsupportedNames);
+            Assert.Contains("commits", unsupportedNames);
+            Assert.Contains("watch", unsupportedNames);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_RejectsScopedUnsupportedModesWithoutDryRun_Issue3543()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_scope_reject_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(fixtureDir);
+        try
+        {
+            File.WriteAllText(Path.Combine(fixtureDir, "app.py"), "def run():\n    return 1\n");
+            var request = new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = 1,
+                ["method"] = "tools/call",
+                ["params"] = new JsonObject
+                {
+                    ["name"] = "index",
+                    ["arguments"] = new JsonObject
+                    {
+                        ["path"] = fixtureDir,
+                        ["files"] = new JsonArray(JsonValue.Create("app.py")),
+                    },
+                },
+            };
+
+            var response = _server.HandleMessage(request)!;
+
+            Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+            var structured = response["result"]!["structuredContent"]!;
+            Assert.False(structured["index_started"]!.GetValue<bool>());
+            Assert.Equal("files", Assert.Single(structured["unsupported_modes"]!.AsArray())!["name"]!.GetValue<string>());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_AppliesMaxSymbolsPerFile_Issue3543()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_max_symbols_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(fixtureDir);
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_index_max_symbols_{Guid.NewGuid():N}.db");
+        try
+        {
+            File.WriteAllText(Path.Combine(fixtureDir, "app.py"), "class App:\n    def one(self):\n        return 1\n    def two(self):\n        return 2\n");
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var request = new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = 1,
+                ["method"] = "tools/call",
+                ["params"] = new JsonObject
+                {
+                    ["name"] = "index",
+                    ["arguments"] = new JsonObject
+                    {
+                        ["path"] = fixtureDir,
+                        ["maxSymbolsPerFile"] = 1,
+                    },
+                },
+            };
+
+            var response = server.HandleMessage(request)!;
+
+            var structured = response["result"]!["structuredContent"]!;
+            Assert.Equal(0, structured["summary"]!["symbols"]!.GetValue<long>());
+            Assert.True(structured["summary"]!["errors"]!.GetValue<int>() == 0);
+            Assert.Equal(1, structured["index_options"]!["maxSymbolsPerFile"]!.GetValue<int>());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
     }
 
     [Fact]
