@@ -537,6 +537,59 @@ public class ProgramCliTests
     }
 
     [Fact]
+    public void ImportArchive_DryRunJsonValidatesWithoutReplacingDestination_Issue3550()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_import_dry_run");
+        try
+        {
+            var sourceDbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(sourceDbPath, "src/app.cs", "csharp", "class App { void Run() {} }\n");
+            var archivePath = Path.Combine(projectRoot, "codeindex.cdidx.zip");
+            var destinationDbPath = Path.Combine(projectRoot, "destination", "codeindex.db");
+            Directory.CreateDirectory(Path.GetDirectoryName(destinationDbPath)!);
+            File.WriteAllText(destinationDbPath, "existing db");
+            File.WriteAllText(destinationDbPath + "-wal", "existing wal");
+            File.WriteAllText(destinationDbPath + "-shm", "existing shm");
+
+            var (exportExit, _, exportStderr) = RunCliInSubprocess(["export", archivePath, "--db", sourceDbPath]);
+            var (dryRunExit, dryRunStdout, dryRunStderr) = RunCliInSubprocess([
+                "import", archivePath, "--db", destinationDbPath, "--prune-paths", "--dry-run", "--json"
+            ]);
+
+            Assert.True(exportExit == 0, exportStderr);
+            Assert.Equal(CommandExitCodes.Success, dryRunExit);
+            Assert.Equal(string.Empty, dryRunStderr);
+            Assert.Equal("existing db", File.ReadAllText(destinationDbPath));
+            Assert.Equal("existing wal", File.ReadAllText(destinationDbPath + "-wal"));
+            Assert.Equal("existing shm", File.ReadAllText(destinationDbPath + "-shm"));
+
+            using var document = JsonDocument.Parse(dryRunStdout);
+            var root = document.RootElement;
+            Assert.Equal("success", root.GetProperty("status").GetString());
+            Assert.True(root.GetProperty("dry_run").GetBoolean());
+            Assert.True(root.GetProperty("pruned_paths").GetBoolean());
+            Assert.True(root.GetProperty("replacement_would_be_allowed").GetBoolean());
+            var phases = root.GetProperty("validation_phases")
+                .EnumerateArray()
+                .ToDictionary(
+                    phase => phase.GetProperty("phase").GetString()!,
+                    phase => phase.GetProperty("status").GetString()!,
+                    StringComparer.Ordinal);
+            Assert.Equal("success", phases["open_archive"]);
+            Assert.Equal("success", phases["manifest"]);
+            Assert.Equal("success", phases["database_entry"]);
+            Assert.Equal("success", phases["sha256"]);
+            Assert.Equal("success", phases["sqlite_validate"]);
+            Assert.Equal("success", phases["prune_paths"]);
+            Assert.Equal("skipped", phases["replace_db"]);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void ImportArchive_RejectsDatabaseHashMismatch()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_import_hash_mismatch");

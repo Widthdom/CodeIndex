@@ -404,6 +404,8 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(ExportImportCommandRunner.ExportArchiveResult))]
 [JsonSerializable(typeof(ExportImportCommandRunner.ExportImportErrorResult))]
 [JsonSerializable(typeof(ExportImportCommandRunner.ExportManifest))]
+[JsonSerializable(typeof(ExportImportCommandRunner.ImportDryRunResult))]
+[JsonSerializable(typeof(ExportImportCommandRunner.ImportValidationPhaseResult))]
 [JsonSerializable(typeof(ExcerptSemanticToken))]
 [JsonSerializable(typeof(FileDependencyResult))]
 [JsonSerializable(typeof(FileExcerptResult))]
