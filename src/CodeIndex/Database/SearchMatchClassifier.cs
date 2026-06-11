@@ -39,8 +39,9 @@ internal static class SearchMatchClassifier
 
     public static bool IsLikelyTestPath(string path)
     {
-        var normalized = path.Replace('\\', '/').ToLowerInvariant();
-        var fileName = Path.GetFileName(normalized);
+        var slashPath = path.Replace('\\', '/');
+        var normalized = slashPath.ToLowerInvariant();
+        var fileName = Path.GetFileName(slashPath);
         if (normalized.StartsWith("tests/", StringComparison.Ordinal) ||
             normalized.StartsWith("test/", StringComparison.Ordinal) ||
             normalized.Contains("/tests/", StringComparison.Ordinal) ||
@@ -51,10 +52,43 @@ internal static class SearchMatchClassifier
             return true;
         }
 
-        return fileName.Contains("test.", StringComparison.Ordinal) ||
-               fileName.EndsWith("tests.cs", StringComparison.Ordinal) ||
-               fileName.EndsWith("test.cs", StringComparison.Ordinal) ||
-               fileName is "conftest.py";
+        return IsLikelyTestFileName(fileName);
+    }
+
+    private static bool IsLikelyTestFileName(string fileName)
+    {
+        var lowerFileName = fileName.ToLowerInvariant();
+        if (lowerFileName is "conftest.py")
+            return true;
+
+        var extension = Path.GetExtension(fileName);
+        var baseName = extension.Length == 0 ? fileName : fileName[..^extension.Length];
+        var lowerBaseName = baseName.ToLowerInvariant();
+
+        if (lowerBaseName is "test" or "tests" or "conftest")
+            return true;
+        if (lowerBaseName.StartsWith("test.", StringComparison.Ordinal) ||
+            lowerBaseName.StartsWith("tests.", StringComparison.Ordinal) ||
+            lowerBaseName.StartsWith("test_", StringComparison.Ordinal) ||
+            lowerBaseName.StartsWith("tests_", StringComparison.Ordinal) ||
+            lowerBaseName.StartsWith("test-", StringComparison.Ordinal) ||
+            lowerBaseName.StartsWith("tests-", StringComparison.Ordinal))
+        {
+            return true;
+        }
+        if (lowerBaseName.EndsWith(".test", StringComparison.Ordinal) ||
+            lowerBaseName.EndsWith(".tests", StringComparison.Ordinal) ||
+            lowerBaseName.EndsWith(".spec", StringComparison.Ordinal) ||
+            lowerBaseName.EndsWith("_test", StringComparison.Ordinal) ||
+            lowerBaseName.EndsWith("_tests", StringComparison.Ordinal) ||
+            lowerBaseName.EndsWith("-test", StringComparison.Ordinal) ||
+            lowerBaseName.EndsWith("-tests", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        return baseName.EndsWith("Test", StringComparison.Ordinal) ||
+               baseName.EndsWith("Tests", StringComparison.Ordinal);
     }
 
     private static string ClassifyOrigin(string path, string? lang, string text, int column)
