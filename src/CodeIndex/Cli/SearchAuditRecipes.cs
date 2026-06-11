@@ -93,7 +93,46 @@ internal static class SearchAuditRecipes
                     "RegexMatchTimeoutException",
                     "Find regex timeout handling boundaries that may need consistent diagnostics and recovery behavior.",
                     ["audit", "bug"],
-                    "False positives include tests and already-normalized parse/validation errors.")
+                    "False positives include tests and already-normalized parse/validation errors."),
+                new(
+                    "environment-secret-source",
+                    "GetEnvironmentVariable",
+                    "Find environment-variable reads that may source tokens, secrets, credentials, or operational policy.",
+                    ["audit", "security"],
+                    "False positives include non-secret feature flags and documented public configuration."),
+                new(
+                    "authorization-handling",
+                    "Authorization",
+                    "Find authorization header or auth-boundary handling that may need redaction and egress review.",
+                    ["audit", "security"],
+                    "False positives include documentation, tests, and already-redacted header-name-only handling."),
+                new(
+                    "bearer-token-handling",
+                    "Bearer",
+                    "Find bearer token handling that may need storage, logging, and outbound request review.",
+                    ["audit", "security"],
+                    "False positives include examples, tests, and redacted token placeholders."),
+                new(
+                    "credential-term",
+                    "credential",
+                    "Find credential-related code paths that may need source, persistence, and redaction boundary review.",
+                    ["audit", "security"],
+                    "False positives include natural-language documentation or non-secret credential-type names.",
+                    ExactSubstring: false),
+                new(
+                    "secret-term",
+                    "secret",
+                    "Find secret-related code paths that may need source, persistence, and redaction boundary review.",
+                    ["audit", "security"],
+                    "False positives include documentation, labels, and comments that do not touch secret material.",
+                    ExactSubstring: false),
+                new(
+                    "token-term",
+                    "token",
+                    "Find token-related code paths that may need lexical-token versus auth-token triage.",
+                    ["audit", "security"],
+                    "False positives include parser/tokenizer code, syntax tokens, and non-auth identifiers.",
+                    ExactSubstring: false)
             ])
     ];
 

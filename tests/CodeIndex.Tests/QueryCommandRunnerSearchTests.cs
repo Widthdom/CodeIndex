@@ -304,6 +304,9 @@ public partial class QueryCommandRunnerTests
         Assert.Contains(
             recipe.GetProperty("queries").EnumerateArray(),
             item => item.GetProperty("name").GetString() == "process-start-info");
+        Assert.Contains(
+            recipe.GetProperty("queries").EnumerateArray(),
+            item => item.GetProperty("name").GetString() == "token-term");
     }
 
     [Theory]
@@ -372,7 +375,7 @@ public partial class QueryCommandRunnerTests
                 .Single(item => item.GetProperty("name").GetString() == "unbounded-json-parse");
 
             Assert.Equal("risky-code", root.GetProperty("recipe").GetProperty("name").GetString());
-            Assert.Equal(14, root.GetProperty("query_count").GetInt32());
+            Assert.Equal(20, root.GetProperty("query_count").GetInt32());
             Assert.True(root.GetProperty("result_count").GetInt32() >= 4);
             Assert.Equal(1, unboundedJsonParse.GetProperty("count").GetInt32());
             Assert.Equal("JsonDocument.Parse", unboundedJsonParse.GetProperty("query").GetString());
