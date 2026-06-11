@@ -323,6 +323,54 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunInspect_BodyRangeJson_ReportsNextLineFromByteClampedContent_Issue3394()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_body_byte_clamp_range_json");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var longValue = new string('x', DbReader.DefinitionBodyMaxBytes + 1024);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Target.cs",
+                "csharp",
+                $$"""
+                public class Target
+                {
+                    public string Compute()
+                    {
+                        var marker1 = "{{longValue}}";
+                        var marker2 = "after";
+                        return marker1 + marker2;
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["Compute", "--db", dbPath, "--json", "--body"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var definition = document.RootElement.GetProperty("definitions").EnumerateArray().Single();
+            var bodyContent = definition.GetProperty("body_content").GetString();
+            var bodyContentEndLine = definition.GetProperty("body_content_end_line").GetInt32();
+            var bodyContentNextStartLine = definition.GetProperty("body_content_next_start_line").GetInt32();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Contains("var marker1", bodyContent, StringComparison.Ordinal);
+            Assert.DoesNotContain("var marker2", bodyContent, StringComparison.Ordinal);
+            Assert.True(definition.GetProperty("body_content_truncated").GetBoolean());
+            Assert.Equal(bodyContentEndLine, bodyContentNextStartLine);
+            Assert.True(bodyContentNextStartLine < definition.GetProperty("body_end_line").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunInspect_JsonWithoutBody_IncludesBodyModeHint_Issue3441()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_body_mode_json");

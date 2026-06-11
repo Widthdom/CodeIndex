@@ -815,9 +815,28 @@ public partial class DbReader
                     bodyContentStartLine = bodyExcerpt.StartLine;
                     bodyContentEndLine = bodyExcerpt.EndLine;
                     bodyContentTruncated = bodyExcerpt.ContentTruncated || cappedBodyEndLine < symbol.BodyEndLine.Value;
-                    (bodyContent, var byteTruncated) = ClampDefinitionBodyBytes(bodyContent);
-                    bodyContentTruncated |= byteTruncated;
-                    if (cappedBodyEndLine < symbol.BodyEndLine.Value)
+                    var byteClamp = ClampDefinitionBodyBytes(bodyContent);
+                    bodyContent = byteClamp.Content;
+                    if (byteClamp.Truncated)
+                    {
+                        bodyContentTruncated = true;
+                        if (byteClamp.ReturnedLineCount > 0)
+                        {
+                            bodyContentEndLine = Math.Min(
+                                bodyExcerpt.EndLine,
+                                bodyExcerpt.StartLine + byteClamp.ReturnedLineCount - 1);
+                            var nextStartLine = byteClamp.LastReturnedLineComplete
+                                ? bodyContentEndLine.Value + 1
+                                : bodyContentEndLine.Value;
+                            bodyContentNextStartLine = Math.Clamp(nextStartLine, bodyExcerpt.StartLine, symbol.BodyEndLine.Value);
+                        }
+                        else
+                        {
+                            bodyContentEndLine = bodyExcerpt.StartLine;
+                            bodyContentNextStartLine = bodyExcerpt.StartLine;
+                        }
+                    }
+                    else if (cappedBodyEndLine < symbol.BodyEndLine.Value)
                         bodyContentNextStartLine = cappedBodyEndLine + 1;
                 }
             }
@@ -855,20 +874,52 @@ public partial class DbReader
         return results;
     }
 
-    private static (string Content, bool Truncated) ClampDefinitionBodyBytes(string content)
+    private static (string Content, bool Truncated, int ReturnedLineCount, bool LastReturnedLineComplete) ClampDefinitionBodyBytes(string content)
     {
         var bytes = Encoding.UTF8.GetBytes(content);
         if (bytes.Length <= DefinitionBodyMaxBytes)
-            return (content, false);
+            return (content, false, CountReturnedBodyLines(content), true);
 
         var byteCount = DefinitionBodyMaxBytes;
         while (byteCount > 0 && IsUtf8ContinuationByte(bytes[byteCount]))
             byteCount--;
 
-        return (Encoding.UTF8.GetString(bytes, 0, byteCount), true);
+        var clamped = Encoding.UTF8.GetString(bytes, 0, byteCount);
+        return (
+            clamped,
+            true,
+            CountReturnedBodyLines(clamped),
+            IsLastReturnedBodyLineComplete(content, clamped));
     }
 
     private static bool IsUtf8ContinuationByte(byte value) => (value & 0xC0) == 0x80;
+
+    private static int CountReturnedBodyLines(string content)
+    {
+        if (content.Length == 0)
+            return 0;
+
+        var lineBreaks = 0;
+        foreach (var ch in content)
+        {
+            if (ch == '\n')
+                lineBreaks++;
+        }
+
+        return content[^1] == '\n'
+            ? lineBreaks
+            : lineBreaks + 1;
+    }
+
+    private static bool IsLastReturnedBodyLineComplete(string originalContent, string clampedContent)
+    {
+        if (clampedContent.Length == 0)
+            return false;
+        if (clampedContent[^1] == '\n')
+            return true;
+        return clampedContent.Length >= originalContent.Length
+            || originalContent[clampedContent.Length] == '\n';
+    }
 
     private static string? BuildDefinitionDisambiguator(SymbolResult symbol)
     {
