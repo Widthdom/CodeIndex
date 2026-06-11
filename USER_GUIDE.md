@@ -2132,6 +2132,8 @@ All MCP tools include `annotations` (`readOnlyHint`, `destructiveHint`, `idempot
 
 `tools/list` also advertises argument compatibility metadata. Common path filters such as `excludePaths` accept either a scalar string or a string array, matching `path`; schemas expose `x-expectedType`, aliases through `x-aliases` / `x-aliasOf`, and deprecated aliases through `deprecated` plus `x-deprecationReason`. Validation errors echo `expected` and, where relevant, `alias_of` / `deprecated` so clients can recover without parsing prose. `definition` and `references` accept both `lsp_compatible` and the JSON-style `lspCompatible` alias.
 
+When an MCP tool clamps or ignores a supported argument, successful responses include human-readable `warnings` and machine-readable `argument_adjustments`. Each adjustment records `argument`, `action` (`clamped` or `ignored`), `requested`, `effective`, and cap fields when applicable, so clients can tell when `limit`, `offset`, `snippetLines`, `map.depth`, or `impact_analysis.maxHops` returned a narrower result than requested.
+
 #### MCP error responses
 
 MCP JSON-RPC failures use the standard `error` object. Clients should route on
@@ -4422,6 +4424,8 @@ cdidx backfill-fold
 全 MCP ツールは `annotations`（`readOnlyHint`、`destructiveHint`、`idempotentHint`、`openWorldHint`）を含み、AIクライアントがユーザーへの確認なしに安全な読み取り専用クエリを自動承認できるようにしています。
 
 `tools/list` は引数互換メタデータも公開します。`excludePaths` などの共通 path filter は `path` と同じくスカラー文字列または文字列配列を受け付け、schema には `x-expectedType`、`x-aliases` / `x-aliasOf` による alias、`deprecated` と `x-deprecationReason` による非推奨 alias 情報が含まれます。検証エラーも `expected` と、該当する場合は `alias_of` / `deprecated` を返すため、クライアントは説明文を parse せず復旧できます。`definition` と `references` は `lsp_compatible` と JSON 風 alias の `lspCompatible` の両方を受け付けます。
+
+MCP ツールが対応済み引数をクランプまたは無視した場合、成功レスポンスには人間向けの `warnings` と機械処理向けの `argument_adjustments` が含まれます。各 adjustment は `argument`、`action`（`clamped` または `ignored`）、`requested`、`effective`、必要に応じて cap 情報を持つため、`limit`、`offset`、`snippetLines`、`map.depth`、`impact_analysis.maxHops` が要求より狭い結果に調整されたかをクライアント側で判定できます。
 
 #### MCP エラー応答
 

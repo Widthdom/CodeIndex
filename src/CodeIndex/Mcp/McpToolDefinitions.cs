@@ -265,7 +265,7 @@ public partial class McpServer
                         ["excludePaths"] = StringOrArraySchema("Exclude glob-style path patterns. `*` and `?` are wildcards."),
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },
                         ["sections"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray { "tree", "languages", "hotspots", "metrics" } }, ["description"] = "Only include selected response sections. Omit for the full backward-compatible map." },
-                        ["depth"] = new JsonObject { ["type"] = "integer", ["description"] = "Maximum module/tree depth to include; 0 keeps only root-level modules.", ["minimum"] = 0 }
+                        ["depth"] = new JsonObject { ["type"] = "integer", ["description"] = $"Maximum module/tree depth to include; 0 keeps only root-level modules. Requests above {MaxMcpMapDepth} are clamped with an MCP warning.", ["minimum"] = 0, ["maximum"] = MaxMcpMapDepth }
                     }
                 },
                 ReadOnlyAnnotations()),

@@ -6744,7 +6744,21 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
-    public void ToolsCall_References_ClampsTooLargeOffset()
+    public void ToolsList_MapDepthSchemaAdvertisesCap_Issue3436()
+    {
+        var response = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!)!;
+
+        var tools = response["result"]!["tools"]!.AsArray();
+        var map = tools.First(tool => tool!["name"]!.GetValue<string>() == "map")!;
+        var depth = map["inputSchema"]!["properties"]!["depth"]!;
+
+        Assert.Equal(0, depth["minimum"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxMcpMapDepth, depth["maximum"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsCall_References_ClampsTooLargeOffset_Issue3436()
     {
         InsertIndexedFile(
             "src/offset-clamp.cs",
@@ -6775,6 +6789,111 @@ public class McpServerTests : IDisposable
         var structured = response["result"]!["structuredContent"]!;
         Assert.Equal(McpServer.MaxMcpPaginationOffset, structured["offset"]!.GetValue<int>());
         Assert.True(structured["total"]!.GetValue<int>() > 0);
+        var warning = Assert.Single(structured["warnings"]!.AsArray());
+        Assert.Contains("offset was clamped", warning!.GetValue<string>(), StringComparison.Ordinal);
+        var adjustment = Assert.Single(structured["argument_adjustments"]!.AsArray());
+        Assert.Equal("offset", adjustment!["argument"]!.GetValue<string>());
+        Assert.Equal("clamped", adjustment["action"]!.GetValue<string>());
+        Assert.Equal(McpServer.MaxMcpPaginationOffset + 1, adjustment["requested"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxMcpPaginationOffset, adjustment["effective"]!.GetValue<int>());
+        Assert.Equal(0, adjustment["minimum"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxMcpPaginationOffset, adjustment["maximum"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsCall_Search_ReportsClampedLimitAndSnippetLines_Issue3436()
+    {
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "search",
+                ["arguments"] = new JsonObject
+                {
+                    ["query"] = "Run",
+                    ["limit"] = 999,
+                    ["snippetLines"] = 999,
+                },
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(SearchSnippetFormatter.MaxSnippetLines, structured["snippetLines"]!.GetValue<int>());
+        var warnings = structured["warnings"]!.AsArray().Select(warning => warning!.GetValue<string>()).ToArray();
+        Assert.Contains(warnings, warning => warning.Contains("limit was clamped", StringComparison.Ordinal));
+        Assert.Contains(warnings, warning => warning.Contains("snippetLines was clamped", StringComparison.Ordinal));
+        var adjustments = structured["argument_adjustments"]!.AsArray();
+        var limit = adjustments.Single(adjustment => adjustment!["argument"]!.GetValue<string>() == "limit")!;
+        Assert.Equal("clamped", limit["action"]!.GetValue<string>());
+        Assert.Equal(999, limit["requested"]!.GetValue<int>());
+        Assert.Equal(200, limit["effective"]!.GetValue<int>());
+        var snippetLines = adjustments.Single(adjustment => adjustment!["argument"]!.GetValue<string>() == "snippetLines")!;
+        Assert.Equal("clamped", snippetLines["action"]!.GetValue<string>());
+        Assert.Equal(999, snippetLines["requested"]!.GetValue<int>());
+        Assert.Equal(SearchSnippetFormatter.MaxSnippetLines, snippetLines["effective"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsCall_Map_ReportsClampedDepth_Issue3436()
+    {
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "map",
+                ["arguments"] = new JsonObject
+                {
+                    ["depth"] = McpServer.MaxMcpMapDepth + 1,
+                },
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(McpServer.MaxMcpMapDepth, structured["depth"]!.GetValue<int>());
+        var adjustment = Assert.Single(structured["argument_adjustments"]!.AsArray());
+        Assert.Equal("depth", adjustment!["argument"]!.GetValue<string>());
+        Assert.Equal("clamped", adjustment["action"]!.GetValue<string>());
+        Assert.Equal(McpServer.MaxMcpMapDepth + 1, adjustment["requested"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxMcpMapDepth, adjustment["effective"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsCall_Map_ReportsIgnoredNegativeDepth_Issue3436()
+    {
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "map",
+                ["arguments"] = new JsonObject
+                {
+                    ["depth"] = -1,
+                },
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Null(structured["depth"]);
+        var adjustment = Assert.Single(structured["argument_adjustments"]!.AsArray());
+        Assert.Equal("depth", adjustment!["argument"]!.GetValue<string>());
+        Assert.Equal("ignored", adjustment["action"]!.GetValue<string>());
+        Assert.Equal(-1, adjustment["requested"]!.GetValue<int>());
+        Assert.Null(adjustment["effective"]);
     }
 
     [Fact]
