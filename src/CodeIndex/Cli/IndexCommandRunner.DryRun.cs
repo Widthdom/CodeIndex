@@ -30,6 +30,11 @@ public static partial class IndexCommandRunner
         DryRunScanMetadata dryScanMetadata;
         var resolvedDbPath = DbPathResolver.NormalizeDbPath(DbPathResolver.ResolveForIndex(projectPath, options.DbPath, options.DataDir).DbPath);
         var dbSnapshot = ReadDryRunDbSnapshot(resolvedDbPath);
+        var normalizedProjectRoot = Path.GetFullPath(projectPath);
+        var normalizedPriorIndexedProjectRoot = string.IsNullOrWhiteSpace(dbSnapshot.IndexedProjectRoot)
+            ? null
+            : Path.GetFullPath(dbSnapshot.IndexedProjectRoot);
+        var projectRootWritten = PathsEqual(normalizedPriorIndexedProjectRoot, normalizedProjectRoot);
         var retainedRelativePaths = new HashSet<string>(StringComparer.Ordinal);
         var projectedDeletePaths = new HashSet<string>(StringComparer.Ordinal);
         var projectedPurgePaths = new HashSet<string>(StringComparer.Ordinal);
@@ -107,7 +112,17 @@ public static partial class IndexCommandRunner
                     unsupportedTotal++;
 
                 if (dbSnapshot.Files.ContainsKey(relativePath))
+                {
                     projectedDeletePaths.Add(relativePath);
+                }
+                else if (!authoritativeFullScan && projectRootWritten && probe.Error == null)
+                {
+                    AddProjectedPartialStalePurges(
+                        projectedPurgePaths,
+                        dbSnapshot,
+                        projectPath,
+                        relativePath);
+                }
 
                 if (probe.Error != null)
                 {
@@ -120,6 +135,14 @@ public static partial class IndexCommandRunner
 
             dryFileCount++;
             retainedRelativePaths.Add(relativePath);
+            if (!authoritativeFullScan && projectRootWritten)
+            {
+                AddProjectedPartialStalePurges(
+                    projectedPurgePaths,
+                    dbSnapshot,
+                    projectPath,
+                    relativePath);
+            }
             AddEstimatedUpdateMutation(estimatedTableMutations, dbSnapshot, relativePath);
             if (dryFileSamples.Count < DryRunFileSampleLimit)
                 dryFileSamples.Add(relativePath);
@@ -415,6 +438,32 @@ public static partial class IndexCommandRunner
         }
     }
 
+    private static void AddProjectedPartialStalePurges(
+        HashSet<string> projectedPurgePaths,
+        DryRunDbSnapshot dbSnapshot,
+        string projectPath,
+        string retainedRelativePath)
+    {
+        var retainedDirectory = GetDirectoryPath(retainedRelativePath);
+        var retainedStem = GetRelativeFileStem(retainedRelativePath);
+        if (retainedStem.Length == 0)
+            return;
+
+        foreach (var relativePath in dbSnapshot.Files.Keys)
+        {
+            if (string.Equals(relativePath, retainedRelativePath, StringComparison.Ordinal)
+                || !string.Equals(GetDirectoryPath(relativePath), retainedDirectory, StringComparison.Ordinal)
+                || !string.Equals(GetRelativeFileStem(relativePath), retainedStem, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var absolutePath = Path.Combine(projectPath, relativePath.Replace('/', Path.DirectorySeparatorChar));
+            if (!File.Exists(LongPath.EnsureWindowsPrefix(absolutePath)))
+                projectedPurgePaths.Add(relativePath);
+        }
+    }
+
     private static bool HasListedParentDirectory(string path, IReadOnlySet<string> listedDirectories)
         => listedDirectories.Contains(GetDirectoryPath(path));
 
@@ -440,6 +489,15 @@ public static partial class IndexCommandRunner
     {
         var separatorIndex = path.LastIndexOf('/');
         return separatorIndex >= 0 ? path[..separatorIndex] : string.Empty;
+    }
+
+    private static string GetRelativeFileStem(string relativePath)
+    {
+        var normalized = relativePath.Replace('\\', '/');
+        var slashIndex = normalized.LastIndexOf('/');
+        var fileName = slashIndex < 0 ? normalized : normalized[(slashIndex + 1)..];
+        var dotIndex = fileName.LastIndexOf('.');
+        return dotIndex <= 0 ? fileName : fileName[..dotIndex];
     }
 
     private static DryRunFileProbe ProbeDryRunFile(FileIndexer indexer, string absolutePath)
@@ -526,6 +584,7 @@ public static partial class IndexCommandRunner
             if (!DryRunTableExists(connection, "files"))
                 return DryRunDbSnapshot.Empty;
 
+            var indexedProjectRoot = DryRunReadMetaString(connection, DbContext.IndexedProjectRootMetaKey);
             var hasChunks = DryRunTableExists(connection, "chunks");
             var hasSymbols = DryRunTableExists(connection, "symbols");
             var hasSymbolReferences = DryRunTableExists(connection, "symbol_references");
@@ -555,7 +614,7 @@ public static partial class IndexCommandRunner
                     reader.GetInt64(5));
             }
 
-            return new DryRunDbSnapshot(files);
+            return new DryRunDbSnapshot(files, indexedProjectRoot);
         }
         catch (SqliteException)
         {
@@ -579,6 +638,17 @@ public static partial class IndexCommandRunner
         return command.ExecuteScalar() != null;
     }
 
+    private static string? DryRunReadMetaString(SqliteConnection connection, string key)
+    {
+        if (!DryRunTableExists(connection, "codeindex_meta"))
+            return null;
+
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT value FROM codeindex_meta WHERE key = @key LIMIT 1";
+        command.Parameters.AddWithValue("@key", key);
+        return command.ExecuteScalar() as string;
+    }
+
     private static int WriteDryRunInterrupted(IndexCommandOptions options, JsonSerializerOptions jsonOptions) => WriteCommandError(
         options.Json,
         jsonOptions,
@@ -587,9 +657,9 @@ public static partial class IndexCommandRunner
         "Rerun `cdidx index --dry-run` when you are ready to inspect the candidate files again.",
         CommandErrorCodes.Interrupted);
 
-    private sealed record DryRunDbSnapshot(IReadOnlyDictionary<string, DryRunExistingFileRows> Files)
+    private sealed record DryRunDbSnapshot(IReadOnlyDictionary<string, DryRunExistingFileRows> Files, string? IndexedProjectRoot)
     {
-        public static DryRunDbSnapshot Empty { get; } = new(new Dictionary<string, DryRunExistingFileRows>(StringComparer.Ordinal));
+        public static DryRunDbSnapshot Empty { get; } = new(new Dictionary<string, DryRunExistingFileRows>(StringComparer.Ordinal), null);
     }
 
     private readonly record struct DryRunExistingFileRows(
