@@ -27,6 +27,7 @@ public static partial class IndexCommandRunner
         var errorSamples = new List<CliJsonMessage>();
         var errorCount = 0;
         var dryScanErrorKeys = new HashSet<string>(StringComparer.Ordinal);
+        DryRunScanMetadata dryScanMetadata;
         var resolvedDbPath = DbPathResolver.NormalizeDbPath(DbPathResolver.ResolveForIndex(projectPath, options.DbPath, options.DataDir).DbPath);
         var dbSnapshot = ReadDryRunDbSnapshot(resolvedDbPath);
         var retainedRelativePaths = new HashSet<string>(StringComparer.Ordinal);
@@ -70,6 +71,7 @@ public static partial class IndexCommandRunner
             out dryCandidates,
             out dryDeleteCandidates,
             out authoritativeFullScan,
+            out dryScanMetadata,
             out var exitCode))
         {
             return exitCode;
@@ -78,6 +80,12 @@ public static partial class IndexCommandRunner
         var dryFileSamples = new List<string>();
         var dryFileCount = 0;
         var langCounts = new Dictionary<string, int>();
+        if (authoritativeFullScan)
+        {
+            unknownExtensionTotal = dryScanMetadata.UnknownExtensionFiles.Count;
+            unsupportedTotal = CountUnsupportedNonIndexablePaths(dryScanMetadata);
+        }
+
         foreach (var f in dryCandidates)
         {
             var relativePath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectPath, f));
@@ -187,11 +195,13 @@ public static partial class IndexCommandRunner
         out IReadOnlyList<string> dryCandidates,
         out IReadOnlyList<string> dryDeleteCandidates,
         out bool authoritativeFullScan,
+        out DryRunScanMetadata scanMetadata,
         out int exitCode)
     {
         dryCandidates = [];
         dryDeleteCandidates = [];
         authoritativeFullScan = false;
+        scanMetadata = DryRunScanMetadata.Empty;
         exitCode = CommandExitCodes.Success;
 
         if (options.UpdateFiles.Count > 0)
@@ -213,6 +223,7 @@ public static partial class IndexCommandRunner
                 }
                 dryCandidates = scanResult.Files;
                 authoritativeFullScan = true;
+                scanMetadata = DryRunScanMetadata.FromScanResult(scanResult);
                 recordDryRunScanErrors(scanResult.Errors);
             }
             else
@@ -302,6 +313,7 @@ public static partial class IndexCommandRunner
                 }
                 dryCandidates = scanResult.Files;
                 authoritativeFullScan = true;
+                scanMetadata = DryRunScanMetadata.FromScanResult(scanResult);
                 recordDryRunScanErrors(scanResult.Errors);
             }
             else
@@ -329,10 +341,29 @@ public static partial class IndexCommandRunner
             }
             dryCandidates = scanResult.Files;
             authoritativeFullScan = true;
+            scanMetadata = DryRunScanMetadata.FromScanResult(scanResult);
             recordDryRunScanErrors(scanResult.Errors);
         }
 
         return true;
+    }
+
+    private static int CountUnsupportedNonIndexablePaths(DryRunScanMetadata scanMetadata)
+    {
+        if (scanMetadata.NonIndexablePaths.Count == 0)
+            return 0;
+
+        var unknownPaths = scanMetadata.UnknownExtensionFiles.Count > 0
+            ? new HashSet<string>(scanMetadata.UnknownExtensionFiles, StringComparer.Ordinal)
+            : [];
+        var count = 0;
+        foreach (var path in scanMetadata.NonIndexablePaths)
+        {
+            if (!unknownPaths.Contains(path))
+                count++;
+        }
+
+        return count;
     }
 
     private static DryRunFileProbe ProbeDryRunFile(FileIndexer indexer, string absolutePath)
@@ -491,6 +522,16 @@ public static partial class IndexCommandRunner
         long SymbolReferences,
         long ReferenceLines,
         long FileIssues);
+
+    private readonly record struct DryRunScanMetadata(
+        IReadOnlyList<string> NonIndexablePaths,
+        IReadOnlyList<string> UnknownExtensionFiles)
+    {
+        public static DryRunScanMetadata Empty { get; } = new([], []);
+
+        public static DryRunScanMetadata FromScanResult(FileIndexer.ScanFilesResult scanResult)
+            => new(scanResult.NonIndexablePaths, scanResult.UnknownExtensionFiles);
+    }
 
     private readonly record struct DryRunFileProbe(
         bool Supported,

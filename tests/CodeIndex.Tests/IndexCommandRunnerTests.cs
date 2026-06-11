@@ -8367,6 +8367,7 @@ public class IndexCommandRunnerTests
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             File.Delete(Path.Combine(projectRoot, "removed.cs"));
+            File.WriteAllText(Path.Combine(projectRoot, "notes.unknownext"), "plain text\n");
 
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--dry-run", "--json"]);
 
@@ -8375,6 +8376,8 @@ public class IndexCommandRunnerTests
             Assert.Equal(1, json.GetProperty("files_total").GetInt32());
             Assert.Equal(0, json.GetProperty("projected_file_deletes").GetInt32());
             Assert.Equal(1, json.GetProperty("projected_file_purges").GetInt32());
+            Assert.Equal(1, json.GetProperty("unknown_extension_total").GetInt32());
+            Assert.True(json.TryGetProperty("unsupported_total", out _));
             Assert.True(json.GetProperty("estimated_table_mutations").GetProperty("files").GetInt64() >= 2);
             Assert.Equal(2, CountRows(dbPath, "files"));
         }
