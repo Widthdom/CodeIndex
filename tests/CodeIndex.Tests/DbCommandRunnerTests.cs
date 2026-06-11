@@ -265,11 +265,41 @@ public class DbCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.True(json.GetProperty("ok").GetBoolean());
+            Assert.Equal("ok", json.GetProperty("severity").GetString());
+            Assert.Equal("integrity_ok", json.GetProperty("diagnostic_code").GetString());
             Assert.Equal(0, json.GetProperty("issues").GetArrayLength());
             Assert.Equal(Path.GetFullPath(dbPath), json.GetProperty("db_path").GetString());
         }
         finally
         {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void Run_IntegrityCheck_JsonReportsStableErrorSeverity()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_integrity_error_json_{Guid.NewGuid():N}.db");
+        DbCommandRunner.IntegrityCheckRowsForTesting = () => ["simulated corruption"];
+        try
+        {
+            using (var db = new DbContext(dbPath))
+                db.InitializeSchema();
+            SqliteConnection.ClearAllPools();
+
+            var (exitCode, json) = RunAndCaptureJson(["--integrity-check", "--db", dbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.False(json.GetProperty("ok").GetBoolean());
+            Assert.Equal("error", json.GetProperty("severity").GetString());
+            Assert.Equal("integrity_failed", json.GetProperty("diagnostic_code").GetString());
+            Assert.Equal("simulated corruption", json.GetProperty("issues")[0].GetString());
+        }
+        finally
+        {
+            DbCommandRunner.IntegrityCheckRowsForTesting = null;
             SqliteConnection.ClearAllPools();
             if (File.Exists(dbPath))
                 File.Delete(dbPath);
@@ -291,9 +321,44 @@ public class DbCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(Path.GetFullPath(dbPath), json.GetProperty("db_path").GetString());
             Assert.True(json.TryGetProperty("user_version", out _));
+            Assert.Equal("ok", json.GetProperty("severity").GetString());
+            Assert.Equal("schema_ok", json.GetProperty("diagnostic_code").GetString());
+            Assert.True(json.GetProperty("object_type_counts").GetProperty("table").GetInt32() > 0);
+            Assert.Equal(0, json.GetProperty("object_type_omitted_counts").GetProperty("table").GetInt32());
             Assert.Contains(json.GetProperty("entries").EnumerateArray(), entry =>
                 entry.GetProperty("type").GetString() == "table" &&
                 entry.GetProperty("name").GetString() == "files");
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void Run_Schema_JsonReportsObjectTypeOmissionsWhenEntryLimitTruncates()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_schema_truncated_{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
+            {
+                connection.Open();
+                for (var i = 0; i < DbCommandRunner.SchemaEntryLimit + 5; i++)
+                    Execute(connection, $"CREATE TABLE t_{i:D3}(id INTEGER PRIMARY KEY);");
+            }
+            SqliteConnection.ClearAllPools();
+
+            var (exitCode, json) = RunAndCaptureJson(["schema", "--db", dbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("warn", json.GetProperty("severity").GetString());
+            Assert.Equal("schema_truncated", json.GetProperty("diagnostic_code").GetString());
+            Assert.True(json.GetProperty("entries_truncated").GetBoolean());
+            Assert.Equal(DbCommandRunner.SchemaEntryLimit + 5, json.GetProperty("object_type_counts").GetProperty("table").GetInt32());
+            Assert.Equal(5, json.GetProperty("object_type_omitted_counts").GetProperty("table").GetInt32());
         }
         finally
         {

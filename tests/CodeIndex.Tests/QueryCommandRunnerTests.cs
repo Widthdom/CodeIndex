@@ -646,6 +646,54 @@ public partial class QueryCommandRunnerTests
         }
     }
 
+    [Fact]
+    public void RunVacuum_DryRunJsonReportsMaintenanceEstimate_Issue3564()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_vacuum_dry_run");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using (var db = new DbContext(dbPath))
+            {
+                using var command = db.Connection.CreateCommand();
+                command.CommandText = @"
+                    CREATE TABLE vacuum_payload (id INTEGER PRIMARY KEY, payload BLOB);
+                    WITH RECURSIVE n(value) AS (
+                        SELECT 1
+                        UNION ALL
+                        SELECT value + 1 FROM n WHERE value < 128
+                    )
+                    INSERT INTO vacuum_payload (payload)
+                    SELECT randomblob(4096) FROM n;
+                    DELETE FROM vacuum_payload;";
+                command.ExecuteNonQuery();
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunVacuum(
+                ["--db", dbPath, "--dry-run", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            Assert.Equal("dry_run", root.GetProperty("status").GetString());
+            Assert.True(root.GetProperty("dry_run").GetBoolean());
+            Assert.True(root.GetProperty("estimated_pages_reclaimable").GetInt64() > 0);
+            Assert.True(root.GetProperty("estimated_bytes_reclaimable").GetInt64() > 0);
+            Assert.Equal(0, root.GetProperty("pages_reclaimed").GetInt64());
+            Assert.Equal(root.GetProperty("page_count_before").GetInt64(), root.GetProperty("page_count_after").GetInt64());
+            Assert.Equal("incremental", root.GetProperty("auto_vacuum_mode_after_name").GetString());
+            var guidance = root.GetProperty("maintenance_guidance");
+            Assert.Equal("vacuum_recommended", guidance.GetProperty("freelist_state").GetString());
+            Assert.Equal("cdidx vacuum --db <db>", guidance.GetProperty("recommended_command").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
 
 
 

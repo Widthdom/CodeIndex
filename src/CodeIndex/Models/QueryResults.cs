@@ -593,6 +593,15 @@ public class StatusResult
     [JsonPropertyName("unknown_extension_file_path_limit")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public long? UnknownExtensionFilePathLimit { get; set; }
+    [JsonPropertyName("unknown_extension_extension_counts")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Dictionary<string, long>? UnknownExtensionExtensionCounts { get; set; }
+    [JsonPropertyName("unknown_extension_category_counts")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Dictionary<string, long>? UnknownExtensionCategoryCounts { get; set; }
+    [JsonPropertyName("unknown_extension_groups")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<StatusUnknownExtensionGroup>? UnknownExtensionGroups { get; set; }
     public DateTime? IndexedAt { get; set; }
     /// <summary>
     /// Timestamp of the most recent successful index/update run that freshened workspace
@@ -751,6 +760,9 @@ public class StatusResult
     [JsonPropertyName("failed_checks")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<string>? FailedChecks { get; set; }
+    [JsonPropertyName("repair_commands")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<StatusRepairCommand>? RepairCommands { get; set; }
     /// <summary>
     /// Effective age threshold, in seconds, used by `status --check` to explain stale-index
     /// warnings. Null when `--check` was not requested.
@@ -904,6 +916,8 @@ public class StatusResult
     /// </summary>
     [JsonPropertyName("db_pragma_settings")]
     public StatusDbPragmaSettings DbPragmaSettings { get; set; } = new();
+    [JsonPropertyName("maintenance_guidance")]
+    public StatusMaintenanceGuidance MaintenanceGuidance { get; set; } = new();
     [JsonPropertyName("db_size_bytes")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public long? DbSizeBytes { get; set; }
@@ -915,6 +929,9 @@ public class StatusResult
     [JsonPropertyName("last_index_run")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public StatusLastIndexRun? LastIndexRun { get; set; }
+    [JsonPropertyName("last_failed_or_partial_index_run")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public StatusFailedOrPartialIndexRun? LastFailedOrPartialIndexRun { get; set; }
 }
 
 public sealed class StatusProcessMetrics
@@ -970,6 +987,45 @@ public sealed class StatusLastIndexRun
     public long? PeakMemoryMb { get; set; }
 }
 
+public sealed class StatusFailedOrPartialIndexRun
+{
+    public string? Status { get; set; }
+    public string? Mode { get; set; }
+    [JsonPropertyName("started_at")]
+    public DateTime? StartedAt { get; set; }
+    [JsonPropertyName("duration_ms")]
+    public long? DurationMs { get; set; }
+    [JsonPropertyName("files_processed")]
+    public long? FilesProcessed { get; set; }
+    [JsonPropertyName("files_total")]
+    public long? FilesTotal { get; set; }
+    [JsonPropertyName("error_code")]
+    public string? ErrorCode { get; set; }
+    public string? Reason { get; set; }
+}
+
+public sealed class StatusRepairCommand
+{
+    public string Name { get; set; } = string.Empty;
+    public List<string> Args { get; set; } = [];
+    public string Reason { get; set; } = string.Empty;
+    [JsonPropertyName("safety_notes")]
+    public List<string> SafetyNotes { get; set; } = [];
+}
+
+public sealed class StatusUnknownExtensionGroup
+{
+    public string Extension { get; set; } = string.Empty;
+    public string Category { get; set; } = string.Empty;
+    [JsonPropertyName("recommended_action")]
+    public string RecommendedAction { get; set; } = string.Empty;
+    public long Count { get; set; }
+    [JsonPropertyName("sample_paths")]
+    public List<string> SamplePaths { get; set; } = [];
+    [JsonPropertyName("sample_paths_truncated")]
+    public bool SamplePathsTruncated { get; set; }
+}
+
 public class StatusReadinessDegradation
 {
     public string Field { get; set; } = string.Empty;
@@ -991,17 +1047,30 @@ public class StatusDbPragmaSettings
     public long? PageCount { get; set; }
     public long? FreelistCount { get; set; }
     public long? PageSize { get; set; }
+    public long? AutoVacuum { get; set; }
 }
 
 public sealed record VacuumResult(
     string Status,
+    bool DryRun,
     long PageSize,
     long PageCountBefore,
     long FreelistCountBefore,
     long PageCountAfter,
     long FreelistCountAfter,
     long PagesReclaimed,
-    long BytesReclaimed);
+    long BytesReclaimed,
+    long EstimatedPagesReclaimable,
+    long EstimatedBytesReclaimable,
+    long? DbSizeBytesBefore,
+    long? WalSizeBytesBefore,
+    long? DbSizeBytesAfter,
+    long? WalSizeBytesAfter,
+    long AutoVacuumModeBefore,
+    string AutoVacuumModeBeforeName,
+    long AutoVacuumModeAfter,
+    string AutoVacuumModeAfterName,
+    StatusMaintenanceGuidance MaintenanceGuidance);
 
 public class PostExtractionHookStatus
 {

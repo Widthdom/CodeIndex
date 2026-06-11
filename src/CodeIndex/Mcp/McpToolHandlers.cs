@@ -4516,6 +4516,7 @@ public partial class McpServer
             writer.SetMeta(DbContext.LastIndexRunBytesReadMetaKey, SumReadableFileBytes(files).ToString(System.Globalization.CultureInfo.InvariantCulture));
             writer.SetMeta(DbContext.LastIndexRunRowsUpsertedMetaKey, processed.ToString(System.Globalization.CultureInfo.InvariantCulture));
             writer.SetMeta(DbContext.LastIndexRunRowsDeletedMetaKey, purged.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            writer.ClearLastFailedIndexRunMetadata();
             // Persist the current HEAD only after the run is fully successful (errors == 0).
             // Mirrors the CLI full-scan contract (Issue #1508) so MCP-driven re-indexes also
             // refresh `worktree_head_changed`; partial / failed runs leave the prior HEAD

@@ -259,6 +259,7 @@ public static class QueryCommandRunner
         "--list-recipes",
         "--read-only",
         "--immutable",
+        "--dry-run",
         "--pretty",
         "--compact",
         "--body-only",
@@ -4063,7 +4064,10 @@ public static class QueryCommandRunner
                 ? BuildStatusCheckFailures(status, options.StatusCheckScopes)
                 : Array.Empty<StatusCheckFailure>();
             if (options.CheckWorkspace)
+            {
                 status.FailedChecks = checkFailures.Select(f => f.Name).ToList();
+                status.RepairCommands = BuildStatusRepairCommands(status, checkFailures, options);
+            }
 
             if (options.Json)
             {
@@ -4410,7 +4414,7 @@ public static class QueryCommandRunner
         }
 
         using var db = new DbContext(options.DbPath);
-        var result = db.RunIncrementalVacuum();
+        var result = db.RunIncrementalVacuum(options.DryRun);
         if (options.Json)
         {
             Console.WriteLine(JsonSerializer.Serialize(
@@ -4419,10 +4423,17 @@ public static class QueryCommandRunner
         }
         else
         {
-            Console.WriteLine($"Vacuum complete: reclaimed {result.PagesReclaimed:N0} page(s) ({result.BytesReclaimed:N0} bytes).");
+            Console.WriteLine(result.DryRun
+                ? $"Vacuum dry run: estimated reclaimable {result.EstimatedPagesReclaimable:N0} page(s) ({result.EstimatedBytesReclaimable:N0} bytes)."
+                : $"Vacuum complete: reclaimed {result.PagesReclaimed:N0} page(s) ({result.BytesReclaimed:N0} bytes).");
             Console.WriteLine(ConsoleUi.FormatSummaryLine("Page size", $"{result.PageSize:N0} bytes"));
             Console.WriteLine(ConsoleUi.FormatSummaryLine("Pages", $"{result.PageCountBefore:N0} -> {result.PageCountAfter:N0}"));
             Console.WriteLine(ConsoleUi.FormatSummaryLine("Freelist", $"{result.FreelistCountBefore:N0} -> {result.FreelistCountAfter:N0}"));
+            Console.WriteLine(ConsoleUi.FormatSummaryLine("AutoVac", $"{result.AutoVacuumModeBeforeName} -> {result.AutoVacuumModeAfterName}"));
+            if (result.MaintenanceGuidance.RecommendedCommand != "none")
+                Console.WriteLine(ConsoleUi.FormatSummaryLine("Recommend", result.MaintenanceGuidance.RecommendedCommand));
+            if (!string.IsNullOrWhiteSpace(result.MaintenanceGuidance.PostMaintenanceFollowUp))
+                Console.WriteLine(ConsoleUi.FormatSummaryLine("Follow-up", result.MaintenanceGuidance.PostMaintenanceFollowUp));
         }
 
         return CommandExitCodes.Success;
@@ -6385,6 +6396,7 @@ public static class QueryCommandRunner
         bool exactSubstring = false;
         bool dbPathExplicit = false;
         bool readOnly = false;
+        bool dryRun = false;
         bool checkWorkspace = false;
         TimeSpan? staleAfter = null;
         HashSet<string>? statusCheckScopes = null;
@@ -6534,6 +6546,9 @@ public static class QueryCommandRunner
                 case "--read-only":
                 case "--immutable":
                     readOnly = true;
+                    break;
+                case "--dry-run":
+                    dryRun = true;
                     break;
                 case "--pretty":
                     break;
@@ -7286,6 +7301,7 @@ public static class QueryCommandRunner
             DbPath = resolvedDbPath,
             DbPathExplicit = dbPathExplicit,
             ReadOnly = readOnly,
+            DryRun = dryRun,
             DataDir = dbResolution.DataDir,
             DataDirSource = dbResolution.DataDirSource,
             Json = json ?? jsonDefault,
@@ -9186,6 +9202,127 @@ public static class QueryCommandRunner
         return failures;
     }
 
+    private static List<StatusRepairCommand>? BuildStatusRepairCommands(
+        StatusResult status,
+        IReadOnlyList<StatusCheckFailure> failures,
+        QueryCommandOptions options)
+    {
+        if (failures.Count == 0)
+            return null;
+
+        var commands = new List<StatusRepairCommand>();
+        foreach (var failure in failures)
+        {
+            var command = failure.Name switch
+            {
+                "workspace_stale" or "workspace_unavailable" => BuildIndexRepairCommand(
+                    status,
+                    options,
+                    failure.Name,
+                    rebuild: false,
+                    "Re-runs indexing for the current workspace snapshot."),
+                "graph_table_available" or "issues_table_available" or "file_issues_data_current"
+                    or "sql_graph_contract_ready" or "csharp_symbol_name_ready" or "csharp_metadata_target_ready"
+                    => BuildIndexRepairCommand(
+                        status,
+                        options,
+                        failure.Name,
+                        rebuild: false,
+                        "Rewrites stale or missing index metadata before query results are trusted."),
+                "hotspot_family_ready" or "index_newer_than_reader" => BuildIndexRepairCommand(
+                    status,
+                    options,
+                    failure.Name,
+                    rebuild: true,
+                    "Performs a full rebuild because partial updates cannot prove every indexed row was restamped."),
+                "fold_ready" => BuildBackfillFoldRepairCommand(options, failure.Name),
+                "migration_in_progress" => BuildStatusCheckRepairCommand(options, failure.Name),
+                _ => null,
+            };
+            if (command != null)
+                commands.Add(command);
+        }
+
+        return commands.Count == 0 ? null : commands;
+    }
+
+    private static StatusRepairCommand BuildIndexRepairCommand(
+        StatusResult status,
+        QueryCommandOptions options,
+        string reason,
+        bool rebuild,
+        string safetyNote)
+    {
+        var args = new List<string>
+        {
+            "index",
+            string.IsNullOrWhiteSpace(status.ProjectRoot) ? "." : status.ProjectRoot!,
+        };
+        if (options.DbPathExplicit)
+        {
+            args.Add("--db");
+            args.Add(ResolveWritableDbPathOrPlaceholder(options.DbPath));
+        }
+        if (rebuild)
+            args.Add("--rebuild");
+
+        return new StatusRepairCommand
+        {
+            Name = "cdidx",
+            Args = args,
+            Reason = reason,
+            SafetyNotes =
+            [
+                safetyNote,
+                "Avoid running concurrently with another cdidx index writer for the same database.",
+            ],
+        };
+    }
+
+    private static StatusRepairCommand BuildBackfillFoldRepairCommand(QueryCommandOptions options, string reason)
+    {
+        var args = new List<string> { "backfill-fold" };
+        if (options.DbPathExplicit)
+        {
+            args.Add("--db");
+            args.Add(ResolveWritableDbPathOrPlaceholder(options.DbPath));
+        }
+
+        return new StatusRepairCommand
+        {
+            Name = "cdidx",
+            Args = args,
+            Reason = reason,
+            SafetyNotes =
+            [
+                "Restamps folded-name columns in place without reparsing source files.",
+                "Use a full index rebuild instead if the database must be regenerated from source.",
+            ],
+        };
+    }
+
+    private static StatusRepairCommand BuildStatusCheckRepairCommand(QueryCommandOptions options, string reason)
+    {
+        var args = new List<string> { "status", "--check", "--json" };
+        if (options.DbPathExplicit)
+        {
+            args.Add("--db");
+            args.Add(options.DbPath);
+        }
+
+        return new StatusRepairCommand
+        {
+            Name = "cdidx",
+            Args = args,
+            Reason = reason,
+            SafetyNotes =
+            [
+                "Wait for the active index or migration writer to finish before rerunning status.",
+                "Do not start a second writer unless the existing writer is known to be gone.",
+            ],
+        };
+    }
+
     private static void WriteStatusCheckDiagnostics(IReadOnlyList<StatusCheckFailure> failures)
     {
         foreach (var failure in failures)
@@ -10290,6 +10427,7 @@ public sealed class QueryCommandOptions
     public string DbPath { get; init; } = Path.Combine(".cdidx", "codeindex.db");
     public bool DbPathExplicit { get; init; }
     public bool ReadOnly { get; init; }
+    public bool DryRun { get; init; }
     public string? DataDir { get; init; }
     public string? DataDirSource { get; init; }
     public bool Json { get; init; }

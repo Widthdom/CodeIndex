@@ -52,6 +52,8 @@ internal sealed record UpgradeJsonResult(
 internal sealed record DbIntegrityCheckJsonResult(
     [property: JsonPropertyName("db_path")] string DbPath,
     [property: JsonPropertyName("ok")] bool Ok,
+    [property: JsonPropertyName("severity")] string Severity,
+    [property: JsonPropertyName("diagnostic_code")] string DiagnosticCode,
     [property: JsonPropertyName("issues")] List<string> Issues,
     [property: JsonPropertyName("truncated")] bool Truncated = false,
     [property: JsonPropertyName("rows_truncated")] bool RowsTruncated = false,
@@ -98,6 +100,10 @@ internal sealed record DbSchemaEntryJsonResult(
 internal sealed record DbSchemaJsonResult(
     [property: JsonPropertyName("db_path")] string DbPath,
     [property: JsonPropertyName("user_version")] int UserVersion,
+    [property: JsonPropertyName("severity")] string Severity,
+    [property: JsonPropertyName("diagnostic_code")] string DiagnosticCode,
+    [property: JsonPropertyName("object_type_counts")] Dictionary<string, int> ObjectTypeCounts,
+    [property: JsonPropertyName("object_type_omitted_counts")] Dictionary<string, int> ObjectTypeOmittedCounts,
     [property: JsonPropertyName("entries")] List<DbSchemaEntryJsonResult> Entries,
     [property: JsonPropertyName("truncated")] bool Truncated = false,
     [property: JsonPropertyName("entries_truncated")] bool EntriesTruncated = false,
@@ -514,10 +520,14 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(ExtractorRegistryDiagnostic))]
 [JsonSerializable(typeof(ExtractorRegistryStatus))]
 [JsonSerializable(typeof(StatusResult))]
+[JsonSerializable(typeof(StatusFailedOrPartialIndexRun))]
 [JsonSerializable(typeof(StatusReadinessDegradation))]
 [JsonSerializable(typeof(StatusDbPragmaSettings))]
 [JsonSerializable(typeof(StatusLastIndexRun))]
+[JsonSerializable(typeof(StatusMaintenanceGuidance))]
 [JsonSerializable(typeof(StatusProcessMetrics))]
+[JsonSerializable(typeof(StatusRepairCommand))]
+[JsonSerializable(typeof(StatusUnknownExtensionGroup))]
 [JsonSerializable(typeof(SuggestionDetailJsonResult))]
 [JsonSerializable(typeof(SuggestionExportJsonResult))]
 [JsonSerializable(typeof(SuggestionIssueDraftDuplicateMatchJsonResult))]

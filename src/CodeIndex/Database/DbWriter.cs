@@ -2178,6 +2178,18 @@ public class DbWriter
         SetMeta(DbContext.CdidxWriterVersionMetaKey, version);
     }
 
+    public void ClearLastFailedIndexRunMetadata()
+    {
+        SetMeta(DbContext.LastFailedIndexRunStatusMetaKey, null);
+        SetMeta(DbContext.LastFailedIndexRunModeMetaKey, null);
+        SetMeta(DbContext.LastFailedIndexRunStartedAtMetaKey, null);
+        SetMeta(DbContext.LastFailedIndexRunDurationMsMetaKey, null);
+        SetMeta(DbContext.LastFailedIndexRunFilesProcessedMetaKey, null);
+        SetMeta(DbContext.LastFailedIndexRunFilesTotalMetaKey, null);
+        SetMeta(DbContext.LastFailedIndexRunErrorCodeMetaKey, null);
+        SetMeta(DbContext.LastFailedIndexRunReasonMetaKey, null);
+    }
+
     /// <summary>
     /// Stamp unknown-extension scan coverage from the latest successful full-worktree scan.
     /// Stores the total count plus a bounded path sample so status callers can identify the
@@ -2191,6 +2203,7 @@ public class DbWriter
         var sample = JsonStringListCodec.TakeSerializableSample(
             paths,
             DbContext.UnknownExtensionFilePathSampleLimit);
+        var classification = UnknownExtensionClassifier.Classify(paths);
         SetMeta(
             DbContext.UnknownExtensionFileCountMetaKey,
             paths.Count.ToString(System.Globalization.CultureInfo.InvariantCulture));
@@ -2203,6 +2216,15 @@ public class DbWriter
         SetMeta(
             DbContext.UnknownExtensionFilePathLimitMetaKey,
             DbContext.UnknownExtensionFilePathSampleLimit.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        SetMeta(
+            DbContext.UnknownExtensionExtensionCountsMetaKey,
+            UnknownExtensionClassifier.SerializeCounts(classification.ExtensionCounts));
+        SetMeta(
+            DbContext.UnknownExtensionCategoryCountsMetaKey,
+            UnknownExtensionClassifier.SerializeCounts(classification.CategoryCounts));
+        SetMeta(
+            DbContext.UnknownExtensionGroupsMetaKey,
+            UnknownExtensionClassifier.SerializeGroups(classification.Groups));
     }
 
     /// <summary>

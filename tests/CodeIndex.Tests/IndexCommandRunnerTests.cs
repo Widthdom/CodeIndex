@@ -2630,6 +2630,19 @@ public class IndexCommandRunnerTests
                 .Select(path => path.GetString())
                 .ToArray();
             Assert.Equal(["data.unmapped", "notes.mystery"], paths);
+            var extensionCounts = statusJson.GetProperty("unknown_extension_extension_counts");
+            Assert.Equal(1, extensionCounts.GetProperty(".mystery").GetInt64());
+            Assert.Equal(1, extensionCounts.GetProperty(".unmapped").GetInt64());
+            var categoryCounts = statusJson.GetProperty("unknown_extension_category_counts");
+            Assert.Equal(2, categoryCounts.GetProperty("language_support_candidate").GetInt64());
+            var groups = statusJson.GetProperty("unknown_extension_groups").EnumerateArray().ToArray();
+            Assert.Equal(2, groups.Length);
+            Assert.All(groups, group =>
+            {
+                Assert.Equal("language_support_candidate", group.GetProperty("category").GetString());
+                Assert.Equal("language_support", group.GetProperty("recommended_action").GetString());
+                Assert.Equal(1, group.GetProperty("count").GetInt64());
+            });
         }
         finally
         {

@@ -132,8 +132,9 @@ names visible so documentation and tests stay synchronized.
 | Readiness and graph trust | `fold_ready`, `fold_ready_reason`, `graph_table_available`, `issues_table_available`, `file_issues_data_current`, `migration_in_progress`, `sql_graph_contract_ready`, `sql_graph_contract_degraded_reason`, `hotspot_family_ready`, `hotspot_family_degraded_reason`, `language_readiness`, `csharp_symbol_name_ready`, `csharp_metadata_target_ready`, `csharp_metadata_target_degraded_reason`. |
 | Workspace and HEAD freshness | `indexed_head_commit`, `worktree_head_changed`, `indexed_head_sha`, `indexed_head_branch`, `indexed_head_timestamp`, `commits_ahead_of_indexed_head`. |
 | Version and forward compatibility | `index_writer_version`, `index_newer_than_reader`, `index_newer_than_reader_reason`. |
-| Unknown-extension and runtime diagnostics | `unknown_extension_file_count`, `unknown_extension_files`, `unknown_extension_files_truncated`, `unknown_extension_file_path_limit`, `extractors`, `path_case_sensitive`, `data_dir_mode`, `mac_profile`, `stale_after_seconds`, `index_age_seconds`. |
-| Remediation fields | `degraded_root_cause`, `degraded_reason`, `recommended_action`, `alternative_action`, `readiness_degradations`. |
+| Unknown-extension and runtime diagnostics | `unknown_extension_file_count`, `unknown_extension_files`, `unknown_extension_files_truncated`, `unknown_extension_file_path_limit`, `unknown_extension_extension_counts`, `unknown_extension_category_counts`, `unknown_extension_groups`, `extractors`, `path_case_sensitive`, `data_dir_mode`, `mac_profile`, `stale_after_seconds`, `index_age_seconds`, `last_failed_or_partial_index_run`. |
+| Database maintenance | `db_size_bytes`, `wal_size_bytes`, `db_pragma_settings` (`journal_mode`, `synchronous`, `wal_autocheckpoint`, `page_count`, `freelist_count`, `page_size`, `auto_vacuum`), `maintenance_guidance`. |
+| Remediation fields | `degraded_root_cause`, `degraded_reason`, `recommended_action`, `alternative_action`, `readiness_degradations`, `repair_commands`. |
 | MCP-only session diagnostics | `mcp_session`. |
 
 ## Verifying Releases
@@ -288,8 +289,9 @@ freshness、compatibility、remediation field を返します。詳細な意味�
 | readiness / graph trust | `fold_ready`, `fold_ready_reason`, `graph_table_available`, `issues_table_available`, `file_issues_data_current`, `migration_in_progress`, `sql_graph_contract_ready`, `sql_graph_contract_degraded_reason`, `hotspot_family_ready`, `hotspot_family_degraded_reason`, `language_readiness`, `csharp_symbol_name_ready`, `csharp_metadata_target_ready`, `csharp_metadata_target_degraded_reason`。 |
 | workspace / HEAD freshness | `indexed_head_commit`, `worktree_head_changed`, `indexed_head_sha`, `indexed_head_branch`, `indexed_head_timestamp`, `commits_ahead_of_indexed_head`。 |
 | version / forward compatibility | `index_writer_version`, `index_newer_than_reader`, `index_newer_than_reader_reason`。 |
-| unknown-extension / runtime diagnostics | `unknown_extension_file_count`, `unknown_extension_files`, `unknown_extension_files_truncated`, `unknown_extension_file_path_limit`, `extractors`, `path_case_sensitive`, `data_dir_mode`, `mac_profile`, `stale_after_seconds`, `index_age_seconds`。 |
-| remediation fields | `degraded_root_cause`, `degraded_reason`, `recommended_action`, `alternative_action`, `readiness_degradations`。 |
+| unknown-extension / runtime diagnostics | `unknown_extension_file_count`, `unknown_extension_files`, `unknown_extension_files_truncated`, `unknown_extension_file_path_limit`, `unknown_extension_extension_counts`, `unknown_extension_category_counts`, `unknown_extension_groups`, `extractors`, `path_case_sensitive`, `data_dir_mode`, `mac_profile`, `stale_after_seconds`, `index_age_seconds`, `last_failed_or_partial_index_run`。 |
+| database maintenance | `db_size_bytes`, `wal_size_bytes`, `db_pragma_settings` (`journal_mode`, `synchronous`, `wal_autocheckpoint`, `page_count`, `freelist_count`, `page_size`, `auto_vacuum`), `maintenance_guidance`。 |
+| remediation fields | `degraded_root_cause`, `degraded_reason`, `recommended_action`, `alternative_action`, `readiness_degradations`, `repair_commands`。 |
 | MCP-only session diagnostics | `mcp_session`。 |
 
 ## リリース成果物の検証
