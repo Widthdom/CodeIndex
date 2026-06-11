@@ -6,6 +6,7 @@ using Microsoft.Data.Sqlite;
 using System.Globalization;
 using System.IO.Compression;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace CodeIndex.Tests;
 
@@ -387,6 +388,147 @@ public class ProgramCliTests
             Assert.Contains("Imported CodeIndex database", importStdout);
             Assert.True(File.Exists(importedDbPath));
             Assert.True(DbContext.TryValidateExistingCodeIndexDb(importedDbPath, out _, out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ExportArchive_ManifestIncludesReadinessAndSummaryMetadata_Issue3549()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_export_manifest_metadata");
+        try
+        {
+            var sourceDbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(sourceDbPath, "src/app.cs", "csharp", "class App { void Run() {} }\n");
+            using (var db = new DbContext(sourceDbPath))
+            {
+                using var cmd = db.Connection.CreateCommand();
+                cmd.CommandText = $"PRAGMA user_version = {DbContext.CurrentSchemaVersion.ToString(CultureInfo.InvariantCulture)}";
+                cmd.ExecuteNonQuery();
+                var writer = new DbWriter(db.Connection);
+                writer.SetMeta(DbContext.CdidxWriterVersionMetaKey, "test-writer");
+                writer.SetMeta(DbContext.IndexedHeadBranchMetaKey, "main");
+                writer.SetMeta(DbContext.IndexedHeadTimestampMetaKey, "2026-06-11T00:00:00Z");
+                writer.SetMeta(DbContext.CodeIndexMetaSchemaVersionMetaKey, "1");
+                writer.SetMeta(DbContext.CSharpSymbolNameContractVersionMetaKey, "2");
+                writer.SetMeta(DbContext.SqlGraphContractVersionMetaKey, "1");
+                writer.SetMeta(DbContext.HotspotFamilyVersionMetaKey, "2");
+                writer.SetMeta(DbContext.UnknownExtensionFileCountMetaKey, "2");
+                writer.SetMeta(DbContext.UnknownExtensionFilePathsMetaKey, "[\"tools/custom.foo\",\"docs/archive.bar\"]");
+                writer.SetMeta(DbContext.UnknownExtensionFilesTruncatedMetaKey, "false");
+                writer.SetMeta(DbContext.UnknownExtensionFilePathLimitMetaKey, "50");
+            }
+
+            var archivePath = Path.Combine(projectRoot, "codeindex.cdidx.zip");
+
+            var (exportExit, _, exportStderr) = RunCliInSubprocess(["export", archivePath, "--db", sourceDbPath]);
+
+            Assert.True(exportExit == 0, exportStderr);
+            Assert.Equal(string.Empty, exportStderr);
+            using var archive = ZipFile.OpenRead(archivePath);
+            var manifestEntry = archive.GetEntry("manifest.json")
+                ?? throw new InvalidOperationException("manifest.json entry was not found");
+            using var document = JsonDocument.Parse(manifestEntry.Open());
+            var root = document.RootElement;
+            Assert.Equal(1, root.GetProperty("file_count").GetInt64());
+            Assert.True(root.GetProperty("chunk_count").GetInt64() >= 1);
+            Assert.True(root.GetProperty("symbol_count").GetInt64() >= 1);
+            Assert.True(root.GetProperty("reference_count").GetInt64() >= 0);
+            Assert.Equal("test-writer", root.GetProperty("index_writer_version").GetString());
+            Assert.Equal("main", root.GetProperty("indexed_head_branch").GetString());
+            Assert.Equal("2026-06-11T00:00:00Z", root.GetProperty("indexed_head_timestamp").GetString());
+            Assert.Equal(1, root.GetProperty("codeindex_meta_schema_version").GetInt32());
+            Assert.Equal(2, root.GetProperty("csharp_symbol_name_contract_version").GetInt32());
+            Assert.Equal(1, root.GetProperty("sql_graph_contract_version").GetInt32());
+            Assert.Equal(2, root.GetProperty("hotspot_family_version").GetInt32());
+            Assert.Equal(2, root.GetProperty("unknown_extension_file_count").GetInt64());
+            Assert.False(root.GetProperty("unknown_extension_files_truncated").GetBoolean());
+            Assert.Equal(50, root.GetProperty("unknown_extension_file_path_limit").GetInt32());
+            Assert.Equal("tools/custom.foo", root.GetProperty("unknown_extension_files")[0].GetString());
+            Assert.Equal(JsonValueKind.True, root.GetProperty("graph_ready").ValueKind);
+            Assert.Equal(JsonValueKind.True, root.GetProperty("issues_ready").ValueKind);
+            Assert.Equal(JsonValueKind.True, root.GetProperty("fold_ready").ValueKind);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ImportArchive_RejectsManifestFileCountMismatch_Issue3549()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_import_manifest_count_mismatch");
+        try
+        {
+            var sourceDbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(sourceDbPath, "src/app.cs", "csharp", "class App { void Run() {} }\n");
+            var archivePath = Path.Combine(projectRoot, "codeindex.cdidx.zip");
+            var importedDbPath = Path.Combine(projectRoot, "imported", "codeindex.db");
+
+            var (exportExit, _, exportStderr) = RunCliInSubprocess(["export", archivePath, "--db", sourceDbPath]);
+            ReplaceManifestNumber(archivePath, "file_count", 999);
+            var (importExit, importStdout, importStderr) = RunCliInSubprocess(["import", archivePath, "--db", importedDbPath, "--json"]);
+
+            Assert.True(exportExit == 0, exportStderr);
+            Assert.Equal(CommandExitCodes.UsageError, importExit);
+            Assert.Equal(string.Empty, importStderr);
+            using var document = JsonDocument.Parse(importStdout);
+            Assert.Equal("sqlite_validate", document.RootElement.GetProperty("phase").GetString());
+            Assert.Equal("import_manifest_mismatch", document.RootElement.GetProperty("error_code").GetString());
+            Assert.Contains("file_count", document.RootElement.GetProperty("message").GetString(), StringComparison.Ordinal);
+            Assert.False(File.Exists(importedDbPath));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ImportArchive_AcceptsOlderManifestWithoutSummaryMetadata_Issue3549()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_import_old_manifest");
+        try
+        {
+            var sourceDbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(sourceDbPath, "src/app.cs", "csharp", "class App { void Run() {} }\n");
+            var archivePath = Path.Combine(projectRoot, "codeindex.cdidx.zip");
+            var importedDbPath = Path.Combine(projectRoot, "imported", "codeindex.db");
+
+            var (exportExit, _, exportStderr) = RunCliInSubprocess(["export", archivePath, "--db", sourceDbPath]);
+            RemoveManifestProperties(
+                archivePath,
+                "file_count",
+                "chunk_count",
+                "symbol_count",
+                "reference_count",
+                "graph_ready",
+                "issues_ready",
+                "fold_ready",
+                "index_writer_version",
+                "indexed_head_branch",
+                "indexed_head_timestamp",
+                "codeindex_meta_schema_version",
+                "csharp_symbol_name_contract_version",
+                "sql_graph_contract_version",
+                "hotspot_family_version",
+                "unknown_extension_file_count",
+                "unknown_extension_files",
+                "unknown_extension_files_truncated",
+                "unknown_extension_file_path_limit");
+            var (importExit, importStdout, importStderr) = RunCliInSubprocess(["import", archivePath, "--db", importedDbPath, "--json"]);
+
+            Assert.True(exportExit == 0, exportStderr);
+            Assert.Equal(CommandExitCodes.Success, importExit);
+            Assert.Equal(string.Empty, importStderr);
+            Assert.True(File.Exists(importedDbPath));
+            using var document = JsonDocument.Parse(importStdout);
+            Assert.Equal("1", document.RootElement.GetProperty("api_version").GetString());
+            Assert.Equal(Path.GetFullPath(importedDbPath), document.RootElement.GetProperty("db_path").GetString());
         }
         finally
         {
@@ -1086,6 +1228,53 @@ public class ProgramCliTests
         var replacementEntry = archive.CreateEntry("manifest.json", CompressionLevel.SmallestSize);
         using var writer = new StreamWriter(replacementEntry.Open());
         writer.Write(updatedManifestJson);
+    }
+
+    private static void ReplaceManifestNumber(string archivePath, string propertyName, long newValue)
+    {
+        using var archive = ZipFile.Open(archivePath, ZipArchiveMode.Update);
+        var entry = archive.GetEntry("manifest.json")
+            ?? throw new InvalidOperationException("manifest.json entry was not found");
+
+        string manifestJson;
+        using (var reader = new StreamReader(entry.Open()))
+        {
+            manifestJson = reader.ReadToEnd();
+        }
+
+        using var document = JsonDocument.Parse(manifestJson);
+        var oldValue = document.RootElement.GetProperty(propertyName).GetRawText();
+        var updatedManifestJson = manifestJson.Replace(
+            $"\"{propertyName}\":{oldValue}",
+            $"\"{propertyName}\":{newValue.ToString(CultureInfo.InvariantCulture)}",
+            StringComparison.Ordinal);
+
+        entry.Delete();
+        var replacementEntry = archive.CreateEntry("manifest.json", CompressionLevel.SmallestSize);
+        using var writer = new StreamWriter(replacementEntry.Open());
+        writer.Write(updatedManifestJson);
+    }
+
+    private static void RemoveManifestProperties(string archivePath, params string[] propertyNames)
+    {
+        using var archive = ZipFile.Open(archivePath, ZipArchiveMode.Update);
+        var entry = archive.GetEntry("manifest.json")
+            ?? throw new InvalidOperationException("manifest.json entry was not found");
+
+        JsonObject manifest;
+        using (var reader = new StreamReader(entry.Open()))
+        {
+            manifest = JsonNode.Parse(reader.ReadToEnd())?.AsObject()
+                ?? throw new InvalidOperationException("manifest.json did not contain an object");
+        }
+
+        foreach (var propertyName in propertyNames)
+            manifest.Remove(propertyName);
+
+        entry.Delete();
+        var replacementEntry = archive.CreateEntry("manifest.json", CompressionLevel.SmallestSize);
+        using var writer = new StreamWriter(replacementEntry.Open());
+        writer.Write(manifest.ToJsonString());
     }
 
     private sealed class SuggestionFixture : IDisposable
