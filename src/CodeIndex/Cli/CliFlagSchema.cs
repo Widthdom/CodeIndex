@@ -278,6 +278,7 @@ internal static class CliFlagSchema
             new() { Name = "--recipe", ValuePlaceholder = "<name>", Description = "Search: run a built-in audit recipe query set", Commands = Set("search") },
             new() { Name = "--list-recipes", Description = "Search: list built-in audit recipes", Commands = Set("search") },
             new() { Name = "--open-issues", ValuePlaceholder = "<path>", Description = "Preflight issue drafts against open issue JSON", Commands = Set("search", "suggestions") },
+            new() { Name = "--audit-scope", ValuePlaceholder = "<source|all>", Description = "Search recipes: use production source defaults or include all indexed paths", Commands = Set("search") },
             new() { Name = "--status", ValuePlaceholder = "<status>", Description = "Suggestions: filter by suggestion status", Commands = Set("suggestions") },
             new() { Name = "--category", ValuePlaceholder = "<category>", Description = "Suggestions: filter by category", Commands = Set("suggestions") },
             new() { Name = "--agent", ValuePlaceholder = "<agent>", Description = "Suggestions: filter by agent", Commands = Set("suggestions") },

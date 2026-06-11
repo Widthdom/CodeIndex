@@ -48,6 +48,7 @@ public partial class QueryCommandRunnerTests
             "--exclude-path", "tests/**",
             "--exclude-path", "docs/**",
             "--exclude-tests",
+            "--audit-scope", "all",
             "--start", "12",
             "--end", "18",
             "--before", "2",
@@ -75,6 +76,8 @@ public partial class QueryCommandRunnerTests
         Assert.Equal(new[] { "src/**" }, options.PathPatterns);
         Assert.Equal(["tests/**", "docs/**"], options.ExcludePaths);
         Assert.True(options.ExcludeTests);
+        Assert.Equal("all", options.AuditScope);
+        Assert.True(options.AuditScopeExplicit);
         Assert.Equal(12, options.StartLine);
         Assert.Equal(18, options.EndLine);
         Assert.Equal(2, options.ContextBefore);

@@ -509,6 +509,14 @@ public static class QueryCommandRunner
                 "Use an open-issues JSON file from `gh issue list --state open --json number,title,labels,url`.");
             return CommandExitCodes.UsageError;
         }
+        if (options.AuditScopeExplicit && options.RecipeName == null)
+        {
+            WriteUsageError(
+                "--audit-scope is only supported with `cdidx search --recipe <name>`.",
+                GetUsageLineOrThrow("search"),
+                "Use `--audit-scope source` for the production-code default or `--audit-scope all` when intentionally auditing docs, tests, and recipe definitions.");
+            return CommandExitCodes.UsageError;
+        }
         if (options.ListRecipes)
         {
             if (options.Query != null || options.RecipeName != null || options.ExtraNames.Count > 0)
@@ -801,6 +809,11 @@ public static class QueryCommandRunner
         {
             Console.WriteLine($"{recipe.Name}: {recipe.Description}");
             Console.WriteLine($"  labels: {string.Join(", ", recipe.RecommendedLabels)}");
+            Console.WriteLine($"  default scope: {recipe.DefaultScope}");
+            if (recipe.DefaultPathPatterns.Count > 0)
+                Console.WriteLine($"  default paths: {string.Join(", ", recipe.DefaultPathPatterns)}");
+            if (recipe.DefaultExcludePaths.Count > 0)
+                Console.WriteLine($"  default excludes: {string.Join(", ", recipe.DefaultExcludePaths)}");
             foreach (var query in recipe.Queries)
             {
                 var mode = query.ExactSubstring ? "exact-substring" : "fts";
@@ -827,7 +840,8 @@ public static class QueryCommandRunner
 
         return WithDb(options, jsonOptions, reader =>
         {
-            var queryResults = CollectSearchRecipeQueryResults(reader, recipe, options, userExact, out var total);
+            var scope = BuildSearchRecipeScope(recipe, options);
+            var queryResults = CollectSearchRecipeQueryResults(reader, recipe, scope, options, userExact, out var total);
 
             if (options.Json)
             {
@@ -835,6 +849,7 @@ public static class QueryCommandRunner
                     new SearchRecipeRunJsonResult(
                         JsonOutputContract.ApiVersion,
                         ToSearchRecipeListItem(recipe),
+                        scope,
                         recipe.Queries.Count,
                         total,
                         queryResults),
@@ -844,6 +859,12 @@ public static class QueryCommandRunner
 
             Console.WriteLine($"Recipe: {recipe.Name}");
             Console.WriteLine(recipe.Description);
+            Console.WriteLine($"Scope: {scope.Name}");
+            if (scope.PathPatterns.Count > 0)
+                Console.WriteLine($"Paths: {string.Join(", ", scope.PathPatterns)}");
+            if (scope.ExcludePaths.Count > 0)
+                Console.WriteLine($"Excludes: {string.Join(", ", scope.ExcludePaths)}");
+            Console.WriteLine($"Exclude tests: {scope.ExcludeTests.ToString().ToLowerInvariant()}");
             Console.WriteLine();
             foreach (var queryResult in queryResults)
             {
@@ -888,7 +909,8 @@ public static class QueryCommandRunner
 
         return WithDb(options, jsonOptions, reader =>
         {
-            var queryResults = CollectSearchRecipeQueryResults(reader, recipe, options, userExact, out var total);
+            var scope = BuildSearchRecipeScope(recipe, options);
+            var queryResults = CollectSearchRecipeQueryResults(reader, recipe, scope, options, userExact, out var total);
             var drafts = queryResults
                 .Where(queryResult => queryResult.Count > 0)
                 .Select(queryResult => ToSearchIssueDraft(recipe, queryResult, preflight))
@@ -897,6 +919,7 @@ public static class QueryCommandRunner
                 new SearchIssueDraftExportJsonResult(
                     JsonOutputContract.ApiVersion,
                     ToSearchRecipeListItem(recipe),
+                    scope,
                     recipe.Queries.Count,
                     total,
                     drafts.Count,
@@ -913,6 +936,7 @@ public static class QueryCommandRunner
     private static List<SearchRecipeQueryResultJsonResult> CollectSearchRecipeQueryResults(
         DbReader reader,
         SearchAuditRecipe recipe,
+        SearchRecipeScopeJsonResult scope,
         QueryCommandOptions options,
         bool userExact,
         out int total)
@@ -927,9 +951,9 @@ public static class QueryCommandRunner
                 options.Limit,
                 options.Lang,
                 false,
-                options.PathPatterns,
-                options.ExcludePaths,
-                options.ExcludeTests,
+                scope.PathPatterns,
+                scope.ExcludePaths,
+                scope.ExcludeTests,
                 !options.NoDedup,
                 options.Since,
                 exact,
@@ -951,6 +975,39 @@ public static class QueryCommandRunner
         }
 
         return queryResults;
+    }
+
+    private static SearchRecipeScopeJsonResult BuildSearchRecipeScope(SearchAuditRecipe recipe, QueryCommandOptions options)
+    {
+        var scopeName = options.AuditScopeExplicit ? options.AuditScope : recipe.DefaultScope;
+        var pathPatterns = new List<string>(options.PathPatterns);
+        var excludePaths = new List<string>(options.ExcludePaths);
+        var excludeTests = options.ExcludeTests;
+
+        if (string.Equals(scopeName, SearchAuditRecipes.DefaultAuditScope, StringComparison.OrdinalIgnoreCase))
+        {
+            if (pathPatterns.Count == 0)
+                AddDistinct(pathPatterns, recipe.DefaultPathPatterns);
+            AddDistinct(excludePaths, recipe.DefaultExcludePaths);
+            excludeTests = true;
+        }
+
+        return new SearchRecipeScopeJsonResult(
+            scopeName,
+            pathPatterns,
+            excludePaths,
+            excludeTests,
+            [.. recipe.DefaultPathPatterns],
+            [.. recipe.DefaultExcludePaths]);
+    }
+
+    private static void AddDistinct(List<string> target, IEnumerable<string> values)
+    {
+        foreach (var value in values)
+        {
+            if (!target.Contains(value, StringComparer.Ordinal))
+                target.Add(value);
+        }
     }
 
     private static SearchIssueDraftJsonResult ToSearchIssueDraft(
@@ -1036,6 +1093,9 @@ public static class QueryCommandRunner
         recipe.Name,
         recipe.Description,
         recipe.RecommendedLabels,
+        recipe.DefaultScope,
+        [.. recipe.DefaultPathPatterns],
+        [.. recipe.DefaultExcludePaths],
         recipe.Queries.Select(query => new SearchRecipeQueryListItemJsonResult(
             query.Name,
             query.Query,
@@ -6086,6 +6146,20 @@ public static class QueryCommandRunner
         return capability is LanguageCapabilityGraph or LanguageCapabilityReferences or LanguageCapabilitySymbols;
     }
 
+    private static bool TryNormalizeSearchAuditScope(string value, out string scope)
+    {
+        scope = value.Trim().ToLowerInvariant();
+        if (scope is SearchAuditRecipes.DefaultAuditScope or SearchAuditRecipes.AllAuditScope)
+            return true;
+        if (scope is "production" or "production-only")
+        {
+            scope = SearchAuditRecipes.DefaultAuditScope;
+            return true;
+        }
+
+        return false;
+    }
+
     public static QueryCommandOptions ParseArgs(
         string[] args,
         bool jsonDefault,
@@ -6174,6 +6248,8 @@ public static class QueryCommandRunner
         string? recipeName = null;
         bool listRecipes = false;
         string? openIssuesPath = null;
+        string auditScope = SearchAuditRecipes.DefaultAuditScope;
+        bool auditScopeExplicit = false;
         bool languagesIndexedOnly = false;
         var languageCapabilities = new List<string>();
 
@@ -6452,6 +6528,22 @@ public static class QueryCommandRunner
                     }
                     else
                         AddParseError(openIssuesError!);
+                    break;
+                case "--audit-scope":
+                    if (!TryReadStringOptionValue(args, ref i, "--audit-scope", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var auditScopeValue, out var auditScopeError))
+                    {
+                        AddParseError(auditScopeError!);
+                    }
+                    else if (TryNormalizeSearchAuditScope(auditScopeValue!, out var normalizedAuditScope))
+                    {
+                        WarnIfDuplicateSingleValueOption("--audit-scope", auditScopeValue!);
+                        auditScope = normalizedAuditScope;
+                        auditScopeExplicit = true;
+                    }
+                    else
+                    {
+                        AddParseError($"Error: unsupported --audit-scope value '{ConsoleUi.FormatBoundedValue(auditScopeValue)}'. Use source or all.");
+                    }
                     break;
                 case "--require-before":
                     if (TryReadStringOptionValue(args, ref i, "--require-before", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var requireBeforeValue, out var requireBeforeError))
@@ -7085,6 +7177,8 @@ public static class QueryCommandRunner
             RecipeName = recipeName,
             ListRecipes = listRecipes,
             OpenIssuesPath = openIssuesPath,
+            AuditScope = auditScope,
+            AuditScopeExplicit = auditScopeExplicit,
             LanguagesIndexedOnly = languagesIndexedOnly,
             LanguageCapabilities = languageCapabilities,
             ParseError = parseErrors == null ? null : string.Join(Environment.NewLine, parseErrors),
@@ -10068,6 +10162,8 @@ public sealed class QueryCommandOptions
     public string? RecipeName { get; init; }
     public bool ListRecipes { get; init; }
     public string? OpenIssuesPath { get; init; }
+    public string AuditScope { get; init; } = SearchAuditRecipes.DefaultAuditScope;
+    public bool AuditScopeExplicit { get; init; }
     public bool LanguagesIndexedOnly { get; init; }
     public List<string> LanguageCapabilities { get; init; } = [];
     public string? ParseError { get; init; }

@@ -297,6 +297,8 @@ public partial class QueryCommandRunnerTests
 
         Assert.Equal(1, root.GetProperty("count").GetInt32());
         Assert.Contains(recipe.GetProperty("recommended_labels").EnumerateArray(), label => label.GetString() == "audit");
+        Assert.Equal("source", recipe.GetProperty("default_scope").GetString());
+        Assert.Contains(recipe.GetProperty("default_path_patterns").EnumerateArray(), path => path.GetString() == "src/**");
         Assert.Equal("ex.Message", query.GetProperty("query").GetString());
         Assert.True(query.GetProperty("exact_substring").GetBoolean());
         Assert.Contains("redaction", query.GetProperty("description").GetString(), StringComparison.OrdinalIgnoreCase);
@@ -376,6 +378,9 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal("risky-code", root.GetProperty("recipe").GetProperty("name").GetString());
             Assert.Equal(20, root.GetProperty("query_count").GetInt32());
+            Assert.Equal("source", root.GetProperty("scope").GetProperty("name").GetString());
+            Assert.Contains(root.GetProperty("scope").GetProperty("path_patterns").EnumerateArray(), path => path.GetString() == "src/**");
+            Assert.True(root.GetProperty("scope").GetProperty("exclude_tests").GetBoolean());
             Assert.True(root.GetProperty("result_count").GetInt32() >= 4);
             Assert.Equal(1, unboundedJsonParse.GetProperty("count").GetInt32());
             Assert.Equal("JsonDocument.Parse", unboundedJsonParse.GetProperty("query").GetString());

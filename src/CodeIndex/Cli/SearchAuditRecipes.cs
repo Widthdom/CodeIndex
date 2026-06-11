@@ -4,6 +4,9 @@ namespace CodeIndex.Cli;
 
 internal static class SearchAuditRecipes
 {
+    internal const string DefaultAuditScope = "source";
+    internal const string AllAuditScope = "all";
+
     private static readonly List<SearchAuditRecipe> Recipes =
     [
         new(
@@ -134,6 +137,9 @@ internal static class SearchAuditRecipes
                     "False positives include parser/tokenizer code, syntax tokens, and non-auth identifiers.",
                     ExactSubstring: false)
             ])
+        {
+            DefaultPathPatterns = ["src/**"]
+        }
     ];
 
     internal static IReadOnlyList<SearchAuditRecipe> All => Recipes;
@@ -150,6 +156,10 @@ internal sealed record SearchAuditRecipe(
     string Description,
     List<SearchAuditRecipeQuery> Queries)
 {
+    public string DefaultScope { get; init; } = SearchAuditRecipes.DefaultAuditScope;
+    public List<string> DefaultPathPatterns { get; init; } = [];
+    public List<string> DefaultExcludePaths { get; init; } = [];
+
     public List<string> RecommendedLabels =>
         Queries
             .SelectMany(query => query.RecommendedLabels)
@@ -175,6 +185,9 @@ internal sealed record SearchRecipeListItemJsonResult(
     [property: JsonPropertyName("name")] string Name,
     [property: JsonPropertyName("description")] string Description,
     [property: JsonPropertyName("recommended_labels")] List<string> RecommendedLabels,
+    [property: JsonPropertyName("default_scope")] string DefaultScope,
+    [property: JsonPropertyName("default_path_patterns")] List<string> DefaultPathPatterns,
+    [property: JsonPropertyName("default_exclude_paths")] List<string> DefaultExcludePaths,
     [property: JsonPropertyName("queries")] List<SearchRecipeQueryListItemJsonResult> Queries);
 
 internal sealed record SearchRecipeQueryListItemJsonResult(
@@ -188,9 +201,18 @@ internal sealed record SearchRecipeQueryListItemJsonResult(
 internal sealed record SearchRecipeRunJsonResult(
     [property: JsonPropertyName("api_version")] string ApiVersion,
     [property: JsonPropertyName("recipe")] SearchRecipeListItemJsonResult Recipe,
+    [property: JsonPropertyName("scope")] SearchRecipeScopeJsonResult Scope,
     [property: JsonPropertyName("query_count")] int QueryCount,
     [property: JsonPropertyName("result_count")] int ResultCount,
     [property: JsonPropertyName("queries")] List<SearchRecipeQueryResultJsonResult> Queries);
+
+internal sealed record SearchRecipeScopeJsonResult(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("path_patterns")] List<string> PathPatterns,
+    [property: JsonPropertyName("exclude_paths")] List<string> ExcludePaths,
+    [property: JsonPropertyName("exclude_tests")] bool ExcludeTests,
+    [property: JsonPropertyName("recipe_default_path_patterns")] List<string> RecipeDefaultPathPatterns,
+    [property: JsonPropertyName("recipe_default_exclude_paths")] List<string> RecipeDefaultExcludePaths);
 
 internal sealed record SearchRecipeQueryResultJsonResult(
     [property: JsonPropertyName("name")] string Name,
@@ -205,6 +227,7 @@ internal sealed record SearchRecipeQueryResultJsonResult(
 internal sealed record SearchIssueDraftExportJsonResult(
     [property: JsonPropertyName("api_version")] string ApiVersion,
     [property: JsonPropertyName("recipe")] SearchRecipeListItemJsonResult Recipe,
+    [property: JsonPropertyName("scope")] SearchRecipeScopeJsonResult Scope,
     [property: JsonPropertyName("query_count")] int QueryCount,
     [property: JsonPropertyName("result_count")] int ResultCount,
     [property: JsonPropertyName("count")] int Count,
