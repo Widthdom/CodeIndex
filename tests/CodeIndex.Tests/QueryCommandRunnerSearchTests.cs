@@ -3462,7 +3462,7 @@ jobs:
     }
 
     [Fact]
-    public void RunSearch_GroupBy_IsRejectedOutsideHotspots()
+    public void RunSearch_GroupByWithoutCount_IsRejected()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_group_by_reject");
         try
@@ -3475,7 +3475,7 @@ jobs:
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains("--group-by is only supported by 'hotspots'", stderr);
+            Assert.Contains("search --group-by requires --count", stderr, StringComparison.Ordinal);
         }
         finally
         {
