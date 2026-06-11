@@ -126,10 +126,13 @@ public static class DbCommandRunner
 
             if (options.Json)
             {
+                var severity = ok ? "ok" : "error";
                 Console.WriteLine(JsonSerializer.Serialize(
                     new DbIntegrityCheckJsonResult(
                         displayDbPath,
                         ok,
+                        severity,
+                        ok ? "integrity_ok" : "integrity_failed",
                         ok ? new List<string>() : issues,
                         result.Truncated,
                         result.RowsTruncated,
@@ -181,11 +184,16 @@ public static class DbCommandRunner
             var fullPath = DbPathResolver.FormatDbPathForDisplay(dbPath);
             if (options.Json)
             {
+                var severity = schema.Truncated ? "warn" : "ok";
                 var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
                 Console.WriteLine(JsonSerializer.Serialize(
                     new DbSchemaJsonResult(
                         fullPath,
                         schema.UserVersion,
+                        severity,
+                        schema.Truncated ? "schema_truncated" : "schema_ok",
+                        schema.ObjectTypeCounts,
+                        schema.ObjectTypeOmittedCounts,
                         schema.Entries,
                         schema.Truncated,
                         schema.EntriesTruncated,
@@ -468,6 +476,7 @@ public static class DbCommandRunner
         versionCmd.CommandText = "PRAGMA user_version";
         var rawVersion = versionCmd.ExecuteScalar();
         var userVersion = rawVersion is long l ? (int)l : (rawVersion is int i ? i : 0);
+        var objectTypeCounts = ReadSchemaObjectTypeCounts(connection);
 
         using var cmd = connection.CreateCommand();
         cmd.CommandText = @"
@@ -500,7 +509,42 @@ public static class DbCommandRunner
                 boundedSql.Text));
         }
 
-        return new DbSchemaReadResult(userVersion, entries, entriesTruncated, sqlTruncated);
+        var emittedTypeCounts = entries
+            .GroupBy(entry => entry.Type, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
+        var omittedTypeCounts = objectTypeCounts.ToDictionary(
+            kv => kv.Key,
+            kv => Math.Max(0, kv.Value - (emittedTypeCounts.TryGetValue(kv.Key, out var emitted) ? emitted : 0)),
+            StringComparer.Ordinal);
+
+        return new DbSchemaReadResult(userVersion, entries, objectTypeCounts, omittedTypeCounts, entriesTruncated, sqlTruncated);
+    }
+
+    private static Dictionary<string, int> ReadSchemaObjectTypeCounts(SqliteConnection connection)
+    {
+        var counts = new Dictionary<string, int>(StringComparer.Ordinal)
+        {
+            ["table"] = 0,
+            ["index"] = 0,
+            ["trigger"] = 0,
+            ["view"] = 0,
+        };
+
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT type, COUNT(*)
+            FROM sqlite_master
+            WHERE type IN ('table', 'index', 'trigger', 'view')
+            GROUP BY type";
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            var type = reader.GetString(0);
+            if (counts.ContainsKey(type))
+                counts[type] = Convert.ToInt32(reader.GetInt64(1), System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        return counts;
     }
 
     private static DbIntegrityCheckReadResult BoundIntegrityRows(IEnumerable<string> rawRows)
@@ -1048,6 +1092,8 @@ internal sealed record DbIntegrityCheckReadResult(List<string> Rows, bool RowsTr
 internal sealed record DbSchemaReadResult(
     int UserVersion,
     List<DbSchemaEntryJsonResult> Entries,
+    Dictionary<string, int> ObjectTypeCounts,
+    Dictionary<string, int> ObjectTypeOmittedCounts,
     bool EntriesTruncated,
     bool SqlTruncated)
 {
