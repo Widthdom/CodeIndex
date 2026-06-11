@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
@@ -32,6 +33,20 @@ internal sealed class LspServer : IDisposable
     private const int JsonRpcInternalErrorCode = -32603;
     private const string JsonRpcInvalidParamsMessage = "Invalid params";
     private const string JsonRpcInternalErrorMessage = "Internal error";
+    private const string LspLookupFailureEventName = "lsp.lookup_failed";
+    private const string LspLookupFailureReasonTag = "lsp.lookup.failure_reason";
+    private const string LspMethodTag = "lsp.method";
+    private const string FailureInvalidPosition = "invalid_position";
+    private const string FailureOutsideProject = "outside_project";
+    private const string FailureDocumentPathUnresolved = "document_path_unresolved";
+    private const string FailureFileNotIndexed = "file_not_indexed";
+    private const string FailureIndexedFileUnresolved = "indexed_file_unresolved";
+    private const string FailurePathCasingMismatch = "path_casing_mismatch";
+    private const string FailurePositionFileTooLarge = "position_file_too_large";
+    private const string FailurePositionLineTooLong = "position_line_too_long";
+    private const string FailurePositionLineMissing = "position_line_missing";
+    private const string FailurePositionFileUnreadable = "position_file_unreadable";
+    private const string FailureNoTokenAtPosition = "no_token_at_position";
     private static readonly JsonReaderOptions LspJsonReaderOptions = new()
     {
         MaxDepth = MaxJsonDepth,
@@ -109,6 +124,7 @@ internal sealed class LspServer : IDisposable
                 if (method == null)
                     return hasId ? Error(id, -32600, "Invalid Request") : null;
 
+                using var activity = StartLspRequestActivity(method);
                 return method switch
                 {
                     "initialize" => Result(id, BuildInitializeResult()),
@@ -255,6 +271,15 @@ internal sealed class LspServer : IDisposable
         return null;
     }
 
+    private static Activity? StartLspRequestActivity(string method)
+    {
+        var activity = CodeIndexTelemetry.ActivitySource.StartActivity("lsp.request", ActivityKind.Server);
+        activity?.SetTag("rpc.system", "jsonrpc");
+        activity?.SetTag("rpc.service", "lsp");
+        activity?.SetTag("rpc.method", method);
+        return activity;
+    }
+
     private JsonObject BuildInitializeResult() => new()
     {
         ["capabilities"] = new JsonObject
@@ -311,11 +336,13 @@ internal sealed class LspServer : IDisposable
 
     private JsonArray Definition(JsonElement root)
     {
-        var context = ExtractPositionToken(root);
-        if (context == null)
+        if (!TryExtractPositionToken(root, out var context, out var failureReason))
+        {
+            RecordLookupFailure("textDocument/definition", failureReason);
             return [];
+        }
 
-        var definitions = ResolveLspDefinitions(context.Value);
+        var definitions = ResolveLspDefinitions(context);
         var array = new JsonArray();
         foreach (var definition in definitions)
             array.Add(ToLocation(definition.Path, definition.StartLine, 1, definition.EndLine, 1));
@@ -324,15 +351,31 @@ internal sealed class LspServer : IDisposable
 
     private JsonArray References(JsonElement root)
     {
-        var context = ExtractPositionToken(root);
-        if (context == null)
+        if (!TryExtractPositionToken(root, out var context, out var failureReason))
+        {
+            RecordLookupFailure("textDocument/references", failureReason);
             return [];
+        }
 
-        var analysis = ResolveLspReferences(context.Value);
+        var analysis = ResolveLspReferences(context);
         var array = new JsonArray();
         foreach (var reference in analysis.References)
-            array.Add(ToLocation(reference.Path, reference.Line, Math.Max(reference.Column, 1), reference.Line, Math.Max(reference.Column, 1) + Math.Max(context.Value.Token.Length, 1)));
+            array.Add(ToLocation(reference.Path, reference.Line, Math.Max(reference.Column, 1), reference.Line, Math.Max(reference.Column, 1) + Math.Max(context.Token.Length, 1)));
         return array;
+    }
+
+    private static void RecordLookupFailure(string method, string? failureReason)
+    {
+        if (string.IsNullOrEmpty(failureReason))
+            return;
+
+        Activity.Current?.AddEvent(new ActivityEvent(
+            LspLookupFailureEventName,
+            tags: new ActivityTagsCollection
+            {
+                [LspMethodTag] = method,
+                [LspLookupFailureReasonTag] = failureReason,
+            }));
     }
 
     private List<DefinitionResult> ResolveLspDefinitions(PositionTokenContext context)
@@ -370,39 +413,67 @@ internal sealed class LspServer : IDisposable
     private static string BuildLspDefinitionTargetKey(DefinitionResult definition)
         => string.Join('\0', definition.Path, definition.Kind, definition.ContainerKind, definition.ContainerName, definition.Name);
 
-    private PositionTokenContext? ExtractPositionToken(JsonElement root)
+    private bool TryExtractPositionToken(JsonElement root, out PositionTokenContext context, out string? failureReason)
     {
+        context = default;
+        failureReason = null;
         var path = GetDocumentPath(root);
         var line = GetInt32(root, "params", "position", "line");
         var character = GetInt32(root, "params", "position", "character");
         if (line < 0 || character < 0)
-            return null;
+        {
+            failureReason = FailureInvalidPosition;
+            return false;
+        }
 
-        if (!TryResolveDocumentPath(path, out var resolvedPath, out var projectRelativePath))
-            return null;
+        if (!TryResolveDocumentPath(path, out var resolvedPath, out var projectRelativePath, out failureReason))
+            return false;
 
         var indexedPath = ResolveIndexedPath(path, resolvedPath, projectRelativePath);
-        if (indexedPath == null || !TryResolveIndexedFilePath(indexedPath, out var indexedFullPath))
-            return null;
+        if (indexedPath == null)
+        {
+            failureReason = FailureFileNotIndexed;
+            return false;
+        }
+
+        if (!TryResolveIndexedFilePath(indexedPath, out var indexedFullPath))
+        {
+            failureReason = FailureIndexedFileUnresolved;
+            return false;
+        }
 
         if (!string.Equals(resolvedPath, indexedFullPath, _pathStringComparison))
-            return null;
+        {
+            failureReason = FailurePathCasingMismatch;
+            return false;
+        }
 
-        if (!TryReadPositionLine(indexedFullPath, line, out var sourceLine))
-            return null;
+        if (!TryReadPositionLine(indexedFullPath, line, out var sourceLine, out failureReason))
+            return false;
 
         var token = ExtractTokenAtUtf16Position(sourceLine, character);
-        return string.IsNullOrWhiteSpace(token) ? null : new PositionTokenContext(token, indexedPath);
+        if (string.IsNullOrWhiteSpace(token))
+        {
+            failureReason = FailureNoTokenAtPosition;
+            return false;
+        }
+
+        context = new PositionTokenContext(token, indexedPath);
+        return true;
     }
 
-    private static bool TryReadPositionLine(string path, int targetLine, out string sourceLine)
+    private static bool TryReadPositionLine(string path, int targetLine, out string sourceLine, out string? failureReason)
     {
         sourceLine = string.Empty;
+        failureReason = null;
         try
         {
             using var stream = File.OpenRead(path);
             if (stream.Length > MaxPositionDocumentBytes)
+            {
+                failureReason = FailurePositionFileTooLarge;
                 return false;
+            }
 
             using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
             var currentLine = 0;
@@ -419,6 +490,7 @@ internal sealed class LspServer : IDisposable
                         return true;
                     }
 
+                    failureReason = FailurePositionLineMissing;
                     return false;
                 }
 
@@ -444,7 +516,10 @@ internal sealed class LspServer : IDisposable
                 if (currentLineLength > MaxPositionLineChars)
                 {
                     if (currentLine == targetLine)
+                    {
+                        failureReason = FailurePositionLineTooLong;
                         return false;
+                    }
                     continue;
                 }
 
@@ -453,6 +528,7 @@ internal sealed class LspServer : IDisposable
         }
         catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException or UnauthorizedAccessException)
         {
+            failureReason = FailurePositionFileUnreadable;
             return false;
         }
     }
@@ -536,10 +612,18 @@ internal sealed class LspServer : IDisposable
         return matches.Count == 1 ? matches[0].Path : null;
     }
 
-    private bool TryResolveDocumentPath(string documentPath, out string resolvedPath, out string? projectRelativePath)
+    private bool TryResolveDocumentPath(string documentPath, out string resolvedPath, out string? projectRelativePath) =>
+        TryResolveDocumentPath(documentPath, out resolvedPath, out projectRelativePath, out _);
+
+    private bool TryResolveDocumentPath(
+        string documentPath,
+        out string resolvedPath,
+        out string? projectRelativePath,
+        out string? failureReason)
     {
         resolvedPath = string.Empty;
         projectRelativePath = null;
+        failureReason = null;
         try
         {
             resolvedPath = Path.IsPathRooted(documentPath)
@@ -548,13 +632,18 @@ internal sealed class LspServer : IDisposable
         }
         catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException or UnauthorizedAccessException)
         {
+            failureReason = FailureDocumentPathUnresolved;
             return false;
         }
 
         if (_projectRoot == null)
             return true;
 
-        return TryGetProjectRelativePath(resolvedPath, out projectRelativePath);
+        if (TryGetProjectRelativePath(resolvedPath, out projectRelativePath))
+            return true;
+
+        failureReason = FailureOutsideProject;
+        return false;
     }
 
     private bool TryResolveIndexedFilePath(string indexedPath, out string resolvedPath)

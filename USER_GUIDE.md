@@ -1999,6 +1999,10 @@ each `detail` string to 512 characters with `...`, and stops adding symbols
 before the result array exceeds 524288 JSON bytes.
 Position-based `definition` and `references` lookups read at most 16384
 characters from the target source line before returning an empty result.
+When a position lookup returns an empty result because the request cannot be
+resolved safely, the `CodeIndex` `ActivitySource` emits an `lsp.lookup_failed`
+event with a safe `lsp.lookup.failure_reason` code such as `outside_project`,
+`file_not_indexed`, `position_file_too_large`, or `no_token_at_position`.
 When exact indexed path resolution misses, LSP document path fallback inspects
 at most 32 basename candidates before treating the document as unresolved.
 
@@ -4292,6 +4296,9 @@ invalid request として拒否します。
 `...` 付きの 512 文字に切り詰め、result array が 524288 JSON bytes を超える前に symbol 追加を止めます。
 position-based な `definition` / `references` lookup は、対象 source line を最大 16384 文字まで読み、
 超過時は空の result を返します。
+position lookup が安全に解決できず空の result を返す場合、`CodeIndex` `ActivitySource` は
+`outside_project`、`file_not_indexed`、`position_file_too_large`、`no_token_at_position`
+などの安全な `lsp.lookup.failure_reason` code を持つ `lsp.lookup_failed` event を出します。
 exact indexed path resolution が失敗した場合、LSP document path fallback は最大 32 件の
 basename candidate だけを確認し、見つからなければ unresolved document として扱います。
 

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
@@ -966,6 +967,46 @@ public class LspServerTests
     }
 
     [Fact]
+    public void HandleMessage_Definition_UnindexedDocument_EmitsLookupFailureTrace_Issue3428()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_definition_unindexed_trace");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var indexedPath = Path.Combine(projectRoot, "indexed.cs");
+            var indexedSource = "class Indexed { void Needle() { } }\n";
+            File.WriteAllText(indexedPath, indexedSource);
+            TestProjectHelper.InsertIndexedFile(dbPath, "indexed.cs", "csharp", indexedSource);
+            var unindexedPath = Path.Combine(projectRoot, "unindexed.cs");
+            var unindexedSource = "class Unindexed { void Call() { Needle(); } }\n";
+            File.WriteAllText(unindexedPath, unindexedSource);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var request = CreateDefinitionRequest(
+                unindexedPath,
+                3428,
+                0,
+                unindexedSource.IndexOf("Needle();", StringComparison.Ordinal));
+            var activities = new List<Activity>();
+            using var listener = CaptureCodeIndexActivities(activities);
+
+            var response = server.HandleMessage(request);
+
+            Assert.NotNull(response);
+            Assert.Empty(response!["result"]!.AsArray());
+            var requestActivity = Assert.Single(activities.Where(activity => activity.OperationName == "lsp.request"));
+            var failureEvent = Assert.Single(requestActivity.Events.Where(activityEvent => activityEvent.Name == "lsp.lookup_failed"));
+            var tags = failureEvent.Tags.ToDictionary(tag => tag.Key, tag => tag.Value?.ToString(), StringComparer.Ordinal);
+            Assert.Equal("textDocument/definition", tags["lsp.method"]);
+            Assert.Equal("file_not_indexed", tags["lsp.lookup.failure_reason"]);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void HandleMessage_Definition_ReturnsEmptyForOutsideProjectDocument()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_definition_project_root");
@@ -1257,6 +1298,18 @@ public class LspServerTests
             builder.Append('}');
         builder.Append('}');
         return builder.ToString();
+    }
+
+    private static ActivityListener CaptureCodeIndexActivities(List<Activity> activities)
+    {
+        var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == CodeIndexTelemetry.ActivitySourceName,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = activities.Add,
+        };
+        ActivitySource.AddActivityListener(listener);
+        return listener;
     }
 
     private static void MarkGraphReady(string dbPath)
