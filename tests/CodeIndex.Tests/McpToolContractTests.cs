@@ -14,15 +14,23 @@ public class McpToolContractTests
 
     private static readonly HashSet<(string Tool, string Argument)> HiddenCompatibilityAliases =
     [
+        ("index", "dry_run"),
         ("backfill_fold", "dryRun"),
         ("suggest_improvement", "evidence_paths"),
     ];
 
-    private static readonly HashSet<string> SpecializedListValidatedArguments = new(StringComparer.Ordinal)
+    private static readonly HashSet<string> SpecializedArrayValidatedArguments = new(StringComparer.Ordinal)
     {
         "excludePaths",
         "names",
         "sections",
+    };
+
+    private static readonly HashSet<string> SpecializedStringOrArrayValidatedArguments = new(StringComparer.Ordinal)
+    {
+        "commits",
+        "changedBetween",
+        "files",
     };
 
     [Fact]
@@ -73,13 +81,25 @@ public class McpToolContractTests
                     continue;
                 }
 
-                if (SpecializedListValidatedArguments.Contains(argumentName))
+                if (SpecializedArrayValidatedArguments.Contains(argumentName))
                 {
                     if (schemaType != "array")
                     {
                         failures.Add(
                             $"{toolName}.{argumentName}: schema={schemaType}; "
                             + "specialized_list_validator=array");
+                    }
+
+                    continue;
+                }
+
+                if (SpecializedStringOrArrayValidatedArguments.Contains(argumentName))
+                {
+                    if (schemaType != "string_or_array")
+                    {
+                        failures.Add(
+                            $"{toolName}.{argumentName}: schema={schemaType}; "
+                            + "specialized_list_validator=string_or_array");
                     }
 
                     continue;
@@ -120,7 +140,7 @@ public class McpToolContractTests
         var depsProperties = GetAdvertisedToolSchemas()["deps"];
         var allowed = GetAllowedToolArguments("deps");
 
-        foreach (var argumentName in new[] { "reverse", "format", "cycles" })
+        foreach (var argumentName in new[] { "reverse", "format", "cycles", "includeGenerated" })
         {
             Assert.True(depsProperties.ContainsKey(argumentName));
             Assert.Contains(argumentName, allowed);
@@ -128,15 +148,14 @@ public class McpToolContractTests
 
         Assert.False(depsProperties.ContainsKey("direction"));
         Assert.DoesNotContain("direction", allowed);
-        Assert.False(depsProperties.ContainsKey("includeGenerated"));
-        Assert.DoesNotContain("includeGenerated", allowed);
-
         Assert.Equal("boolean", ExpectedTypeFromSchema(depsProperties["reverse"]));
         Assert.Equal("string", ExpectedTypeFromSchema(depsProperties["format"]));
         Assert.Equal("boolean", ExpectedTypeFromSchema(depsProperties["cycles"]));
+        Assert.Equal("boolean", ExpectedTypeFromSchema(depsProperties["includeGenerated"]));
         Assert.Equal((true, "boolean"), TryGetExpectedJsonType("deps", "reverse"));
         Assert.Equal((true, "string"), TryGetExpectedJsonType("deps", "format"));
         Assert.Equal((true, "boolean"), TryGetExpectedJsonType("deps", "cycles"));
+        Assert.Equal((true, "boolean"), TryGetExpectedJsonType("deps", "includeGenerated"));
     }
 
     [Fact]
@@ -148,7 +167,7 @@ public class McpToolContractTests
         Assert.True(mapProperties.ContainsKey("sections"));
         Assert.Contains("sections", allowed);
         Assert.Equal("array", ExpectedTypeFromSchema(mapProperties["sections"]));
-        Assert.Contains("sections", SpecializedListValidatedArguments);
+        Assert.Contains("sections", SpecializedArrayValidatedArguments);
         Assert.Equal((false, string.Empty), TryGetExpectedJsonType("map", "sections"));
 
         Assert.True(mapProperties.ContainsKey("depth"));
@@ -163,18 +182,10 @@ public class McpToolContractTests
         var advertisedSchemas = GetAdvertisedToolSchemas();
 
         AssertToolArgumentsExactly(advertisedSchemas, "outline", ["path"]);
-        AssertToolArgumentsExactly(advertisedSchemas, "validate", ["kind", "path", "excludePaths", "excludeTests", "project", "solution"]);
+        AssertToolArgumentsExactly(advertisedSchemas, "validate", ["kind", "severity", "limit", "path", "excludePaths", "excludeTests", "countOnly", "format", "project", "solution"]);
 
-        foreach (var toolName in new[] { "outline", "validate" })
-        {
-            var advertised = advertisedSchemas[toolName].Keys.ToHashSet(StringComparer.Ordinal);
-            var allowed = GetAllowedToolArguments(toolName);
-            foreach (var noopArgument in new[] { "limit", "includeImports", "maxLineWidth", "lang" })
-            {
-                Assert.DoesNotContain(noopArgument, advertised);
-                Assert.DoesNotContain(noopArgument, allowed);
-            }
-        }
+        AssertNoopArgumentsAbsent(advertisedSchemas, "outline", ["limit", "includeImports", "maxLineWidth", "lang"]);
+        AssertNoopArgumentsAbsent(advertisedSchemas, "validate", ["includeImports", "maxLineWidth", "lang"]);
 
         static void AssertToolArgumentsExactly(
             Dictionary<string, Dictionary<string, JsonObject>> advertisedSchemas,
@@ -187,6 +198,20 @@ public class McpToolContractTests
 
             Assert.Equal(expected.Order(StringComparer.Ordinal), advertised.Order(StringComparer.Ordinal));
             Assert.Equal(expected.Order(StringComparer.Ordinal), allowed.Order(StringComparer.Ordinal));
+        }
+
+        static void AssertNoopArgumentsAbsent(
+            Dictionary<string, Dictionary<string, JsonObject>> advertisedSchemas,
+            string toolName,
+            string[] noopArguments)
+        {
+            var advertised = advertisedSchemas[toolName].Keys.ToHashSet(StringComparer.Ordinal);
+            var allowed = GetAllowedToolArguments(toolName);
+            foreach (var noopArgument in noopArguments)
+            {
+                Assert.DoesNotContain(noopArgument, advertised);
+                Assert.DoesNotContain(noopArgument, allowed);
+            }
         }
     }
 
@@ -262,6 +287,7 @@ public class McpToolContractTests
             "array" => "array",
             "boolean" => "boolean",
             "integer" => "integer",
+            "number" => "number",
             "string" => "string",
             _ => null,
         };
