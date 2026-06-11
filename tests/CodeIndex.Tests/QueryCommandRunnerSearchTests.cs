@@ -86,6 +86,135 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_GroupByFileCountJsonReturnsRankedGroups_Issue3388()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_group_by_file");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/alpha.cs",
+                "csharp",
+                "public class Alpha { public void Run() { AuditMarker(); } }");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/beta.cs",
+                "csharp",
+                "public class Beta { public void Run() { AuditMarker(); } }");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["AuditMarker();", "--db", dbPath, "--exact-substring", "--group-by", "file", "--count", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            Assert.Equal("AuditMarker();", root.GetProperty("query").GetString());
+            Assert.Equal("file", root.GetProperty("group_by").GetString());
+            Assert.Equal(2, root.GetProperty("count").GetInt32());
+            Assert.Equal(2, root.GetProperty("files").GetInt32());
+            var groups = root.GetProperty("groups").EnumerateArray().ToList();
+            Assert.Equal(["src/alpha.cs", "src/beta.cs"], groups.Select(group => group.GetProperty("file").GetString()).ToArray());
+            Assert.All(groups, group => Assert.Equal(1, group.GetProperty("count").GetInt32()));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_GroupBySymbolCountJsonIncludesEnclosingSymbols_Issue3388()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_group_by_symbol");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/alpha.cs",
+                "csharp",
+                """
+                public class Alpha
+                {
+                    public void Run()
+                    {
+                        AuditMarker();
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/beta.cs",
+                "csharp",
+                """
+                public class Beta
+                {
+                    public void Execute()
+                    {
+                        AuditMarker();
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["AuditMarker();", "--db", dbPath, "--exact-substring", "--group-by", "symbol", "--count", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            Assert.Equal("symbol", root.GetProperty("group_by").GetString());
+            Assert.Equal(2, root.GetProperty("count").GetInt32());
+            var groups = root.GetProperty("groups").EnumerateArray().ToList();
+            Assert.Equal(2, groups.Count);
+            Assert.Contains(groups, group =>
+                group.GetProperty("file").GetString() == "src/alpha.cs" &&
+                group.GetProperty("symbol_name").GetString() == "Run" &&
+                group.GetProperty("symbol_kind").GetString() == "function" &&
+                group.GetProperty("symbol_start_line").GetInt32() > 0);
+            Assert.Contains(groups, group =>
+                group.GetProperty("file").GetString() == "src/beta.cs" &&
+                group.GetProperty("symbol_name").GetString() == "Execute" &&
+                group.GetProperty("symbol_kind").GetString() == "function" &&
+                group.GetProperty("symbol_start_line").GetInt32() > 0);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_GroupByRequiresCount_Issue3388()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_group_by_requires_count");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                "public class App { public void Run() { AuditMarker(); } }");
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["AuditMarker();", "--db", dbPath, "--exact-substring", "--group-by", "file"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("search --group-by requires --count", stderr, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_FormatLspEmitsLocationArray()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_format_lsp");

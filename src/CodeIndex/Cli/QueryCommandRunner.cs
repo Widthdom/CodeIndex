@@ -667,12 +667,52 @@ public static class QueryCommandRunner
         }
         if (TryWriteUnexpectedExtraPositionals("search", options))
             return CommandExitCodes.UsageError;
+        if (options.GroupBy != null)
+        {
+            if (options.GroupBy is not "file" and not "symbol")
+            {
+                WriteUsageError(
+                    "--group-by for search must be one of file or symbol.",
+                    GetUsageLineOrThrow("search"),
+                    "Use `cdidx search <query> --group-by file --count` or `cdidx search <query> --group-by symbol --count`.");
+                return CommandExitCodes.UsageError;
+            }
+            if (!options.CountOnly)
+            {
+                WriteUsageError(
+                    "search --group-by requires --count.",
+                    GetUsageLineOrThrow("search"),
+                    "Add --count to request grouped result counts, or remove --group-by to print matching snippets.");
+                return CommandExitCodes.UsageError;
+            }
+            if (options.OutputFormat is not OutputFormatText and not OutputFormatJson and not OutputFormatCount)
+            {
+                WriteUsageError(
+                    "--group-by for search only supports plain count output or JSON.",
+                    GetUsageLineOrThrow("search"),
+                    "Use `--count`, optionally with `--json`, instead of compact/location formats.");
+                return CommandExitCodes.UsageError;
+            }
+            if (options.JsonOutputFormat == JsonOutputFormatArray)
+            {
+                WriteUsageError(
+                    "--json=array is not supported with search --group-by because grouped count output is a JSON object.",
+                    GetUsageLineOrThrow("search"),
+                    "Use plain `--json` for the grouped-count object.");
+                return CommandExitCodes.UsageError;
+            }
+        }
 
         var exactSubstringHint = SearchQueryAdvisor.BuildExactSubstringHint(options.Query, options.RawFts, exact, options.Prefix);
         var ndjsonOptions = options.JsonOutputFormat == JsonOutputFormatNdjson ? GetCompactJsonOptions(jsonOptions) : jsonOptions;
         int? jsonDoneCount = null;
         return WithDb(options, jsonOptions, reader =>
         {
+            if (options.GroupBy != null)
+            {
+                return RunGroupedSearchCount(reader, options, jsonOptions, exact, exactSubstringHint);
+            }
+
             if (options.CountOnly)
             {
                 var counts = reader.CountSearchResults(options.Query, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank, options.GuardFilters, options.GuardWindow);
@@ -829,6 +869,114 @@ public static class QueryCommandRunner
             if (options.Json && options.JsonOutputFormat == JsonOutputFormatNdjson && jsonDoneCount.HasValue)
                 WriteJsonStreamDone(jsonDoneCount.Value, ndjsonOptions);
         });
+    }
+
+    private static int RunGroupedSearchCount(DbReader reader, QueryCommandOptions options, JsonSerializerOptions jsonOptions, bool exact, SearchQueryHint? exactSubstringHint)
+    {
+        var results = reader.Search(options.Query!, int.MaxValue, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank, guardFilters: options.GuardFilters, guardWindow: options.GuardWindow);
+        var displayRows = BuildSearchDisplayRows(results, options, exact);
+        var groups = BuildSearchGroupedCounts(options.GroupBy!, displayRows);
+        var fileCount = displayRows.Select(row => row.Result.Path).Distinct(StringComparer.Ordinal).Count();
+
+        if (options.Json)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(
+                new SearchGroupedCountJsonResult(
+                    JsonOutputContract.ApiVersion,
+                    options.Query!,
+                    options.GroupBy!,
+                    displayRows.Count,
+                    fileCount,
+                    groups),
+                CliJsonSerializerContextFactory.Create(jsonOptions).SearchGroupedCountJsonResult));
+        }
+        else
+        {
+            WriteSearchGroupedCounts(options.GroupBy!, groups, displayRows.Count, fileCount);
+            WriteExactSubstringHintIfNeeded(exactSubstringHint);
+        }
+
+        return CommandExitCodes.Success;
+    }
+
+    private static List<SearchGroupedCountItemJsonResult> BuildSearchGroupedCounts(string groupBy, List<SearchDisplayRow> rows)
+        => groupBy == "file"
+            ? rows
+                .GroupBy(row => row.Result.Path, StringComparer.Ordinal)
+                .Select(group => new SearchGroupedCountItemJsonResult(
+                    group.Key,
+                    group.Count(),
+                    group.Key,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null))
+                .OrderByDescending(group => group.Count)
+                .ThenBy(group => group.Key, StringComparer.Ordinal)
+                .ToList()
+            : rows
+                .GroupBy(row => BuildSearchSymbolGroupKey(row.Result), StringComparer.Ordinal)
+                .Select(group =>
+                {
+                    var result = group.First().Result;
+                    var key = BuildSearchSymbolDisplayKey(result);
+                    return new SearchGroupedCountItemJsonResult(
+                        key,
+                        group.Count(),
+                        result.Path,
+                        result.EnclosingSymbolName,
+                        result.EnclosingSymbolKind,
+                        result.EnclosingSymbolStartLine,
+                        result.EnclosingSymbolEndLine,
+                        result.EnclosingContainerName);
+                })
+                .OrderByDescending(group => group.Count)
+                .ThenBy(group => group.Key, StringComparer.Ordinal)
+                .ToList();
+
+    private static string BuildSearchSymbolGroupKey(SearchResult result)
+        => result.EnclosingSymbolName == null
+            ? string.Join('\0', result.Path, "<no-symbol>")
+            : string.Join(
+                '\0',
+                result.Path,
+                result.EnclosingSymbolKind ?? string.Empty,
+                result.EnclosingSymbolName,
+                result.EnclosingSymbolStartLine?.ToString(CultureInfo.InvariantCulture) ?? string.Empty,
+                result.EnclosingSymbolEndLine?.ToString(CultureInfo.InvariantCulture) ?? string.Empty);
+
+    private static string BuildSearchSymbolDisplayKey(SearchResult result)
+    {
+        if (result.EnclosingSymbolName == null)
+            return $"{result.Path}:<no enclosing symbol>";
+
+        var start = result.EnclosingSymbolStartLine?.ToString(CultureInfo.InvariantCulture) ?? "?";
+        var kind = result.EnclosingSymbolKind ?? "symbol";
+        return $"{result.Path}:{start}:{kind}:{result.EnclosingSymbolName}";
+    }
+
+    private static void WriteSearchGroupedCounts(string groupBy, List<SearchGroupedCountItemJsonResult> groups, int totalCount, int fileCount)
+    {
+        foreach (var group in groups)
+        {
+            if (groupBy == "file")
+            {
+                Console.WriteLine($"{group.Count,8} {group.File}");
+                continue;
+            }
+
+            var location = group.SymbolStartLine.HasValue
+                ? $"{group.File}:{group.SymbolStartLine}-{group.SymbolEndLine ?? group.SymbolStartLine}"
+                : group.File ?? group.Key;
+            var symbol = group.SymbolName == null
+                ? "<no enclosing symbol>"
+                : $"{group.SymbolKind ?? "symbol"} {group.SymbolName}";
+            var container = group.ContainerName == null ? string.Empty : $" ({group.ContainerName})";
+            Console.WriteLine($"{group.Count,8} {location} {symbol}{container}");
+        }
+
+        Console.Error.WriteLine($"({totalCount} results in {fileCount} files; grouped by {groupBy})");
     }
 
     private static int RunSearchNamedBatch(QueryCommandOptions options, JsonSerializerOptions jsonOptions, bool userExact)
