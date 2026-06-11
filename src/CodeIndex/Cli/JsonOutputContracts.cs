@@ -195,6 +195,13 @@ internal sealed class IndexDryRunJsonResult
 {
     public string Status { get; init; } = string.Empty;
     public int FilesTotal { get; init; }
+    public bool Estimates { get; init; }
+    public int ProjectedFileUpdates { get; init; }
+    public int ProjectedFileDeletes { get; init; }
+    public int ProjectedFilePurges { get; init; }
+    public int UnsupportedTotal { get; init; }
+    public int UnknownExtensionTotal { get; init; }
+    public Dictionary<string, long> EstimatedTableMutations { get; init; } = new();
     public List<string>? FileSamples { get; init; }
     public bool FileSamplesTruncated { get; init; }
     public int FileSampleLimit { get; init; }
