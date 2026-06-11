@@ -1192,6 +1192,8 @@ Default `cdidx search` is literal-safe unless you explicitly opt into raw FTS5:
 
 For punctuation-heavy code phrases such as `catch { }`, normal search may emit a rerun hint. Use `--exact-substring` when braces, operators, punctuation, and case need byte-for-byte matching.
 
+For whitespace-containing literal queries passed as one argument, such as `cdidx search "not supported"`, normal search still uses FTS token matching but ranks chunks containing the exact phrase ahead of token-only matches.
+
 Search case behavior depends on the selected mode:
 
 | Mode or text | Case and token behavior |
@@ -3493,6 +3495,8 @@ cdidx report --output report.tgz --json
 | `--fts` なし | cdidx が明示している literal-safe prefix shorthand を除き、operator に見える文字も literal な query 内容として扱います。 |
 
 `catch { }` のように記号の多いコード片では、通常検索が再実行ヒントを出す場合があります。brace、operator、punctuation、大文字小文字まで byte-for-byte に一致させたい場合は `--exact-substring` を使います。
+
+`cdidx search "not supported"` のように空白を含む literal query を 1 引数で渡した場合、通常検索は引き続き FTS token matching を使いますが、exact phrase を含む chunk を token-only match より前に並べます。
 
 検索の大小文字の扱いは mode ごとに異なります:
 

@@ -93,6 +93,42 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_MultiwordLiteralRanksExactPhraseContentFirst_Issue3389()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_multiword_phrase_3389");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/not supported noise.cs",
+                "csharp",
+                "class Noise { string Message = \"not every platform is supported\"; }");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/z_phrase.cs",
+                "csharp",
+                "class Phrase { string Message = \"feature is not supported here\"; }");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["not supported", "--db", dbPath, "--json=array", "--limit", "2"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var rows = document.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(2, rows.Count);
+            Assert.Equal("src/z_phrase.cs", rows[0].GetProperty("path").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_FormatLspEmitsLocationArray()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_format_lsp");

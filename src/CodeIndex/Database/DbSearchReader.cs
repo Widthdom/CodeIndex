@@ -123,7 +123,7 @@ public partial class DbReader
         var coverageTokens = exact ? new List<string>() : GetSearchCoverageTokens(normalizedQuery, rawQuery);
         var hasGuardFilters = guardFilters is { Count: > 0 };
         var searchMatchLineContext = SearchMatchLineContext.Create(query, lang, exact);
-        var exactSubstringBoost = !exact && !rawQuery && IsPunctuationHeavyLiteralQuery(query);
+        var exactLiteralBoost = !exact && !rawQuery && ShouldBoostExactLiteralSearch(query);
         var guardedCandidateLimit = hasGuardFilters ? GetGuardedSearchCandidateLimit(limit, cursor) : 0;
         using var cmd = _conn.CreateCommand();
         string sql;
@@ -165,7 +165,7 @@ public partial class DbReader
         if (since != null && _fileColumns.Contains("modified"))
             sql += " AND f.modified >= @since";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        sql += $" ORDER BY {GetSearchOrderSql(coverageTokens.Count, exactSubstringBoost)}";
+        sql += $" ORDER BY {GetSearchOrderSql(coverageTokens.Count, exactLiteralBoost)}";
         if (hasGuardFilters)
             sql += " LIMIT @candidateFetchLimit";
         else
@@ -459,7 +459,7 @@ public partial class DbReader
             sql += " AND f.modified >= @since";
 
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        sql += $" ORDER BY {GetSearchOrderSql(coverageTokens.Count, exactSubstringBoost: false)}";
+        sql += $" ORDER BY {GetSearchOrderSql(coverageTokens.Count, exactLiteralBoost: false)}";
 
         cmd.CommandText = sql;
         if (exact)
@@ -1298,13 +1298,22 @@ public partial class DbReader
         }
     }
 
-    private static string GetSearchOrderSql(int coverageTokenCount, bool exactSubstringBoost)
+    private static string GetSearchOrderSql(int coverageTokenCount, bool exactLiteralBoost)
     {
         var coverageOrder = GetSearchCoverageOrderSql(coverageTokenCount);
-        var exactSubstringOrder = exactSubstringBoost
+        var exactLiteralOrder = exactLiteralBoost
             ? $"CASE WHEN instr({GetExactSearchTextSql("c.content", "f.lang")}, {GetExactSearchTextSql("@rankingQuery", "f.lang")}) > 0 THEN 0 ELSE 1 END, "
             : string.Empty;
-        return $"{PathBucketOrder}, {exactSubstringOrder}{ExactSymbolMatchOrder}, {PrefixSymbolMatchOrder}, {SearchVisibilityOrder}, {PathTextMatchOrder}, {ChunkTextMatchOrder}, {ChunkStructuredFieldOrder}, {ChunkSymbolKindOrder}, {ChunkSymbolDepthOrder}, {coverageOrder}rank, f.modified DESC, f.path, c.id ASC";
+        return $"{PathBucketOrder}, {exactLiteralOrder}{ExactSymbolMatchOrder}, {PrefixSymbolMatchOrder}, {SearchVisibilityOrder}, {PathTextMatchOrder}, {ChunkTextMatchOrder}, {ChunkStructuredFieldOrder}, {ChunkSymbolKindOrder}, {ChunkSymbolDepthOrder}, {coverageOrder}rank, f.modified DESC, f.path, c.id ASC";
+    }
+
+    private static bool ShouldBoostExactLiteralSearch(string query)
+    {
+        var trimmed = query.Trim();
+        if (trimmed.Length == 0 || !trimmed.Any(char.IsLetterOrDigit))
+            return false;
+
+        return IsPunctuationHeavyLiteralQuery(trimmed) || IsMultiwordLiteralPhrase(trimmed);
     }
 
     private static bool IsPunctuationHeavyLiteralQuery(string query)
@@ -1316,6 +1325,12 @@ public partial class DbReader
         var tokens = trimmed.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
         var punctuationCount = trimmed.Count(IsCodePunctuation);
         return punctuationCount >= 2 || tokens.Any(IsStandaloneCodeOperatorToken);
+    }
+
+    private static bool IsMultiwordLiteralPhrase(string query)
+    {
+        var tokens = query.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        return tokens.Length > 1 && tokens.All(token => token.Any(char.IsLetterOrDigit));
     }
 
     private static bool IsStandaloneCodeOperatorToken(string token)
