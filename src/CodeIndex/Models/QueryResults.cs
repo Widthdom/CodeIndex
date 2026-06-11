@@ -543,6 +543,15 @@ public class StatusResult
     [JsonPropertyName("unknown_extension_file_path_limit")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public long? UnknownExtensionFilePathLimit { get; set; }
+    [JsonPropertyName("unknown_extension_extension_counts")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Dictionary<string, long>? UnknownExtensionExtensionCounts { get; set; }
+    [JsonPropertyName("unknown_extension_category_counts")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Dictionary<string, long>? UnknownExtensionCategoryCounts { get; set; }
+    [JsonPropertyName("unknown_extension_groups")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<StatusUnknownExtensionGroup>? UnknownExtensionGroups { get; set; }
     public DateTime? IndexedAt { get; set; }
     /// <summary>
     /// Timestamp of the most recent successful index/update run that freshened workspace
@@ -918,6 +927,19 @@ public sealed class StatusLastIndexRun
     public long? RowsDeleted { get; set; }
     [JsonPropertyName("peak_memory_mb")]
     public long? PeakMemoryMb { get; set; }
+}
+
+public sealed class StatusUnknownExtensionGroup
+{
+    public string Extension { get; set; } = string.Empty;
+    public string Category { get; set; } = string.Empty;
+    [JsonPropertyName("recommended_action")]
+    public string RecommendedAction { get; set; } = string.Empty;
+    public long Count { get; set; }
+    [JsonPropertyName("sample_paths")]
+    public List<string> SamplePaths { get; set; } = [];
+    [JsonPropertyName("sample_paths_truncated")]
+    public bool SamplePathsTruncated { get; set; }
 }
 
 public class StatusReadinessDegradation

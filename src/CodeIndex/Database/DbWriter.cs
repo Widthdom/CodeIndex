@@ -2191,6 +2191,7 @@ public class DbWriter
         var sample = JsonStringListCodec.TakeSerializableSample(
             paths,
             DbContext.UnknownExtensionFilePathSampleLimit);
+        var classification = UnknownExtensionClassifier.Classify(paths);
         SetMeta(
             DbContext.UnknownExtensionFileCountMetaKey,
             paths.Count.ToString(System.Globalization.CultureInfo.InvariantCulture));
@@ -2203,6 +2204,15 @@ public class DbWriter
         SetMeta(
             DbContext.UnknownExtensionFilePathLimitMetaKey,
             DbContext.UnknownExtensionFilePathSampleLimit.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        SetMeta(
+            DbContext.UnknownExtensionExtensionCountsMetaKey,
+            UnknownExtensionClassifier.SerializeCounts(classification.ExtensionCounts));
+        SetMeta(
+            DbContext.UnknownExtensionCategoryCountsMetaKey,
+            UnknownExtensionClassifier.SerializeCounts(classification.CategoryCounts));
+        SetMeta(
+            DbContext.UnknownExtensionGroupsMetaKey,
+            UnknownExtensionClassifier.SerializeGroups(classification.Groups));
     }
 
     /// <summary>

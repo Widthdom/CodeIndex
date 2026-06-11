@@ -1444,6 +1444,9 @@ public class DbContext : IDisposable
     public const string UnknownExtensionFilePathsMetaKey = "unknown_extension_file_paths_json";
     public const string UnknownExtensionFilesTruncatedMetaKey = "unknown_extension_files_truncated";
     public const string UnknownExtensionFilePathLimitMetaKey = "unknown_extension_file_path_limit";
+    public const string UnknownExtensionExtensionCountsMetaKey = "unknown_extension_extension_counts_json";
+    public const string UnknownExtensionCategoryCountsMetaKey = "unknown_extension_category_counts_json";
+    public const string UnknownExtensionGroupsMetaKey = "unknown_extension_groups_json";
     public const int UnknownExtensionFilePathSampleLimit = 50;
     public const string BatchInProgressMetaKey = "batch_in_progress";
     // Issue #1546: case-sensitivity of the workspace filesystem the most recent successful

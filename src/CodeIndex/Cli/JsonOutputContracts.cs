@@ -488,6 +488,7 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(StatusDbPragmaSettings))]
 [JsonSerializable(typeof(StatusLastIndexRun))]
 [JsonSerializable(typeof(StatusProcessMetrics))]
+[JsonSerializable(typeof(StatusUnknownExtensionGroup))]
 [JsonSerializable(typeof(SuggestionDetailJsonResult))]
 [JsonSerializable(typeof(SuggestionExportJsonResult))]
 [JsonSerializable(typeof(SuggestionIssueDraftDuplicateMatchJsonResult))]

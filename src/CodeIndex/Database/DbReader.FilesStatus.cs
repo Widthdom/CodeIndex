@@ -656,11 +656,21 @@ public partial class DbReader
         var unknownExtensionFiles = ParseMetaStringList(TryGetMetaStringInternal(DbContext.UnknownExtensionFilePathsMetaKey));
         var unknownExtensionFilesTruncated = ParseMetaBool(TryGetMetaStringInternal(DbContext.UnknownExtensionFilesTruncatedMetaKey));
         var unknownExtensionFilePathLimit = ParseMetaLong(TryGetMetaStringInternal(DbContext.UnknownExtensionFilePathLimitMetaKey));
+        var unknownExtensionExtensionCounts = UnknownExtensionClassifier.DeserializeCounts(TryGetMetaStringInternal(DbContext.UnknownExtensionExtensionCountsMetaKey));
+        var unknownExtensionCategoryCounts = UnknownExtensionClassifier.DeserializeCounts(TryGetMetaStringInternal(DbContext.UnknownExtensionCategoryCountsMetaKey));
+        var unknownExtensionGroups = UnknownExtensionClassifier.DeserializeGroups(TryGetMetaStringInternal(DbContext.UnknownExtensionGroupsMetaKey));
         if (unknownExtensionFiles != null)
         {
             unknownExtensionFilesTruncated ??= unknownExtensionFileCount.HasValue
                 && unknownExtensionFileCount.Value > unknownExtensionFiles.Count;
             unknownExtensionFilePathLimit ??= unknownExtensionFiles.Count;
+            if (unknownExtensionExtensionCounts == null || unknownExtensionCategoryCounts == null || unknownExtensionGroups == null)
+            {
+                var fallbackClassification = UnknownExtensionClassifier.Classify(unknownExtensionFiles);
+                unknownExtensionExtensionCounts ??= fallbackClassification.ExtensionCounts;
+                unknownExtensionCategoryCounts ??= fallbackClassification.CategoryCounts;
+                unknownExtensionGroups ??= fallbackClassification.Groups;
+            }
         }
         // #1546: workspace case-sensitivity stamp. Read inside the SHARED snapshot for
         // consistency with the other freshness signals; missing on legacy DBs.
@@ -685,6 +695,9 @@ public partial class DbReader
             UnknownExtensionFiles = unknownExtensionFiles,
             UnknownExtensionFilesTruncated = unknownExtensionFilesTruncated,
             UnknownExtensionFilePathLimit = unknownExtensionFilePathLimit,
+            UnknownExtensionExtensionCounts = unknownExtensionExtensionCounts,
+            UnknownExtensionCategoryCounts = unknownExtensionCategoryCounts,
+            UnknownExtensionGroups = unknownExtensionGroups,
             IndexedAt = freshness.IndexedAt,
             LastWorkspaceFreshenedAt = lastIndexRun?.StartedAt ?? indexedHeadTimestamp,
             LatestModified = freshness.LatestModified,
