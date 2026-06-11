@@ -734,6 +734,13 @@ public sealed class CompactSearchResult
     public int ContextAfter { get; set; }
     public int TruncatedLineCount { get; set; }
     public int DroppedMatchLineCount { get; set; }
+    public int SnippetLines { get; set; }
+    public int MaxLineWidth { get; set; }
+    public bool Exact { get; set; }
+    public bool RawFts { get; set; }
+    public bool LiteralHighlightsAvailable { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? LiteralHighlightWarning { get; set; }
     public string FocusMode { get; set; } = string.Empty;
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? FocusLine { get; set; }

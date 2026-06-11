@@ -1061,6 +1061,14 @@ public static class QueryCommandRunner
                 result.Lang,
                 options.SnippetFocus,
                 exposeLiteralHighlights: exact);
+            compact.SnippetLines = SearchSnippetFormatter.ClampSnippetLines(options.SnippetLines);
+            compact.MaxLineWidth = LineWidthFormatter.ClampMaxLineWidth(options.MaxLineWidth);
+            compact.Exact = exact;
+            compact.RawFts = options.RawFts;
+            compact.LiteralHighlightsAvailable = exact && !options.RawFts;
+            compact.LiteralHighlightWarning = options.RawFts
+                ? "literal_highlights_unavailable_raw_fts"
+                : null;
 
             if (!options.RawFts && compact.MatchLines.Count == 0 && compact.Highlights.Count == 0)
                 continue;
