@@ -329,12 +329,13 @@ public class IndexWatchRunnerTests
         var options = new IndexCommandOptions
         {
             ProjectPath = "/repo",
-            DbPath = "/repo/.cdidx/codeindex.db",
+            DataDir = "/custom-data",
             Json = true,
             Watch = true,
         };
         var method = typeof(IndexWatchRunner).GetMethod("EmitWatchOverflow", BindingFlags.NonPublic | BindingFlags.Static);
         Assert.NotNull(method);
+        const string resolvedDbPath = "/custom-data/codeindex.db";
 
         string capturedOut;
         lock (TestConsoleLock.Gate)
@@ -344,7 +345,7 @@ public class IndexWatchRunnerTests
             Console.SetOut(stdout);
             try
             {
-                method.Invoke(null, [options, "buffer full"]);
+                method.Invoke(null, [options, "buffer full", resolvedDbPath]);
             }
             finally
             {
@@ -361,6 +362,8 @@ public class IndexWatchRunnerTests
         Assert.Equal("cdidx", recovery.GetProperty("command").GetString());
         Assert.Equal("index", recovery.GetProperty("args")[0].GetString());
         Assert.Equal("/repo", recovery.GetProperty("args")[1].GetString());
+        Assert.Equal("--db", recovery.GetProperty("args")[2].GetString());
+        Assert.Equal(resolvedDbPath, recovery.GetProperty("args")[3].GetString());
         Assert.Contains("--json", recovery.GetProperty("args").EnumerateArray().Select(static item => item.GetString()));
     }
 

@@ -141,7 +141,7 @@ internal static class IndexWatchRunner
 
                 if (fullRescan)
                 {
-                    EmitWatchOverflow(baseOptions, overflowReason);
+                    EmitWatchOverflow(baseOptions, overflowReason, resolvedDbPath);
                     RecordSubRunExitCode(ref watchExitCode, RunFullRescan(baseOptions, jsonOptions));
                     continue;
                 }
@@ -423,7 +423,7 @@ internal static class IndexWatchRunner
         }
     }
 
-    private static void EmitWatchOverflow(IndexCommandOptions baseOptions, string? reason)
+    private static void EmitWatchOverflow(IndexCommandOptions baseOptions, string? reason, string resolvedDbPath)
     {
         if (baseOptions.Json)
         {
@@ -437,7 +437,7 @@ internal static class IndexWatchRunner
                 Reason = reason,
                 Phase = "incremental",
                 OverflowReason = reason,
-                RecoveryCommand = BuildOverflowRecoveryCommand(baseOptions),
+                RecoveryCommand = BuildOverflowRecoveryCommand(baseOptions, resolvedDbPath),
             }, CliJsonSerializerContextFactory.Create(jsonOpts).IndexWatchEventJsonResult));
         }
         else
@@ -466,15 +466,9 @@ internal static class IndexWatchRunner
         }
     }
 
-    private static IndexWatchRecoveryCommandJsonResult BuildOverflowRecoveryCommand(IndexCommandOptions baseOptions)
+    private static IndexWatchRecoveryCommandJsonResult BuildOverflowRecoveryCommand(IndexCommandOptions baseOptions, string resolvedDbPath)
     {
-        var args = new List<string> { "index", baseOptions.ProjectPath! };
-        if (!string.IsNullOrEmpty(baseOptions.DbPath))
-        {
-            args.Add("--db");
-            args.Add(baseOptions.DbPath!);
-        }
-
+        var args = new List<string> { "index", baseOptions.ProjectPath!, "--db", resolvedDbPath };
         args.Add("--json");
         return new IndexWatchRecoveryCommandJsonResult
         {
