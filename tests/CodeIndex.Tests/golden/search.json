@@ -44,6 +44,10 @@
   "exact": false,
   "raw_fts": false,
   "literal_highlights_available": false,
+  "focus_mode": "quality",
+  "focus_line": 5,
+  "focus_column": 23,
+  "focus_reason": "full_query",
   "truncation_context": {
     "line_count": 0,
     "char_counts": [],
