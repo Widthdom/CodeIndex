@@ -356,11 +356,17 @@ public partial class McpServer
                 ReadOnlyAnnotations()),
             CreateToolDefinition(
                 "languages",
-                "List all supported languages with their file extensions and capabilities (symbol extraction, call-graph queries). No database required. / 対応言語一覧を拡張子・機能（シンボル抽出、コールグラフ対応）付きで返す。DB不要。",
+                "List supported languages with extensions, aliases, and capabilities. Use `indexedOnly`, `capability`, `extension`, or `alias` to match CLI language filters and extension lookup. / 対応言語一覧を拡張子・別名・機能付きで返す。`indexedOnly` / `capability` / `extension` / `alias` で CLI の言語フィルタと拡張子 lookup に合わせて絞り込める。",
                 new JsonObject
                 {
                     ["type"] = "object",
-                    ["properties"] = new JsonObject()
+                    ["properties"] = new JsonObject
+                    {
+                        ["indexedOnly"] = new JsonObject { ["type"] = "boolean", ["description"] = "Return only languages currently present in the index. Requires the configured database.", ["default"] = false },
+                        ["capability"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string", ["enum"] = new JsonArray { "symbols", "graph", "references" } }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray { "symbols", "graph", "references" } } } }, ["description"] = "Filter by language capability. `graph` and `references` both require call-graph/reference extraction support. Accepts a single value or an array; all requested capabilities must match." },
+                        ["extension"] = new JsonObject { ["type"] = "string", ["description"] = "Look up languages by file extension. Accepts `cs` or `.cs` style values." },
+                        ["alias"] = new JsonObject { ["type"] = "string", ["description"] = "Look up languages by canonical language name or CLI language alias, e.g. `cs` for `csharp`." }
+                    }
                 },
                 ReadOnlyAnnotations()),
             CreateToolDefinition(

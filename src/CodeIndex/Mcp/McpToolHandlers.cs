@@ -30,6 +30,9 @@ public partial class McpServer
         "category",
         "format",
         "groupBy",
+        "alias",
+        "capability",
+        "extension",
         "kind",
         "lang",
         "language",
@@ -420,6 +423,22 @@ public partial class McpServer
             : [];
     }
 
+    private static List<string> ReadStringOrArrayList(JsonNode? args, string propertyName)
+    {
+        var node = args?[propertyName];
+        if (node is JsonArray array)
+        {
+            return array.Select(item => item is JsonValue value && value.TryGetValue<string>(out var text) ? text : null)
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .Cast<string>()
+                .ToList();
+        }
+
+        return node is JsonValue scalar && scalar.TryGetValue<string>(out var scalarText) && !string.IsNullOrWhiteSpace(scalarText)
+            ? [scalarText]
+            : [];
+    }
+
     private JsonNode? TryReadSearchGuardFilters(JsonNode? id, JsonNode? args, out List<SearchGuardFilter> filters)
     {
         filters = [];
@@ -478,7 +497,7 @@ public partial class McpServer
 
     private static JsonObject? ValidateCommonListArguments(JsonNode? args)
     {
-        foreach (var propertyName in new[] { "path", "project", "excludePaths", "names", "sections" })
+        foreach (var propertyName in new[] { "path", "project", "excludePaths", "names", "sections", "capability" })
         {
             if (ValidateStringListArgument(args, propertyName) is JsonObject error)
                 return error;
@@ -641,14 +660,14 @@ public partial class McpServer
                 "focusLine" or "focusColumn" or "focusLength" or "startLine" or "endLine" or
                 "maxHops" or "maxDepth" or "depth" or "parallelism" or "maxFileBytes" or
                 "guardWindow" or "maxOutputBytes" => "integer",
-            "excludeTests" or "includeGenerated" or "rawQuery" or "noDedup" or "exactSubstring" or
+            "excludeTests" or "includeGenerated" or "indexedOnly" or "rawQuery" or "noDedup" or "exactSubstring" or
                 "exactName" or "exact" or "prefix" or "countOnly" or "includeBody" or "lsp_compatible" or
                 "regex" or "withPaths" or "rebuild" or "dryRun" or "dry_run" or "force" or
                 "optimize" or "reverse" or "cycles" => "boolean",
-            "project" or "requireBefore" or "requireAfter" or "rejectBefore" or "rejectAfter" => "string_or_array",
+            "project" or "capability" or "requireBefore" or "requireAfter" or "rejectBefore" or "rejectAfter" => "string_or_array",
             "query" or "lang" or "kind" or "format" or "rankBy" or "since" or "cursor" or
                 "solution" or "symbol" or "groupBy" or "category" or "language" or
-                "bucket" or "minConfidence" or "description" or "context" or "toolInvocationContext" or "db" => "string",
+                "bucket" or "minConfidence" or "extension" or "alias" or "description" or "context" or "toolInvocationContext" or "db" => "string",
             "queries" or "evidencePaths" or "evidence_paths" => "array",
             _ => string.Empty,
         };
@@ -719,6 +738,7 @@ public partial class McpServer
         "batch_query" => new HashSet<string>(StringComparer.Ordinal) { "queries" },
         "deps" => new HashSet<string>(StringComparer.Ordinal) { "path", "reverse", "format", "cycles", "lang", "limit", "excludePaths", "excludeTests", "project", "solution" },
         "impact_analysis" => new HashSet<string>(StringComparer.Ordinal) { "query", "lang", "maxHops", "maxDepth", "limit", "path", "excludePaths", "excludeTests", "includeGenerated", "withPaths", "countOnly", "project", "solution" },
+        "languages" => new HashSet<string>(StringComparer.Ordinal) { "indexedOnly", "capability", "extension", "alias" },
         "validate" => new HashSet<string>(StringComparer.Ordinal) { "kind", "path", "excludePaths", "excludeTests", "project", "solution" },
         "unused_symbols" => new HashSet<string>(StringComparer.Ordinal) { "kind", "lang", "limit", "path", "excludePaths", "excludeTests", "bucket", "minConfidence", "project", "solution" },
         "symbol_hotspots" => new HashSet<string>(StringComparer.Ordinal) { "kind", "lang", "limit", "groupBy", "path", "excludePaths", "excludeTests", "project", "solution" },
@@ -2946,7 +2966,7 @@ public partial class McpServer
                     "outline" => ExecuteOutline(null, toolArgs),
                     "deps" => ExecuteDeps(null, toolArgs),
                     "impact_analysis" => ExecuteImpactAnalysis(null, toolArgs),
-                    "languages" => ExecuteLanguages(null),
+                    "languages" => ExecuteLanguages(null, toolArgs),
                     "validate" => ExecuteValidate(null, toolArgs),
                     "unused_symbols" => ExecuteUnusedSymbols(null, toolArgs),
                     "symbol_hotspots" => ExecuteSymbolHotspots(null, toolArgs),
@@ -3677,11 +3697,29 @@ public partial class McpServer
         return CreateToolResult(id, $"cdidx v{_version} is ready.", payload);
     }
 
-    private JsonNode ExecuteLanguages(JsonNode? id)
+    private JsonNode ExecuteLanguages(JsonNode? id, JsonNode? args)
     {
         var langExtensions = FileIndexer.GetLanguageExtensions();
         var symbolLangs = SymbolExtractor.GetSupportedLanguages();
         var graphLangs = ReferenceExtractor.GetSupportedLanguages();
+        var indexedOnly = args?["indexedOnly"]?.GetValue<bool>() ?? false;
+        var capabilities = ReadStringOrArrayList(args, "capability")
+            .Select(value => value.Trim().ToLowerInvariant())
+            .ToList();
+        var extensionFilter = args?["extension"]?.GetValue<string>()?.Trim();
+        var normalizedExtension = string.IsNullOrWhiteSpace(extensionFilter)
+            ? null
+            : extensionFilter.StartsWith(".", StringComparison.Ordinal) ? extensionFilter : "." + extensionFilter;
+        var aliasFilter = QueryCommandRunner.NormalizeLangFilterValue(args?["alias"]?.GetValue<string>());
+
+        if (args?["capability"] is JsonArray capabilityArray && capabilities.Count != capabilityArray.Count)
+            return CreateToolErrorResponse(id, "capability entries must be non-empty strings.");
+
+        foreach (var capability in capabilities)
+        {
+            if (!IsKnownLanguageCapability(capability))
+                return CreateToolErrorResponse(id, $"Invalid language capability '{capability}'. Use one of: symbols, graph, references.");
+        }
 
         // Build consolidated language info / 統合言語情報を構築
         var allLangs = new Dictionary<string, (List<string> Extensions, List<string> Aliases, bool Symbols, bool Graph)>(StringComparer.Ordinal);
@@ -3695,28 +3733,85 @@ public partial class McpServer
             info.Extensions.Add(ext);
         }
 
-        var sorted = allLangs.OrderBy(kv => kv.Key).ToList();
-        var languagesArray = new JsonArray();
-        foreach (var (lang, info) in sorted)
+        JsonNode BuildResponse(HashSet<string>? indexedLanguages)
         {
-            var extArray = new JsonArray();
-            foreach (var ext in info.Extensions.OrderBy(e => e))
-                extArray.Add(ext);
+            var sorted = allLangs
+                .Where(kv => !indexedOnly || indexedLanguages?.Contains(kv.Key) == true)
+                .Where(kv => capabilities.All(capability => LanguageMatchesCapability(kv.Value.Symbols, kv.Value.Graph, capability)))
+                .Where(kv => normalizedExtension is null || kv.Value.Extensions.Contains(normalizedExtension, StringComparer.OrdinalIgnoreCase))
+                .Where(kv => aliasFilter is null
+                    || string.Equals(kv.Key, aliasFilter, StringComparison.OrdinalIgnoreCase)
+                    || kv.Value.Aliases.Contains(aliasFilter, StringComparer.OrdinalIgnoreCase))
+                .OrderBy(kv => kv.Key, StringComparer.Ordinal)
+                .ToList();
 
-            languagesArray.Add(new JsonObject
+            var languagesArray = new JsonArray();
+            foreach (var (lang, info) in sorted)
             {
-                ["lang"] = lang,
-                ["extensions"] = extArray,
-                ["aliases"] = new JsonArray(info.Aliases.OrderBy(alias => alias).Select(alias => JsonValue.Create(alias)).ToArray()),
-                ["symbol_extraction"] = info.Symbols,
-                ["graph_queries"] = info.Graph,
-            });
+                var extArray = new JsonArray();
+                foreach (var ext in info.Extensions.OrderBy(e => e, StringComparer.Ordinal))
+                    extArray.Add(ext);
+
+                languagesArray.Add(new JsonObject
+                {
+                    ["lang"] = lang,
+                    ["extensions"] = extArray,
+                    ["aliases"] = new JsonArray(info.Aliases.OrderBy(alias => alias, StringComparer.Ordinal).Select(alias => JsonValue.Create(alias)).ToArray()),
+                    ["symbol_extraction"] = info.Symbols,
+                    ["graph_queries"] = info.Graph,
+                });
+            }
+
+            var payload = new JsonObject
+            {
+                ["languages"] = languagesArray,
+                ["filters"] = new JsonObject
+                {
+                    ["indexedOnly"] = indexedOnly,
+                    ["capability"] = new JsonArray(capabilities.Select(capability => JsonValue.Create(capability)).ToArray()),
+                    ["extension"] = normalizedExtension,
+                    ["alias"] = aliasFilter,
+                },
+            };
+            if (normalizedExtension is not null)
+            {
+                payload["extension_lookup"] = new JsonObject
+                {
+                    ["extension"] = normalizedExtension,
+                    ["matched"] = sorted.Count,
+                    ["languages"] = new JsonArray(sorted.Select(kv => JsonValue.Create(kv.Key)).ToArray()),
+                };
+            }
+            if (aliasFilter is not null)
+            {
+                payload["alias_lookup"] = new JsonObject
+                {
+                    ["alias"] = aliasFilter,
+                    ["matched"] = sorted.Count,
+                    ["languages"] = new JsonArray(sorted.Select(kv => JsonValue.Create(kv.Key)).ToArray()),
+                };
+            }
+
+            var summary = $"{sorted.Count} languages supported. {symbolLangs.Count} with symbol extraction, {graphLangs.Count} with call-graph queries.";
+            return CreateToolResult(id, summary, payload);
         }
 
-        var payload = new JsonObject { ["languages"] = languagesArray };
-        var summary = $"{sorted.Count} languages supported. {symbolLangs.Count} with symbol extraction, {graphLangs.Count} with call-graph queries.";
-        return CreateToolResult(id, summary, payload);
+        if (!indexedOnly)
+            return BuildResponse(null);
+
+        return WithDbReader(id, args, reader => BuildResponse(new HashSet<string>(reader.GetStatus().Languages.Keys, StringComparer.Ordinal)));
     }
+
+    private static bool IsKnownLanguageCapability(string capability) =>
+        capability is "symbols" or "graph" or "references";
+
+    private static bool LanguageMatchesCapability(bool symbols, bool graph, string capability) =>
+        capability switch
+        {
+            "symbols" => symbols,
+            "graph" or "references" => graph,
+            _ => false,
+        };
 
     private JsonNode ExecuteIndex(JsonNode? id, JsonNode? args, JsonNode? progressToken = null)
         => ExecuteIndexAsync(id, args, progressToken).GetAwaiter().GetResult();

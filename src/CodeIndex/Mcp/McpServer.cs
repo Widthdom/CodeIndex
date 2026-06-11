@@ -2692,7 +2692,7 @@ public partial class McpServer : IDisposable
                         "batch_query" => ExecuteBatchQuery(id, args),
                         "deps" => ExecuteDeps(id, args),
                         "impact_analysis" => ExecuteImpactAnalysis(id, args),
-                        "languages" => ExecuteLanguages(id),
+                        "languages" => ExecuteLanguages(id, args),
                         "validate" => ExecuteValidate(id, args),
                         "unused_symbols" => ExecuteUnusedSymbols(id, args),
                         "symbol_hotspots" => ExecuteSymbolHotspots(id, args),

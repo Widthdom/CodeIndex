@@ -8815,6 +8815,37 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_Languages_FiltersByCliCompatibleMetadata_Issue3540()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"languages","arguments":{"capability":["graph","references"],"extension":"cs","alias":"cs"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        var languages = structured["languages"]!.AsArray();
+        var language = Assert.Single(languages)!;
+        Assert.Equal("csharp", language["lang"]!.GetValue<string>());
+        Assert.True(language["graph_queries"]!.GetValue<bool>());
+        Assert.Contains(".cs", language["extensions"]!.AsArray().Select(e => e!.GetValue<string>()));
+        Assert.Equal(".cs", structured["filters"]!["extension"]!.GetValue<string>());
+        Assert.Equal(2, structured["filters"]!["capability"]!.AsArray().Count);
+        Assert.Equal(1, structured["extension_lookup"]!["matched"]!.GetValue<int>());
+        Assert.Equal("csharp", Assert.Single(structured["extension_lookup"]!["languages"]!.AsArray())!.GetValue<string>());
+        Assert.Equal(1, structured["alias_lookup"]!["matched"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsCall_Languages_IndexedOnlyUsesDatabaseLanguages_Issue3540()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"languages","arguments":{"indexedOnly":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.True(structured["filters"]!["indexedOnly"]!.GetValue<bool>());
+        var language = Assert.Single(structured["languages"]!.AsArray())!;
+        Assert.Equal("csharp", language["lang"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void ToolsCall_Outline_ReturnsSymbols()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"outline","arguments":{"path":"src/app.cs"}}}""")!;
