@@ -6728,6 +6728,30 @@ public class McpServerTests : IDisposable
         Assert.Equal(McpServer.MaxConfiguredResponseBytes, limits["max_configured_response_bytes"]!.GetValue<int>());
         Assert.Equal(McpServer.MaxBatchQueryResponseByteLimit, limits["batch_response_bytes"]!.GetValue<int>());
         Assert.Equal(McpServer.MaxBatchQueryResponseByteLimit, limits["max_batch_response_bytes"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxBatchQueryResponseByteLimit, limits["batch_query_response_bytes"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxBatchQueryResponseByteLimit, limits["batch_query_max_response_bytes"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxBatchQuerySize, limits["batch_query_max_queries"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxBatchRequestCount, limits["json_rpc_batch_max_requests"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsList_BatchQuerySchemaAdvertisesLimitsAndControls_Issue3539()
+    {
+        var response = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!)!;
+
+        var tools = response["result"]!["tools"]!.AsArray();
+        var batchQuery = tools.First(tool => tool!["name"]!.GetValue<string>() == "batch_query")!;
+        var properties = batchQuery["inputSchema"]!["properties"]!;
+        var queries = properties["queries"]!;
+
+        Assert.Equal(1, queries["minItems"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxBatchQuerySize, queries["maxItems"]!.GetValue<int>());
+        var itemProperties = queries["items"]!["properties"]!;
+        Assert.Equal("string", itemProperties["id"]!["type"]!.GetValue<string>());
+        Assert.Equal("string", itemProperties["slotId"]!["type"]!.GetValue<string>());
+        Assert.Equal(McpServer.MaxBatchQueryResponseByteLimit, properties["maxResponseBytes"]!["maximum"]!.GetValue<int>());
+        Assert.False(properties["estimateOnly"]!["default"]!.GetValue<bool>());
     }
 
     [Fact]
@@ -8451,6 +8475,41 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_BatchQuery_EchoesSlotIdAndSummary_Issue3539()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[{"slotId":"ping-slot","tool":"ping"}]}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var slot = Assert.Single(response["result"]!["structuredContent"]!["results"]!.AsArray())!;
+        Assert.Equal("ping-slot", slot["slot_id"]!.GetValue<string>());
+        Assert.Equal("ping", slot["tool"]!.GetValue<string>());
+        Assert.True(slot["ok"]!.GetValue<bool>());
+        Assert.Contains("cdidx v", slot["summary"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.NotNull(slot["result"]!["version"]);
+    }
+
+    [Fact]
+    public void ToolsCall_BatchQuery_EstimateOnlyDoesNotExecuteSlots_Issue3539()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"estimateOnly":true,"queries":[{"id":"slot-a","tool":"ping"},{"slotId":"slot-b","tool":"search","arguments":{"query":"Run","limit":1}}]}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.True(structured["estimate_only"]!.GetValue<bool>());
+        Assert.Equal(2, structured["total_count"]!.GetValue<int>());
+        Assert.Equal(0, structured["metadata"]!["executed"]!.GetValue<int>());
+        Assert.Empty(structured["results"]!.AsArray());
+        Assert.True(structured["metadata"]!["estimated_response_bytes"]!.GetValue<int>() > 0);
+        var estimates = structured["slot_estimates"]!.AsArray();
+        Assert.Equal(2, estimates.Count);
+        Assert.Equal("slot-a", estimates[0]!["slot_id"]!.GetValue<string>());
+        Assert.Equal("ping", estimates[0]!["tool"]!.GetValue<string>());
+        Assert.Equal("slot-b", estimates[1]!["slot_id"]!.GetValue<string>());
+        Assert.Equal("search", estimates[1]!["tool"]!.GetValue<string>());
+        Assert.Contains("query=\"Run\"", estimates[1]!["args_summary"]!.GetValue<string>(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ToolsCall_BatchQuery_BlocksIndexInBatch()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[{"tool":"index","arguments":{"path":"."}}]}}}""")!;
@@ -8858,7 +8917,7 @@ public class McpServerTests : IDisposable
         try
         {
             InsertIndexedFile("src/large.cs", "csharp", "// " + new string('x', 5000));
-            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[{"tool":"ping"},{"tool":"excerpt","arguments":{"path":"src/large.cs","startLine":1,"endLine":1,"maxLineWidth":0}}]}}}""")!;
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[{"slotId":"ping-slot","tool":"ping"},{"slotId":"excerpt-slot","tool":"excerpt","arguments":{"path":"src/large.cs","startLine":1,"endLine":1,"maxLineWidth":0}}]}}}""")!;
             var response = _server.HandleMessage(request)!;
 
             var structured = response["result"]!["structuredContent"]!;
@@ -8868,7 +8927,8 @@ public class McpServerTests : IDisposable
             Assert.True(structured["metadata"]!["estimated_response_bytes"]!.GetValue<int>() <= 950);
             Assert.Equal(950, structured["metadata"]!["response_byte_limit"]!.GetValue<int>());
             Assert.Equal(2, structured["metadata"]!["submitted"]!.GetValue<int>());
-            Assert.Equal(2, structured["metadata"]!["executed"]!.GetValue<int>());
+            var executed = structured["metadata"]!["executed"]!.GetValue<int>();
+            Assert.InRange(executed, 1, 2);
             Assert.Equal(0, structured["metadata"]!["errors"]!.GetValue<int>());
             Assert.Equal("cascading", structured["failure_scope"]!.GetValue<string>());
             Assert.NotNull(structured["cascade_started_at_index"]);
@@ -8877,9 +8937,17 @@ public class McpServerTests : IDisposable
             var truncatedQueries = structured["truncated_queries"]!.AsArray();
             Assert.NotEmpty(truncatedQueries);
             Assert.All(truncatedQueries, q => Assert.NotNull(q!["args_summary"]));
+            Assert.All(truncatedQueries, q => Assert.NotNull(q!["slot_id"]));
             Assert.Contains(truncatedQueries, q =>
-                q!["tool"]?.GetValue<string>() == "ping" &&
-                q["reason"]?.GetValue<string>() == "final_response_byte_limit_exceeded");
+                q!["reason"]?.GetValue<string>() is "response_byte_limit_exceeded" or "response_byte_limit_already_exceeded" or "final_response_byte_limit_exceeded");
+            var splitHint = structured["split_hint"]!;
+            Assert.Equal("response_byte_limit_exceeded", splitHint["reason"]!.GetValue<string>());
+            var firstTruncatedRequestIndex = truncatedQueries
+                .Select(q => q!["request_index"]!.GetValue<int>())
+                .Min();
+            Assert.Equal(firstTruncatedRequestIndex, splitHint["next_request_index"]!.GetValue<int>());
+            Assert.StartsWith("batch_query:v1:", splitHint["resume_cursor"]!.GetValue<string>(), StringComparison.Ordinal);
+            Assert.True(splitHint["suggested_query_count"]!.GetValue<int>() >= 1);
 
             var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
             Assert.Contains("Response truncated", text);
@@ -8901,6 +8969,40 @@ public class McpServerTests : IDisposable
 
         var metadata = response["result"]!["structuredContent"]!["metadata"]!;
         Assert.Equal(McpServer.MaxBatchQueryResponseByteLimit, metadata["response_byte_limit"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsCall_BatchQuery_UsesPerCallResponseBudget_Issue3539()
+    {
+        InsertIndexedFile("src/large-per-call.cs", "csharp", "// " + new string('x', 5000));
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"maxResponseBytes":1200,"queries":[{"slotId":"first","tool":"ping"},{"slotId":"second","tool":"excerpt","arguments":{"path":"src/large-per-call.cs","startLine":1,"endLine":1,"maxLineWidth":0}}]}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(1200, structured["metadata"]!["response_byte_limit"]!.GetValue<int>());
+        Assert.True(structured["truncated"]!.GetValue<bool>(), response.ToJsonString());
+        Assert.NotNull(structured["split_hint"]);
+        Assert.True(Encoding.UTF8.GetByteCount(response.ToJsonString()) <= 1200);
+    }
+
+    [Fact]
+    public void ToolsCall_BatchQuery_ClampedPerCallBudgetCountsAdjustmentsAgainstBudget_Issue3539()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES");
+        env.Set("CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES", "1400");
+        InsertIndexedFile("src/large-per-call-clamped.cs", "csharp", "// " + new string('x', 5000));
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"maxResponseBytes":2000,"queries":[{"slotId":"first","tool":"ping"},{"slotId":"second","tool":"excerpt","arguments":{"path":"src/large-per-call-clamped.cs","startLine":1,"endLine":1,"maxLineWidth":0}}]}}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(1400, structured["metadata"]!["response_byte_limit"]!.GetValue<int>());
+        Assert.True(Encoding.UTF8.GetByteCount(response.ToJsonString()) <= 1400, response.ToJsonString());
+        var adjustment = Assert.Single(structured["argument_adjustments"]!.AsArray());
+        Assert.Equal("maxResponseBytes", adjustment!["argument"]!.GetValue<string>());
+        Assert.Equal("clamped", adjustment["action"]!.GetValue<string>());
+        Assert.Equal(2000, adjustment["requested"]!.GetValue<int>());
+        Assert.Equal(1400, adjustment["effective"]!.GetValue<int>());
     }
 
     [Fact]

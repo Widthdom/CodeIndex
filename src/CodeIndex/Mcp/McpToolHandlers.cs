@@ -21,6 +21,7 @@ public partial class McpServer
 {
     private const int DefaultBatchQueryResponseByteLimit = MaxLineByteLength;
     internal const int MaxBatchQueryResponseByteLimit = 10 * 1024 * 1024;
+    internal const int MaxBatchQuerySize = 10;
     private const int DefaultExcerptOutputByteLimit = MaxLineByteLength;
     private const string BatchQueryResponseByteLimitEnvVar = "CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES";
     internal const int MaxMcpArrayFilterCount = QueryCommandRunner.MaxQueryPathFilterCount;
@@ -650,6 +651,11 @@ public partial class McpServer
             && offset < 0)
             return CreateIntegerMinimumArgumentError(toolName, "offset", minimum: 0, actual: offset);
 
+        if (args["maxResponseBytes"] is JsonValue maxResponseBytesValue
+            && maxResponseBytesValue.TryGetValue<int>(out var maxResponseBytes)
+            && maxResponseBytes <= 0)
+            return CreateIntegerMinimumArgumentError(toolName, "maxResponseBytes", minimum: 1, actual: maxResponseBytes);
+
         return null;
     }
 
@@ -779,12 +785,12 @@ public partial class McpServer
             "limit" or "offset" or "snippetLines" or "maxLineWidth" or "before" or "after" or
                 "focusLine" or "focusColumn" or "focusLength" or "startLine" or "endLine" or
                 "maxHops" or "maxDepth" or "depth" or "parallelism" or "maxFileBytes" or
-                "guardWindow" or "maxOutputBytes" => "integer",
+                "guardWindow" or "maxOutputBytes" or "maxResponseBytes" => "integer",
             "excludeTests" or "includeGenerated" or "rawQuery" or "noDedup" or "exactSubstring" or
                 "exactName" or "exact" or "prefix" or "countOnly" or "includeBody" or "lsp_compatible" or
                 "lspCompatible" or
                 "regex" or "withPaths" or "rebuild" or "dryRun" or "dry_run" or "force" or
-                "optimize" or "reverse" or "cycles" => "boolean",
+                "optimize" or "reverse" or "cycles" or "estimateOnly" => "boolean",
             "project" or "requireBefore" or "requireAfter" or "rejectBefore" or "rejectAfter" => "string_or_array",
             "query" or "lang" or "kind" or "format" or "rankBy" or "since" or "cursor" or
                 "solution" or "symbol" or "groupBy" or "category" or "language" or
@@ -856,7 +862,7 @@ public partial class McpServer
         "map" => new HashSet<string>(StringComparer.Ordinal) { "limit", "lang", "path", "excludePaths", "excludeTests", "sections", "depth", "project", "solution" },
         "analyze_symbol" => new HashSet<string>(StringComparer.Ordinal) { "query", "lang", "limit", "includeBody", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "maxLineWidth", "project", "solution" },
         "outline" => new HashSet<string>(StringComparer.Ordinal) { "path" },
-        "batch_query" => new HashSet<string>(StringComparer.Ordinal) { "queries" },
+        "batch_query" => new HashSet<string>(StringComparer.Ordinal) { "queries", "maxResponseBytes", "estimateOnly" },
         "deps" => new HashSet<string>(StringComparer.Ordinal) { "path", "reverse", "format", "cycles", "lang", "limit", "excludePaths", "excludeTests", "project", "solution" },
         "impact_analysis" => new HashSet<string>(StringComparer.Ordinal) { "query", "lang", "maxHops", "maxDepth", "limit", "path", "excludePaths", "excludeTests", "includeGenerated", "withPaths", "countOnly", "project", "solution" },
         "validate" => new HashSet<string>(StringComparer.Ordinal) { "kind", "path", "excludePaths", "excludeTests", "project", "solution" },
@@ -2456,9 +2462,13 @@ public partial class McpServer
                     ["max_configured_response_bytes"] = MaxConfiguredResponseBytes,
                     ["batch_response_bytes"] = GetBatchQueryResponseByteLimit(),
                     ["max_batch_response_bytes"] = MaxBatchQueryResponseByteLimit,
+                    ["batch_query_response_bytes"] = GetBatchQueryResponseByteLimit(),
+                    ["batch_query_max_response_bytes"] = MaxBatchQueryResponseByteLimit,
+                    ["batch_query_max_queries"] = MaxBatchQuerySize,
                     ["max_pagination_offset"] = MaxMcpPaginationOffset,
                     ["max_json_depth"] = MaxJsonDepth,
                     ["max_batch_requests"] = MaxBatchRequestCount,
+                    ["json_rpc_batch_max_requests"] = MaxBatchRequestCount,
                     ["keep_alive_min_interval_s"] = MinKeepAliveIntervalSeconds,
                     ["keep_alive_max_interval_s"] = MaxKeepAliveIntervalSeconds,
                     ["rate_limit_max_rps"] = RateLimiterOptions.MaxRefillTokensPerSecond,
@@ -2844,23 +2854,26 @@ public partial class McpServer
         if (queries == null || queries.Count == 0)
             return CreateToolErrorResponse(id, "Missing or empty required parameter: queries");
 
-        const int maxBatchSize = 10;
-        if (queries.Count > maxBatchSize)
-            return CreateToolErrorResponse(id, $"Batch too large: {queries.Count} queries (max {maxBatchSize})");
+        if (queries.Count > MaxBatchQuerySize)
+            return CreateToolErrorResponse(id, $"Batch too large: {queries.Count} queries (max {MaxBatchQuerySize})");
 
         var resultsArray = new JsonArray();
         var truncatedQueries = new JsonArray();
         var totalStopwatch = Stopwatch.StartNew();
+        var adjustments = new ArgumentAdjustmentCollector();
         int successCount = 0;
         int failureCount = 0;
         int? cascadeStartedAtIndex = null;
         var truncated = false;
-        var responseByteLimit = GetBatchQueryResponseByteLimit();
+        var responseByteLimit = ReadBatchQueryResponseByteLimit(args, adjustments);
+        var estimateOnly = args?["estimateOnly"]?.GetValue<bool>() ?? false;
+        if (estimateOnly)
+            return ExecuteBatchQueryEstimate(id, queries, responseByteLimit, adjustments);
         var estimatedResponseBytes = EstimateBatchResponseBytes(id, "Executed 0 queries.", queries.Count, successCount, failureCount,
             GetBatchFailureScope(queries.Count, successCount, failureCount, cascadeStartedAtIndex), cascadeStartedAtIndex,
-            responseByteLimit, resultsArray, truncated: false, truncatedQueries);
+            responseByteLimit, resultsArray, truncated: false, truncatedQueries, adjustments);
 
-        bool TryAppendResult(JsonObject entry, string? toolName, JsonNode? toolArgs, int requestIndex, bool successfulSlot = false, bool failedSlot = false)
+        bool TryAppendResult(JsonObject entry, string? toolName, JsonNode? toolArgs, int requestIndex, string? slotId, bool successfulSlot = false, bool failedSlot = false)
         {
             var candidateResults = CloneJsonArray(resultsArray);
             candidateResults.Add(entry.DeepClone());
@@ -2872,7 +2885,7 @@ public partial class McpServer
                 : $"Executed {candidateExecutedCount} of {queries.Count} queries in 0 ms ({candidateSuccessCount} succeeded, {candidateFailureCount} failed).";
             var candidateBytes = EstimateBatchResponseBytes(id, candidateSummary, queries.Count, candidateSuccessCount, candidateFailureCount,
                 GetBatchFailureScope(queries.Count, candidateSuccessCount, candidateFailureCount, cascadeStartedAtIndex), cascadeStartedAtIndex,
-                responseByteLimit, candidateResults, truncated: false, truncatedQueries);
+                responseByteLimit, candidateResults, truncated: false, truncatedQueries, adjustments);
             if (candidateBytes > responseByteLimit)
             {
                 truncated = true;
@@ -2883,6 +2896,7 @@ public partial class McpServer
                     ["args_summary"] = BuildArgsSummary(toolArgs),
                     ["reason"] = "response_byte_limit_exceeded",
                 };
+                AddBatchSlotId(truncatedEntry, slotId);
                 AddToolDisplayData(truncatedEntry, toolName);
                 truncatedQueries.Add(truncatedEntry);
                 return false;
@@ -2908,7 +2922,7 @@ public partial class McpServer
             }
         }
 
-        void AppendSlotError(int requestIndex, string? toolName, JsonNode? toolArgs, Stopwatch slotStopwatch, string errorMessage,
+        void AppendSlotError(int requestIndex, string? slotId, string? toolName, JsonNode? toolArgs, Stopwatch slotStopwatch, string errorMessage,
             int? code = null, string? category = null, string? suggestion = null, bool? retrySafe = null, JsonObject? extraData = null)
         {
             slotStopwatch.Stop();
@@ -2921,6 +2935,7 @@ public partial class McpServer
                 ["elapsed_ms"] = slotStopwatch.ElapsedMilliseconds,
                 ["error"] = errorMessage,
             };
+            AddBatchSlotId(entry, slotId);
             AddToolDisplayData(entry, toolName);
             CopySlotErrorData(entry, extraData);
             if (code.HasValue)
@@ -2936,7 +2951,7 @@ public partial class McpServer
                 entry["suggestion"] = suggestion;
             if (retrySafe.HasValue)
                 entry["retry_safe"] = retrySafe.Value;
-            TryAppendResult(entry, toolName, toolArgs, requestIndex, failedSlot: true);
+            TryAppendResult(entry, toolName, toolArgs, requestIndex, slotId, failedSlot: true);
             failureCount++;
         }
 
@@ -2951,7 +2966,7 @@ public partial class McpServer
         // 検出・バックオフを可能にする。外側の batch_query 自体もトークンを消費するため、
         // N 個の内側呼び出しを含むスパムは batch_query バケットとツール別バケットの両方で
         // 上限が掛かる（#1560）。
-        void AppendRateLimitedSlot(int requestIndex, string? toolName, JsonNode? toolArgs, Stopwatch slotStopwatch, long retryAfterMs)
+        void AppendRateLimitedSlot(int requestIndex, string? slotId, string? toolName, JsonNode? toolArgs, Stopwatch slotStopwatch, long retryAfterMs)
         {
             slotStopwatch.Stop();
             var toolDisplay = toolName is null ? "(missing)" : BoundToolNameForDisplay(toolName).Text;
@@ -2975,8 +2990,9 @@ public partial class McpServer
                 ["suggestion"] = $"Back off for at least {retryAfterMs} ms before retrying this tool.",
                 ["retry_safe"] = true,
             };
+            AddBatchSlotId(entry, slotId);
             AddToolDisplayData(entry, toolName);
-            TryAppendResult(entry, toolName, toolArgs, requestIndex, failedSlot: true);
+            TryAppendResult(entry, toolName, toolArgs, requestIndex, slotId, failedSlot: true);
             failureCount++;
         }
 
@@ -2989,6 +3005,7 @@ public partial class McpServer
                 ? parsedToolName
                 : null;
             var toolArgs = queryObject?["arguments"];
+            var slotId = ReadBatchSlotId(queryObject);
             var slotStopwatch = Stopwatch.StartNew();
 
             if (truncated)
@@ -3001,6 +3018,7 @@ public partial class McpServer
                     ["args_summary"] = BuildArgsSummary(toolArgs),
                     ["reason"] = "response_byte_limit_already_exceeded",
                 };
+                AddBatchSlotId(truncatedEntry, slotId);
                 AddToolDisplayData(truncatedEntry, toolName);
                 truncatedQueries.Add(truncatedEntry);
                 continue;
@@ -3009,7 +3027,7 @@ public partial class McpServer
             if (string.IsNullOrEmpty(toolName))
             {
                 var message = queryObject is null ? "Each query must be an object with a string tool name." : "Missing tool name";
-                AppendSlotError(requestIndex, toolName, toolArgs, slotStopwatch, message,
+                AppendSlotError(requestIndex, slotId, toolName, toolArgs, slotStopwatch, message,
                     category: McpErrorEnvelope.CategoryMissingParameter,
                     suggestion: "Each batch_query slot must include a string `tool` field.",
                     retrySafe: false);
@@ -3017,7 +3035,7 @@ public partial class McpServer
             }
             if (toolName.Length > McpBoundedText.MaxToolNameChars)
             {
-                AppendSlotError(requestIndex, toolName, toolArgs, slotStopwatch, BuildUnknownToolMessage(toolName),
+                AppendSlotError(requestIndex, slotId, toolName, toolArgs, slotStopwatch, BuildUnknownToolMessage(toolName),
                     category: McpErrorEnvelope.CategoryToolUnknown,
                     suggestion: "Call tools/list to see the tool catalog. Slot tool names are case-sensitive.",
                     retrySafe: false);
@@ -3026,7 +3044,7 @@ public partial class McpServer
 
             if (ValidateToolArguments(toolName, toolArgs) is JsonObject argumentError)
             {
-                AppendSlotError(requestIndex, toolName, toolArgs, slotStopwatch, argumentError["message"]!.GetValue<string>(),
+                AppendSlotError(requestIndex, slotId, toolName, toolArgs, slotStopwatch, argumentError["message"]!.GetValue<string>(),
                     category: McpErrorEnvelope.CategoryInvalidArgument,
                     suggestion: "Use exactly the argument names advertised by tools/list for this tool.",
                     retrySafe: false,
@@ -3036,7 +3054,7 @@ public partial class McpServer
 
             if (ValidateCommonListArguments(toolArgs) is JsonObject listArgumentError)
             {
-                AppendSlotError(requestIndex, toolName, toolArgs, slotStopwatch, listArgumentError["message"]!.GetValue<string>(),
+                AppendSlotError(requestIndex, slotId, toolName, toolArgs, slotStopwatch, listArgumentError["message"]!.GetValue<string>(),
                     category: McpErrorEnvelope.CategoryInvalidArgument,
                     suggestion: "Send only non-empty string entries within the documented MCP array bounds.",
                     retrySafe: false,
@@ -3061,7 +3079,7 @@ public partial class McpServer
             // 前にこのゲートを置く。
             if (McpToolFilter.IsKnownTool(toolName) && !_toolFilter.IsEnabled(toolName))
             {
-                AppendSlotError(requestIndex, toolName, toolArgs, slotStopwatch, $"Tool not enabled: {toolName}", code: -32601,
+                AppendSlotError(requestIndex, slotId, toolName, toolArgs, slotStopwatch, $"Tool not enabled: {toolName}", code: -32601,
                     category: McpErrorEnvelope.CategoryToolDisabled,
                     suggestion: "This tool is disabled on the server. Ask the operator to enable it or remove the slot.",
                     retrySafe: false);
@@ -3071,7 +3089,7 @@ public partial class McpServer
             // Block write operations in batch / バッチ内では書き込み操作をブロック
             if (toolName == "index" || toolName == "backfill_fold" || toolName == "suggest_improvement")
             {
-                AppendSlotError(requestIndex, toolName, toolArgs, slotStopwatch, $"{toolName} is not allowed in batch_query (write operation)",
+                AppendSlotError(requestIndex, slotId, toolName, toolArgs, slotStopwatch, $"{toolName} is not allowed in batch_query (write operation)",
                     category: McpErrorEnvelope.CategoryInvalidArgument,
                     suggestion: "Call write tools (index / backfill_fold / suggest_improvement) directly via tools/call, not inside batch_query.",
                     retrySafe: false);
@@ -3086,7 +3104,7 @@ public partial class McpServer
             // ネスト禁止の明示文に揃える（#1560）。
             if (toolName == "batch_query")
             {
-                AppendSlotError(requestIndex, toolName, toolArgs, slotStopwatch, "batch_query cannot be nested inside batch_query.",
+                AppendSlotError(requestIndex, slotId, toolName, toolArgs, slotStopwatch, "batch_query cannot be nested inside batch_query.",
                     category: McpErrorEnvelope.CategoryInvalidArgument,
                     suggestion: "Flatten the nested batch_query into top-level slots.",
                     retrySafe: false);
@@ -3104,13 +3122,13 @@ public partial class McpServer
             var slotDecision = RateLimiter.TryAcquire(toolName, _caller);
             if (!slotDecision.Allowed)
             {
-                AppendRateLimitedSlot(requestIndex, toolName, toolArgs, slotStopwatch, slotDecision.RetryAfterMs);
+                AppendRateLimitedSlot(requestIndex, slotId, toolName, toolArgs, slotStopwatch, slotDecision.RetryAfterMs);
                 continue;
             }
 
             if (ValidateProjectFilterArguments(toolArgs) is JsonObject projectFilterError)
             {
-                AppendSlotError(requestIndex, toolName, toolArgs, slotStopwatch, projectFilterError["message"]!.GetValue<string>(),
+                AppendSlotError(requestIndex, slotId, toolName, toolArgs, slotStopwatch, projectFilterError["message"]!.GetValue<string>(),
                     category: McpErrorEnvelope.CategoryInvalidArgument,
                     suggestion: "Use a project name or project path from the current workspace, or correct the solution filter.",
                     retrySafe: false,
@@ -3148,7 +3166,7 @@ public partial class McpServer
 
                 if (response == null)
                 {
-                    AppendSlotError(requestIndex, toolName, toolArgs, slotStopwatch, BuildUnknownToolMessage(toolName),
+                    AppendSlotError(requestIndex, slotId, toolName, toolArgs, slotStopwatch, BuildUnknownToolMessage(toolName),
                         category: McpErrorEnvelope.CategoryToolUnknown,
                         suggestion: "Call tools/list to see the tool catalog. Slot tool names are case-sensitive.",
                         retrySafe: false);
@@ -3174,7 +3192,7 @@ public partial class McpServer
                     bool? innerRetrySafe = null;
                     if (innerStructured?["retry_safe"] is JsonValue rv && rv.TryGetValue<bool>(out var rb))
                         innerRetrySafe = rb;
-                    AppendSlotError(requestIndex, toolName, toolArgs, slotStopwatch, errorText,
+                    AppendSlotError(requestIndex, slotId, toolName, toolArgs, slotStopwatch, errorText,
                         category: innerCategory,
                         suggestion: innerSuggestion,
                         retrySafe: innerRetrySafe);
@@ -3183,6 +3201,7 @@ public partial class McpServer
 
                 slotStopwatch.Stop();
                 var structured = response["result"]?["structuredContent"];
+                var slotSummary = response["result"]?["content"]?[0]?["text"]?.GetValue<string>();
                 var entry = new JsonObject
                 {
                     ["request_index"] = requestIndex,
@@ -3190,10 +3209,12 @@ public partial class McpServer
                     ["correlation_id"] = CurrentCorrelationContext.Value?.CorrelationId,
                     ["args_summary"] = BuildArgsSummary(toolArgs),
                     ["elapsed_ms"] = slotStopwatch.ElapsedMilliseconds,
+                    ["summary"] = slotSummary,
                     ["result"] = structured?.DeepClone(),
                 };
+                AddBatchSlotId(entry, slotId);
                 AddToolDisplayData(entry, toolName);
-                TryAppendResult(entry, toolName, toolArgs, requestIndex, successfulSlot: true);
+                TryAppendResult(entry, toolName, toolArgs, requestIndex, slotId, successfulSlot: true);
                 successCount++;
             }
             catch (Exception ex)
@@ -3207,7 +3228,7 @@ public partial class McpServer
                     Database.DbDebug.DumpToStderr(ex);
                 });
                 var classification = McpErrorEnvelope.ClassifyException(ex);
-                AppendSlotError(requestIndex, toolName, toolArgs, slotStopwatch, BuildSanitizedToolErrorMessage(toolName, ex),
+                AppendSlotError(requestIndex, slotId, toolName, toolArgs, slotStopwatch, BuildSanitizedToolErrorMessage(toolName, ex),
                     category: classification.Category,
                     suggestion: classification.Suggestion,
                     retrySafe: classification.RetrySafe);
@@ -3216,28 +3237,33 @@ public partial class McpServer
 
         totalStopwatch.Stop();
         var totalElapsedMs = totalStopwatch.ElapsedMilliseconds;
-        JsonObject BuildPayload() => new()
+        JsonObject BuildPayload()
         {
-            ["count"] = resultsArray.Count,
-            ["total_count"] = queries.Count,
-            ["success_count"] = successCount,
-            ["failure_count"] = failureCount,
-            ["partial_failure"] = failureCount > 0 || cascadeStartedAtIndex.HasValue,
-            ["failure_scope"] = GetBatchFailureScope(queries.Count, successCount, failureCount, cascadeStartedAtIndex),
-            ["cascade_started_at_index"] = cascadeStartedAtIndex,
-            ["metadata"] = new JsonObject
+            var payload = new JsonObject
             {
-                ["submitted"] = queries.Count,
-                ["executed"] = successCount + failureCount,
-                ["errors"] = failureCount,
-                ["total_elapsed_ms"] = totalElapsedMs,
+                ["count"] = resultsArray.Count,
+                ["total_count"] = queries.Count,
                 ["success_count"] = successCount,
                 ["failure_count"] = failureCount,
-                ["response_byte_limit"] = responseByteLimit,
-                ["estimated_response_bytes"] = responseByteLimit,
-            },
-            ["results"] = resultsArray.DeepClone(),
-        };
+                ["partial_failure"] = failureCount > 0 || cascadeStartedAtIndex.HasValue,
+                ["failure_scope"] = GetBatchFailureScope(queries.Count, successCount, failureCount, cascadeStartedAtIndex),
+                ["cascade_started_at_index"] = cascadeStartedAtIndex,
+                ["metadata"] = new JsonObject
+                {
+                    ["submitted"] = queries.Count,
+                    ["executed"] = successCount + failureCount,
+                    ["errors"] = failureCount,
+                    ["total_elapsed_ms"] = totalElapsedMs,
+                    ["success_count"] = successCount,
+                    ["failure_count"] = failureCount,
+                    ["response_byte_limit"] = responseByteLimit,
+                    ["estimated_response_bytes"] = responseByteLimit,
+                },
+                ["results"] = resultsArray.DeepClone(),
+            };
+            adjustments.ApplyTo(payload);
+            return payload;
+        }
 
         string BuildSummary()
         {
@@ -3258,6 +3284,7 @@ public partial class McpServer
             {
                 payload["truncated"] = true;
                 payload["truncated_queries"] = truncatedQueries.DeepClone();
+                payload["split_hint"] = BuildBatchSplitHint(queries.Count, cascadeStartedAtIndex, resultsArray.Count);
             }
 
             summary = BuildSummary();
@@ -3267,9 +3294,18 @@ public partial class McpServer
             if (resultsArray.Count > 0)
             {
                 var removed = resultsArray[resultsArray.Count - 1];
+                truncated = true;
+                if (removed?["request_index"] is JsonValue requestIndexValue
+                    && requestIndexValue.TryGetValue<int>(out var removedRequestIndex))
+                {
+                    cascadeStartedAtIndex = cascadeStartedAtIndex.HasValue
+                        ? Math.Min(cascadeStartedAtIndex.Value, removedRequestIndex)
+                        : removedRequestIndex;
+                }
                 truncatedQueries.Insert(0, new JsonObject
                 {
                     ["request_index"] = removed?["request_index"]?.DeepClone(),
+                    ["slot_id"] = removed?["slot_id"]?.DeepClone(),
                     ["tool"] = removed?["tool"]?.DeepClone(),
                     ["args_summary"] = removed?["args_summary"]?.DeepClone(),
                     ["reason"] = "final_response_byte_limit_exceeded",
@@ -3289,6 +3325,127 @@ public partial class McpServer
         return CreateToolResult(id, summary, payload);
     }
 
+    private JsonNode ExecuteBatchQueryEstimate(JsonNode? id, JsonArray queries, int responseByteLimit, ArgumentAdjustmentCollector adjustments)
+    {
+        var slotEstimates = new JsonArray();
+        for (var requestIndex = 0; requestIndex < queries.Count; requestIndex++)
+        {
+            var queryObject = queries[requestIndex] as JsonObject;
+            slotEstimates.Add(BuildBatchSlotDescriptor(requestIndex, queryObject));
+        }
+
+        var payload = new JsonObject
+        {
+            ["count"] = 0,
+            ["total_count"] = queries.Count,
+            ["success_count"] = 0,
+            ["failure_count"] = 0,
+            ["partial_failure"] = false,
+            ["failure_scope"] = "none",
+            ["cascade_started_at_index"] = null,
+            ["estimate_only"] = true,
+            ["metadata"] = new JsonObject
+            {
+                ["submitted"] = queries.Count,
+                ["executed"] = 0,
+                ["errors"] = 0,
+                ["total_elapsed_ms"] = 0,
+                ["success_count"] = 0,
+                ["failure_count"] = 0,
+                ["response_byte_limit"] = responseByteLimit,
+                ["estimated_response_bytes"] = responseByteLimit,
+            },
+            ["slot_estimates"] = slotEstimates,
+            ["results"] = new JsonArray(),
+        };
+        adjustments.ApplyTo(payload);
+
+        var summary = $"Estimated batch_query envelope for {queries.Count} query slot(s); no slots executed.";
+        var estimatedResponseBytes = EstimateJsonUtf8Bytes(CreateToolResult(id, summary, payload.DeepClone()), responseByteLimit);
+        ((JsonObject)payload["metadata"]!)["estimated_response_bytes"] = estimatedResponseBytes;
+        payload["estimate_exceeds_response_byte_limit"] = estimatedResponseBytes > responseByteLimit;
+        return CreateToolResult(id, summary, payload);
+    }
+
+    private static int ReadBatchQueryResponseByteLimit(JsonNode? args, ArgumentAdjustmentCollector adjustments)
+    {
+        var serverLimit = GetBatchQueryResponseByteLimit();
+        var requested = args?["maxResponseBytes"]?.GetValue<int>();
+        if (!requested.HasValue)
+            return serverLimit;
+        var effective = Math.Min(requested.Value, serverLimit);
+        if (effective != requested.Value)
+            adjustments.AddClamped("maxResponseBytes", requested.Value, effective, 1, serverLimit);
+        return effective;
+    }
+
+    private static JsonObject BuildBatchSlotDescriptor(int requestIndex, JsonObject? queryObject)
+    {
+        var toolName = queryObject?["tool"] is JsonValue toolValue && toolValue.TryGetValue<string>(out var parsedToolName)
+            ? parsedToolName
+            : null;
+        var toolArgs = queryObject?["arguments"];
+        var descriptor = new JsonObject
+        {
+            ["request_index"] = requestIndex,
+            ["args_summary"] = BuildArgsSummary(toolArgs),
+        };
+        AddBatchSlotId(descriptor, ReadBatchSlotId(queryObject));
+        AddToolDisplayData(descriptor, toolName);
+        return descriptor;
+    }
+
+    private static JsonObject BuildBatchSplitHint(int submittedCount, int? cascadeStartedAtIndex, int retainedResultCount)
+    {
+        var nextRequestIndex = cascadeStartedAtIndex ?? submittedCount;
+        return new JsonObject
+        {
+            ["reason"] = "response_byte_limit_exceeded",
+            ["next_request_index"] = nextRequestIndex,
+            ["suggested_query_count"] = Math.Max(1, retainedResultCount),
+            ["resume_cursor"] = $"batch_query:v1:{nextRequestIndex}",
+        };
+    }
+
+    private static string? ReadBatchSlotId(JsonObject? queryObject)
+    {
+        if (TryReadBatchSlotIdValue(queryObject?["slotId"], out var slotId)
+            || TryReadBatchSlotIdValue(queryObject?["id"], out slotId))
+            return McpBoundedText.ForDisplay(slotId!, MaxRequestIdCharacterCount).Text;
+        return null;
+    }
+
+    private static bool TryReadBatchSlotIdValue(JsonNode? node, out string? slotId)
+    {
+        slotId = null;
+        if (node is not JsonValue value)
+            return false;
+        if (value.TryGetValue<string>(out var text))
+        {
+            if (string.IsNullOrWhiteSpace(text))
+                return false;
+            slotId = text;
+            return true;
+        }
+        if (value.TryGetValue<int>(out var intValue))
+        {
+            slotId = intValue.ToString(CultureInfo.InvariantCulture);
+            return true;
+        }
+        if (value.TryGetValue<long>(out var longValue))
+        {
+            slotId = longValue.ToString(CultureInfo.InvariantCulture);
+            return true;
+        }
+        return false;
+    }
+
+    private static void AddBatchSlotId(JsonObject entry, string? slotId)
+    {
+        if (!string.IsNullOrEmpty(slotId))
+            entry["slot_id"] = slotId;
+    }
+
     private static int GetBatchQueryResponseByteLimit()
         => ReadPositiveIntEnvironmentLimit(
             BatchQueryResponseByteLimitEnvVar,
@@ -3303,7 +3460,8 @@ public partial class McpServer
     }
 
     private int EstimateBatchResponseBytes(JsonNode? id, string summary, int submittedCount, int successCount, int failureCount,
-        string failureScope, int? cascadeStartedAtIndex, int responseByteLimit, JsonArray resultsArray, bool truncated, JsonArray truncatedQueries)
+        string failureScope, int? cascadeStartedAtIndex, int responseByteLimit, JsonArray resultsArray, bool truncated, JsonArray truncatedQueries,
+        ArgumentAdjustmentCollector? adjustments = null)
     {
         var payload = new JsonObject
         {
@@ -3332,6 +3490,7 @@ public partial class McpServer
             payload["truncated"] = true;
             payload["truncated_queries"] = truncatedQueries.DeepClone();
         }
+        adjustments?.ApplyTo(payload);
 
         return EstimateJsonUtf8Bytes(CreateToolResult(id, summary, payload), responseByteLimit);
     }

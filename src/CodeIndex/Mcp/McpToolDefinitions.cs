@@ -400,18 +400,24 @@ public partial class McpServer
                         ["queries"] = new JsonObject
                         {
                             ["type"] = "array",
-                            ["description"] = "Array of {tool, arguments} objects. Only read-only tools are allowed (not index or backfill_fold).",
+                            ["description"] = $"Array of {{tool, arguments}} objects. Only read-only tools are allowed (not index or backfill_fold). Hard cap: {MaxBatchQuerySize} slots.",
+                            ["minItems"] = 1,
+                            ["maxItems"] = MaxBatchQuerySize,
                             ["items"] = new JsonObject
                             {
                                 ["type"] = "object",
                                 ["properties"] = new JsonObject
                                 {
+                                    ["id"] = new JsonObject { ["type"] = "string", ["description"] = "Optional client-supplied slot identifier echoed as slot_id." },
+                                    ["slotId"] = new JsonObject { ["type"] = "string", ["description"] = "Optional client-supplied slot identifier echoed as slot_id." },
                                     ["tool"] = new JsonObject { ["type"] = "string", ["description"] = "Tool name (e.g. search, definition, symbols)" },
                                     ["arguments"] = new JsonObject { ["type"] = "object", ["description"] = "Tool arguments" }
                                 },
                                 ["required"] = new JsonArray { "tool" }
                             }
-                        }
+                        },
+                        ["maxResponseBytes"] = new JsonObject { ["type"] = "integer", ["description"] = "Optional per-call response byte budget for this batch_query response. Values above the server cap are clamped and reported in argument_adjustments.", ["minimum"] = 1, ["maximum"] = MaxBatchQueryResponseByteLimit },
+                        ["estimateOnly"] = new JsonObject { ["type"] = "boolean", ["description"] = "Return budget and slot estimate metadata without executing the slots.", ["default"] = false }
                     },
                     ["required"] = new JsonArray { "queries" }
                 },
