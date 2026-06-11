@@ -472,6 +472,8 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(SearchGuardEvidence))]
 [JsonSerializable(typeof(List<SearchGuardEvidence>))]
 [JsonSerializable(typeof(SearchGuardSpan))]
+[JsonSerializable(typeof(SearchMatchFacet))]
+[JsonSerializable(typeof(List<SearchMatchFacet>))]
 [JsonSerializable(typeof(SearchQueryHint))]
 [JsonSerializable(typeof(SearchRecipeListItemJsonResult))]
 [JsonSerializable(typeof(SearchRecipeListJsonResult))]
