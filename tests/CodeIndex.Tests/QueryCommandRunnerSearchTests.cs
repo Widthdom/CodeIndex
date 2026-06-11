@@ -41,6 +41,45 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_MaxResultsAliasLimitsSearchResults_Issue3521()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_max_results_3521");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/one.cs", "csharp", "class One { string Value = \"needle\"; }");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/two.cs", "csharp", "class Two { string Value = \"needle\"; }");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["needle", "--db", dbPath, "--json=array", "--max-results", "1"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Single(document.RootElement.EnumerateArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_MissingDashLiteralQuerySuggestsEscapes_Issue3521()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["--exact", "--profile", "--limit", "5"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("Error: search requires a query argument", stderr);
+        Assert.Contains("`--query \"--profile\"`", stderr);
+        Assert.Contains("`cdidx search -- \"--profile\"`", stderr);
+    }
+
+    [Fact]
     public void RunSearch_FormatLspEmitsLocationArray()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_format_lsp");

@@ -104,6 +104,7 @@ public static class QueryCommandRunner
         "--db",
         "--data-dir",
         "--limit",
+        "--max-results",
         "--top",
         "--lang",
         "--kind",
@@ -608,7 +609,7 @@ public static class QueryCommandRunner
             WriteUsageError(
                 "search requires a query argument",
                 GetUsageLineOrThrow("search"),
-                "Add the text you want to search for after the command, for example: `cdidx search authenticate`.");
+                BuildMissingSearchQueryHint(cmdArgs));
             return CommandExitCodes.UsageError;
         }
         if (options.Query.Length > QueryLimits.MaxQueryLength)
@@ -6388,10 +6389,11 @@ public static class QueryCommandRunner
                     }
                     break;
                 case "--limit":
+                case "--max-results":
                 case "--top":
-                    if (!TryReadRawOptionValue(args, ref i, "--limit", inlineValue, out var limitValue, out var missingLimitError))
+                    if (!TryReadRawOptionValue(args, ref i, normalizedArg, inlineValue, out var limitValue, out var missingLimitError))
                         AddParseError(missingLimitError!);
-                    else if (TryParsePositiveInt(limitValue!, "--limit", out var parsedLimit, out var limitError))
+                    else if (TryParsePositiveInt(limitValue!, normalizedArg, out var parsedLimit, out var limitError))
                     {
                         WarnIfDuplicateSingleValueOption("--limit", limitValue!);
                         limit = parsedLimit;
@@ -8258,6 +8260,69 @@ public static class QueryCommandRunner
         return true;
     }
 
+    private static string BuildMissingSearchQueryHint(string[] cmdArgs)
+    {
+        var candidate = FindOptionLookingSearchLiteralCandidate(cmdArgs);
+        if (candidate != null)
+        {
+            var display = ConsoleUi.FormatBoundedValue(candidate);
+            return $"Add the text you want to search for after the command. If you meant to search for `{display}`, pass it as `--query \"{display}\"` or after `--`, for example: `cdidx search -- \"{display}\"`.";
+        }
+
+        return "Add the text you want to search for after the command, for example: `cdidx search authenticate`. If the query itself starts with `--`, pass it as `--query \"--profile\"` or after `--`, for example: `cdidx search -- \"--profile\"`.";
+    }
+
+    private static string? FindOptionLookingSearchLiteralCandidate(string[] cmdArgs)
+    {
+        for (var i = 0; i < cmdArgs.Length; i++)
+        {
+            var arg = cmdArgs[i];
+            if (arg == "--")
+                return i + 1 < cmdArgs.Length && cmdArgs[i + 1].StartsWith("-", StringComparison.Ordinal)
+                    ? cmdArgs[i + 1]
+                    : null;
+
+            var inlineValue = TrySplitInlineOptionValue(arg, out var inlineOptionName)
+                ? arg[(inlineOptionName!.Length + 1)..]
+                : null;
+            var normalizedArg = inlineOptionName ?? arg;
+            if (ValueTakingOptions.Contains(normalizedArg))
+            {
+                if (inlineValue == null)
+                    i++;
+                continue;
+            }
+
+            if (!arg.StartsWith("--", StringComparison.Ordinal))
+                continue;
+            if (SearchMissingQueryControlFlags.Contains(normalizedArg))
+                continue;
+
+            return arg;
+        }
+
+        return null;
+    }
+
+    private static readonly HashSet<string> SearchMissingQueryControlFlags =
+    [
+        "--exact",
+        "--exact-name",
+        "--exact-substring",
+        "--prefix",
+        "--fts",
+        "--json",
+        "--pretty",
+        "--count",
+        "--no-dedup",
+        "--no-visibility-rank",
+        "--exclude-tests",
+        "--strict-not-found",
+        "--verbose",
+        "--quiet",
+        "--silent",
+    ];
+
     private static string GetUsageLineOrThrow(string commandName) =>
         ConsoleUi.GetUsageLine(commandName)
         ?? throw new InvalidOperationException($"Missing usage line for command '{commandName}'.");
@@ -9615,6 +9680,7 @@ public static class QueryCommandRunner
         new Dictionary<string, int>(StringComparer.Ordinal)
         {
             ["--limit"] = 10_000,
+            ["--max-results"] = 10_000,
             ["--snippet-lines"] = SearchSnippetFormatter.MaxSnippetLines,
             ["--max-line-width"] = LineWidthFormatter.MaxAllowedLineWidth,
             ["--slow-query-ms"] = 3_600_000,
