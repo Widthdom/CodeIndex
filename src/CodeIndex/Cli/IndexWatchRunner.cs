@@ -142,14 +142,14 @@ internal static class IndexWatchRunner
                 if (fullRescan)
                 {
                     EmitWatchOverflow(baseOptions, overflowReason, resolvedDbPath);
-                    RecordSubRunExitCode(ref watchExitCode, RunFullRescan(baseOptions, jsonOptions));
+                    RecordSubRunExitCode(ref watchExitCode, RunFullRescan(baseOptions, jsonOptions, resolvedDbPath));
                     continue;
                 }
 
                 if (batch.Count == 0)
                     continue;
 
-                RecordSubRunExitCode(ref watchExitCode, RunPartialUpdate(baseOptions, jsonOptions, batch));
+                RecordSubRunExitCode(ref watchExitCode, RunPartialUpdate(baseOptions, jsonOptions, batch, resolvedDbPath));
             }
         }
         finally
@@ -168,10 +168,11 @@ internal static class IndexWatchRunner
     private static int RunPartialUpdate(
         IndexCommandOptions baseOptions,
         JsonSerializerOptions jsonOptions,
-        IReadOnlyList<string> changedPaths)
+        IReadOnlyList<string> changedPaths,
+        string resolvedDbPath)
     {
         var stopwatch = Stopwatch.StartNew();
-        var args = BuildSubRunArgs(baseOptions);
+        var args = BuildSubRunArgs(baseOptions, resolvedDbPath);
         args.Add("--files");
         foreach (var path in changedPaths)
             args.Add(path);
@@ -181,10 +182,11 @@ internal static class IndexWatchRunner
 
     private static int RunFullRescan(
         IndexCommandOptions baseOptions,
-        JsonSerializerOptions jsonOptions)
+        JsonSerializerOptions jsonOptions,
+        string resolvedDbPath)
     {
         var stopwatch = Stopwatch.StartNew();
-        var args = BuildSubRunArgs(baseOptions);
+        var args = BuildSubRunArgs(baseOptions, resolvedDbPath);
         // No --files: this is a default incremental full scan.
         // --files を付けない: 通常のインクリメンタル全件スキャン。
         return InvokeSubRunAndEmit(baseOptions, jsonOptions, args, stopwatch, "rescanned", batchSize: null, "incremental", batchPaths: null);
@@ -196,7 +198,7 @@ internal static class IndexWatchRunner
             watchExitCode = subRunExitCode;
     }
 
-    private static List<string> BuildSubRunArgs(IndexCommandOptions baseOptions)
+    private static List<string> BuildSubRunArgs(IndexCommandOptions baseOptions, string? resolvedDbPath = null)
     {
         // Always pass --json so sub-runs produce a single JSON-line summary on stdout. The
         // watch loop then either forwards that line (user --json) or extracts a one-line
@@ -204,10 +206,11 @@ internal static class IndexWatchRunner
         // 常に --json を付けてサブ実行の stdout を1行 JSON に揃える。watch ループ側で
         // 透過 or 整形してから出力する。
         var args = new List<string>(8) { baseOptions.ProjectPath!, "--json", "--quiet" };
-        if (!string.IsNullOrEmpty(baseOptions.DbPath))
+        var dbPath = string.IsNullOrEmpty(resolvedDbPath) ? baseOptions.DbPath : resolvedDbPath;
+        if (!string.IsNullOrEmpty(dbPath))
         {
             args.Add("--db");
-            args.Add(baseOptions.DbPath!);
+            args.Add(dbPath!);
         }
         if (baseOptions.Verbose && baseOptions.Json)
             args.Add("--verbose");
@@ -468,8 +471,8 @@ internal static class IndexWatchRunner
 
     private static IndexWatchRecoveryCommandJsonResult BuildOverflowRecoveryCommand(IndexCommandOptions baseOptions, string resolvedDbPath)
     {
-        var args = new List<string> { "index", baseOptions.ProjectPath!, "--db", resolvedDbPath };
-        args.Add("--json");
+        var args = BuildSubRunArgs(baseOptions, resolvedDbPath);
+        args.Insert(0, "index");
         return new IndexWatchRecoveryCommandJsonResult
         {
             Command = "cdidx",

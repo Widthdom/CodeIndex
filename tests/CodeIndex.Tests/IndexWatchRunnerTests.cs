@@ -3,6 +3,7 @@ using System.Reflection;
 using System.Text.Json;
 using CodeIndex.Cli;
 using CodeIndex.Database;
+using CodeIndex.Indexer;
 using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
@@ -154,10 +155,11 @@ public class IndexWatchRunnerTests
         var method = typeof(IndexWatchRunner).GetMethod("BuildSubRunArgs", BindingFlags.NonPublic | BindingFlags.Static);
 
         Assert.NotNull(method);
-        var args = Assert.IsType<List<string>>(method.Invoke(null, [options]));
+        var args = Assert.IsType<List<string>>(method.Invoke(null, [options, "/repo/.cdidx/codeindex.db"]));
 
         Assert.Contains("--json", args);
         Assert.Contains("--quiet", args);
+        AssertOptionValue(args, "--db", "/repo/.cdidx/codeindex.db");
     }
 
     [Fact]
@@ -173,7 +175,7 @@ public class IndexWatchRunnerTests
         var method = typeof(IndexWatchRunner).GetMethod("BuildSubRunArgs", BindingFlags.NonPublic | BindingFlags.Static);
 
         Assert.NotNull(method);
-        var args = Assert.IsType<List<string>>(method.Invoke(null, [options]));
+        var args = Assert.IsType<List<string>>(method.Invoke(null, [options, "/repo/.cdidx/codeindex.db"]));
 
         var flagIndex = args.IndexOf("--max-file-bytes");
         Assert.True(flagIndex >= 0);
@@ -193,7 +195,7 @@ public class IndexWatchRunnerTests
         var method = typeof(IndexWatchRunner).GetMethod("BuildSubRunArgs", BindingFlags.NonPublic | BindingFlags.Static);
 
         Assert.NotNull(method);
-        var args = Assert.IsType<List<string>>(method.Invoke(null, [options]));
+        var args = Assert.IsType<List<string>>(method.Invoke(null, [options, "/repo/.cdidx/codeindex.db"]));
 
         var flagIndex = args.IndexOf("--max-symbols-per-file");
         Assert.True(flagIndex >= 0);
@@ -332,6 +334,9 @@ public class IndexWatchRunnerTests
             DataDir = "/custom-data",
             Json = true,
             Watch = true,
+            MaxFileSizeBytes = 4096,
+            MaxSymbolsPerFile = 42,
+            SymlinkPolicy = FileIndexer.SymlinkPolicy.All,
         };
         var method = typeof(IndexWatchRunner).GetMethod("EmitWatchOverflow", BindingFlags.NonPublic | BindingFlags.Static);
         Assert.NotNull(method);
@@ -360,11 +365,15 @@ public class IndexWatchRunnerTests
         Assert.Equal("buffer full", doc.RootElement.GetProperty("overflow_reason").GetString());
         var recovery = doc.RootElement.GetProperty("recovery_command");
         Assert.Equal("cdidx", recovery.GetProperty("command").GetString());
-        Assert.Equal("index", recovery.GetProperty("args")[0].GetString());
-        Assert.Equal("/repo", recovery.GetProperty("args")[1].GetString());
-        Assert.Equal("--db", recovery.GetProperty("args")[2].GetString());
-        Assert.Equal(resolvedDbPath, recovery.GetProperty("args")[3].GetString());
-        Assert.Contains("--json", recovery.GetProperty("args").EnumerateArray().Select(static item => item.GetString()));
+        var args = recovery.GetProperty("args").EnumerateArray().Select(static item => item.GetString()).ToList();
+        Assert.Equal("index", args[0]);
+        Assert.Equal("/repo", args[1]);
+        Assert.Contains("--json", args);
+        Assert.Contains("--quiet", args);
+        AssertOptionValue(args, "--db", resolvedDbPath);
+        AssertOptionValue(args, "--max-file-bytes", "4096");
+        AssertOptionValue(args, "--max-symbols-per-file", "42");
+        AssertOptionValue(args, "--follow-symlinks", "all");
     }
 
     [Fact]
@@ -571,6 +580,23 @@ public class IndexWatchRunnerTests
             if (File.Exists(dbPath))
                 File.Delete(dbPath);
         }
+    }
+
+    private static void AssertOptionValue(IReadOnlyList<string?> args, string option, string expectedValue)
+    {
+        var index = -1;
+        for (var i = 0; i < args.Count; i++)
+        {
+            if (string.Equals(args[i], option, StringComparison.Ordinal))
+            {
+                index = i;
+                break;
+            }
+        }
+
+        Assert.True(index >= 0, $"Expected option {option} in recovery command.");
+        Assert.True(index + 1 < args.Count, $"Expected value after option {option}.");
+        Assert.Equal(expectedValue, args[index + 1]);
     }
 
     private static string? ExtractStatus(string jsonLine)
