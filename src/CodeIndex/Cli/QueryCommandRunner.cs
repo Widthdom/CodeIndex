@@ -76,6 +76,10 @@ public static class QueryCommandRunner
     internal const int MaxQueryPathFilterLength = 1024;
     internal const int ExactZeroHintProbeLimit = 1;
     internal const int ExactZeroHintSampleLimit = 5;
+    private const int SearchOriginFilterMinCandidates = 200;
+    private const int SearchOriginFilterOverFetchFactor = 50;
+    private const int SearchOriginFilterMaxCandidates = 10_000;
+    private const int SearchOriginFilterMaxPages = 50;
     private const string HotspotsGroupedByNameKind = "name_kind";
     private const string HotspotsGroupedBySymbol = "symbol";
     private const string HotspotsGroupedByFile = "file";
@@ -629,7 +633,9 @@ public static class QueryCommandRunner
         {
             if (options.CountOnly)
             {
-                var counts = reader.CountSearchResults(options.Query, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank, options.GuardFilters, options.GuardWindow);
+                var counts = HasSearchOriginFilters(options)
+                    ? CountFilteredSearchResults(reader, options, exact)
+                    : reader.CountSearchResults(options.Query, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank, options.GuardFilters, options.GuardWindow);
                 var queryDiagnostics = DbReader.AnalyzeFtsQuery(options.Query, options.RawFts, options.Prefix, options.Lang);
                 if (counts.Count == 0)
                 {
@@ -657,9 +663,9 @@ public static class QueryCommandRunner
                 return CommandExitCodes.Success;
             }
 
-            var results = reader.Search(options.Query, options.Limit, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank, guardFilters: options.GuardFilters, guardWindow: options.GuardWindow);
             var ftsQueryDiagnostics = DbReader.AnalyzeFtsQuery(options.Query, options.RawFts, options.Prefix, options.Lang);
-            if (results.Count == 0)
+            var displayRows = ReadSearchDisplayRows(reader, options, exact);
+            if (displayRows.Count == 0)
             {
                 if (options.Json && TryWriteEmptyFormattedResult(options, jsonOptions))
                     return ZeroResultExitCode(options);
@@ -680,35 +686,6 @@ public static class QueryCommandRunner
                     }
                 }
                 else if (!options.Json)
-                {
-                    Console.Error.WriteLine(BuildZeroResultLine("No results found", options));
-                    WriteLangHint(options.Lang, reader);
-                    WriteExactSubstringHintIfNeeded(exactSubstringHint);
-                    WriteZeroResultHints(options, reader);
-                }
-                return ZeroResultExitCode(options);
-            }
-
-            var displayRows = BuildSearchDisplayRows(results, options, exact);
-            if (displayRows.Count == 0)
-            {
-                if (options.Json && TryWriteEmptyFormattedResult(options, jsonOptions))
-                    return ZeroResultExitCode(options);
-                if (options.Json)
-                {
-                    if (options.JsonOutputFormat == JsonOutputFormatArray)
-                    {
-                        Console.WriteLine(JsonSerializer.Serialize(
-                            Array.Empty<CompactSearchResult>(),
-                            CliJsonSerializerContextFactory.Create(jsonOptions).CompactSearchResultArray));
-                    }
-                    else
-                    {
-                        Console.WriteLine(BuildJsonZeroResultPayload(reader, ndjsonOptions, resultsKey: "results", query: options.Query, ftsQueryDiagnostics: ftsQueryDiagnostics, queryOptions: options, exactSubstringHint: exactSubstringHint).ToJsonString(ndjsonOptions));
-                        jsonDoneCount = 0;
-                    }
-                }
-                else
                 {
                     Console.Error.WriteLine(BuildZeroResultLine("No results found", options));
                     WriteLangHint(options.Lang, reader);
@@ -1049,7 +1026,9 @@ public static class QueryCommandRunner
         var rows = new List<SearchDisplayRow>(results.Count);
         var seenMatchLocations = options.NoDedup ? null : new HashSet<string>(StringComparer.Ordinal);
         var displayQuery = queryOverride ?? options.Query!;
-        var queryContext = SearchSnippetFormatter.PrepareQueryContext(displayQuery);
+        var queryContext = options.RawFts
+            ? SearchSnippetFormatter.PrepareRawFtsQueryContext(displayQuery)
+            : SearchSnippetFormatter.PrepareQueryContext(displayQuery);
         foreach (var result in results)
         {
             var compact = SearchSnippetFormatter.ToCompactResult(
@@ -1061,8 +1040,25 @@ public static class QueryCommandRunner
                 result.Lang,
                 options.SnippetFocus,
                 exposeLiteralHighlights: exact);
+            var preferredOriginFilterLine = GetPreferredSearchOriginFilterLine(compact, options);
+            if (preferredOriginFilterLine.HasValue && !IsLineWithinSnippet(compact, preferredOriginFilterLine.Value))
+            {
+                compact = SearchSnippetFormatter.ToCompactResult(
+                    result,
+                    queryContext,
+                    options.SnippetLines,
+                    exact,
+                    options.MaxLineWidth,
+                    result.Lang,
+                    options.SnippetFocus,
+                    exposeLiteralHighlights: exact,
+                    preferredMatchLine: preferredOriginFilterLine.Value);
+            }
 
             if (!options.RawFts && compact.MatchLines.Count == 0 && compact.Highlights.Count == 0)
+                continue;
+
+            if (!ApplySearchOriginFilters(compact, options))
                 continue;
 
             if (seenMatchLocations != null && compact.MatchLines.Count > 0)
@@ -1093,6 +1089,166 @@ public static class QueryCommandRunner
 
         return rows;
     }
+
+    private static int? GetPreferredSearchOriginFilterLine(CompactSearchResult compact, QueryCommandOptions options)
+    {
+        if (!HasSearchOriginFilters(options) || compact.MatchFacets.Count == 0)
+            return null;
+
+        return compact.MatchFacets
+            .Where(facet => !IsSearchFacetExcluded(facet, options))
+            .Select(facet => (int?)facet.Line)
+            .OrderBy(line => line)
+            .FirstOrDefault();
+    }
+
+    private static bool IsLineWithinSnippet(CompactSearchResult compact, int line)
+        => line >= compact.SnippetStartLine && line <= compact.SnippetEndLine;
+
+    private static List<SearchDisplayRow> ReadSearchDisplayRows(DbReader reader, QueryCommandOptions options, bool exact)
+    {
+        if (!HasSearchOriginFilters(options))
+            return BuildSearchDisplayRows(ReadSearchResults(reader, options, exact, options.Limit), options, exact);
+
+        return ReadOriginFilteredSearchDisplayRows(reader, options, exact);
+    }
+
+    private static List<SearchDisplayRow> ReadOriginFilteredSearchDisplayRows(DbReader reader, QueryCommandOptions options, bool exact)
+    {
+        var requestedLimit = Math.Max(0, options.Limit);
+        if (requestedLimit == 0)
+            return [];
+
+        var candidateLimit = GetSearchOriginFilterCandidateLimit(requestedLimit);
+        var batchLimit = GetSearchOriginFilterBatchLimit(requestedLimit);
+        var candidates = new List<SearchResult>(Math.Min(candidateLimit, batchLimit));
+        var displayRows = new List<SearchDisplayRow>();
+        SearchCursor? cursor = null;
+        var pagesRead = 0;
+        while (displayRows.Count < requestedLimit && pagesRead < SearchOriginFilterMaxPages)
+        {
+            var currentOffset = Math.Max(0, cursor?.Offset ?? 0);
+            if (currentOffset >= candidateLimit)
+                break;
+
+            var pageLimit = Math.Min(batchLimit, candidateLimit - currentOffset);
+            if (pageLimit <= 0)
+                break;
+
+            var page = ReadSearchResults(reader, options, exact, pageLimit, cursor, requestedLimit);
+            pagesRead++;
+            if (page.Count == 0)
+                break;
+
+            candidates.AddRange(page);
+            displayRows = BuildSearchDisplayRows(candidates, options, exact);
+
+            var last = page[^1];
+            if (last.NextOffset <= currentOffset)
+                break;
+            cursor = new SearchCursor(last.Score, last.ChunkId, last.NextOffset);
+        }
+
+        return displayRows.Count <= requestedLimit
+            ? displayRows
+            : displayRows.Take(requestedLimit).ToList();
+    }
+
+    private static int GetSearchOriginFilterBatchLimit(int requestedLimit)
+    {
+        var requested = Math.Max(1, requestedLimit);
+        var overFetched = requested * SearchOriginFilterOverFetchFactor;
+        return Math.Min(SearchOriginFilterMaxCandidates, Math.Max(SearchOriginFilterMinCandidates, overFetched));
+    }
+
+    private static int GetSearchOriginFilterCandidateLimit(int requestedLimit)
+        => requestedLimit <= 0 ? 0 : SearchOriginFilterMaxCandidates;
+
+    private static List<SearchResult> ReadSearchResults(DbReader reader, QueryCommandOptions options, bool exact, int limit, SearchCursor? cursor = null, int? guardRequestedLimit = null)
+        => reader.Search(options.Query!, limit, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank, cursor, options.GuardFilters, options.GuardWindow, guardRequestedLimit);
+
+    private static QueryCountResult CountFilteredSearchResults(DbReader reader, QueryCommandOptions options, bool exact)
+    {
+        var results = ReadSearchResults(reader, options, exact, int.MaxValue);
+        var rows = BuildSearchDisplayRows(results, options, exact);
+        return new QueryCountResult(
+            rows.Count,
+            rows.Select(row => row.Result.Path).Distinct(StringComparer.Ordinal).Count());
+    }
+
+    private static bool ApplySearchOriginFilters(CompactSearchResult compact, QueryCommandOptions options)
+    {
+        if (!HasSearchOriginFilters(options))
+            return true;
+        if (compact.MatchFacets.Count == 0)
+            return true;
+
+        var keptFacets = compact.MatchFacets
+            .Where(facet => !IsSearchFacetExcluded(facet, options))
+            .ToList();
+        if (keptFacets.Count == 0)
+            return false;
+
+        compact.MatchFacets = keptFacets;
+        compact.MatchOrigins = keptFacets
+            .Select(facet => facet.Origin)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(origin => origin, StringComparer.Ordinal)
+            .ToList();
+        compact.TestFile = keptFacets.Any(facet => facet.TestFile);
+        compact.TestSymbol = keptFacets.Any(facet => facet.TestSymbol);
+        compact.TestFixture = keptFacets.Any(facet => facet.TestFixture);
+
+        var keptLines = keptFacets.Select(facet => facet.Line).ToHashSet();
+        compact.MatchLines = keptLines
+            .OrderBy(line => line)
+            .ToList();
+        compact.Highlights = compact.Highlights
+            .Where(highlight => keptLines.Contains(highlight.Line))
+            .ToList();
+        var keptFacetKeys = keptFacets
+            .Select(facet => SearchFacetKey(facet.Line, facet.Column, facet.Length))
+            .ToHashSet(StringComparer.Ordinal);
+        foreach (var highlight in compact.Highlights)
+        {
+            var lineFacets = keptFacets.Where(facet => facet.Line == highlight.Line).ToList();
+            highlight.MatchOrigins = lineFacets
+                .Select(facet => facet.Origin)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(origin => origin, StringComparer.Ordinal)
+                .ToList();
+            highlight.TestFile = lineFacets.Any(facet => facet.TestFile);
+            highlight.TestSymbol = lineFacets.Any(facet => facet.TestSymbol);
+            highlight.TestFixture = lineFacets.Any(facet => facet.TestFixture);
+            highlight.TermOccurrences = FilterSearchOccurrences(highlight.TermOccurrences, highlight.Line, keptFacetKeys);
+            if (highlight.LiteralTermOccurrences != null)
+                highlight.LiteralTermOccurrences = FilterSearchOccurrences(highlight.LiteralTermOccurrences, highlight.Line, keptFacetKeys);
+        }
+
+        return keptFacets.Count > 0;
+    }
+
+    private static bool HasSearchOriginFilters(QueryCommandOptions options)
+        => options.ExcludeComments || options.ExcludeStrings || options.ExcludeFixtures;
+
+    private static bool IsSearchFacetExcluded(SearchMatchFacet facet, QueryCommandOptions options)
+    {
+        if (options.ExcludeComments && string.Equals(facet.Origin, SearchMatchClassifier.Comment, StringComparison.Ordinal))
+            return true;
+        if (options.ExcludeStrings && SearchMatchClassifier.IsStringLikeOrigin(facet.Origin))
+            return true;
+        if (options.ExcludeFixtures && facet.TestFixture)
+            return true;
+        return false;
+    }
+
+    private static List<SearchTermOccurrence> FilterSearchOccurrences(List<SearchTermOccurrence> occurrences, int line, HashSet<string> keptFacetKeys)
+        => occurrences
+            .Where(occurrence => keptFacetKeys.Contains(SearchFacetKey(line, occurrence.Column, occurrence.Length)))
+            .ToList();
+
+    private static string SearchFacetKey(int line, int column, int length)
+        => $"{line}:{column}:{length}";
 
     private static IEnumerable<FormattedLocation> ToSearchFormattedLocations(SearchDisplayRow row, string query, bool useMatchLines)
     {
@@ -6140,6 +6296,9 @@ public static class QueryCommandRunner
         bool prefix = false;
         var guardFilters = new List<SearchGuardFilter>();
         var guardWindow = DbReader.DefaultSearchGuardWindow;
+        bool excludeComments = false;
+        bool excludeStrings = false;
+        bool excludeFixtures = false;
         List<string>? parseErrors = null;
         bool exactName = false;
         bool exactSubstring = false;
@@ -6813,6 +6972,15 @@ public static class QueryCommandRunner
                 case "--exclude-tests":
                     excludeTests = true;
                     break;
+                case "--exclude-comments":
+                    excludeComments = true;
+                    break;
+                case "--exclude-strings":
+                    excludeStrings = true;
+                    break;
+                case "--exclude-fixtures":
+                    excludeFixtures = true;
+                    break;
                 case "--include-generated":
                     includeGenerated = true;
                     break;
@@ -7060,6 +7228,9 @@ public static class QueryCommandRunner
             Prefix = prefix,
             GuardFilters = guardFilters,
             GuardWindow = guardWindow,
+            ExcludeComments = excludeComments,
+            ExcludeStrings = excludeStrings,
+            ExcludeFixtures = excludeFixtures,
             ExactName = exactName,
             ExactSubstring = exactSubstring,
             CheckWorkspace = checkWorkspace,
@@ -8377,8 +8548,8 @@ public static class QueryCommandRunner
             return;
         }
 
-        if (options.Lang != null || options.PathPatterns.Count > 0 || options.ExcludeTests || options.ExcludePaths.Count > 0)
-            Console.Error.WriteLine($"Hint: {filterHint ?? "try removing --lang, --path, --exclude-path, or --exclude-tests to broaden the search."}");
+        if (options.Lang != null || options.PathPatterns.Count > 0 || options.ExcludeTests || options.ExcludeComments || options.ExcludeStrings || options.ExcludeFixtures || options.ExcludePaths.Count > 0)
+            Console.Error.WriteLine($"Hint: {filterHint ?? "try removing --lang, --path, --exclude-path, --exclude-tests, --exclude-comments, --exclude-strings, or --exclude-fixtures to broaden the search."}");
 
         if (alternativeHint != null)
             Console.Error.WriteLine($"Hint: {alternativeHint}");
@@ -8435,6 +8606,12 @@ public static class QueryCommandRunner
             yield return $"rank-by: {FormatReferenceRankMode(options.RankMode)}";
         if (options.ExcludeTests)
             yield return "exclude-tests: true";
+        if (options.ExcludeComments)
+            yield return "exclude-comments: true";
+        if (options.ExcludeStrings)
+            yield return "exclude-strings: true";
+        if (options.ExcludeFixtures)
+            yield return "exclude-fixtures: true";
         if (options.Since.HasValue)
             yield return $"since: {options.Since.Value:O}";
         if (options.CountOnly)
@@ -8479,6 +8656,12 @@ public static class QueryCommandRunner
             query["rank_by"] = FormatReferenceRankMode(options.RankMode);
         if (options.ExcludeTests)
             query["exclude_tests"] = true;
+        if (options.ExcludeComments)
+            query["exclude_comments"] = true;
+        if (options.ExcludeStrings)
+            query["exclude_strings"] = true;
+        if (options.ExcludeFixtures)
+            query["exclude_fixtures"] = true;
         if (options.IncludeGenerated)
             query["include_generated"] = true;
         if (options.Since.HasValue)
@@ -10043,6 +10226,9 @@ public sealed class QueryCommandOptions
     public bool Prefix { get; init; }
     public List<SearchGuardFilter> GuardFilters { get; init; } = [];
     public int GuardWindow { get; init; } = DbReader.DefaultSearchGuardWindow;
+    public bool ExcludeComments { get; init; }
+    public bool ExcludeStrings { get; init; }
+    public bool ExcludeFixtures { get; init; }
     public bool ExactName { get; init; }
     public bool ExactSubstring { get; init; }
     public bool CheckWorkspace { get; init; }

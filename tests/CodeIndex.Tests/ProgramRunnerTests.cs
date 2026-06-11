@@ -1485,6 +1485,33 @@ exit 0
         }
     }
 
+    [Fact]
+    public void Run_SearchBooleanOriginFilterDoesNotConsumeFollowingOptionLikeQuery_Issue3423()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue3423_origin_filter_option_query");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "USER_GUIDE.md",
+                "markdown",
+                "--log-max-size-mb appears here\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["search", "--exclude-comments", "--log-max-size-mb", "--path", "USER_GUIDE.md", "--db", dbPath, "--count", "--exact-substring"],
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("1", stdout.Trim());
+            Assert.Equal(string.Empty, stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Theory]
     [InlineData("--log-max-size-mb=50")]
     [InlineData("--log-format=json")]
