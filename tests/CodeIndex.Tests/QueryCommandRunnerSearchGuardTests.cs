@@ -251,6 +251,54 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_GuardFiltersKeepRequestedBudgetWithOriginFilters_Issue3423()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_guard_origin_filter_budget");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/GuardBudgetNeedle.cs",
+                "csharp",
+                """
+                public class Guarded
+                {
+                    public void Run()
+                    {
+                        GuardMarker();
+                        GuardBudgetNeedle();
+                    }
+                }
+                """,
+                modified: new DateTime(2025, 2, 1, 0, 0, 0, DateTimeKind.Utc));
+
+            for (var i = 0; i < 501; i++)
+            {
+                TestProjectHelper.InsertIndexedFile(
+                    dbPath,
+                    $"src/zzz_noise_{i:000}.cs",
+                    "csharp",
+                    "public class Noise { public void Run() { GuardBudgetNeedle(); } }\n");
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["GuardBudgetNeedle", "--db", dbPath, "--exact-substring", "--require-before", "GuardMarker", "--guard-window", "2", "--exclude-strings", "--limit", "1", "--json=array"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var row = Assert.Single(document.RootElement.EnumerateArray());
+            Assert.Equal("src/GuardBudgetNeedle.cs", row.GetProperty("path").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void SearchUsageLineListsGuardFlags_Issue2852()
     {
         var usage = ConsoleUi.GetUsageLine("search");

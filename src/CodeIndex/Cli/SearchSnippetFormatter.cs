@@ -67,16 +67,16 @@ public static class SearchSnippetFormatter
         return snippet;
     }
 
-    public static CompactSearchResult ToCompactResult(SearchResult result, string query, int maxLines = DefaultSnippetLines, bool caseSensitive = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, string? lang = null, SearchSnippetFocusMode focusMode = SearchSnippetFocusMode.Quality, bool exposeLiteralHighlights = false)
+    public static CompactSearchResult ToCompactResult(SearchResult result, string query, int maxLines = DefaultSnippetLines, bool caseSensitive = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, string? lang = null, SearchSnippetFocusMode focusMode = SearchSnippetFocusMode.Quality, bool exposeLiteralHighlights = false, int? preferredMatchLine = null)
     {
-        return ToCompactResult(result, PrepareQueryContext(query), maxLines, caseSensitive, maxLineWidth, lang, focusMode, exposeLiteralHighlights);
+        return ToCompactResult(result, PrepareQueryContext(query), maxLines, caseSensitive, maxLineWidth, lang, focusMode, exposeLiteralHighlights, preferredMatchLine);
     }
 
-    public static CompactSearchResult ToCompactResult(SearchResult result, SearchSnippetQueryContext queryContext, int maxLines = DefaultSnippetLines, bool caseSensitive = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, string? lang = null, SearchSnippetFocusMode focusMode = SearchSnippetFocusMode.Quality, bool exposeLiteralHighlights = false)
+    public static CompactSearchResult ToCompactResult(SearchResult result, SearchSnippetQueryContext queryContext, int maxLines = DefaultSnippetLines, bool caseSensitive = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, string? lang = null, SearchSnippetFocusMode focusMode = SearchSnippetFocusMode.Quality, bool exposeLiteralHighlights = false, int? preferredMatchLine = null)
     {
         ArgumentNullException.ThrowIfNull(queryContext);
 
-        var excerpt = BuildExcerpt(result.Content, queryContext, result.StartLine, maxLines, caseSensitive, maxLineWidth, lang ?? result.Lang, focusMode, exposeLiteralHighlights);
+        var excerpt = BuildExcerpt(result.Content, queryContext, result.StartLine, maxLines, caseSensitive, maxLineWidth, lang ?? result.Lang, focusMode, exposeLiteralHighlights, preferredMatchLine);
         var matchFacets = BuildMatchFacets(result, queryContext, caseSensitive, lang ?? result.Lang, exposeLiteralHighlights);
         AttachHighlightOrigins(excerpt.Highlights, matchFacets);
         return new CompactSearchResult
@@ -136,7 +136,6 @@ public static class SearchSnippetFormatter
                 continue;
 
             var absoluteLine = result.StartLine + snippetLine.Index;
-            var matchLine = normalizeCSharpVerbatimNames && snippetLine.NormalizedText != null ? snippetLine.NormalizedText : snippetLine.Text;
             var occurrences = exposeLiteralHighlights
                 ? normalizeCSharpVerbatimNames && snippetLine.NormalizedText != null && snippetLine.RawIndexMap != null
                     ? GetMatchedTermOccurrences(snippetLine.NormalizedText, absoluteLine, normalizedQuery, [], caseSensitive, snippetLine.Text, snippetLine.RawIndexMap)
@@ -210,12 +209,12 @@ public static class SearchSnippetFormatter
             yield return ToCompactResult(result, queryContext, maxLines, caseSensitive, maxLineWidth, lang ?? result.Lang, focusMode, exposeLiteralHighlights);
     }
 
-    public static SearchSnippetExcerpt BuildExcerpt(string content, string query, int absoluteStartLine, int maxLines = DefaultSnippetLines, bool caseSensitive = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, string? lang = null, SearchSnippetFocusMode focusMode = SearchSnippetFocusMode.Quality, bool exposeLiteralHighlights = false)
+    public static SearchSnippetExcerpt BuildExcerpt(string content, string query, int absoluteStartLine, int maxLines = DefaultSnippetLines, bool caseSensitive = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, string? lang = null, SearchSnippetFocusMode focusMode = SearchSnippetFocusMode.Quality, bool exposeLiteralHighlights = false, int? preferredMatchLine = null)
     {
-        return BuildExcerpt(content, PrepareQueryContext(query), absoluteStartLine, maxLines, caseSensitive, maxLineWidth, lang, focusMode, exposeLiteralHighlights);
+        return BuildExcerpt(content, PrepareQueryContext(query), absoluteStartLine, maxLines, caseSensitive, maxLineWidth, lang, focusMode, exposeLiteralHighlights, preferredMatchLine);
     }
 
-    public static SearchSnippetExcerpt BuildExcerpt(string content, SearchSnippetQueryContext queryContext, int absoluteStartLine, int maxLines = DefaultSnippetLines, bool caseSensitive = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, string? lang = null, SearchSnippetFocusMode focusMode = SearchSnippetFocusMode.Quality, bool exposeLiteralHighlights = false)
+    public static SearchSnippetExcerpt BuildExcerpt(string content, SearchSnippetQueryContext queryContext, int absoluteStartLine, int maxLines = DefaultSnippetLines, bool caseSensitive = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, string? lang = null, SearchSnippetFocusMode focusMode = SearchSnippetFocusMode.Quality, bool exposeLiteralHighlights = false, int? preferredMatchLine = null)
     {
         ArgumentNullException.ThrowIfNull(queryContext);
 
@@ -227,7 +226,8 @@ public static class SearchSnippetFormatter
         var tokens = queryForLanguage.Tokens;
         var normalizeCSharpVerbatimNames = queryForLanguage.NormalizeCSharpVerbatimNames;
 
-        var matchScan = FindMatchingLineIndexes(content, normalizedQuery, tokens, caseSensitive, normalizeCSharpVerbatimNames, maxLines);
+        var maxTrackedWindowLines = preferredMatchLine.HasValue ? int.MaxValue : maxLines;
+        var matchScan = FindMatchingLineIndexes(content, normalizedQuery, tokens, caseSensitive, normalizeCSharpVerbatimNames, maxTrackedWindowLines);
         var lineCount = matchScan.LineCount;
         if (lineCount == 0)
         {
@@ -239,10 +239,10 @@ public static class SearchSnippetFormatter
         }
 
         var matchIndexes = matchScan.MatchIndexes;
-        var focusStart = matchIndexes.Count > 0 ? matchIndexes[0] : 0;
+        var focusStart = SelectFocusStart(matchIndexes, absoluteStartLine, preferredMatchLine);
         var focusEnd = focusStart;
         var includedMatchLineCount = matchIndexes.Count > 0 ? 1 : 0;
-        foreach (var matchIndex in matchIndexes.Skip(1))
+        foreach (var matchIndex in matchIndexes.Where(index => index > focusStart))
         {
             if ((matchIndex - focusStart) + 1 > maxLines)
                 break;
@@ -353,6 +353,21 @@ public static class SearchSnippetFormatter
                 TotalChars = truncatedCharCounts.Sum(),
             },
         };
+    }
+
+    private static int SelectFocusStart(IReadOnlyList<int> matchIndexes, int absoluteStartLine, int? preferredMatchLine)
+    {
+        if (matchIndexes.Count == 0)
+            return 0;
+
+        if (preferredMatchLine.HasValue)
+        {
+            var preferredIndex = preferredMatchLine.Value - absoluteStartLine;
+            if (matchIndexes.Contains(preferredIndex))
+                return preferredIndex;
+        }
+
+        return matchIndexes[0];
     }
 
     // Clamp one snippet line, keeping the strongest match visible on match lines.

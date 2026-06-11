@@ -1040,6 +1040,20 @@ public static class QueryCommandRunner
                 result.Lang,
                 options.SnippetFocus,
                 exposeLiteralHighlights: exact);
+            var preferredOriginFilterLine = GetPreferredSearchOriginFilterLine(compact, options);
+            if (preferredOriginFilterLine.HasValue && !IsLineWithinSnippet(compact, preferredOriginFilterLine.Value))
+            {
+                compact = SearchSnippetFormatter.ToCompactResult(
+                    result,
+                    queryContext,
+                    options.SnippetLines,
+                    exact,
+                    options.MaxLineWidth,
+                    result.Lang,
+                    options.SnippetFocus,
+                    exposeLiteralHighlights: exact,
+                    preferredMatchLine: preferredOriginFilterLine.Value);
+            }
 
             if (!options.RawFts && compact.MatchLines.Count == 0 && compact.Highlights.Count == 0)
                 continue;
@@ -1076,6 +1090,21 @@ public static class QueryCommandRunner
         return rows;
     }
 
+    private static int? GetPreferredSearchOriginFilterLine(CompactSearchResult compact, QueryCommandOptions options)
+    {
+        if (!HasSearchOriginFilters(options) || compact.MatchFacets.Count == 0)
+            return null;
+
+        return compact.MatchFacets
+            .Where(facet => !IsSearchFacetExcluded(facet, options))
+            .Select(facet => (int?)facet.Line)
+            .OrderBy(line => line)
+            .FirstOrDefault();
+    }
+
+    private static bool IsLineWithinSnippet(CompactSearchResult compact, int line)
+        => line >= compact.SnippetStartLine && line <= compact.SnippetEndLine;
+
     private static List<SearchDisplayRow> ReadSearchDisplayRows(DbReader reader, QueryCommandOptions options, bool exact)
     {
         if (!HasSearchOriginFilters(options))
@@ -1106,7 +1135,7 @@ public static class QueryCommandRunner
             if (pageLimit <= 0)
                 break;
 
-            var page = ReadSearchResults(reader, options, exact, pageLimit, cursor);
+            var page = ReadSearchResults(reader, options, exact, pageLimit, cursor, requestedLimit);
             pagesRead++;
             if (page.Count == 0)
                 break;
@@ -1135,8 +1164,8 @@ public static class QueryCommandRunner
     private static int GetSearchOriginFilterCandidateLimit(int requestedLimit)
         => requestedLimit <= 0 ? 0 : SearchOriginFilterMaxCandidates;
 
-    private static List<SearchResult> ReadSearchResults(DbReader reader, QueryCommandOptions options, bool exact, int limit, SearchCursor? cursor = null)
-        => reader.Search(options.Query!, limit, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank, cursor, options.GuardFilters, options.GuardWindow);
+    private static List<SearchResult> ReadSearchResults(DbReader reader, QueryCommandOptions options, bool exact, int limit, SearchCursor? cursor = null, int? guardRequestedLimit = null)
+        => reader.Search(options.Query!, limit, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank, cursor, options.GuardFilters, options.GuardWindow, guardRequestedLimit);
 
     private static QueryCountResult CountFilteredSearchResults(DbReader reader, QueryCommandOptions options, bool exact)
     {

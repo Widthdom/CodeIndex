@@ -101,14 +101,18 @@ internal static class SearchMatchClassifier
         if (string.Equals(normalizedLang, "csharp", StringComparison.Ordinal))
             return ClassifyCSharp(path, text, index);
 
-        if (LooksLikeWholeLineComment(normalizedLang, text))
+        if (LooksLikeWholeLineComment(normalizedLang, text) ||
+            IsInsideLineCommentSpan(normalizedLang, text, index) ||
+            IsInsideInlineBlockCommentSpan(normalizedLang, text, index))
+        {
             return Comment;
-
-        if (IsLikelySlashRegexLiteral(normalizedLang, text, index))
-            return RegexLiteral;
+        }
 
         if (IsInsideQuotedSpan(text, index))
             return LooksLikeHelpText(path, text) ? HelpText : StringLiteral;
+
+        if (IsLikelySlashRegexLiteral(normalizedLang, text, index))
+            return RegexLiteral;
 
         return Code;
     }
@@ -255,6 +259,95 @@ internal static class SearchMatchClassifier
 
         return (lang is "python" or "shell" or "ruby" or "perl" or "r" or "yaml" or "toml" or "dockerfile") &&
                trimmed.StartsWith("#", StringComparison.Ordinal);
+    }
+
+    private static bool IsInsideLineCommentSpan(string? lang, string text, int index)
+    {
+        foreach (var marker in GetLineCommentMarkers(lang))
+        {
+            var markerIndex = FindUnquotedMarker(text, marker);
+            if (markerIndex >= 0 && index >= markerIndex)
+                return true;
+        }
+
+        return false;
+    }
+
+    private static string[] GetLineCommentMarkers(string? lang) => lang switch
+    {
+        "javascript" or "typescript" or "java" or "c" or "cpp" or "c++" or "go" or "rust" or "swift" or "kotlin" or "scala" or "php" => ["//"],
+        "python" or "shell" or "bash" or "zsh" or "ruby" or "perl" or "r" or "yaml" or "toml" or "dockerfile" => ["#"],
+        "sql" => ["--"],
+        _ => [],
+    };
+
+    private static int FindUnquotedMarker(string text, string marker)
+    {
+        for (var i = 0; i <= text.Length - marker.Length; i++)
+        {
+            if (TrySkipQuotedSpan(text, ref i) || TrySkipInlineBlockComment(text, ref i))
+                continue;
+
+            if (text.AsSpan(i, marker.Length).SequenceEqual(marker))
+                return i;
+        }
+
+        return -1;
+    }
+
+    private static bool IsInsideInlineBlockCommentSpan(string? lang, string text, int index)
+    {
+        if (!SupportsInlineBlockComments(lang))
+            return false;
+
+        for (var i = 0; i < text.Length; i++)
+        {
+            if (TrySkipQuotedSpan(text, ref i))
+                continue;
+
+            if (i + 1 >= text.Length || text[i] != '/' || text[i + 1] != '*')
+                continue;
+
+            var end = text.IndexOf("*/", i + 2, StringComparison.Ordinal);
+            var spanEnd = end < 0 ? text.Length - 1 : end + 1;
+            if (index >= i && index <= spanEnd)
+                return true;
+
+            i = spanEnd;
+        }
+
+        return false;
+    }
+
+    private static bool SupportsInlineBlockComments(string? lang)
+        => lang is "javascript" or "typescript" or "java" or "c" or "cpp" or "c++" or "go" or "rust" or "swift" or "kotlin" or "scala" or "php" or "css" or "scss" or "less" or "sql";
+
+    private static bool TrySkipQuotedSpan(string text, ref int index)
+    {
+        var quote = text[index];
+        if (quote is not ('"' or '\''))
+            return false;
+
+        var end = index + 1;
+        while (end < text.Length)
+        {
+            if (text[end] == quote && text[end - 1] != '\\')
+                break;
+            end++;
+        }
+
+        index = end;
+        return true;
+    }
+
+    private static bool TrySkipInlineBlockComment(string text, ref int index)
+    {
+        if (index + 1 >= text.Length || text[index] != '/' || text[index + 1] != '*')
+            return false;
+
+        var end = text.IndexOf("*/", index + 2, StringComparison.Ordinal);
+        index = end < 0 ? text.Length - 1 : end + 1;
+        return true;
     }
 
     private static bool IsInsideQuotedSpan(string text, int index)

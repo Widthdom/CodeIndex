@@ -142,8 +142,71 @@ public partial class QueryCommandRunnerTests
             using var document = ParseJsonOutput(stdout);
             var row = Assert.Single(document.RootElement.EnumerateArray());
             Assert.Equal("src/mixed.cs", row.GetProperty("path").GetString());
+            Assert.Equal(10, row.GetProperty("snippet_start_line").GetInt32());
+            Assert.Equal(10, row.GetProperty("snippet_end_line").GetInt32());
+            Assert.Contains("FarNeedle();", row.GetProperty("snippet").GetString());
+            Assert.DoesNotContain("appears in a comment", row.GetProperty("snippet").GetString());
             Assert.Equal([10], row.GetProperty("match_lines").EnumerateArray().Select(value => value.GetInt32()).ToArray());
             Assert.Equal(["code"], row.GetProperty("match_origins").EnumerateArray().Select(value => value.GetString()).ToArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_ExcludeCommentsSuppressesNonCSharpInlineComments_Issue3423()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_exclude_inline_comments");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/comment.js", "javascript", "run(); // InlineCommentNeedle\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/comment_quote.js", "javascript", "run(); // don't InlineCommentNeedle\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/comment.py", "python", "run()  # InlineCommentNeedle\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/comment_quote.py", "python", "run()  # \"InlineCommentNeedle\"\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/block.js", "javascript", "run(); /* InlineCommentNeedle */\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/block_quote.js", "javascript", "run(); /* don't InlineCommentNeedle */\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/code.js", "javascript", "InlineCommentNeedle();\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["InlineCommentNeedle", "--db", dbPath, "--exact-substring", "--json=array", "--exclude-comments"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var row = Assert.Single(document.RootElement.EnumerateArray());
+            Assert.Equal("src/code.js", row.GetProperty("path").GetString());
+            Assert.Equal(["code"], row.GetProperty("match_origins").EnumerateArray().Select(value => value.GetString()).ToArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("javascript", "run(); // InlineMarkerNeedle\n", "//")]
+    [InlineData("python", "run()  # InlineMarkerNeedle\n", "#")]
+    [InlineData("javascript", "run(); /* InlineMarkerNeedle */\n", "/*")]
+    public void RunSearch_ExcludeCommentsSuppressesInlineCommentMarkers_Issue3423(string lang, string content, string query)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_exclude_inline_comment_markers");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, $"src/comment.{lang}", lang, content);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [query, "--db", dbPath, "--exact-substring", "--json=array", "--exclude-comments"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            Assert.Empty(document.RootElement.EnumerateArray());
         }
         finally
         {
@@ -227,6 +290,33 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("src/code.cs", row.GetProperty("path").GetString());
             Assert.Equal(["code"], row.GetProperty("match_origins").EnumerateArray().Select(value => value.GetString()).ToArray());
             Assert.NotEmpty(row.GetProperty("match_facets").EnumerateArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_ExcludeStringsSuppressesRawFtsNumericStringMatches_Issue3423()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_exclude_strings_raw_fts_numeric");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/string.cs", "csharp", "var text = \"12345\";\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/code.cs", "csharp", "public class Demo { void Run() { var value = 12345; } }\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["content:12345", "--db", dbPath, "--fts", "--json=array", "--exclude-strings"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var row = Assert.Single(document.RootElement.EnumerateArray());
+            Assert.Equal("src/code.cs", row.GetProperty("path").GetString());
+            Assert.Equal(["code"], row.GetProperty("match_origins").EnumerateArray().Select(value => value.GetString()).ToArray());
         }
         finally
         {

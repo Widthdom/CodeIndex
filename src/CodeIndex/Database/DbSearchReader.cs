@@ -109,7 +109,7 @@ public partial class DbReader
     /// Full-text search across indexed chunks using FTS5.
     /// FTS5を使ったチャンク全文検索。
     /// </summary>
-    public List<SearchResult> Search(string query, int limit = 20, string? lang = null, bool rawQuery = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool deduplicate = true, DateTime? since = null, bool exact = false, bool prefix = false, bool visibilityRank = true, SearchCursor? cursor = null, IReadOnlyList<SearchGuardFilter>? guardFilters = null, int guardWindow = DefaultSearchGuardWindow)
+    public List<SearchResult> Search(string query, int limit = 20, string? lang = null, bool rawQuery = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool deduplicate = true, DateTime? since = null, bool exact = false, bool prefix = false, bool visibilityRank = true, SearchCursor? cursor = null, IReadOnlyList<SearchGuardFilter>? guardFilters = null, int guardWindow = DefaultSearchGuardWindow, int? guardRequestedLimit = null)
     {
         // Guard against empty/whitespace queries that would match everything
         // 空白のみのクエリが全件マッチするのを防止
@@ -124,7 +124,8 @@ public partial class DbReader
         var hasGuardFilters = guardFilters is { Count: > 0 };
         var searchMatchLineContext = SearchMatchLineContext.Create(query, lang, exact);
         var exactSubstringBoost = !exact && !rawQuery && IsPunctuationHeavyLiteralQuery(query);
-        var guardedCandidateLimit = hasGuardFilters ? GetGuardedSearchCandidateLimit(limit, cursor) : 0;
+        var guardedRequestedLimit = Math.Max(0, guardRequestedLimit ?? limit);
+        var guardedCandidateLimit = hasGuardFilters ? GetGuardedSearchCandidateLimit(guardedRequestedLimit, cursor) : 0;
         using var cmd = _conn.CreateCommand();
         string sql;
 
@@ -229,8 +230,8 @@ public partial class DbReader
             raw = FilterBySearchGuards(raw, SearchPrimaryMatchContext.Create(query, normalizedQuery, rawQuery, exact, lang), guardFilters!, guardWindow);
 
         var results = deduplicate ? DeduplicateOverlappingResults(raw, SearchPrimaryMatchContext.Create(query, normalizedQuery, rawQuery, exact, lang)) : raw;
-        if (guardCandidateLimitReached && results.Count < GetGuardedSearchRequestedPageEnd(limit, cursor))
-            throw new SearchGuardCandidateLimitException(guardedCandidateLimit, limit, cursor?.Offset ?? 0);
+        if (guardCandidateLimitReached && results.Count < GetGuardedSearchRequestedPageEnd(guardedRequestedLimit, cursor))
+            throw new SearchGuardCandidateLimitException(guardedCandidateLimit, guardedRequestedLimit, cursor?.Offset ?? 0);
 
         AttachSearchEnclosingSymbols(results, searchMatchLineContext);
         return hasGuardFilters ? PageGuardedSearchResults(results, limit, cursor) : results;
@@ -1464,7 +1465,7 @@ public partial class DbReader
                 continue;
             }
 
-            if (!IsFtsIdentifierStart(ch))
+            if (!IsRawFtsCoverageTokenStart(ch))
                 continue;
 
             var startIdentifier = i;
@@ -1473,7 +1474,9 @@ public partial class DbReader
                 i++;
 
             var token = query[startIdentifier..i];
-            if (!IsRawFtsOperatorToken(token) && !IsRawFtsColumnQualifierToken(query, startIdentifier, i))
+            if (!IsRawFtsOperatorToken(token)
+                && !IsRawFtsColumnQualifierToken(query, startIdentifier, i)
+                && !IsRawFtsNearDistanceToken(query, startIdentifier, i))
                 tokens.Add(token);
             i--;
         }
@@ -1498,6 +1501,68 @@ public partial class DbReader
         var afterColumnList = SkipWhitespace(query, columnListEnd + 1);
         return afterColumnList < query.Length && query[afterColumnList] == ':';
     }
+
+    private static bool IsRawFtsNearDistanceToken(string query, int tokenStart, int tokenEnd)
+    {
+        if (!IsUnsignedIntegerToken(query, tokenStart, tokenEnd))
+            return false;
+
+        for (var openParen = query.LastIndexOf('(', tokenStart); openParen >= 0; openParen = query.LastIndexOf('(', openParen - 1))
+        {
+            var nearStart = FindNearOperatorBeforeOpenParen(query, openParen);
+            if (nearStart < 0 || !IsNearOperatorAt(query, nearStart))
+                continue;
+
+            var closeParen = FindNearCloseParen(query, openParen + 1);
+            if (closeParen < tokenEnd)
+                continue;
+
+            var nearBody = query.AsSpan(openParen + 1, closeParen - openParen - 1);
+            if (!TryReadNearDistance(nearBody, out _))
+                continue;
+
+            var candidateStart = openParen + 1;
+            var lastComma = query.LastIndexOf(',', closeParen - 1, closeParen - openParen - 1);
+            if (lastComma >= openParen)
+                candidateStart = lastComma + 1;
+            candidateStart = SkipWhitespace(query, candidateStart);
+
+            var candidateEnd = closeParen;
+            while (candidateEnd > candidateStart && char.IsWhiteSpace(query[candidateEnd - 1]))
+                candidateEnd--;
+
+            return tokenStart >= candidateStart && tokenEnd <= candidateEnd;
+        }
+
+        return false;
+    }
+
+    private static int FindNearOperatorBeforeOpenParen(string query, int openParen)
+    {
+        var index = openParen - 1;
+        while (index >= 0 && char.IsWhiteSpace(query[index]))
+            index--;
+
+        var nearStart = index - "NEAR".Length + 1;
+        return nearStart >= 0 ? nearStart : -1;
+    }
+
+    private static bool IsUnsignedIntegerToken(string query, int tokenStart, int tokenEnd)
+    {
+        if (tokenStart >= tokenEnd)
+            return false;
+
+        for (var i = tokenStart; i < tokenEnd; i++)
+        {
+            if (!char.IsDigit(query[i]))
+                return false;
+        }
+
+        return true;
+    }
+
+    private static bool IsRawFtsCoverageTokenStart(char ch)
+        => IsFtsIdentifierStart(ch) || char.IsDigit(ch);
 
     private static bool IsRawFtsOperatorToken(string token)
         => string.Equals(token, "AND", StringComparison.OrdinalIgnoreCase)
