@@ -328,6 +328,7 @@ public class IndexWatchRunnerTests
     [Fact]
     public void EmitWatchOverflow_Json_EmitsStructuredRecoveryCommand()
     {
+        var parallelism = IndexCommandRunner.DefaultIndexParallelism() == 1 ? 2 : 1;
         var options = new IndexCommandOptions
         {
             ProjectPath = "/repo",
@@ -336,6 +337,7 @@ public class IndexWatchRunnerTests
             Watch = true,
             MaxFileSizeBytes = 4096,
             MaxSymbolsPerFile = 42,
+            Parallelism = parallelism,
             SymlinkPolicy = FileIndexer.SymlinkPolicy.All,
             SymbolKindFilter = SymbolKindFilter.Create(["class", "function"], ["test.method"], parseError: null),
         };
@@ -374,6 +376,7 @@ public class IndexWatchRunnerTests
         AssertOptionValue(args, "--db", resolvedDbPath);
         AssertOptionValue(args, "--max-file-bytes", "4096");
         AssertOptionValue(args, "--max-symbols-per-file", "42");
+        AssertOptionValue(args, "--parallelism", parallelism.ToString(System.Globalization.CultureInfo.InvariantCulture));
         AssertOptionValue(args, "--follow-symlinks", "all");
         AssertOptionValue(args, "--include-symbol-kind", "class,function");
         AssertOptionValue(args, "--exclude-symbol-kind", "test.method");
