@@ -59,7 +59,9 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Contains("src/sql.cs", stdout);
-            Assert.Contains("Hint: This looks like a literal code phrase; try --exact-substring for punctuation-sensitive matching.", stderr);
+            Assert.Contains(
+                "Hint: This looks like a literal code phrase; rerun with `--exact-substring`, for example: `cdidx search --exact-substring --query \"...\"`, for punctuation-sensitive matching.",
+                stderr);
         }
         finally
         {
@@ -90,6 +92,9 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("punctuation_heavy_query", hint.GetProperty("reason").GetString());
+            Assert.Equal(
+                "This looks like a literal code phrase; rerun with `--exact-substring`, for example: `cdidx search --exact-substring --query \"...\"`, for punctuation-sensitive matching.",
+                hint.GetProperty("suggested_action").GetString());
             Assert.Equal("--exact-substring", hint.GetProperty("flag").GetString());
             Assert.Equal("exactSubstring", hint.GetProperty("mcp_argument").GetString());
         }

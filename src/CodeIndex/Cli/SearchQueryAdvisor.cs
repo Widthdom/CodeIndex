@@ -3,8 +3,10 @@ namespace CodeIndex.Cli;
 internal static class SearchQueryAdvisor
 {
     internal const string ExactSubstringHintReason = "punctuation_heavy_query";
-    internal const string CliExactSubstringSuggestedAction = "This looks like a literal code phrase; try --exact-substring for punctuation-sensitive matching.";
-    internal const string McpExactSubstringSuggestedAction = "This looks like a literal code phrase; try exactSubstring for punctuation-sensitive matching.";
+    internal const string CliExactSubstringSuggestedAction =
+        "This looks like a literal code phrase; rerun with `--exact-substring`, for example: `cdidx search --exact-substring --query \"...\"`, for punctuation-sensitive matching.";
+    internal const string McpExactSubstringSuggestedAction =
+        "This looks like a literal code phrase; rerun the search with exactSubstring=true for punctuation-sensitive matching.";
 
     internal static SearchQueryHint? BuildExactSubstringHint(string? query, bool rawQuery, bool exact, bool prefix)
         => ShouldSuggestExactSubstring(query, rawQuery, exact, prefix)

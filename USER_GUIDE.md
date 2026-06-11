@@ -1190,6 +1190,8 @@ Default `cdidx search` is literal-safe unless you explicitly opt into raw FTS5:
 | Raw FTS5 mode | With `--fts`, the query is passed to FTS5 as raw syntax. Supported operators include `content:term` column filters, `NEAR(foo bar, 5)`, `foo OR bar`, `foo NOT bar`, parenthesized groups, prefix tokens such as `foo*`, and quoted phrases such as `"foo bar"`. |
 | No `--fts` | Operator-like characters are treated as literal query content except for cdidx's documented literal-safe prefix shorthand. |
 
+For punctuation-heavy code phrases such as `catch { }`, normal search may emit a rerun hint. Use `--exact-substring` when braces, operators, punctuation, and case need byte-for-byte matching.
+
 Search case behavior depends on the selected mode:
 
 | Mode or text | Case and token behavior |
@@ -3489,6 +3491,8 @@ cdidx report --output report.tgz --json
 | 隣接 phrase を要求する場合 | raw FTS5 mode で `--fts '"foo bar"'` のように引用します。 |
 | raw FTS5 mode | `--fts` 付きでは query を raw FTS5 構文としてそのまま渡します。利用できる演算子には `content:term` の列 filter、`NEAR(foo bar, 5)`、`foo OR bar`、`foo NOT bar`、括弧 grouping、`foo*` のような prefix token、`"foo bar"` のような quoted phrase があります。 |
 | `--fts` なし | cdidx が明示している literal-safe prefix shorthand を除き、operator に見える文字も literal な query 内容として扱います。 |
+
+`catch { }` のように記号の多いコード片では、通常検索が再実行ヒントを出す場合があります。brace、operator、punctuation、大文字小文字まで byte-for-byte に一致させたい場合は `--exact-substring` を使います。
 
 検索の大小文字の扱いは mode ごとに異なります:
 
