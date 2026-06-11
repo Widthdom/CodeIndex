@@ -2328,6 +2328,14 @@ public static class QueryCommandRunner
             ExcerptRecoveryCommandFormatter.ApplyDbPath(result.BodyContentRecovery, result.Path, dbPath);
     }
 
+    private static void ApplyBodyRecoveryCommands(SymbolAnalysisResult result, string dbPath)
+    {
+        ApplyBodyRecoveryCommands(result.Definitions, dbPath);
+        ApplyBodyRecoveryCommands(result.References, dbPath);
+        ApplyBodyRecoveryCommands(result.Callers, dbPath);
+        ApplyBodyRecoveryCommands(result.Callees, dbPath);
+    }
+
     private static void WriteOptionalBodyExcerpt(int? startLine, string? content, string indent = "")
     {
         if (startLine == null || content == null)
@@ -3527,6 +3535,7 @@ public static class QueryCommandRunner
             if (options.Json)
             {
                 var compactTruncation = options.Compact ? ApplySymbolAnalysisCompactCaps(analysis, compactLimit) : null;
+                ApplyBodyRecoveryCommands(analysis, options.DbPath);
                 var payload = JsonSerializer.SerializeToNode(analysis, CliJsonSerializerContextFactory.Create(jsonOptions).SymbolAnalysisResult)!.AsObject();
                 AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
                 if (compactTruncation != null)

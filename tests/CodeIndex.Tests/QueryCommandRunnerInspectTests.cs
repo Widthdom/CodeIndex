@@ -154,6 +154,46 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunInspect_JsonBodyRecoveryCommandIncludesActiveDb_Issue3562()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_body_recovery_db_3562");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var longLiteral = new string('a', DbReader.DefinitionBodyMaxBytes + 1024);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/huge_body.py",
+                "python",
+                $"def huge_body():\n    value = \"{longLiteral}\"\n    return value\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["huge_body", "--db", dbPath, "--json", "--body", "--lang", "python", "--exact-name"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var definition = document.RootElement
+                .GetProperty("definitions")
+                .EnumerateArray()
+                .Single(item => item.GetProperty("name").GetString() == "huge_body");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(definition.GetProperty("body_content_truncated").GetBoolean());
+            var recovery = definition.GetProperty("body_content_recovery");
+            var recoveryCommand = recovery.GetProperty("command").GetString();
+            Assert.Contains("cdidx excerpt src/huge_body.py", recoveryCommand);
+            Assert.Contains("--db", recoveryCommand);
+            Assert.Contains(dbPath, recoveryCommand);
+            Assert.Contains("--start 2 --end 3 --max-line-width 0 --json", recoveryCommand);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunInspect_ParseFields_ImplyJsonAndCanonicalizeAliases_Issue3056()
     {
         var options = QueryCommandRunner.ParseArgs(
