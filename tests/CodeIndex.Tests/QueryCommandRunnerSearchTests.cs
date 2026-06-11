@@ -301,6 +301,9 @@ public partial class QueryCommandRunnerTests
         Assert.True(query.GetProperty("exact_substring").GetBoolean());
         Assert.Contains("redaction", query.GetProperty("description").GetString(), StringComparison.OrdinalIgnoreCase);
         Assert.Contains("False positives", query.GetProperty("false_positive_guidance").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(
+            recipe.GetProperty("queries").EnumerateArray(),
+            item => item.GetProperty("name").GetString() == "process-start-info");
     }
 
     [Theory]
@@ -369,7 +372,7 @@ public partial class QueryCommandRunnerTests
                 .Single(item => item.GetProperty("name").GetString() == "unbounded-json-parse");
 
             Assert.Equal("risky-code", root.GetProperty("recipe").GetProperty("name").GetString());
-            Assert.Equal(5, root.GetProperty("query_count").GetInt32());
+            Assert.Equal(10, root.GetProperty("query_count").GetInt32());
             Assert.True(root.GetProperty("result_count").GetInt32() >= 4);
             Assert.Equal(1, unboundedJsonParse.GetProperty("count").GetInt32());
             Assert.Equal("JsonDocument.Parse", unboundedJsonParse.GetProperty("query").GetString());

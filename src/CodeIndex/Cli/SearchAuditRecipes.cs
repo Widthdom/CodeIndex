@@ -39,7 +39,37 @@ internal static class SearchAuditRecipes
                     "CancellationToken.None",
                     "Find async or stream paths that may be ignoring caller cancellation.",
                     ["audit", "bug"],
-                    "False positives include intentionally fire-and-forget work and APIs that have no meaningful caller cancellation token.")
+                    "False positives include intentionally fire-and-forget work and APIs that have no meaningful caller cancellation token."),
+                new(
+                    "process-start-info",
+                    "ProcessStartInfo",
+                    "Find external process launch configuration that may need argument, environment, cwd, and shell-use review.",
+                    ["audit", "security"],
+                    "False positives include tests and launch wrappers that already validate arguments and disable shell expansion."),
+                new(
+                    "process-start-direct",
+                    "Process.Start",
+                    "Find direct process launches that may need a shared safe-launch wrapper or explicit argument handling.",
+                    ["audit", "security"],
+                    "False positives include simple URL/document open helpers or test fixtures with trusted inputs."),
+                new(
+                    "recursive-delete",
+                    "Directory.Delete",
+                    "Find recursive or broad delete operations that may need path-boundary and symlink/reparse-point review.",
+                    ["audit", "security"],
+                    "False positives include isolated temporary-directory cleanup guarded by test helpers or workspace-root containment checks."),
+                new(
+                    "infinite-timeout",
+                    "Timeout.InfiniteTimeSpan",
+                    "Find infinite waits that may need bounded timeouts, cancellation, or liveness reporting.",
+                    ["audit", "bug"],
+                    "False positives include deliberate sentinel values that are never passed to blocking waits."),
+                new(
+                    "path-case-heuristic",
+                    "OrdinalIgnoreCase",
+                    "Find case-insensitive path or identifier comparisons that may need filesystem case-sensitivity awareness.",
+                    ["audit", "portability"],
+                    "False positives include non-path protocol tokens, CLI option names, labels, and other intentionally case-insensitive domains.")
             ])
     ];
 
