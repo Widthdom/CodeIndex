@@ -510,6 +510,13 @@ public static class QueryCommandRunner
                 "Use an open-issues JSON file from `gh issue list --state open --json number,title,labels,url`.");
             return CommandExitCodes.UsageError;
         }
+        if (exact && options.Prefix)
+        {
+            WriteValidationError(
+                "--prefix cannot be combined with --exact / --exact-substring (exact uses instr(), not FTS5 prefix phrases).",
+                "Drop --prefix to keep the exact substring path, or drop --exact to opt into FTS5 prefix matching.");
+            return CommandExitCodes.UsageError;
+        }
         if (options.ListRecipes)
         {
             if (options.Query != null || options.RecipeName != null || options.NamedSearchQueries.Count > 0 || options.ExtraNames.Count > 0)
@@ -639,13 +646,6 @@ public static class QueryCommandRunner
                 return RunSearchRecipeIssueDrafts(options, jsonOptions, exact);
 
             return RunSearchRecipe(options, jsonOptions, exact);
-        }
-        if (exact && options.Prefix)
-        {
-            WriteValidationError(
-                "--prefix cannot be combined with --exact / --exact-substring (exact uses instr(), not FTS5 prefix phrases).",
-                "Drop --prefix to keep the exact substring path, or drop --exact to opt into FTS5 prefix matching.");
-            return CommandExitCodes.UsageError;
         }
         if (TryWriteBlankQueryError(options, "search"))
             return CommandExitCodes.UsageError;

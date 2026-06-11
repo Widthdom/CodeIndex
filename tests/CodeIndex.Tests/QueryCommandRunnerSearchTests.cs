@@ -86,6 +86,32 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_NamedQueriesRejectExactPrefixConflict_Issue3481()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_named_queries_exact_prefix");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                "public class App { void Run() { Authenticate(); } }");
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--named-query", "auth=Authenticate", "--db", dbPath, "--exact-substring", "--prefix"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("--prefix cannot be combined with --exact", stderr, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_GroupByFileCountJsonReturnsRankedGroups_Issue3388()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_group_by_file");
