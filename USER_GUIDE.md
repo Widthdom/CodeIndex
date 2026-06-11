@@ -314,7 +314,9 @@ top-level groups such as `definitions`, `file`, `graph`, `references`,
 `callers`, and `callees`; `--body-only` is shorthand for `--body --fields
 definitions`. When a definition body is longer than the returned slice,
 `body_content_next_start_line` points to the next source line to pass with
-`--body-start`; use `--body-lines` to choose the page size.
+`--body-start`; use `--body-lines` to choose the page size. `inspect --json`
+also includes `body_mode` metadata so clients can see whether body content was
+requested, whether it is present, and which follow-up flags to use.
 
 ```bash
 cdidx search authenticate --json          # ndjson stream, one result per line
@@ -2618,7 +2620,9 @@ AI 向けに上限付き payload が必要な場合、`map`、`inspect`、`outli
 top-level group を選択します。`--body-only` は `--body --fields definitions` の
 shorthand です。definition body が返却 slice より長い場合は
 `body_content_next_start_line` が次に `--body-start` へ渡す source line を示します。
-`--body-lines` で page size を指定できます。
+`--body-lines` で page size を指定できます。`inspect --json` には `body_mode`
+metadata も含まれるため、body content が要求済みか、存在するか、次に使う flag が何かを
+client 側で判断できます。
 
 ```bash
 cdidx search authenticate --json          # ndjson stream、1 行 1 result

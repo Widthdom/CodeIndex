@@ -3374,6 +3374,70 @@ public static class QueryCommandRunner
     private static bool IsInspectListField(string field)
         => field is "definitions" or "nearby_symbols" or "references" or "callers" or "callees";
 
+    private static void AddInspectBodyModeJsonFields(JsonObject payload, QueryCommandOptions options, SymbolAnalysisResult analysis)
+    {
+        var bodyContentPresent = analysis.Definitions.Any(definition => definition.BodyContent != null);
+        var bodyContentTruncated = analysis.Definitions.Any(definition => definition.BodyContentTruncated);
+        var nextStartLine = analysis.Definitions
+            .Where(definition => definition.BodyContentNextStartLine.HasValue)
+            .Select(definition => definition.BodyContentNextStartLine!.Value)
+            .DefaultIfEmpty()
+            .Min();
+
+        var bodyMode = new JsonObject
+        {
+            ["include_body"] = options.IncludeBody,
+            ["definitions_only"] = IsInspectDefinitionsOnlyMode(options),
+            ["body_content_present"] = bodyContentPresent,
+            ["body_content_truncated"] = bodyContentTruncated,
+            ["default_body_lines"] = DbReader.DefinitionBodyMaxLines,
+            ["max_body_lines"] = DbReader.DefinitionBodyMaxRequestedLines,
+            ["hint"] = BuildInspectBodyModeHint(options, bodyContentPresent, bodyContentTruncated),
+        };
+        if (options.BodyStartLine.HasValue)
+            bodyMode["body_start_line"] = options.BodyStartLine.Value;
+        if (options.BodyLines.HasValue)
+            bodyMode["body_lines"] = options.BodyLines.Value;
+        else if (options.IncludeBody)
+            bodyMode["body_lines"] = DbReader.DefinitionBodyMaxLines;
+        if (nextStartLine > 0)
+            bodyMode["next_body_start_line"] = nextStartLine;
+
+        payload["body_mode"] = bodyMode;
+    }
+
+    private static void WriteInspectBodyModeHint(SymbolAnalysisResult analysis, QueryCommandOptions options)
+    {
+        if (analysis.Definitions.Count == 0)
+            return;
+
+        var bodyContentPresent = analysis.Definitions.Any(definition => definition.BodyContent != null);
+        var bodyContentTruncated = analysis.Definitions.Any(definition => definition.BodyContentTruncated);
+        Console.WriteLine($"Body Hint           : {BuildInspectBodyModeHint(options, bodyContentPresent, bodyContentTruncated)}");
+    }
+
+    private static bool IsInspectDefinitionsOnlyMode(QueryCommandOptions options)
+        => options.IncludeBody
+            && options.InspectFields is { Count: 1 } fields
+            && string.Equals(fields[0], "definitions", StringComparison.Ordinal);
+
+    private static string BuildInspectBodyModeHint(QueryCommandOptions options, bool bodyContentPresent, bool bodyContentTruncated)
+    {
+        if (!options.IncludeBody)
+            return "Add `--body` for definition body snippets in JSON, or use `--body-only` for body-focused JSON. Page long bodies with `--body-start <line> --body-lines <n>`.";
+
+        if (!options.Json)
+            return "Body content was requested, but human inspect output stays summary-only; use `--json --fields body` or `--body-only` to show `body_content`.";
+
+        if (bodyContentTruncated)
+            return "Use each definition's `body_content_next_start_line` with `--body-start <line>` and optionally `--body-lines <n>` to fetch the next body slice.";
+
+        if (bodyContentPresent)
+            return "Body content is present under each definition's `body_content` field.";
+
+        return "No definition body content is available for the matched definitions.";
+    }
+
     public static int RunInspect(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var previewOptionError = ValidatePreviewOptions("inspect", cmdArgs, allowMaxLineWidth: true, allowFocusOptions: false);
@@ -3463,6 +3527,7 @@ public static class QueryCommandRunner
                 if (compactTruncation != null)
                     AddCompactJsonFields(payload, compactLimit, compactTruncation);
                 ApplyInspectFieldSelection(payload, options, jsonOptions);
+                AddInspectBodyModeJsonFields(payload, options, analysis);
                 Console.WriteLine(payload.ToJsonString(jsonOptions));
             }
             else
@@ -3499,6 +3564,7 @@ public static class QueryCommandRunner
                     }
                 }
                 WriteExactZeroHint(analysis.ExactZeroHint);
+                WriteInspectBodyModeHint(analysis, options);
                 WriteRepoMapSection("Definitions", analysis.Definitions.Select(item => $"{item.Kind,-10} {item.Name,-24} {item.Path}:{item.StartLine}-{item.EndLine}"));
                 WriteRepoMapSection("Nearby symbols", analysis.NearbySymbols.Select(item => $"{item.Kind,-10} {item.Name,-24} {item.Path}:{item.StartLine}-{item.EndLine}"));
                 WriteRepoMapSection("References", analysis.References.Select(item => $"{item.Path}:{item.Line}:{item.Column}  {item.Context}"));

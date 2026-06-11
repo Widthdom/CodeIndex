@@ -323,6 +323,89 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunInspect_JsonWithoutBody_IncludesBodyModeHint_Issue3441()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_body_mode_json");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Target.cs",
+                "csharp",
+                """
+                public class Target
+                {
+                    public int Compute()
+                    {
+                        return 42;
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["Compute", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var definition = json.GetProperty("definitions").EnumerateArray().Single();
+            var bodyMode = json.GetProperty("body_mode");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(JsonValueKind.Null, definition.GetProperty("body_content").ValueKind);
+            Assert.False(bodyMode.GetProperty("include_body").GetBoolean());
+            Assert.False(bodyMode.GetProperty("definitions_only").GetBoolean());
+            Assert.False(bodyMode.GetProperty("body_content_present").GetBoolean());
+            Assert.Equal(DbReader.DefinitionBodyMaxLines, bodyMode.GetProperty("default_body_lines").GetInt32());
+            Assert.Equal(DbReader.DefinitionBodyMaxRequestedLines, bodyMode.GetProperty("max_body_lines").GetInt32());
+            Assert.Contains("--body-only", bodyMode.GetProperty("hint").GetString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunInspect_HumanWithoutBody_PrintsBodyModeHint_Issue3441()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_body_mode_human");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Target.cs",
+                "csharp",
+                """
+                public class Target
+                {
+                    public int Compute()
+                    {
+                        return 42;
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["Compute", "--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Contains("Body Hint", stdout, StringComparison.Ordinal);
+            Assert.Contains("--body", stdout, StringComparison.Ordinal);
+            Assert.Contains("--body-only", stdout, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunOutline_IndentsByContainerDepth()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_depth");
