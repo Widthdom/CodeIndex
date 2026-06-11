@@ -255,6 +255,7 @@ public partial class DbReader
         // ある。call-graph 専用コマンド (`callers` / `callees`) 側では metadata
         // 種別の拒否を CLI / MCP boundary で引き続き行う — そちらは別契約。
         sql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "src", "depsLang")}";
+        AppendDependencyGeneratedFilter(ref sql, sourceFilterAlias);
         if (lang != null)
             sql += " AND src.lang = @lang";
         if (!reverse && pathPatterns is { Count: > 0 })
@@ -365,6 +366,7 @@ public partial class DbReader
                 JOIN files dst ON s.file_id = dst.id
                 WHERE 1 = 1";
         sql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "dst", "depsTargetLang")}";
+        AppendDependencyGeneratedFilter(ref sql, targetFilterAlias);
         if (lang != null)
             sql += " AND dst.lang = @lang";
         if (reverse && pathPatterns is { Count: > 0 })
@@ -553,5 +555,11 @@ public partial class DbReader
             });
         }
         return results;
+    }
+
+    private void AppendDependencyGeneratedFilter(ref string sql, string fileAlias)
+    {
+        if (!IncludeGeneratedScope.Value && _fileColumns.Contains("generated"))
+            sql += $" AND COALESCE({fileAlias}.generated, 0) = 0";
     }
 }

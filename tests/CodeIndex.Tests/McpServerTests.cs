@@ -4088,6 +4088,21 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsList_DepsExposesGeneratedCodeFilter_Issue3544()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var tools = response["result"]!["tools"]!.AsArray();
+        var depsTool = tools.First(t => t!["name"]!.GetValue<string>() == "deps")!;
+        var includeGenerated = depsTool["inputSchema"]!["properties"]!["includeGenerated"]!;
+
+        Assert.Equal("boolean", includeGenerated["type"]!.GetValue<string>());
+        Assert.False(includeGenerated["default"]!.GetValue<bool>());
+        Assert.Contains("source or target", includeGenerated["description"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void ToolsList_IndexHasRequiredPathParam()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
@@ -7213,7 +7228,7 @@ public class McpServerTests : IDisposable
         Assert.All(nodes, node => Assert.StartsWith("src/Cycle", node));
     }
 
-    private static long InsertDependencyFile(DbWriter writer, string path)
+    private static long InsertDependencyFile(DbWriter writer, string path, bool generated = false)
     {
         return writer.UpsertFile(new FileRecord
         {
@@ -7223,6 +7238,7 @@ public class McpServerTests : IDisposable
             Lines = 1,
             Modified = new DateTime(2026, 6, 6, 0, 0, 0, DateTimeKind.Utc),
             Checksum = Guid.NewGuid().ToString("N"),
+            Generated = generated,
         });
     }
 
@@ -7273,6 +7289,35 @@ public class McpServerTests : IDisposable
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
+    }
+
+    [Fact]
+    public void ToolsCall_Deps_IncludeGeneratedControlsGeneratedEdges_Issue3544()
+    {
+        var writer = new DbWriter(_db.Connection);
+        var targetId = InsertDependencyFile(writer, "src/DependencyTarget.cs");
+        var generatedSourceId = InsertDependencyFile(writer, "src/GeneratedSource.g.cs", generated: true);
+        InsertDependencySymbols(writer, targetId, ["DependencyTarget"]);
+        InsertDependencyReferences(writer, generatedSourceId, ["DependencyTarget"]);
+
+        var defaultRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"deps","arguments":{"path":"src/GeneratedSource.g.cs","lang":"csharp"}}}""")!;
+        var defaultResponse = _server.HandleMessage(defaultRequest)!;
+        var defaultStructured = defaultResponse["result"]!["structuredContent"]!;
+
+        Assert.Equal(0, defaultStructured["count"]!.GetValue<int>());
+        Assert.False(defaultStructured["includeGenerated"]!.GetValue<bool>());
+        Assert.True(defaultStructured["generated_code_filter_supported"]!.GetValue<bool>());
+        Assert.Equal("source_and_target_files", defaultStructured["generated_code_scope"]!.GetValue<string>());
+
+        var includeRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"deps","arguments":{"path":"src/GeneratedSource.g.cs","lang":"csharp","includeGenerated":true}}}""")!;
+        var includeResponse = _server.HandleMessage(includeRequest)!;
+        var includeStructured = includeResponse["result"]!["structuredContent"]!;
+        var edge = Assert.Single(includeStructured["edges"]!.AsArray());
+
+        Assert.Equal(1, includeStructured["count"]!.GetValue<int>());
+        Assert.True(includeStructured["includeGenerated"]!.GetValue<bool>());
+        Assert.Equal("src/GeneratedSource.g.cs", edge!["sourcePath"]!.GetValue<string>());
+        Assert.Equal("src/DependencyTarget.cs", edge["targetPath"]!.GetValue<string>());
     }
 
     [Fact]
