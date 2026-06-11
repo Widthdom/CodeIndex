@@ -381,6 +381,53 @@ public partial class QueryCommandRunnerTests
         }
     }
 
+    [Fact]
+    public void RunSearch_RecipeJsonWithRawFtsReportsEffectiveSanitizedMode_Issue3558()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_recipe_json_raw_fts_3558");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                """
+                using System.Text.Json;
+
+                public sealed class App
+                {
+                    public void Run()
+                    {
+                        JsonDocument.Parse("{}");
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "risky-code", "--db", dbPath, "--lang", "csharp", "--limit", "2", "--json", "--fts"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var result = document.RootElement
+                .GetProperty("queries")
+                .EnumerateArray()
+                .Single(item => item.GetProperty("name").GetString() == "unbounded-json-parse")
+                .GetProperty("results")
+                .EnumerateArray()
+                .Single();
+
+            Assert.False(result.GetProperty("raw_fts").GetBoolean());
+            Assert.False(result.TryGetProperty("literal_highlight_warning", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Theory]
     [InlineData("count")]
     [InlineData("compact")]

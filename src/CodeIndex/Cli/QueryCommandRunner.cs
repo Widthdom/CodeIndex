@@ -937,7 +937,7 @@ public static class QueryCommandRunner
                 !options.NoVisibilityRank,
                 guardFilters: options.GuardFilters,
                 guardWindow: options.GuardWindow);
-            var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query);
+            var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, rawFtsOverride: false);
             total += rows.Count;
             queryResults.Add(new SearchRecipeQueryResultJsonResult(
                 recipeQuery.Name,
@@ -1044,11 +1044,17 @@ public static class QueryCommandRunner
             query.FalsePositiveGuidance,
             query.ExactSubstring)).ToList());
 
-    private static List<SearchDisplayRow> BuildSearchDisplayRows(List<SearchResult> results, QueryCommandOptions options, bool exact, string? queryOverride = null)
+    private static List<SearchDisplayRow> BuildSearchDisplayRows(
+        List<SearchResult> results,
+        QueryCommandOptions options,
+        bool exact,
+        string? queryOverride = null,
+        bool? rawFtsOverride = null)
     {
         var rows = new List<SearchDisplayRow>(results.Count);
         var seenMatchLocations = options.NoDedup ? null : new HashSet<string>(StringComparer.Ordinal);
         var displayQuery = queryOverride ?? options.Query!;
+        var rawFts = rawFtsOverride ?? options.RawFts;
         var queryContext = SearchSnippetFormatter.PrepareQueryContext(displayQuery);
         foreach (var result in results)
         {
@@ -1061,9 +1067,9 @@ public static class QueryCommandRunner
                 result.Lang,
                 options.SnippetFocus,
                 exposeLiteralHighlights: exact);
-            SearchSnippetFormatter.ApplyOutputMetadata(compact, options.SnippetLines, options.MaxLineWidth, exact, options.RawFts);
+            SearchSnippetFormatter.ApplyOutputMetadata(compact, options.SnippetLines, options.MaxLineWidth, exact, rawFts);
 
-            if (!options.RawFts && compact.MatchLines.Count == 0 && compact.Highlights.Count == 0)
+            if (!rawFts && compact.MatchLines.Count == 0 && compact.Highlights.Count == 0)
                 continue;
 
             if (seenMatchLocations != null && compact.MatchLines.Count > 0)
