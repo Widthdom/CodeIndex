@@ -1535,7 +1535,7 @@ Run `cdidx status --log-path` to print the active log directory without opening 
 
 You can check a `.cdidx/config.json` or `.cdidxrc.json` file into a repository to set per-project defaults instead of relying on shell-profile or CI env vars (#1571). On startup `cdidx` walks upward from the current working directory looking for the first project config file, validates its schema, and materializes recognized keys as process environment variables — so every existing env-var consumer picks them up without further changes.
 
-Precedence is **CLI flag > environment variable > config file > built-in default**. A config-file value is applied only when the matching env var is not already set in the process, so a value the user already exported in the shell or CI always wins. Config JSON is bounded to 64 KiB and a conservative nesting depth before schema validation. A malformed file (invalid JSON, unknown key, wrong type, or excessive nesting) is a hard error: cdidx exits `1` with the file path and the offending field; set `CDIDX_DISABLE_CONFIG_FILE=1` to bypass the file entirely.
+Precedence is **CLI flag > environment variable > config file > built-in default**. A config-file value is applied only when the matching env var is not already set in the process, so a value the user already exported in the shell or CI always wins. Config JSON is bounded to 64 KiB and a conservative nesting depth before schema validation. A malformed file (invalid JSON, unknown key, wrong type, or excessive nesting) is a hard error: cdidx exits `1` with the file path and all detected offending fields; set `CDIDX_DISABLE_CONFIG_FILE=1` to bypass the file entirely.
 
 Secrets are intentionally **not** loadable from the file: `CDIDX_GITHUB_TOKEN`, `CDIDX_MCP_AUTH_TOKEN`, and `CDIDX_MCP_HTTP_TOKEN` are env-only so tokens never get checked into version control.
 
@@ -1562,14 +1562,15 @@ Supported schema (top-level keys are snake_case; nested indexing kind keys keep 
       "deny":  ["index", "backfill_fold"]              // → CDIDX_MCP_TOOLS_DENY
     },
     "rate_limit": {
-      "rps":   5,  // → CDIDX_MCP_RATE_LIMIT_RPS
-      "burst": 10  // → CDIDX_MCP_RATE_LIMIT_BURST
+      "rps": 5,                       // → CDIDX_MCP_RATE_LIMIT_RPS
+      "burst": 10,                    // → CDIDX_MCP_RATE_LIMIT_BURST
+      "bucket_idle_seconds": 900      // → CDIDX_MCP_RATE_LIMIT_BUCKET_IDLE_SECONDS
     }
   }
 }
 ```
 
-JSON5-style line comments (`//`) and trailing commas are accepted so the file stays human-editable. The optional `$schema` key is ignored at runtime; it is honored only so editors that recognize JSON Schema references can offer completion. Setting `disable_persistent_log` to `false` is a no-op (absence already means "logging enabled") — only `true` exports `CDIDX_DISABLE_PERSISTENT_LOG=1`. Config-sourced `metrics_path` and `global_tool_log_dir` values are resolved from the config workspace root and must stay inside that workspace; use the CLI flag or a real environment variable when you intentionally need an outside destination. `stale_after` uses the same compact duration format as `status --check --stale-after`: `30m`, `2h`, or `7d`, up to `30d`. `suggestion_dedup_threshold` sets the MCP suggestion fuzzy-deduplication cutoff as a number from `0` to `1`; the built-in default is `0.85`, and `cdidx mcp --suggestion-dedup-threshold <0..1>` overrides it for one MCP session. `suggestion_max_age_days` and `suggestion_max_count` bound the live `.cdidx/suggestions-*.json` store; pruned records are appended to `.cdidx/suggestions-*.archive.jsonl`, whose active file is capped at 8 MiB and rotates up to three retained generations (`.1` through `.3`). Defaults are 365 days and 5000 records, and config-file values may not exceed 3650 days or 100000 records. Matching environment variables above those caps fall back to the defaults. String-array settings such as `indexing.includeKinds`, `indexing.excludeKinds`, `mcp.tools.allow`, and `mcp.tools.deny` are capped at 128 entries and 256 characters per item before they are joined into environment variables. `indexing.includeKinds` and `indexing.excludeKinds` set the default symbol-kind filter for `cdidx index`; CLI flags `--include-symbol-kind <kind>[,<kind>]` and `--exclude-symbol-kind <kind>[,<kind>]` override those env-backed defaults for a single run.
+JSON5-style line comments (`//`) and trailing commas are accepted so the file stays human-editable. The optional `$schema` key is ignored at runtime; it is honored only so editors that recognize JSON Schema references can offer completion. Setting `disable_persistent_log` to `false` is a no-op (absence already means "logging enabled") — only `true` exports `CDIDX_DISABLE_PERSISTENT_LOG=1`. Config-sourced `metrics_path` and `global_tool_log_dir` values are resolved from the config workspace root and must stay inside that workspace; use the CLI flag or a real environment variable when you intentionally need an outside destination. `stale_after` uses the same compact duration format as `status --check --stale-after`: `30m`, `2h`, or `7d`, up to `30d`. `suggestion_dedup_threshold` sets the MCP suggestion fuzzy-deduplication cutoff as a number from `0` to `1`; the built-in default is `0.85`, and `cdidx mcp --suggestion-dedup-threshold <0..1>` overrides it for one MCP session. `suggestion_max_age_days` and `suggestion_max_count` bound the live `.cdidx/suggestions-*.json` store; pruned records are appended to `.cdidx/suggestions-*.archive.jsonl`, whose active file is capped at 8 MiB and rotates up to three retained generations (`.1` through `.3`). Defaults are 365 days and 5000 records, and config-file values may not exceed 3650 days or 100000 records. Matching environment variables above those caps fall back to the defaults. `mcp.rate_limit.bucket_idle_seconds` sets the same idle bucket TTL as `CDIDX_MCP_RATE_LIMIT_BUCKET_IDLE_SECONDS`; invalid runtime values fall back to the default with a warning. String-array settings such as `indexing.includeKinds`, `indexing.excludeKinds`, `mcp.tools.allow`, and `mcp.tools.deny` are capped at 128 entries and 256 characters per item before they are joined into environment variables. `indexing.includeKinds` and `indexing.excludeKinds` set the default symbol-kind filter for `cdidx index`; CLI flags `--include-symbol-kind <kind>[,<kind>]` and `--exclude-symbol-kind <kind>[,<kind>]` override those env-backed defaults for a single run.
 
 ## How it works
 
@@ -3830,7 +3831,7 @@ MCP のレスポンスサイズ上限は、環境変数 override で guard が�
 
 シェルプロファイルや CI の環境変数に頼らず、プロジェクトごとの既定値を `.cdidx/config.json` または `.cdidxrc.json` ファイルとしてリポジトリにチェックインできます (#1571)。`cdidx` は起動時にカレントディレクトリから上方向に最初のプロジェクト設定ファイルを探索し、スキーマを検証してから既知のキーをプロセス環境変数として注入します。これにより、既存の環境変数コンシューマはコード変更なしに同じ値を受け取れます。
 
-優先順位は **CLI フラグ > 環境変数 > 設定ファイル > 組み込み既定値** です。設定ファイル由来の値は、対応する環境変数がプロセスで未設定の場合にのみ適用されるため、シェルや CI で既に export されている値が常に優先されます。設定 JSON はスキーマ検証前に 64 KiB と保守的なネスト深度の上限で検査されます。不正なファイル（無効な JSON、未知のキー、型違い、過度なネスト）は hard error として扱われ、cdidx はファイルパスと該当フィールドを示して終了コード `1` で終了します。完全にバイパスしたい場合は `CDIDX_DISABLE_CONFIG_FILE=1` を設定してください。
+優先順位は **CLI フラグ > 環境変数 > 設定ファイル > 組み込み既定値** です。設定ファイル由来の値は、対応する環境変数がプロセスで未設定の場合にのみ適用されるため、シェルや CI で既に export されている値が常に優先されます。設定 JSON はスキーマ検証前に 64 KiB と保守的なネスト深度の上限で検査されます。不正なファイル（無効な JSON、未知のキー、型違い、過度なネスト）は hard error として扱われ、cdidx はファイルパスと検出できた該当フィールドすべてを示して終了コード `1` で終了します。完全にバイパスしたい場合は `CDIDX_DISABLE_CONFIG_FILE=1` を設定してください。
 
 シークレットは意図的に**ファイルから読み込めません**。`CDIDX_GITHUB_TOKEN` / `CDIDX_MCP_AUTH_TOKEN` / `CDIDX_MCP_HTTP_TOKEN` は環境変数専用としており、トークンがバージョン管理に混入するのを防ぎます。
 
@@ -3857,14 +3858,15 @@ MCP のレスポンスサイズ上限は、環境変数 override で guard が�
       "deny":  ["index", "backfill_fold"]              // → CDIDX_MCP_TOOLS_DENY
     },
     "rate_limit": {
-      "rps":   5,  // → CDIDX_MCP_RATE_LIMIT_RPS
-      "burst": 10  // → CDIDX_MCP_RATE_LIMIT_BURST
+      "rps": 5,                       // → CDIDX_MCP_RATE_LIMIT_RPS
+      "burst": 10,                    // → CDIDX_MCP_RATE_LIMIT_BURST
+      "bucket_idle_seconds": 900      // → CDIDX_MCP_RATE_LIMIT_BUCKET_IDLE_SECONDS
     }
   }
 }
 ```
 
-人手で編集しやすいよう JSON5 形式の行コメント（`//`）と末尾カンマを許容します。任意の `$schema` キーはランタイムでは無視され、JSON Schema 参照をサポートするエディタが補完を提供するためだけに認識されます。`disable_persistent_log` を `false` に設定しても何も起きません（不在のままで "ログ有効" が既定）— `true` の場合のみ `CDIDX_DISABLE_PERSISTENT_LOG=1` を export します。config 由来の `metrics_path` と `global_tool_log_dir` は設定ファイルの workspace root から解決され、その workspace 内に収まる必要があります。意図的に外部の出力先を使う場合は CLI フラグまたは実際の環境変数を使ってください。`stale_after` は `status --check --stale-after` と同じ compact duration 形式（`30m` / `2h` / `7d`、最大 `30d`）です。`suggestion_dedup_threshold` は MCP suggestion の fuzzy deduplication しきい値を `0` から `1` の数値で設定します。組み込み既定値は `0.85` で、`cdidx mcp --suggestion-dedup-threshold <0..1>` は 1 回の MCP session だけこの値を上書きします。`suggestion_max_age_days` と `suggestion_max_count` は live の `.cdidx/suggestions-*.json` store の上限を設定し、prune された record は `.cdidx/suggestions-*.archive.jsonl` に追記されます。この active archive は 8 MiB で上限管理され、最大 3 世代（`.1` から `.3`）までローテーションされます。既定値は 365 日と 5000 件で、config-file 値は 3650 日または 100000 件を超えられません。同じ環境変数がこの上限を超えた場合は既定値へ戻ります。`indexing.includeKinds`、`indexing.excludeKinds`、`mcp.tools.allow`、`mcp.tools.deny` のような string array 設定は、環境変数へ join される前に 128 件、1 要素 256 文字までに制限されます。`indexing.includeKinds` と `indexing.excludeKinds` は `cdidx index` の symbol-kind filter 既定値を設定し、CLI フラグ `--include-symbol-kind <kind>[,<kind>]` / `--exclude-symbol-kind <kind>[,<kind>]` はその env 経由の既定値を 1 回の実行だけ上書きします。
+人手で編集しやすいよう JSON5 形式の行コメント（`//`）と末尾カンマを許容します。任意の `$schema` キーはランタイムでは無視され、JSON Schema 参照をサポートするエディタが補完を提供するためだけに認識されます。`disable_persistent_log` を `false` に設定しても何も起きません（不在のままで "ログ有効" が既定）— `true` の場合のみ `CDIDX_DISABLE_PERSISTENT_LOG=1` を export します。config 由来の `metrics_path` と `global_tool_log_dir` は設定ファイルの workspace root から解決され、その workspace 内に収まる必要があります。意図的に外部の出力先を使う場合は CLI フラグまたは実際の環境変数を使ってください。`stale_after` は `status --check --stale-after` と同じ compact duration 形式（`30m` / `2h` / `7d`、最大 `30d`）です。`suggestion_dedup_threshold` は MCP suggestion の fuzzy deduplication しきい値を `0` から `1` の数値で設定します。組み込み既定値は `0.85` で、`cdidx mcp --suggestion-dedup-threshold <0..1>` は 1 回の MCP session だけこの値を上書きします。`suggestion_max_age_days` と `suggestion_max_count` は live の `.cdidx/suggestions-*.json` store の上限を設定し、prune された record は `.cdidx/suggestions-*.archive.jsonl` に追記されます。この active archive は 8 MiB で上限管理され、最大 3 世代（`.1` から `.3`）までローテーションされます。既定値は 365 日と 5000 件で、config-file 値は 3650 日または 100000 件を超えられません。同じ環境変数がこの上限を超えた場合は既定値へ戻ります。`mcp.rate_limit.bucket_idle_seconds` は `CDIDX_MCP_RATE_LIMIT_BUCKET_IDLE_SECONDS` と同じ idle bucket TTL を設定します。不正な runtime 値は警告付きで既定値へ戻ります。`indexing.includeKinds`、`indexing.excludeKinds`、`mcp.tools.allow`、`mcp.tools.deny` のような string array 設定は、環境変数へ join される前に 128 件、1 要素 256 文字までに制限されます。`indexing.includeKinds` と `indexing.excludeKinds` は `cdidx index` の symbol-kind filter 既定値を設定し、CLI フラグ `--include-symbol-kind <kind>[,<kind>]` / `--exclude-symbol-kind <kind>[,<kind>]` はその env 経由の既定値を 1 回の実行だけ上書きします。
 
 ## 動作の仕組み
 
