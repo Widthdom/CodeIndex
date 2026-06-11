@@ -6391,9 +6391,10 @@ public static class QueryCommandRunner
                 case "--limit":
                 case "--max-results":
                 case "--top":
-                    if (!TryReadRawOptionValue(args, ref i, normalizedArg, inlineValue, out var limitValue, out var missingLimitError))
+                    var limitOptionName = normalizedArg == "--top" ? "--limit" : normalizedArg;
+                    if (!TryReadRawOptionValue(args, ref i, limitOptionName, inlineValue, out var limitValue, out var missingLimitError))
                         AddParseError(missingLimitError!);
-                    else if (TryParsePositiveInt(limitValue!, normalizedArg, out var parsedLimit, out var limitError))
+                    else if (TryParsePositiveInt(limitValue!, limitOptionName, out var parsedLimit, out var limitError))
                     {
                         WarnIfDuplicateSingleValueOption("--limit", limitValue!);
                         limit = parsedLimit;
