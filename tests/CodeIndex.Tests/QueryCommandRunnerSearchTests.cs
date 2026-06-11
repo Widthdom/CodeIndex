@@ -3876,6 +3876,38 @@ jobs:
     }
 
     [Fact]
+    public void RunFind_AllScopeCountJsonLineCapIsNonAuthoritative_Issue3566()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_find_all_line_cap_authority_3566");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var content = string.Concat(Enumerable.Repeat("alpha\n", QueryCommandRunner.FindAllLineScanLimit + 1));
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/large.txt", "text", content);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["alpha", "--db", dbPath, "--all", "--json", "--count"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(QueryCommandRunner.FindAllLineScanLimit, json.GetProperty("count").GetInt32());
+            Assert.True(json.GetProperty("scan_truncated").GetBoolean());
+            Assert.True(json.GetProperty("scan_cap_reached").GetBoolean());
+            Assert.Equal("line_scan_limit", json.GetProperty("scan_truncation_reason").GetString());
+            Assert.True(json.GetProperty("degraded").GetBoolean());
+            Assert.False(json.GetProperty("authoritative_count").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunFind_PathGlobsMatchExpectedFiles()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_find_path_glob");

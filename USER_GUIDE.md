@@ -319,6 +319,14 @@ source line hits the body byte cap, continuation still advances to the following
 source line because body paging is line-based. `inspect --json` also includes
 `body_mode` metadata so clients can see whether body content was requested,
 whether it is present, and which follow-up flags to use.
+Count-only JSON (`--count --json` or `--format count` where supported) is a
+single object with `count`, applied `query_context`, freshness metadata
+(`indexed_file_count`, `indexed_at`, `freshness_available`), and trust flags
+`degraded` / `authoritative_count`. Commands that count matched files also
+include `files`; the older `file_count` field remains as a compatibility alias
+with the same value and is not scheduled for removal before the next major
+release. New consumers should read `files` and treat `authoritative_count=false`
+as a signal to inspect the accompanying readiness or graph/exact trust fields.
 
 ```bash
 cdidx search authenticate --json          # ndjson stream, one result per line
@@ -328,11 +336,6 @@ cdidx map --compact                       # capped JSON with truncation metadata
 cdidx inspect Compute --body-only         # definitions with body_content only
 cdidx inspect Compute --body --body-start 40 --body-lines 40
 ```
-
-For `cdidx find --count --json`, `files` is the canonical matched-file count.
-The older `file_count` field remains as a deprecated compatibility alias with
-the same value and is not scheduled for removal before the next major release;
-new consumers should read `files`.
 
 ## Editor and index portability
 
@@ -2669,6 +2672,14 @@ shorthand です。definition body が返却 slice より長い場合は
 `--body-lines` で page size を指定できます。`inspect --json` には `body_mode`
 metadata も含まれるため、body content が要求済みか、存在するか、次に使う flag が何かを
 client 側で判断できます。
+count-only JSON（対応 command の `--count --json` または `--format count`）は、
+`count`、適用済み `query_context`、freshness metadata（`indexed_file_count`、
+`indexed_at`、`freshness_available`）、trust flag の `degraded` /
+`authoritative_count` を持つ単一 object です。matched file を数える command は
+`files` も含みます。古い `file_count` field は同じ値の互換 alias として残っており、
+少なくとも次の major release までは削除予定はありません。新しい consumer は
+`files` を読み、`authoritative_count=false` の場合は同じ payload の readiness または
+graph/exact trust field を確認してください。
 
 ```bash
 cdidx search authenticate --json          # ndjson stream、1 行 1 result

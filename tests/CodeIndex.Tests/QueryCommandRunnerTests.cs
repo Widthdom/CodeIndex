@@ -4058,6 +4058,13 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(25, json.GetProperty("count").GetInt32());
+            Assert.False(json.GetProperty("degraded").GetBoolean());
+            Assert.True(json.GetProperty("authoritative_count").GetBoolean());
+            Assert.True(json.GetProperty("freshness_available").GetBoolean());
+            Assert.True(json.GetProperty("indexed_file_count").GetInt32() > 0);
+            var queryContext = json.GetProperty("query_context");
+            Assert.True(queryContext.GetProperty("count").GetBoolean());
+            Assert.Equal(useExplicitLimit ? 5 : 20, queryContext.GetProperty("limit").GetInt32());
 
             switch (command)
             {
@@ -4068,12 +4075,15 @@ public partial class QueryCommandRunnerTests
                 case "callers":
                 case "callees":
                     Assert.Equal(25, json.GetProperty("files").GetInt32());
+                    Assert.Equal(25, json.GetProperty("file_count").GetInt32());
                     break;
                 case "find":
                     Assert.Equal(1, json.GetProperty("files").GetInt32());
                     Assert.Equal(1, json.GetProperty("file_count").GetInt32());
                     break;
                 case "files":
+                    Assert.Equal(25, json.GetProperty("files").GetInt32());
+                    Assert.Equal(25, json.GetProperty("file_count").GetInt32());
                     break;
                 default:
                     throw new ArgumentOutOfRangeException(nameof(command), command, null);

@@ -668,7 +668,15 @@ public static class QueryCommandRunner
                 {
                     if (options.Json)
                     {
-                        Console.WriteLine(BuildJsonZeroResultPayload(reader, jsonOptions, includeFiles: true, query: options.Query, ftsQueryDiagnostics: queryDiagnostics, queryOptions: options, exactSubstringHint: exactSubstringHint).ToJsonString(jsonOptions));
+                        Console.WriteLine(BuildCountJsonPayload(
+                            reader,
+                            jsonOptions,
+                            count: 0,
+                            files: 0,
+                            query: options.Query,
+                            queryOptions: options,
+                            ftsQueryDiagnostics: queryDiagnostics,
+                            exactSubstringHint: exactSubstringHint).ToJsonString(jsonOptions));
                     }
                     else
                     {
@@ -680,7 +688,15 @@ public static class QueryCommandRunner
 
                 if (options.Json)
                 {
-                    Console.WriteLine(JsonSerializer.Serialize(new QueryCountFilesJsonResult(counts.Count, counts.FileCount, options.Query), CliJsonSerializerContextFactory.Create(jsonOptions).QueryCountFilesJsonResult));
+                    Console.WriteLine(BuildCountJsonPayload(
+                        reader,
+                        jsonOptions,
+                        counts.Count,
+                        counts.FileCount,
+                        query: options.Query,
+                        queryOptions: options,
+                        ftsQueryDiagnostics: queryDiagnostics,
+                        exactSubstringHint: exactSubstringHint).ToJsonString(jsonOptions));
                 }
                 else
                 {
@@ -1675,20 +1691,14 @@ public static class QueryCommandRunner
                 if (counts.Count == 0)
                 {
                     Console.WriteLine(options.Json
-                        ? BuildJsonZeroResultPayload(reader, jsonOptions, includeFiles: true, exactZeroHint: exactZeroHintForCount, exactSignal: exact ? exactSignalForCount : null, queryOptions: options).ToJsonString(jsonOptions)
+                        ? BuildCountJsonPayload(reader, jsonOptions, count: 0, files: 0, query: options.Query, exactZeroHint: exactZeroHintForCount, exactSignal: exact ? exactSignalForCount : null, queryOptions: options).ToJsonString(jsonOptions)
                         : "0");
                     return CommandExitCodes.Success;
                 }
 
                 if (options.Json)
                 {
-                    var payload = new JsonObject
-                    {
-                        ["count"] = counts.Count,
-                        ["files"] = counts.FileCount,
-                    };
-                    if (exact)
-                        AddExactJsonFields(payload, exactSignalForCount);
+                    var payload = BuildCountJsonPayload(reader, jsonOptions, counts.Count, counts.FileCount, query: options.Query, exactSignal: exact ? exactSignalForCount : null, queryOptions: options);
                     Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
                 else
@@ -2543,20 +2553,14 @@ public static class QueryCommandRunner
                 if (counts.Count == 0)
                 {
                     Console.WriteLine(options.Json
-                        ? BuildJsonZeroResultPayload(reader, jsonOptions, includeFiles: true, exactZeroHint: exactZeroHintForCount, exactSignal: hasExactPredicateForCount ? exactSignalForCount : null, queryOptions: options).ToJsonString(jsonOptions)
+                        ? BuildCountJsonPayload(reader, jsonOptions, count: 0, files: 0, query: options.Query, exactZeroHint: exactZeroHintForCount, exactSignal: hasExactPredicateForCount ? exactSignalForCount : null, queryOptions: options).ToJsonString(jsonOptions)
                         : "0");
                     return CommandExitCodes.Success;
                 }
 
                 if (options.Json)
                 {
-                    var payload = new JsonObject
-                    {
-                        ["count"] = counts.Count,
-                        ["files"] = counts.FileCount,
-                    };
-                    if (hasExactPredicateForCount)
-                        AddExactJsonFields(payload, exactSignalForCount);
+                    var payload = BuildCountJsonPayload(reader, jsonOptions, counts.Count, counts.FileCount, query: options.Query, exactSignal: hasExactPredicateForCount ? exactSignalForCount : null, queryOptions: options);
                     Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
                 else
@@ -2651,13 +2655,13 @@ public static class QueryCommandRunner
                 if (counts.Count == 0)
                 {
                     Console.WriteLine(options.Json
-                        ? BuildJsonZeroResultPayload(reader, jsonOptions).ToJsonString(jsonOptions)
+                        ? BuildCountJsonPayload(reader, jsonOptions, count: 0, files: 0, query: options.Query, queryOptions: options).ToJsonString(jsonOptions)
                         : "0");
                     return CommandExitCodes.Success;
                 }
 
                 Console.WriteLine(options.Json
-                    ? JsonSerializer.Serialize(new QueryCountJsonResult(counts.Count), CliJsonSerializerContextFactory.Create(jsonOptions).QueryCountJsonResult)
+                    ? BuildCountJsonPayload(reader, jsonOptions, counts.Count, counts.Count, query: options.Query, queryOptions: options).ToJsonString(jsonOptions)
                     : $"{counts.Count}");
                 return CommandExitCodes.Success;
             }
@@ -2960,11 +2964,14 @@ public static class QueryCommandRunner
                 {
                     if (options.Json)
                     {
-                        var payload = BuildJsonZeroResultPayload(reader, jsonOptions, includeFiles: true, queryOptions: options, extraFields: static payload =>
-                        {
-                            payload["file_count"] = 0;
-                        });
-                        AddFindScanJsonFields(payload, counts.Scan);
+                        var payload = BuildCountJsonPayload(
+                            reader,
+                            jsonOptions,
+                            count: 0,
+                            files: 0,
+                            query: options.Query,
+                            queryOptions: options,
+                            extraFields: payload => AddFindScanJsonFields(payload, counts.Scan));
                         Console.WriteLine(payload.ToJsonString(jsonOptions));
                     }
                     else
@@ -2977,13 +2984,14 @@ public static class QueryCommandRunner
 
                 if (options.Json)
                 {
-                    var payload = new JsonObject
-                    {
-                        ["count"] = counts.Count,
-                        ["files"] = counts.FileCount,
-                        ["file_count"] = counts.FileCount,
-                    };
-                    AddFindScanJsonFields(payload, counts.Scan);
+                    var payload = BuildCountJsonPayload(
+                        reader,
+                        jsonOptions,
+                        counts.Count,
+                        counts.FileCount,
+                        query: options.Query,
+                        queryOptions: options,
+                        extraFields: payload => AddFindScanJsonFields(payload, counts.Scan));
                     Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
                 else
@@ -4616,6 +4624,7 @@ public static class QueryCommandRunner
                             ["query"] = options.Query,
                             ["resolved_name"] = analysis.ResolvedName,
                             ["count"] = 0,
+                            ["files"] = 0,
                             ["file_count"] = 0,
                             ["confirmed_count"] = 0,
                             ["confirmed_file_count"] = 0,
@@ -4640,8 +4649,8 @@ public static class QueryCommandRunner
                         if (!analysis.GraphTableAvailable)
                             payload["note"] = "symbol_references table is missing in this index (legacy or read-only DB). Zero result is degraded, not authoritative.";
                         AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
-                        AddFreshnessHint(payload, reader);
                         AddImpactOptionWarnings(payload, options);
+                        AddCountEnvelopeJsonFields(payload, reader, jsonOptions, options);
                         Console.WriteLine(payload.ToJsonString(jsonOptions));
                     }
                     else
@@ -4715,6 +4724,7 @@ public static class QueryCommandRunner
                         ["query"] = options.Query,
                         ["resolved_name"] = analysis.ResolvedName,
                         ["count"] = visibleCount,
+                        ["files"] = visibleFileCount,
                         ["file_count"] = visibleFileCount,
                         ["confirmed_count"] = confirmedCount,
                         ["confirmed_file_count"] = confirmedFileCount,
@@ -4729,6 +4739,7 @@ public static class QueryCommandRunner
                         payload["truncated_reason"] = analysis.TruncatedReason;
                     AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
                     AddImpactOptionWarnings(payload, options);
+                    AddCountEnvelopeJsonFields(payload, reader, jsonOptions, options);
                     Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
                 else
@@ -8907,14 +8918,24 @@ public static class QueryCommandRunner
             query["since"] = options.Since.Value;
         if (options.CountOnly)
             query["count"] = true;
+        if (options.All)
+            query["all"] = true;
         if (options.RawFts)
             query["fts"] = true;
+        if (options.Regex)
+            query["regex"] = true;
         if (options.Exact)
             query["exact"] = true;
         if (options.Prefix)
             query["prefix"] = true;
         if (options.NoDedup)
             query["dedup"] = false;
+        if (options.RawKinds)
+            query["raw_kinds"] = true;
+        if (options.FocusLine.HasValue)
+            query["focus_line"] = options.FocusLine.Value;
+        if (options.FocusColumn.HasValue)
+            query["focus_column"] = options.FocusColumn.Value;
         if (options.ContextBefore > 0)
             query["before"] = options.ContextBefore;
         if (options.ContextAfter > 0)
@@ -8973,6 +8994,87 @@ public static class QueryCommandRunner
         payload["freshness_available"] = freshness.FreshnessAvailable;
         if (!freshness.FreshnessAvailable && freshness.FreshnessDegradedReason != null)
             payload["freshness_degraded_reason"] = freshness.FreshnessDegradedReason;
+    }
+
+    private static JsonObject BuildCountJsonPayload(
+        DbReader reader,
+        JsonSerializerOptions jsonOptions,
+        int count,
+        int? files = null,
+        string? query = null,
+        QueryCommandOptions? queryOptions = null,
+        bool? graphTableAvailable = null,
+        bool degraded = false,
+        ExactQuerySignal? exactSignal = null,
+        ExactZeroHintResult? exactZeroHint = null,
+        FtsQueryDiagnostics? ftsQueryDiagnostics = null,
+        SearchQueryHint? exactSubstringHint = null,
+        Action<JsonObject>? extraFields = null,
+        bool deferAuthority = false)
+    {
+        var payload = new JsonObject
+        {
+            ["count"] = count,
+        };
+        if (files.HasValue)
+        {
+            payload["files"] = files.Value;
+            payload["file_count"] = files.Value;
+        }
+        if (query != null)
+            payload["query"] = query;
+        if (graphTableAvailable.HasValue)
+            payload["graph_table_available"] = graphTableAvailable.Value;
+        if (degraded)
+            payload["degraded"] = true;
+        if (exactSignal.HasValue)
+            AddExactJsonFields(payload, exactSignal.Value);
+        if (exactZeroHint != null)
+            payload["exact_zero_hint"] = JsonSerializer.SerializeToNode(exactZeroHint, CliJsonSerializerContextFactory.Create(jsonOptions).ExactZeroHintResult);
+        if (ftsQueryDiagnostics is { HasDegradation: true })
+        {
+            payload["query_degraded_reason"] = ftsQueryDiagnostics.QueryDegradedReason;
+            payload["tokens_dropped"] = JsonSerializer.SerializeToNode(ftsQueryDiagnostics.TokensDropped.ToList(), CliJsonSerializerContextFactory.Create(jsonOptions).ListString);
+        }
+        if (exactSubstringHint != null)
+            payload["exact_substring_hint"] = BuildSearchQueryHintJson(exactSubstringHint);
+        extraFields?.Invoke(payload);
+        AddCountEnvelopeJsonFields(payload, reader, jsonOptions, queryOptions, deferAuthority);
+        return payload;
+    }
+
+    private static void AddCountEnvelopeJsonFields(JsonObject payload, DbReader reader, JsonSerializerOptions jsonOptions, QueryCommandOptions? queryOptions, bool deferAuthority = false)
+    {
+        if (queryOptions != null)
+            payload["query_context"] = BuildQueryContextJson(queryOptions, jsonOptions);
+        AddFreshnessHint(payload, reader);
+        if (!deferAuthority)
+            AddCountAuthorityJsonFields(payload);
+    }
+
+    private static void AddCountAuthorityJsonFields(JsonObject payload)
+    {
+        var degraded =
+            JsonBool(payload, "degraded") == true
+            || JsonBool(payload, "graph_table_available") == false
+            || JsonBool(payload, "exact_index_available") == false
+            || JsonBool(payload, "sql_graph_contract_ready") == false
+            || JsonBool(payload, "graph_degraded") == true
+            || JsonBool(payload, "scan_truncated") == true
+            || JsonBool(payload, "scan_cap_reached") == true
+            || JsonBool(payload, "scan_timed_out") == true
+            || JsonBool(payload, "truncated") == true;
+        payload["degraded"] = degraded;
+        payload["authoritative_count"] = !degraded;
+    }
+
+    private static bool? JsonBool(JsonObject payload, string name)
+    {
+        return payload.TryGetPropertyValue(name, out var node)
+            && node is JsonValue value
+            && value.TryGetValue<bool>(out var boolValue)
+            ? boolValue
+            : null;
     }
 
     private static JsonObject BuildJsonZeroResultPayload(
@@ -9956,22 +10058,23 @@ public static class QueryCommandRunner
             return;
         }
 
-        var payload = new JsonObject
-        {
-            ["count"] = count,
-            ["files"] = files,
-            ["graph_table_available"] = graphAvailable,
-        };
-        if (!graphAvailable)
-            payload["degraded"] = true;
+        var payload = BuildCountJsonPayload(
+            reader,
+            jsonOptions,
+            count,
+            files,
+            query: options.Query,
+            queryOptions: options,
+            graphTableAvailable: graphAvailable,
+            degraded: !graphAvailable,
+            deferAuthority: true);
         AddGraphSupportOverrideFields(payload, graphSupportOverride);
         if (options.Exact || options.ExactName)
             AddExactGraphJsonFields(payload, exactSignal);
         if (exactZeroHint != null)
             payload["exact_zero_hint"] = JsonSerializer.SerializeToNode(exactZeroHint, CliJsonSerializerContextFactory.Create(jsonOptions).ExactZeroHintResult);
         extraFields?.Invoke(payload);
-        if (count == 0)
-            AddFreshnessHint(payload, reader);
+        AddCountAuthorityJsonFields(payload);
         Console.WriteLine(payload.ToJsonString(jsonOptions));
     }
 
