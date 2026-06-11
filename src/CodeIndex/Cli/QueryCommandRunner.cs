@@ -121,6 +121,8 @@ public static class QueryCommandRunner
         "--end",
         "--before",
         "--after",
+        "--body-start",
+        "--body-lines",
         "--name",
         "--snippet-lines",
         "--snippet-focus",
@@ -3528,6 +3530,70 @@ public static class QueryCommandRunner
     private static bool IsInspectListField(string field)
         => field is "definitions" or "nearby_symbols" or "references" or "callers" or "callees";
 
+    private static void AddInspectBodyModeJsonFields(JsonObject payload, QueryCommandOptions options, SymbolAnalysisResult analysis)
+    {
+        var bodyContentPresent = analysis.Definitions.Any(definition => definition.BodyContent != null);
+        var bodyContentTruncated = analysis.Definitions.Any(definition => definition.BodyContentTruncated);
+        var nextStartLine = analysis.Definitions
+            .Where(definition => definition.BodyContentNextStartLine.HasValue)
+            .Select(definition => definition.BodyContentNextStartLine!.Value)
+            .DefaultIfEmpty()
+            .Min();
+
+        var bodyMode = new JsonObject
+        {
+            ["include_body"] = options.IncludeBody,
+            ["definitions_only"] = IsInspectDefinitionsOnlyMode(options),
+            ["body_content_present"] = bodyContentPresent,
+            ["body_content_truncated"] = bodyContentTruncated,
+            ["default_body_lines"] = DbReader.DefinitionBodyMaxLines,
+            ["max_body_lines"] = DbReader.DefinitionBodyMaxRequestedLines,
+            ["hint"] = BuildInspectBodyModeHint(options, bodyContentPresent, bodyContentTruncated),
+        };
+        if (options.BodyStartLine.HasValue)
+            bodyMode["body_start_line"] = options.BodyStartLine.Value;
+        if (options.BodyLines.HasValue)
+            bodyMode["body_lines"] = options.BodyLines.Value;
+        else if (options.IncludeBody)
+            bodyMode["body_lines"] = DbReader.DefinitionBodyMaxLines;
+        if (nextStartLine > 0)
+            bodyMode["next_body_start_line"] = nextStartLine;
+
+        payload["body_mode"] = bodyMode;
+    }
+
+    private static void WriteInspectBodyModeHint(SymbolAnalysisResult analysis, QueryCommandOptions options)
+    {
+        if (analysis.Definitions.Count == 0)
+            return;
+
+        var bodyContentPresent = analysis.Definitions.Any(definition => definition.BodyContent != null);
+        var bodyContentTruncated = analysis.Definitions.Any(definition => definition.BodyContentTruncated);
+        Console.WriteLine($"Body Hint           : {BuildInspectBodyModeHint(options, bodyContentPresent, bodyContentTruncated)}");
+    }
+
+    private static bool IsInspectDefinitionsOnlyMode(QueryCommandOptions options)
+        => options.IncludeBody
+            && options.InspectFields is { Count: 1 } fields
+            && string.Equals(fields[0], "definitions", StringComparison.Ordinal);
+
+    private static string BuildInspectBodyModeHint(QueryCommandOptions options, bool bodyContentPresent, bool bodyContentTruncated)
+    {
+        if (!options.IncludeBody)
+            return "Add `--body` for definition body snippets in JSON, or use `--body-only` for body-focused JSON. Page long bodies with `--body-start <line> --body-lines <n>`.";
+
+        if (!options.Json)
+            return "Body content was requested, but human inspect output stays summary-only; use `--json --fields body` or `--body-only` to show `body_content`.";
+
+        if (bodyContentTruncated)
+            return "Use each definition's `body_content_next_start_line` with `--body-start <line>` and optionally `--body-lines <n>` to fetch the next body slice.";
+
+        if (bodyContentPresent)
+            return "Body content is present under each definition's `body_content` field.";
+
+        return "No definition body content is available for the matched definitions.";
+    }
+
     public static int RunInspect(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var previewOptionError = ValidatePreviewOptions("inspect", cmdArgs, allowMaxLineWidth: true, allowFocusOptions: false);
@@ -3575,7 +3641,18 @@ public static class QueryCommandRunner
         {
             var compactLimit = GetCompactSectionLimit(options);
             var inspectLimit = options.Compact ? GetCompactSourceLimit(compactLimit) : options.Limit;
-            var analysis = reader.AnalyzeSymbol(options.Query, inspectLimit, options.Lang, options.IncludeBody, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.MaxLineWidth);
+            var analysis = reader.AnalyzeSymbol(
+                options.Query,
+                inspectLimit,
+                options.Lang,
+                options.IncludeBody,
+                options.PathPatterns,
+                options.ExcludePaths,
+                options.ExcludeTests,
+                exact,
+                options.MaxLineWidth,
+                options.BodyStartLine,
+                options.BodyLines);
             var sqlGraphSignal = NarrowSqlGraphContractSignal(
                 reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests),
                 DbReader.IsSqlLanguage(options.Lang)
@@ -3606,6 +3683,7 @@ public static class QueryCommandRunner
                 if (compactTruncation != null)
                     AddCompactJsonFields(payload, compactLimit, compactTruncation);
                 ApplyInspectFieldSelection(payload, options, jsonOptions);
+                AddInspectBodyModeJsonFields(payload, options, analysis);
                 Console.WriteLine(payload.ToJsonString(jsonOptions));
             }
             else
@@ -3642,6 +3720,7 @@ public static class QueryCommandRunner
                     }
                 }
                 WriteExactZeroHint(analysis.ExactZeroHint);
+                WriteInspectBodyModeHint(analysis, options);
                 WriteRepoMapSection("Definitions", analysis.Definitions.Select(item => $"{item.Kind,-10} {item.Name,-24} {item.Path}:{item.StartLine}-{item.EndLine}"));
                 WriteRepoMapSection("Nearby symbols", analysis.NearbySymbols.Select(item => $"{item.Kind,-10} {item.Name,-24} {item.Path}:{item.StartLine}-{item.EndLine}"));
                 WriteRepoMapSection("References", analysis.References.Select(item => $"{item.Path}:{item.Line}:{item.Column}  {item.Context}"));
@@ -6265,6 +6344,8 @@ public static class QueryCommandRunner
         string? query = null;
         bool rawFts = false;
         bool includeBody = false;
+        int? bodyStartLine = null;
+        int? bodyLines = null;
         bool countOnly = false;
         bool strictNotFound = false;
         int? startLine = null;
@@ -6749,6 +6830,30 @@ public static class QueryCommandRunner
                 case "--body":
                     includeBody = true;
                     break;
+                case "--body-start":
+                    if (!TryReadRawOptionValue(args, ref i, "--body-start", inlineValue, out var bodyStartValue, out var missingBodyStartError))
+                        AddParseError(missingBodyStartError!);
+                    else if (TryParsePositiveInt(bodyStartValue!, "--body-start", out var parsedBodyStartLine, out var bodyStartError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--body-start", bodyStartValue!);
+                        bodyStartLine = parsedBodyStartLine;
+                        includeBody = true;
+                    }
+                    else
+                        AddParseError(bodyStartError!);
+                    break;
+                case "--body-lines":
+                    if (!TryReadRawOptionValue(args, ref i, "--body-lines", inlineValue, out var bodyLinesValue, out var missingBodyLinesError))
+                        AddParseError(missingBodyLinesError!);
+                    else if (TryParsePositiveInt(bodyLinesValue!, "--body-lines", out var parsedBodyLines, out var bodyLinesError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--body-lines", bodyLinesValue!);
+                        bodyLines = parsedBodyLines;
+                        includeBody = true;
+                    }
+                    else
+                        AddParseError(bodyLinesError!);
+                    break;
                 case "--count":
                     countOnly = true;
                     break;
@@ -7196,6 +7301,8 @@ public static class QueryCommandRunner
             Query = query,
             RawFts = rawFts,
             IncludeBody = includeBody,
+            BodyStartLine = bodyStartLine,
+            BodyLines = bodyLines,
             StartLine = startLine,
             EndLine = endLine,
             ContextBefore = contextBefore,
@@ -9801,6 +9908,8 @@ public static class QueryCommandRunner
             ["--snippet-lines"] = SearchSnippetFormatter.MaxSnippetLines,
             ["--max-line-width"] = LineWidthFormatter.MaxAllowedLineWidth,
             ["--slow-query-ms"] = 3_600_000,
+            ["--body-start"] = 10_000_000,
+            ["--body-lines"] = DbReader.DefinitionBodyMaxRequestedLines,
             ["--max-hops"] = 64,
             ["--depth"] = 64,
             ["--before"] = 1_000,
@@ -9825,6 +9934,8 @@ public static class QueryCommandRunner
         ["--data-dir"] = "pass a directory where cdidx should store `codeindex.db`, e.g. `--data-dir /var/cache/cdidx`.",
         ["--limit"] = "pass a positive integer, e.g. `--limit 20` (default 20).",
         ["--top"] = "pass a positive integer, e.g. `--top 20` (alias for `--limit`, default 20).",
+        ["--body-start"] = "pass a 1-based source line inside the symbol body, e.g. `--body-start 120`.",
+        ["--body-lines"] = "pass a positive line count for the body slice, e.g. `--body-lines 40`.",
         ["--lang"] = "pass a language identifier, e.g. `--lang csharp`. Run `cdidx languages` for the supported set.",
         ["--query"] = "pass a search literal, e.g. `--query \"authenticate\"`. Use the `--query` form when the literal starts with `-`.",
         ["--recipe"] = "pass a built-in audit recipe name, e.g. `--recipe risky-code`; run `cdidx search --list-recipes` to list available recipes.",
@@ -10196,6 +10307,8 @@ public sealed class QueryCommandOptions
     public string? Query { get; init; }
     public bool RawFts { get; init; }
     public bool IncludeBody { get; init; }
+    public int? BodyStartLine { get; init; }
+    public int? BodyLines { get; init; }
     public int? StartLine { get; init; }
     public int? EndLine { get; init; }
     public int ContextBefore { get; init; }
