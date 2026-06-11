@@ -9,7 +9,7 @@ namespace CodeIndex.Tests;
 public partial class QueryCommandRunnerTests
 {
     [Fact]
-    public void RunSearch_FormatCompactEmitsFileLineOnly_Issue1642()
+    public void RunSearch_FormatCompactEmitsBoundedSnippet_Issue3481()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_format_compact");
         try
@@ -29,10 +29,55 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             using var document = ParseJsonOutput(stdout);
             var row = Assert.Single(document.RootElement.EnumerateArray());
-            Assert.Equal("src/app.cs", row.GetProperty("file").GetString());
-            Assert.True(row.GetProperty("line").GetInt32() > 0);
-            Assert.False(row.TryGetProperty("snippet", out _));
+            Assert.Equal("Authenticate", row.GetProperty("query").GetString());
+            Assert.Equal("src/app.cs", row.GetProperty("path").GetString());
+            Assert.True(row.GetProperty("chunk_start_line").GetInt32() > 0);
+            Assert.Contains("Authenticate", row.GetProperty("snippet").GetString(), StringComparison.Ordinal);
+            Assert.NotEmpty(row.GetProperty("match_lines").EnumerateArray());
+            Assert.NotEmpty(row.GetProperty("highlights").EnumerateArray());
             Assert.False(row.TryGetProperty("name", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_NamedQueriesReturnGroupedCompactResults_Issue3481()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_named_queries");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "release/pack.md",
+                "markdown",
+                "Run dotnet pack before publishing.");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "release/push.md",
+                "markdown",
+                "Run nuget push after package validation.");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--named-query", "pack=dotnet pack", "--named-query", "push=nuget push", "--db", dbPath, "--format", "compact"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            Assert.Equal(2, root.GetProperty("query_count").GetInt32());
+            Assert.Equal(2, root.GetProperty("result_count").GetInt32());
+            var queries = root.GetProperty("queries").EnumerateArray().ToList();
+            var pack = Assert.Single(queries, query => query.GetProperty("name").GetString() == "pack");
+            Assert.Equal("dotnet pack", pack.GetProperty("query").GetString());
+            var packResult = Assert.Single(pack.GetProperty("results").EnumerateArray());
+            Assert.Equal("release/pack.md", packResult.GetProperty("path").GetString());
+            Assert.Contains("dotnet pack", packResult.GetProperty("snippet").GetString(), StringComparison.Ordinal);
+            Assert.NotEmpty(packResult.GetProperty("match_lines").EnumerateArray());
         }
         finally
         {

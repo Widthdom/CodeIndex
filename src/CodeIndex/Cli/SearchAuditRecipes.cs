@@ -99,6 +99,19 @@ internal sealed record SearchRecipeRunJsonResult(
     [property: JsonPropertyName("result_count")] int ResultCount,
     [property: JsonPropertyName("queries")] List<SearchRecipeQueryResultJsonResult> Queries);
 
+internal sealed record SearchNamedBatchRunJsonResult(
+    [property: JsonPropertyName("api_version")] string ApiVersion,
+    [property: JsonPropertyName("query_count")] int QueryCount,
+    [property: JsonPropertyName("result_count")] int ResultCount,
+    [property: JsonPropertyName("queries")] List<SearchNamedBatchQueryResultJsonResult> Queries);
+
+internal sealed record SearchNamedBatchQueryResultJsonResult(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("query")] string Query,
+    [property: JsonPropertyName("exact_substring")] bool ExactSubstring,
+    [property: JsonPropertyName("count")] int Count,
+    [property: JsonPropertyName("results")] List<CompactSearchResult> Results);
+
 internal sealed record SearchRecipeQueryResultJsonResult(
     [property: JsonPropertyName("name")] string Name,
     [property: JsonPropertyName("query")] string Query,
