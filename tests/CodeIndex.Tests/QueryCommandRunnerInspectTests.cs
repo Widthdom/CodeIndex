@@ -168,7 +168,7 @@ public partial class QueryCommandRunnerTests
                 $"def huge_body():\n    value = \"{longLiteral}\"\n    return value\n");
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
-                ["huge_body", "--db", dbPath, "--json", "--body", "--lang", "python", "--exact-name"],
+                ["huge_body", "--db", dbPath, "--read-only", "--json", "--body", "--lang", "python", "--exact-name"],
                 _jsonOptions));
 
             using var document = ParseJsonOutput(stdout);
@@ -184,7 +184,10 @@ public partial class QueryCommandRunnerTests
             var recoveryCommand = recovery.GetProperty("command").GetString();
             Assert.Contains("cdidx excerpt src/huge_body.py", recoveryCommand);
             Assert.Contains("--db", recoveryCommand);
+            Assert.Contains("file:", recoveryCommand);
             Assert.Contains(dbPath, recoveryCommand);
+            Assert.Contains("immutable=1", recoveryCommand);
+            Assert.Contains("mode=ro", recoveryCommand);
             Assert.Contains("--start 2 --end 3 --max-line-width 0 --json", recoveryCommand);
         }
         finally

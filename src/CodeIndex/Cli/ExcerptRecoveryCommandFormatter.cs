@@ -27,6 +27,9 @@ internal static class ExcerptRecoveryCommandFormatter
 
     private static string NormalizeDbPath(string dbPath)
     {
+        if (dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+            return dbPath;
+
         var normalized = DbPathResolver.NormalizeDbPath(dbPath);
         return normalized.StartsWith("file:", StringComparison.OrdinalIgnoreCase)
             ? normalized
