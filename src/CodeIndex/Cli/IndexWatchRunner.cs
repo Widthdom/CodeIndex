@@ -18,6 +18,7 @@ internal static class IndexWatchRunner
     internal const int MaxDebounceMs = 60_000;
     internal const int MaxHumanSummarySubRunJsonChars = 64 * 1024;
     internal const int MaxHumanSummaryJsonDepth = 16;
+    internal const int BatchPathSampleLimit = 20;
     private const int InternalBufferSize = 64 * 1024;
     private const int PollIntervalMs = 50;
 
@@ -175,7 +176,7 @@ internal static class IndexWatchRunner
         foreach (var path in changedPaths)
             args.Add(path);
 
-        return InvokeSubRunAndEmit(baseOptions, jsonOptions, args, stopwatch, "updated", changedPaths.Count);
+        return InvokeSubRunAndEmit(baseOptions, jsonOptions, args, stopwatch, "updated", changedPaths.Count, "incremental", changedPaths);
     }
 
     private static int RunFullRescan(
@@ -186,7 +187,7 @@ internal static class IndexWatchRunner
         var args = BuildSubRunArgs(baseOptions);
         // No --files: this is a default incremental full scan.
         // --files を付けない: 通常のインクリメンタル全件スキャン。
-        return InvokeSubRunAndEmit(baseOptions, jsonOptions, args, stopwatch, "rescanned", batchSize: null);
+        return InvokeSubRunAndEmit(baseOptions, jsonOptions, args, stopwatch, "rescanned", batchSize: null, "incremental", batchPaths: null);
     }
 
     private static void RecordSubRunExitCode(ref int watchExitCode, int subRunExitCode)
@@ -234,7 +235,9 @@ internal static class IndexWatchRunner
         List<string> args,
         Stopwatch stopwatch,
         string status,
-        int? batchSize)
+        int? batchSize,
+        string phase,
+        IReadOnlyList<string>? batchPaths)
     {
         string capturedJson;
         int subRunExitCode;
@@ -255,18 +258,29 @@ internal static class IndexWatchRunner
         var failureReason = subRunExitCode == CommandExitCodes.Success
             ? null
             : $"{status} sub-run exited with code {subRunExitCode.ToString(CultureInfo.InvariantCulture)}";
+        var summary = ParseSubRunSummary(capturedJson);
 
         if (baseOptions.Json)
         {
+            var pathSamples = BuildBatchPathSamples(baseOptions.ProjectPath!, batchPaths, out var pathSamplesTruncated);
             // Pre-pend a watch-event header line so MCP clients can distinguish watch
             // batches from the initial scan. The underlying sub-run result follows.
             // watch バッチであることを示すヘッダ行を先頭に流し、その後にサブ実行 JSON を出す。
             Console.Out.WriteLine(JsonSerializer.Serialize(new IndexWatchEventJsonResult
             {
                 Status = eventStatus,
+                Phase = phase,
                 BatchSize = batchSize,
+                BatchPathSamples = pathSamples.Count > 0 ? pathSamples : null,
+                BatchPathSampleLimit = batchPaths == null ? null : BatchPathSampleLimit,
+                BatchPathSamplesTruncated = batchPaths == null ? null : pathSamplesTruncated,
                 ElapsedMs = stopwatch.ElapsedMilliseconds,
                 ExitCode = subRunExitCode,
+                Updated = summary.Updated,
+                Removed = summary.Removed,
+                Errors = summary.Errors,
+                SubRunParseStatus = summary.ParseStatus,
+                SubRunParseReason = summary.ParseReason,
                 Reason = failureReason,
             }, CliJsonSerializerContextFactory.Create(jsonOptions).IndexWatchEventJsonResult));
 
@@ -302,33 +316,74 @@ internal static class IndexWatchRunner
         {
             $"exit code {exitCode.ToString(CultureInfo.InvariantCulture)}",
         };
-        try
+        var summary = ParseSubRunSummary(subRunJson);
+        if (summary.ParseStatus == "parsed")
         {
-            var trimmedLength = TrimTrailingLineBreaks(subRunJson);
-            if (trimmedLength > 0 && trimmedLength <= MaxHumanSummarySubRunJsonChars)
-            {
-                using var doc = JsonDocument.Parse(
-                    subRunJson.AsMemory(0, trimmedLength),
-                    new JsonDocumentOptions { MaxDepth = MaxHumanSummaryJsonDepth });
-                var root = doc.RootElement;
-                if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("summary", out var summary)
-                    && summary.ValueKind == JsonValueKind.Object)
-                {
-                    int updated = summary.TryGetProperty("updated", out var u) && u.TryGetInt32(out var uv) ? uv : 0;
-                    int removed = summary.TryGetProperty("removed", out var r) && r.TryGetInt32(out var rv) ? rv : 0;
-                    int errors = summary.TryGetProperty("errors", out var er) && er.TryGetInt32(out var erv) ? erv : 0;
-                    details.Add($"updated {updated}");
-                    details.Add($"removed {removed}");
-                    details.Add($"errors {errors}");
-                }
-            }
-        }
-        catch (JsonException)
-        {
+            details.Add($"updated {summary.Updated.GetValueOrDefault()}");
+            details.Add($"removed {summary.Removed.GetValueOrDefault()}");
+            details.Add($"errors {summary.Errors.GetValueOrDefault()}");
         }
 
         var detail = details.Count > 0 ? $" ({string.Join(", ", details)})" : string.Empty;
         return $"{prefix}{batchLabel}{detail} in {elapsedMs.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)} ms";
+    }
+
+    private static WatchSubRunSummary ParseSubRunSummary(string subRunJson)
+    {
+        var trimmedLength = TrimTrailingLineBreaks(subRunJson);
+        if (trimmedLength == 0)
+            return new WatchSubRunSummary(null, null, null, "missing", "sub-run emitted no JSON");
+
+        if (trimmedLength > MaxHumanSummarySubRunJsonChars)
+            return new WatchSubRunSummary(null, null, null, "too_large", $"sub-run JSON exceeded {MaxHumanSummarySubRunJsonChars.ToString(CultureInfo.InvariantCulture)} characters");
+
+        try
+        {
+            using var doc = JsonDocument.Parse(
+                subRunJson.AsMemory(0, trimmedLength),
+                new JsonDocumentOptions { MaxDepth = MaxHumanSummaryJsonDepth });
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("summary", out var summary)
+                || summary.ValueKind != JsonValueKind.Object)
+            {
+                return new WatchSubRunSummary(null, null, null, "missing_summary", "sub-run JSON did not contain an object summary");
+            }
+
+            return new WatchSubRunSummary(
+                TryReadInt32(summary, "updated") ?? 0,
+                TryReadInt32(summary, "removed") ?? 0,
+                TryReadInt32(summary, "errors") ?? 0,
+                "parsed",
+                null);
+        }
+        catch (JsonException ex)
+        {
+            return new WatchSubRunSummary(null, null, null, "invalid_json", ex.Message);
+        }
+    }
+
+    private static int? TryReadInt32(JsonElement element, string propertyName)
+        => element.TryGetProperty(propertyName, out var property) && property.TryGetInt32(out var value)
+            ? value
+            : null;
+
+    private static List<string> BuildBatchPathSamples(string projectRoot, IReadOnlyList<string>? batchPaths, out bool truncated)
+    {
+        truncated = false;
+        if (batchPaths == null || batchPaths.Count == 0)
+            return [];
+
+        truncated = batchPaths.Count > BatchPathSampleLimit;
+        var samples = new List<string>(Math.Min(batchPaths.Count, BatchPathSampleLimit));
+        foreach (var path in batchPaths.Take(BatchPathSampleLimit))
+        {
+            var sample = path;
+            if (Path.IsPathRooted(path))
+                sample = Path.GetRelativePath(projectRoot, path);
+            samples.Add(FileIndexer.NormalizePathSeparators(sample));
+        }
+
+        return samples;
     }
 
     private static int TrimTrailingLineBreaks(string value)
@@ -355,6 +410,7 @@ internal static class IndexWatchRunner
             Console.Out.WriteLine(JsonSerializer.Serialize(new IndexWatchEventJsonResult
             {
                 Status = "watching",
+                Phase = "initial_scan",
                 ProjectRoot = projectRoot,
                 Db = resolvedDbPath,
                 DebounceMs = (int)debounce.TotalMilliseconds,
@@ -379,6 +435,9 @@ internal static class IndexWatchRunner
             {
                 Status = "overflow",
                 Reason = reason,
+                Phase = "incremental",
+                OverflowReason = reason,
+                RecoveryCommand = BuildOverflowRecoveryCommand(baseOptions),
             }, CliJsonSerializerContextFactory.Create(jsonOpts).IndexWatchEventJsonResult));
         }
         else
@@ -406,6 +465,30 @@ internal static class IndexWatchRunner
             Console.Error.WriteLine("[watch] Stopped.");
         }
     }
+
+    private static IndexWatchRecoveryCommandJsonResult BuildOverflowRecoveryCommand(IndexCommandOptions baseOptions)
+    {
+        var args = new List<string> { "index", baseOptions.ProjectPath! };
+        if (!string.IsNullOrEmpty(baseOptions.DbPath))
+        {
+            args.Add("--db");
+            args.Add(baseOptions.DbPath!);
+        }
+
+        args.Add("--json");
+        return new IndexWatchRecoveryCommandJsonResult
+        {
+            Command = "cdidx",
+            Args = args,
+        };
+    }
+
+    private readonly record struct WatchSubRunSummary(
+        int? Updated,
+        int? Removed,
+        int? Errors,
+        string ParseStatus,
+        string? ParseReason);
 }
 
 /// <summary>

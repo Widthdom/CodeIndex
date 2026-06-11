@@ -208,13 +208,30 @@ internal sealed class IndexDryRunJsonResult
 internal sealed class IndexWatchEventJsonResult
 {
     public string Status { get; init; } = string.Empty;
+    public string? Phase { get; init; }
     public string? ProjectRoot { get; init; }
     public string? Db { get; init; }
     public int? DebounceMs { get; init; }
     public int? BatchSize { get; init; }
+    public List<string>? BatchPathSamples { get; init; }
+    public int? BatchPathSampleLimit { get; init; }
+    public bool? BatchPathSamplesTruncated { get; init; }
     public long? ElapsedMs { get; init; }
     public int? ExitCode { get; init; }
+    public int? Updated { get; init; }
+    public int? Removed { get; init; }
+    public int? Errors { get; init; }
+    public string? SubRunParseStatus { get; init; }
+    public string? SubRunParseReason { get; init; }
+    public string? OverflowReason { get; init; }
+    public IndexWatchRecoveryCommandJsonResult? RecoveryCommand { get; init; }
     public string? Reason { get; init; }
+}
+
+internal sealed class IndexWatchRecoveryCommandJsonResult
+{
+    public string Command { get; init; } = string.Empty;
+    public List<string> Args { get; init; } = [];
 }
 
 internal sealed class IndexUpdateSummaryJsonResult
@@ -425,6 +442,7 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(IndexUpdateJsonResult))]
 [JsonSerializable(typeof(IndexUpdateSummaryJsonResult))]
 [JsonSerializable(typeof(IndexWatchEventJsonResult))]
+[JsonSerializable(typeof(IndexWatchRecoveryCommandJsonResult))]
 [JsonSerializable(typeof(ExportImportCommandRunner.ImportResult))]
 [JsonSerializable(typeof(HookCommandJsonResult))]
 [JsonSerializable(typeof(JsonStreamDoneResult))]

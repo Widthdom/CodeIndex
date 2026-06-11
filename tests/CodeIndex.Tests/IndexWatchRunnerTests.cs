@@ -231,7 +231,16 @@ public class IndexWatchRunnerTests
                 {
                     exitCode = Assert.IsType<int>(method.Invoke(
                         null,
-                        [options, _jsonOptions, args, Stopwatch.StartNew(), "updated", 3]));
+                        [
+                            options,
+                            _jsonOptions,
+                            args,
+                            Stopwatch.StartNew(),
+                            "updated",
+                            3,
+                            "incremental",
+                            new[] { Path.Combine(projectRoot, "a.cs"), Path.Combine(projectRoot, "b.cs") },
+                        ]));
                 }
                 finally
                 {
@@ -245,8 +254,14 @@ public class IndexWatchRunnerTests
             var firstLine = Assert.Single(capturedOut.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Take(1));
             using var doc = JsonDocument.Parse(firstLine);
             Assert.Equal("failed", doc.RootElement.GetProperty("status").GetString());
+            Assert.Equal("incremental", doc.RootElement.GetProperty("phase").GetString());
             Assert.Equal(3, doc.RootElement.GetProperty("batch_size").GetInt32());
+            Assert.Equal(IndexWatchRunner.BatchPathSampleLimit, doc.RootElement.GetProperty("batch_path_sample_limit").GetInt32());
+            Assert.False(doc.RootElement.GetProperty("batch_path_samples_truncated").GetBoolean());
+            Assert.Equal(2, doc.RootElement.GetProperty("batch_path_samples").GetArrayLength());
+            Assert.Equal("a.cs", doc.RootElement.GetProperty("batch_path_samples")[0].GetString());
             Assert.Equal(exitCode, doc.RootElement.GetProperty("exit_code").GetInt32());
+            Assert.Equal("missing_summary", doc.RootElement.GetProperty("sub_run_parse_status").GetString());
             var reason = doc.RootElement.GetProperty("reason").GetString();
             Assert.NotNull(reason);
             Assert.Contains("updated sub-run exited with code", reason);
@@ -288,7 +303,7 @@ public class IndexWatchRunnerTests
                 {
                     exitCode = Assert.IsType<int>(method.Invoke(
                         null,
-                        [options, _jsonOptions, args, Stopwatch.StartNew(), "updated", 3]));
+                        [options, _jsonOptions, args, Stopwatch.StartNew(), "updated", 3, "incremental", Array.Empty<string>()]));
                 }
                 finally
                 {
@@ -306,6 +321,47 @@ public class IndexWatchRunnerTests
         {
             DeleteDirectory(projectRoot);
         }
+    }
+
+    [Fact]
+    public void EmitWatchOverflow_Json_EmitsStructuredRecoveryCommand()
+    {
+        var options = new IndexCommandOptions
+        {
+            ProjectPath = "/repo",
+            DbPath = "/repo/.cdidx/codeindex.db",
+            Json = true,
+            Watch = true,
+        };
+        var method = typeof(IndexWatchRunner).GetMethod("EmitWatchOverflow", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(method);
+
+        string capturedOut;
+        lock (TestConsoleLock.Gate)
+        {
+            var originalOut = Console.Out;
+            using var stdout = new StringWriter();
+            Console.SetOut(stdout);
+            try
+            {
+                method.Invoke(null, [options, "buffer full"]);
+            }
+            finally
+            {
+                Console.SetOut(originalOut);
+            }
+            capturedOut = stdout.ToString();
+        }
+
+        using var doc = JsonDocument.Parse(capturedOut);
+        Assert.Equal("overflow", doc.RootElement.GetProperty("status").GetString());
+        Assert.Equal("incremental", doc.RootElement.GetProperty("phase").GetString());
+        Assert.Equal("buffer full", doc.RootElement.GetProperty("overflow_reason").GetString());
+        var recovery = doc.RootElement.GetProperty("recovery_command");
+        Assert.Equal("cdidx", recovery.GetProperty("command").GetString());
+        Assert.Equal("index", recovery.GetProperty("args")[0].GetString());
+        Assert.Equal("/repo", recovery.GetProperty("args")[1].GetString());
+        Assert.Contains("--json", recovery.GetProperty("args").EnumerateArray().Select(static item => item.GetString()));
     }
 
     [Fact]
