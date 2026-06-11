@@ -8239,10 +8239,25 @@ public static class QueryCommandRunner
 
         CommandErrorWriter.Write(
             $"unexpected extra positional {ConsoleUi.Counted(options.ExtraNames.Count, "argument")} for {commandName}: {string.Join(", ", options.ExtraNames.Select(name => $"`{name}`"))}.",
-            "quote multi-word queries as a single argument, or remove the extra positional values.",
+            BuildUnexpectedExtraPositionalsHint(commandName, options),
             GetUsageLineOrThrow(commandName));
         return true;
     }
+
+    private static string BuildUnexpectedExtraPositionalsHint(string commandName, QueryCommandOptions options)
+    {
+        if (string.Equals(commandName, "search", StringComparison.Ordinal)
+            && options.PathPatterns.Count > 0
+            && options.ExtraNames.Any(IsPathLikeArgument))
+        {
+            return "quote --path globs so the shell passes one literal pattern, e.g. `--path 'src/CodeIndex/**'`; remove the expanded path arguments and rerun.";
+        }
+
+        return "quote multi-word queries as a single argument, or remove the extra positional values.";
+    }
+
+    private static bool IsPathLikeArgument(string value) =>
+        value.Contains('/') || value.Contains('\\');
 
     private static bool TryWriteUnexpectedPositionals(string commandName, QueryCommandOptions options)
     {

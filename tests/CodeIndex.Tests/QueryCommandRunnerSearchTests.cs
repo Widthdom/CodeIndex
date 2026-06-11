@@ -80,6 +80,19 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_PathGlobExpansionHintSuggestsQuotedPath_Issue3445()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["needle", "--path", "src/CodeIndex/Cli", "src/CodeIndex/Database"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("Error: unexpected extra positional 1 argument for search: `src/CodeIndex/Database`.", stderr);
+        Assert.Contains("quote --path globs so the shell passes one literal pattern", stderr);
+        Assert.Contains("`--path 'src/CodeIndex/**'`", stderr);
+    }
+
+    [Fact]
     public void RunSearch_FormatLspEmitsLocationArray()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_format_lsp");
