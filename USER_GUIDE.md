@@ -2200,6 +2200,8 @@ For read-only deployments or sessions that only need a narrow tool surface, two 
 
 When both are set, the allowlist wins. `tools/list` only advertises enabled tools, and the `initialize` instructions string no longer recommends tools the gate disabled. A top-level `tools/call` on a disabled known tool returns the structured JSON-RPC error `-32601 Tool not enabled: <name>`. `batch_query` continues to succeed at the envelope, but each disabled-tool slot carries a `code: -32601` field alongside the `error` string so clients can branch on the code instead of substring-matching prose. Unknown names (typos) still surface as `-32602 Unknown tool`, so operator-disabled tools are distinguishable from missing tools. Names are compared case-insensitively. The default is **all tools enabled**, so existing deployments are unaffected unless an operator sets one of these variables.
 
+Filter parsing also warns on `stderr` when an allow/deny variable is empty, contains empty CSV entries, or names unknown tools. Unknown names in `CDIDX_MCP_TOOLS_DENY` are ignored after the warning. `CDIDX_MCP_TOOLS_ALLOW` fails closed when it is explicitly set but contains no known tool names, so a typo-only allowlist exposes no tools instead of accidentally falling back to the default surface. Oversized filter values remain rejected with a warning.
+
 #### MCP roots and sampling
 
 `cdidx mcp` advertises roots and sampling support during `initialize`. When the client supports roots, `index` refreshes `roots/list` and rejects paths outside the granted client roots. `suggest_improvement` uses `sampling/createMessage` to extract an optional one-line title and tag list before storing the raw suggestion. Sampling prompts are byte-bounded, long fields are clamped to one-line summaries, and `toolInvocationContext` is summarized without sending its raw content to the sampling client. Set `CDIDX_MCP_SAMPLING=0` (or `false` / `off`) to disable server-to-client sampling requests.
@@ -4494,6 +4496,8 @@ stdio の `cdidx mcp` を信頼度の低いチャネル（転送ソケット、�
 - `CDIDX_MCP_TOOLS_DENY=<カンマ区切り名>` — 既定の全有効集合から個別ツールを除外。例: `CDIDX_MCP_TOOLS_DENY=index,backfill_fold,suggest_improvement` で read-only マウント上の書き込み系ツールを非表示にします。
 
 両方指定された場合は allowlist が優先されます。`tools/list` は有効ツールのみ広告し、`initialize` の instructions 文字列も無効化されたツールを推奨しなくなります。トップレベル `tools/call` で無効化された既知ツールを呼び出した場合は、構造化された JSON-RPC エラー `-32601 Tool not enabled: <name>` を返します。`batch_query` 自体は引き続きエンベロープとして成功しますが、無効化ツールの各 slot に `code: -32601` フィールドが `error` 文字列と並んで載るため、クライアントは prose の部分一致ではなく code で分岐できます。typo などサーバーに元から無い名前は引き続き `-32602 Unknown tool` を返すため、オペレータによる無効化と typo を区別できます。比較は大小文字無視。既定は **全ツール有効** なので、オペレータがこれらの変数を設定しない限り既存デプロイへの影響はありません。
+
+filter 解析では、allow / deny 変数が空、CSV 内に空 entry がある、または未知の tool 名を含む場合に `stderr` へ警告します。`CDIDX_MCP_TOOLS_DENY` の未知名は警告後に無視されます。`CDIDX_MCP_TOOLS_ALLOW` は明示的に設定されているのに既知 tool 名が 0 件の場合 fail closed となり、typo だけの allowlist が既定の全公開 surface に戻ることを防ぎます。過大な filter 値は従来通り warning 付きで拒否されます。
 
 #### MCP roots と sampling
 

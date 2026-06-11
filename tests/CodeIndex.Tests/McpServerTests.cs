@@ -4141,19 +4141,123 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
-    public void McpToolFilter_Parse_UnknownNamesInDenyListDoNotAffectKnownTools()
+    public void McpToolFilter_Parse_UnknownNamesWarnAndKeepFilterSemantics_Issue3406()
     {
-        // A typo in CDIDX_MCP_TOOLS_DENY simply does not match anything; the known set stays
-        // enabled. Allowlist semantics deliberately differ: a non-empty allowlist is treated
-        // as a strict pin, so an allowlist of only-unknown names exposes nothing — that empty
-        // surface is visible at the next tools/list call.
-        var denyFilter = McpToolFilter.Parse(null, "bogus_tool");
-        foreach (var name in McpToolFilter.KnownToolNames)
-            Assert.True(denyFilter.IsEnabled(name), $"{name} should remain enabled when denylist names only unknown tools");
+        lock (TestConsoleLock.Gate)
+        {
+            var originalError = Console.Error;
+            using var stderr = new StringWriter();
+            try
+            {
+                Console.SetError(stderr);
 
-        var allowFilter = McpToolFilter.Parse("bogus_tool", null);
-        foreach (var name in McpToolFilter.KnownToolNames)
-            Assert.False(allowFilter.IsEnabled(name), $"{name} should be disabled when allowlist only names unknown tools");
+                // A typo in CDIDX_MCP_TOOLS_DENY simply does not match anything; the known set
+                // stays enabled, but the operator now gets a bounded warning.
+                // CDIDX_MCP_TOOLS_DENY の typo は何にも一致しないため既知ツールは有効のまま。
+                // ただし、オペレータに bounded warning を出す。
+                var denyFilter = McpToolFilter.Parse(null, "bogus_tool");
+                foreach (var name in McpToolFilter.KnownToolNames)
+                    Assert.True(denyFilter.IsEnabled(name), $"{name} should remain enabled when denylist names only unknown tools");
+
+                // Allowlist semantics deliberately differ: an allowlist with no known names
+                // fails closed and exposes nothing.
+                // allowlist は厳格に扱い、既知名が 0 件なら fail closed で何も公開しない。
+                var allowFilter = McpToolFilter.Parse("bogus_tool", null);
+                foreach (var name in McpToolFilter.KnownToolNames)
+                    Assert.False(allowFilter.IsEnabled(name), $"{name} should be disabled when allowlist only names unknown tools");
+
+                var warning = stderr.ToString();
+                Assert.Contains(McpToolFilter.DenyEnvVarName, warning);
+                Assert.Contains(McpToolFilter.AllowEnvVarName, warning);
+                Assert.Contains("unknown MCP tool name", warning);
+                Assert.Contains("failing closed", warning);
+            }
+            finally
+            {
+                Console.SetError(originalError);
+            }
+        }
+    }
+
+    [Fact]
+    public void McpToolFilter_Parse_EmptyAllowListWarnsAndFailsClosed_Issue3406()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalError = Console.Error;
+            using var stderr = new StringWriter();
+            try
+            {
+                Console.SetError(stderr);
+                var filter = McpToolFilter.Parse("   ", null);
+
+                foreach (var name in McpToolFilter.KnownToolNames)
+                    Assert.False(filter.IsEnabled(name), $"{name} should be disabled when allowlist is explicitly empty");
+                var warning = stderr.ToString();
+                Assert.Contains(McpToolFilter.AllowEnvVarName, warning);
+                Assert.Contains("empty", warning);
+                Assert.Contains("failing closed", warning);
+            }
+            finally
+            {
+                Console.SetError(originalError);
+            }
+        }
+    }
+
+    [Fact]
+    public void McpToolFilter_Parse_EmptyDenyListWarnsAndKeepsDefaults_Issue3406()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalError = Console.Error;
+            using var stderr = new StringWriter();
+            try
+            {
+                Console.SetError(stderr);
+                var filter = McpToolFilter.Parse(null, "");
+
+                foreach (var name in McpToolFilter.KnownToolNames)
+                    Assert.True(filter.IsEnabled(name), $"{name} should remain enabled when denylist is explicitly empty");
+                var warning = stderr.ToString();
+                Assert.Contains(McpToolFilter.DenyEnvVarName, warning);
+                Assert.Contains("empty", warning);
+                Assert.DoesNotContain("failing closed", warning);
+            }
+            finally
+            {
+                Console.SetError(originalError);
+            }
+        }
+    }
+
+    [Fact]
+    public void McpToolFilter_Parse_UnknownNameWarningIsBounded_Issue3406()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalError = Console.Error;
+            using var stderr = new StringWriter();
+            try
+            {
+                Console.SetError(stderr);
+                var unknownNames = Enumerable.Range(0, McpToolFilter.MaxToolFilterUnknownNamesReported + 2)
+                    .Select(i => $"bogus_tool_{i}");
+
+                var filter = McpToolFilter.Parse(string.Join(',', unknownNames.Prepend("search")), null);
+
+                Assert.True(filter.IsEnabled("search"));
+                Assert.False(filter.IsEnabled("references"));
+                var warning = stderr.ToString();
+                Assert.Contains("unknown MCP tool names", warning);
+                Assert.Contains("more", warning);
+                Assert.DoesNotContain($"bogus_tool_{McpToolFilter.MaxToolFilterUnknownNamesReported + 1}", warning);
+            }
+            finally
+            {
+                Console.SetError(originalError);
+            }
+        }
     }
 
     [Fact]
