@@ -36,9 +36,11 @@ public class DocumentationStatusContractTests
         "mac_profile",
         "stale_after_seconds",
         "index_age_seconds",
+        "last_failed_or_partial_index_run",
         "degraded_reason",
         "recommended_action",
         "alternative_action",
+        "repair_commands",
     ];
 
     [Theory]

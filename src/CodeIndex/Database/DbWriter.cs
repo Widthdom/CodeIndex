@@ -2178,6 +2178,18 @@ public class DbWriter
         SetMeta(DbContext.CdidxWriterVersionMetaKey, version);
     }
 
+    public void ClearLastFailedIndexRunMetadata()
+    {
+        SetMeta(DbContext.LastFailedIndexRunStatusMetaKey, null);
+        SetMeta(DbContext.LastFailedIndexRunModeMetaKey, null);
+        SetMeta(DbContext.LastFailedIndexRunStartedAtMetaKey, null);
+        SetMeta(DbContext.LastFailedIndexRunDurationMsMetaKey, null);
+        SetMeta(DbContext.LastFailedIndexRunFilesProcessedMetaKey, null);
+        SetMeta(DbContext.LastFailedIndexRunFilesTotalMetaKey, null);
+        SetMeta(DbContext.LastFailedIndexRunErrorCodeMetaKey, null);
+        SetMeta(DbContext.LastFailedIndexRunReasonMetaKey, null);
+    }
+
     /// <summary>
     /// Stamp unknown-extension scan coverage from the latest successful full-worktree scan.
     /// Stores the total count plus a bounded path sample so status callers can identify the

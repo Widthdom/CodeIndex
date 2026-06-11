@@ -3160,6 +3160,8 @@ DB を read-only で開いて SQLite の `PRAGMA integrity_check` を実行し�
 
 DB / WAL の肥大や空き page を確認したい場合は `status --json` の `maintenance_guidance` を見ます。既定では WAL が 64 MiB 以上で `checkpoint_recommended`、`freelist_count / page_count` が 0.20 以上で `vacuum_recommended` になり、`recommended_command` と `post_maintenance_follow_up` が返ります。しきい値は `CDIDX_MAINTENANCE_WAL_WARN_BYTES` と `CDIDX_MAINTENANCE_FREELIST_WARN_RATIO` で調整できます。
 
+`status --check --json` は failed check ごとに `repair_commands` を返します。各 entry は `name`、`args`、`reason`、`safety_notes` を持つため、自動化は `recommended_action` の文章を分解せずに修復コマンドを組み立てられます。前回の index が中断・失敗した情報が DB に残っている場合は、`last_failed_or_partial_index_run` に bounded metadata だけを返し、例外本文や file path は含めません。
+
 ```bash
 cdidx vacuum --dry-run --json   # 回収見積もりと maintenance guidance だけを確認
 cdidx vacuum --json             # incremental vacuum / 初回変換を実行

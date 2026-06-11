@@ -710,6 +710,9 @@ public class StatusResult
     [JsonPropertyName("failed_checks")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<string>? FailedChecks { get; set; }
+    [JsonPropertyName("repair_commands")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<StatusRepairCommand>? RepairCommands { get; set; }
     /// <summary>
     /// Effective age threshold, in seconds, used by `status --check` to explain stale-index
     /// warnings. Null when `--check` was not requested.
@@ -876,6 +879,9 @@ public class StatusResult
     [JsonPropertyName("last_index_run")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public StatusLastIndexRun? LastIndexRun { get; set; }
+    [JsonPropertyName("last_failed_or_partial_index_run")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public StatusFailedOrPartialIndexRun? LastFailedOrPartialIndexRun { get; set; }
 }
 
 public sealed class StatusProcessMetrics
@@ -929,6 +935,32 @@ public sealed class StatusLastIndexRun
     public long? RowsDeleted { get; set; }
     [JsonPropertyName("peak_memory_mb")]
     public long? PeakMemoryMb { get; set; }
+}
+
+public sealed class StatusFailedOrPartialIndexRun
+{
+    public string? Status { get; set; }
+    public string? Mode { get; set; }
+    [JsonPropertyName("started_at")]
+    public DateTime? StartedAt { get; set; }
+    [JsonPropertyName("duration_ms")]
+    public long? DurationMs { get; set; }
+    [JsonPropertyName("files_processed")]
+    public long? FilesProcessed { get; set; }
+    [JsonPropertyName("files_total")]
+    public long? FilesTotal { get; set; }
+    [JsonPropertyName("error_code")]
+    public string? ErrorCode { get; set; }
+    public string? Reason { get; set; }
+}
+
+public sealed class StatusRepairCommand
+{
+    public string Name { get; set; } = string.Empty;
+    public List<string> Args { get; set; } = [];
+    public string Reason { get; set; } = string.Empty;
+    [JsonPropertyName("safety_notes")]
+    public List<string> SafetyNotes { get; set; } = [];
 }
 
 public sealed class StatusUnknownExtensionGroup

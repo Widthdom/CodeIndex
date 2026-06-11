@@ -691,6 +691,7 @@ public partial class DbReader
             TryGetMetaStringInternal(DbContext.BatchInProgressMetaKey),
             "true",
             StringComparison.OrdinalIgnoreCase);
+        var lastFailedOrPartialIndexRun = GetLastFailedOrPartialIndexRun(batchInProgress);
 
         var result = new StatusResult
         {
@@ -737,6 +738,7 @@ public partial class DbReader
             WalSizeBytes = walSizeBytes,
             Process = StatusProcessMetrics.Capture(),
             LastIndexRun = lastIndexRun,
+            LastFailedOrPartialIndexRun = lastFailedOrPartialIndexRun,
             ReadOnlyFallback = _readOnlyFallback,
             WalCheckpointAttempted = _walCheckpointAttempted,
             WalCheckpointSucceeded = _walCheckpointSucceeded,
@@ -839,6 +841,41 @@ public partial class DbReader
             RowsUpserted = rowsUpserted,
             RowsDeleted = rowsDeleted,
             PeakMemoryMb = peakMemoryMb,
+        };
+    }
+
+    private StatusFailedOrPartialIndexRun? GetLastFailedOrPartialIndexRun(bool batchInProgress)
+    {
+        var status = TryGetMetaStringInternal(DbContext.LastFailedIndexRunStatusMetaKey);
+        var mode = TryGetMetaStringInternal(DbContext.LastFailedIndexRunModeMetaKey);
+        var startedAt = ParseMetaDateTime(TryGetMetaStringInternal(DbContext.LastFailedIndexRunStartedAtMetaKey));
+        var durationMs = ParseMetaLong(TryGetMetaStringInternal(DbContext.LastFailedIndexRunDurationMsMetaKey));
+        var filesProcessed = ParseMetaLong(TryGetMetaStringInternal(DbContext.LastFailedIndexRunFilesProcessedMetaKey));
+        var filesTotal = ParseMetaLong(TryGetMetaStringInternal(DbContext.LastFailedIndexRunFilesTotalMetaKey));
+        var errorCode = TryGetMetaStringInternal(DbContext.LastFailedIndexRunErrorCodeMetaKey);
+        var reason = TryGetMetaStringInternal(DbContext.LastFailedIndexRunReasonMetaKey);
+        if (status == null && mode == null && startedAt == null && durationMs == null && filesProcessed == null
+            && filesTotal == null && errorCode == null && reason == null)
+        {
+            return batchInProgress
+                ? new StatusFailedOrPartialIndexRun
+                {
+                    Status = "partial",
+                    Reason = "batch_in_progress",
+                }
+                : null;
+        }
+
+        return new StatusFailedOrPartialIndexRun
+        {
+            Status = status,
+            Mode = mode,
+            StartedAt = startedAt,
+            DurationMs = durationMs,
+            FilesProcessed = filesProcessed,
+            FilesTotal = filesTotal,
+            ErrorCode = errorCode,
+            Reason = reason,
         };
     }
 

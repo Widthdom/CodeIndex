@@ -3829,7 +3829,10 @@ public static class QueryCommandRunner
                 ? BuildStatusCheckFailures(status, options.StatusCheckScopes)
                 : Array.Empty<StatusCheckFailure>();
             if (options.CheckWorkspace)
+            {
                 status.FailedChecks = checkFailures.Select(f => f.Name).ToList();
+                status.RepairCommands = BuildStatusRepairCommands(status, checkFailures, options);
+            }
 
             if (options.Json)
             {
@@ -8907,6 +8910,127 @@ public static class QueryCommandRunner
             failures.Add(new StatusCheckFailure("index_newer_than_reader", false, $"[degraded] index_newer_than_reader=true reason={status.IndexNewerThanReaderReason ?? "unknown"}"));
 
         return failures;
+    }
+
+    private static List<StatusRepairCommand>? BuildStatusRepairCommands(
+        StatusResult status,
+        IReadOnlyList<StatusCheckFailure> failures,
+        QueryCommandOptions options)
+    {
+        if (failures.Count == 0)
+            return null;
+
+        var commands = new List<StatusRepairCommand>();
+        foreach (var failure in failures)
+        {
+            var command = failure.Name switch
+            {
+                "workspace_stale" or "workspace_unavailable" => BuildIndexRepairCommand(
+                    status,
+                    options,
+                    failure.Name,
+                    rebuild: false,
+                    "Re-runs indexing for the current workspace snapshot."),
+                "graph_table_available" or "issues_table_available" or "file_issues_data_current"
+                    or "sql_graph_contract_ready" or "csharp_symbol_name_ready" or "csharp_metadata_target_ready"
+                    => BuildIndexRepairCommand(
+                        status,
+                        options,
+                        failure.Name,
+                        rebuild: false,
+                        "Rewrites stale or missing index metadata before query results are trusted."),
+                "hotspot_family_ready" or "index_newer_than_reader" => BuildIndexRepairCommand(
+                    status,
+                    options,
+                    failure.Name,
+                    rebuild: true,
+                    "Performs a full rebuild because partial updates cannot prove every indexed row was restamped."),
+                "fold_ready" => BuildBackfillFoldRepairCommand(options, failure.Name),
+                "migration_in_progress" => BuildStatusCheckRepairCommand(options, failure.Name),
+                _ => null,
+            };
+            if (command != null)
+                commands.Add(command);
+        }
+
+        return commands.Count == 0 ? null : commands;
+    }
+
+    private static StatusRepairCommand BuildIndexRepairCommand(
+        StatusResult status,
+        QueryCommandOptions options,
+        string reason,
+        bool rebuild,
+        string safetyNote)
+    {
+        var args = new List<string>
+        {
+            "index",
+            string.IsNullOrWhiteSpace(status.ProjectRoot) ? "." : status.ProjectRoot!,
+        };
+        if (options.DbPathExplicit)
+        {
+            args.Add("--db");
+            args.Add(ResolveWritableDbPathOrPlaceholder(options.DbPath));
+        }
+        if (rebuild)
+            args.Add("--rebuild");
+
+        return new StatusRepairCommand
+        {
+            Name = "cdidx",
+            Args = args,
+            Reason = reason,
+            SafetyNotes =
+            [
+                safetyNote,
+                "Avoid running concurrently with another cdidx index writer for the same database.",
+            ],
+        };
+    }
+
+    private static StatusRepairCommand BuildBackfillFoldRepairCommand(QueryCommandOptions options, string reason)
+    {
+        var args = new List<string> { "backfill-fold" };
+        if (options.DbPathExplicit)
+        {
+            args.Add("--db");
+            args.Add(ResolveWritableDbPathOrPlaceholder(options.DbPath));
+        }
+
+        return new StatusRepairCommand
+        {
+            Name = "cdidx",
+            Args = args,
+            Reason = reason,
+            SafetyNotes =
+            [
+                "Restamps folded-name columns in place without reparsing source files.",
+                "Use a full index rebuild instead if the database must be regenerated from source.",
+            ],
+        };
+    }
+
+    private static StatusRepairCommand BuildStatusCheckRepairCommand(QueryCommandOptions options, string reason)
+    {
+        var args = new List<string> { "status", "--check", "--json" };
+        if (options.DbPathExplicit)
+        {
+            args.Add("--db");
+            args.Add(options.DbPath);
+        }
+
+        return new StatusRepairCommand
+        {
+            Name = "cdidx",
+            Args = args,
+            Reason = reason,
+            SafetyNotes =
+            [
+                "Wait for the active index or migration writer to finish before rerunning status.",
+                "Do not start a second writer unless the existing writer is known to be gone.",
+            ],
+        };
     }
 
     private static void WriteStatusCheckDiagnostics(IReadOnlyList<StatusCheckFailure> failures)
