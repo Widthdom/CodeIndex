@@ -41,6 +41,18 @@ internal static class SearchAuditRecipes
                     ["audit", "bug"],
                     "False positives include intentionally fire-and-forget work and APIs that have no meaningful caller cancellation token."),
                 new(
+                    "empty-catch-review",
+                    "catch",
+                    "Find catch blocks that may be empty, overly broad, or swallowing diagnostic context.",
+                    ["audit", "bug"],
+                    "False positives include catch blocks that rethrow, translate exceptions safely, or intentionally ignore best-effort cleanup failures."),
+                new(
+                    "broad-exception-catch",
+                    "catch (Exception",
+                    "Find broad C# exception catches that may need narrower exception types or explicit recovery boundaries.",
+                    ["audit", "bug"],
+                    "False positives include top-level command boundaries that intentionally normalize all recoverable failures."),
+                new(
                     "process-start-info",
                     "ProcessStartInfo",
                     "Find external process launch configuration that may need argument, environment, cwd, and shell-use review.",
@@ -69,7 +81,19 @@ internal static class SearchAuditRecipes
                     "OrdinalIgnoreCase",
                     "Find case-insensitive path or identifier comparisons that may need filesystem case-sensitivity awareness.",
                     ["audit", "portability"],
-                    "False positives include non-path protocol tokens, CLI option names, labels, and other intentionally case-insensitive domains.")
+                    "False positives include non-path protocol tokens, CLI option names, labels, and other intentionally case-insensitive domains."),
+                new(
+                    "regex-construction",
+                    "new Regex",
+                    "Find direct regex construction that may need a timeout, non-backtracking mode, or bounded input review.",
+                    ["audit", "performance"],
+                    "False positives include precompiled bounded patterns with explicit timeouts or tiny trusted inputs."),
+                new(
+                    "regex-timeout-handling",
+                    "RegexMatchTimeoutException",
+                    "Find regex timeout handling boundaries that may need consistent diagnostics and recovery behavior.",
+                    ["audit", "bug"],
+                    "False positives include tests and already-normalized parse/validation errors.")
             ])
     ];
 
