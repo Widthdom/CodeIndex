@@ -241,6 +241,42 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_GroupByIsRejectedForSearchSubmodes_Issue3388()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_group_by_submodes");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                "public class App { public void Run() { AuditMarker(); } }");
+
+            var (listExitCode, _, listStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--list-recipes", "--group-by", "file"],
+                _jsonOptions));
+            var (recipeExitCode, _, recipeStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "risky-code", "--db", dbPath, "--group-by", "file"],
+                _jsonOptions));
+            var (namedExitCode, _, namedStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--named-query", "audit=AuditMarker", "--db", dbPath, "--group-by", "file"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, listExitCode);
+            Assert.Equal(CommandExitCodes.UsageError, recipeExitCode);
+            Assert.Equal(CommandExitCodes.UsageError, namedExitCode);
+            Assert.Contains("--group-by is not supported with --list-recipes", listStderr, StringComparison.Ordinal);
+            Assert.Contains("--group-by is not supported with --recipe", recipeStderr, StringComparison.Ordinal);
+            Assert.Contains("--group-by is not supported with --named-query", namedStderr, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_FormatLspEmitsLocationArray()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_format_lsp");

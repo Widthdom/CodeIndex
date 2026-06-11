@@ -517,6 +517,19 @@ public static class QueryCommandRunner
                 "Drop --prefix to keep the exact substring path, or drop --exact to opt into FTS5 prefix matching.");
             return CommandExitCodes.UsageError;
         }
+        if (options.GroupBy != null && (options.ListRecipes || options.NamedSearchQueries.Count > 0 || options.RecipeName != null))
+        {
+            var mode = options.ListRecipes
+                ? "--list-recipes"
+                : options.NamedSearchQueries.Count > 0
+                    ? "--named-query"
+                    : "--recipe";
+            WriteUsageError(
+                $"--group-by is not supported with {mode}.",
+                GetUsageLineOrThrow("search"),
+                "Use `cdidx search <query> --group-by file --count` or remove --group-by for recipe and named-batch output.");
+            return CommandExitCodes.UsageError;
+        }
         if (options.ListRecipes)
         {
             if (options.Query != null || options.RecipeName != null || options.NamedSearchQueries.Count > 0 || options.ExtraNames.Count > 0)
