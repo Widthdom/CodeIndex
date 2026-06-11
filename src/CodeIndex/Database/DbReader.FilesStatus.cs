@@ -507,8 +507,16 @@ public partial class DbReader
             Lang = lang,
             StartLine = selectedLines[0],
             EndLine = selectedLines[^1],
+            RequestedStartLine = requestedStart,
+            RequestedEndLine = requestedEndCeiling,
+            EffectiveStartLine = selectedLines[0],
+            EffectiveEndLine = selectedLines[^1],
             Content = clampedContent.Text,
             ContentTruncated = clampedContent.Truncated,
+            ContentTruncationReasons = clampedContent.Truncated ? ["line_width_cap"] : [],
+            ContentRecovery = clampedContent.Truncated
+                ? FileExcerptResult.CreateRecoveryHint(path, selectedLines[0], selectedLines[^1])
+                : null,
         };
     }
 

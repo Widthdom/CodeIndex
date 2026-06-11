@@ -403,6 +403,7 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(ExactZeroHintResult))]
 [JsonSerializable(typeof(ExportImportCommandRunner.ExportArchiveResult))]
 [JsonSerializable(typeof(ExportImportCommandRunner.ExportManifest))]
+[JsonSerializable(typeof(ExcerptRecoveryHint))]
 [JsonSerializable(typeof(ExcerptSemanticToken))]
 [JsonSerializable(typeof(FileDependencyResult))]
 [JsonSerializable(typeof(FileExcerptResult))]

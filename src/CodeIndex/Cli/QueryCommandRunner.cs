@@ -2196,10 +2196,19 @@ public static class QueryCommandRunner
 
         var startLine = symbol.StartLine;
         var naturalEndLine = symbol.BodyEndLine ?? symbol.EndLine;
-        var cappedEndLine = (int)Math.Min(naturalEndLine, (long)startLine + SearchSnippetFormatter.ClampSnippetLines(snippetLines) - 1);
+        var cappedLines = SearchSnippetFormatter.ClampSnippetLines(snippetLines);
+        var cappedEndLine = (int)Math.Min(naturalEndLine, (long)startLine + cappedLines - 1);
         var excerpt = reader.GetExcerpt(path, startLine, cappedEndLine, maxLineWidth: maxLineWidth, focusLine: startLine);
         if (excerpt != null && cappedEndLine < naturalEndLine)
-            excerpt.ContentTruncated = true;
+        {
+            excerpt.RequestedStartLine = startLine;
+            excerpt.RequestedEndLine = naturalEndLine;
+            excerpt.EffectiveStartLine = excerpt.StartLine;
+            excerpt.EffectiveEndLine = excerpt.EndLine;
+            var recoveryStartLine = cappedEndLine + 1;
+            var recoveryEndLine = (int)Math.Min(naturalEndLine, (long)recoveryStartLine + cappedLines - 1);
+            AddExcerptTruncation(excerpt, "body_line_cap", recoveryStartLine, recoveryEndLine);
+        }
         return excerpt;
     }
 
@@ -2225,6 +2234,12 @@ public static class QueryCommandRunner
         result.BodyStartLine = excerpt.StartLine;
         result.BodyEndLine = excerpt.EndLine;
         result.BodyContentTruncated = excerpt.ContentTruncated;
+        result.BodyRequestedStartLine = excerpt.RequestedStartLine;
+        result.BodyRequestedEndLine = excerpt.RequestedEndLine;
+        result.BodyEffectiveStartLine = excerpt.EffectiveStartLine;
+        result.BodyEffectiveEndLine = excerpt.EffectiveEndLine;
+        result.BodyContentTruncationReasons = CopyTruncationReasons(excerpt);
+        result.BodyContentRecovery = excerpt.ContentRecovery;
     }
 
     private static void ApplyBodyExcerpt(CallerResult result, FileExcerptResult? excerpt)
@@ -2235,6 +2250,12 @@ public static class QueryCommandRunner
         result.BodyStartLine = excerpt.StartLine;
         result.BodyEndLine = excerpt.EndLine;
         result.BodyContentTruncated = excerpt.ContentTruncated;
+        result.BodyRequestedStartLine = excerpt.RequestedStartLine;
+        result.BodyRequestedEndLine = excerpt.RequestedEndLine;
+        result.BodyEffectiveStartLine = excerpt.EffectiveStartLine;
+        result.BodyEffectiveEndLine = excerpt.EffectiveEndLine;
+        result.BodyContentTruncationReasons = CopyTruncationReasons(excerpt);
+        result.BodyContentRecovery = excerpt.ContentRecovery;
     }
 
     private static void ApplyBodyExcerpt(CalleeResult result, FileExcerptResult? excerpt)
@@ -2245,6 +2266,12 @@ public static class QueryCommandRunner
         result.BodyStartLine = excerpt.StartLine;
         result.BodyEndLine = excerpt.EndLine;
         result.BodyContentTruncated = excerpt.ContentTruncated;
+        result.BodyRequestedStartLine = excerpt.RequestedStartLine;
+        result.BodyRequestedEndLine = excerpt.RequestedEndLine;
+        result.BodyEffectiveStartLine = excerpt.EffectiveStartLine;
+        result.BodyEffectiveEndLine = excerpt.EffectiveEndLine;
+        result.BodyContentTruncationReasons = CopyTruncationReasons(excerpt);
+        result.BodyContentRecovery = excerpt.ContentRecovery;
     }
 
     private static void ApplyBodyExcerpt(ImpactResult result, FileExcerptResult? excerpt)
@@ -2255,7 +2282,24 @@ public static class QueryCommandRunner
         result.BodyStartLine = excerpt.StartLine;
         result.BodyEndLine = excerpt.EndLine;
         result.BodyContentTruncated = excerpt.ContentTruncated;
+        result.BodyRequestedStartLine = excerpt.RequestedStartLine;
+        result.BodyRequestedEndLine = excerpt.RequestedEndLine;
+        result.BodyEffectiveStartLine = excerpt.EffectiveStartLine;
+        result.BodyEffectiveEndLine = excerpt.EffectiveEndLine;
+        result.BodyContentTruncationReasons = CopyTruncationReasons(excerpt);
+        result.BodyContentRecovery = excerpt.ContentRecovery;
     }
+
+    private static void AddExcerptTruncation(FileExcerptResult excerpt, string reason, int recoveryStartLine, int recoveryEndLine)
+    {
+        excerpt.ContentTruncated = true;
+        if (!excerpt.ContentTruncationReasons.Any(existing => string.Equals(existing, reason, StringComparison.Ordinal)))
+            excerpt.ContentTruncationReasons.Add(reason);
+        excerpt.ContentRecovery ??= FileExcerptResult.CreateRecoveryHint(excerpt.Path, recoveryStartLine, recoveryEndLine);
+    }
+
+    private static List<string>? CopyTruncationReasons(FileExcerptResult excerpt)
+        => excerpt.ContentTruncationReasons.Count > 0 ? [.. excerpt.ContentTruncationReasons] : null;
 
     private static void WriteOptionalBodyExcerpt(int? startLine, string? content, string indent = "")
     {

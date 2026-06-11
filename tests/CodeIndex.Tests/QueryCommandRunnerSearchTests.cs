@@ -1830,7 +1830,20 @@ jobs:
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
+            Assert.Equal(1, json.GetProperty("requested_start_line").GetInt32());
+            Assert.Equal(1, json.GetProperty("requested_end_line").GetInt32());
+            Assert.Equal(1, json.GetProperty("effective_start_line").GetInt32());
+            Assert.Equal(1, json.GetProperty("effective_end_line").GetInt32());
             Assert.True(json.GetProperty("content_truncated").GetBoolean());
+            var truncationReasons = json.GetProperty("content_truncation_reasons")
+                .EnumerateArray()
+                .Select(reason => reason.GetString())
+                .ToArray();
+            Assert.Contains("line_width_cap", truncationReasons);
+            var recovery = json.GetProperty("content_recovery");
+            Assert.Equal(1, recovery.GetProperty("start_line").GetInt32());
+            Assert.Equal(1, recovery.GetProperty("end_line").GetInt32());
+            Assert.Equal("cdidx excerpt dist/data.txt --start 1 --end 1 --max-line-width 0 --json", recovery.GetProperty("command").GetString());
             Assert.DoesNotContain(longLine, json.GetProperty("content").GetString());
             Assert.Contains("TARGET", json.GetProperty("content").GetString());
             Assert.True(json.GetProperty("content").GetString()!.Length <= 96);

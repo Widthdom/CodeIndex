@@ -791,6 +791,12 @@ public partial class DbReader
 
             string? bodyContent = null;
             var bodyContentTruncated = false;
+            int? bodyRequestedStartLine = null;
+            int? bodyRequestedEndLine = null;
+            int? bodyEffectiveStartLine = null;
+            int? bodyEffectiveEndLine = null;
+            var bodyContentTruncationReasons = new List<string>();
+            ExcerptRecoveryHint? bodyContentRecovery = null;
             if (includeBody && symbol.BodyStartLine != null && symbol.BodyEndLine != null)
             {
                 var cappedBodyEndLine = Math.Min(
@@ -799,10 +805,29 @@ public partial class DbReader
                 var bodyExcerpt = GetExcerpt(symbol.Path, symbol.BodyStartLine.Value, cappedBodyEndLine);
                 if (bodyExcerpt != null)
                 {
+                    bodyRequestedStartLine = symbol.BodyStartLine.Value;
+                    bodyRequestedEndLine = symbol.BodyEndLine.Value;
+                    bodyEffectiveStartLine = bodyExcerpt.StartLine;
+                    bodyEffectiveEndLine = bodyExcerpt.EndLine;
                     bodyContent = bodyExcerpt.Content;
-                    bodyContentTruncated = bodyExcerpt.ContentTruncated || cappedBodyEndLine < symbol.BodyEndLine.Value;
+                    bodyContentTruncationReasons.AddRange(bodyExcerpt.ContentTruncationReasons);
+                    bodyContentRecovery = bodyExcerpt.ContentRecovery;
+                    if (cappedBodyEndLine < symbol.BodyEndLine.Value)
+                    {
+                        bodyContentTruncated = true;
+                        AddBodyContentTruncationReason(bodyContentTruncationReasons, "body_line_cap");
+                        var recoveryStartLine = cappedBodyEndLine + 1;
+                        var recoveryEndLine = Math.Min(symbol.BodyEndLine.Value, recoveryStartLine + DefinitionBodyMaxLines - 1);
+                        bodyContentRecovery ??= FileExcerptResult.CreateRecoveryHint(symbol.Path, recoveryStartLine, recoveryEndLine);
+                    }
+                    bodyContentTruncated |= bodyExcerpt.ContentTruncated;
                     (bodyContent, var byteTruncated) = ClampDefinitionBodyBytes(bodyContent);
-                    bodyContentTruncated |= byteTruncated;
+                    if (byteTruncated)
+                    {
+                        bodyContentTruncated = true;
+                        AddBodyContentTruncationReason(bodyContentTruncationReasons, "body_byte_cap");
+                        bodyContentRecovery = FileExcerptResult.CreateRecoveryHint(symbol.Path, bodyExcerpt.StartLine, bodyExcerpt.EndLine);
+                    }
                 }
             }
 
@@ -827,6 +852,12 @@ public partial class DbReader
                 Content = definitionExcerpt.Content,
                 BodyContent = bodyContent,
                 BodyContentTruncated = bodyContentTruncated,
+                BodyRequestedStartLine = bodyRequestedStartLine,
+                BodyRequestedEndLine = bodyRequestedEndLine,
+                BodyEffectiveStartLine = bodyEffectiveStartLine,
+                BodyEffectiveEndLine = bodyEffectiveEndLine,
+                BodyContentTruncationReasons = bodyContentTruncationReasons.Count > 0 ? bodyContentTruncationReasons : null,
+                BodyContentRecovery = bodyContentRecovery,
                 Complexity = bodyContent != null && !bodyContentTruncated
                     ? SymbolExtractor.EstimateComplexity(bodyContent)
                     : null,
@@ -834,6 +865,12 @@ public partial class DbReader
         }
 
         return results;
+    }
+
+    private static void AddBodyContentTruncationReason(List<string> reasons, string reason)
+    {
+        if (!reasons.Any(existing => string.Equals(existing, reason, StringComparison.Ordinal)))
+            reasons.Add(reason);
     }
 
     private static (string Content, bool Truncated) ClampDefinitionBodyBytes(string content)
