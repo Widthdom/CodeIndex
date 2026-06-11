@@ -56,6 +56,8 @@ public static class SearchSnippetFormatter
         ArgumentNullException.ThrowIfNull(queryContext);
 
         var excerpt = BuildExcerpt(result.Content, queryContext, result.StartLine, maxLines, caseSensitive, maxLineWidth, lang ?? result.Lang, focusMode, exposeLiteralHighlights);
+        var matchFacets = BuildMatchFacets(result, excerpt);
+        AttachHighlightOrigins(excerpt.Highlights, matchFacets);
         return new CompactSearchResult
         {
             Query = queryContext.Query,
@@ -69,6 +71,12 @@ public static class SearchSnippetFormatter
             Snippet = string.Join('\n', excerpt.Lines),
             MatchLines = excerpt.MatchLines,
             Highlights = excerpt.Highlights,
+            MatchOrigins = matchFacets
+                .Select(facet => facet.Origin)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(origin => origin, StringComparer.Ordinal)
+                .ToList(),
+            MatchFacets = matchFacets,
             ContextBefore = excerpt.ContextBefore,
             ContextAfter = excerpt.ContextAfter,
             TruncatedLineCount = excerpt.TruncatedLineCount,
@@ -82,6 +90,83 @@ public static class SearchSnippetFormatter
             EnclosingSymbolEndLine = result.EnclosingSymbolEndLine,
             EnclosingContainerName = result.EnclosingContainerName,
         };
+    }
+
+    private static List<SearchMatchFacet> BuildMatchFacets(SearchResult result, SearchSnippetExcerpt excerpt)
+    {
+        var facets = new List<SearchMatchFacet>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var highlight in excerpt.Highlights)
+        {
+            var lineText = GetContentLine(result.Content, result.StartLine, highlight.Line) ?? highlight.Text;
+            var occurrences = highlight.LiteralTermOccurrences ?? highlight.TermOccurrences;
+            if (occurrences.Count == 0)
+            {
+                AddFacet(SearchMatchClassifier.Classify(
+                    result.Path,
+                    result.Lang,
+                    highlight.Line,
+                    lineText,
+                    column: 1,
+                    length: 1,
+                    result.EnclosingSymbolKind));
+                continue;
+            }
+
+            foreach (var occurrence in occurrences)
+            {
+                AddFacet(SearchMatchClassifier.Classify(
+                    result.Path,
+                    result.Lang,
+                    highlight.Line,
+                    lineText,
+                    occurrence.Column,
+                    occurrence.Length,
+                    result.EnclosingSymbolKind));
+            }
+        }
+
+        return facets;
+
+        void AddFacet(SearchMatchFacet facet)
+        {
+            var key = $"{facet.Line}\0{facet.Column}\0{facet.Length}\0{facet.Origin}";
+            if (seen.Add(key))
+                facets.Add(facet);
+        }
+    }
+
+    private static void AttachHighlightOrigins(IReadOnlyList<SearchHighlight> highlights, IReadOnlyList<SearchMatchFacet> facets)
+    {
+        foreach (var highlight in highlights)
+        {
+            var lineFacets = facets.Where(facet => facet.Line == highlight.Line).ToList();
+            highlight.MatchOrigins = lineFacets
+                .Select(facet => facet.Origin)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(origin => origin, StringComparer.Ordinal)
+                .ToList();
+            highlight.TestFile = lineFacets.Any(facet => facet.TestFile);
+            highlight.TestSymbol = lineFacets.Any(facet => facet.TestSymbol);
+            highlight.TestFixture = lineFacets.Any(facet => facet.TestFixture);
+        }
+    }
+
+    private static string? GetContentLine(string content, int absoluteStartLine, int absoluteLine)
+    {
+        var targetIndex = absoluteLine - absoluteStartLine;
+        if (targetIndex < 0)
+            return null;
+
+        foreach (var (index, text) in EnumerateContentLines(content))
+        {
+            if (index == targetIndex)
+                return text;
+            if (index > targetIndex)
+                return null;
+        }
+
+        return null;
     }
 
     public static IEnumerable<CompactSearchResult> ToCompactResults(IEnumerable<SearchResult> results, string query, int maxLines = DefaultSnippetLines, bool caseSensitive = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, string? lang = null, SearchSnippetFocusMode focusMode = SearchSnippetFocusMode.Quality, bool exposeLiteralHighlights = false)
@@ -649,6 +734,8 @@ public sealed class CompactSearchResult
     public string Snippet { get; set; } = string.Empty;
     public List<int> MatchLines { get; set; } = [];
     public List<SearchHighlight> Highlights { get; set; } = [];
+    public List<string> MatchOrigins { get; set; } = [];
+    public List<SearchMatchFacet> MatchFacets { get; set; } = [];
     public int ContextBefore { get; set; }
     public int ContextAfter { get; set; }
     public int TruncatedLineCount { get; set; }
@@ -687,6 +774,10 @@ public sealed class SearchHighlight
     public List<int> TruncatedCharCounts { get; set; } = [];
     public List<string> Terms { get; set; } = [];
     public List<SearchTermOccurrence> TermOccurrences { get; set; } = [];
+    public List<string> MatchOrigins { get; set; } = [];
+    public bool TestFile { get; set; }
+    public bool TestSymbol { get; set; }
+    public bool TestFixture { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<string>? LiteralTerms { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

@@ -66,6 +66,17 @@ public sealed class SearchGuardEvidence
     public string Text { get; set; } = string.Empty;
 }
 
+public sealed class SearchMatchFacet
+{
+    public int Line { get; set; }
+    public int Column { get; set; }
+    public int Length { get; set; }
+    public string Origin { get; set; } = string.Empty;
+    public bool TestFile { get; set; }
+    public bool TestSymbol { get; set; }
+    public bool TestFixture { get; set; }
+}
+
 public sealed record FtsQueryDiagnostics(
     [property: JsonPropertyName("query_degraded_reason")] string? QueryDegradedReason,
     [property: JsonPropertyName("tokens_dropped")] IReadOnlyList<string> TokensDropped)

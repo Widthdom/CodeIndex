@@ -9,6 +9,111 @@ namespace CodeIndex.Tests;
 public partial class QueryCommandRunnerTests
 {
     [Fact]
+    public void RunSearch_JsonIncludesMatchOrigins_Issue3423()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_match_origins");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/match.cs",
+                "csharp",
+                """
+                using System.Text.RegularExpressions;
+
+                public class Demo
+                {
+                    public void Run()
+                    {
+                        OriginNeedle();
+                        // OriginNeedle in comment
+                        var text = "OriginNeedle in string";
+                        var regex = new Regex("OriginNeedle\d+");
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["OriginNeedle", "--db", dbPath, "--exact-substring", "--json=array", "--snippet-lines", "12"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var row = Assert.Single(document.RootElement.EnumerateArray());
+            var origins = row.GetProperty("match_origins").EnumerateArray().Select(value => value.GetString()).ToArray();
+            Assert.Contains("code", origins);
+            Assert.Contains("comment", origins);
+            Assert.Contains("string_literal", origins);
+            Assert.Contains("regex_literal", origins);
+
+            var facets = row.GetProperty("match_facets").EnumerateArray().ToArray();
+            Assert.Contains(facets, facet => facet.GetProperty("origin").GetString() == "comment");
+            Assert.Contains(facets, facet => facet.GetProperty("origin").GetString() == "regex_literal");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_ExcludeCommentsSuppressesCommentOnlyMatches_Issue3423()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_exclude_comments");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/comment.cs", "csharp", "// FilterNeedle appears only in a comment\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/code.cs", "csharp", "public class Demo { void Run() { FilterNeedle(); } }\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["FilterNeedle", "--db", dbPath, "--exact-substring", "--json=array", "--exclude-comments"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var row = Assert.Single(document.RootElement.EnumerateArray());
+            Assert.Equal("src/code.cs", row.GetProperty("path").GetString());
+            Assert.DoesNotContain("comment", row.GetProperty("match_origins").EnumerateArray().Select(value => value.GetString()));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_ExcludeStringsSuppressesStringAndRegexMatches_Issue3423()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_exclude_strings");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/string.cs", "csharp", "var text = \"StringOnlyNeedle\";\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/regex.cs", "csharp", "var pattern = new Regex(\"StringOnlyNeedle\");\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/code.cs", "csharp", "public class Demo { void Run() { StringOnlyNeedle(); } }\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["StringOnlyNeedle", "--db", dbPath, "--exact-substring", "--json=array", "--exclude-strings"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var row = Assert.Single(document.RootElement.EnumerateArray());
+            Assert.Equal("src/code.cs", row.GetProperty("path").GetString());
+            Assert.Equal(["code"], row.GetProperty("match_origins").EnumerateArray().Select(value => value.GetString()).ToArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_FormatCompactEmitsFileLineOnly_Issue1642()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_format_compact");

@@ -1065,6 +1065,9 @@ public static class QueryCommandRunner
             if (!options.RawFts && compact.MatchLines.Count == 0 && compact.Highlights.Count == 0)
                 continue;
 
+            if (!ApplySearchOriginFilters(compact, options))
+                continue;
+
             if (seenMatchLocations != null && compact.MatchLines.Count > 0)
             {
                 var keptLines = new List<int>(compact.MatchLines.Count);
@@ -1093,6 +1096,72 @@ public static class QueryCommandRunner
 
         return rows;
     }
+
+    private static bool ApplySearchOriginFilters(CompactSearchResult compact, QueryCommandOptions options)
+    {
+        if (!options.ExcludeComments && !options.ExcludeStrings)
+            return true;
+        if (compact.MatchFacets.Count == 0)
+            return true;
+
+        var keptFacets = compact.MatchFacets
+            .Where(facet => !IsSearchFacetExcluded(facet, options))
+            .ToList();
+        if (keptFacets.Count == 0)
+            return false;
+
+        compact.MatchFacets = keptFacets;
+        compact.MatchOrigins = keptFacets
+            .Select(facet => facet.Origin)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(origin => origin, StringComparer.Ordinal)
+            .ToList();
+
+        var keptLines = keptFacets.Select(facet => facet.Line).ToHashSet();
+        compact.MatchLines = compact.MatchLines
+            .Where(line => keptLines.Contains(line))
+            .ToList();
+        compact.Highlights = compact.Highlights
+            .Where(highlight => keptLines.Contains(highlight.Line))
+            .ToList();
+        var keptFacetKeys = keptFacets
+            .Select(facet => SearchFacetKey(facet.Line, facet.Column, facet.Length))
+            .ToHashSet(StringComparer.Ordinal);
+        foreach (var highlight in compact.Highlights)
+        {
+            var lineFacets = keptFacets.Where(facet => facet.Line == highlight.Line).ToList();
+            highlight.MatchOrigins = lineFacets
+                .Select(facet => facet.Origin)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(origin => origin, StringComparer.Ordinal)
+                .ToList();
+            highlight.TestFile = lineFacets.Any(facet => facet.TestFile);
+            highlight.TestSymbol = lineFacets.Any(facet => facet.TestSymbol);
+            highlight.TestFixture = lineFacets.Any(facet => facet.TestFixture);
+            highlight.TermOccurrences = FilterSearchOccurrences(highlight.TermOccurrences, highlight.Line, keptFacetKeys);
+            if (highlight.LiteralTermOccurrences != null)
+                highlight.LiteralTermOccurrences = FilterSearchOccurrences(highlight.LiteralTermOccurrences, highlight.Line, keptFacetKeys);
+        }
+
+        return compact.Highlights.Count > 0 || compact.MatchLines.Count > 0;
+    }
+
+    private static bool IsSearchFacetExcluded(SearchMatchFacet facet, QueryCommandOptions options)
+    {
+        if (options.ExcludeComments && string.Equals(facet.Origin, SearchMatchClassifier.Comment, StringComparison.Ordinal))
+            return true;
+        if (options.ExcludeStrings && SearchMatchClassifier.IsStringLikeOrigin(facet.Origin))
+            return true;
+        return false;
+    }
+
+    private static List<SearchTermOccurrence> FilterSearchOccurrences(List<SearchTermOccurrence> occurrences, int line, HashSet<string> keptFacetKeys)
+        => occurrences
+            .Where(occurrence => keptFacetKeys.Contains(SearchFacetKey(line, occurrence.Column, occurrence.Length)))
+            .ToList();
+
+    private static string SearchFacetKey(int line, int column, int length)
+        => $"{line}:{column}:{length}";
 
     private static IEnumerable<FormattedLocation> ToSearchFormattedLocations(SearchDisplayRow row, string query, bool useMatchLines)
     {
@@ -6140,6 +6209,8 @@ public static class QueryCommandRunner
         bool prefix = false;
         var guardFilters = new List<SearchGuardFilter>();
         var guardWindow = DbReader.DefaultSearchGuardWindow;
+        bool excludeComments = false;
+        bool excludeStrings = false;
         List<string>? parseErrors = null;
         bool exactName = false;
         bool exactSubstring = false;
@@ -6813,6 +6884,12 @@ public static class QueryCommandRunner
                 case "--exclude-tests":
                     excludeTests = true;
                     break;
+                case "--exclude-comments":
+                    excludeComments = true;
+                    break;
+                case "--exclude-strings":
+                    excludeStrings = true;
+                    break;
                 case "--include-generated":
                     includeGenerated = true;
                     break;
@@ -7060,6 +7137,8 @@ public static class QueryCommandRunner
             Prefix = prefix,
             GuardFilters = guardFilters,
             GuardWindow = guardWindow,
+            ExcludeComments = excludeComments,
+            ExcludeStrings = excludeStrings,
             ExactName = exactName,
             ExactSubstring = exactSubstring,
             CheckWorkspace = checkWorkspace,
@@ -8377,8 +8456,8 @@ public static class QueryCommandRunner
             return;
         }
 
-        if (options.Lang != null || options.PathPatterns.Count > 0 || options.ExcludeTests || options.ExcludePaths.Count > 0)
-            Console.Error.WriteLine($"Hint: {filterHint ?? "try removing --lang, --path, --exclude-path, or --exclude-tests to broaden the search."}");
+        if (options.Lang != null || options.PathPatterns.Count > 0 || options.ExcludeTests || options.ExcludeComments || options.ExcludeStrings || options.ExcludePaths.Count > 0)
+            Console.Error.WriteLine($"Hint: {filterHint ?? "try removing --lang, --path, --exclude-path, --exclude-tests, --exclude-comments, or --exclude-strings to broaden the search."}");
 
         if (alternativeHint != null)
             Console.Error.WriteLine($"Hint: {alternativeHint}");
@@ -8435,6 +8514,10 @@ public static class QueryCommandRunner
             yield return $"rank-by: {FormatReferenceRankMode(options.RankMode)}";
         if (options.ExcludeTests)
             yield return "exclude-tests: true";
+        if (options.ExcludeComments)
+            yield return "exclude-comments: true";
+        if (options.ExcludeStrings)
+            yield return "exclude-strings: true";
         if (options.Since.HasValue)
             yield return $"since: {options.Since.Value:O}";
         if (options.CountOnly)
@@ -10043,6 +10126,8 @@ public sealed class QueryCommandOptions
     public bool Prefix { get; init; }
     public List<SearchGuardFilter> GuardFilters { get; init; } = [];
     public int GuardWindow { get; init; } = DbReader.DefaultSearchGuardWindow;
+    public bool ExcludeComments { get; init; }
+    public bool ExcludeStrings { get; init; }
     public bool ExactName { get; init; }
     public bool ExactSubstring { get; init; }
     public bool CheckWorkspace { get; init; }

@@ -1187,6 +1187,8 @@ internal static class ProgramRunner
         "--reject-before",
         "--reject-after",
         "--guard-window",
+        "--exclude-comments",
+        "--exclude-strings",
         "--project",
         "--solution",
         "--exclude-path",
