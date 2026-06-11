@@ -407,6 +407,7 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(FileDependencyResult))]
 [JsonSerializable(typeof(FileExcerptResult))]
 [JsonSerializable(typeof(FileFindResult))]
+[JsonSerializable(typeof(FileFindSnippetTruncationContext))]
 [JsonSerializable(typeof(FileIssue))]
 [JsonSerializable(typeof(FileResult))]
 [JsonSerializable(typeof(FreshnessHintResult))]

@@ -186,10 +186,22 @@ public class FileFindResult
     public string? Lang { get; set; }
     public int Line { get; set; }
     public int Column { get; set; }
+    public int Length { get; set; }
+    public int OriginalLineLength { get; set; }
     public int StartLine { get; set; }
     public int EndLine { get; set; }
     public string Snippet { get; set; } = string.Empty;
     public bool SnippetTruncated { get; set; }
+    public FileFindSnippetTruncationContext SnippetTruncationContext { get; set; } = new();
+}
+
+public class FileFindSnippetTruncationContext
+{
+    public int LineCount { get; set; }
+    public List<int> CharCounts { get; set; } = [];
+    public int TotalChars { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Reason { get; set; }
 }
 
 public class IndexFreshnessCheckResult
