@@ -7486,6 +7486,14 @@ public class McpServerTests : IDisposable
         Assert.Contains("TARGET", structured["content"]!.GetValue<string>());
         Assert.True(structured["content"]!.GetValue<string>().Length <= 96);
         Assert.Equal(96, structured["maxLineWidth"]!.GetValue<int>());
+        var recovery = structured["contentRecovery"]!;
+        Assert.Equal(1, recovery["startLine"]!.GetValue<int>());
+        Assert.Equal(1, recovery["endLine"]!.GetValue<int>());
+        var recoveryCommand = recovery["command"]!.GetValue<string>();
+        Assert.Contains("cdidx excerpt dist/data.txt", recoveryCommand);
+        Assert.Contains("--db", recoveryCommand);
+        Assert.Contains(_dbPath, recoveryCommand);
+        Assert.Contains("--start 1 --end 1 --max-line-width 0 --json", recoveryCommand);
     }
 
     [Fact]

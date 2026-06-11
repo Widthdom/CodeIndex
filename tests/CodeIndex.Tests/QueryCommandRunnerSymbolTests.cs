@@ -42,7 +42,11 @@ public partial class QueryCommandRunnerTests
             Assert.Contains("body_line_cap", bodyReasons);
             var recovery = json.GetProperty("body_content_recovery");
             Assert.Equal(json.GetProperty("body_effective_end_line").GetInt32() + 1, recovery.GetProperty("start_line").GetInt32());
-            Assert.Contains("--max-line-width 0 --json", recovery.GetProperty("command").GetString());
+            var recoveryCommand = recovery.GetProperty("command").GetString();
+            Assert.Contains("cdidx excerpt src/long_body.py", recoveryCommand);
+            Assert.Contains("--db", recoveryCommand);
+            Assert.Contains(dbPath, recoveryCommand);
+            Assert.Contains("--max-line-width 0 --json", recoveryCommand);
             Assert.False(json.TryGetProperty("complexity", out _));
             Assert.True(CountLines(json.GetProperty("body_content").GetString()!) <= DbReader.DefinitionBodyMaxLines);
             Assert.DoesNotContain("value_23", json.GetProperty("body_content").GetString());
@@ -86,7 +90,11 @@ public partial class QueryCommandRunnerTests
             var recovery = json.GetProperty("body_content_recovery");
             Assert.Equal(2, recovery.GetProperty("start_line").GetInt32());
             Assert.Equal(3, recovery.GetProperty("end_line").GetInt32());
-            Assert.Equal("cdidx excerpt src/huge_body.py --start 2 --end 3 --max-line-width 0 --json", recovery.GetProperty("command").GetString());
+            var recoveryCommand = recovery.GetProperty("command").GetString();
+            Assert.Contains("cdidx excerpt src/huge_body.py", recoveryCommand);
+            Assert.Contains("--db", recoveryCommand);
+            Assert.Contains(dbPath, recoveryCommand);
+            Assert.Contains("--start 2 --end 3 --max-line-width 0 --json", recoveryCommand);
             Assert.False(json.TryGetProperty("complexity", out _));
         }
         finally

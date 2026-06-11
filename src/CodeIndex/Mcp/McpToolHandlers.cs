@@ -1529,6 +1529,7 @@ public partial class McpServer
             }
             if (lspCompatible)
                 QueryCommandRunner.AttachLspLocations(results);
+            ApplyExcerptRecoveryDbPath(results);
             var exactSignal = reader.GetDefinitionExactQuerySignal(lang, pathPatterns, excludePaths, excludeTests, since);
             var exactZeroHint = QueryCommandRunner.BuildExactZeroHint(
                 exact,
@@ -1562,6 +1563,30 @@ public partial class McpServer
                 ConsoleUi.FoundSummary(results.Count, "definition"),
                 payload);
         });
+    }
+
+    private void ApplyExcerptRecoveryDbPath(IEnumerable<DefinitionResult> results)
+    {
+        foreach (var result in results)
+            ExcerptRecoveryCommandFormatter.ApplyDbPath(result.BodyContentRecovery, result.Path, _dbPath);
+    }
+
+    private void ApplyExcerptRecoveryDbPath(IEnumerable<ReferenceResult> results)
+    {
+        foreach (var result in results)
+            ExcerptRecoveryCommandFormatter.ApplyDbPath(result.BodyContentRecovery, result.Path, _dbPath);
+    }
+
+    private void ApplyExcerptRecoveryDbPath(IEnumerable<CallerResult> results)
+    {
+        foreach (var result in results)
+            ExcerptRecoveryCommandFormatter.ApplyDbPath(result.BodyContentRecovery, result.Path, _dbPath);
+    }
+
+    private void ApplyExcerptRecoveryDbPath(IEnumerable<CalleeResult> results)
+    {
+        foreach (var result in results)
+            ExcerptRecoveryCommandFormatter.ApplyDbPath(result.BodyContentRecovery, result.Path, _dbPath);
     }
 
     private JsonNode ExecuteReferences(JsonNode? id, JsonNode? args)
@@ -2009,6 +2034,10 @@ public partial class McpServer
             analysis.SqlGraphContractReady = sqlGraphSignal.Relevant ? sqlGraphSignal.Ready : null;
             analysis.SqlGraphContractDegradedReason = sqlGraphSignal.Relevant ? sqlGraphSignal.DegradedReason : null;
             WorkspaceMetadataEnricher.Enrich(analysis, _dbPath, _dbPathExplicit);
+            ApplyExcerptRecoveryDbPath(analysis.Definitions);
+            ApplyExcerptRecoveryDbPath(analysis.References);
+            ApplyExcerptRecoveryDbPath(analysis.Callers);
+            ApplyExcerptRecoveryDbPath(analysis.Callees);
             var structured = ToAnalyzeSymbolJsonObject(analysis);
             AddSqlGraphContractSignal(structured, sqlGraphSignal);
             structured.Remove("exactZeroHint");
@@ -2495,6 +2524,7 @@ public partial class McpServer
                 return CreateToolResult(id, "No excerpt found.", emptyPayload);
             }
 
+            ExcerptRecoveryCommandFormatter.ApplyDbPath(excerpt, _dbPath);
             var payload = JsonSerializer.SerializeToNode(excerpt, _jsonOptions)!.AsObject();
             ApplyExcerptOutputBudget(payload, maxOutputBytes);
             payload["maxOutputBytes"] = maxOutputBytes;
