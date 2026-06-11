@@ -139,7 +139,7 @@ ownership boundaries so behavior changes remain reviewable and testable.
 
 ### Workspaces
 
-`cdidx.workspace.json` and `.cdidx-workspace.json` declare monorepo members without adding a YAML dependency. Workspace manifests are capped at 64 KiB, 16 JSON nesting levels, 1024 members, 4096 characters per member path, and 255 characters for `default_db_name`. The supported schema is additive: `members` is an array of member paths that must be relative to and resolve under the manifest directory, `index_strategy` is `per_member` or `single` with unknown values rejected, `default_db_name` is a plain file name that overrides `codeindex.db`, and `shared_ignores` is reserved for shared ignore policy. `cdidx workspace list` and `cdidx workspace status` report member DB paths.
+`cdidx.workspace.json` and `.cdidx-workspace.json` declare monorepo members without adding a YAML dependency. Workspace manifests are capped at 64 KiB, 16 JSON nesting levels, 1024 members, 4096 characters per member path, and 255 characters for `default_db_name`. The supported schema is additive: `members` is an array of member paths that must be relative to and resolve under the manifest directory, `index_strategy` is `per_member` or `single` with unknown values rejected, `default_db_name` is a plain file name that overrides `codeindex.db`, and `shared_ignores` is reserved for shared ignore policy. Invalid `members` entries are rejected with bounded diagnostics, and valid entries are normalized and deduplicated with the workspace path casing policy before DB paths are materialized. `cdidx workspace list` and `cdidx workspace status` report member DB paths.
 
 `cdidx workspace use <name>` writes an existing manifest member or `default` workspace to the per-user config directory, rejects missing manifest members, and rejects ambiguous member directory names. Query DB resolution keeps existing precedence: explicit `--db`, then explicit `--data-dir` / `CDIDX_DATA_DIR`, then active workspace state, then ancestor/CWD discovery.
 
@@ -2249,11 +2249,14 @@ ownership boundary を分けるときは、挙動変更を review しやすく t
 ### ワークスペース
 
 `cdidx.workspace.json` と `.cdidx-workspace.json` は YAML dependency を増やさずに monorepo
-member を宣言します。workspace manifest は 64 KiB、JSON nesting 16 level、1024 members に制限されます。
+member を宣言します。workspace manifest は 64 KiB、JSON nesting 16 level、1024 members、
+member path 4096 characters、`default_db_name` 255 characters に制限されます。
 schema は additive で、`members` は manifest directory からの相対 path かつ正規化後も
 manifest directory 配下に残る member path、
 `index_strategy` は `per_member` または `single`、`default_db_name` は
 `codeindex.db` を上書きする plain file name、`shared_ignores` は共有 ignore policy 用の予約 field です。
+invalid な `members` entries は件数を制限した diagnostics で拒否され、有効な entry は DB path を
+作る前に workspace path casing policy で正規化・重複排除されます。
 `cdidx workspace list` と `cdidx workspace status` は member DB path を報告します。
 
 `cdidx workspace use <name>` は active workspace を per-user config directory に保存します。
