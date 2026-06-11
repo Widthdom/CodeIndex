@@ -2824,7 +2824,7 @@ public partial class McpServer
             List<FileFindResult> results;
             try
             {
-                results = reader.FindInFiles(query, limit, lang, pathPatterns, excludePaths, excludeTests, before, after, exact, maxLineWidth, focusLine, focusColumn, regex);
+                results = reader.FindInFiles(query, limit, lang, pathPatterns, excludePaths, excludeTests, before, after, exact, maxLineWidth, focusLine, focusColumn, regex).Results;
             }
             catch (Exception ex) when (regex && (ex is ArgumentException || ex is RegexMatchTimeoutException))
             {

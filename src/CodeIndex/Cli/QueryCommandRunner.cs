@@ -26,6 +26,8 @@ public static class QueryCommandRunner
     internal const int DefaultDependencyCycleGraphLimit = 1_000;
     internal const int MaxWorkspaceDependencyDatabaseCount = 8;
     internal const int MaxWorkspaceDependencyDatabasePairCount = MaxWorkspaceDependencyDatabaseCount * (MaxWorkspaceDependencyDatabaseCount - 1);
+    internal const int FindAllCandidateFileLimit = 4096;
+    internal const int FindAllLineScanLimit = 250_000;
     internal const int BatchMaxLineChars = 1024 * 1024;
     internal const int BatchMaxArgumentCount = 256;
     internal const int BatchMaxArgumentChars = 8192;
@@ -304,7 +306,7 @@ public static class QueryCommandRunner
         new(
             ValueTakingOptions.Concat(["--json", "--log-format", "--log-retain-count", "--log-max-size-mb"]),
             StringComparer.Ordinal);
-    private const string FindUsage = "Usage: cdidx find <query> --path <glob> [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--before <n>] [--after <n>] [--snippet-lines <n>] [--focus-line <line>] [--focus-column <n>] [--max-line-width <n>] [--exact] [--regex] [--count]\n       cdidx find --query <query> --path <glob> [...]\n       cdidx find [options] -- <query>";
+    private const string FindUsage = "Usage: cdidx find <query> (--path <glob>|--all) [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--before <n>] [--after <n>] [--snippet-lines <n>] [--focus-line <line>] [--focus-column <n>] [--max-line-width <n>] [--exact] [--regex] [--count]\n       cdidx find --query <query> (--path <glob>|--all) [...]\n       cdidx find [options] -- <query>";
 
     public static int RunBatch(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
@@ -2922,21 +2924,32 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         }
 
-        if (options.PathPatterns.Count == 0)
+        if (options.PathPatterns.Count == 0 && !options.All)
         {
-            Console.Error.WriteLine("Error: find requires at least one --path <glob> to scope the search to known files");
+            Console.Error.WriteLine("Error: find requires at least one --path <glob> or explicit --all to scope the search");
+            Console.Error.WriteLine("Hint: use --path <glob> for a bounded file set, or --all to scan all indexed files with safety caps.");
+            Console.Error.WriteLine(FindUsage);
+            return CommandExitCodes.UsageError;
+        }
+        if (options.PathPatterns.Count > 0 && options.All)
+        {
+            Console.Error.WriteLine("Error: find accepts either --path <glob> or --all, not both");
+            Console.Error.WriteLine("Hint: remove --all when using explicit path filters, or remove --path to scan all indexed files with caps.");
             Console.Error.WriteLine(FindUsage);
             return CommandExitCodes.UsageError;
         }
 
         return WithDb(options, jsonOptions, reader =>
         {
+            var pathPatterns = options.All ? null : options.PathPatterns;
+            var candidateFileLimit = options.All ? FindAllCandidateFileLimit : (int?)null;
+            var lineLimit = options.All ? FindAllLineScanLimit : (int?)null;
             if (options.CountOnly)
             {
-                QueryCountResult counts;
+                FindCountResult counts;
                 try
                 {
-                    counts = reader.CountFindInFiles(options.Query, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Exact, options.FocusLine, options.FocusColumn, options.Regex);
+                    counts = reader.CountFindInFiles(options.Query, options.Lang, pathPatterns, options.ExcludePaths, options.ExcludeTests, options.Exact, options.FocusLine, options.FocusColumn, options.Regex, candidateFileLimit, lineLimit);
                 }
                 catch (Exception ex) when (options.Regex && (ex is ArgumentException || ex is RegexMatchTimeoutException))
                 {
@@ -2951,26 +2964,41 @@ public static class QueryCommandRunner
                         {
                             payload["file_count"] = 0;
                         });
+                        AddFindScanJsonFields(payload, counts.Scan);
                         Console.WriteLine(payload.ToJsonString(jsonOptions));
                     }
                     else
                     {
                         Console.WriteLine("0");
+                        WriteFindScanSummary(counts.Scan);
                     }
                     return CommandExitCodes.Success;
                 }
 
-                Console.WriteLine(options.Json
-                    ? JsonSerializer.Serialize(new QueryFindCountJsonResult(counts.Count, counts.FileCount, counts.FileCount), CliJsonSerializerContextFactory.Create(jsonOptions).QueryFindCountJsonResult)
-                    : $"{counts.Count}");
+                if (options.Json)
+                {
+                    var payload = new JsonObject
+                    {
+                        ["count"] = counts.Count,
+                        ["files"] = counts.FileCount,
+                        ["file_count"] = counts.FileCount,
+                    };
+                    AddFindScanJsonFields(payload, counts.Scan);
+                    Console.WriteLine(payload.ToJsonString(jsonOptions));
+                }
+                else
+                {
+                    Console.WriteLine($"{counts.Count}");
+                    WriteFindScanSummary(counts.Scan);
+                }
                 return CommandExitCodes.Success;
             }
 
             var (contextBefore, contextAfter, snippetLines) = ResolveFindContext(options, preparedFindArgs);
-            List<FileFindResult> results;
+            FindResults findResults;
             try
             {
-                results = reader.FindInFiles(options.Query, options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, contextBefore, contextAfter, options.Exact, options.MaxLineWidth, options.FocusLine, options.FocusColumn, options.Regex);
+                findResults = reader.FindInFiles(options.Query, options.Limit, options.Lang, pathPatterns, options.ExcludePaths, options.ExcludeTests, contextBefore, contextAfter, options.Exact, options.MaxLineWidth, options.FocusLine, options.FocusColumn, options.Regex, candidateFileLimit, lineLimit);
             }
             catch (ArgumentException ex) when (options.Regex)
             {
@@ -2982,9 +3010,10 @@ public static class QueryCommandRunner
                 Console.Error.WriteLine($"Error: invalid regular expression: {ex.Message}");
                 return CommandExitCodes.UsageError;
             }
+            var results = findResults.Results;
             if (results.Count == 0)
             {
-                var candidateFileCount = reader.CountFindCandidateFiles(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
+                var candidateFileCount = findResults.Scan.CandidateFiles;
                 if (options.Json)
                 {
                     if (TryWriteEmptyFormattedResult(options, jsonOptions))
@@ -3002,6 +3031,7 @@ public static class QueryCommandRunner
                         payload["regex"] = options.Regex;
                         payload["file_count"] = candidateFileCount;
                     });
+                    AddFindScanJsonFields(payload, findResults.Scan);
                     Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
                 else
@@ -3055,6 +3085,7 @@ public static class QueryCommandRunner
                 }
                 var fileCount = results.Select(r => r.Path).Distinct().Count();
                 Console.Error.WriteLine($"({results.Count} matches in {fileCount} files)");
+                WriteFindScanSummary(findResults.Scan);
             }
             return CommandExitCodes.Success;
         });
@@ -6380,6 +6411,7 @@ public static class QueryCommandRunner
         int? bodyStartLine = null;
         int? bodyLines = null;
         bool countOnly = false;
+        bool all = false;
         bool strictNotFound = false;
         int? startLine = null;
         int? endLine = null;
@@ -6911,6 +6943,7 @@ public static class QueryCommandRunner
                 case "--by-bucket":
                     break;
                 case "--all":
+                    all = true;
                     break;
                 case "--no-dedup":
                     noDedup = true;
@@ -7370,6 +7403,7 @@ public static class QueryCommandRunner
             ExcludeTests = excludeTests,
             IncludeGenerated = includeGenerated,
             CountOnly = countOnly,
+            All = all,
             StrictNotFound = strictNotFound,
             Strict = strict,
             Since = since,
@@ -8645,6 +8679,30 @@ public static class QueryCommandRunner
             GetUsageLineOrThrow(commandName),
             hint);
         return true;
+    }
+
+    private static void AddFindScanJsonFields(JsonObject payload, FindScanSummary scan)
+    {
+        payload["candidate_files"] = scan.CandidateFiles;
+        payload["files_scanned"] = scan.FilesScanned;
+        payload["lines_scanned"] = scan.LinesScanned;
+        payload["scan_truncated"] = scan.Truncated;
+        payload["scan_cap_reached"] = scan.CapReached;
+        payload["scan_timed_out"] = scan.TimedOut;
+        if (scan.TruncationReason != null)
+            payload["scan_truncation_reason"] = scan.TruncationReason;
+        if (scan.CandidateFileLimit.HasValue)
+            payload["candidate_file_limit"] = scan.CandidateFileLimit.Value;
+        if (scan.LineLimit.HasValue)
+            payload["line_scan_limit"] = scan.LineLimit.Value;
+    }
+
+    private static void WriteFindScanSummary(FindScanSummary scan)
+    {
+        var summary = $"scanned {scan.FilesScanned}/{scan.CandidateFiles} candidate files, {ConsoleUi.Counted(scan.LinesScanned, "line")}";
+        if (scan.Truncated)
+            summary += scan.TruncationReason == null ? "; truncated" : $"; truncated by {scan.TruncationReason}";
+        Console.Error.WriteLine($"({summary})");
     }
 
     // Reject queries that were supplied but resolve to empty / whitespace-only text so the user gets
@@ -10527,6 +10585,7 @@ public sealed class QueryCommandOptions
     public bool ExcludeTests { get; init; }
     public bool IncludeGenerated { get; init; }
     public bool CountOnly { get; init; }
+    public bool All { get; init; }
     public bool StrictNotFound { get; init; }
     public bool Strict { get; init; }
     public DateTime? Since { get; init; }

@@ -122,7 +122,7 @@ public class ConsoleUiTests
         Assert.Contains("--snippet-lines <n>        search/find snippet length (1-20, default: search 8; find 1)", output);
         Assert.Contains("--snippet-focus <mode>     search only: long-line focus mode (leftmost|quality|proximity, default: quality)", output);
         Assert.Contains("--max-line-width <n>       search/references/callers/callees/find/excerpt/impact/inspect only: clamp very long single-line snippet/context/excerpt payloads (`0` disables clamping; default: 512)", output);
-        Assert.Contains("cdidx find <query> --path <glob>", output);
+        Assert.Contains("cdidx find <query> (--path <glob>|--all)", output);
         Assert.Contains("--fts                      Use raw FTS5 query syntax for search (content:term, NEAR(a b, 5), OR, NOT, groups, prefix*, \"phrase\"; search query max 1000 chars; raw FTS parser max 2000 chars, 64 boolean ops, 16 NEAR ops", output);
         Assert.Contains("--exact                    Backward-compatible shorthand.", output);
         Assert.Contains("                              Prefer --exact-substring for search,", output);

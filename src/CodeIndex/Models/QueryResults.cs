@@ -43,6 +43,32 @@ public readonly record struct SearchCursor(double Score, long ChunkId, int Offse
 
 public readonly record struct QueryCountResult(int Count, int FileCount, bool IncludesSql = false);
 
+public readonly record struct FindScanSummary(
+    int CandidateFiles,
+    int FilesScanned,
+    int LinesScanned,
+    bool Truncated = false,
+    bool CapReached = false,
+    bool TimedOut = false,
+    string? TruncationReason = null,
+    int? CandidateFileLimit = null,
+    int? LineLimit = null);
+
+public readonly record struct FindCountResult(int Count, int FileCount, FindScanSummary Scan);
+
+public readonly record struct FindResults(List<FileFindResult> Results, FindScanSummary Scan) : IReadOnlyList<FileFindResult>
+{
+    public int Count => Results.Count;
+
+    public FileFindResult this[int index] => Results[index];
+
+    public List<FileFindResult>.Enumerator GetEnumerator() => Results.GetEnumerator();
+
+    IEnumerator<FileFindResult> IEnumerable<FileFindResult>.GetEnumerator() => Results.GetEnumerator();
+
+    System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => Results.GetEnumerator();
+}
+
 public readonly record struct HotspotCountResult(int Count, int FileCount, int DefinitionSiteTotal = 0);
 
 public enum SearchGuardRole
