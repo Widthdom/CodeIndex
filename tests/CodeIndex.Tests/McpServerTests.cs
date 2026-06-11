@@ -229,6 +229,81 @@ public class McpServerTests : IDisposable
         Assert.Empty(structured["results"]!.AsArray());
     }
 
+    [Fact]
+    public void ToolsCall_SearchFilesAndMapExposeCliQueryOptions_Issue3542()
+    {
+        InsertIndexedFile("src/large.cs", "csharp", "public class Large { " + new string('x', 512) + " }\n");
+
+        var searchRequest = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"Run","snippetFocus":"leftmost"}}}""")!;
+        var searchResponse = _server.HandleMessage(searchRequest)!;
+        var searchStructured = searchResponse["result"]!["structuredContent"]!;
+        Assert.Equal("leftmost", searchStructured["snippetFocus"]!.GetValue<string>());
+
+        var filesRequest = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"files","arguments":{"orderBySize":true,"rawBytes":true,"limit":1}}}""")!;
+        var filesResponse = _server.HandleMessage(filesRequest)!;
+        var filesStructured = filesResponse["result"]!["structuredContent"]!;
+        Assert.True(filesStructured["orderBySize"]!.GetValue<bool>());
+        Assert.True(filesStructured["rawBytes"]!.GetValue<bool>());
+        Assert.False(filesStructured["raw_bytes_payload_supported"]!.GetValue<bool>());
+        Assert.Equal("src/large.cs", filesStructured["results"]![0]!["path"]!.GetValue<string>());
+
+        var mapRequest = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"map","arguments":{"minEntrypointConfidence":0.5,"sections":["hotspots"]}}}""")!;
+        var mapResponse = _server.HandleMessage(mapRequest)!;
+        var mapStructured = mapResponse["result"]!["structuredContent"]!;
+        Assert.Equal(0.5, mapStructured["minEntrypointConfidence"]!.GetValue<double>());
+    }
+
+    [Fact]
+    public void ToolsCall_SymbolGraphAndAnalyzeExposeCliQueryOptions_Issue3542()
+    {
+        InsertIndexedFile("src/visible.cs", "csharp", "public class Visible { public void RunVisible() { } private void Hidden() { } }\n");
+
+        var symbolsRequest = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbols","arguments":{"query":"RunVisible","visibility":["public"],"excludeVisibility":"private","format":"compact"}}}""")!;
+        var symbolsResponse = _server.HandleMessage(symbolsRequest)!;
+        var symbolsStructured = symbolsResponse["result"]!["structuredContent"]!;
+        Assert.Equal("compact", symbolsStructured["format"]!.GetValue<string>());
+        Assert.Equal("public", Assert.Single(symbolsStructured["visibility"]!.AsArray())!.GetValue<string>());
+        Assert.Equal("private", Assert.Single(symbolsStructured["excludeVisibility"]!.AsArray())!.GetValue<string>());
+
+        var callersRequest = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"callers","arguments":{"query":"RunVisible","rawKinds":true,"format":"count"}}}""")!;
+        var callersResponse = _server.HandleMessage(callersRequest)!;
+        var callersStructured = callersResponse["result"]!["structuredContent"]!;
+        Assert.True(callersStructured["rawKinds"]!.GetValue<bool>());
+        Assert.True(callersStructured["count_only"]!.GetValue<bool>());
+
+        var analyzeRequest = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"RunVisible","format":"compact"}}}""")!;
+        var analyzeResponse = _server.HandleMessage(analyzeRequest)!;
+        var analyzeStructured = analyzeResponse["result"]!["structuredContent"]!;
+        Assert.Equal("compact", analyzeStructured["format"]!.GetValue<string>());
+        Assert.True(analyzeStructured["definition_count"]!.GetValue<int>() >= 1);
+        Assert.NotNull(analyzeStructured["definitions"]);
+    }
+
+    [Fact]
+    public void ToolsCall_UnusedAndHotspotsExposeVisibilityAndBucketOptions_Issue3542()
+    {
+        var hotspotsRequest = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbol_hotspots","arguments":{"visibility":"public","excludeVisibility":["private"]}}}""")!;
+        var hotspotsResponse = _server.HandleMessage(hotspotsRequest)!;
+        var hotspotsStructured = hotspotsResponse["result"]!["structuredContent"]!;
+        Assert.Equal("public", Assert.Single(hotspotsStructured["visibility"]!.AsArray())!.GetValue<string>());
+        Assert.Equal("private", Assert.Single(hotspotsStructured["excludeVisibility"]!.AsArray())!.GetValue<string>());
+
+        var unusedRequest = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"visibility":"public","byBucket":true}}}""")!;
+        var unusedResponse = _server.HandleMessage(unusedRequest)!;
+        var unusedStructured = unusedResponse["result"]!["structuredContent"]!;
+        Assert.True(unusedStructured["byBucket"]!.GetValue<bool>());
+        Assert.NotNull(unusedStructured["symbols_by_bucket"]);
+        Assert.Equal("public", Assert.Single(unusedStructured["visibility"]!.AsArray())!.GetValue<string>());
+    }
+
     [Theory]
     [InlineData("search", "format")]
     [InlineData("symbol_hotspots", "groupBy")]

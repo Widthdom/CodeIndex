@@ -38,6 +38,9 @@ public partial class McpServer
         "language",
         "rankBy",
         "severity",
+        "snippetFocus",
+        "visibility",
+        "excludeVisibility",
     };
     internal const int MaxMcpIndexFailureMessageLength = 512;
 
@@ -440,6 +443,14 @@ public partial class McpServer
             : [];
     }
 
+    private static List<string> ReadStringOrCommaSeparatedList(JsonNode? args, string propertyName)
+        => ReadStringOrArrayList(args, propertyName)
+            .SelectMany(value => value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => value.ToLowerInvariant())
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
     private JsonNode? TryReadSearchGuardFilters(JsonNode? id, JsonNode? args, out List<SearchGuardFilter> filters)
     {
         filters = [];
@@ -498,7 +509,7 @@ public partial class McpServer
 
     private static JsonObject? ValidateCommonListArguments(JsonNode? args)
     {
-        foreach (var propertyName in new[] { "path", "project", "excludePaths", "names", "sections", "capability", "scopes" })
+        foreach (var propertyName in new[] { "path", "project", "excludePaths", "names", "sections", "capability", "scopes", "visibility", "excludeVisibility" })
         {
             if (ValidateStringListArgument(args, propertyName) is JsonObject error)
                 return error;
@@ -665,11 +676,13 @@ public partial class McpServer
             "check" or "excludeTests" or "includeGenerated" or "indexedOnly" or "rawQuery" or "noDedup" or "exactSubstring" or
                 "exactName" or "exact" or "prefix" or "countOnly" or "includeBody" or "lsp_compatible" or
                 "regex" or "withPaths" or "rebuild" or "dryRun" or "dry_run" or "force" or
-                "optimize" or "reverse" or "cycles" or "config" or "logPath" or "updateCheck" => "boolean",
-            "project" or "capability" or "scopes" or "requireBefore" or "requireAfter" or "rejectBefore" or "rejectAfter" => "string_or_array",
+                "optimize" or "reverse" or "cycles" or "config" or "logPath" or "updateCheck" or
+                "rawKinds" or "orderBySize" or "rawBytes" or "byBucket" => "boolean",
+            "project" or "capability" or "scopes" or "visibility" or "excludeVisibility" or "requireBefore" or "requireAfter" or "rejectBefore" or "rejectAfter" => "string_or_array",
             "query" or "lang" or "kind" or "format" or "rankBy" or "since" or "cursor" or
-                "solution" or "symbol" or "groupBy" or "category" or "language" or "severity" or "explain" or
+                "solution" or "symbol" or "groupBy" or "category" or "language" or "severity" or "explain" or "snippetFocus" or
                 "bucket" or "minConfidence" or "extension" or "alias" or "description" or "context" or "toolInvocationContext" or "db" => "string",
+            "minEntrypointConfidence" => "number",
             "queries" or "evidencePaths" or "evidence_paths" => "array",
             _ => string.Empty,
         };
@@ -695,6 +708,7 @@ public partial class McpServer
         "string" => node is JsonValue value && value.TryGetValue<string>(out _),
         "string_or_array" => node is JsonArray || node is JsonValue value && value.TryGetValue<string>(out _),
         "array" => node is JsonArray,
+        "number" => node is JsonValue value && value.TryGetValue<double>(out _),
         _ => true,
     };
 
@@ -726,16 +740,16 @@ public partial class McpServer
 
     private static IReadOnlySet<string> GetAllowedToolArguments(string toolName) => toolName switch
     {
-        "search" => new HashSet<string>(StringComparer.Ordinal) { "query", "limit", "lang", "snippetLines", "maxLineWidth", "rawQuery", "cursor", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "noDedup", "exactSubstring", "exact", "prefix", "requireBefore", "requireAfter", "rejectBefore", "rejectAfter", "guardWindow", "countOnly", "format", "project", "solution" },
-        "definition" => new HashSet<string>(StringComparer.Ordinal) { "query", "kind", "lang", "limit", "includeBody", "lsp_compatible", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "exactName", "exact", "format", "project", "solution" },
+        "search" => new HashSet<string>(StringComparer.Ordinal) { "query", "limit", "lang", "snippetLines", "snippetFocus", "maxLineWidth", "rawQuery", "cursor", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "noDedup", "exactSubstring", "exact", "prefix", "requireBefore", "requireAfter", "rejectBefore", "rejectAfter", "guardWindow", "countOnly", "format", "project", "solution" },
+        "definition" => new HashSet<string>(StringComparer.Ordinal) { "query", "kind", "lang", "limit", "visibility", "excludeVisibility", "includeBody", "lsp_compatible", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "exactName", "exact", "format", "project", "solution" },
         "references" => new HashSet<string>(StringComparer.Ordinal) { "query", "kind", "lang", "limit", "offset", "maxLineWidth", "lsp_compatible", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "countOnly", "format", "project", "solution" },
-        "callers" or "callees" => new HashSet<string>(StringComparer.Ordinal) { "query", "kind", "rankBy", "lang", "limit", "offset", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "countOnly", "format", "project", "solution" },
-        "symbols" => new HashSet<string>(StringComparer.Ordinal) { "query", "names", "kind", "lang", "limit", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "exactName", "exact", "project", "solution" },
-        "files" => new HashSet<string>(StringComparer.Ordinal) { "query", "lang", "limit", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "project", "solution" },
+        "callers" or "callees" => new HashSet<string>(StringComparer.Ordinal) { "query", "kind", "rawKinds", "rankBy", "lang", "limit", "offset", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "countOnly", "format", "project", "solution" },
+        "symbols" => new HashSet<string>(StringComparer.Ordinal) { "query", "names", "kind", "lang", "visibility", "excludeVisibility", "limit", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "exactName", "exact", "countOnly", "format", "project", "solution" },
+        "files" => new HashSet<string>(StringComparer.Ordinal) { "query", "lang", "limit", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "orderBySize", "rawBytes", "project", "solution" },
         "find_in_file" => new HashSet<string>(StringComparer.Ordinal) { "query", "path", "limit", "lang", "excludePaths", "excludeTests", "includeGenerated", "before", "after", "snippetLines", "focusLine", "focusColumn", "maxLineWidth", "exact", "regex" },
         "excerpt" => new HashSet<string>(StringComparer.Ordinal) { "path", "startLine", "endLine", "before", "after", "focusLine", "focusColumn", "focusLength", "maxLineWidth", "maxOutputBytes" },
-        "map" => new HashSet<string>(StringComparer.Ordinal) { "limit", "lang", "path", "excludePaths", "excludeTests", "sections", "depth", "project", "solution" },
-        "analyze_symbol" => new HashSet<string>(StringComparer.Ordinal) { "query", "lang", "limit", "includeBody", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "maxLineWidth", "project", "solution" },
+        "map" => new HashSet<string>(StringComparer.Ordinal) { "limit", "lang", "path", "excludePaths", "excludeTests", "sections", "depth", "minEntrypointConfidence", "project", "solution" },
+        "analyze_symbol" => new HashSet<string>(StringComparer.Ordinal) { "query", "lang", "limit", "includeBody", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "maxLineWidth", "countOnly", "format", "project", "solution" },
         "status" => new HashSet<string>(StringComparer.Ordinal) { "check", "scopes", "staleAfterSeconds", "explain", "config", "logPath", "updateCheck", "format" },
         "outline" => new HashSet<string>(StringComparer.Ordinal) { "path" },
         "batch_query" => new HashSet<string>(StringComparer.Ordinal) { "queries" },
@@ -743,8 +757,8 @@ public partial class McpServer
         "impact_analysis" => new HashSet<string>(StringComparer.Ordinal) { "query", "lang", "maxHops", "maxDepth", "limit", "path", "excludePaths", "excludeTests", "includeGenerated", "withPaths", "countOnly", "project", "solution" },
         "languages" => new HashSet<string>(StringComparer.Ordinal) { "indexedOnly", "capability", "extension", "alias" },
         "validate" => new HashSet<string>(StringComparer.Ordinal) { "kind", "severity", "limit", "path", "excludePaths", "excludeTests", "countOnly", "format", "project", "solution" },
-        "unused_symbols" => new HashSet<string>(StringComparer.Ordinal) { "kind", "lang", "limit", "path", "excludePaths", "excludeTests", "bucket", "minConfidence", "project", "solution" },
-        "symbol_hotspots" => new HashSet<string>(StringComparer.Ordinal) { "kind", "lang", "limit", "groupBy", "path", "excludePaths", "excludeTests", "project", "solution" },
+        "unused_symbols" => new HashSet<string>(StringComparer.Ordinal) { "kind", "lang", "limit", "visibility", "excludeVisibility", "path", "excludePaths", "excludeTests", "bucket", "minConfidence", "byBucket", "project", "solution" },
+        "symbol_hotspots" => new HashSet<string>(StringComparer.Ordinal) { "kind", "lang", "limit", "visibility", "excludeVisibility", "groupBy", "path", "excludePaths", "excludeTests", "project", "solution" },
         "index" => new HashSet<string>(StringComparer.Ordinal) { "path", "rebuild", "maxFileBytes" },
         "backfill_fold" => new HashSet<string>(StringComparer.Ordinal) { "dry_run", "dryRun", "force" },
         "suggest_improvement" => new HashSet<string>(StringComparer.Ordinal) { "category", "language", "description", "context", "toolInvocationContext", "evidencePaths", "evidence_paths" },
@@ -960,6 +974,198 @@ public partial class McpServer
             ["results"] = new JsonArray(),
         };
         AddResultEnvelope(payload, count, total, truncated);
+        return payload;
+    }
+
+    private static JsonArray ToJsonStringArray(IEnumerable<string> values)
+    {
+        var array = new JsonArray();
+        foreach (var value in values)
+            array.Add(value);
+        return array;
+    }
+
+    private static void AddVisibilityFilterEcho(JsonObject payload, IReadOnlyList<string> visibilityFilters, IReadOnlyList<string> excludeVisibilityFilters)
+    {
+        payload["visibility"] = ToJsonStringArray(visibilityFilters);
+        payload["excludeVisibility"] = ToJsonStringArray(excludeVisibilityFilters);
+    }
+
+    private static JsonArray BuildCompactSymbolRows(IEnumerable<SymbolResult> results)
+    {
+        var rows = new JsonArray();
+        foreach (var result in results)
+        {
+            var row = new JsonObject
+            {
+                ["file"] = result.Path,
+                ["line"] = result.Line,
+                ["kind"] = result.Kind,
+                ["name"] = result.Name,
+            };
+            if (result.Lang != null)
+                row["lang"] = result.Lang;
+            if (result.Visibility != null)
+                row["visibility"] = result.Visibility;
+            if (result.ContainerName != null)
+                row["container"] = result.ContainerName;
+            rows.Add(row);
+        }
+        return rows;
+    }
+
+    private static JsonArray BuildCompactReferenceRows(IEnumerable<ReferenceResult> results)
+    {
+        var rows = new JsonArray();
+        foreach (var result in results)
+        {
+            rows.Add(new JsonObject
+            {
+                ["file"] = result.Path,
+                ["line"] = result.Line,
+                ["column"] = result.Column,
+                ["symbol"] = result.SymbolName,
+                ["kind"] = result.ReferenceKind,
+            });
+        }
+        return rows;
+    }
+
+    private static JsonArray BuildCompactCallerRows(IEnumerable<CallerResult> results)
+    {
+        var rows = new JsonArray();
+        foreach (var result in results)
+        {
+            rows.Add(new JsonObject
+            {
+                ["file"] = result.Path,
+                ["line"] = result.FirstLine,
+                ["caller_kind"] = result.CallerKind,
+                ["caller"] = result.CallerName,
+                ["callee"] = result.CalleeName,
+                ["reference_kind"] = result.ReferenceKind,
+                ["reference_count"] = result.ReferenceCount,
+            });
+        }
+        return rows;
+    }
+
+    private static JsonArray BuildCompactCalleeRows(IEnumerable<CalleeResult> results)
+    {
+        var rows = new JsonArray();
+        foreach (var result in results)
+        {
+            rows.Add(new JsonObject
+            {
+                ["file"] = result.Path,
+                ["line"] = result.FirstLine,
+                ["caller_kind"] = result.CallerKind,
+                ["caller"] = result.CallerName,
+                ["callee"] = result.CalleeName,
+                ["reference_kind"] = result.ReferenceKind,
+                ["reference_count"] = result.ReferenceCount,
+            });
+        }
+        return rows;
+    }
+
+    private JsonObject BuildUnusedSymbolsByBucket(IEnumerable<UnusedSymbolResult> results)
+    {
+        var grouped = results
+            .GroupBy(result => result.UnusedBucket, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.ToList(), StringComparer.Ordinal);
+        var buckets = new JsonObject();
+        foreach (var bucket in QueryCommandRunner.OrderedUnusedBuckets)
+        {
+            if (grouped.TryGetValue(bucket, out var rows))
+                buckets[bucket] = ToJsonArray(rows);
+        }
+        foreach (var (bucket, rows) in grouped.OrderBy(kv => kv.Key, StringComparer.Ordinal))
+        {
+            if (!buckets.ContainsKey(bucket))
+                buckets[bucket] = ToJsonArray(rows);
+        }
+        return buckets;
+    }
+
+    private JsonObject BuildAnalyzeSymbolCountPayload(SymbolAnalysisResult analysis, string? lang, JsonNode? pathEcho, bool excludeTests, int maxLineWidth)
+    {
+        var paths = analysis.Definitions.Select(definition => definition.Path)
+            .Concat(analysis.References.Select(reference => reference.Path))
+            .Concat(analysis.Callers.Select(caller => caller.Path))
+            .Concat(analysis.Callees.Select(callee => callee.Path));
+        var payload = new JsonObject
+        {
+            ["format"] = "count",
+            ["count_only"] = true,
+            ["query"] = analysis.Query,
+            ["lang"] = lang,
+            ["path"] = pathEcho?.DeepClone(),
+            ["excludeTests"] = excludeTests,
+            ["maxLineWidth"] = maxLineWidth,
+            ["file_found"] = analysis.File != null,
+            ["definition_count"] = analysis.Definitions.Count,
+            ["nearby_symbol_count"] = analysis.NearbySymbols.Count,
+            ["reference_count"] = analysis.References.Count,
+            ["caller_count"] = analysis.Callers.Count,
+            ["callee_count"] = analysis.Callees.Count,
+            ["graph_language"] = analysis.GraphLanguage,
+            ["graph_supported"] = analysis.GraphSupported,
+            ["graph_support_reason"] = analysis.GraphSupportReason,
+            ["graph_table_available"] = analysis.GraphTableAvailable,
+            ["workspace_indexed_at"] = JsonSerializer.SerializeToNode(analysis.WorkspaceIndexedAt, _jsonOptions),
+            ["workspace_latest_modified"] = JsonSerializer.SerializeToNode(analysis.WorkspaceLatestModified, _jsonOptions),
+            ["top_files"] = BuildTopFileHistogram(paths, path => path),
+            ["results"] = new JsonArray(),
+        };
+        if (analysis.ExactIndexAvailable.HasValue)
+            payload["exact_index_available"] = analysis.ExactIndexAvailable.Value;
+        if (analysis.DegradedReason != null)
+            payload["degraded_reason"] = analysis.DegradedReason;
+        return payload;
+    }
+
+    private JsonObject BuildAnalyzeSymbolCompactPayload(SymbolAnalysisResult analysis, string? lang, JsonNode? pathEcho, bool excludeTests, int maxLineWidth)
+    {
+        var payload = new JsonObject
+        {
+            ["api_version"] = analysis.ApiVersion,
+            ["format"] = "compact",
+            ["query"] = analysis.Query,
+            ["lang"] = lang,
+            ["path"] = pathEcho?.DeepClone(),
+            ["excludeTests"] = excludeTests,
+            ["maxLineWidth"] = maxLineWidth,
+            ["file"] = analysis.File == null
+                ? null
+                : new JsonObject
+                {
+                    ["path"] = analysis.File.Path,
+                    ["lang"] = analysis.File.Lang,
+                    ["lines"] = analysis.File.Lines,
+                    ["size"] = analysis.File.Size,
+                },
+            ["workspace_indexed_at"] = JsonSerializer.SerializeToNode(analysis.WorkspaceIndexedAt, _jsonOptions),
+            ["workspace_latest_modified"] = JsonSerializer.SerializeToNode(analysis.WorkspaceLatestModified, _jsonOptions),
+            ["graph_language"] = analysis.GraphLanguage,
+            ["graph_supported"] = analysis.GraphSupported,
+            ["graph_support_reason"] = analysis.GraphSupportReason,
+            ["graph_table_available"] = analysis.GraphTableAvailable,
+            ["definition_count"] = analysis.Definitions.Count,
+            ["nearby_symbol_count"] = analysis.NearbySymbols.Count,
+            ["reference_count"] = analysis.References.Count,
+            ["caller_count"] = analysis.Callers.Count,
+            ["callee_count"] = analysis.Callees.Count,
+            ["definitions"] = BuildCompactSymbolRows(analysis.Definitions),
+            ["nearby_symbols"] = BuildCompactSymbolRows(analysis.NearbySymbols),
+            ["references"] = BuildCompactReferenceRows(analysis.References),
+            ["callers"] = BuildCompactCallerRows(analysis.Callers),
+            ["callees"] = BuildCompactCalleeRows(analysis.Callees),
+        };
+        if (analysis.ExactIndexAvailable.HasValue)
+            payload["exact_index_available"] = analysis.ExactIndexAvailable.Value;
+        if (analysis.DegradedReason != null)
+            payload["degraded_reason"] = analysis.DegradedReason;
         return payload;
     }
 
@@ -1253,6 +1459,9 @@ public partial class McpServer
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? QueryCommandRunner.DefaultQueryLimit);
         var lang = QueryCommandRunner.NormalizeLangFilterValue(args?["lang"]?.GetValue<string>());
         var snippetLines = SearchSnippetFormatter.ClampSnippetLines(args?["snippetLines"]?.GetValue<int>() ?? SearchSnippetFormatter.DefaultSnippetLines);
+        var snippetFocusText = args?["snippetFocus"]?.GetValue<string>() ?? "quality";
+        if (!QueryCommandRunner.TryParseSnippetFocusMode(snippetFocusText, out var snippetFocus))
+            return CreateToolErrorResponse(id, "snippetFocus must be one of quality, leftmost, proximity");
         if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
             return maxLineWidthError;
         var rawQuery = args?["rawQuery"]?.GetValue<bool>() ?? false;
@@ -1307,6 +1516,7 @@ public partial class McpServer
                 var payload = BuildCountOnlyPayload(countResults.Count, truncatedCount ? null : countResults.Count, truncatedCount, countResults, result => result.Path);
                 payload["query"] = query;
                 payload["rawQuery"] = rawQuery;
+                payload["snippetFocus"] = snippetFocusText.Trim().ToLowerInvariant();
                 payload["path"] = PathEcho(pathPatterns);
                 payload["excludeTests"] = excludeTests;
                 AddSearchStabilityMetadata(payload, reader, cursor, []);
@@ -1339,6 +1549,7 @@ public partial class McpServer
                     ["query"] = query,
                     ["rawQuery"] = rawQuery,
                     ["snippetLines"] = snippetLines,
+                    ["snippetFocus"] = snippetFocusText.Trim().ToLowerInvariant(),
                     ["maxLineWidth"] = maxLineWidth,
                     ["path"] = PathEcho(pathPatterns),
                     ["excludeTests"] = excludeTests,
@@ -1371,10 +1582,11 @@ public partial class McpServer
                 ["rawQuery"] = rawQuery,
                 ["cursor"] = cursorValue,
                 ["snippetLines"] = snippetLines,
+                ["snippetFocus"] = snippetFocusText.Trim().ToLowerInvariant(),
                 ["maxLineWidth"] = maxLineWidth,
                 ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
-                ["results"] = ToJsonArray(SearchSnippetFormatter.ToCompactResults(results, queryContext, snippetLines, exact, maxLineWidth, exposeLiteralHighlights: exact))
+                ["results"] = ToJsonArray(SearchSnippetFormatter.ToCompactResults(results, queryContext, snippetLines, exact, maxLineWidth, lang, snippetFocus, exposeLiteralHighlights: exact))
             };
             AddSearchStabilityMetadata(structured, reader, cursor, results);
             AddResultEnvelope(structured, results.Count, truncated ? null : results.Count, truncated);
@@ -1431,6 +1643,12 @@ public partial class McpServer
             return CreateToolErrorResponse(id, sinceError!);
         if (!TryResolveNameExactArgument(args, "symbols", out var exact, out var exactError))
             return CreateToolErrorResponse(id, exactError!);
+        var visibilityFilters = ReadStringOrCommaSeparatedList(args, "visibility");
+        var excludeVisibilityFilters = ReadStringOrCommaSeparatedList(args, "excludeVisibility");
+        var format = ReadResponseFormat(args);
+        if (ValidateResponseFormat(format) is string formatError)
+            return CreateToolErrorResponse(id, formatError);
+        var countOnly = ReadCountOnly(args) || format == "count";
 
         // Merge query + names into a de-duplicated OR list. `|` is treated as a literal name character
         // so operator symbols (e.g. `operator |`) stay searchable; multi-name must use repeated `names[]`.
@@ -1449,23 +1667,42 @@ public partial class McpServer
 
         return WithDbReader(id, args, reader =>
         {
-            var results = reader.SearchSymbols(effectiveQueries, limit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact);
+            JsonNode? namesEcho = effectiveQueries == null ? null : JsonSerializer.SerializeToNode(effectiveQueries, _jsonOptions);
             var hasExactPredicate = exact && effectiveQueries is { Count: > 0 };
             var exactSignal = reader.GetSymbolsExactQuerySignal(lang, pathPatterns, excludePaths, excludeTests, since);
+            if (countOnly)
+            {
+                var countSummary = reader.CountSearchSymbolsTotal(effectiveQueries, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact, visibilityFilters, excludeVisibilityFilters);
+                var histogramResults = countSummary.Count > 0
+                    ? reader.SearchSymbols(effectiveQueries, Math.Min(countSummary.Count, MaxLimit), kind, lang, pathPatterns, excludePaths, excludeTests, since, exact, visibilityFilters, excludeVisibilityFilters)
+                    : [];
+                var payload = BuildCountOnlyPayload(countSummary.Count, countSummary.Count, truncated: false, histogramResults, result => result.Path);
+                payload["query"] = query;
+                payload["names"] = namesEcho;
+                payload["kind"] = kind;
+                payload["lang"] = lang;
+                payload["path"] = PathEcho(pathPatterns);
+                payload["excludeTests"] = excludeTests;
+                AddVisibilityFilterEcho(payload, visibilityFilters, excludeVisibilityFilters);
+                if (hasExactPredicate)
+                    AddExactGraphSignal(payload, exactSignal);
+                return CreateToolResult(id, $"Counted {ConsoleUi.Counted(countSummary.Count, "symbol")}.", payload);
+            }
+
+            var results = reader.SearchSymbols(effectiveQueries, limit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact, visibilityFilters, excludeVisibilityFilters);
             var multiNameExactHint = effectiveQueries != null && effectiveQueries.Count > 1;
             var exactZeroHint = multiNameExactHint
                 ? QueryCommandRunner.BuildExactZeroHint(
                     exact,
-                    () => reader.AnySearchSymbols(effectiveQueries, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false),
-                    () => reader.SearchSymbols(effectiveQueries, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false),
+                    () => reader.AnySearchSymbols(effectiveQueries, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false, visibilityFilters: visibilityFilters, excludeVisibilityFilters: excludeVisibilityFilters),
+                    () => reader.SearchSymbols(effectiveQueries, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false, visibilityFilters: visibilityFilters, excludeVisibilityFilters: excludeVisibilityFilters),
                     r => r.Name)
                 : QueryCommandRunner.BuildExactZeroHint(
                     exact && effectiveQueries != null && effectiveQueries.Count > 0,
-                    () => reader.CountSearchSymbols(effectiveQueries, QueryCommandRunner.ExactZeroHintProbeLimit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false) > 0,
-                    () => reader.CountSearchSymbols(effectiveQueries, limit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false),
-                    () => reader.SearchSymbols(effectiveQueries, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false),
+                    () => reader.CountSearchSymbols(effectiveQueries, QueryCommandRunner.ExactZeroHintProbeLimit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false, visibilityFilters: visibilityFilters, excludeVisibilityFilters: excludeVisibilityFilters) > 0,
+                    () => reader.CountSearchSymbols(effectiveQueries, limit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false, visibilityFilters: visibilityFilters, excludeVisibilityFilters: excludeVisibilityFilters),
+                    () => reader.SearchSymbols(effectiveQueries, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false, visibilityFilters: visibilityFilters, excludeVisibilityFilters: excludeVisibilityFilters),
                     r => r.Name);
-            JsonNode? namesEcho = effectiveQueries == null ? null : JsonSerializer.SerializeToNode(effectiveQueries, _jsonOptions);
             if (results.Count == 0)
             {
                 var payload = new JsonObject
@@ -1479,6 +1716,7 @@ public partial class McpServer
                     ["count"] = 0,
                     ["results"] = new JsonArray()
                 };
+                AddVisibilityFilterEcho(payload, visibilityFilters, excludeVisibilityFilters);
                 if (hasExactPredicate)
                     AddExactGraphSignal(payload, exactSignal);
                 AddExactZeroHint(payload, exactZeroHint);
@@ -1497,6 +1735,12 @@ public partial class McpServer
                 ["count"] = results.Count,
                 ["results"] = ToJsonArray(results)
             };
+            AddVisibilityFilterEcho(structured, visibilityFilters, excludeVisibilityFilters);
+            if (format == "compact")
+            {
+                structured["results"] = BuildCompactSymbolRows(results);
+                structured["format"] = "compact";
+            }
             if (hasExactPredicate)
                 AddExactGraphSignal(structured, exactSignal);
             return CreateToolResult(id, ConsoleUi.FoundSummary(results.Count, "symbol"), structured);
@@ -1524,18 +1768,20 @@ public partial class McpServer
             return CreateToolErrorResponse(id, sinceError!);
         if (!TryResolveNameExactArgument(args, "definition", out var exact, out var exactError))
             return CreateToolErrorResponse(id, exactError!);
+        var visibilityFilters = ReadStringOrCommaSeparatedList(args, "visibility");
+        var excludeVisibilityFilters = ReadStringOrCommaSeparatedList(args, "excludeVisibility");
         var format = ReadResponseFormat(args);
         if (ValidateResponseFormat(format) is string formatError)
             return CreateToolErrorResponse(id, formatError);
 
         return WithDbReader(id, args, reader =>
         {
-            var results = reader.GetDefinitions(query, FetchLimitForEnvelope(limit), kind, lang, includeBody, pathPatterns, excludePaths, excludeTests, since, exact);
+            var results = reader.GetDefinitions(query, FetchLimitForEnvelope(limit), kind, lang, includeBody, pathPatterns, excludePaths, excludeTests, since, exact, visibilityFilters, excludeVisibilityFilters);
             var truncated = TrimToRequestedLimit(results, limit);
             if (format == "count")
             {
                 var total = truncated
-                    ? reader.CountDefinitionsTotal(query, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact).Count
+                    ? reader.CountDefinitionsTotal(query, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact, visibilityFilters, excludeVisibilityFilters).Count
                     : results.Count;
                 var countPayload = BuildCountOnlyPayload(total, total, truncated: false, results, result => result.Path);
                 countPayload["query"] = query;
@@ -1543,6 +1789,7 @@ public partial class McpServer
                 countPayload["lang"] = lang;
                 countPayload["path"] = PathEcho(pathPatterns);
                 countPayload["excludeTests"] = excludeTests;
+                AddVisibilityFilterEcho(countPayload, visibilityFilters, excludeVisibilityFilters);
                 return CreateToolResult(id, $"Counted {ConsoleUi.Counted(total, "definition")}.", countPayload);
             }
             if (lspCompatible)
@@ -1550,9 +1797,9 @@ public partial class McpServer
             var exactSignal = reader.GetDefinitionExactQuerySignal(lang, pathPatterns, excludePaths, excludeTests, since);
             var exactZeroHint = QueryCommandRunner.BuildExactZeroHint(
                 exact,
-                () => reader.CountSearchSymbols(query, QueryCommandRunner.ExactZeroHintProbeLimit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false) > 0,
-                () => reader.CountSearchSymbols(query, limit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false),
-                () => reader.SearchSymbols(query, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false),
+                () => reader.CountSearchSymbols(query, QueryCommandRunner.ExactZeroHintProbeLimit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false, visibilityFilters: visibilityFilters, excludeVisibilityFilters: excludeVisibilityFilters) > 0,
+                () => reader.CountSearchSymbols(query, limit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false, visibilityFilters: visibilityFilters, excludeVisibilityFilters: excludeVisibilityFilters),
+                () => reader.SearchSymbols(query, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false, visibilityFilters: visibilityFilters, excludeVisibilityFilters: excludeVisibilityFilters),
                 r => r.Name);
             var payload = new JsonObject
             {
@@ -1565,6 +1812,7 @@ public partial class McpServer
                 ["excludeTests"] = excludeTests,
                 ["results"] = ToJsonArray(results)
             };
+            AddVisibilityFilterEcho(payload, visibilityFilters, excludeVisibilityFilters);
             AddResultEnvelope(payload, results.Count, truncated ? null : results.Count, truncated);
             if (format == "compact")
                 ApplyCompactResults(payload, results, result => result.Path, result => result.StartLine);
@@ -1711,28 +1959,30 @@ public partial class McpServer
         if (ValidateResponseFormat(format) is string formatError)
             return CreateToolErrorResponse(id, formatError);
         var countOnly = ReadCountOnly(args) || format == "count";
+        var rawKinds = args?["rawKinds"]?.GetValue<bool>() ?? false;
 
         return WithDbReader(id, args, reader =>
         {
             if (countOnly)
             {
-                var countOnlyTotal = reader.CountCallersTotal(query, lang, kind, pathPatterns, excludePaths, excludeTests, exact).Count;
+                var countOnlyTotal = reader.CountCallersTotal(query, lang, kind, pathPatterns, excludePaths, excludeTests, exact, rawKinds).Count;
                 var histogramResults = countOnlyTotal > 0
-                    ? reader.GetCallers(query, Math.Min(countOnlyTotal, MaxLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, rankMode: rankMode)
+                    ? reader.GetCallers(query, Math.Min(countOnlyTotal, MaxLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, rawKinds, rankMode: rankMode)
                     : [];
                 var countOnlyPayload = BuildCountOnlyPayload(countOnlyTotal, countOnlyTotal, truncated: false, histogramResults, result => result.Path);
                 countOnlyPayload["query"] = query;
                 countOnlyPayload["kind"] = kind;
+                countOnlyPayload["rawKinds"] = rawKinds;
                 countOnlyPayload["lang"] = lang;
                 countOnlyPayload["path"] = PathEcho(pathPatterns);
                 countOnlyPayload["excludeTests"] = excludeTests;
                 return CreateToolResult(id, $"Counted {ConsoleUi.Counted(countOnlyTotal, "caller")}.", countOnlyPayload);
             }
 
-            var results = reader.GetCallers(query, FetchLimitForEnvelope(limit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, rankMode: rankMode, offset: offset);
+            var results = reader.GetCallers(query, FetchLimitForEnvelope(limit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, rawKinds, rankMode: rankMode, offset: offset);
             var truncated = TrimToRequestedLimit(results, limit);
             var total = truncated || offset > 0
-                ? reader.CountCallersTotal(query, lang, kind, pathPatterns, excludePaths, excludeTests, exact).Count
+                ? reader.CountCallersTotal(query, lang, kind, pathPatterns, excludePaths, excludeTests, exact, rawKinds).Count
                 : results.Count;
             var graphSupport = ResolveGraphSupport(reader, exact, query, lang, pathPatterns, excludePaths, excludeTests);
             var sqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignalByLanguages(
@@ -1743,14 +1993,15 @@ public partial class McpServer
             var exactSignal = reader.GetCallersExactQuerySignal(lang, pathPatterns, excludePaths, excludeTests, includeSqlGraphContractSignal: sqlGraphSignal.Relevant);
             var exactZeroHint = QueryCommandRunner.BuildExactZeroHint(
                 exact && reader._hasReferencesTable,
-                () => reader.CountCallers(query, QueryCommandRunner.ExactZeroHintProbeLimit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false) > 0,
-                () => reader.CountCallers(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
-                () => reader.GetCallers(query, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact: false, rankMode: rankMode),
+                () => reader.CountCallers(query, QueryCommandRunner.ExactZeroHintProbeLimit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false, rawKinds: rawKinds) > 0,
+                () => reader.CountCallers(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false, rawKinds: rawKinds),
+                () => reader.GetCallers(query, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact: false, rawKinds: rawKinds, rankMode: rankMode),
                 r => r.CalleeName);
             var payload = new JsonObject
             {
                 ["query"] = query,
                 ["kind"] = kind,
+                ["rawKinds"] = rawKinds,
                 ["lang"] = lang,
                 ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
@@ -1805,28 +2056,30 @@ public partial class McpServer
         if (ValidateResponseFormat(format) is string formatError)
             return CreateToolErrorResponse(id, formatError);
         var countOnly = ReadCountOnly(args) || format == "count";
+        var rawKinds = args?["rawKinds"]?.GetValue<bool>() ?? false;
 
         return WithDbReader(id, args, reader =>
         {
             if (countOnly)
             {
-                var countOnlyTotal = reader.CountCalleesTotal(query, lang, kind, pathPatterns, excludePaths, excludeTests, exact).Count;
+                var countOnlyTotal = reader.CountCalleesTotal(query, lang, kind, pathPatterns, excludePaths, excludeTests, exact, rawKinds).Count;
                 var histogramResults = countOnlyTotal > 0
-                    ? reader.GetCallees(query, Math.Min(countOnlyTotal, MaxLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, rankMode: rankMode)
+                    ? reader.GetCallees(query, Math.Min(countOnlyTotal, MaxLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, rawKinds, rankMode: rankMode)
                     : [];
                 var countOnlyPayload = BuildCountOnlyPayload(countOnlyTotal, countOnlyTotal, truncated: false, histogramResults, result => result.Path);
                 countOnlyPayload["query"] = query;
                 countOnlyPayload["kind"] = kind;
+                countOnlyPayload["rawKinds"] = rawKinds;
                 countOnlyPayload["lang"] = lang;
                 countOnlyPayload["path"] = PathEcho(pathPatterns);
                 countOnlyPayload["excludeTests"] = excludeTests;
                 return CreateToolResult(id, $"Counted {ConsoleUi.Counted(countOnlyTotal, "callee")}.", countOnlyPayload);
             }
 
-            var results = reader.GetCallees(query, FetchLimitForEnvelope(limit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, rankMode: rankMode, offset: offset);
+            var results = reader.GetCallees(query, FetchLimitForEnvelope(limit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, rawKinds, rankMode: rankMode, offset: offset);
             var truncated = TrimToRequestedLimit(results, limit);
             var total = truncated || offset > 0
-                ? reader.CountCalleesTotal(query, lang, kind, pathPatterns, excludePaths, excludeTests, exact).Count
+                ? reader.CountCalleesTotal(query, lang, kind, pathPatterns, excludePaths, excludeTests, exact, rawKinds).Count
                 : results.Count;
             var graphSupport = ResolveGraphSupport(reader, exact, query, lang, pathPatterns, excludePaths, excludeTests);
             var sqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignalByLanguages(
@@ -1837,14 +2090,15 @@ public partial class McpServer
             var exactSignal = reader.GetCalleesExactQuerySignal(lang, pathPatterns, excludePaths, excludeTests, includeSqlGraphContractSignal: sqlGraphSignal.Relevant);
             var exactZeroHint = QueryCommandRunner.BuildExactZeroHint(
                 exact && reader._hasReferencesTable,
-                () => reader.CountCallees(query, QueryCommandRunner.ExactZeroHintProbeLimit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false) > 0,
-                () => reader.CountCallees(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
-                () => reader.GetCallees(query, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact: false, rankMode: rankMode),
+                () => reader.CountCallees(query, QueryCommandRunner.ExactZeroHintProbeLimit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false, rawKinds: rawKinds) > 0,
+                () => reader.CountCallees(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false, rawKinds: rawKinds),
+                () => reader.GetCallees(query, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact: false, rawKinds: rawKinds, rankMode: rankMode),
                 r => r.CallerName);
             var payload = new JsonObject
             {
                 ["query"] = query,
                 ["kind"] = kind,
+                ["rawKinds"] = rawKinds,
                 ["lang"] = lang,
                 ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
@@ -1885,10 +2139,12 @@ public partial class McpServer
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
         if (!TryReadSinceArgument(args, out var since, out var sinceError))
             return CreateToolErrorResponse(id, sinceError!);
+        var orderBySize = args?["orderBySize"]?.GetValue<bool>() ?? false;
+        var rawBytes = args?["rawBytes"]?.GetValue<bool>() ?? false;
 
         return WithDbReader(id, args, reader =>
         {
-            var results = reader.ListFiles(query, limit, lang, pathPatterns, excludePaths, excludeTests, since);
+            var results = reader.ListFiles(query, limit, lang, pathPatterns, excludePaths, excludeTests, since, orderBySize || rawBytes);
             if (results.Count == 0)
             {
                 var payload = new JsonObject
@@ -1897,9 +2153,16 @@ public partial class McpServer
                     ["lang"] = lang,
                     ["path"] = PathEcho(pathPatterns),
                     ["excludeTests"] = excludeTests,
+                    ["orderBySize"] = orderBySize,
+                    ["rawBytes"] = rawBytes,
                     ["count"] = 0,
                     ["results"] = new JsonArray()
                 };
+                if (rawBytes)
+                {
+                    payload["raw_bytes_payload_supported"] = false;
+                    payload["raw_bytes_note"] = "MCP returns indexed file size metadata; raw file bytes are not returned.";
+                }
                 AddFreshnessHint(payload, reader);
                 return CreateToolResult(id, "No files found.", payload);
             }
@@ -1910,9 +2173,16 @@ public partial class McpServer
                 ["lang"] = lang,
                 ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
+                ["orderBySize"] = orderBySize,
+                ["rawBytes"] = rawBytes,
                 ["count"] = results.Count,
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
+            if (rawBytes)
+            {
+                structured["raw_bytes_payload_supported"] = false;
+                structured["raw_bytes_note"] = "MCP returns indexed file size metadata; raw file bytes are not returned.";
+            }
             return CreateToolResult(id, ConsoleUi.FoundSummary(results.Count, "file"), structured);
         });
     }
@@ -1926,10 +2196,13 @@ public partial class McpServer
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
         var sections = ReadStringList(args, "sections").Select(section => section.ToLowerInvariant()).ToHashSet(StringComparer.Ordinal);
         var depth = args?["depth"]?.GetValue<int>();
+        var minEntrypointConfidence = args?["minEntrypointConfidence"]?.GetValue<double>() ?? 0;
+        if (minEntrypointConfidence is < 0 or > 1)
+            return CreateToolErrorResponse(id, "minEntrypointConfidence must be between 0.0 and 1.0");
 
         return WithDbReader(id, args, reader =>
         {
-            var map = reader.GetRepoMap(limit, lang, pathPatterns, excludePaths, excludeTests);
+            var map = reader.GetRepoMap(limit, lang, pathPatterns, excludePaths, excludeTests, minEntrypointConfidence);
             WorkspaceMetadataEnricher.Enrich(map, _dbPath, _dbPathExplicit);
             var structured = JsonSerializer.SerializeToNode(map, _jsonOptions)!.AsObject();
             if (depth is >= 0)
@@ -1955,6 +2228,7 @@ public partial class McpServer
             structured["lang"] = lang;
             structured["path"] = PathEcho(pathPatterns);
             structured["excludeTests"] = excludeTests;
+            structured["minEntrypointConfidence"] = minEntrypointConfidence;
             var hasFilter = (pathPatterns is { Count: > 0 }) || excludePaths.Count > 0 || excludeTests || lang != null;
             if (map.FileCount == 0 && hasFilter)
                 AddFreshnessHint(structured, reader);
@@ -1972,7 +2246,7 @@ public partial class McpServer
             "api_version", "fileCount", "totalLines", "totalSymbols", "totalReferences",
             "indexedAt", "latestModified", "workspaceIndexedAt", "workspaceLatestModified",
             "projectRoot", "gitHead", "gitIsDirty", "indexed_head_commit", "worktree_head_changed",
-            "graphTableAvailable", "limit", "lang", "path", "excludeTests", "depth",
+            "graphTableAvailable", "limit", "lang", "path", "excludeTests", "depth", "minEntrypointConfidence",
         };
         if (sections.Contains("languages"))
             keep.Add("languages");
@@ -2011,6 +2285,10 @@ public partial class McpServer
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
         if (!TryResolveNameExactArgument(args, "analyze_symbol", out var exact, out var exactError))
             return CreateToolErrorResponse(id, exactError!);
+        var format = ReadResponseFormat(args);
+        if (ValidateResponseFormat(format) is string formatError)
+            return CreateToolErrorResponse(id, formatError);
+        var countOnly = ReadCountOnly(args) || format == "count";
 
         return WithDbReader(id, args, reader =>
         {
@@ -2027,13 +2305,18 @@ public partial class McpServer
             analysis.SqlGraphContractReady = sqlGraphSignal.Relevant ? sqlGraphSignal.Ready : null;
             analysis.SqlGraphContractDegradedReason = sqlGraphSignal.Relevant ? sqlGraphSignal.DegradedReason : null;
             WorkspaceMetadataEnricher.Enrich(analysis, _dbPath, _dbPathExplicit);
-            var structured = ToAnalyzeSymbolJsonObject(analysis);
+            var pathEcho = PathEcho(pathPatterns);
+            var structured = countOnly
+                ? BuildAnalyzeSymbolCountPayload(analysis, lang, pathEcho, excludeTests, maxLineWidth)
+                : format == "compact"
+                    ? BuildAnalyzeSymbolCompactPayload(analysis, lang, pathEcho, excludeTests, maxLineWidth)
+                    : ToAnalyzeSymbolJsonObject(analysis);
             AddSqlGraphContractSignal(structured, sqlGraphSignal);
             structured.Remove("exactZeroHint");
             AddExactZeroHint(structured, analysis.ExactZeroHint);
             structured["maxLineWidth"] = maxLineWidth;
             structured["lang"] = lang;
-            structured["path"] = PathEcho(pathPatterns);
+            structured["path"] = pathEcho;
             structured["excludeTests"] = excludeTests;
             return CreateToolResult(id, BuildAnalyzeSymbolSummary(analysis), structured);
         });
@@ -3817,14 +4100,16 @@ public partial class McpServer
         var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
+        var visibilityFilters = ReadStringOrCommaSeparatedList(args, "visibility");
+        var excludeVisibilityFilters = ReadStringOrCommaSeparatedList(args, "excludeVisibility");
 
         return WithDbReader(id, args, reader =>
         {
             var fileResults = groupBy == "file"
-                ? reader.GetFileSymbolHotspots(limit, kind, lang, pathPatterns, excludePaths, excludeTests)
+                ? reader.GetFileSymbolHotspots(limit, kind, lang, pathPatterns, excludePaths, excludeTests, visibilityFilters, excludeVisibilityFilters)
                 : null;
             var results = fileResults == null
-                ? reader.GetSymbolHotspots(limit, kind, lang, pathPatterns, excludePaths, excludeTests)
+                ? reader.GetSymbolHotspots(limit, kind, lang, pathPatterns, excludePaths, excludeTests, visibilityFilters, excludeVisibilityFilters)
                 : [];
             var hotspotSignal = reader.GetHotspotFamilySignal(lang);
             var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests);
@@ -3877,6 +4162,7 @@ public partial class McpServer
                 ["grouped_by"] = groupBy,
                 ["hotspots"] = hotspotsNode
             };
+            AddVisibilityFilterEcho(payload, visibilityFilters, excludeVisibilityFilters);
             if (fileResults != null)
                 payload["files"] = fileResults.Count;
             AddHotspotFamilySignal(payload, hotspotSignal);
@@ -3913,6 +4199,9 @@ public partial class McpServer
         var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
+        var visibilityFilters = ReadStringOrCommaSeparatedList(args, "visibility");
+        var excludeVisibilityFilters = ReadStringOrCommaSeparatedList(args, "excludeVisibility");
+        var byBucket = args?["byBucket"]?.GetValue<bool>() ?? false;
         if (bucket != null && !QueryCommandRunner.IsKnownUnusedBucket(bucket))
             return CreateToolErrorResponse(id, $"Invalid bucket '{bucket}'. Use one of: {string.Join(", ", QueryCommandRunner.OrderedUnusedBuckets)}.");
         if (minConfidence != null && !QueryCommandRunner.IsKnownUnusedConfidence(minConfidence))
@@ -3932,6 +4221,8 @@ public partial class McpServer
                 pathPatterns,
                 excludePaths,
                 excludeTests,
+                visibilityFilters,
+                excludeVisibilityFilters,
                 bucketFilter: bucket,
                 minConfidence: minConfidence);
             var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests);
@@ -3955,6 +4246,10 @@ public partial class McpServer
                 ["bucket_taxonomy"] = QueryCommandRunner.BuildUnusedBucketTaxonomyJson(),
                 ["symbols"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
+            AddVisibilityFilterEcho(payload, visibilityFilters, excludeVisibilityFilters);
+            payload["byBucket"] = byBucket;
+            if (byBucket)
+                payload["symbols_by_bucket"] = BuildUnusedSymbolsByBucket(results);
             AddSqlGraphContractSignal(payload, sqlGraphSignal);
             var summary = results.Count > 0
                 ? $"Found {ConsoleUi.Counted(results.Count, "potentially unused symbol")} across {ConsoleUi.Counted(bucketCounts.Count, "returned bucket")}. Private hits are ranked ahead of exported/config suspects, but not labeled high-confidence from indexed refs alone. Note: name-based matching — same-named symbols in different contexts may mask true unused symbols."

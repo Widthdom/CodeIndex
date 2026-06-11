@@ -30,6 +30,7 @@ public partial class McpServer
                         ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20). Responses include `truncated` and `more_available` when more rows exist.", ["default"] = QueryCommandRunner.DefaultQueryLimit },
                         ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language (e.g. csharp, python, javascript)" },
                         ["snippetLines"] = new JsonObject { ["type"] = "integer", ["description"] = "Max snippet lines per result (default: 8, max: 20)", ["default"] = 8, ["minimum"] = 1, ["maximum"] = SearchSnippetFormatter.MaxSnippetLines },
+                        ["snippetFocus"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray { "quality", "leftmost", "proximity" }, ["description"] = "Snippet anchoring mode matching CLI `--snippet-focus`: quality (default), leftmost, or proximity.", ["default"] = "quality" },
                         ["maxLineWidth"] = new JsonObject { ["type"] = "integer", ["description"] = "Clamp very long single-line snippets per line (default: 512; 0 disables clamping). Match lines are clamped around the first match; non-match lines are clamped from the head. Each clamp inserts a `...(+N)...` marker showing how many chars were elided.", ["default"] = LineWidthFormatter.DefaultMaxLineWidth, ["minimum"] = 0, ["maximum"] = LineWidthFormatter.MaxAllowedLineWidth },
                         ["rawQuery"] = new JsonObject { ["type"] = "boolean", ["description"] = "Use raw FTS5 syntax instead of literal-safe quoting: content:term, NEAR(a b, 5), OR, NOT, parenthesized groups, prefix*, and quoted phrases.", ["default"] = false },
                         ["cursor"] = new JsonObject { ["type"] = "string", ["description"] = "Optional pagination cursor returned as `next_cursor` by a previous search response with the same query and filters. Compare `result_stable_at` across pages to detect index drift." },
@@ -65,6 +66,8 @@ public partial class McpServer
                         ["kind"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by symbol kind" },
                         ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language" },
                         ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20)", ["default"] = QueryCommandRunner.DefaultQueryLimit },
+                        ["visibility"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Filter symbol visibility. Accepts a value, comma-separated string, or array." },
+                        ["excludeVisibility"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Exclude symbol visibility values. Accepts a value, comma-separated string, or array." },
                         ["includeBody"] = new JsonObject { ["type"] = "boolean", ["description"] = "Include body content when body ranges are available", ["default"] = false },
                         ["lsp_compatible"] = new JsonObject { ["type"] = "boolean", ["description"] = "Add file:// uri and LSP range fields to each result", ["default"] = false },
                         ["path"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Prefer or restrict matches to paths containing this text. Accepts a single string or an array; multiple values are OR'd together." },
@@ -116,6 +119,7 @@ public partial class McpServer
                     {
                         ["query"] = new JsonObject { ["type"] = "string", ["description"] = "Callee symbol name pattern to search for" },
                         ["kind"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by call-graph reference kind (call, instantiate, subscribe, friend). Non-call-graph kinds — metadata (attribute, annotation) and type-position (type_reference) — are rejected here; use `references` with the desired kind instead." },
+                        ["rawKinds"] = new JsonObject { ["type"] = "boolean", ["description"] = "Preserve raw reference kinds instead of CLI logical grouping, matching `--raw-kinds`.", ["default"] = false },
                         ["rankBy"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray { "weighted", "count", "kind" }, ["description"] = "Ranking model: weighted (default; instantiate=3.0, call=1.0, subscribe=0.1, friend=0.3), count, or kind.", ["default"] = "weighted" },
                         ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language" },
                         ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20). Responses include `truncated`, `more_available`, and `next_offset` when more rows exist.", ["default"] = QueryCommandRunner.DefaultQueryLimit },
@@ -142,6 +146,7 @@ public partial class McpServer
                     {
                         ["query"] = new JsonObject { ["type"] = "string", ["description"] = "Caller/container symbol name pattern to search for" },
                         ["kind"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by call-graph reference kind (call, instantiate, subscribe). Non-call-graph kinds — metadata (attribute, annotation) and type-position (type_reference) — are rejected here; use `references` with the desired kind instead." },
+                        ["rawKinds"] = new JsonObject { ["type"] = "boolean", ["description"] = "Preserve raw reference kinds instead of CLI logical grouping, matching `--raw-kinds`.", ["default"] = false },
                         ["rankBy"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray { "weighted", "count", "kind" }, ["description"] = "Ranking model: weighted (default; instantiate=3.0, call=1.0, subscribe=0.1), count, or kind.", ["default"] = "weighted" },
                         ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language" },
                         ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20). Responses include `truncated`, `more_available`, and `next_offset` when more rows exist.", ["default"] = QueryCommandRunner.DefaultQueryLimit },
@@ -170,6 +175,8 @@ public partial class McpServer
                         ["names"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Optional list of additional symbol name patterns, OR-joined with `query`. Use this to resolve multiple candidate names in one call." },
                         ["kind"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by symbol kind (function, class, interface, import, etc.)" },
                         ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language" },
+                        ["visibility"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Filter symbol visibility. Accepts a value, comma-separated string, or array." },
+                        ["excludeVisibility"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Exclude symbol visibility values. Accepts a value, comma-separated string, or array." },
                         ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20)", ["default"] = QueryCommandRunner.DefaultQueryLimit },
                         ["path"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Prefer or restrict matches to paths containing this text. Accepts a single string or an array; multiple values are OR'd together." },
                         ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
@@ -177,7 +184,9 @@ public partial class McpServer
                         ["includeGenerated"] = new JsonObject { ["type"] = "boolean", ["description"] = "Include files detected as generated code", ["default"] = false },
                         ["since"] = new JsonObject { ["type"] = "string", ["description"] = "Filter to symbols in files modified since this ISO 8601 timestamp" },
                         ["exactName"] = new JsonObject { ["type"] = "boolean", ["description"] = "Preferred explicit name for exact symbol-name equality instead of substring, so `Run` no longer matches `RunAsync`/`RunImpact`.", ["default"] = false },
-                        ["exact"] = new JsonObject { ["type"] = "boolean", ["description"] = "Backward-compatible alias for `exactName`.", ["default"] = false }
+                        ["exact"] = new JsonObject { ["type"] = "boolean", ["description"] = "Backward-compatible alias for `exactName`.", ["default"] = false },
+                        ["countOnly"] = new JsonObject { ["type"] = "boolean", ["description"] = "Return count metadata and a top-file histogram without symbol rows.", ["default"] = false },
+                        ["format"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray { "full", "count", "compact" }, ["description"] = "Response shape: full symbol rows, count metadata, or compact file/line/kind/name rows.", ["default"] = "full" }
                     }
                 },
                 ReadOnlyAnnotations()),
@@ -196,7 +205,9 @@ public partial class McpServer
                         ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },
                         ["includeGenerated"] = new JsonObject { ["type"] = "boolean", ["description"] = "Include files detected as generated code", ["default"] = false },
-                        ["since"] = new JsonObject { ["type"] = "string", ["description"] = "Filter to files modified since this ISO 8601 timestamp" }
+                        ["since"] = new JsonObject { ["type"] = "string", ["description"] = "Filter to files modified since this ISO 8601 timestamp" },
+                        ["orderBySize"] = new JsonObject { ["type"] = "boolean", ["description"] = "Sort by indexed byte size descending before path, matching byte-oriented CLI views.", ["default"] = false },
+                        ["rawBytes"] = new JsonObject { ["type"] = "boolean", ["description"] = "CLI-compatible alias for byte-oriented file listing. MCP returns indexed size metadata, not raw file bytes.", ["default"] = false }
                     }
                 },
                 ReadOnlyAnnotations()),
@@ -263,13 +274,14 @@ public partial class McpServer
                         ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude glob-style path patterns. `*` and `?` are wildcards." },
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },
                         ["sections"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray { "tree", "languages", "hotspots", "metrics" } }, ["description"] = "Only include selected response sections. Omit for the full backward-compatible map." },
-                        ["depth"] = new JsonObject { ["type"] = "integer", ["description"] = "Maximum module/tree depth to include; 0 keeps only root-level modules.", ["minimum"] = 0 }
+                        ["depth"] = new JsonObject { ["type"] = "integer", ["description"] = "Maximum module/tree depth to include; 0 keeps only root-level modules.", ["minimum"] = 0 },
+                        ["minEntrypointConfidence"] = new JsonObject { ["type"] = "number", ["description"] = "Minimum entrypoint confidence threshold, from 0.0 to 1.0, matching CLI `--min-entrypoint-confidence`.", ["minimum"] = 0, ["maximum"] = 1 }
                     }
                 },
                 ReadOnlyAnnotations()),
             CreateToolDefinition(
                 "analyze_symbol",
-                "Bundle definition, nearby symbols, references, callers, callees, file metadata, and graph-support metadata for one symbol query. For exact matches, use `exactName`; `exact` is the legacy alias documented in USER_GUIDE.md's flag compatibility table. Bundled caller/callee rows carry the same `reference_kind` (preferred summary kind, back-compat) plus `reference_kinds` (sorted distinct) and `has_mixed_reference_kinds` fields as the standalone `callers` / `callees` tools, so mixed `call` + `subscribe` containers stay visible in the bundle. / 1つのシンボルクエリに対して、定義、近傍シンボル、参照、caller、callee、ファイルメタデータ、グラフ対応メタデータをまとめて返す。完全一致には `exactName` を使う。`exact` は USER_GUIDE.md の flag compatibility table に記載された legacy alias。バンドルされた caller / callee 行にも単独の `callers` / `callees` と同じ `reference_kind`（後方互換の優先サマリー種別）、`reference_kinds`（distinct kind の昇順配列）、`has_mixed_reference_kinds` が付くため、`call` + `subscribe` が混在するコンテナも要約 1 ラベルに潰れず見える。",
+                "Bundle definition, nearby symbols, references, callers, callees, file metadata, and graph-support metadata for one symbol query. For exact matches, use `exactName`; `exact` is the legacy alias documented in USER_GUIDE.md's flag compatibility table. Bundled caller/callee rows carry the same `reference_kind` (preferred summary kind, back-compat) plus `reference_kinds` (sorted distinct) and `has_mixed_reference_kinds` fields as the standalone `callers` / `callees` tools, so mixed `call` + `subscribe` containers stay visible in the bundle. Supports `format: count|compact`; CLI `since` filtering is intentionally not exposed because the backing analysis reader does not support it yet. / 1つのシンボルクエリに対して、定義、近傍シンボル、参照、caller、callee、ファイルメタデータ、グラフ対応メタデータをまとめて返す。完全一致には `exactName` を使う。`exact` は USER_GUIDE.md の flag compatibility table に記載された legacy alias。バンドルされた caller / callee 行にも単独の `callers` / `callees` と同じ `reference_kind`（後方互換の優先サマリー種別）、`reference_kinds`（distinct kind の昇順配列）、`has_mixed_reference_kinds` が付くため、`call` + `subscribe` が混在するコンテナも要約 1 ラベルに潰れず見える。`format: count|compact` 対応。CLI の `since` filter は backing analysis reader 未対応のため意図的に未公開。",
                 new JsonObject
                 {
                     ["type"] = "object",
@@ -285,7 +297,9 @@ public partial class McpServer
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },
                         ["includeGenerated"] = new JsonObject { ["type"] = "boolean", ["description"] = "Include files detected as generated code", ["default"] = false },
                         ["exactName"] = new JsonObject { ["type"] = "boolean", ["description"] = "Preferred explicit name for exact bundle symbol-name equality. Propagates through definitions, references, callers, and callees so `Run` no longer pulls in `RunAsync` / `RunImpact`.", ["default"] = false },
-                        ["exact"] = new JsonObject { ["type"] = "boolean", ["description"] = "Backward-compatible alias for `exactName`.", ["default"] = false }
+                        ["exact"] = new JsonObject { ["type"] = "boolean", ["description"] = "Backward-compatible alias for `exactName`.", ["default"] = false },
+                        ["countOnly"] = new JsonObject { ["type"] = "boolean", ["description"] = "Return only dossier counts and graph support metadata.", ["default"] = false },
+                        ["format"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray { "full", "count", "compact" }, ["description"] = "Response shape: full dossier, count-only metadata, or compact file/line rows.", ["default"] = "full" }
                     },
                     ["required"] = new JsonArray { "query" }
                 },
@@ -476,6 +490,8 @@ public partial class McpServer
                         ["kind"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by symbol kind" },
                         ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language" },
                         ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20)", ["default"] = QueryCommandRunner.DefaultQueryLimit },
+                        ["visibility"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Filter symbol visibility. Accepts a value, comma-separated string, or array." },
+                        ["excludeVisibility"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Exclude symbol visibility values. Accepts a value, comma-separated string, or array." },
                         ["groupBy"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray("symbol", "file", "statement"), ["description"] = "Grouping unit. Defaults to symbol for non-SQL scopes and statement for SQL scopes." },
                         ["path"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Restrict to glob-style path patterns. `*` and `?` are wildcards. Accepts a single string or an array; multiple values are OR'd together." },
                         ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude glob-style path patterns. `*` and `?` are wildcards." },
@@ -501,6 +517,9 @@ public partial class McpServer
                         ["kind"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by symbol kind (function, class, property, interface, enum, struct, event, delegate)" },
                         ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language (recommended: use a graph-supported language)" },
                         ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 50)", ["default"] = QueryCommandRunner.DefaultImpactLimit },
+                        ["visibility"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Filter symbol visibility. Accepts a value, comma-separated string, or array." },
+                        ["excludeVisibility"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Exclude symbol visibility values. Accepts a value, comma-separated string, or array." },
+                        ["byBucket"] = new JsonObject { ["type"] = "boolean", ["description"] = "Include `symbols_by_bucket` grouped by unused-symbol bucket.", ["default"] = false },
                         ["bucket"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray("likely_unused_private", "maybe_unused_nonpublic", "public_or_exported_no_refs", "reflection_or_config_suspect"), ["description"] = "Return only one unused-symbol bucket." },
                         ["minConfidence"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray("medium", "low"), ["description"] = "Return symbols at or above this confidence threshold." },
                         ["path"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Restrict to paths containing this text. Accepts a single string or an array; multiple values are OR'd together." },
