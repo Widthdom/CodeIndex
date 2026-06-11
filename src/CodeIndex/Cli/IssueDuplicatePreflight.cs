@@ -210,7 +210,7 @@ internal sealed class IssueDuplicatePreflight
             issues.Add(new OpenIssue(
                 TryReadInt(item?["number"]),
                 title,
-                TryReadString(item?["url"], MaxOpenIssueUrlLength) ?? TryReadString(item?["html_url"], MaxOpenIssueUrlLength),
+                TryReadString(item?["html_url"], MaxOpenIssueUrlLength) ?? TryReadString(item?["url"], MaxOpenIssueUrlLength),
                 ReadLabels(item?["labels"])));
         }
 

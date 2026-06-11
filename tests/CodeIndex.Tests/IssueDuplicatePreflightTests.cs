@@ -102,12 +102,14 @@ public sealed class IssueDuplicatePreflightTests : IDisposable
                 "number": 3449,
                 "title": "Issue-draft duplicate preflight should fetch open GitHub issues directly",
                 "labels": [{"name": "enhancement"}],
+                "url": "https://api.github.example.test/repos/Widthdom/CodeIndex/issues/3449",
                 "html_url": "https://github.example.test/Widthdom/CodeIndex/issues/3449"
               },
               {
                 "number": 1,
                 "title": "Pull request entry should be ignored",
                 "labels": [{"name": "enhancement"}],
+                "url": "https://api.github.example.test/repos/Widthdom/CodeIndex/issues/1",
                 "html_url": "https://github.example.test/Widthdom/CodeIndex/pull/1",
                 "pull_request": {}
               }
@@ -129,6 +131,7 @@ public sealed class IssueDuplicatePreflightTests : IDisposable
             "Issue-draft duplicate preflight should fetch open GitHub issues directly",
             ["enhancement"]));
         Assert.Equal(3449, match.Number);
+        Assert.Equal("https://github.example.test/Widthdom/CodeIndex/issues/3449", match.Url);
     }
 
     [Fact]
