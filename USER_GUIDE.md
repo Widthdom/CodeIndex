@@ -888,8 +888,8 @@ appears in the selected line window, while `--reject-before` / `--reject-after`
 drop matches when the guard query appears. JSON search results include
 `guard_evidence` for matched guards and `guard_checks` for each guard evaluated
 on a returned match. Guard evidence includes the guard name, pattern,
-before/after relationship, 1-based span, origin category, source line, and a
-compact pass/fail summary.
+before/after relationship, 1-based span, origin category, and source line.
+Each `guard_checks[]` entry includes a compact pass/fail summary.
 Guarded searches inspect a bounded candidate set before pagination; if a guarded
 query is too broad to satisfy the requested page within that budget, CLI and MCP
 return a validation error. Narrow with more specific query text, `--lang`,
