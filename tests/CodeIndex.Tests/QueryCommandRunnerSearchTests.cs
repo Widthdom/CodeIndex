@@ -478,14 +478,84 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunSearch_IssueDraftsRequireRecipe_Issue3145()
+    public void RunSearch_AdHocIssueDraftsUseTitleLabelsAndDuplicatePreflight_Issue3520()
     {
-        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-            ["Authenticate", "--format", "issue-drafts"],
-            _jsonOptions));
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_issue_drafts_ad_hoc");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var openIssuesPath = Path.Combine(projectRoot, "open-issues.json");
+            File.WriteAllText(
+                openIssuesPath,
+                """
+                [
+                  {
+                    "number": 3520,
+                    "title": "Thread.Yield audit",
+                    "labels": [{"name": "audit"}],
+                    "url": "https://example.test/issues/3520"
+                  }
+                ]
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/scheduler.cs",
+                "csharp",
+                """
+                public sealed class Scheduler
+                {
+                    public void Run()
+                    {
+                        Thread.Yield();
+                    }
+                }
+                """);
 
-        Assert.Equal(CommandExitCodes.UsageError, exitCode);
-        Assert.Contains("--format issue-drafts requires --recipe", stderr);
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [
+                    "Thread.Yield",
+                    "--db", dbPath,
+                    "--format", "issue-drafts",
+                    "--exact-substring",
+                    "--issue-title", "Thread.Yield audit",
+                    "--issue-label", "audit,bug",
+                    "--issue-label", "needs-triage",
+                    "--open-issues", openIssuesPath
+                ],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            var draft = Assert.Single(root.GetProperty("drafts").EnumerateArray());
+            var labels = draft.GetProperty("labels").EnumerateArray().Select(label => label.GetString()).ToList();
+            var duplicatePreflight = draft.GetProperty("duplicate_preflight");
+            var match = Assert.Single(duplicatePreflight.GetProperty("matches").EnumerateArray());
+            var body = draft.GetProperty("body").GetString();
+
+            Assert.Equal(1, root.GetProperty("query_count").GetInt32());
+            Assert.Equal(JsonValueKind.Null, root.GetProperty("recipe").ValueKind);
+            Assert.Equal(1, root.GetProperty("count").GetInt32());
+            Assert.Equal("Thread.Yield audit", draft.GetProperty("title").GetString());
+            Assert.Contains("audit", labels);
+            Assert.Contains("bug", labels);
+            Assert.Contains("needs-triage", labels);
+            Assert.Equal("src/scheduler.cs", draft.GetProperty("evidence_paths")[0].GetString());
+            Assert.Contains("Thread.Yield", body, StringComparison.Ordinal);
+            Assert.DoesNotContain("public sealed class Scheduler", body, StringComparison.Ordinal);
+            Assert.Equal(JsonValueKind.Null, draft.GetProperty("source").GetProperty("recipe").ValueKind);
+            Assert.Equal(JsonValueKind.Null, draft.GetProperty("source").GetProperty("query_name").ValueKind);
+            Assert.Equal("Thread.Yield", draft.GetProperty("source").GetProperty("query").GetString());
+            Assert.True(draft.GetProperty("source").GetProperty("exact_substring").GetBoolean());
+            Assert.Equal(1, duplicatePreflight.GetProperty("match_count").GetInt32());
+            Assert.Equal(3520, match.GetProperty("number").GetInt32());
+            Assert.Equal("title_exact", match.GetProperty("reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
     }
 
     [Fact]

@@ -111,7 +111,7 @@ internal sealed record SearchRecipeQueryResultJsonResult(
 
 internal sealed record SearchIssueDraftExportJsonResult(
     [property: JsonPropertyName("api_version")] string ApiVersion,
-    [property: JsonPropertyName("recipe")] SearchRecipeListItemJsonResult Recipe,
+    [property: JsonPropertyName("recipe")] SearchRecipeListItemJsonResult? Recipe,
     [property: JsonPropertyName("query_count")] int QueryCount,
     [property: JsonPropertyName("result_count")] int ResultCount,
     [property: JsonPropertyName("count")] int Count,
@@ -128,8 +128,8 @@ internal sealed record SearchIssueDraftJsonResult(
     [property: JsonPropertyName("duplicate_preflight")] SuggestionIssueDraftDuplicatePreflightJsonResult DuplicatePreflight);
 
 internal sealed record SearchIssueDraftSourceJsonResult(
-    [property: JsonPropertyName("recipe")] string Recipe,
-    [property: JsonPropertyName("query_name")] string QueryName,
+    [property: JsonPropertyName("recipe")] string? Recipe,
+    [property: JsonPropertyName("query_name")] string? QueryName,
     [property: JsonPropertyName("query")] string Query,
     [property: JsonPropertyName("description")] string Description,
     [property: JsonPropertyName("false_positive_guidance")] string FalsePositiveGuidance,
