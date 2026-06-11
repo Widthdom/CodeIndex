@@ -138,7 +138,22 @@ internal static class SearchAuditRecipes
                     ExactSubstring: false)
             ])
         {
-            DefaultPathPatterns = ["src/**"]
+            DefaultPathPatterns = ["src/**"],
+            DefaultExcludePaths =
+            [
+                "src/CodeIndex/Cli/SearchAuditRecipes.cs",
+                "tests/**",
+                "docs/**",
+                "CHANGELOG.md",
+                "changelog.d/**",
+                "README.md",
+                "USER_GUIDE.md",
+                "DEVELOPER_GUIDE.md",
+                "TESTING_GUIDE.md",
+                "AGENT_GUIDE.md",
+                ".codex/**",
+                ".github/**"
+            ]
         }
     ];
 

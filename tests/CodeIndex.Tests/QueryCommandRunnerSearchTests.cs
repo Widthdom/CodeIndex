@@ -299,6 +299,7 @@ public partial class QueryCommandRunnerTests
         Assert.Contains(recipe.GetProperty("recommended_labels").EnumerateArray(), label => label.GetString() == "audit");
         Assert.Equal("source", recipe.GetProperty("default_scope").GetString());
         Assert.Contains(recipe.GetProperty("default_path_patterns").EnumerateArray(), path => path.GetString() == "src/**");
+        Assert.Contains(recipe.GetProperty("default_exclude_paths").EnumerateArray(), path => path.GetString() == "src/CodeIndex/Cli/SearchAuditRecipes.cs");
         Assert.Equal("ex.Message", query.GetProperty("query").GetString());
         Assert.True(query.GetProperty("exact_substring").GetBoolean());
         Assert.Contains("redaction", query.GetProperty("description").GetString(), StringComparison.OrdinalIgnoreCase);
@@ -380,11 +381,78 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(20, root.GetProperty("query_count").GetInt32());
             Assert.Equal("source", root.GetProperty("scope").GetProperty("name").GetString());
             Assert.Contains(root.GetProperty("scope").GetProperty("path_patterns").EnumerateArray(), path => path.GetString() == "src/**");
+            Assert.Contains(root.GetProperty("scope").GetProperty("exclude_paths").EnumerateArray(), path => path.GetString() == "src/CodeIndex/Cli/SearchAuditRecipes.cs");
             Assert.True(root.GetProperty("scope").GetProperty("exclude_tests").GetBoolean());
             Assert.True(root.GetProperty("result_count").GetInt32() >= 4);
             Assert.Equal(1, unboundedJsonParse.GetProperty("count").GetInt32());
             Assert.Equal("JsonDocument.Parse", unboundedJsonParse.GetProperty("query").GetString());
             Assert.Equal("src/app.cs", unboundedJsonParse.GetProperty("results")[0].GetProperty("path").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_RecipeSourceScopeSuppressesDefinitionsDocsChangelogAndTests_Issues3440_3448()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_recipe_scope");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            foreach (var path in new[]
+            {
+                "src/app.cs",
+                "src/CodeIndex/Cli/SearchAuditRecipes.cs",
+                "docs/audit.md",
+                "CHANGELOG.md",
+                "tests/AppTests.cs",
+            })
+            {
+                TestProjectHelper.InsertIndexedFile(
+                    dbPath,
+                    path,
+                    path.EndsWith(".cs", StringComparison.Ordinal) ? "csharp" : "markdown",
+                    "ProcessStartInfo");
+            }
+
+            var sourceScope = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "risky-code", "--db", dbPath, "--json", "--limit", "10"],
+                _jsonOptions));
+            var allScope = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "risky-code", "--db", dbPath, "--json", "--limit", "10", "--audit-scope", "all"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, sourceScope.Result);
+            Assert.Equal(string.Empty, sourceScope.Stderr);
+            using var sourceDocument = ParseJsonOutput(sourceScope.Stdout);
+            var sourceQuery = sourceDocument.RootElement
+                .GetProperty("queries")
+                .EnumerateArray()
+                .Single(item => item.GetProperty("name").GetString() == "process-start-info");
+            var sourceResult = Assert.Single(sourceQuery.GetProperty("results").EnumerateArray());
+
+            Assert.Equal("source", sourceDocument.RootElement.GetProperty("scope").GetProperty("name").GetString());
+            Assert.Equal("src/app.cs", sourceResult.GetProperty("path").GetString());
+
+            Assert.Equal(CommandExitCodes.Success, allScope.Result);
+            Assert.Equal(string.Empty, allScope.Stderr);
+            using var allDocument = ParseJsonOutput(allScope.Stdout);
+            var allPaths = allDocument.RootElement
+                .GetProperty("queries")
+                .EnumerateArray()
+                .Single(item => item.GetProperty("name").GetString() == "process-start-info")
+                .GetProperty("results")
+                .EnumerateArray()
+                .Select(item => item.GetProperty("path").GetString())
+                .ToList();
+
+            Assert.Equal("all", allDocument.RootElement.GetProperty("scope").GetProperty("name").GetString());
+            Assert.Contains("src/CodeIndex/Cli/SearchAuditRecipes.cs", allPaths);
+            Assert.Contains("docs/audit.md", allPaths);
+            Assert.Contains("CHANGELOG.md", allPaths);
+            Assert.Contains("tests/AppTests.cs", allPaths);
         }
         finally
         {
