@@ -134,6 +134,7 @@ public static class QueryCommandRunner
         "--depth",
         "--query",
         "--recipe",
+        "--named-query",
         "--open-issues",
         "--group-by",
         "--focus-line",

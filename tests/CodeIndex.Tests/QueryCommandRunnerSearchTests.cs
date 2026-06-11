@@ -62,7 +62,7 @@ public partial class QueryCommandRunnerTests
                 "Run nuget push after package validation.");
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                ["--named-query", "pack=dotnet pack", "--named-query", "push=nuget push", "--db", dbPath, "--format", "compact"],
+                ["--named-query=pack=dotnet pack", "--named-query=push=nuget push", "--db", dbPath, "--format", "compact"],
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
