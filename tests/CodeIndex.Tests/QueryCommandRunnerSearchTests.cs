@@ -297,6 +297,11 @@ public partial class QueryCommandRunnerTests
 
         Assert.Equal(1, root.GetProperty("count").GetInt32());
         Assert.Contains(recipe.GetProperty("recommended_labels").EnumerateArray(), label => label.GetString() == "audit");
+        Assert.Contains(recipe.GetProperty("supported_formats").EnumerateArray(), format => format.GetString() == "issue-drafts");
+        Assert.True(recipe.GetProperty("filter_support").GetProperty("exclude_tests").GetBoolean());
+        Assert.True(recipe.GetProperty("filter_support").GetProperty("guard_filters").GetBoolean());
+        Assert.Equal("per_query", recipe.GetProperty("limit_semantics").GetProperty("scope").GetString());
+        Assert.Equal(20, recipe.GetProperty("limit_semantics").GetProperty("default").GetInt32());
         Assert.Equal("ex.Message", query.GetProperty("query").GetString());
         Assert.True(query.GetProperty("exact_substring").GetBoolean());
         Assert.Contains("redaction", query.GetProperty("description").GetString(), StringComparison.OrdinalIgnoreCase);
@@ -444,7 +449,7 @@ public partial class QueryCommandRunnerTests
                 """);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                ["--recipe", "risky-code", "--db", dbPath, "--format", "issue-drafts", "--open-issues", openIssuesPath],
+                ["--recipe", "risky-code", "--db", dbPath, "--format", "issue-drafts", "--limit", "5", "--lang", "csharp", "--path", "src/app.cs", "--exclude-tests", "--open-issues", openIssuesPath],
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
@@ -465,6 +470,10 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("src/app.cs", draft.GetProperty("evidence_paths")[0].GetString());
             Assert.Contains("JsonDocument.Parse", body, StringComparison.Ordinal);
             Assert.Contains("False-positive guidance", body, StringComparison.Ordinal);
+            Assert.Contains("## Replay command", body, StringComparison.Ordinal);
+            Assert.Contains("cdidx search --recipe risky-code --format issue-drafts --limit 5", body, StringComparison.Ordinal);
+            Assert.Contains("--lang csharp --path src/app.cs --exclude-tests", body, StringComparison.Ordinal);
+            Assert.Contains($"--open-issues {openIssuesPath}", body, StringComparison.Ordinal);
             Assert.DoesNotContain("public sealed class App", body, StringComparison.Ordinal);
             Assert.Equal("unbounded-json-parse", draft.GetProperty("source").GetProperty("query_name").GetString());
             Assert.Equal(1, duplicatePreflight.GetProperty("match_count").GetInt32());

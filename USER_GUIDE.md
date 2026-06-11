@@ -1238,8 +1238,8 @@ same source location.
 | `--exclude-visibility <v[,v]>` | `definition`, `symbols`, `unused`, `hotspots` | Exclude symbols with the requested visibility values. Accepts the same comma-separated values and alias expansion as `--visibility`. |
 | `--path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `validate` | Restrict results to glob-style path patterns. `*` and `?` are wildcards. Repeatable; multiple values are OR'd together |
 | `--query <query>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `inspect`, `impact` | Pass a query literal explicitly, useful when the query starts with `-`. Query commands except `find` also accept `-- <query>` as a one-token query escape while continuing to parse later options. |
-| `--recipe <name>` | `search` | Run a reusable audit recipe such as `risky-code`. Normal search filters and snippet controls apply to every recipe query; text, `--json` / `--format json`, and `--format issue-drafts` are supported. |
-| `--list-recipes` | `search` | List available search audit recipes with query text, recommended labels, exact-match mode, and false-positive guidance. |
+| `--recipe <name>` | `search` | Run a reusable audit recipe such as `risky-code`. Normal search filters and snippet controls apply to every recipe query; `--limit` / `--top` is per child query. Text, `--json` / `--format json`, and `--format issue-drafts` are supported, and issue drafts include a replay command. |
+| `--list-recipes` | `search` | List available search audit recipes with query text, recommended labels, exact-match mode, false-positive guidance, supported formats, filter support, and limit semantics. |
 | `--open-issues <path>` | `search --recipe <name> --format issue-drafts` | Preflight generated issue drafts against an open-issues JSON file such as `gh issue list --state open --json number,title,labels,url`. |
 | `--exclude-path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | Exclude glob-style path patterns. `*` and `?` are wildcards (repeatable) |
 | `--exclude-tests` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | Exclude likely test files and prefer production code |
@@ -3538,8 +3538,8 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--exclude-visibility <v[,v]>` | `definition`, `symbols`, `unused`, `hotspots` | 指定した可視性のシンボルを除外する。値と alias 展開は `--visibility` と同じ |
 | `--path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `validate` | glob 形式のパスパターンで結果を絞る。`*` と `?` がワイルドカード。繰り返し指定可（複数値は OR で結合） |
 | `--query <query>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `inspect`, `impact` | クエリを明示的なリテラルとして渡す。クエリが `-` で始まる場合に有用。`find` 以外のクエリ系コマンドでは `-- <query>` も1トークンのクエリエスケープとして受け付け、その後のオプション解析を続ける。 |
-| `--recipe <name>` | `search` | `risky-code` などの再利用可能な audit recipe を実行する。通常の search filter と snippet control は recipe 内の各 query に適用され、text、`--json` / `--format json`、`--format issue-drafts` に対応する。 |
-| `--list-recipes` | `search` | 利用可能な search audit recipe を query text、推奨 label、exact-match mode、false-positive guidance 付きで一覧表示する。 |
+| `--recipe <name>` | `search` | `risky-code` などの再利用可能な audit recipe を実行する。通常の search filter と snippet control は recipe 内の各 query に適用され、`--limit` / `--top` は child query ごとの上限になる。text、`--json` / `--format json`、`--format issue-drafts` に対応し、issue draft には再実行コマンドを含める。 |
+| `--list-recipes` | `search` | 利用可能な search audit recipe を query text、推奨 label、exact-match mode、false-positive guidance、対応 format、filter support、limit semantics 付きで一覧表示する。 |
 | `--open-issues <path>` | `search --recipe <name> --format issue-drafts` | `gh issue list --state open --json number,title,labels,url` のような open issue JSON file と照合し、生成した issue draft を事前重複確認する。 |
 | `--exclude-path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | glob 形式のパスパターンを除外する。`*` と `?` がワイルドカード。繰り返し指定可 |
 | `--exclude-tests` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | テストらしいパスを除外し、本番コードを優先 |

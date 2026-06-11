@@ -82,7 +82,27 @@ internal sealed record SearchRecipeListItemJsonResult(
     [property: JsonPropertyName("name")] string Name,
     [property: JsonPropertyName("description")] string Description,
     [property: JsonPropertyName("recommended_labels")] List<string> RecommendedLabels,
+    [property: JsonPropertyName("supported_formats")] List<string> SupportedFormats,
+    [property: JsonPropertyName("filter_support")] SearchRecipeFilterSupportJsonResult FilterSupport,
+    [property: JsonPropertyName("limit_semantics")] SearchRecipeLimitSemanticsJsonResult LimitSemantics,
     [property: JsonPropertyName("queries")] List<SearchRecipeQueryListItemJsonResult> Queries);
+
+internal sealed record SearchRecipeFilterSupportJsonResult(
+    [property: JsonPropertyName("lang")] bool Lang,
+    [property: JsonPropertyName("path")] bool Path,
+    [property: JsonPropertyName("exclude_path")] bool ExcludePath,
+    [property: JsonPropertyName("exclude_tests")] bool ExcludeTests,
+    [property: JsonPropertyName("since")] bool Since,
+    [property: JsonPropertyName("dedup")] bool Dedup,
+    [property: JsonPropertyName("visibility_rank")] bool VisibilityRank,
+    [property: JsonPropertyName("guard_filters")] bool GuardFilters,
+    [property: JsonPropertyName("snippet_controls")] bool SnippetControls,
+    [property: JsonPropertyName("exact_mode_override")] bool ExactModeOverride);
+
+internal sealed record SearchRecipeLimitSemanticsJsonResult(
+    [property: JsonPropertyName("scope")] string Scope,
+    [property: JsonPropertyName("default")] int Default,
+    [property: JsonPropertyName("description")] string Description);
 
 internal sealed record SearchRecipeQueryListItemJsonResult(
     [property: JsonPropertyName("name")] string Name,

@@ -84,6 +84,22 @@ public static class QueryCommandRunner
     private const string HotspotsGroupedByStatement = "statement";
     private const string JsonOutputFormatNdjson = "ndjson";
     private const string JsonOutputFormatArray = "array";
+    private static readonly List<string> SearchRecipeSupportedFormats = ["text", "json", OutputFormatIssueDrafts];
+    private static readonly SearchRecipeFilterSupportJsonResult SearchRecipeFilterSupport = new(
+        Lang: true,
+        Path: true,
+        ExcludePath: true,
+        ExcludeTests: true,
+        Since: true,
+        Dedup: true,
+        VisibilityRank: true,
+        GuardFilters: true,
+        SnippetControls: true,
+        ExactModeOverride: true);
+    private static readonly SearchRecipeLimitSemanticsJsonResult SearchRecipeLimitSemantics = new(
+        "per_query",
+        DefaultQueryLimit,
+        "--limit/--top is applied independently to each recipe child query; result_count is the sum of returned rows.");
     private static readonly Dictionary<string, string[]> LanguageDisplayAliases = new(StringComparer.Ordinal)
     {
         ["javascript"] = ["js", "jsx", "cjs", "mjs"],
@@ -1077,7 +1093,7 @@ public static class QueryCommandRunner
             title,
             labels,
             evidencePaths,
-            BuildSearchIssueDraftBody(recipe, queryResult, evidencePaths),
+            BuildSearchIssueDraftBody(recipe, queryResult, evidencePaths, options),
             new SearchIssueDraftSourceJsonResult(
                 recipe.Name,
                 queryResult.Name,
@@ -1145,7 +1161,8 @@ public static class QueryCommandRunner
     private static string BuildSearchIssueDraftBody(
         SearchAuditRecipe recipe,
         SearchRecipeQueryResultJsonResult queryResult,
-        IReadOnlyList<string> evidencePaths)
+        IReadOnlyList<string> evidencePaths,
+        QueryCommandOptions options)
     {
         var sb = new StringBuilder();
         sb.AppendLine("## Summary");
@@ -1171,12 +1188,93 @@ public static class QueryCommandRunner
         sb.AppendLine("## False-positive guidance");
         sb.AppendLine(queryResult.FalsePositiveGuidance);
         sb.AppendLine();
+        sb.AppendLine("## Replay command");
+        sb.AppendLine("```sh");
+        sb.AppendLine(BuildSearchRecipeReplayCommand(recipe, options));
+        sb.AppendLine("```");
+        sb.AppendLine();
         sb.AppendLine("## Search metadata");
         sb.AppendLine($"- draft_id: `{recipe.Name}/{queryResult.Name}`");
         sb.AppendLine($"- recipe_query: `{queryResult.Name}`");
         sb.AppendLine($"- result_count: `{queryResult.Count}`");
         sb.AppendLine($"- exact_substring: `{queryResult.ExactSubstring.ToString().ToLowerInvariant()}`");
         return sb.ToString().TrimEnd();
+    }
+
+    private static string BuildSearchRecipeReplayCommand(SearchAuditRecipe recipe, QueryCommandOptions options)
+    {
+        var args = new List<string>
+        {
+            "cdidx",
+            "search",
+            "--recipe",
+            recipe.Name,
+            "--format",
+            OutputFormatIssueDrafts,
+            "--limit",
+            options.Limit.ToString(CultureInfo.InvariantCulture),
+        };
+
+        if (options.DbPathExplicit)
+            AddReplayValueOption(args, "--db", options.DbPath);
+        if (!string.IsNullOrWhiteSpace(options.Lang))
+            AddReplayValueOption(args, "--lang", options.Lang);
+        foreach (var pathPattern in options.PathPatterns)
+            AddReplayValueOption(args, "--path", pathPattern);
+        foreach (var excludePath in options.ExcludePaths)
+            AddReplayValueOption(args, "--exclude-path", excludePath);
+        if (options.ExcludeTests)
+            args.Add("--exclude-tests");
+        if (options.Since.HasValue)
+            AddReplayValueOption(args, "--since", options.Since.Value.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture));
+        if (options.NoDedup)
+            args.Add("--no-dedup");
+        if (options.NoVisibilityRank)
+            args.Add("--no-visibility-rank");
+        if (options.Exact)
+            args.Add("--exact");
+        if (options.ExactSubstring)
+            args.Add("--exact-substring");
+        foreach (var guardFilter in options.GuardFilters)
+            AddReplayValueOption(args, BuildSearchGuardReplayOptionName(guardFilter), guardFilter.Query);
+        if (options.GuardFilters.Count > 0 && options.GuardWindow != DbReader.DefaultSearchGuardWindow)
+            AddReplayValueOption(args, "--guard-window", options.GuardWindow.ToString(CultureInfo.InvariantCulture));
+        AddReplayValueOption(args, "--snippet-lines", options.SnippetLines.ToString(CultureInfo.InvariantCulture));
+        AddReplayValueOption(args, "--snippet-focus", FormatSearchSnippetFocusMode(options.SnippetFocus));
+        AddReplayValueOption(args, "--max-line-width", options.MaxLineWidth.ToString(CultureInfo.InvariantCulture));
+        if (!string.IsNullOrWhiteSpace(options.OpenIssuesPath))
+            AddReplayValueOption(args, "--open-issues", options.OpenIssuesPath);
+        if (!string.IsNullOrWhiteSpace(options.OpenIssuesRepository))
+            AddReplayValueOption(args, "--repo", options.OpenIssuesRepository);
+        foreach (var label in options.IssueLabels)
+            AddReplayValueOption(args, "--issue-label", label);
+
+        return string.Join(" ", args.Select(QuoteReplayShellArg));
+    }
+
+    private static void AddReplayValueOption(List<string> args, string optionName, string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return;
+        args.Add(optionName);
+        args.Add(value);
+    }
+
+    private static string BuildSearchGuardReplayOptionName(SearchGuardFilter guardFilter)
+    {
+        var role = guardFilter.Role == SearchGuardRole.Require ? "require" : "reject";
+        var direction = guardFilter.Direction == SearchGuardDirection.Before ? "before" : "after";
+        return $"--{role}-{direction}";
+    }
+
+    private static string FormatSearchSnippetFocusMode(SearchSnippetFocusMode mode)
+        => mode.ToString().ToLowerInvariant();
+
+    private static string QuoteReplayShellArg(string arg)
+    {
+        if (arg.Length > 0 && arg.All(c => char.IsLetterOrDigit(c) || c is '_' or '-' or '.' or '/' or ':' or '='))
+            return arg;
+        return "'" + arg.Replace("'", "'\\''", StringComparison.Ordinal) + "'";
     }
 
     private static string BuildAdHocSearchIssueDraftBody(
@@ -1215,6 +1313,9 @@ public static class QueryCommandRunner
         recipe.Name,
         recipe.Description,
         recipe.RecommendedLabels,
+        SearchRecipeSupportedFormats,
+        SearchRecipeFilterSupport,
+        SearchRecipeLimitSemantics,
         recipe.Queries.Select(query => new SearchRecipeQueryListItemJsonResult(
             query.Name,
             query.Query,
