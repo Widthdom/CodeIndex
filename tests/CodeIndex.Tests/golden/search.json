@@ -39,6 +39,11 @@
   "context_after": 2,
   "truncated_line_count": 0,
   "dropped_match_line_count": 0,
+  "snippet_lines": 8,
+  "max_line_width": 512,
+  "exact": false,
+  "raw_fts": false,
+  "literal_highlights_available": false,
   "truncation_context": {
     "line_count": 0,
     "char_counts": [],
