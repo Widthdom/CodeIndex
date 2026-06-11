@@ -4,9 +4,11 @@ using CodeIndex.Cli;
 
 namespace CodeIndex.Tests;
 
+[Collection("SQLite pool sensitive")]
 public sealed class IssueDuplicatePreflightTests : IDisposable
 {
     private readonly string _tempDir;
+    private readonly EnvironmentVariableScope _env = EnvironmentVariableScope.Capture("CDIDX_GITHUB_TOKEN", "GITHUB_TOKEN");
 
     public IssueDuplicatePreflightTests()
     {
@@ -88,6 +90,57 @@ public sealed class IssueDuplicatePreflightTests : IDisposable
         Assert.All(match.Labels, label => Assert.True(label.Length <= IssueDuplicatePreflight.MaxOpenIssueLabelLength));
     }
 
+    [Fact]
+    public void TryLoad_GitHubSourceFetchesOpenIssuesWithExplicitToken_Issue3449()
+    {
+        _env.Set("CDIDX_GITHUB_TOKEN", "explicit-token");
+        _env.Set("GITHUB_TOKEN", "ignored-token");
+        var handler = new RecordingOpenIssuesHandler(
+            """
+            [
+              {
+                "number": 3449,
+                "title": "Issue-draft duplicate preflight should fetch open GitHub issues directly",
+                "labels": [{"name": "enhancement"}],
+                "html_url": "https://github.example.test/Widthdom/CodeIndex/issues/3449"
+              },
+              {
+                "number": 1,
+                "title": "Pull request entry should be ignored",
+                "labels": [{"name": "enhancement"}],
+                "html_url": "https://github.example.test/Widthdom/CodeIndex/pull/1",
+                "pull_request": {}
+              }
+            ]
+            """);
+        IssueDuplicatePreflight.s_httpClientOverride = new HttpClient(handler);
+
+        var loaded = IssueDuplicatePreflight.TryLoad("github", "Widthdom/CodeIndex", out var preflight, out var error);
+
+        Assert.True(loaded, error);
+        Assert.True(preflight.Checked);
+        Assert.Equal("github:Widthdom/CodeIndex", preflight.Source);
+        Assert.Equal(1, preflight.OpenIssueCount);
+        var request = Assert.Single(handler.Requests);
+        Assert.Equal("https://api.github.com/repos/Widthdom/CodeIndex/issues?state=open&per_page=100&page=1", request.Uri);
+        Assert.Equal("Bearer", request.AuthorizationScheme);
+        Assert.Equal("explicit-token", request.AuthorizationParameter);
+        var match = Assert.Single(preflight.FindMatches(
+            "Issue-draft duplicate preflight should fetch open GitHub issues directly",
+            ["enhancement"]));
+        Assert.Equal(3449, match.Number);
+    }
+
+    [Fact]
+    public void TryLoad_GitHubSourceRequiresRepository_Issue3449()
+    {
+        var loaded = IssueDuplicatePreflight.TryLoad("github", repository: null, out var preflight, out var error);
+
+        Assert.False(loaded);
+        Assert.False(preflight.Checked);
+        Assert.Contains("--open-issues github requires --repo", error);
+    }
+
     private string WriteOpenIssuesJson(string json)
     {
         var path = Path.Combine(_tempDir, "open-issues.json");
@@ -117,6 +170,8 @@ public sealed class IssueDuplicatePreflightTests : IDisposable
 
     public void Dispose()
     {
+        IssueDuplicatePreflight.s_httpClientOverride = null;
+        _env.Dispose();
         try
         {
             if (Directory.Exists(_tempDir))
@@ -126,4 +181,32 @@ public sealed class IssueDuplicatePreflightTests : IDisposable
         {
         }
     }
+
+    private sealed class RecordingOpenIssuesHandler(string json) : HttpMessageHandler
+    {
+        internal List<RecordedOpenIssuesRequest> Requests { get; } = [];
+
+        protected override HttpResponseMessage Send(HttpRequestMessage request, CancellationToken cancellationToken)
+            => BuildResponse(request);
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            => Task.FromResult(BuildResponse(request));
+
+        private HttpResponseMessage BuildResponse(HttpRequestMessage request)
+        {
+            Requests.Add(new RecordedOpenIssuesRequest(
+                request.RequestUri!.ToString(),
+                request.Headers.Authorization?.Scheme,
+                request.Headers.Authorization?.Parameter));
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(json, Encoding.UTF8, "application/json"),
+            };
+        }
+    }
+
+    private sealed record RecordedOpenIssuesRequest(
+        string Uri,
+        string? AuthorizationScheme,
+        string? AuthorizationParameter);
 }

@@ -136,6 +136,7 @@ public static class QueryCommandRunner
         "--query",
         "--recipe",
         "--open-issues",
+        "--repo",
         "--issue-title",
         "--issue-label",
         "--group-by",
@@ -511,6 +512,14 @@ public static class QueryCommandRunner
                 "--open-issues can only be used with `cdidx search --format issue-drafts`.",
                 GetUsageLineOrThrow("search"),
                 "Use an open-issues JSON file from `gh issue list --state open --json number,title,labels,url`.");
+            return CommandExitCodes.UsageError;
+        }
+        if (options.OpenIssuesRepository != null && !IssueDuplicatePreflight.IsGitHubOpenIssuesSource(options.OpenIssuesPath))
+        {
+            WriteUsageError(
+                "--repo can only be used with `--open-issues github`.",
+                GetUsageLineOrThrow("search"),
+                "Use `--open-issues github --repo owner/name` to fetch open issues directly from GitHub.");
             return CommandExitCodes.UsageError;
         }
         if ((options.IssueTitle != null || options.IssueLabels.Count > 0) && options.OutputFormat != OutputFormatIssueDrafts)
@@ -907,12 +916,12 @@ public static class QueryCommandRunner
                 $"Use `cdidx search --list-recipes` to see available recipes: {available}.");
             return CommandExitCodes.UsageError;
         }
-        if (!IssueDuplicatePreflight.TryLoad(options.OpenIssuesPath, out var preflight, out var error))
+        if (!IssueDuplicatePreflight.TryLoad(options.OpenIssuesPath, options.OpenIssuesRepository, out var preflight, out var error))
         {
             WriteUsageError(
                 error!,
                 GetUsageLineOrThrow("search"),
-                "Pass a readable JSON array from `gh issue list --state open --json number,title,labels,url`.");
+                "Pass a readable JSON array from `gh issue list --state open --json number,title,labels,url`, or use `--open-issues github --repo owner/name`.");
             return CommandExitCodes.UsageError;
         }
 
@@ -942,12 +951,12 @@ public static class QueryCommandRunner
 
     private static int RunSearchIssueDrafts(QueryCommandOptions options, JsonSerializerOptions jsonOptions, bool exact)
     {
-        if (!IssueDuplicatePreflight.TryLoad(options.OpenIssuesPath, out var preflight, out var error))
+        if (!IssueDuplicatePreflight.TryLoad(options.OpenIssuesPath, options.OpenIssuesRepository, out var preflight, out var error))
         {
             WriteUsageError(
                 error!,
                 GetUsageLineOrThrow("search"),
-                "Pass a readable JSON array from `gh issue list --state open --json number,title,labels,url`.");
+                "Pass a readable JSON array from `gh issue list --state open --json number,title,labels,url`, or use `--open-issues github --repo owner/name`.");
             return CommandExitCodes.UsageError;
         }
 
@@ -6344,6 +6353,7 @@ public static class QueryCommandRunner
         string? recipeName = null;
         bool listRecipes = false;
         string? openIssuesPath = null;
+        string? openIssuesRepository = null;
         string? issueTitle = null;
         var issueLabels = new List<string>();
         bool languagesIndexedOnly = false;
@@ -6649,6 +6659,15 @@ public static class QueryCommandRunner
                     }
                     else
                         AddParseError(openIssuesError!);
+                    break;
+                case "--repo":
+                    if (TryReadStringOptionValue(args, ref i, "--repo", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var repoValue, out var repoError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--repo", repoValue!);
+                        openIssuesRepository = repoValue;
+                    }
+                    else
+                        AddParseError(repoError!);
                     break;
                 case "--issue-title":
                     if (TryReadStringOptionValue(args, ref i, "--issue-title", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var issueTitleValue, out var issueTitleError))
@@ -7303,6 +7322,7 @@ public static class QueryCommandRunner
             RecipeName = recipeName,
             ListRecipes = listRecipes,
             OpenIssuesPath = openIssuesPath,
+            OpenIssuesRepository = openIssuesRepository,
             IssueTitle = issueTitle,
             IssueLabels = issueLabels,
             LanguagesIndexedOnly = languagesIndexedOnly,
@@ -9865,7 +9885,8 @@ public static class QueryCommandRunner
         ["--lang"] = "pass a language identifier, e.g. `--lang csharp`. Run `cdidx languages` for the supported set.",
         ["--query"] = "pass a search literal, e.g. `--query \"authenticate\"`. Use the `--query` form when the literal starts with `-`.",
         ["--recipe"] = "pass a built-in audit recipe name, e.g. `--recipe risky-code`; run `cdidx search --list-recipes` to list available recipes.",
-        ["--open-issues"] = "pass an open-issues JSON file, e.g. `--open-issues open-issues.json`; only valid with `search --format issue-drafts`.",
+        ["--open-issues"] = "pass an open-issues JSON file or GitHub source, e.g. `--open-issues open-issues.json` or `--open-issues github --repo owner/name`; only valid with `search --format issue-drafts`.",
+        ["--repo"] = "pass a GitHub repository in owner/name form for `--open-issues github`, e.g. `--repo Widthdom/CodeIndex`.",
         ["--issue-title"] = "pass an issue title hint for ad hoc search issue-drafts, e.g. `--issue-title \"Thread.Yield audit\"`.",
         ["--issue-label"] = "pass an issue label hint for search issue-drafts, e.g. `--issue-label audit`; repeat or comma-separate values.",
         ["--kind"] = "pass a kind identifier, e.g. `--kind function`. definition/symbols/hotspots/unused take a symbol kind; references/callers/callees take a reference kind such as `call`, `instantiate`, or `subscribe`. Run the command's `--help` for the kind list.",
@@ -10290,6 +10311,7 @@ public sealed class QueryCommandOptions
     public string? RecipeName { get; init; }
     public bool ListRecipes { get; init; }
     public string? OpenIssuesPath { get; init; }
+    public string? OpenIssuesRepository { get; init; }
     public string? IssueTitle { get; init; }
     public List<string> IssueLabels { get; init; } = [];
     public bool LanguagesIndexedOnly { get; init; }
