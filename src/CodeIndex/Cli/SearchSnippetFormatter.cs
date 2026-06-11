@@ -109,6 +109,19 @@ public static class SearchSnippetFormatter
             yield return ToCompactResult(result, queryContext, maxLines, caseSensitive, maxLineWidth, lang ?? result.Lang, focusMode, exposeLiteralHighlights);
     }
 
+    public static void ApplyOutputMetadata(CompactSearchResult result, int snippetLines, int maxLineWidth, bool exact, bool rawFts)
+    {
+        var effectiveRawFts = rawFts && !exact;
+        result.SnippetLines = ClampSnippetLines(snippetLines);
+        result.MaxLineWidth = LineWidthFormatter.ClampMaxLineWidth(maxLineWidth);
+        result.Exact = exact;
+        result.RawFts = effectiveRawFts;
+        result.LiteralHighlightsAvailable = exact && !effectiveRawFts;
+        result.LiteralHighlightWarning = effectiveRawFts
+            ? "literal_highlights_unavailable_raw_fts"
+            : null;
+    }
+
     public static SearchSnippetExcerpt BuildExcerpt(string content, string query, int absoluteStartLine, int maxLines = DefaultSnippetLines, bool caseSensitive = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, string? lang = null, SearchSnippetFocusMode focusMode = SearchSnippetFocusMode.Quality, bool exposeLiteralHighlights = false)
     {
         return BuildExcerpt(content, PrepareQueryContext(query), absoluteStartLine, maxLines, caseSensitive, maxLineWidth, lang, focusMode, exposeLiteralHighlights);

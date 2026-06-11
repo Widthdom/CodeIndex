@@ -4547,7 +4547,29 @@ public class McpServerTests : IDisposable
 
         Assert.Equal(1, response["result"]!["structuredContent"]!["count"]!.GetValue<int>());
         Assert.True(response["result"]!["structuredContent"]!["rawQuery"]!.GetValue<bool>());
-        Assert.Equal("src/app.cs", response["result"]!["structuredContent"]!["results"]![0]!["path"]!.GetValue<string>());
+        var result = response["result"]!["structuredContent"]!["results"]![0]!;
+        Assert.Equal("src/app.cs", result["path"]!.GetValue<string>());
+        Assert.True(result["rawFts"]!.GetValue<bool>());
+        Assert.False(result["exact"]!.GetValue<bool>());
+        Assert.False(result["literalHighlightsAvailable"]!.GetValue<bool>());
+        Assert.Equal("literal_highlights_unavailable_raw_fts", result["literalHighlightWarning"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Search_ExactWithRawQueryReportsEffectiveLiteralHighlightMode_Issue3558()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"App","rawQuery":true,"exact":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal(1, response["result"]!["structuredContent"]!["count"]!.GetValue<int>());
+        Assert.True(response["result"]!["structuredContent"]!["rawQuery"]!.GetValue<bool>());
+        var result = response["result"]!["structuredContent"]!["results"]![0]!;
+        Assert.True(result["exact"]!.GetValue<bool>());
+        Assert.False(result["rawFts"]!.GetValue<bool>());
+        Assert.True(result["literalHighlightsAvailable"]!.GetValue<bool>());
+        Assert.Null(result["literalHighlightWarning"]);
+        var highlight = result["highlights"]![0]!;
+        Assert.Equal("App", highlight["literalTerms"]![0]!.GetValue<string>());
     }
 
     [Theory]

@@ -1342,6 +1342,11 @@ public partial class McpServer
             }
 
             var queryContext = SearchSnippetFormatter.PrepareQueryContext(query);
+            var compactResults = SearchSnippetFormatter
+                .ToCompactResults(results, queryContext, snippetLines, exact, maxLineWidth, exposeLiteralHighlights: exact)
+                .ToList();
+            foreach (var compact in compactResults)
+                SearchSnippetFormatter.ApplyOutputMetadata(compact, snippetLines, maxLineWidth, exact, rawQuery);
             var structured = new JsonObject
             {
                 ["query"] = query,
@@ -1351,7 +1356,7 @@ public partial class McpServer
                 ["maxLineWidth"] = maxLineWidth,
                 ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
-                ["results"] = ToJsonArray(SearchSnippetFormatter.ToCompactResults(results, queryContext, snippetLines, exact, maxLineWidth, exposeLiteralHighlights: exact))
+                ["results"] = ToJsonArray(compactResults)
             };
             AddSearchStabilityMetadata(structured, reader, cursor, results);
             AddResultEnvelope(structured, results.Count, truncated ? null : results.Count, truncated);
