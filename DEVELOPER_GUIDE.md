@@ -72,6 +72,7 @@ in [DISTRIBUTION.md](DISTRIBUTION.md):
 | `install.sh` | Latest install, explicit-version install, `--doctor`, and local mirror self-test. |
 | NuGet global tool | Install/update on a clean .NET 8 tool environment. |
 | Release assets | Published asset exists for every advertised RID. |
+| GHCR container image | Published `linux/amd64` and `linux/arm64` images run `cdidx --version`, omit runtime `git`, and expose provenance/SBOM attestations. |
 | Package metadata | License, repository URL, tags, and runtime prerequisites are correct. |
 | Documentation links | README, USER_GUIDE, and package metadata links resolve to the intended docs. |
 
@@ -2180,6 +2181,7 @@ channel をすべて確認してください。
 | `install.sh` | latest install、explicit-version install、`--doctor`、local mirror self-test。 |
 | NuGet global tool | clean な .NET 8 tool environment での install/update。 |
 | release asset | advertised RID ごとに published release asset があること。 |
+| GHCR container image | 公開済みの `linux/amd64` / `linux/arm64` image で `cdidx --version` が動作し、runtime `git` を含まず、provenance / SBOM attestation を公開していること。 |
 | package metadata | license、repository URL、tag、runtime prerequisite が正しいこと。 |
 | documentation link | README、USER_GUIDE、package metadata からの link が意図した docs を指すこと。 |
 

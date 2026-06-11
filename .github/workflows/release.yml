@@ -903,6 +903,8 @@ jobs:
     needs: create-release
     permissions:
       contents: read
+      id-token: write
+      attestations: write
       packages: write
     steps:
       - name: Checkout release tag
@@ -953,6 +955,8 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
+          provenance: mode=max
+          sbom: true
           tags: ${{ steps.image-tags.outputs.tags }}
 
   publish-homebrew:
