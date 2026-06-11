@@ -83,6 +83,7 @@ public static class SearchSnippetFormatter
             DroppedMatchLineCount = excerpt.DroppedMatchLineCount,
             TruncationContext = excerpt.TruncationContext,
             GuardEvidence = result.GuardEvidence,
+            GuardChecks = result.GuardChecks,
             Score = result.Score,
             EnclosingSymbolName = result.EnclosingSymbolName,
             EnclosingSymbolKind = result.EnclosingSymbolKind,
@@ -743,6 +744,8 @@ public sealed class CompactSearchResult
     public SearchTruncationContext TruncationContext { get; set; } = new();
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<SearchGuardEvidence>? GuardEvidence { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<SearchGuardCheck>? GuardChecks { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public SearchQueryHint? ExactSubstringHint { get; set; }
     public double Score { get; set; }

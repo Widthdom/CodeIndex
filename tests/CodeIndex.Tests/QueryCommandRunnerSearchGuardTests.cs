@@ -161,7 +161,7 @@ public partial class QueryCommandRunnerTests
                 """);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                ["FileMode.Create", "--db", dbPath, "--exact-substring", "--require-after", "File.Move", "--guard-window", "2", "--json=array"],
+                ["FileMode.Create", "--db", dbPath, "--exact-substring", "--require-after", "File.Move", "--reject-before", "NoAtomicMarker", "--guard-window", "2", "--json=array"],
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
@@ -173,7 +173,33 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("require", evidence.GetProperty("role").GetString());
             Assert.Equal("after", evidence.GetProperty("direction").GetString());
             Assert.Equal("File.Move", evidence.GetProperty("query").GetString());
+            Assert.Equal("require-after", evidence.GetProperty("name").GetString());
+            Assert.Equal("File.Move", evidence.GetProperty("pattern").GetString());
+            Assert.Equal("after", evidence.GetProperty("relationship").GetString());
             Assert.Equal(8, evidence.GetProperty("line").GetInt32());
+            Assert.Equal(9, evidence.GetProperty("column").GetInt32());
+            Assert.Equal(9, evidence.GetProperty("length").GetInt32());
+            Assert.Equal("code", evidence.GetProperty("origin").GetString());
+            var span = evidence.GetProperty("span");
+            Assert.Equal(8, span.GetProperty("line").GetInt32());
+            Assert.Equal(9, span.GetProperty("column").GetInt32());
+            Assert.Equal(9, span.GetProperty("length").GetInt32());
+
+            var checks = row.GetProperty("guard_checks").EnumerateArray().ToArray();
+            Assert.Equal(2, checks.Length);
+            var requireCheck = Assert.Single(checks, check => check.GetProperty("name").GetString() == "require-after");
+            Assert.True(requireCheck.GetProperty("matched").GetBoolean());
+            Assert.True(requireCheck.GetProperty("passed").GetBoolean());
+            Assert.Equal(8, requireCheck.GetProperty("window_start_line").GetInt32());
+            Assert.Equal(9, requireCheck.GetProperty("window_end_line").GetInt32());
+            Assert.Contains("matched code", requireCheck.GetProperty("summary").GetString());
+            Assert.Equal("File.Move", requireCheck.GetProperty("evidence").GetProperty("pattern").GetString());
+
+            var rejectCheck = Assert.Single(checks, check => check.GetProperty("name").GetString() == "reject-before");
+            Assert.False(rejectCheck.GetProperty("matched").GetBoolean());
+            Assert.True(rejectCheck.GetProperty("passed").GetBoolean());
+            Assert.Equal("NoAtomicMarker", rejectCheck.GetProperty("pattern").GetString());
+            Assert.False(rejectCheck.TryGetProperty("evidence", out _));
         }
         finally
         {

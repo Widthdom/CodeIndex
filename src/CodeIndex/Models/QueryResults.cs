@@ -31,6 +31,8 @@ public class SearchResult
     public string? EnclosingContainerName { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<SearchGuardEvidence>? GuardEvidence { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<SearchGuardCheck>? GuardChecks { get; set; }
     [JsonIgnore]
     public long ChunkId { get; set; }
     [JsonIgnore]
@@ -62,8 +64,39 @@ public sealed class SearchGuardEvidence
     public string Role { get; set; } = string.Empty;
     public string Direction { get; set; } = string.Empty;
     public string Query { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string Pattern { get; set; } = string.Empty;
+    public string Relationship { get; set; } = string.Empty;
+    public SearchGuardSpan Span { get; set; } = new();
     public int Line { get; set; }
+    public int Column { get; set; }
+    public int Length { get; set; }
+    public string Origin { get; set; } = string.Empty;
     public string Text { get; set; } = string.Empty;
+}
+
+public sealed class SearchGuardCheck
+{
+    public string Role { get; set; } = string.Empty;
+    public string Direction { get; set; } = string.Empty;
+    public string Query { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string Pattern { get; set; } = string.Empty;
+    public string Relationship { get; set; } = string.Empty;
+    public bool Matched { get; set; }
+    public bool Passed { get; set; }
+    public string Summary { get; set; } = string.Empty;
+    public int WindowStartLine { get; set; }
+    public int WindowEndLine { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SearchGuardEvidence? Evidence { get; set; }
+}
+
+public sealed class SearchGuardSpan
+{
+    public int Line { get; set; }
+    public int Column { get; set; }
+    public int Length { get; set; }
 }
 
 public sealed class SearchMatchFacet

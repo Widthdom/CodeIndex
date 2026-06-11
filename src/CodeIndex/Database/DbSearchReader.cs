@@ -529,23 +529,21 @@ public partial class DbReader
             foreach (var (focusLine, focusText) in FindPrimarySearchMatchLines(result, primaryMatchContext))
             {
                 var guardEvidence = new List<SearchGuardEvidence>();
+                var guardChecks = new List<SearchGuardCheck>(guardFilters.Count);
                 var keep = true;
                 foreach (var filter in guardFilters)
                 {
-                    var match = FindGuardEvidence(result.Path, focusLine, filter, guardWindow, primaryMatchContext.GetEffectiveLang(result), lineWindowCache);
-                    var matched = match != null;
-                    if (filter.Role == SearchGuardRole.Require && !matched)
+                    var evaluation = FindGuardEvidence(result.Path, focusLine, filter, guardWindow, primaryMatchContext.GetEffectiveLang(result), lineWindowCache);
+                    var matched = evaluation.Evidence != null;
+                    var passed = filter.Role == SearchGuardRole.Require ? matched : !matched;
+                    guardChecks.Add(CreateSearchGuardCheck(filter, evaluation, matched, passed));
+                    if (!passed)
                     {
                         keep = false;
                         break;
                     }
-                    if (filter.Role == SearchGuardRole.Reject && matched)
-                    {
-                        keep = false;
-                        break;
-                    }
-                    if (match != null)
-                        guardEvidence.Add(match);
+                    if (evaluation.Evidence != null)
+                        guardEvidence.Add(evaluation.Evidence);
                 }
 
                 if (!keep)
@@ -561,6 +559,7 @@ public partial class DbReader
                     Score = result.Score,
                     Visibility = result.Visibility,
                     GuardEvidence = guardEvidence.Count == 0 ? null : guardEvidence,
+                    GuardChecks = guardChecks.Count == 0 ? null : guardChecks,
                     ChunkId = result.ChunkId,
                     NextOffset = result.NextOffset,
                 });
@@ -630,7 +629,9 @@ public partial class DbReader
             .ToArray();
     }
 
-    private SearchGuardEvidence? FindGuardEvidence(
+    private sealed record SearchGuardEvaluation(int WindowStartLine, int WindowEndLine, SearchGuardEvidence? Evidence);
+
+    private SearchGuardEvaluation FindGuardEvidence(
         string path,
         int focusLine,
         SearchGuardFilter filter,
@@ -646,15 +647,15 @@ public partial class DbReader
             : focusLine + guardWindow;
 
         if (windowEnd < windowStart)
-            return null;
+            return new SearchGuardEvaluation(windowStart, windowEnd, Evidence: null);
 
         var lineWindow = ReadLineWindow(path, windowStart, windowEnd, lineWindowCache);
         if (lineWindow.Count == 0)
-            return null;
+            return new SearchGuardEvaluation(windowStart, windowEnd, Evidence: null);
 
         var guardQuery = NormalizeGuardQuery(filter.Query, lang);
         if (guardQuery.Length == 0)
-            return null;
+            return new SearchGuardEvaluation(windowStart, windowEnd, Evidence: null);
 
         foreach (var (lineNumber, text) in lineWindow)
         {
@@ -664,17 +665,79 @@ public partial class DbReader
             if (!candidate.Contains(guardQuery, StringComparison.OrdinalIgnoreCase))
                 continue;
 
-            return new SearchGuardEvidence
+            var (matchIndex, matchLength) = FindGuardMatchSpan(text, filter.Query, guardQuery, candidate);
+            var column = matchIndex + 1;
+            var length = Math.Max(1, Math.Min(matchLength, text.Length - matchIndex));
+            var facet = SearchMatchClassifier.Classify(path, lang, lineNumber, text, column, length);
+            var role = FormatSearchGuardRole(filter.Role);
+            var direction = FormatSearchGuardDirection(filter.Direction);
+            return new SearchGuardEvaluation(windowStart, windowEnd, new SearchGuardEvidence
             {
-                Role = FormatSearchGuardRole(filter.Role),
-                Direction = FormatSearchGuardDirection(filter.Direction),
+                Role = role,
+                Direction = direction,
                 Query = filter.Query,
+                Name = FormatSearchGuardName(filter),
+                Pattern = filter.Query,
+                Relationship = direction,
+                Span = new SearchGuardSpan
+                {
+                    Line = lineNumber,
+                    Column = column,
+                    Length = length,
+                },
                 Line = lineNumber,
+                Column = column,
+                Length = length,
+                Origin = facet.Origin,
                 Text = text,
-            };
+            });
         }
 
-        return null;
+        return new SearchGuardEvaluation(windowStart, windowEnd, Evidence: null);
+    }
+
+    private static SearchGuardCheck CreateSearchGuardCheck(SearchGuardFilter filter, SearchGuardEvaluation evaluation, bool matched, bool passed)
+    {
+        var role = FormatSearchGuardRole(filter.Role);
+        var direction = FormatSearchGuardDirection(filter.Direction);
+        var name = FormatSearchGuardName(filter);
+        return new SearchGuardCheck
+        {
+            Role = role,
+            Direction = direction,
+            Query = filter.Query,
+            Name = name,
+            Pattern = filter.Query,
+            Relationship = direction,
+            Matched = matched,
+            Passed = passed,
+            Summary = FormatSearchGuardSummary(name, filter.Query, passed, evaluation.Evidence),
+            WindowStartLine = evaluation.WindowStartLine,
+            WindowEndLine = evaluation.WindowEndLine,
+            Evidence = evaluation.Evidence,
+        };
+    }
+
+    private static (int Index, int Length) FindGuardMatchSpan(string text, string rawQuery, string normalizedQuery, string candidate)
+    {
+        var rawIndex = text.IndexOf(rawQuery, StringComparison.OrdinalIgnoreCase);
+        if (rawIndex >= 0)
+            return (rawIndex, rawQuery.Length);
+
+        var normalizedIndex = text.IndexOf(normalizedQuery, StringComparison.OrdinalIgnoreCase);
+        if (normalizedIndex >= 0)
+            return (normalizedIndex, normalizedQuery.Length);
+
+        var candidateIndex = candidate.IndexOf(normalizedQuery, StringComparison.OrdinalIgnoreCase);
+        return (Math.Max(0, candidateIndex), normalizedQuery.Length);
+    }
+
+    private static string FormatSearchGuardSummary(string name, string pattern, bool passed, SearchGuardEvidence? evidence)
+    {
+        var outcome = passed ? "passed" : "failed";
+        return evidence == null
+            ? $"{name} {outcome}: no match for {pattern}"
+            : $"{name} {outcome}: matched {evidence.Origin} at line {evidence.Line}, column {evidence.Column}";
     }
 
     private SortedDictionary<int, string> ReadLineWindow(
@@ -787,6 +850,9 @@ public partial class DbReader
 
     private static string FormatSearchGuardDirection(SearchGuardDirection direction)
         => direction == SearchGuardDirection.Before ? "before" : "after";
+
+    private static string FormatSearchGuardName(SearchGuardFilter filter)
+        => $"{FormatSearchGuardRole(filter.Role)}-{FormatSearchGuardDirection(filter.Direction)}";
 
     private static string NormalizeLiteralSearchQuery(string query, string? lang)
     {
