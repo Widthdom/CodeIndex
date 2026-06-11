@@ -134,11 +134,11 @@ public static partial class IndexCommandRunner
 
         if (authoritativeFullScan && dbSnapshot.Files.Count > 0)
         {
-            foreach (var relativePath in dbSnapshot.Files.Keys)
-            {
-                if (!retainedRelativePaths.Contains(relativePath))
-                    projectedPurgePaths.Add(relativePath);
-            }
+            AddProjectedFullScanPurges(
+                projectedPurgePaths,
+                dbSnapshot,
+                retainedRelativePaths,
+                dryScanMetadata);
         }
 
         projectedPurgePaths.ExceptWith(projectedDeletePaths);
@@ -366,6 +366,82 @@ public static partial class IndexCommandRunner
         return count;
     }
 
+    private static void AddProjectedFullScanPurges(
+        HashSet<string> projectedPurgePaths,
+        DryRunDbSnapshot dbSnapshot,
+        HashSet<string> retainedRelativePaths,
+        DryRunScanMetadata scanMetadata)
+    {
+        if (!scanMetadata.HadErrors)
+        {
+            foreach (var relativePath in dbSnapshot.Files.Keys)
+            {
+                if (!retainedRelativePaths.Contains(relativePath))
+                    projectedPurgePaths.Add(relativePath);
+            }
+
+            return;
+        }
+
+        var retainedPaths = new HashSet<string>(retainedRelativePaths, StringComparer.Ordinal);
+        foreach (var relativePath in scanMetadata.ProbeFailedFilePaths)
+            retainedPaths.Add(FileIndexer.NormalizeIndexPath(relativePath));
+
+        foreach (var relativePath in scanMetadata.NonIndexablePaths)
+        {
+            var dbPath = FileIndexer.NormalizeIndexPath(relativePath);
+            if (dbSnapshot.Files.ContainsKey(dbPath))
+                projectedPurgePaths.Add(dbPath);
+        }
+
+        var listedDirectories = scanMetadata.ListedDirectories
+            .Select(FileIndexer.NormalizeIndexPath)
+            .ToHashSet(StringComparer.Ordinal);
+        var attributePrunedDirectories = scanMetadata.AttributePrunedDirectories
+            .Select(FileIndexer.NormalizeIndexPath)
+            .ToHashSet(StringComparer.Ordinal);
+        attributePrunedDirectories.UnionWith(scanMetadata.NestedRepositories.Select(FileIndexer.NormalizeIndexPath));
+
+        foreach (var relativePath in dbSnapshot.Files.Keys)
+        {
+            if (retainedPaths.Contains(relativePath))
+                continue;
+
+            if (HasListedParentDirectory(relativePath, listedDirectories)
+                || IsUnderAttributePrunedDirectory(relativePath, attributePrunedDirectories))
+            {
+                projectedPurgePaths.Add(relativePath);
+            }
+        }
+    }
+
+    private static bool HasListedParentDirectory(string path, IReadOnlySet<string> listedDirectories)
+        => listedDirectories.Contains(GetDirectoryPath(path));
+
+    private static bool IsUnderAttributePrunedDirectory(string path, IReadOnlySet<string> attributePrunedDirectories)
+    {
+        if (attributePrunedDirectories.Count == 0)
+            return false;
+
+        var directory = GetDirectoryPath(path);
+        while (directory.Length > 0)
+        {
+            if (attributePrunedDirectories.Contains(directory))
+                return true;
+
+            var separatorIndex = directory.LastIndexOf('/');
+            directory = separatorIndex >= 0 ? directory[..separatorIndex] : string.Empty;
+        }
+
+        return false;
+    }
+
+    private static string GetDirectoryPath(string path)
+    {
+        var separatorIndex = path.LastIndexOf('/');
+        return separatorIndex >= 0 ? path[..separatorIndex] : string.Empty;
+    }
+
     private static DryRunFileProbe ProbeDryRunFile(FileIndexer indexer, string absolutePath)
     {
         var indexability = FileIndexer.GetFileIndexability(absolutePath);
@@ -524,13 +600,25 @@ public static partial class IndexCommandRunner
         long FileIssues);
 
     private readonly record struct DryRunScanMetadata(
+        bool HadErrors,
         IReadOnlyList<string> NonIndexablePaths,
-        IReadOnlyList<string> UnknownExtensionFiles)
+        IReadOnlyList<string> UnknownExtensionFiles,
+        IReadOnlyList<string> ProbeFailedFilePaths,
+        IReadOnlyList<string> ListedDirectories,
+        IReadOnlyList<string> AttributePrunedDirectories,
+        IReadOnlyList<string> NestedRepositories)
     {
-        public static DryRunScanMetadata Empty { get; } = new([], []);
+        public static DryRunScanMetadata Empty { get; } = new(false, [], [], [], [], [], []);
 
         public static DryRunScanMetadata FromScanResult(FileIndexer.ScanFilesResult scanResult)
-            => new(scanResult.NonIndexablePaths, scanResult.UnknownExtensionFiles);
+            => new(
+                scanResult.HadErrors,
+                scanResult.NonIndexablePaths,
+                scanResult.UnknownExtensionFiles,
+                scanResult.ProbeFailedFilePaths,
+                scanResult.ListedDirectories,
+                scanResult.AttributePrunedDirectories,
+                scanResult.NestedRepositories);
     }
 
     private readonly record struct DryRunFileProbe(
