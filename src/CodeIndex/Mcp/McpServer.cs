@@ -3737,8 +3737,20 @@ public partial class McpServer : IDisposable
                 }
             }
         };
-        if (structuredContent != null)
+        if (structuredContent is JsonObject structuredObject)
+        {
+            AddProjectFilterRootDiagnostics(structuredObject);
             result["structuredContent"] = structuredContent;
+        }
+        else if (structuredContent != null)
+        {
+            ClearProjectFilterRootDiagnostics();
+            result["structuredContent"] = structuredContent;
+        }
+        else
+        {
+            ClearProjectFilterRootDiagnostics();
+        }
         var response = CreateSuccessResponse(true, id, result);
         var responseLimit = GetMaxResponseBytes();
         if (TryMeasureJsonUtf8BytesWithinLimit(response, _jsonOptions, responseLimit, out var responseBytes))
@@ -3904,7 +3916,7 @@ public partial class McpServer : IDisposable
     /// <c>data.similar_values</c> 配列を添えるので、MCP クライアントは
     /// 人間向けメッセージを解析せずに代替候補を提示できる (#1582)。
     /// </summary>
-    private static JsonObject CreateToolErrorResponse(JsonNode? id, string message,
+    private JsonObject CreateToolErrorResponse(JsonNode? id, string message,
         string category, string suggestion, bool retrySafe, JsonObject? extraData = null,
         IReadOnlyList<string>? similarValues = null)
         => CreateToolErrorResponse(id is not null, id, message, category, suggestion, retrySafe, extraData, similarValues);
@@ -3920,7 +3932,7 @@ public partial class McpServer : IDisposable
     // / retry_safe=false とする。任意の `similarValues` は未知 enum 値に対する構造化された
     // did-you-mean 候補 (#1582)。より具体的なカテゴリを持てる呼び出し元は明示オーバーロード
     // を使う。
-    private static JsonObject CreateToolErrorResponse(JsonNode? id, string message,
+    private JsonObject CreateToolErrorResponse(JsonNode? id, string message,
         IReadOnlyList<string>? similarValues = null)
         => CreateToolErrorResponse(id, message,
             category: McpErrorEnvelope.CategoryInvalidArgument,
@@ -3935,10 +3947,11 @@ public partial class McpServer : IDisposable
     // #1581: ツール結果エラーにも JSON-RPC エラーと同じ `category` / `suggestion` / `retry_safe`
     // を `result.structuredContent` に載せる。既存の `content[0].text` + `isError` だけを読む
     // クライアントは互換のまま、新規クライアントは `structuredContent` でカテゴリ分岐できる。
-    private static JsonObject CreateToolErrorResponse(bool hasId, JsonNode? id, string message,
+    private JsonObject CreateToolErrorResponse(bool hasId, JsonNode? id, string message,
         string category, string suggestion, bool retrySafe, JsonObject? extraData = null,
         IReadOnlyList<string>? similarValues = null)
     {
+        ClearProjectFilterRootDiagnostics();
         var result = new JsonObject
         {
             ["content"] = new JsonArray

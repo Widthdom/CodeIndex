@@ -1765,6 +1765,7 @@ CLI JSON and MCP compatibility:
 | CLI metadata | CLI commands keep CLI-oriented metadata such as `api_version` and command result fields. |
 | MCP metadata | MCP tools return JSON-RPC tool results with camelCase field names and may include MCP-specific metadata. |
 | Grouped graph rows | Graph tools that group reference rows (`callers`, `callees`, and bundled `analyze_symbol` caller/callee rows) expose a backward-compatible scalar summary kind plus a sorted kind array and mixed-kind flag. CLI JSON uses `reference_kind` / `reference_kinds` / `has_mixed_reference_kinds`, while MCP uses `referenceKind` / `referenceKinds` / `hasMixedReferenceKinds`. |
+| Project filters | When `--project` / MCP `project` expansion cannot resolve the indexed project root and uses the process current directory, structured payloads expose `project_filter_root` and `project_filter_root_fallback_reason`. |
 | Consumer guidance | Consumers that need every underlying kind should read the array for the surface they call and ignore unknown future fields. See [INTEGRATION_POLICY.md](INTEGRATION_POLICY.md#cli-json-and-mcp-response-compatibility) for the CLI/MCP compatibility table. |
 | Slow search profiling | Add `--profile` to read commands to append one JSON object after the normal results. It contains `profile.phases` (`name`, `elapsed_ms`, `rows_scanned`), `profile.query_plan` (`EXPLAIN QUERY PLAN` rows), and `profile.queries` (SQL text). With `--slow-query-ms <n>`, profiled SQL at or above the threshold is written to the persistent tool log. |
 
