@@ -314,9 +314,11 @@ top-level groups such as `definitions`, `file`, `graph`, `references`,
 `callers`, and `callees`; `--body-only` is shorthand for `--body --fields
 definitions`. When a definition body is longer than the returned slice,
 `body_content_next_start_line` points to the next source line to pass with
-`--body-start`; use `--body-lines` to choose the page size. `inspect --json`
-also includes `body_mode` metadata so clients can see whether body content was
-requested, whether it is present, and which follow-up flags to use.
+`--body-start`; use `--body-lines` to choose the page size. If a single long
+source line hits the body byte cap, continuation still advances to the following
+source line because body paging is line-based. `inspect --json` also includes
+`body_mode` metadata so clients can see whether body content was requested,
+whether it is present, and which follow-up flags to use.
 
 ```bash
 cdidx search authenticate --json          # ndjson stream, one result per line

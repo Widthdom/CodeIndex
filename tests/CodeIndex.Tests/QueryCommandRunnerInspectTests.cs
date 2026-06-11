@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using CodeIndex.Cli;
 using CodeIndex.Database;
@@ -361,8 +362,22 @@ public partial class QueryCommandRunnerTests
             Assert.Contains("var marker1", bodyContent, StringComparison.Ordinal);
             Assert.DoesNotContain("var marker2", bodyContent, StringComparison.Ordinal);
             Assert.True(definition.GetProperty("body_content_truncated").GetBoolean());
-            Assert.Equal(bodyContentEndLine, bodyContentNextStartLine);
+            Assert.Equal(bodyContentEndLine + 1, bodyContentNextStartLine);
             Assert.True(bodyContentNextStartLine < definition.GetProperty("body_end_line").GetInt32());
+
+            var (nextExitCode, nextStdout, nextStderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["Compute", "--db", dbPath, "--json", "--body", "--body-start", bodyContentNextStartLine.ToString(CultureInfo.InvariantCulture)],
+                _jsonOptions));
+
+            using var nextDocument = ParseJsonOutput(nextStdout);
+            var nextDefinition = nextDocument.RootElement.GetProperty("definitions").EnumerateArray().Single();
+            var nextBodyContent = nextDefinition.GetProperty("body_content").GetString();
+
+            Assert.Equal(CommandExitCodes.Success, nextExitCode);
+            Assert.Equal(string.Empty, nextStderr);
+            Assert.Equal(bodyContentNextStartLine, nextDefinition.GetProperty("body_content_start_line").GetInt32());
+            Assert.Contains("var marker2", nextBodyContent, StringComparison.Ordinal);
+            Assert.DoesNotContain("var marker1", nextBodyContent, StringComparison.Ordinal);
         }
         finally
         {

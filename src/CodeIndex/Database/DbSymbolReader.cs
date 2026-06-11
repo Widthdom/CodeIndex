@@ -825,15 +825,16 @@ public partial class DbReader
                             bodyContentEndLine = Math.Min(
                                 bodyExcerpt.EndLine,
                                 bodyExcerpt.StartLine + byteClamp.ReturnedLineCount - 1);
-                            var nextStartLine = byteClamp.LastReturnedLineComplete
-                                ? bodyContentEndLine.Value + 1
-                                : bodyContentEndLine.Value;
-                            bodyContentNextStartLine = Math.Clamp(nextStartLine, bodyExcerpt.StartLine, symbol.BodyEndLine.Value);
+                            var nextStartLine = bodyContentEndLine.Value + 1;
+                            if (nextStartLine <= symbol.BodyEndLine.Value)
+                                bodyContentNextStartLine = nextStartLine;
                         }
                         else
                         {
                             bodyContentEndLine = bodyExcerpt.StartLine;
-                            bodyContentNextStartLine = bodyExcerpt.StartLine;
+                            var nextStartLine = bodyExcerpt.StartLine + 1;
+                            if (nextStartLine <= symbol.BodyEndLine.Value)
+                                bodyContentNextStartLine = nextStartLine;
                         }
                     }
                     else if (cappedBodyEndLine < symbol.BodyEndLine.Value)
@@ -874,11 +875,11 @@ public partial class DbReader
         return results;
     }
 
-    private static (string Content, bool Truncated, int ReturnedLineCount, bool LastReturnedLineComplete) ClampDefinitionBodyBytes(string content)
+    private static (string Content, bool Truncated, int ReturnedLineCount) ClampDefinitionBodyBytes(string content)
     {
         var bytes = Encoding.UTF8.GetBytes(content);
         if (bytes.Length <= DefinitionBodyMaxBytes)
-            return (content, false, CountReturnedBodyLines(content), true);
+            return (content, false, CountReturnedBodyLines(content));
 
         var byteCount = DefinitionBodyMaxBytes;
         while (byteCount > 0 && IsUtf8ContinuationByte(bytes[byteCount]))
@@ -888,8 +889,7 @@ public partial class DbReader
         return (
             clamped,
             true,
-            CountReturnedBodyLines(clamped),
-            IsLastReturnedBodyLineComplete(content, clamped));
+            CountReturnedBodyLines(clamped));
     }
 
     private static bool IsUtf8ContinuationByte(byte value) => (value & 0xC0) == 0x80;
@@ -909,16 +909,6 @@ public partial class DbReader
         return content[^1] == '\n'
             ? lineBreaks
             : lineBreaks + 1;
-    }
-
-    private static bool IsLastReturnedBodyLineComplete(string originalContent, string clampedContent)
-    {
-        if (clampedContent.Length == 0)
-            return false;
-        if (clampedContent[^1] == '\n')
-            return true;
-        return clampedContent.Length >= originalContent.Length
-            || originalContent[clampedContent.Length] == '\n';
     }
 
     private static string? BuildDefinitionDisambiguator(SymbolResult symbol)
