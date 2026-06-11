@@ -386,6 +386,110 @@ public partial class QueryCommandRunnerTests
         }
     }
 
+    [Fact]
+    public void RunSearch_RecipeChildSelectorRunsSingleQuery_Issue3519()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_recipe_child_selector");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                """
+                using System.Text.Json;
+
+                public sealed class App
+                {
+                    public void Run(Exception ex)
+                    {
+                        JsonDocument.Parse("{}");
+                        Console.WriteLine(ex.Message);
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "risky-code/raw-diagnostic-echo", "--db", dbPath, "--json", "--limit", "10"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            var query = Assert.Single(root.GetProperty("queries").EnumerateArray());
+            var recipeQuery = Assert.Single(root.GetProperty("recipe").GetProperty("queries").EnumerateArray());
+
+            Assert.Equal(1, root.GetProperty("query_count").GetInt32());
+            Assert.Equal("raw-diagnostic-echo", query.GetProperty("name").GetString());
+            Assert.Equal("raw-diagnostic-echo", recipeQuery.GetProperty("name").GetString());
+            Assert.Equal("ex.Message", query.GetProperty("query").GetString());
+            Assert.Equal(1, query.GetProperty("count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_RecipeIncludeExcludeQueriesFilterChildren_Issue3519()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_recipe_include_exclude");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                """
+                using System.Text.Json;
+
+                public sealed class App
+                {
+                    public void Run(Exception ex)
+                    {
+                        JsonDocument.Parse("{}");
+                        Console.WriteLine(ex.Message);
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "risky-code", "--include-query", "raw-diagnostic-echo,unbounded-json-parse", "--exclude-query", "raw-diagnostic-echo", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            var query = Assert.Single(root.GetProperty("queries").EnumerateArray());
+
+            Assert.Equal(1, root.GetProperty("query_count").GetInt32());
+            Assert.Equal("unbounded-json-parse", query.GetProperty("name").GetString());
+            Assert.Equal("JsonDocument.Parse", query.GetProperty("query").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_RecipeUnknownChildSelectorReturnsUsage_Issue3519()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["--recipe", "risky-code/missing-child", "--json"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("unknown recipe query 'missing-child'", stderr);
+        Assert.Contains("raw-diagnostic-echo", stderr);
+    }
+
     [Theory]
     [InlineData("count")]
     [InlineData("compact")]
@@ -471,7 +575,7 @@ public partial class QueryCommandRunnerTests
             Assert.Contains("JsonDocument.Parse", body, StringComparison.Ordinal);
             Assert.Contains("False-positive guidance", body, StringComparison.Ordinal);
             Assert.Contains("## Replay command", body, StringComparison.Ordinal);
-            Assert.Contains("cdidx search --recipe risky-code --format issue-drafts --limit 5", body, StringComparison.Ordinal);
+            Assert.Contains("cdidx search --recipe risky-code/unbounded-json-parse --format issue-drafts --limit 5", body, StringComparison.Ordinal);
             Assert.Contains("--lang csharp --path src/app.cs --exclude-tests", body, StringComparison.Ordinal);
             Assert.Contains($"--open-issues {openIssuesPath}", body, StringComparison.Ordinal);
             Assert.DoesNotContain("public sealed class App", body, StringComparison.Ordinal);
