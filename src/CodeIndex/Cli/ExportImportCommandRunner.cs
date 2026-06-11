@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using CodeIndex.Database;
 using Microsoft.Data.Sqlite;
 
@@ -17,6 +18,17 @@ internal static class ExportImportCommandRunner
     internal const long MaxImportDatabaseBytes = 8L * 1024 * 1024 * 1024;
     private const int ImportCopyBufferSize = 81920;
     private static readonly DateTimeOffset DeterministicZipTimestamp = new(1980, 1, 1, 0, 0, 0, TimeSpan.Zero);
+    private const string ExportCommandName = "export";
+    private const string ImportCommandName = "import";
+    private const string PhaseParseArgs = "parse_args";
+    private const string PhaseOpenArchive = "open_archive";
+    private const string PhaseManifest = "manifest";
+    private const string PhaseDatabaseEntry = "database_entry";
+    private const string PhaseSha256 = "sha256";
+    private const string PhaseSqliteValidate = "sqlite_validate";
+    private const string PhasePrunePaths = "prune_paths";
+    private const string PhaseReplaceDb = "replace_db";
+    private const string PhaseWriteArchive = "write_archive";
 
     public static int RunExport(string[] args, JsonSerializerOptions jsonOptions, string appVersion)
     {
@@ -30,7 +42,7 @@ internal static class ExportImportCommandRunner
     {
         string? archivePath = null;
         string? dbPath = null;
-        var wantsJson = false;
+        var wantsJson = Array.Exists(args, arg => arg == "--json");
         var prunePaths = false;
 
         for (var i = 0; i < args.Length; i++)
@@ -50,64 +62,71 @@ internal static class ExportImportCommandRunner
             if (TryReadValueOption(args, ref i, "--db", arg, out var dbValue, out var dbError))
             {
                 if (dbError != null)
-                    return WriteError(dbError, "use `cdidx import <archive> --db <path>`.", "cdidx import <archive> [--db <path>] [--json]");
+                    return WriteImportError(wantsJson, jsonOptions, PhaseParseArgs, "import_db_requires_value", dbError, "use `cdidx import <archive> --db <path>`.", "cdidx import <archive> [--db <path>] [--json]");
                 dbPath = dbValue;
                 continue;
             }
 
             if (arg.StartsWith("-", StringComparison.Ordinal))
-                return WriteError($"unknown import option `{arg}`.", "use `cdidx import <archive> [--db <path>]`.", "cdidx import <archive> [--db <path>] [--prune-paths] [--json]");
+                return WriteImportError(wantsJson, jsonOptions, PhaseParseArgs, "import_unknown_option", $"unknown import option `{arg}`.", "use `cdidx import <archive> [--db <path>]`.", "cdidx import <archive> [--db <path>] [--prune-paths] [--json]");
 
             if (archivePath != null)
-                return WriteError($"import accepts exactly one archive path, got extra `{arg}`.", "remove the extra argument.", "cdidx import <archive> [--db <path>] [--json]");
+                return WriteImportError(wantsJson, jsonOptions, PhaseParseArgs, "import_extra_archive_path", $"import accepts exactly one archive path, got extra `{arg}`.", "remove the extra argument.", "cdidx import <archive> [--db <path>] [--json]");
             archivePath = arg;
         }
 
         if (string.IsNullOrWhiteSpace(archivePath))
-            return WriteError("import requires an archive path.", "pass an archive produced by `cdidx export <archive>`.", "cdidx import <archive> [--db <path>] [--prune-paths] [--json]");
+            return WriteImportError(wantsJson, jsonOptions, PhaseParseArgs, "import_archive_required", "import requires an archive path.", "pass an archive produced by `cdidx export <archive>`.", "cdidx import <archive> [--db <path>] [--prune-paths] [--json]");
 
         dbPath ??= DbPathResolver.ResolveForQuery(Environment.CurrentDirectory, explicitDbPath: null, explicitDataDir: null).DbPath;
         var fullDbPath = Path.GetFullPath(DbPathResolver.NormalizeDbPath(dbPath));
         var dbDirectory = Path.GetDirectoryName(fullDbPath);
         if (string.IsNullOrWhiteSpace(dbDirectory))
-            return WriteError($"could not resolve destination DB directory for `{dbPath}`.", "pass an explicit `--db <path>`.", "cdidx import <archive> [--db <path>] [--json]");
+            return WriteImportError(wantsJson, jsonOptions, PhaseParseArgs, "import_db_directory_unresolved", $"could not resolve destination DB directory for `{dbPath}`.", "pass an explicit `--db <path>`.", "cdidx import <archive> [--db <path>] [--json]");
 
         var tempPath = Path.Combine(dbDirectory, $".codeindex-import-{Guid.NewGuid():N}.db");
+        var phase = PhaseOpenArchive;
         try
         {
             Directory.CreateDirectory(dbDirectory);
             using (var archive = ZipFile.OpenRead(archivePath))
             {
+                phase = PhaseManifest;
                 var manifestEntry = archive.GetEntry(ManifestEntryName);
                 if (manifestEntry == null)
-                    return WriteError("archive is missing manifest.json.", "use an archive produced by `cdidx export <archive>`.", "cdidx import <archive> [--db <path>] [--json]");
+                    return WriteImportError(wantsJson, jsonOptions, PhaseManifest, "import_manifest_missing", "archive is missing manifest.json.", "use an archive produced by `cdidx export <archive>`.", "cdidx import <archive> [--db <path>] [--json]");
                 if (!TryReadManifest(manifestEntry, jsonOptions, out var manifest, out var manifestError))
-                    return WriteError($"archive manifest is invalid: {manifestError}.", "use an archive produced by `cdidx export <archive>`.", "cdidx import <archive> [--db <path>] [--json]");
+                    return WriteImportError(wantsJson, jsonOptions, PhaseManifest, "import_manifest_invalid", $"archive manifest is invalid: {manifestError}.", "use an archive produced by `cdidx export <archive>`.", "cdidx import <archive> [--db <path>] [--json]");
                 if (!TryValidateManifestHeader(manifest, out var manifestHeaderError))
-                    return WriteError($"archive manifest is invalid: {manifestHeaderError}.", "re-export from a compatible CodeIndex database.", "cdidx import <archive> [--db <path>] [--json]");
+                    return WriteImportError(wantsJson, jsonOptions, PhaseManifest, "import_manifest_incompatible", $"archive manifest is invalid: {manifestHeaderError}.", "re-export from a compatible CodeIndex database.", "cdidx import <archive> [--db <path>] [--json]");
 
+                phase = PhaseDatabaseEntry;
                 var dbEntry = archive.GetEntry(DatabaseEntryName);
                 if (dbEntry == null)
-                    return WriteError("archive is missing codeindex.db.", "use an archive produced by `cdidx export <archive>`.", "cdidx import <archive> [--db <path>] [--json]");
+                    return WriteImportError(wantsJson, jsonOptions, PhaseDatabaseEntry, "import_database_entry_missing", "archive is missing codeindex.db.", "use an archive produced by `cdidx export <archive>`.", "cdidx import <archive> [--db <path>] [--json]");
                 if (!TryValidateDatabaseEntrySize(dbEntry.Length, dbEntry.CompressedLength, out var sizeValidationMessage))
-                    return WriteError(sizeValidationMessage, "re-export a smaller CodeIndex database or rebuild a smaller index.", "cdidx import <archive> [--db <path>] [--prune-paths] [--json]");
+                    return WriteImportError(wantsJson, jsonOptions, PhaseDatabaseEntry, "import_database_entry_too_large", sizeValidationMessage, "re-export a smaller CodeIndex database or rebuild a smaller index.", "cdidx import <archive> [--db <path>] [--prune-paths] [--json]");
 
                 ExtractDatabaseEntryToFile(dbEntry, tempPath);
 
-                if (!TryValidateImportedManifest(manifest, tempPath, out var manifestValidationMessage))
-                    return WriteError($"archive manifest mismatch: {manifestValidationMessage}.", "re-export from a compatible CodeIndex database.", "cdidx import <archive> [--db <path>] [--prune-paths] [--json]");
+                phase = PhaseSha256;
+                if (!TryValidateImportedManifest(manifest, tempPath, out var manifestValidationMessage, out var manifestValidationPhase))
+                    return WriteImportError(wantsJson, jsonOptions, manifestValidationPhase, "import_manifest_mismatch", $"archive manifest mismatch: {manifestValidationMessage}.", "re-export from a compatible CodeIndex database.", "cdidx import <archive> [--db <path>] [--prune-paths] [--json]");
             }
 
+            phase = PhaseSqliteValidate;
             if (!DbContext.TryValidateExistingCodeIndexDb(tempPath, out var validationMessage, out _))
-                return WriteError($"archive database is invalid: {validationMessage}.", "re-export from a compatible CodeIndex database.", "cdidx import <archive> [--db <path>] [--prune-paths] [--json]");
+                return WriteImportError(wantsJson, jsonOptions, PhaseSqliteValidate, "import_database_invalid", $"archive database is invalid: {validationMessage}.", "re-export from a compatible CodeIndex database.", "cdidx import <archive> [--db <path>] [--prune-paths] [--json]");
             SqliteConnection.ClearAllPools();
 
             if (prunePaths)
             {
+                phase = PhasePrunePaths;
                 RewriteImportedProjectRoot(tempPath, Environment.CurrentDirectory);
                 SqliteConnection.ClearAllPools();
             }
 
+            phase = PhaseReplaceDb;
             ReplaceImportedDatabase(tempPath, fullDbPath);
             if (wantsJson)
             {
@@ -121,7 +140,7 @@ internal static class ExportImportCommandRunner
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or SqliteException)
         {
-            return WriteError($"import failed ({CommandErrorWriter.FormatSanitizedException(ex)}).", "check the archive path and destination database permissions.", "cdidx import <archive> [--db <path>] [--prune-paths] [--json]");
+            return WriteImportError(wantsJson, jsonOptions, phase, "import_failed", $"import failed ({CommandErrorWriter.FormatSanitizedException(ex)}).", "check the archive path and destination database permissions.", "cdidx import <archive> [--db <path>] [--prune-paths] [--json]");
         }
         finally
         {
@@ -134,7 +153,7 @@ internal static class ExportImportCommandRunner
     {
         string? outputPath = null;
         string? dbPath = null;
-        var wantsJson = false;
+        var wantsJson = Array.Exists(args, arg => arg == "--json");
 
         for (var i = 0; i < args.Length; i++)
         {
@@ -148,41 +167,43 @@ internal static class ExportImportCommandRunner
             if (TryReadValueOption(args, ref i, "--db", arg, out var dbValue, out var dbError))
             {
                 if (dbError != null)
-                    return WriteError(dbError, "use `cdidx export <archive> --db <path>`.", "cdidx export <archive> [--db <path>] [--json]");
+                    return WriteExportError(wantsJson, jsonOptions, PhaseParseArgs, "export_db_requires_value", dbError, "use `cdidx export <archive> --db <path>`.", "cdidx export <archive> [--db <path>] [--json]");
                 dbPath = dbValue;
                 continue;
             }
 
             if (arg.StartsWith("-", StringComparison.Ordinal))
-                return WriteError($"unknown export option `{arg}`.", "use `cdidx export <archive> [--db <path>]` or `cdidx export ctags`.", "cdidx export <archive> [--db <path>] [--json]");
+                return WriteExportError(wantsJson, jsonOptions, PhaseParseArgs, "export_unknown_option", $"unknown export option `{arg}`.", "use `cdidx export <archive> [--db <path>]` or `cdidx export ctags`.", "cdidx export <archive> [--db <path>] [--json]");
 
             if (outputPath != null)
-                return WriteError($"export accepts exactly one archive path, got extra `{arg}`.", "remove the extra argument.", "cdidx export <archive> [--db <path>] [--json]");
+                return WriteExportError(wantsJson, jsonOptions, PhaseParseArgs, "export_extra_archive_path", $"export accepts exactly one archive path, got extra `{arg}`.", "remove the extra argument.", "cdidx export <archive> [--db <path>] [--json]");
             outputPath = arg;
         }
 
         if (string.IsNullOrWhiteSpace(outputPath))
-            return WriteError("export requires an output archive path.", "pass a destination such as `codeindex.cdidx.zip`, or use `cdidx export ctags`.", "cdidx export <archive> [--db <path>] [--json]");
+            return WriteExportError(wantsJson, jsonOptions, PhaseParseArgs, "export_archive_required", "export requires an output archive path.", "pass a destination such as `codeindex.cdidx.zip`, or use `cdidx export ctags`.", "cdidx export <archive> [--db <path>] [--json]");
 
         dbPath ??= DbPathResolver.ResolveForQuery(Environment.CurrentDirectory, explicitDbPath: null, explicitDataDir: null).DbPath;
         var normalizedDbPath = DbPathResolver.NormalizeDbPath(dbPath);
         if (!DbContext.TryValidateExistingCodeIndexDb(normalizedDbPath, out var validationMessage, out _))
-            return WriteError(validationMessage, "run `cdidx index <projectPath>` first or pass `--db <path>`.", "cdidx export <archive> [--db <path>] [--json]");
+            return WriteExportError(wantsJson, jsonOptions, PhaseSqliteValidate, "export_database_invalid", validationMessage, "run `cdidx index <projectPath>` first or pass `--db <path>`.", "cdidx export <archive> [--db <path>] [--json]");
 
         var fullSourceDbPath = Path.GetFullPath(normalizedDbPath);
         var fullOutputPath = Path.GetFullPath(outputPath);
         if (IsDatabaseOrSqliteSidecarPath(fullOutputPath, fullSourceDbPath))
         {
-            return WriteError("export archive path must not be the source database or a SQLite sidecar.", "choose a separate archive path, for example `codeindex.cdidx.zip`.", "cdidx export <archive> [--db <path>] [--json]");
+            return WriteExportError(wantsJson, jsonOptions, PhaseParseArgs, "export_archive_overlaps_database", "export archive path must not be the source database or a SQLite sidecar.", "choose a separate archive path, for example `codeindex.cdidx.zip`.", "cdidx export <archive> [--db <path>] [--json]");
         }
 
         var snapshotPath = Path.Combine(Path.GetTempPath(), $"codeindex-export-{Guid.NewGuid():N}.db");
+        var phase = PhaseWriteArchive;
         try
         {
             var outputDirectory = Path.GetDirectoryName(fullOutputPath);
             if (!string.IsNullOrWhiteSpace(outputDirectory))
                 Directory.CreateDirectory(outputDirectory);
 
+            phase = PhaseSqliteValidate;
             CreateDatabaseSnapshot(normalizedDbPath, snapshotPath);
             ExportManifest manifest;
             using (var snapshotConnection = new SqliteConnection(CreateUnpooledConnectionString(snapshotPath)))
@@ -191,7 +212,9 @@ internal static class ExportImportCommandRunner
                 manifest = BuildManifest(snapshotConnection, appVersion);
             }
             SqliteConnection.ClearAllPools();
+            phase = PhaseSha256;
             manifest = manifest with { DatabaseSha256 = ComputeSha256(snapshotPath) };
+            phase = PhaseWriteArchive;
             WriteExportArchiveFile(fullOutputPath, snapshotPath, manifest, jsonOptions);
 
             if (wantsJson)
@@ -202,7 +225,7 @@ internal static class ExportImportCommandRunner
         }
         catch (Exception ex)
         {
-            return WriteError($"export failed ({CommandErrorWriter.FormatSanitizedException(ex)}).", "check the database and output archive paths.", "cdidx export <archive> [--db <path>] [--json]");
+            return WriteExportError(wantsJson, jsonOptions, phase, "export_failed", $"export failed ({CommandErrorWriter.FormatSanitizedException(ex)}).", "check the database and output archive paths.", "cdidx export <archive> [--db <path>] [--json]");
         }
         finally
         {
@@ -453,8 +476,9 @@ internal static class ExportImportCommandRunner
         return true;
     }
 
-    private static bool TryValidateImportedManifest(ExportManifest manifest, string dbPath, out string message)
+    private static bool TryValidateImportedManifest(ExportManifest manifest, string dbPath, out string message, out string phase)
     {
+        phase = PhaseSha256;
         var actualSha256 = ComputeSha256(dbPath);
         if (!string.Equals(manifest.DatabaseSha256, actualSha256, StringComparison.OrdinalIgnoreCase))
         {
@@ -462,13 +486,25 @@ internal static class ExportImportCommandRunner
             return false;
         }
 
-        var actualUserVersion = ReadSqliteUserVersion(dbPath);
+        phase = PhaseSqliteValidate;
+        int actualUserVersion;
+        try
+        {
+            actualUserVersion = ReadSqliteUserVersion(dbPath);
+        }
+        catch (SqliteException ex)
+        {
+            message = $"could not read codeindex.db user_version ({CommandErrorWriter.FormatSanitizedException(ex)})";
+            return false;
+        }
+
         if (actualUserVersion != manifest.UserVersion)
         {
             message = $"manifest user_version `{manifest.UserVersion}` does not match codeindex.db user_version `{actualUserVersion}`";
             return false;
         }
 
+        phase = string.Empty;
         message = string.Empty;
         return true;
     }
@@ -655,7 +691,57 @@ internal static class ExportImportCommandRunner
     private static int WriteError(string message, string hint, string usage)
         => CommandErrorWriter.Write(message, CommandExitCodes.UsageError, hint, usage);
 
+    private static int WriteImportError(
+        bool json,
+        JsonSerializerOptions jsonOptions,
+        string phase,
+        string errorCode,
+        string message,
+        string hint,
+        string usage)
+        => WriteStructuredError(json, jsonOptions, ImportCommandName, phase, errorCode, message, hint, usage);
+
+    private static int WriteExportError(
+        bool json,
+        JsonSerializerOptions jsonOptions,
+        string phase,
+        string errorCode,
+        string message,
+        string hint,
+        string usage)
+        => WriteStructuredError(json, jsonOptions, ExportCommandName, phase, errorCode, message, hint, usage);
+
+    private static int WriteStructuredError(
+        bool json,
+        JsonSerializerOptions jsonOptions,
+        string command,
+        string phase,
+        string errorCode,
+        string message,
+        string hint,
+        string usage)
+    {
+        if (json)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(
+                new ExportImportErrorResult("1", "error", command, phase, errorCode, message, hint, usage),
+                CliJsonSerializerContextFactory.Create(jsonOptions).ExportImportErrorResult));
+            return CommandExitCodes.UsageError;
+        }
+
+        return WriteError(message, hint, usage);
+    }
+
     internal sealed record ExportManifest(string FormatVersion, string CdidxVersion, int UserVersion, string? ProjectRoot, string? IndexedHeadSha, string DatabaseSha256);
+    internal sealed record ExportImportErrorResult(
+        [property: JsonPropertyName("api_version")] string ApiVersion,
+        [property: JsonPropertyName("status")] string Status,
+        [property: JsonPropertyName("command")] string Command,
+        [property: JsonPropertyName("phase")] string Phase,
+        [property: JsonPropertyName("error_code")] string ErrorCode,
+        [property: JsonPropertyName("message")] string Message,
+        [property: JsonPropertyName("hint")] string Hint,
+        [property: JsonPropertyName("usage")] string Usage);
     internal sealed record ExportArchiveResult(string ApiVersion, string ArchivePath, string DbPath);
     internal sealed record ImportResult(string ApiVersion, string DbPath, bool PrunedPaths);
 }
