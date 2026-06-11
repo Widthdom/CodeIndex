@@ -282,6 +282,24 @@ public static class QueryCommandRunner
     private const string OutputFormatGraphMl = "graphml";
     private const string OutputFormatJsonGraph = "json-graph";
     private const string OutputFormatEdgeList = "edgelist";
+    private static readonly HashSet<string> RepoMapOutputFormats = new(StringComparer.Ordinal)
+    {
+        OutputFormatText,
+        OutputFormatJson,
+        OutputFormatCompact,
+    };
+    private static readonly HashSet<string> SymbolOutputFormats = new(StringComparer.Ordinal)
+    {
+        OutputFormatText,
+        OutputFormatJson,
+        OutputFormatCount,
+    };
+    private static readonly HashSet<string> InspectOutputFormats = new(StringComparer.Ordinal)
+    {
+        OutputFormatText,
+        OutputFormatJson,
+        OutputFormatCompact,
+    };
     private static readonly HashSet<string> InlineValueOptions =
         new(
             ValueTakingOptions.Concat(["--json", "--log-format", "--log-retain-count", "--log-max-size-mb"]),
@@ -567,14 +585,6 @@ public static class QueryCommandRunner
                     "Remove the positional query, or run a plain `cdidx search <query>` without --recipe.");
                 return CommandExitCodes.UsageError;
             }
-            if (options.CountOnly)
-            {
-                WriteUsageError(
-                    "--count is not supported with --recipe.",
-                    GetUsageLineOrThrow("search"),
-                    "Use `cdidx search --recipe <name> --json` for per-query result counts.");
-                return CommandExitCodes.UsageError;
-            }
             if (options.Prefix)
             {
                 WriteUsageError(
@@ -589,6 +599,14 @@ public static class QueryCommandRunner
                     "--format count/compact/csv/tsv/lsp/qf/sarif is not supported with --recipe.",
                     GetUsageLineOrThrow("search"),
                     "Use `--json` for grouped recipe results or `--format issue-drafts` for draft exports.");
+                return CommandExitCodes.UsageError;
+            }
+            if (options.CountOnly)
+            {
+                WriteUsageError(
+                    "--count is not supported with --recipe.",
+                    GetUsageLineOrThrow("search"),
+                    "Use `cdidx search --recipe <name> --json` for per-query result counts.");
                 return CommandExitCodes.UsageError;
             }
             if (options.JsonOutputFormat == JsonOutputFormatArray)
@@ -2459,6 +2477,8 @@ public static class QueryCommandRunner
             validateDefaultMaxLineWidth: false);
         if (TryWriteUnsupportedOptionError("symbols", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("symbols"), options.Query))
             return CommandExitCodes.UsageError;
+        if (TryWriteUnsupportedOutputFormat("symbols", options, SymbolOutputFormats, "Use `--format json` for symbol rows or `--format count` for symbol totals; compact symbol rows are not currently defined."))
+            return CommandExitCodes.UsageError;
         if (TryWriteInvalidKindFilterError(options, "symbols", KnownSymbolKindFilters))
             return CommandExitCodes.InvalidArgument;
         if (TryWriteParseError(options, "symbols"))
@@ -3201,20 +3221,16 @@ public static class QueryCommandRunner
             Console.Error.WriteLine(previewOptionError);
             return CommandExitCodes.UsageError;
         }
-        if (!TryExtractDepsFormat(cmdArgs, out var depsFormat, out var parseArgs, out var depsFormatError))
-        {
-            Console.Error.WriteLine(depsFormatError);
-            return CommandExitCodes.UsageError;
-        }
-
         var options = ParseArgs(
-            parseArgs,
+            cmdArgs,
             jsonDefault: false,
             validateDefaultSnippetLines: false,
             validateDefaultMaxLineWidth: false);
         if (TryWriteUnsupportedOptionError("map", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("map")))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "map"))
+            return CommandExitCodes.UsageError;
+        if (TryWriteUnsupportedOutputFormat("map", options, RepoMapOutputFormats, "Use `--format json` or `--format compact` for map output; use `cdidx files --count` when you need only a file count."))
             return CommandExitCodes.UsageError;
         if (TryWriteUnexpectedPositionals("map", options))
             return CommandExitCodes.UsageError;
@@ -3615,6 +3631,8 @@ public static class QueryCommandRunner
         if (TryWriteUnsupportedOptionError("inspect", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("inspect"), options.Query))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "inspect"))
+            return CommandExitCodes.UsageError;
+        if (TryWriteUnsupportedOutputFormat("inspect", options, InspectOutputFormats, "Use `--format json` or `--format compact` for inspect bundles; count output is not meaningful for one inspect bundle."))
             return CommandExitCodes.UsageError;
         if (!TryResolveNameExactMode(options, "inspect", out var exact, out var exactError))
         {
@@ -6624,6 +6642,10 @@ public static class QueryCommandRunner
                         if (TryParseOutputFormat(formatValue!, out var parsedOutputFormat))
                         {
                             outputFormat = parsedOutputFormat;
+                            if (parsedOutputFormat == OutputFormatCompact)
+                                compact = true;
+                            if (parsedOutputFormat == OutputFormatCount)
+                                countOnly = true;
                             if (parsedOutputFormat != OutputFormatText &&
                                 parsedOutputFormat != OutputFormatDot &&
                                 parsedOutputFormat != OutputFormatGraphMl)
@@ -8612,6 +8634,18 @@ public static class QueryCommandRunner
 
     private static void WriteUsageError(string message, string usage, string hint)
         => CommandErrorWriter.Write(message, hint, usage);
+
+    private static bool TryWriteUnsupportedOutputFormat(string commandName, QueryCommandOptions options, IReadOnlySet<string> supportedFormats, string hint)
+    {
+        if (supportedFormats.Contains(options.OutputFormat))
+            return false;
+
+        WriteUsageError(
+            $"--format {options.OutputFormat} is not supported by {commandName}.",
+            GetUsageLineOrThrow(commandName),
+            hint);
+        return true;
+    }
 
     // Reject queries that were supplied but resolve to empty / whitespace-only text so the user gets
     // a distinct error instead of the generic "<cmd> requires a query argument" message that fires
