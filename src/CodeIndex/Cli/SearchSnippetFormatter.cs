@@ -207,6 +207,9 @@ public static class SearchSnippetFormatter
                     ? GetMatchedTermOccurrences(snippetLine.NormalizedText, absoluteLine, normalizedQuery, [], caseSensitive, originalLine, snippetLine.RawIndexMap)
                     : GetMatchedTermOccurrences(originalLine, absoluteLine, normalizedQuery, [], caseSensitive)
                 : null;
+            ApplyVisibleRanges(termOccurrences, clamped);
+            if (literalTermOccurrences != null)
+                ApplyVisibleRanges(literalTermOccurrences, clamped);
             highlights.Add(new SearchHighlight
             {
                 Line = absoluteLine,
@@ -248,7 +251,7 @@ public static class SearchSnippetFormatter
     private static ClampedTextResult ClampSnippetLine(string line, int maxLineWidth, string? normalizedQuery, string[] tokens, bool caseSensitive, SearchSnippetFocusMode focusMode)
     {
         if (line.Length <= maxLineWidth)
-            return new ClampedTextResult(line, false);
+            return ClampedTextResult.Unclamped(line);
 
         if (normalizedQuery == null)
             return LineWidthFormatter.ClampLine(line, maxLineWidth);
@@ -543,6 +546,28 @@ public static class SearchSnippetFormatter
         return occurrences;
     }
 
+    private static void ApplyVisibleRanges(List<SearchTermOccurrence> occurrences, ClampedTextResult clamped)
+    {
+        var visibleStart = clamped.OriginalVisibleStartColumn;
+        var visibleEndExclusive = clamped.OriginalVisibleEndColumn + 1;
+        foreach (var occurrence in occurrences)
+        {
+            var occurrenceStart = occurrence.Column;
+            var occurrenceEndExclusive = occurrence.Column + occurrence.Length;
+            var intersectionStart = Math.Max(occurrenceStart, visibleStart);
+            var intersectionEndExclusive = Math.Min(occurrenceEndExclusive, visibleEndExclusive);
+            if (intersectionEndExclusive <= intersectionStart)
+            {
+                occurrence.Visible = false;
+                continue;
+            }
+
+            occurrence.Visible = true;
+            occurrence.VisibleColumn = clamped.TextVisibleStartColumn + (intersectionStart - visibleStart);
+            occurrence.VisibleLength = intersectionEndExclusive - intersectionStart;
+        }
+    }
+
     private static void AddTermOccurrences(List<SearchTermOccurrence> occurrences, string line, int absoluteLine, string term, StringComparison comparison, string? rawLine, int[]? rawIndexMap)
     {
         if (string.IsNullOrEmpty(term))
@@ -699,6 +724,11 @@ public sealed class SearchTermOccurrence
     public int Line { get; set; }
     public int Column { get; set; }
     public int Length { get; set; }
+    public bool Visible { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? VisibleColumn { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? VisibleLength { get; set; }
 }
 
 public sealed class SearchTruncationContext

@@ -65,6 +65,24 @@ public class SearchSnippetFormatterTests
     }
 
     [Fact]
+    public void BuildExcerpt_ReportsVisibleOccurrenceRangesAfterLineClamping_Issue3557()
+    {
+        var content = "Target " + new string('x', 200) + " Target";
+
+        var excerpt = SearchSnippetFormatter.BuildExcerpt(content, "Target", absoluteStartLine: 3, maxLines: 1, maxLineWidth: 48);
+
+        var highlight = Assert.Single(excerpt.Highlights);
+        var occurrences = highlight.TermOccurrences.OrderBy(occurrence => occurrence.Column).ToArray();
+        Assert.Equal(2, occurrences.Length);
+        Assert.True(occurrences[0].Visible);
+        Assert.Equal(1, occurrences[0].VisibleColumn);
+        Assert.Equal("Target".Length, occurrences[0].VisibleLength);
+        Assert.False(occurrences[1].Visible);
+        Assert.Null(occurrences[1].VisibleColumn);
+        Assert.Null(occurrences[1].VisibleLength);
+    }
+
+    [Fact]
     public void BuildExcerpt_ExactSubstringExposesLiteralOnlyHighlights()
     {
         const string content = "CommandText = $\"SELECT\";\nCommandText only";
