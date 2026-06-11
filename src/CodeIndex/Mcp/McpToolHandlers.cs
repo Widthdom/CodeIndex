@@ -37,6 +37,7 @@ public partial class McpServer
         "lang",
         "language",
         "rankBy",
+        "severity",
     };
     internal const int MaxMcpIndexFailureMessageLength = 512;
 
@@ -497,7 +498,7 @@ public partial class McpServer
 
     private static JsonObject? ValidateCommonListArguments(JsonNode? args)
     {
-        foreach (var propertyName in new[] { "path", "project", "excludePaths", "names", "sections", "capability" })
+        foreach (var propertyName in new[] { "path", "project", "excludePaths", "names", "sections", "capability", "scopes" })
         {
             if (ValidateStringListArgument(args, propertyName) is JsonObject error)
                 return error;
@@ -659,14 +660,15 @@ public partial class McpServer
             "limit" or "offset" or "snippetLines" or "maxLineWidth" or "before" or "after" or
                 "focusLine" or "focusColumn" or "focusLength" or "startLine" or "endLine" or
                 "maxHops" or "maxDepth" or "depth" or "parallelism" or "maxFileBytes" or
+                "staleAfterSeconds" or
                 "guardWindow" or "maxOutputBytes" => "integer",
-            "excludeTests" or "includeGenerated" or "indexedOnly" or "rawQuery" or "noDedup" or "exactSubstring" or
+            "check" or "excludeTests" or "includeGenerated" or "indexedOnly" or "rawQuery" or "noDedup" or "exactSubstring" or
                 "exactName" or "exact" or "prefix" or "countOnly" or "includeBody" or "lsp_compatible" or
                 "regex" or "withPaths" or "rebuild" or "dryRun" or "dry_run" or "force" or
-                "optimize" or "reverse" or "cycles" => "boolean",
-            "project" or "capability" or "requireBefore" or "requireAfter" or "rejectBefore" or "rejectAfter" => "string_or_array",
+                "optimize" or "reverse" or "cycles" or "config" or "logPath" or "updateCheck" => "boolean",
+            "project" or "capability" or "scopes" or "requireBefore" or "requireAfter" or "rejectBefore" or "rejectAfter" => "string_or_array",
             "query" or "lang" or "kind" or "format" or "rankBy" or "since" or "cursor" or
-                "solution" or "symbol" or "groupBy" or "category" or "language" or
+                "solution" or "symbol" or "groupBy" or "category" or "language" or "severity" or "explain" or
                 "bucket" or "minConfidence" or "extension" or "alias" or "description" or "context" or "toolInvocationContext" or "db" => "string",
             "queries" or "evidencePaths" or "evidence_paths" => "array",
             _ => string.Empty,
@@ -734,12 +736,13 @@ public partial class McpServer
         "excerpt" => new HashSet<string>(StringComparer.Ordinal) { "path", "startLine", "endLine", "before", "after", "focusLine", "focusColumn", "focusLength", "maxLineWidth", "maxOutputBytes" },
         "map" => new HashSet<string>(StringComparer.Ordinal) { "limit", "lang", "path", "excludePaths", "excludeTests", "sections", "depth", "project", "solution" },
         "analyze_symbol" => new HashSet<string>(StringComparer.Ordinal) { "query", "lang", "limit", "includeBody", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "maxLineWidth", "project", "solution" },
+        "status" => new HashSet<string>(StringComparer.Ordinal) { "check", "scopes", "staleAfterSeconds", "explain", "config", "logPath", "updateCheck", "format" },
         "outline" => new HashSet<string>(StringComparer.Ordinal) { "path" },
         "batch_query" => new HashSet<string>(StringComparer.Ordinal) { "queries" },
         "deps" => new HashSet<string>(StringComparer.Ordinal) { "path", "reverse", "format", "cycles", "lang", "limit", "excludePaths", "excludeTests", "project", "solution" },
         "impact_analysis" => new HashSet<string>(StringComparer.Ordinal) { "query", "lang", "maxHops", "maxDepth", "limit", "path", "excludePaths", "excludeTests", "includeGenerated", "withPaths", "countOnly", "project", "solution" },
         "languages" => new HashSet<string>(StringComparer.Ordinal) { "indexedOnly", "capability", "extension", "alias" },
-        "validate" => new HashSet<string>(StringComparer.Ordinal) { "kind", "path", "excludePaths", "excludeTests", "project", "solution" },
+        "validate" => new HashSet<string>(StringComparer.Ordinal) { "kind", "severity", "limit", "path", "excludePaths", "excludeTests", "countOnly", "format", "project", "solution" },
         "unused_symbols" => new HashSet<string>(StringComparer.Ordinal) { "kind", "lang", "limit", "path", "excludePaths", "excludeTests", "bucket", "minConfidence", "project", "solution" },
         "symbol_hotspots" => new HashSet<string>(StringComparer.Ordinal) { "kind", "lang", "limit", "groupBy", "path", "excludePaths", "excludeTests", "project", "solution" },
         "index" => new HashSet<string>(StringComparer.Ordinal) { "path", "rebuild", "maxFileBytes" },
@@ -2236,13 +2239,39 @@ public partial class McpServer
         }
     }
 
-    private JsonNode ExecuteStatus(JsonNode? id)
+    private JsonNode ExecuteStatus(JsonNode? id, JsonNode? args)
     {
-        return WithDbReader(id, args: null, reader =>
+        var checkWorkspace = args?["check"]?.GetValue<bool>() ?? false;
+        var staleAfterSeconds = args?["staleAfterSeconds"]?.GetValue<int>() ?? (int)TimeSpan.FromDays(1).TotalSeconds;
+        if (staleAfterSeconds <= 0)
+            return CreateToolErrorResponse(id, "staleAfterSeconds must be greater than or equal to 1");
+        var explain = args?["explain"]?.GetValue<string>()?.Trim().ToLowerInvariant();
+        if (explain is not (null or "freshness" or "readiness" or "all"))
+            return CreateToolErrorResponse(id, "explain must be one of freshness, readiness, all");
+        var format = ReadResponseFormat(args);
+        if (format is not ("full" or "compact"))
+            return CreateToolErrorResponse(id, "format must be one of full, compact");
+        if (!TryReadStatusScopes(args, out var statusScopes, out var scopeError))
+            return CreateToolErrorResponse(id, scopeError!);
+        var includeConfig = args?["config"]?.GetValue<bool>() ?? false;
+        var includeLogPath = args?["logPath"]?.GetValue<bool>() ?? false;
+        var runUpdateCheck = args?["updateCheck"]?.GetValue<bool>() ?? false;
+
+        return WithDbReader(id, args, reader =>
         {
             var status = reader.GetStatus();
             WorkspaceMetadataEnricher.Enrich(status, _dbPath, _dbPathExplicit);
             status.MacProfile = MacProfileDetector.DetectCurrent();
+            if (checkWorkspace)
+            {
+                status.WorkspaceCheck = IndexFreshnessChecker.Check(reader, status.ProjectRoot);
+                status.IndexMatchesWorkspace = status.WorkspaceCheck.Checked
+                    ? status.WorkspaceCheck.MatchesWorkspace
+                    : null;
+                status.StaleAfterSeconds = staleAfterSeconds;
+                if (status.IndexedAt.HasValue)
+                    status.IndexAgeSeconds = Math.Max(0, (long)Math.Round((GetUtcNow() - status.IndexedAt.Value).TotalSeconds, MidpointRounding.AwayFromZero));
+            }
             ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(status.ProjectRoot);
             status.GraphSupportedLanguages = ReferenceExtractor.GetSupportedLanguages().OrderBy(l => l).ToList();
             status.Extractors = ExtractorPluginRegistry.GetStatusSnapshot();
@@ -2261,12 +2290,21 @@ public partial class McpServer
                     .ToList();
             }
             status.Version = _version;
+            status.UpdateCheck = runUpdateCheck
+                ? UpdateChecker.Check(_version, CancellationToken.None)
+                : null;
             if (!status.FoldReady)
             {
                 status.DegradedReason = DegradationReasonCodes.BuildFoldNotReadyExplanation(status.FoldReadyReason);
                 status.RecommendedAction = BuildFoldBackfillCommand(_dbPath, _dbPathExplicit);
                 status.AlternativeAction = BuildFoldRebuildRepairCommand(status.ProjectRoot, _dbPath, _dbPathExplicit);
             }
+            var checkFailures = checkWorkspace
+                ? BuildMcpStatusCheckFailures(status, statusScopes)
+                : [];
+            if (checkWorkspace)
+                status.FailedChecks = checkFailures.Select(failure => failure.Name).ToList();
+
             var structured = JsonSerializer.SerializeToNode(status, _jsonOptions)!.AsObject();
             structured["project_root"] = status.ProjectRoot;
             structured["git_head"] = status.GitHead;
@@ -2302,8 +2340,213 @@ public partial class McpServer
                     ["burst"] = RateLimiter.Options.BurstCapacity,
                 },
             };
+            var effectiveConfig = includeConfig
+                ? BuildMcpStatusEffectiveConfig(status, staleAfterSeconds, checkWorkspace, runUpdateCheck)
+                : null;
+            var logPath = includeLogPath ? GlobalToolLog.ResolveLogDirectoryForStatus() : null;
+            var explainPayload = explain is null
+                ? null
+                : BuildMcpStatusExplain(status, checkFailures, explain);
+            if (effectiveConfig is not null)
+                structured["effective_config"] = effectiveConfig.DeepClone();
+            if (logPath is not null)
+                structured["log_path"] = logPath;
+            if (explainPayload is not null)
+                structured["explain"] = explainPayload.DeepClone();
+            if (format == "compact")
+            {
+                structured = BuildMcpCompactStatusPayload(status, checkFailures);
+                if (effectiveConfig is not null)
+                    structured["effective_config"] = effectiveConfig;
+                if (logPath is not null)
+                    structured["log_path"] = logPath;
+                if (explainPayload is not null)
+                    structured["explain"] = explainPayload;
+            }
             return CreateToolResult(id, "Database stats returned.", structured);
         });
+    }
+
+    private sealed record McpStatusCheckFailure(string Name, bool IsStale, string Diagnostic);
+
+    private static bool TryReadStatusScopes(JsonNode? args, out HashSet<string>? scopes, out string? error)
+    {
+        scopes = null;
+        error = null;
+        if (args?["scopes"] is null)
+            return true;
+
+        var values = ReadStringOrArrayList(args, "scopes")
+            .Select(scope => scope.Trim().ToLowerInvariant())
+            .ToList();
+        if (args["scopes"] is JsonArray array && values.Count != array.Count)
+        {
+            error = "scopes entries must be non-empty strings.";
+            return false;
+        }
+        if (values.Count == 0)
+        {
+            error = "scopes cannot be empty or whitespace-only.";
+            return false;
+        }
+
+        scopes = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var value in values)
+        {
+            if (!IsKnownMcpStatusScope(value))
+            {
+                error = $"Invalid status scope '{value}'. Use one of: workspace, graph, issues, sql, hotspot, csharp, fold, newer.";
+                return false;
+            }
+            scopes.Add(value);
+        }
+        return true;
+    }
+
+    private static bool IsKnownMcpStatusScope(string scope) =>
+        scope is "workspace" or "graph" or "issues" or "sql" or "hotspot" or "csharp" or "fold" or "newer";
+
+    private static IReadOnlyList<McpStatusCheckFailure> BuildMcpStatusCheckFailures(StatusResult status, IReadOnlySet<string>? scopes)
+    {
+        var failures = new List<McpStatusCheckFailure>();
+        var checkAll = scopes is not { Count: > 0 };
+        bool Includes(string scope) => checkAll || scopes!.Contains(scope);
+
+        if (Includes("workspace"))
+        {
+            if (status.WorkspaceCheck?.Checked != true)
+            {
+                failures.Add(new McpStatusCheckFailure("workspace_unavailable", true, "[stale] workspace_check unavailable"));
+            }
+            else if (!status.WorkspaceCheck.MatchesWorkspace)
+            {
+                var check = status.WorkspaceCheck;
+                failures.Add(new McpStatusCheckFailure(
+                    "workspace_stale",
+                    true,
+                    $"[stale] workspace_check reason={check.Reason} changed={check.ChangedFileCount} missing={check.MissingFileCount} unindexed={check.UnindexedFileCount}"));
+            }
+        }
+
+        if (Includes("graph") && !status.GraphTableAvailable)
+            failures.Add(new McpStatusCheckFailure("graph_table_available", false, "[degraded] graph_table_available=false"));
+        if (Includes("issues") && !status.IssuesTableAvailable)
+            failures.Add(new McpStatusCheckFailure("issues_table_available", false, "[degraded] issues_table_available=false"));
+        if (Includes("issues") && status.IssuesTableAvailable && !status.FileIssuesDataCurrent)
+            failures.Add(new McpStatusCheckFailure("file_issues_data_current", false, "[degraded] file_issues_data_current=false"));
+        if (Includes("workspace") && status.MigrationInProgress)
+            failures.Add(new McpStatusCheckFailure("migration_in_progress", false, "[degraded] migration_in_progress=true"));
+        if (Includes("sql") && !status.SqlGraphContractReady)
+            failures.Add(new McpStatusCheckFailure("sql_graph_contract_ready", false, $"[degraded] sql_graph_contract_ready=false reason={status.SqlGraphContractDegradedReason ?? "unknown"}"));
+        if (Includes("hotspot") && !status.HotspotFamilyReady)
+            failures.Add(new McpStatusCheckFailure("hotspot_family_ready", false, $"[degraded] hotspot_family_ready=false reason={status.HotspotFamilyDegradedReason ?? "unknown"}"));
+        if (Includes("csharp") && !status.CSharpSymbolNameReady)
+            failures.Add(new McpStatusCheckFailure("csharp_symbol_name_ready", false, "[degraded] csharp_symbol_name_ready=false"));
+        if (Includes("csharp") && !status.CSharpMetadataTargetReady)
+            failures.Add(new McpStatusCheckFailure("csharp_metadata_target_ready", false, $"[degraded] csharp_metadata_target_ready=false reason={status.CSharpMetadataTargetDegradedReason ?? "unknown"}"));
+        if (Includes("fold") && !status.FoldReady)
+            failures.Add(new McpStatusCheckFailure("fold_ready", false, $"[degraded] fold_ready=false reason={status.FoldReadyReason ?? "unknown"}"));
+        if (Includes("newer") && status.IndexNewerThanReader)
+            failures.Add(new McpStatusCheckFailure("index_newer_than_reader", false, $"[degraded] index_newer_than_reader=true reason={status.IndexNewerThanReaderReason ?? "unknown"}"));
+
+        return failures;
+    }
+
+    private JsonObject BuildMcpStatusEffectiveConfig(StatusResult status, int staleAfterSeconds, bool checkWorkspace, bool runUpdateCheck) => new()
+    {
+        ["db_path"] = _dbPath,
+        ["db_explicit"] = _dbPathExplicit,
+        ["project_root"] = status.ProjectRoot,
+        ["data_dir"] = status.DataDir,
+        ["data_dir_source"] = status.DataDirSource,
+        ["global_tool_log_dir"] = GlobalToolLog.ResolveLogDirectoryForStatus(),
+        ["stale_after_seconds"] = staleAfterSeconds,
+        ["check"] = checkWorkspace,
+        ["update_check_requested"] = runUpdateCheck,
+        ["version"] = status.Version,
+    };
+
+    private JsonObject BuildMcpStatusExplain(StatusResult status, IReadOnlyList<McpStatusCheckFailure> failures, string explain)
+    {
+        var payload = new JsonObject();
+        if (explain is "freshness" or "all")
+        {
+            payload["freshness"] = new JsonObject
+            {
+                ["index_matches_workspace"] = status.IndexMatchesWorkspace.HasValue ? JsonValue.Create(status.IndexMatchesWorkspace.Value) : null,
+                ["stale_after_seconds"] = status.StaleAfterSeconds.HasValue ? JsonValue.Create(status.StaleAfterSeconds.Value) : null,
+                ["index_age_seconds"] = status.IndexAgeSeconds.HasValue ? JsonValue.Create(status.IndexAgeSeconds.Value) : null,
+                ["workspace_check"] = status.WorkspaceCheck is null ? null : JsonSerializer.SerializeToNode(status.WorkspaceCheck, _jsonOptions),
+            };
+        }
+        if (explain is "readiness" or "all")
+        {
+            payload["readiness"] = BuildMcpStatusReadiness(status);
+            payload["failed_check_details"] = BuildMcpStatusFailureArray(failures);
+        }
+        return payload;
+    }
+
+    private static JsonObject BuildMcpStatusReadiness(StatusResult status) => new()
+    {
+        ["graph_table_available"] = status.GraphTableAvailable,
+        ["issues_table_available"] = status.IssuesTableAvailable,
+        ["file_issues_data_current"] = status.FileIssuesDataCurrent,
+        ["sql_graph_contract_ready"] = status.SqlGraphContractReady,
+        ["hotspot_family_ready"] = status.HotspotFamilyReady,
+        ["csharp_symbol_name_ready"] = status.CSharpSymbolNameReady,
+        ["csharp_metadata_target_ready"] = status.CSharpMetadataTargetReady,
+        ["fold_ready"] = status.FoldReady,
+        ["index_newer_than_reader"] = status.IndexNewerThanReader,
+        ["migration_in_progress"] = status.MigrationInProgress,
+    };
+
+    private static JsonArray BuildMcpStatusFailureArray(IReadOnlyList<McpStatusCheckFailure> failures)
+    {
+        var array = new JsonArray();
+        foreach (var failure in failures)
+        {
+            array.Add(new JsonObject
+            {
+                ["name"] = failure.Name,
+                ["is_stale"] = failure.IsStale,
+                ["diagnostic"] = failure.Diagnostic,
+            });
+        }
+        return array;
+    }
+
+    private static JsonObject BuildMcpCompactStatusPayload(StatusResult status, IReadOnlyList<McpStatusCheckFailure> failures)
+    {
+        var payload = new JsonObject
+        {
+            ["format"] = "compact",
+            ["summary"] = status.Summary,
+            ["version"] = status.Version,
+            ["project_root"] = status.ProjectRoot,
+            ["files"] = status.Files,
+            ["chunks"] = status.Chunks,
+            ["symbols"] = status.Symbols,
+            ["references"] = status.References,
+            ["language_count"] = status.Languages.Count,
+            ["top_languages"] = new JsonArray(status.Languages
+                .OrderByDescending(kv => kv.Value)
+                .ThenBy(kv => kv.Key, StringComparer.Ordinal)
+                .Take(5)
+                .Select(kv => new JsonObject { ["lang"] = kv.Key, ["files"] = kv.Value })
+                .ToArray<JsonNode?>()),
+            ["git_head"] = status.GitHead,
+            ["git_is_dirty"] = status.GitIsDirty.HasValue ? JsonValue.Create(status.GitIsDirty.Value) : null,
+            ["index_matches_workspace"] = status.IndexMatchesWorkspace.HasValue ? JsonValue.Create(status.IndexMatchesWorkspace.Value) : null,
+            ["stale_after_seconds"] = status.StaleAfterSeconds.HasValue ? JsonValue.Create(status.StaleAfterSeconds.Value) : null,
+            ["index_age_seconds"] = status.IndexAgeSeconds.HasValue ? JsonValue.Create(status.IndexAgeSeconds.Value) : null,
+            ["failed_checks"] = new JsonArray(failures.Select(failure => JsonValue.Create(failure.Name)).ToArray()),
+            ["failed_check_details"] = BuildMcpStatusFailureArray(failures),
+            ["readiness"] = BuildMcpStatusReadiness(status),
+        };
+        if (status.WorkspaceCheck is not null)
+            payload["workspace_check"] = JsonSerializer.SerializeToNode(status.WorkspaceCheck);
+        return payload;
     }
 
     private JsonObject BuildMcpSessionStatus()
@@ -2962,7 +3205,7 @@ public partial class McpServer
                     "excerpt" => ExecuteExcerpt(null, toolArgs),
                     "map" => ExecuteMap(null, toolArgs),
                     "analyze_symbol" => ExecuteAnalyzeSymbol(null, toolArgs),
-                    "status" => ExecuteStatus(null),
+                    "status" => ExecuteStatus(null, toolArgs),
                     "outline" => ExecuteOutline(null, toolArgs),
                     "deps" => ExecuteDeps(null, toolArgs),
                     "impact_analysis" => ExecuteImpactAnalysis(null, toolArgs),
@@ -3476,21 +3719,75 @@ public partial class McpServer
     private JsonNode ExecuteValidate(JsonNode? id, JsonNode? args)
     {
         var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
+        var severity = args?["severity"]?.GetValue<string>()?.Trim().ToLowerInvariant();
+        if (severity is not (null or "error" or FileIssue.SeverityWarning or FileIssue.SeverityInfo))
+            return CreateToolErrorResponse(id, "severity must be one of error, warning, info");
+        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? QueryCommandRunner.DefaultQueryLimit);
+        var format = ReadResponseFormat(args);
+        if (ValidateResponseFormat(format) is string formatError)
+            return CreateToolErrorResponse(id, formatError);
+        var countOnly = ReadCountOnly(args) || format == "count";
         var pathPatterns = ReadScopedPathList(args);
 
         return WithDbReader(id, args, reader =>
         {
-            var issues = reader.GetIssues(kind, pathPatterns);
+            var issues = reader.GetIssues(kind, pathPatterns, countOnly ? null : FetchLimitForEnvelope(limit), severity);
+            var truncated = !countOnly && TrimToRequestedLimit(issues, limit);
+            var pathFilterArray = new JsonArray();
+            if (pathPatterns is not null)
+            {
+                foreach (var path in pathPatterns)
+                    pathFilterArray.Add(path);
+            }
             var payload = new JsonObject
             {
                 ["count"] = issues.Count,
-                ["issues"] = JsonSerializer.SerializeToNode(issues, _jsonOptions)
+                ["truncated"] = truncated,
+                ["more_available"] = truncated,
+                ["filters"] = new JsonObject
+                {
+                    ["kind"] = kind,
+                    ["severity"] = severity,
+                    ["path"] = pathFilterArray,
+                },
+                ["top_files"] = BuildTopFileHistogram(issues, issue => issue.Path),
             };
+            if (countOnly)
+            {
+                payload["format"] = "count";
+            }
+            else if (format == "compact")
+            {
+                payload["format"] = "compact";
+                payload["issues"] = BuildCompactValidateIssues(issues);
+            }
+            else
+            {
+                payload["issues"] = JsonSerializer.SerializeToNode(issues, _jsonOptions);
+            }
             var summary = issues.Count > 0
                 ? $"Found {issues.Count} encoding issue(s)."
                 : "No encoding issues found.";
             return CreateToolResult(id, summary, payload);
         });
+    }
+
+    private static JsonArray BuildCompactValidateIssues(IEnumerable<FileIssue> issues)
+    {
+        var compact = new JsonArray();
+        foreach (var issue in issues)
+        {
+            compact.Add(new JsonObject
+            {
+                ["path"] = issue.Path,
+                ["line"] = issue.Line,
+                ["kind"] = issue.Kind,
+                ["severity"] = issue.Severity,
+                ["origin"] = issue.Origin,
+                ["message"] = issue.Message,
+            });
+        }
+        return compact;
     }
 
     private JsonNode ExecuteSymbolHotspots(JsonNode? id, JsonNode? args)

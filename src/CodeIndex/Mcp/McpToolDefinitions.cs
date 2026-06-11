@@ -315,11 +315,21 @@ public partial class McpServer
                 ReadOnlyAnnotations()),
             CreateToolDefinition(
                 "status",
-                "Get database statistics: file count, chunk count, symbol count, reference count, and language breakdown. / DB統計情報を取得：ファイル数、チャンク数、シンボル数、参照数、言語別内訳。",
+                "Get database statistics, readiness state, and optional CLI-style freshness checks. Use `check`, `scopes`, `staleAfterSeconds`, `explain`, `config`, `logPath`, or `format` for bounded health-check views. / DB統計、readiness 状態、必要に応じて CLI 風の freshness check を取得。`check` / `scopes` / `staleAfterSeconds` / `explain` / `config` / `logPath` / `format` で health-check 用の出力に絞り込める。",
                 new JsonObject
                 {
                     ["type"] = "object",
-                    ["properties"] = new JsonObject()
+                    ["properties"] = new JsonObject
+                    {
+                        ["check"] = new JsonObject { ["type"] = "boolean", ["description"] = "Run a workspace freshness check and populate `workspace_check`, `index_matches_workspace`, and `failed_checks`.", ["default"] = false },
+                        ["scopes"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray { "workspace", "graph", "issues", "sql", "hotspot", "csharp", "fold", "newer" } } } }, ["description"] = "Readiness scopes to evaluate for `failed_checks`. Omit to evaluate all scopes." },
+                        ["staleAfterSeconds"] = new JsonObject { ["type"] = "integer", ["description"] = "Effective stale-after threshold, in seconds, echoed with `index_age_seconds` when `check` is true.", ["default"] = 86400, ["minimum"] = 1 },
+                        ["explain"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray { "freshness", "readiness", "all" }, ["description"] = "Include a focused `explain` object for freshness/readiness diagnostics. `all` includes both.", ["default"] = "all" },
+                        ["config"] = new JsonObject { ["type"] = "boolean", ["description"] = "Include effective MCP/CLI status configuration such as DB path, version, log dir, stale threshold, and update-check request state.", ["default"] = false },
+                        ["logPath"] = new JsonObject { ["type"] = "boolean", ["description"] = "Include the resolved global tool log directory as `log_path`.", ["default"] = false },
+                        ["updateCheck"] = new JsonObject { ["type"] = "boolean", ["description"] = "Run the same update check as CLI status. Defaults to false because it may perform network I/O.", ["default"] = false },
+                        ["format"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray { "full", "compact" }, ["description"] = "Response shape. `compact` returns counts, freshness, readiness, and requested diagnostics without full language/kind tables.", ["default"] = "full" }
+                    }
                 },
                 ReadOnlyAnnotations()),
             CreateToolDefinition(
@@ -378,9 +388,13 @@ public partial class McpServer
                     ["properties"] = new JsonObject
                     {
                         ["kind"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by issue kind (replacement_char, bom, null_byte, mixed_line_endings, mixed_line_endings_three_way, cr_only_line_endings, utf16_bom, non_utf8_likely, line_too_long)" },
+                        ["severity"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray { "error", "warning", "info" }, ["description"] = "Filter by issue severity." },
+                        ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max issues to return (default: 20).", ["default"] = QueryCommandRunner.DefaultQueryLimit },
                         ["path"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Filter to paths containing this text. Accepts a single string or an array; multiple values are OR'd together." },
                         ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
-                        ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false }
+                        ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },
+                        ["countOnly"] = new JsonObject { ["type"] = "boolean", ["description"] = "Return only count metadata and a top-file histogram; omit issue rows.", ["default"] = false },
+                        ["format"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray { "full", "count", "compact" }, ["description"] = "Response shape: full issue rows, count-only metadata, or compact file/line/kind/severity rows.", ["default"] = "full" }
                     }
                 },
                 ReadOnlyAnnotations()),

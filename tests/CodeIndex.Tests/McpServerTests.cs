@@ -183,6 +183,21 @@ public class McpServerTests : IDisposable
         writer.MarkCSharpSymbolNameContractReady();
     }
 
+    private void InsertValidationIssues(params FileIssue[] issues)
+    {
+        var writer = new DbWriter(_db.Connection);
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/app.cs",
+            Lang = "csharp",
+            Size = 200,
+            Lines = 10,
+            Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime,
+            Checksum = "issues",
+        });
+        writer.InsertIssues(fileId, issues);
+    }
+
     [Fact]
     public void ToolsCall_SearchFormatCompactEmitsFileLineOnly_Issue1642()
     {
@@ -7901,6 +7916,69 @@ public class McpServerTests : IDisposable
         Assert.Contains("--exact falls back", response["result"]!["structuredContent"]!["degraded_reason"]!.GetValue<string>());
         Assert.Equal("cdidx backfill-fold", response["result"]!["structuredContent"]!["recommended_action"]!.GetValue<string>());
         Assert.Equal("cdidx index . --rebuild", response["result"]!["structuredContent"]!["alternative_action"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Status_CheckCompactExposesReadinessDiagnostics_Issue3541()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status","arguments":{"check":true,"scopes":["issues"],"staleAfterSeconds":60,"format":"compact","explain":"readiness","config":true,"logPath":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal("compact", structured["format"]!.GetValue<string>());
+        Assert.Equal(60, structured["stale_after_seconds"]!.GetValue<long>());
+        Assert.NotNull(structured["workspace_check"]);
+        Assert.Empty(structured["failed_checks"]!.AsArray());
+        Assert.True(structured["readiness"]!["issues_table_available"]!.GetValue<bool>());
+        Assert.True(structured["explain"]!["readiness"]!["issues_table_available"]!.GetValue<bool>());
+        Assert.Empty(structured["explain"]!["failed_check_details"]!.AsArray());
+        Assert.Equal(_dbPath, structured["effective_config"]!["db_path"]!.GetValue<string>());
+        Assert.Equal(60, structured["effective_config"]!["stale_after_seconds"]!.GetValue<int>());
+        Assert.False(structured["effective_config"]!["update_check_requested"]!.GetValue<bool>());
+        Assert.False(string.IsNullOrWhiteSpace(structured["log_path"]!.GetValue<string>()));
+    }
+
+    [Fact]
+    public void ToolsCall_Validate_FiltersSeverityAndSupportsCompactCount_Issue3541()
+    {
+        InsertValidationIssues(
+            new FileIssue
+            {
+                Path = "src/app.cs",
+                Kind = "replacement_char",
+                Line = 3,
+                Message = "warning replacement",
+                Origin = FileIssue.OriginDecodeReplacement,
+                Severity = FileIssue.SeverityWarning,
+            },
+            new FileIssue
+            {
+                Path = "src/app.cs",
+                Kind = "replacement_char",
+                Line = 4,
+                Message = "info literal",
+                Origin = FileIssue.OriginSourceLiteral,
+                Severity = FileIssue.SeverityInfo,
+            });
+
+        var compactRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"validate","arguments":{"severity":"warning","limit":1,"format":"compact"}}}""")!;
+        var compactResponse = _server.HandleMessage(compactRequest)!;
+
+        var compact = compactResponse["result"]!["structuredContent"]!;
+        Assert.Equal("compact", compact["format"]!.GetValue<string>());
+        Assert.Equal(1, compact["count"]!.GetValue<int>());
+        var issue = Assert.Single(compact["issues"]!.AsArray())!;
+        Assert.Equal(FileIssue.SeverityWarning, issue["severity"]!.GetValue<string>());
+        Assert.Equal("replacement_char", issue["kind"]!.GetValue<string>());
+        Assert.Equal("src/app.cs", Assert.Single(compact["top_files"]!.AsArray())!["path"]!.GetValue<string>());
+
+        var countRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"validate","arguments":{"severity":"info","countOnly":true}}}""")!;
+        var countResponse = _server.HandleMessage(countRequest)!;
+
+        var count = countResponse["result"]!["structuredContent"]!;
+        Assert.Equal("count", count["format"]!.GetValue<string>());
+        Assert.Equal(1, count["count"]!.GetValue<int>());
+        Assert.Null(count["issues"]);
     }
 
     [Fact]

@@ -2687,7 +2687,7 @@ public partial class McpServer : IDisposable
                         "excerpt" => ExecuteExcerpt(id, args),
                         "map" => ExecuteMap(id, args),
                         "analyze_symbol" => ExecuteAnalyzeSymbol(id, args),
-                        "status" => ExecuteStatus(id),
+                        "status" => ExecuteStatus(id, args),
                         "outline" => ExecuteOutline(id, args),
                         "batch_query" => ExecuteBatchQuery(id, args),
                         "deps" => ExecuteDeps(id, args),
