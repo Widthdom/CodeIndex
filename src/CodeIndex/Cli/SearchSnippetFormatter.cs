@@ -56,7 +56,7 @@ public static class SearchSnippetFormatter
         ArgumentNullException.ThrowIfNull(queryContext);
 
         var excerpt = BuildExcerpt(result.Content, queryContext, result.StartLine, maxLines, caseSensitive, maxLineWidth, lang ?? result.Lang, focusMode, exposeLiteralHighlights);
-        var matchFacets = BuildMatchFacets(result, excerpt);
+        var matchFacets = BuildMatchFacets(result, queryContext, caseSensitive, lang ?? result.Lang, exposeLiteralHighlights);
         AttachHighlightOrigins(excerpt.Highlights, matchFacets);
         return new CompactSearchResult
         {
@@ -96,21 +96,40 @@ public static class SearchSnippetFormatter
         };
     }
 
-    private static List<SearchMatchFacet> BuildMatchFacets(SearchResult result, SearchSnippetExcerpt excerpt)
+    private static List<SearchMatchFacet> BuildMatchFacets(SearchResult result, SearchSnippetQueryContext queryContext, bool caseSensitive, string? lang, bool exposeLiteralHighlights)
     {
         var facets = new List<SearchMatchFacet>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var highlight in excerpt.Highlights)
+        var queryForLanguage = queryContext.ForLanguage(lang);
+        var normalizedQuery = queryForLanguage.NormalizedQuery;
+        var tokens = queryForLanguage.Tokens;
+        var normalizeCSharpVerbatimNames = queryForLanguage.NormalizeCSharpVerbatimNames;
+        var matchScan = FindMatchingLineIndexes(result.Content, normalizedQuery, tokens, caseSensitive, normalizeCSharpVerbatimNames, int.MaxValue);
+        if (matchScan.LineCount == 0 || matchScan.MatchIndexes.Count == 0)
+            return facets;
+
+        var matchSet = matchScan.MatchIndexes.ToHashSet();
+        foreach (var snippetLine in ReadSnippetLines(result.Content, 0, matchScan.LineCount - 1, normalizeCSharpVerbatimNames))
         {
-            var lineText = GetContentLine(result.Content, result.StartLine, highlight.Line) ?? highlight.Text;
-            var occurrences = highlight.LiteralTermOccurrences ?? highlight.TermOccurrences;
+            if (!matchSet.Contains(snippetLine.Index))
+                continue;
+
+            var absoluteLine = result.StartLine + snippetLine.Index;
+            var matchLine = normalizeCSharpVerbatimNames && snippetLine.NormalizedText != null ? snippetLine.NormalizedText : snippetLine.Text;
+            var occurrences = exposeLiteralHighlights
+                ? normalizeCSharpVerbatimNames && snippetLine.NormalizedText != null && snippetLine.RawIndexMap != null
+                    ? GetMatchedTermOccurrences(snippetLine.NormalizedText, absoluteLine, normalizedQuery, [], caseSensitive, snippetLine.Text, snippetLine.RawIndexMap)
+                    : GetMatchedTermOccurrences(snippetLine.Text, absoluteLine, normalizedQuery, [], caseSensitive)
+                : normalizeCSharpVerbatimNames && snippetLine.NormalizedText != null && snippetLine.RawIndexMap != null
+                    ? GetMatchedTermOccurrences(snippetLine.NormalizedText, absoluteLine, normalizedQuery, tokens, caseSensitive, snippetLine.Text, snippetLine.RawIndexMap)
+                    : GetMatchedTermOccurrences(snippetLine.Text, absoluteLine, normalizedQuery, tokens, caseSensitive);
             if (occurrences.Count == 0)
             {
                 AddFacet(SearchMatchClassifier.Classify(
                     result.Path,
                     result.Lang,
-                    highlight.Line,
-                    lineText,
+                    absoluteLine,
+                    snippetLine.Text,
                     column: 1,
                     length: 1,
                     result.EnclosingSymbolKind));
@@ -122,8 +141,8 @@ public static class SearchSnippetFormatter
                 AddFacet(SearchMatchClassifier.Classify(
                     result.Path,
                     result.Lang,
-                    highlight.Line,
-                    lineText,
+                    absoluteLine,
+                    snippetLine.Text,
                     occurrence.Column,
                     occurrence.Length,
                     result.EnclosingSymbolKind));
@@ -154,23 +173,6 @@ public static class SearchSnippetFormatter
             highlight.TestSymbol = lineFacets.Any(facet => facet.TestSymbol);
             highlight.TestFixture = lineFacets.Any(facet => facet.TestFixture);
         }
-    }
-
-    private static string? GetContentLine(string content, int absoluteStartLine, int absoluteLine)
-    {
-        var targetIndex = absoluteLine - absoluteStartLine;
-        if (targetIndex < 0)
-            return null;
-
-        foreach (var (index, text) in EnumerateContentLines(content))
-        {
-            if (index == targetIndex)
-                return text;
-            if (index > targetIndex)
-                return null;
-        }
-
-        return null;
     }
 
     public static IEnumerable<CompactSearchResult> ToCompactResults(IEnumerable<SearchResult> results, string query, int maxLines = DefaultSnippetLines, bool caseSensitive = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, string? lang = null, SearchSnippetFocusMode focusMode = SearchSnippetFocusMode.Quality, bool exposeLiteralHighlights = false)

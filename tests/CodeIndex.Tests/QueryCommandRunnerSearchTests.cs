@@ -86,6 +86,72 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_ExcludeCommentsCountUsesOriginFilter_Issue3423()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_exclude_comments_count");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/comment.cs", "csharp", "// CountNeedle appears only in a comment\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/code.cs", "csharp", "public class Demo { void Run() { CountNeedle(); } }\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["CountNeedle", "--db", dbPath, "--exact-substring", "--exclude-comments", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("1", stdout.Trim());
+            Assert.Equal(string.Empty, stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_ExcludeCommentsKeepsCodeMatchOutsideSnippet_Issue3423()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_exclude_comments_outside_snippet");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/mixed.cs",
+                "csharp",
+                """
+                // FarNeedle appears in a comment
+                // filler 1
+                // filler 2
+                // filler 3
+                // filler 4
+                // filler 5
+                // filler 6
+                // filler 7
+                // filler 8
+                public class Demo { void Run() { FarNeedle(); } }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["FarNeedle", "--db", dbPath, "--exact-substring", "--json=array", "--snippet-lines", "1", "--exclude-comments"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var row = Assert.Single(document.RootElement.EnumerateArray());
+            Assert.Equal("src/mixed.cs", row.GetProperty("path").GetString());
+            Assert.Equal([10], row.GetProperty("match_lines").EnumerateArray().Select(value => value.GetInt32()).ToArray());
+            Assert.Equal(["code"], row.GetProperty("match_origins").EnumerateArray().Select(value => value.GetString()).ToArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_ExcludeStringsSuppressesStringAndRegexMatches_Issue3423()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_exclude_strings");
@@ -105,6 +171,33 @@ public partial class QueryCommandRunnerTests
             using var document = ParseJsonOutput(stdout);
             var row = Assert.Single(document.RootElement.EnumerateArray());
             Assert.Equal("src/code.cs", row.GetProperty("path").GetString());
+            Assert.Equal(["code"], row.GetProperty("match_origins").EnumerateArray().Select(value => value.GetString()).ToArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_ExcludeStringsOverfetchesPastFilteredLimit_Issue3423()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_exclude_strings_limit");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/aaa_string.cs", "csharp", "var text = \"LimitNeedle\";\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/zzz_code.cs", "csharp", "public class Real { void Run() { LimitNeedle(); } }\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["LimitNeedle", "--db", dbPath, "--exact-substring", "--json=array", "--limit", "1", "--exclude-strings"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var row = Assert.Single(document.RootElement.EnumerateArray());
+            Assert.Equal("src/zzz_code.cs", row.GetProperty("path").GetString());
             Assert.Equal(["code"], row.GetProperty("match_origins").EnumerateArray().Select(value => value.GetString()).ToArray());
         }
         finally
