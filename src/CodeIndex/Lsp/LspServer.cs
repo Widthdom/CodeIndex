@@ -61,10 +61,13 @@ internal sealed class LspServer : IDisposable
         _pathStringComparison = PathCasing.ComparisonFor(_projectRoot ?? Environment.CurrentDirectory);
     }
 
-    public int Run(Stream input, Stream output)
+    public int Run(Stream input, Stream output) => Run(input, output, CancellationToken.None);
+
+    public int Run(Stream input, Stream output, CancellationToken cancellationToken)
     {
-        while (TryReadMessage(input, out var payload))
+        while (TryReadMessage(input, out var payload, cancellationToken))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var response = HandleMessage(payload);
             if (response != null)
                 WriteMessage(output, response.ToJsonString(_jsonOptions));
@@ -731,7 +734,10 @@ internal sealed class LspServer : IDisposable
         },
     };
 
-    internal static bool TryReadMessage(Stream input, out string payload)
+    internal static bool TryReadMessage(Stream input, out string payload) =>
+        TryReadMessage(input, out payload, CancellationToken.None);
+
+    internal static bool TryReadMessage(Stream input, out string payload, CancellationToken cancellationToken)
     {
         payload = string.Empty;
         var contentLength = -1;
@@ -740,7 +746,8 @@ internal sealed class LspServer : IDisposable
         var headerBytes = 0;
         while (true)
         {
-            var line = ReadAsciiLine(input);
+            cancellationToken.ThrowIfCancellationRequested();
+            var line = ReadAsciiLine(input, cancellationToken);
             if (line == null)
                 return false;
             if (line.Length == 0)
@@ -779,7 +786,7 @@ internal sealed class LspServer : IDisposable
             var offset = 0;
             while (offset < contentLength)
             {
-                var read = input.Read(buffer, offset, contentLength - offset);
+                var read = Read(input, buffer, offset, contentLength - offset, cancellationToken);
                 if (read == 0)
                     return false;
                 offset += read;
@@ -802,24 +809,41 @@ internal sealed class LspServer : IDisposable
         output.Flush();
     }
 
-    private static string? ReadAsciiLine(Stream input)
+    private static string? ReadAsciiLine(Stream input, CancellationToken cancellationToken)
     {
-        var bytes = new List<byte>();
-        while (true)
+        var buffer = ArrayPool<byte>.Shared.Rent(MaxLspHeaderLineBytes + 1);
+        var length = 0;
+        try
         {
-            var value = input.ReadByte();
-            if (value < 0)
-                return bytes.Count == 0 ? null : Encoding.ASCII.GetString(bytes.ToArray());
-            if (value == '\n')
-                break;
-            if (value != '\r')
+            while (true)
             {
-                if (bytes.Count >= MaxLspHeaderLineBytes)
-                    return null;
-                bytes.Add((byte)value);
+                var read = Read(input, buffer, length, 1, cancellationToken);
+                if (read == 0)
+                    return length == 0 ? null : Encoding.ASCII.GetString(buffer, 0, length);
+
+                var value = buffer[length];
+                if (value == '\n')
+                    break;
+                if (value != '\r')
+                {
+                    if (length >= MaxLspHeaderLineBytes)
+                        return null;
+                    length++;
+                }
             }
+
+            return Encoding.ASCII.GetString(buffer, 0, length);
         }
-        return Encoding.ASCII.GetString(bytes.ToArray());
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
+    }
+
+    private static int Read(Stream input, byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return input.ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask().GetAwaiter().GetResult();
     }
 
     public void Dispose()

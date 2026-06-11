@@ -98,6 +98,38 @@ public class LspServerTests
     }
 
     [Fact]
+    public void TryReadMessage_CanceledBeforeRead_ThrowsOperationCanceled_Issue3427()
+    {
+        using var stream = new MemoryStream(Encoding.UTF8.GetBytes("Content-Length: 2\r\n\r\n{}"));
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        Assert.Throws<OperationCanceledException>(() => LspServer.TryReadMessage(stream, out _, cts.Token));
+    }
+
+    [Fact]
+    public void Run_CanceledBeforeRead_ThrowsOperationCanceled_Issue3427()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_canceled");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            using var input = new MemoryStream(Encoding.UTF8.GetBytes("Content-Length: 2\r\n\r\n{}"));
+            using var output = new MemoryStream();
+            using var cts = new CancellationTokenSource();
+            cts.Cancel();
+
+            Assert.Throws<OperationCanceledException>(() => server.Run(input, output, cts.Token));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void HandleMessage_Initialize_AdvertisesCoreCapabilities()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_initialize");
