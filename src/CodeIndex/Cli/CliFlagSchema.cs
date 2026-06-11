@@ -283,6 +283,7 @@ internal static class CliFlagSchema
             new() { Name = "--repo", ValuePlaceholder = "<owner/name>", Description = "Search issue-drafts: GitHub repository for --open-issues github", Commands = Set("search") },
             new() { Name = "--issue-title", ValuePlaceholder = "<title>", Description = "Search issue-drafts: override the title for an ad hoc search draft", Commands = Set("search") },
             new() { Name = "--issue-label", ValuePlaceholder = "<label>", Description = "Search issue-drafts: add a label hint; repeat or comma-separate values", Commands = Set("search") },
+            new() { Name = "--cursor", ValuePlaceholder = "<cursor>", Description = "Search recipe: pagination cursor returned as next_cursor", Commands = Set("search") },
             new() { Name = "--status", ValuePlaceholder = "<status>", Description = "Suggestions: filter by suggestion status", Commands = Set("suggestions") },
             new() { Name = "--category", ValuePlaceholder = "<category>", Description = "Suggestions: filter by category", Commands = Set("suggestions") },
             new() { Name = "--agent", ValuePlaceholder = "<agent>", Description = "Suggestions: filter by agent", Commands = Set("suggestions") },

@@ -127,7 +127,38 @@ internal sealed record SearchRecipeQueryResultJsonResult(
     [property: JsonPropertyName("false_positive_guidance")] string FalsePositiveGuidance,
     [property: JsonPropertyName("exact_substring")] bool ExactSubstring,
     [property: JsonPropertyName("count")] int Count,
+    [property: JsonPropertyName("next_cursor")] string? NextCursor,
     [property: JsonPropertyName("results")] List<CompactSearchResult> Results);
+
+internal sealed record SearchRecipeCompactRunJsonResult(
+    [property: JsonPropertyName("api_version")] string ApiVersion,
+    [property: JsonPropertyName("recipe")] SearchRecipeListItemJsonResult Recipe,
+    [property: JsonPropertyName("query_count")] int QueryCount,
+    [property: JsonPropertyName("result_count")] int ResultCount,
+    [property: JsonPropertyName("queries")] List<SearchRecipeCompactQueryResultJsonResult> Queries);
+
+internal sealed record SearchRecipeCompactQueryResultJsonResult(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("query")] string Query,
+    [property: JsonPropertyName("description")] string Description,
+    [property: JsonPropertyName("count")] int Count,
+    [property: JsonPropertyName("top_files")] List<SearchRecipeTopFileJsonResult> TopFiles,
+    [property: JsonPropertyName("next_cursor")] string? NextCursor,
+    [property: JsonPropertyName("results")] List<SearchRecipeCompactResultJsonResult> Results);
+
+internal sealed record SearchRecipeTopFileJsonResult(
+    [property: JsonPropertyName("path")] string Path,
+    [property: JsonPropertyName("count")] int Count);
+
+internal sealed record SearchRecipeCompactResultJsonResult(
+    [property: JsonPropertyName("path")] string Path,
+    [property: JsonPropertyName("lang")] string? Lang,
+    [property: JsonPropertyName("visibility")] string? Visibility,
+    [property: JsonPropertyName("chunk_start_line")] int ChunkStartLine,
+    [property: JsonPropertyName("chunk_end_line")] int ChunkEndLine,
+    [property: JsonPropertyName("match_lines")] List<int> MatchLines,
+    [property: JsonPropertyName("enclosing_symbol_name")] string? EnclosingSymbolName,
+    [property: JsonPropertyName("enclosing_symbol_kind")] string? EnclosingSymbolKind);
 
 internal sealed record SearchIssueDraftExportJsonResult(
     [property: JsonPropertyName("api_version")] string ApiVersion,

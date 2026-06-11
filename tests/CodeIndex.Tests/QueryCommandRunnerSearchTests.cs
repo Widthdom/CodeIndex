@@ -490,9 +490,93 @@ public partial class QueryCommandRunnerTests
         Assert.Contains("raw-diagnostic-echo", stderr);
     }
 
+    [Fact]
+    public void RunSearch_RecipeCompactJsonEmitsSummaryAndCursor_Issue3392()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_recipe_compact_json");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/a.cs",
+                "csharp",
+                """
+                public sealed class A
+                {
+                    public void Run(Exception ex)
+                    {
+                        Console.WriteLine(ex.Message);
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/b.cs",
+                "csharp",
+                """
+                public sealed class B
+                {
+                    public void Run(Exception ex)
+                    {
+                        Console.WriteLine(ex.Message);
+                    }
+                }
+                """);
+
+            var (firstExitCode, firstStdout, firstStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "risky-code/raw-diagnostic-echo", "--db", dbPath, "--format", "compact", "--limit", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, firstExitCode);
+            Assert.Equal(string.Empty, firstStderr);
+            using var firstDocument = ParseJsonOutput(firstStdout);
+            var firstRoot = firstDocument.RootElement;
+            var firstQuery = Assert.Single(firstRoot.GetProperty("queries").EnumerateArray());
+            var firstResult = Assert.Single(firstQuery.GetProperty("results").EnumerateArray());
+            var firstPath = firstResult.GetProperty("path").GetString();
+            var nextCursor = firstQuery.GetProperty("next_cursor").GetString();
+
+            Assert.Equal(1, firstRoot.GetProperty("query_count").GetInt32());
+            Assert.Equal(1, firstRoot.GetProperty("result_count").GetInt32());
+            Assert.Equal("raw-diagnostic-echo", firstQuery.GetProperty("name").GetString());
+            Assert.Equal(1, firstQuery.GetProperty("top_files")[0].GetProperty("count").GetInt32());
+            Assert.True(firstResult.TryGetProperty("match_lines", out _));
+            Assert.False(firstResult.TryGetProperty("snippet", out _));
+            Assert.False(string.IsNullOrWhiteSpace(nextCursor));
+
+            var (secondExitCode, secondStdout, secondStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "risky-code/raw-diagnostic-echo", "--db", dbPath, "--format", "compact", "--limit", "1", "--cursor", nextCursor!],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, secondExitCode);
+            Assert.Equal(string.Empty, secondStderr);
+            using var secondDocument = ParseJsonOutput(secondStdout);
+            var secondResult = Assert.Single(Assert.Single(secondDocument.RootElement.GetProperty("queries").EnumerateArray()).GetProperty("results").EnumerateArray());
+
+            Assert.NotEqual(firstPath, secondResult.GetProperty("path").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_RecipeCursorRequiresSingleChildQuery_Issue3392()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["--recipe", "risky-code", "--format", "compact", "--cursor", "0:1:1"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("--cursor requires exactly one selected recipe query", stderr);
+    }
+
     [Theory]
     [InlineData("count")]
-    [InlineData("compact")]
+    [InlineData("csv")]
     public void RunSearch_RecipeRejectsUnsupportedFormattedOutputs_Issue3144(string format)
     {
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
@@ -501,7 +585,7 @@ public partial class QueryCommandRunnerTests
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
         Assert.Equal(string.Empty, stdout);
-        Assert.Contains("--format count/compact/csv/tsv/lsp/qf/sarif is not supported with --recipe", stderr);
+        Assert.Contains("--format count/csv/tsv/lsp/qf/sarif is not supported with --recipe", stderr);
     }
 
     [Fact]
