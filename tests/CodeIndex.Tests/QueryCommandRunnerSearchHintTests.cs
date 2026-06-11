@@ -48,6 +48,42 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_ExactSubstringWithRawFtsReportsEffectiveLiteralHighlightMode_Issue3558()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_exact_raw_fts_metadata_3558");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/sql.cs",
+                "csharp",
+                "var CommandText = $\"SELECT 1\";\nvar CommandText = other;");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["CommandText = $", "--db", dbPath, "--json", "--fts", "--exact-substring"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            var highlight = root.GetProperty("highlights")[0];
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(root.GetProperty("exact").GetBoolean());
+            Assert.False(root.GetProperty("raw_fts").GetBoolean());
+            Assert.True(root.GetProperty("literal_highlights_available").GetBoolean());
+            Assert.False(root.TryGetProperty("literal_highlight_warning", out _));
+            Assert.Equal("CommandText = $", highlight.GetProperty("literal_terms")[0].GetString());
+            Assert.Equal("CommandText = $", highlight.GetProperty("literal_term_occurrences")[0].GetProperty("term").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_RawFtsJsonReportsLiteralHighlightGapMetadata_Issue3558()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_raw_fts_metadata_3558");

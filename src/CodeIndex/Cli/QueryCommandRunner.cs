@@ -1064,9 +1064,10 @@ public static class QueryCommandRunner
             compact.SnippetLines = SearchSnippetFormatter.ClampSnippetLines(options.SnippetLines);
             compact.MaxLineWidth = LineWidthFormatter.ClampMaxLineWidth(options.MaxLineWidth);
             compact.Exact = exact;
-            compact.RawFts = options.RawFts;
-            compact.LiteralHighlightsAvailable = exact && !options.RawFts;
-            compact.LiteralHighlightWarning = options.RawFts
+            var effectiveRawFts = options.RawFts && !exact;
+            compact.RawFts = effectiveRawFts;
+            compact.LiteralHighlightsAvailable = exact && !effectiveRawFts;
+            compact.LiteralHighlightWarning = effectiveRawFts
                 ? "literal_highlights_unavailable_raw_fts"
                 : null;
 
