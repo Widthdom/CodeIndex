@@ -27,7 +27,10 @@
           "term": "Add",
           "line": 5,
           "column": 23,
-          "length": 3
+          "length": 3,
+          "visible": true,
+          "visible_column": 23,
+          "visible_length": 3
         }
       ]
     }
