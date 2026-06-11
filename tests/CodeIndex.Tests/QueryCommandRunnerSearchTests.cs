@@ -207,6 +207,34 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_ExcludeStringsSuppressesRawFtsStringMatches_Issue3423()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_exclude_strings_raw_fts");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/string.cs", "csharp", "var text = \"RawFtsNeedle\";\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/code.cs", "csharp", "public class Demo { void Run() { RawFtsNeedle(); } }\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["content:RawFtsNeedle", "--db", dbPath, "--fts", "--json=array", "--exclude-strings"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var row = Assert.Single(document.RootElement.EnumerateArray());
+            Assert.Equal("src/code.cs", row.GetProperty("path").GetString());
+            Assert.Equal(["code"], row.GetProperty("match_origins").EnumerateArray().Select(value => value.GetString()).ToArray());
+            Assert.NotEmpty(row.GetProperty("match_facets").EnumerateArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_JsonIdentifiesTestFixtureMatches_Issue3450()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_test_fixtures");
@@ -1553,7 +1581,7 @@ jobs:
                 "public sealed class App { }");
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                ["missing-token", "--db", dbPath, "--path", "src/**", "--lang", "csharp", "--limit", "7", "--json"],
+                ["missing-token", "--db", dbPath, "--path", "src/**", "--lang", "csharp", "--limit", "7", "--json", "--exclude-comments", "--exclude-strings", "--exclude-fixtures"],
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
@@ -1568,6 +1596,9 @@ jobs:
             Assert.Equal("src/**", queryContext.GetProperty("path")[0].GetString());
             Assert.Equal("csharp", queryContext.GetProperty("lang").GetString());
             Assert.Equal(7, queryContext.GetProperty("limit").GetInt32());
+            Assert.True(queryContext.GetProperty("exclude_comments").GetBoolean());
+            Assert.True(queryContext.GetProperty("exclude_strings").GetBoolean());
+            Assert.True(queryContext.GetProperty("exclude_fixtures").GetBoolean());
         }
         finally
         {

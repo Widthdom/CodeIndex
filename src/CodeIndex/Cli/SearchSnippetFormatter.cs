@@ -21,6 +21,27 @@ public static class SearchSnippetFormatter
             new SearchSnippetPreparedQuery(CSharpVerbatimNameNormalizer.Normalize(normalizedQuery), BuildQueryTokens(query, normalizeCSharpVerbatimNames: true), NormalizeCSharpVerbatimNames: true));
     }
 
+    public static SearchSnippetQueryContext PrepareRawFtsQueryContext(string query)
+    {
+        var tokens = DbReader
+            .ExtractRawFtsSearchTokens(query)
+            .Select(NormalizeToken)
+            .Where(token => token.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (tokens.Length == 0)
+            return PrepareQueryContext(query);
+
+        var normalizedQuery = string.Join(' ', tokens);
+        return new SearchSnippetQueryContext(
+            query,
+            new SearchSnippetPreparedQuery(normalizedQuery, tokens, NormalizeCSharpVerbatimNames: false),
+            new SearchSnippetPreparedQuery(
+                CSharpVerbatimNameNormalizer.Normalize(normalizedQuery),
+                tokens.Select(CSharpVerbatimNameNormalizer.Normalize).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+                NormalizeCSharpVerbatimNames: true));
+    }
+
     public static IReadOnlyList<string> Format(string content, string query, int maxLines = DefaultSnippetLines, bool caseSensitive = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, string? lang = null, SearchSnippetFocusMode focusMode = SearchSnippetFocusMode.Quality)
     {
         return Format(content, PrepareQueryContext(query), maxLines, caseSensitive, maxLineWidth, lang, focusMode);

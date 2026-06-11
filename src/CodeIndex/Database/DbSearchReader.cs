@@ -1418,7 +1418,7 @@ public partial class DbReader
 
     private static List<string> GetSearchCoverageTokens(string query, bool rawQuery)
     {
-        var tokens = rawQuery ? ExtractRawFtsCoverageTokens(query) : SplitLiteralSearchTokens(query);
+        var tokens = rawQuery ? ExtractRawFtsSearchTokens(query) : SplitLiteralSearchTokens(query);
         if (tokens.Length <= 1)
             return [];
 
@@ -1428,6 +1428,9 @@ public partial class DbReader
             .Distinct(StringComparer.Ordinal)
             .ToList();
     }
+
+    internal static string[] ExtractRawFtsSearchTokens(string query)
+        => ExtractRawFtsCoverageTokens(query);
 
     private static string GetSearchCoverageToken(string token)
     {

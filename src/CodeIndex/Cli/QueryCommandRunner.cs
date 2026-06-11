@@ -1026,7 +1026,9 @@ public static class QueryCommandRunner
         var rows = new List<SearchDisplayRow>(results.Count);
         var seenMatchLocations = options.NoDedup ? null : new HashSet<string>(StringComparer.Ordinal);
         var displayQuery = queryOverride ?? options.Query!;
-        var queryContext = SearchSnippetFormatter.PrepareQueryContext(displayQuery);
+        var queryContext = options.RawFts
+            ? SearchSnippetFormatter.PrepareRawFtsQueryContext(displayQuery)
+            : SearchSnippetFormatter.PrepareQueryContext(displayQuery);
         foreach (var result in results)
         {
             var compact = SearchSnippetFormatter.ToCompactResult(
@@ -8625,6 +8627,12 @@ public static class QueryCommandRunner
             query["rank_by"] = FormatReferenceRankMode(options.RankMode);
         if (options.ExcludeTests)
             query["exclude_tests"] = true;
+        if (options.ExcludeComments)
+            query["exclude_comments"] = true;
+        if (options.ExcludeStrings)
+            query["exclude_strings"] = true;
+        if (options.ExcludeFixtures)
+            query["exclude_fixtures"] = true;
         if (options.IncludeGenerated)
             query["include_generated"] = true;
         if (options.Since.HasValue)
