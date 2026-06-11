@@ -1189,6 +1189,7 @@ internal static class ProgramRunner
         "--guard-window",
         "--exclude-comments",
         "--exclude-strings",
+        "--exclude-fixtures",
         "--project",
         "--solution",
         "--exclude-path",

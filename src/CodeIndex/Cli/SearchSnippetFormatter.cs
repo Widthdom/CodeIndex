@@ -77,6 +77,9 @@ public static class SearchSnippetFormatter
                 .OrderBy(origin => origin, StringComparer.Ordinal)
                 .ToList(),
             MatchFacets = matchFacets,
+            TestFile = matchFacets.Any(facet => facet.TestFile),
+            TestSymbol = matchFacets.Any(facet => facet.TestSymbol),
+            TestFixture = matchFacets.Any(facet => facet.TestFixture),
             ContextBefore = excerpt.ContextBefore,
             ContextAfter = excerpt.ContextAfter,
             TruncatedLineCount = excerpt.TruncatedLineCount,
@@ -737,6 +740,9 @@ public sealed class CompactSearchResult
     public List<SearchHighlight> Highlights { get; set; } = [];
     public List<string> MatchOrigins { get; set; } = [];
     public List<SearchMatchFacet> MatchFacets { get; set; } = [];
+    public bool TestFile { get; set; }
+    public bool TestSymbol { get; set; }
+    public bool TestFixture { get; set; }
     public int ContextBefore { get; set; }
     public int ContextAfter { get; set; }
     public int TruncatedLineCount { get; set; }

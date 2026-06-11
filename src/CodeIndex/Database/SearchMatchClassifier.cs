@@ -21,6 +21,7 @@ internal static class SearchMatchClassifier
         var origin = ClassifyOrigin(path, lang, text, column);
         var testFile = IsLikelyTestPath(path);
         var testSymbol = string.Equals(enclosingSymbolKind, "test.method", StringComparison.OrdinalIgnoreCase);
+        var testFixture = (testFile || testSymbol) && IsStringLikeOrigin(origin);
         return new SearchMatchFacet
         {
             Line = line,
@@ -29,7 +30,7 @@ internal static class SearchMatchClassifier
             Origin = origin,
             TestFile = testFile,
             TestSymbol = testSymbol,
-            TestFixture = false,
+            TestFixture = testFixture,
         };
     }
 

@@ -1099,7 +1099,7 @@ public static class QueryCommandRunner
 
     private static bool ApplySearchOriginFilters(CompactSearchResult compact, QueryCommandOptions options)
     {
-        if (!options.ExcludeComments && !options.ExcludeStrings)
+        if (!options.ExcludeComments && !options.ExcludeStrings && !options.ExcludeFixtures)
             return true;
         if (compact.MatchFacets.Count == 0)
             return true;
@@ -1116,6 +1116,9 @@ public static class QueryCommandRunner
             .Distinct(StringComparer.Ordinal)
             .OrderBy(origin => origin, StringComparer.Ordinal)
             .ToList();
+        compact.TestFile = keptFacets.Any(facet => facet.TestFile);
+        compact.TestSymbol = keptFacets.Any(facet => facet.TestSymbol);
+        compact.TestFixture = keptFacets.Any(facet => facet.TestFixture);
 
         var keptLines = keptFacets.Select(facet => facet.Line).ToHashSet();
         compact.MatchLines = compact.MatchLines
@@ -1151,6 +1154,8 @@ public static class QueryCommandRunner
         if (options.ExcludeComments && string.Equals(facet.Origin, SearchMatchClassifier.Comment, StringComparison.Ordinal))
             return true;
         if (options.ExcludeStrings && SearchMatchClassifier.IsStringLikeOrigin(facet.Origin))
+            return true;
+        if (options.ExcludeFixtures && facet.TestFixture)
             return true;
         return false;
     }
@@ -6211,6 +6216,7 @@ public static class QueryCommandRunner
         var guardWindow = DbReader.DefaultSearchGuardWindow;
         bool excludeComments = false;
         bool excludeStrings = false;
+        bool excludeFixtures = false;
         List<string>? parseErrors = null;
         bool exactName = false;
         bool exactSubstring = false;
@@ -6890,6 +6896,9 @@ public static class QueryCommandRunner
                 case "--exclude-strings":
                     excludeStrings = true;
                     break;
+                case "--exclude-fixtures":
+                    excludeFixtures = true;
+                    break;
                 case "--include-generated":
                     includeGenerated = true;
                     break;
@@ -7139,6 +7148,7 @@ public static class QueryCommandRunner
             GuardWindow = guardWindow,
             ExcludeComments = excludeComments,
             ExcludeStrings = excludeStrings,
+            ExcludeFixtures = excludeFixtures,
             ExactName = exactName,
             ExactSubstring = exactSubstring,
             CheckWorkspace = checkWorkspace,
@@ -8456,8 +8466,8 @@ public static class QueryCommandRunner
             return;
         }
 
-        if (options.Lang != null || options.PathPatterns.Count > 0 || options.ExcludeTests || options.ExcludeComments || options.ExcludeStrings || options.ExcludePaths.Count > 0)
-            Console.Error.WriteLine($"Hint: {filterHint ?? "try removing --lang, --path, --exclude-path, --exclude-tests, --exclude-comments, or --exclude-strings to broaden the search."}");
+        if (options.Lang != null || options.PathPatterns.Count > 0 || options.ExcludeTests || options.ExcludeComments || options.ExcludeStrings || options.ExcludeFixtures || options.ExcludePaths.Count > 0)
+            Console.Error.WriteLine($"Hint: {filterHint ?? "try removing --lang, --path, --exclude-path, --exclude-tests, --exclude-comments, --exclude-strings, or --exclude-fixtures to broaden the search."}");
 
         if (alternativeHint != null)
             Console.Error.WriteLine($"Hint: {alternativeHint}");
@@ -8518,6 +8528,8 @@ public static class QueryCommandRunner
             yield return "exclude-comments: true";
         if (options.ExcludeStrings)
             yield return "exclude-strings: true";
+        if (options.ExcludeFixtures)
+            yield return "exclude-fixtures: true";
         if (options.Since.HasValue)
             yield return $"since: {options.Since.Value:O}";
         if (options.CountOnly)
@@ -10128,6 +10140,7 @@ public sealed class QueryCommandOptions
     public int GuardWindow { get; init; } = DbReader.DefaultSearchGuardWindow;
     public bool ExcludeComments { get; init; }
     public bool ExcludeStrings { get; init; }
+    public bool ExcludeFixtures { get; init; }
     public bool ExactName { get; init; }
     public bool ExactSubstring { get; init; }
     public bool CheckWorkspace { get; init; }

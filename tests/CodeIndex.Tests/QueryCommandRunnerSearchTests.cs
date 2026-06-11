@@ -114,6 +114,107 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_JsonIdentifiesTestFixtureMatches_Issue3450()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_test_fixtures");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "tests/DemoTests.cs",
+                "csharp",
+                """
+                using Xunit;
+
+                public class DemoTests
+                {
+                    [Fact]
+                    public void MatchesFixture()
+                    {
+                        var fixtureSource = "FixtureNeedle();";
+                        FixtureNeedle();
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["FixtureNeedle", "--db", dbPath, "--exact-substring", "--json=array", "--snippet-lines", "12"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var row = Assert.Single(document.RootElement.EnumerateArray());
+            Assert.True(row.GetProperty("test_file").GetBoolean());
+            Assert.True(row.GetProperty("test_symbol").GetBoolean());
+            Assert.True(row.GetProperty("test_fixture").GetBoolean());
+
+            var facets = row.GetProperty("match_facets").EnumerateArray().ToArray();
+            var fixtureFacet = Assert.Single(facets, facet => facet.GetProperty("origin").GetString() == "string_literal");
+            Assert.True(fixtureFacet.GetProperty("test_file").GetBoolean());
+            Assert.True(fixtureFacet.GetProperty("test_symbol").GetBoolean());
+            Assert.True(fixtureFacet.GetProperty("test_fixture").GetBoolean());
+
+            var codeFacet = Assert.Single(facets, facet => facet.GetProperty("origin").GetString() == "code");
+            Assert.True(codeFacet.GetProperty("test_file").GetBoolean());
+            Assert.True(codeFacet.GetProperty("test_symbol").GetBoolean());
+            Assert.False(codeFacet.GetProperty("test_fixture").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_ExcludeFixturesSuppressesFixtureOnlyMatches_Issue3450()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_exclude_fixtures");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "tests/FixtureTests.cs",
+                "csharp",
+                """
+                using Xunit;
+
+                public class FixtureTests
+                {
+                    [Fact]
+                    public void HasFixtureSource()
+                    {
+                        var fixtureSource = "FixtureOnlyNeedle();";
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/real.cs",
+                "csharp",
+                "public class Real { public void Run() { FixtureOnlyNeedle(); } }\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["FixtureOnlyNeedle", "--db", dbPath, "--exact-substring", "--json=array", "--exclude-fixtures"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var row = Assert.Single(document.RootElement.EnumerateArray());
+            Assert.Equal("src/real.cs", row.GetProperty("path").GetString());
+            Assert.False(row.GetProperty("test_fixture").GetBoolean());
+            Assert.DoesNotContain(row.GetProperty("match_facets").EnumerateArray(), facet => facet.GetProperty("test_fixture").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_FormatCompactEmitsFileLineOnly_Issue1642()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_format_compact");
