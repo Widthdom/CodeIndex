@@ -169,6 +169,21 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunInspect_ParseBodyRange_ImplyBodyAndValidateValues_Issue3394()
+    {
+        var options = QueryCommandRunner.ParseArgs(
+            ["--body-start", "6", "--body-lines=2"],
+            jsonDefault: false,
+            validateDefaultSnippetLines: false,
+            validateDefaultMaxLineWidth: false);
+
+        Assert.True(options.IncludeBody);
+        Assert.Equal(6, options.BodyStartLine);
+        Assert.Equal(2, options.BodyLines);
+        Assert.Null(options.ParseError);
+    }
+
+    [Fact]
     public void RunInspect_FieldsJson_EmitsOnlySelectedTopLevelGroups_Issue3056()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_fields_json");
@@ -251,6 +266,55 @@ public partial class QueryCommandRunnerTests
             Assert.False(json.TryGetProperty("references", out _));
             Assert.False(json.TryGetProperty("callers", out _));
             Assert.False(json.TryGetProperty("callees", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunInspect_BodyRangeJson_PagesDefinitionBody_Issue3394()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_body_range_json");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Target.cs",
+                "csharp",
+                """
+                public class Target
+                {
+                    public int Compute()
+                    {
+                        var value1 = 1;
+                        var value2 = 2;
+                        var value3 = 3;
+                        return value1 + value2 + value3;
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["Compute", "--db", dbPath, "--json", "--body", "--body-start", "6", "--body-lines", "2"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var definition = document.RootElement.GetProperty("definitions").EnumerateArray().Single();
+            var bodyContent = definition.GetProperty("body_content").GetString();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Contains("var value2 = 2;", bodyContent, StringComparison.Ordinal);
+            Assert.Contains("var value3 = 3;", bodyContent, StringComparison.Ordinal);
+            Assert.DoesNotContain("var value1 = 1;", bodyContent, StringComparison.Ordinal);
+            Assert.DoesNotContain("return value1", bodyContent, StringComparison.Ordinal);
+            Assert.Equal(6, definition.GetProperty("body_content_start_line").GetInt32());
+            Assert.Equal(7, definition.GetProperty("body_content_end_line").GetInt32());
+            Assert.Equal(8, definition.GetProperty("body_content_next_start_line").GetInt32());
+            Assert.True(definition.GetProperty("body_content_truncated").GetBoolean());
         }
         finally
         {

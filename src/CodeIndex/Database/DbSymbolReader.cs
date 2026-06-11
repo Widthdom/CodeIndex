@@ -12,6 +12,7 @@ namespace CodeIndex.Database;
 public partial class DbReader
 {
     internal const int DefinitionBodyMaxLines = 20;
+    internal const int DefinitionBodyMaxRequestedLines = 1_000;
     internal const int DefinitionBodyMaxBytes = 16 * 1024;
 
     private const string UnusedBucketLikelyPrivate = "likely_unused_private";
@@ -777,7 +778,7 @@ public partial class DbReader
     /// Resolve symbol definitions with reconstructed excerpts.
     /// シンボル定義を抜粋付きで解決する。
     /// </summary>
-    public List<DefinitionResult> GetDefinitions(string query, int limit = 20, string? kind = null, string? lang = null, bool includeBody = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)
+    public List<DefinitionResult> GetDefinitions(string query, int limit = 20, string? kind = null, string? lang = null, bool includeBody = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null, int? bodyStartLine = null, int? bodyLineCount = null)
     {
         lang = DbReader.NormalizeQueryLanguage(lang);
         var symbols = SearchSymbols(query, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact, visibilityFilters, excludeVisibilityFilters);
@@ -790,19 +791,34 @@ public partial class DbReader
                 continue;
 
             string? bodyContent = null;
+            int? bodyContentStartLine = null;
+            int? bodyContentEndLine = null;
+            int? bodyContentNextStartLine = null;
             var bodyContentTruncated = false;
             if (includeBody && symbol.BodyStartLine != null && symbol.BodyEndLine != null)
             {
+                var requestedBodyLines = Math.Clamp(
+                    bodyLineCount ?? DefinitionBodyMaxLines,
+                    1,
+                    DefinitionBodyMaxRequestedLines);
+                var effectiveBodyStartLine = Math.Clamp(
+                    bodyStartLine ?? symbol.BodyStartLine.Value,
+                    symbol.BodyStartLine.Value,
+                    symbol.BodyEndLine.Value);
                 var cappedBodyEndLine = Math.Min(
                     symbol.BodyEndLine.Value,
-                    symbol.BodyStartLine.Value + DefinitionBodyMaxLines - 1);
-                var bodyExcerpt = GetExcerpt(symbol.Path, symbol.BodyStartLine.Value, cappedBodyEndLine);
+                    effectiveBodyStartLine + requestedBodyLines - 1);
+                var bodyExcerpt = GetExcerpt(symbol.Path, effectiveBodyStartLine, cappedBodyEndLine);
                 if (bodyExcerpt != null)
                 {
                     bodyContent = bodyExcerpt.Content;
+                    bodyContentStartLine = bodyExcerpt.StartLine;
+                    bodyContentEndLine = bodyExcerpt.EndLine;
                     bodyContentTruncated = bodyExcerpt.ContentTruncated || cappedBodyEndLine < symbol.BodyEndLine.Value;
                     (bodyContent, var byteTruncated) = ClampDefinitionBodyBytes(bodyContent);
                     bodyContentTruncated |= byteTruncated;
+                    if (cappedBodyEndLine < symbol.BodyEndLine.Value)
+                        bodyContentNextStartLine = cappedBodyEndLine + 1;
                 }
             }
 
@@ -826,6 +842,9 @@ public partial class DbReader
                 Disambiguator = BuildDefinitionDisambiguator(symbol),
                 Content = definitionExcerpt.Content,
                 BodyContent = bodyContent,
+                BodyContentStartLine = bodyContentStartLine,
+                BodyContentEndLine = bodyContentEndLine,
+                BodyContentNextStartLine = bodyContentNextStartLine,
                 BodyContentTruncated = bodyContentTruncated,
                 Complexity = bodyContent != null && !bodyContentTruncated
                     ? SymbolExtractor.EstimateComplexity(bodyContent)
@@ -1338,7 +1357,7 @@ public partial class DbReader
     /// Bundle definition, graph, and local file context for one symbol query.
     /// 単一シンボルクエリ向けに、定義・グラフ・ローカル文脈をまとめて返す。
     /// </summary>
-    public SymbolAnalysisResult AnalyzeSymbol(string query, int limit = 10, string? lang = null, bool includeBody = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth)
+    public SymbolAnalysisResult AnalyzeSymbol(string query, int limit = 10, string? lang = null, bool includeBody = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, int? bodyStartLine = null, int? bodyLineCount = null)
     {
         if (string.IsNullOrWhiteSpace(query) || IsBareVerbatimQueryToken(query))
         {
@@ -1370,7 +1389,7 @@ public partial class DbReader
         // が同じ WAL snapshot を参照するようにする。
         using var txn = _conn.BeginTransaction(deferred: true);
         var definitionLimit = Math.Min(limit, 5);
-        var definitions = GetDefinitions(normalizedQuery, definitionLimit, kind: null, lang, includeBody, pathPatterns, excludePathPatterns, excludeTests, since: null, exact);
+        var definitions = GetDefinitions(normalizedQuery, definitionLimit, kind: null, lang, includeBody, pathPatterns, excludePathPatterns, excludeTests, since: null, exact, bodyStartLine: bodyStartLine, bodyLineCount: bodyLineCount);
         DefinitionResult? primaryDefinition = definitions
             .FirstOrDefault(definition => ReferenceExtractor.SupportsLanguage(definition.Lang) == true && !IsCSharpEnumMemberDefinition(definition))
             ?? definitions.FirstOrDefault(definition => ReferenceExtractor.SupportsLanguage(definition.Lang) == true)

@@ -312,7 +312,9 @@ For AI-oriented bounded payloads, `map`, `inspect`, and `outline` accept
 For narrower `inspect` evidence, `--fields <csv>` implies JSON and selects
 top-level groups such as `definitions`, `file`, `graph`, `references`,
 `callers`, and `callees`; `--body-only` is shorthand for `--body --fields
-definitions`.
+definitions`. When a definition body is longer than the returned slice,
+`body_content_next_start_line` points to the next source line to pass with
+`--body-start`; use `--body-lines` to choose the page size.
 
 ```bash
 cdidx search authenticate --json          # ndjson stream, one result per line
@@ -320,6 +322,7 @@ cdidx search authenticate --json=array    # single JSON array
 cdidx inspect QueryCommandRunner --json --pretty
 cdidx map --compact                       # capped JSON with truncation metadata
 cdidx inspect Compute --body-only         # definitions with body_content only
+cdidx inspect Compute --body --body-start 40 --body-lines 40
 ```
 
 For `cdidx find --count --json`, `files` is the canonical matched-file count.
@@ -1219,6 +1222,8 @@ same source location.
 | `--compact` | `map`, `inspect`, `outline` | Emit AI-oriented compact JSON with capped list sections and `truncation.sections.*` metadata. The default cap is 5 unless `--limit` / `--top` is supplied. |
 | `--fields <csv>` | `inspect` | Select top-level inspect JSON groups: `file`, `workspace`, `graph`, `definitions`, `body`, `nearby_symbols`, `references`, `callers`, `callees`, or `all`. `body` includes definition bodies and maps to `definitions`. |
 | `--body-only` | `inspect` | Shorthand for `--body --fields definitions`, useful when large audits need implementation text without graph context. |
+| `--body-start <line>` | `inspect` | Start the returned definition body slice at a 1-based source line inside the symbol body. Pair with `body_content_next_start_line` from JSON to page a long body. |
+| `--body-lines <n>` | `inspect` | Return at most this many definition body lines for `--body`, `--body-only`, or `--fields body`; maximum 1000. |
 | `--status <all\|submitted\|unsubmitted>` | `suggestions` | Filter local suggestion history by GitHub submission state. |
 | `--language <lang>` / `--lang <lang>` | `suggestions` | Filter local suggestion history by recorded target language. |
 | `--category <category>` | `suggestions` | Filter local suggestion history by suggestion category. |
@@ -2611,7 +2616,9 @@ AI 向けに上限付き payload が必要な場合、`map`、`inspect`、`outli
 `inspect` の証跡をさらに絞りたい場合、`--fields <csv>` は JSON 出力を暗黙に有効化し、
 `definitions`、`file`、`graph`、`references`、`callers`、`callees` などの
 top-level group を選択します。`--body-only` は `--body --fields definitions` の
-shorthand です。
+shorthand です。definition body が返却 slice より長い場合は
+`body_content_next_start_line` が次に `--body-start` へ渡す source line を示します。
+`--body-lines` で page size を指定できます。
 
 ```bash
 cdidx search authenticate --json          # ndjson stream、1 行 1 result
@@ -2619,6 +2626,7 @@ cdidx search authenticate --json=array    # 単一 JSON array
 cdidx inspect QueryCommandRunner --json --pretty
 cdidx map --compact                       # truncation metadata 付きの cap 済み JSON
 cdidx inspect Compute --body-only         # body_content 付き definitions のみ
+cdidx inspect Compute --body --body-start 40 --body-lines 40
 ```
 
 ## Editor / index portability
@@ -3517,6 +3525,8 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--compact` | `map`、`inspect`、`outline` | list section を cap した AI 向け compact JSON を出力し、`truncation.sections.*` metadata を含める。既定 cap は 5 件で、`--limit` / `--top` 指定時はその値を使う。 |
 | `--fields <csv>` | `inspect` | inspect JSON の top-level group を選択。`file`、`workspace`、`graph`、`definitions`、`body`、`nearby_symbols`、`references`、`callers`、`callees`、`all` を指定できる。`body` は definition body を含め、`definitions` に対応する。 |
 | `--body-only` | `inspect` | `--body --fields definitions` の shorthand。大規模 audit で graph context なしに実装本文だけが必要な場合に使う。 |
+| `--body-start <line>` | `inspect` | symbol body 内の 1-based source line から definition body slice を返す。長い body の page 送りでは JSON の `body_content_next_start_line` を次の値として渡す。 |
+| `--body-lines <n>` | `inspect` | `--body`、`--body-only`、`--fields body` で返す definition body 行数の上限。最大 1000。 |
 | `--status <all\|submitted\|unsubmitted>` | `suggestions` | ローカル提案履歴を GitHub 送信状態で絞り込みます。 |
 | `--language <lang>` / `--lang <lang>` | `suggestions` | ローカル提案履歴を記録済み対象言語で絞り込みます。 |
 | `--category <category>` | `suggestions` | ローカル提案履歴を提案カテゴリで絞り込みます。 |
