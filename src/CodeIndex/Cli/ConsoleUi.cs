@@ -83,7 +83,7 @@ public static class ConsoleUi
         ("hooks", "cdidx hooks <install|uninstall|status> [--project <path>] [--force] [--json]"),
         ("backfill-fold", "cdidx backfill-fold [--db <path>] [--dry-run] [--no-checkpoint] [--json]"),
         ("optimize", "cdidx optimize [--db <path>] [--json]"),
-        ("vacuum", "cdidx vacuum [--db <path>] [--json]"),
+        ("vacuum", "cdidx vacuum [--db <path>] [--dry-run] [--json]"),
         ("index-commits", "cdidx index <projectPath> --commits <commit-ref> [commit-ref ...] [--db <path>] [--verbose] [--dry-run] [--json] [--memory-trace] [--duration-format <auto|seconds|hms>] [--max-file-bytes <bytes>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]]"),
         ("index-changed-between", "cdidx index <projectPath> --changed-between <old-ref> <new-ref> [--db <path>] [--verbose] [--dry-run] [--json] [--memory-trace] [--duration-format <auto|seconds|hms>] [--max-file-bytes <bytes>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]]"),
         ("index-files", "cdidx index <projectPath> --files <path> [path ...] [--db <path>] [--verbose] [--dry-run] [--json] [--memory-trace] [--duration-format <auto|seconds|hms>] [--max-file-bytes <bytes>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]]"),
@@ -1080,7 +1080,7 @@ public static class ConsoleUi
         Console.WriteLine("  cdidx ./myproject                             Index a project");
         Console.WriteLine("  cdidx backfill-fold                           Upgrade folded-name columns in an existing DB");
         Console.WriteLine("  cdidx optimize                                Optimize FTS5 segments in an existing DB");
-        Console.WriteLine("  cdidx vacuum --json                           Reclaim DB free pages and report page metrics");
+        Console.WriteLine("  cdidx vacuum --dry-run --json                 Estimate DB free pages and maintenance guidance");
         Console.WriteLine("  cdidx index ./myproject --commits abc123      Update DB from one commit");
         Console.WriteLine("  cdidx index ./myproject --commits abc123 def456");
         Console.WriteLine("                                              Update DB from multiple commits");

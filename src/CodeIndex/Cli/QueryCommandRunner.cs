@@ -253,6 +253,7 @@ public static class QueryCommandRunner
         "--list-recipes",
         "--read-only",
         "--immutable",
+        "--dry-run",
         "--pretty",
         "--compact",
         "--body-only",
@@ -4175,7 +4176,7 @@ public static class QueryCommandRunner
         }
 
         using var db = new DbContext(options.DbPath);
-        var result = db.RunIncrementalVacuum();
+        var result = db.RunIncrementalVacuum(options.DryRun);
         if (options.Json)
         {
             Console.WriteLine(JsonSerializer.Serialize(
@@ -4184,10 +4185,17 @@ public static class QueryCommandRunner
         }
         else
         {
-            Console.WriteLine($"Vacuum complete: reclaimed {result.PagesReclaimed:N0} page(s) ({result.BytesReclaimed:N0} bytes).");
+            Console.WriteLine(result.DryRun
+                ? $"Vacuum dry run: estimated reclaimable {result.EstimatedPagesReclaimable:N0} page(s) ({result.EstimatedBytesReclaimable:N0} bytes)."
+                : $"Vacuum complete: reclaimed {result.PagesReclaimed:N0} page(s) ({result.BytesReclaimed:N0} bytes).");
             Console.WriteLine(ConsoleUi.FormatSummaryLine("Page size", $"{result.PageSize:N0} bytes"));
             Console.WriteLine(ConsoleUi.FormatSummaryLine("Pages", $"{result.PageCountBefore:N0} -> {result.PageCountAfter:N0}"));
             Console.WriteLine(ConsoleUi.FormatSummaryLine("Freelist", $"{result.FreelistCountBefore:N0} -> {result.FreelistCountAfter:N0}"));
+            Console.WriteLine(ConsoleUi.FormatSummaryLine("AutoVac", $"{result.AutoVacuumModeBeforeName} -> {result.AutoVacuumModeAfterName}"));
+            if (result.MaintenanceGuidance.RecommendedCommand != "none")
+                Console.WriteLine(ConsoleUi.FormatSummaryLine("Recommend", result.MaintenanceGuidance.RecommendedCommand));
+            if (!string.IsNullOrWhiteSpace(result.MaintenanceGuidance.PostMaintenanceFollowUp))
+                Console.WriteLine(ConsoleUi.FormatSummaryLine("Follow-up", result.MaintenanceGuidance.PostMaintenanceFollowUp));
         }
 
         return CommandExitCodes.Success;
@@ -6145,6 +6153,7 @@ public static class QueryCommandRunner
         bool exactSubstring = false;
         bool dbPathExplicit = false;
         bool readOnly = false;
+        bool dryRun = false;
         bool checkWorkspace = false;
         TimeSpan? staleAfter = null;
         HashSet<string>? statusCheckScopes = null;
@@ -6294,6 +6303,9 @@ public static class QueryCommandRunner
                 case "--read-only":
                 case "--immutable":
                     readOnly = true;
+                    break;
+                case "--dry-run":
+                    dryRun = true;
                     break;
                 case "--pretty":
                     break;
@@ -7013,6 +7025,7 @@ public static class QueryCommandRunner
             DbPath = resolvedDbPath,
             DbPathExplicit = dbPathExplicit,
             ReadOnly = readOnly,
+            DryRun = dryRun,
             DataDir = dbResolution.DataDir,
             DataDirSource = dbResolution.DataDirSource,
             Json = json ?? jsonDefault,
@@ -9996,6 +10009,7 @@ public sealed class QueryCommandOptions
     public string DbPath { get; init; } = Path.Combine(".cdidx", "codeindex.db");
     public bool DbPathExplicit { get; init; }
     public bool ReadOnly { get; init; }
+    public bool DryRun { get; init; }
     public string? DataDir { get; init; }
     public string? DataDirSource { get; init; }
     public bool Json { get; init; }

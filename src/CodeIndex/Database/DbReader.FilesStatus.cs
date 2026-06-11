@@ -679,6 +679,13 @@ public partial class DbReader
         var dbPragmaSettings = GetDbPragmaSettings();
         var dbSizeBytes = TryGetDatabaseFileSize();
         var walSizeBytes = TryGetWalFileSize();
+        var maintenanceGuidance = MaintenanceGuidanceBuilder.Build(new MaintenanceMetrics(
+            dbPragmaSettings.PageCount,
+            dbPragmaSettings.FreelistCount,
+            dbPragmaSettings.PageSize,
+            walSizeBytes,
+            dbSizeBytes,
+            dbPragmaSettings.AutoVacuum));
         var lastIndexRun = GetLastIndexRun();
         var batchInProgress = string.Equals(
             TryGetMetaStringInternal(DbContext.BatchInProgressMetaKey),
@@ -725,6 +732,7 @@ public partial class DbReader
             IndexNewerThanReaderReason = _indexNewerThanReaderReason,
             PathCaseSensitive = pathCaseSensitive,
             DbPragmaSettings = dbPragmaSettings,
+            MaintenanceGuidance = maintenanceGuidance,
             DbSizeBytes = dbSizeBytes,
             WalSizeBytes = walSizeBytes,
             Process = StatusProcessMetrics.Capture(),
@@ -764,6 +772,7 @@ public partial class DbReader
         PageCount = ExecuteNullableLong("PRAGMA page_count"),
         FreelistCount = ExecuteNullableLong("PRAGMA freelist_count"),
         PageSize = ExecuteNullableLong("PRAGMA page_size"),
+        AutoVacuum = ExecuteNullableLong("PRAGMA auto_vacuum"),
     };
 
     private long? TryGetDatabaseFileSize()

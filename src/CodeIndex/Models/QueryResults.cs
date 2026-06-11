@@ -863,6 +863,8 @@ public class StatusResult
     /// </summary>
     [JsonPropertyName("db_pragma_settings")]
     public StatusDbPragmaSettings DbPragmaSettings { get; set; } = new();
+    [JsonPropertyName("maintenance_guidance")]
+    public StatusMaintenanceGuidance MaintenanceGuidance { get; set; } = new();
     [JsonPropertyName("db_size_bytes")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public long? DbSizeBytes { get; set; }
@@ -963,17 +965,30 @@ public class StatusDbPragmaSettings
     public long? PageCount { get; set; }
     public long? FreelistCount { get; set; }
     public long? PageSize { get; set; }
+    public long? AutoVacuum { get; set; }
 }
 
 public sealed record VacuumResult(
     string Status,
+    bool DryRun,
     long PageSize,
     long PageCountBefore,
     long FreelistCountBefore,
     long PageCountAfter,
     long FreelistCountAfter,
     long PagesReclaimed,
-    long BytesReclaimed);
+    long BytesReclaimed,
+    long EstimatedPagesReclaimable,
+    long EstimatedBytesReclaimable,
+    long? DbSizeBytesBefore,
+    long? WalSizeBytesBefore,
+    long? DbSizeBytesAfter,
+    long? WalSizeBytesAfter,
+    long AutoVacuumModeBefore,
+    string AutoVacuumModeBeforeName,
+    long AutoVacuumModeAfter,
+    string AutoVacuumModeAfterName,
+    StatusMaintenanceGuidance MaintenanceGuidance);
 
 public class PostExtractionHookStatus
 {

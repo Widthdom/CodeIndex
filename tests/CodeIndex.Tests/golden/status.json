@@ -170,7 +170,20 @@
     "wal_autocheckpoint": 1000,
     "page_count": "\u003CCOUNT\u003E",
     "freelist_count": 0,
-    "page_size": 4096
+    "page_size": 4096,
+    "auto_vacuum": 2
+  },
+  "maintenance_guidance": {
+    "wal_state": "ok",
+    "wal_threshold_bytes": 67108864,
+    "freelist_state": "ok",
+    "freelist_ratio": 0,
+    "freelist_threshold_ratio": 0.2,
+    "estimated_pages_reclaimable": 0,
+    "estimated_bytes_reclaimable": 0,
+    "auto_vacuum_mode": 2,
+    "auto_vacuum_mode_name": "incremental",
+    "recommended_command": "none"
   },
   "db_size_bytes": "\u003CCOUNT\u003E",
   "wal_size_bytes": "\u003CCOUNT\u003E",

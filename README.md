@@ -289,6 +289,7 @@ freshness、compatibility、remediation field を返します。詳細な意味�
 | workspace / HEAD freshness | `indexed_head_commit`, `worktree_head_changed`, `indexed_head_sha`, `indexed_head_branch`, `indexed_head_timestamp`, `commits_ahead_of_indexed_head`。 |
 | version / forward compatibility | `index_writer_version`, `index_newer_than_reader`, `index_newer_than_reader_reason`。 |
 | unknown-extension / runtime diagnostics | `unknown_extension_file_count`, `unknown_extension_files`, `unknown_extension_files_truncated`, `unknown_extension_file_path_limit`, `unknown_extension_extension_counts`, `unknown_extension_category_counts`, `unknown_extension_groups`, `extractors`, `path_case_sensitive`, `data_dir_mode`, `mac_profile`, `stale_after_seconds`, `index_age_seconds`。 |
+| database maintenance | `db_size_bytes`, `wal_size_bytes`, `db_pragma_settings` (`journal_mode`, `synchronous`, `wal_autocheckpoint`, `page_count`, `freelist_count`, `page_size`, `auto_vacuum`), `maintenance_guidance`。 |
 | remediation fields | `degraded_root_cause`, `degraded_reason`, `recommended_action`, `alternative_action`, `readiness_degradations`。 |
 | MCP-only session diagnostics | `mcp_session`。 |
 

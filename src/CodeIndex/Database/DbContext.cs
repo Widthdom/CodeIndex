@@ -591,9 +591,9 @@ public class DbContext : IDisposable
             Execute("PRAGMA auto_vacuum=INCREMENTAL");
     }
 
-    public VacuumResult RunIncrementalVacuum()
+    public VacuumResult RunIncrementalVacuum(bool dryRun = false)
     {
-        if (_isReadOnly)
+        if (_isReadOnly && !dryRun)
         {
             throw new CodeIndexException(
                 code: CommandErrorCodes.DbNotWritable,
@@ -604,31 +604,94 @@ public class DbContext : IDisposable
         }
 
         var before = ReadVacuumMetrics();
-        if (ReadAutoVacuumMode() == 2)
+        if (!dryRun && before.AutoVacuumMode == 2)
         {
             Execute($"PRAGMA incremental_vacuum({before.FreelistCount})");
         }
-        else
+        else if (!dryRun)
         {
             Execute("PRAGMA auto_vacuum=INCREMENTAL");
             Execute("VACUUM");
         }
-        var after = ReadVacuumMetrics();
+        var after = dryRun ? before : ReadVacuumMetrics();
+        var pagesReclaimed = dryRun ? 0 : Math.Max(0, before.PageCount - after.PageCount);
+        var bytesReclaimed = pagesReclaimed * after.PageSize;
+        var estimatedPagesReclaimable = Math.Max(0, before.FreelistCount);
+        var estimatedBytesReclaimable = estimatedPagesReclaimable * before.PageSize;
+        var guidance = MaintenanceGuidanceBuilder.Build(new MaintenanceMetrics(
+            after.PageCount,
+            after.FreelistCount,
+            after.PageSize,
+            after.WalSizeBytes,
+            after.DbSizeBytes,
+            after.AutoVacuumMode));
         return new VacuumResult(
-            Status: "ok",
+            Status: dryRun ? "dry_run" : "ok",
+            DryRun: dryRun,
             PageSize: after.PageSize,
             PageCountBefore: before.PageCount,
             FreelistCountBefore: before.FreelistCount,
             PageCountAfter: after.PageCount,
             FreelistCountAfter: after.FreelistCount,
-            PagesReclaimed: Math.Max(0, before.PageCount - after.PageCount),
-            BytesReclaimed: Math.Max(0, before.PageCount - after.PageCount) * after.PageSize);
+            PagesReclaimed: pagesReclaimed,
+            BytesReclaimed: bytesReclaimed,
+            EstimatedPagesReclaimable: estimatedPagesReclaimable,
+            EstimatedBytesReclaimable: estimatedBytesReclaimable,
+            DbSizeBytesBefore: before.DbSizeBytes,
+            WalSizeBytesBefore: before.WalSizeBytes,
+            DbSizeBytesAfter: after.DbSizeBytes,
+            WalSizeBytesAfter: after.WalSizeBytes,
+            AutoVacuumModeBefore: before.AutoVacuumMode,
+            AutoVacuumModeBeforeName: MaintenanceGuidanceBuilder.FormatAutoVacuumMode(before.AutoVacuumMode) ?? "unknown",
+            AutoVacuumModeAfter: after.AutoVacuumMode,
+            AutoVacuumModeAfterName: MaintenanceGuidanceBuilder.FormatAutoVacuumMode(after.AutoVacuumMode) ?? "unknown",
+            MaintenanceGuidance: guidance);
     }
 
-    private (long PageCount, long FreelistCount, long PageSize) ReadVacuumMetrics()
-        => (ReadPragmaLong("page_count"), ReadPragmaLong("freelist_count"), ReadPragmaLong("page_size"));
+    private VacuumMetrics ReadVacuumMetrics()
+        => new(
+            ReadPragmaLong("page_count"),
+            ReadPragmaLong("freelist_count"),
+            ReadPragmaLong("page_size"),
+            ReadAutoVacuumMode(),
+            TryGetDatabaseFileSize(),
+            TryGetWalFileSize());
 
     private long ReadAutoVacuumMode() => ReadPragmaLong("auto_vacuum");
+
+    private long? TryGetDatabaseFileSize()
+    {
+        var path = _connection.DataSource;
+        if (string.IsNullOrWhiteSpace(path) || path.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        try
+        {
+            var info = new FileInfo(path);
+            return info.Exists ? info.Length : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
+        {
+            return null;
+        }
+    }
+
+    private long? TryGetWalFileSize()
+    {
+        var path = _connection.DataSource;
+        if (string.IsNullOrWhiteSpace(path) || path.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        try
+        {
+            var info = new FileInfo(path + "-wal");
+            return info.Exists ? info.Length : 0;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
+        {
+            return null;
+        }
+    }
 
     private long ReadPragmaLong(string name)
     {
@@ -636,6 +699,14 @@ public class DbContext : IDisposable
         cmd.CommandText = $"PRAGMA {name}";
         return Convert.ToInt64(cmd.ExecuteScalar(), CultureInfo.InvariantCulture);
     }
+
+    private readonly record struct VacuumMetrics(
+        long PageCount,
+        long FreelistCount,
+        long PageSize,
+        long AutoVacuumMode,
+        long? DbSizeBytes,
+        long? WalSizeBytes);
 
     private void EnsureWritableUserVersionSupported(string dbPath)
     {

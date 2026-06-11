@@ -329,7 +329,7 @@ internal static class CliFlagSchema
             new() { Name = "--integrity-check", Description = "Run PRAGMA integrity_check on the database", Commands = Set("db") },
             new() { Name = "--rebuild", Description = "Delete existing DB and rebuild from scratch", Commands = Set("index") },
             new() { Name = "--optimize", Description = "Optimize the existing FTS5 table without scanning files", Commands = Set("index") },
-            new() { Name = "--dry-run", Description = "Preview without writing", Commands = Set("index", "backfill-fold") },
+            new() { Name = "--dry-run", Description = "Preview without writing", Commands = Set("index", "backfill-fold", "vacuum") },
             new() { Name = "--no-checkpoint", Description = "Skip the automatic DB checkpoint before maintenance", Commands = Set("backfill-fold") },
             new() { Name = "--force", Description = "Bypass the per-database index lock", Commands = Set("index") },
             new() { Name = "--duration-format", ValuePlaceholder = "<auto|seconds|hms>", Description = "Index elapsed time display format", Commands = Set("index") },

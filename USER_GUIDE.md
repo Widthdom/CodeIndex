@@ -3158,6 +3158,13 @@ DB を read-only で開いて SQLite の `PRAGMA integrity_check` を実行し�
 
 `--json` の診断出力は自動化向けに安定した `severity` と `diagnostic_code` を含みます。`db --integrity-check --json` は `integrity_ok` / `integrity_failed` を返し、`db schema --json` は `schema_ok` / `schema_truncated` に加えて `object_type_counts` と `object_type_omitted_counts` で SQLite の table / index / trigger / view 件数と省略数を返します。
 
+DB / WAL の肥大や空き page を確認したい場合は `status --json` の `maintenance_guidance` を見ます。既定では WAL が 64 MiB 以上で `checkpoint_recommended`、`freelist_count / page_count` が 0.20 以上で `vacuum_recommended` になり、`recommended_command` と `post_maintenance_follow_up` が返ります。しきい値は `CDIDX_MAINTENANCE_WAL_WARN_BYTES` と `CDIDX_MAINTENANCE_FREELIST_WARN_RATIO` で調整できます。
+
+```bash
+cdidx vacuum --dry-run --json   # 回収見積もりと maintenance guidance だけを確認
+cdidx vacuum --json             # incremental vacuum / 初回変換を実行
+```
+
 ### コード検索
 
 ```bash
