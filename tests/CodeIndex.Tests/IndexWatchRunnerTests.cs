@@ -337,6 +337,7 @@ public class IndexWatchRunnerTests
             MaxFileSizeBytes = 4096,
             MaxSymbolsPerFile = 42,
             SymlinkPolicy = FileIndexer.SymlinkPolicy.All,
+            SymbolKindFilter = SymbolKindFilter.Create(["class", "function"], ["test.method"], parseError: null),
         };
         var method = typeof(IndexWatchRunner).GetMethod("EmitWatchOverflow", BindingFlags.NonPublic | BindingFlags.Static);
         Assert.NotNull(method);
@@ -374,6 +375,8 @@ public class IndexWatchRunnerTests
         AssertOptionValue(args, "--max-file-bytes", "4096");
         AssertOptionValue(args, "--max-symbols-per-file", "42");
         AssertOptionValue(args, "--follow-symlinks", "all");
+        AssertOptionValue(args, "--include-symbol-kind", "class,function");
+        AssertOptionValue(args, "--exclude-symbol-kind", "test.method");
     }
 
     [Fact]

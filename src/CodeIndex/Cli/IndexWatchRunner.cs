@@ -229,6 +229,16 @@ internal static class IndexWatchRunner
             args.Add("--follow-symlinks");
             args.Add(baseOptions.SymlinkPolicy.ToString().ToLowerInvariant());
         }
+        if (baseOptions.SymbolKindFilter.Include.Count > 0)
+        {
+            args.Add("--include-symbol-kind");
+            args.Add(string.Join(",", baseOptions.SymbolKindFilter.Include));
+        }
+        if (baseOptions.SymbolKindFilter.Exclude.Count > 0)
+        {
+            args.Add("--exclude-symbol-kind");
+            args.Add(string.Join(",", baseOptions.SymbolKindFilter.Exclude));
+        }
         return args;
     }
 
