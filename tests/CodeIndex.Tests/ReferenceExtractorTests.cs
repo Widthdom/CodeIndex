@@ -7431,6 +7431,37 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_MutationTargetReferencesDeriveLeafWithoutNamedCaptures()
+    {
+        // The broad mutation-target regex intentionally has no named captures; target emission
+        // derives the trailing qualified identifier leaf from the match text so compiled-regex
+        // group state cannot corrupt indexing on large SQL files.
+        // 広い mutation-target regex は意図的に名前付き capture を持たない。target 発行は
+        // match text 末尾の qualified identifier leaf から導出し、大きな SQL ファイルで
+        // compiled regex の group 状態に依存しないことを固定する。
+        const string content = """
+            INSERT INTO dbo.Äpfel (Id) VALUES (1);
+            UPDATE ONLY sales.Invoices SET Paid = 1;
+            UPDATE TOP (5) "archive"."Legacy Orders" SET Archived = 1;
+            MERGE INTO [dbo].[MergeTarget] USING staging.Source AS source ON 1 = 0;
+            DELETE FROM ##SessionRows WHERE ExpiresAt < CURRENT_TIMESTAMP;
+            ALTER TABLE `tenant`.`Audit Log` ADD processed_at datetime;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Äpfel" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "Invoices" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "Legacy Orders" && r.ReferenceKind == "reference" && r.Line == 3);
+        Assert.Contains(references, r => r.SymbolName == "MergeTarget" && r.ReferenceKind == "reference" && r.Line == 4);
+        Assert.Contains(references, r => r.SymbolName == "##SessionRows" && r.ReferenceKind == "reference" && r.Line == 5);
+        Assert.Contains(references, r => r.SymbolName == "Audit Log" && r.ReferenceKind == "reference" && r.Line == 6);
+        Assert.DoesNotContain(references, r =>
+            (r.SymbolName is "dbo" or "sales" or "archive" or "tenant") && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
     public void Extract_SQL_SelectIntoCapturesNonTempTargetReference()
     {
         // T-SQL `SELECT ... INTO schema.Table` creates/writes a table. Non-temp targets should
