@@ -412,12 +412,19 @@ public partial class McpServer
 
     private static List<string> ReadStringList(JsonNode? args, string propertyName)
     {
-        return args?[propertyName] is JsonArray array
-            ? array.Select(node => node is JsonValue value && value.TryGetValue<string>(out var text) ? text : null)
+        var node = args?[propertyName];
+        if (node is JsonArray array)
+        {
+            return array.Select(node => node is JsonValue value && value.TryGetValue<string>(out var text) ? text : null)
                 .Where(value => !string.IsNullOrWhiteSpace(value))
                 .Cast<string>()
-                .ToList()
-            : [];
+                .ToList();
+        }
+
+        if (node is JsonValue scalar && scalar.TryGetValue<string>(out var scalarText) && !string.IsNullOrWhiteSpace(scalarText))
+            return [scalarText];
+
+        return [];
     }
 
     private JsonNode? TryReadSearchGuardFilters(JsonNode? id, JsonNode? args, out List<SearchGuardFilter> filters)
@@ -509,6 +516,7 @@ public partial class McpServer
                     ["message"] = $"Tool '{toolName}' does not accept arguments.",
                     ["tool"] = toolName,
                 },
+                toolName,
                 obj.First().Key);
 
         foreach (var property in obj)
@@ -521,6 +529,7 @@ public partial class McpServer
                         ["message"] = $"Unknown argument '{McpBoundedText.ForDisplay(property.Key).Text}' for tool '{toolName}'.",
                         ["tool"] = toolName,
                     },
+                    toolName,
                     property.Key);
             }
 
@@ -591,11 +600,44 @@ public partial class McpServer
         return null;
     }
 
-    private static JsonObject AddUnknownArgumentData(JsonObject error, string argumentName)
+    private static JsonObject AddUnknownArgumentData(JsonObject error, string toolName, string argumentName)
     {
         var display = McpBoundedText.ForDisplay(argumentName);
         error["unknown_argument"] = display.Text;
         display.AddMetadata(error, "unknown_argument");
+        return AddArgumentCompatibilityData(error, toolName, argumentName);
+    }
+
+    private static JsonObject AddArgumentCompatibilityData(JsonObject error, string toolName, string argumentName)
+    {
+        switch (toolName, argumentName)
+        {
+            case ("definition", "lspCompatible"):
+            case ("references", "lspCompatible"):
+                error["alias_of"] = "lsp_compatible";
+                break;
+            case ("search", "exact"):
+                error["alias_of"] = "exactSubstring";
+                error["deprecated"] = true;
+                error["deprecation_reason"] = "Use `exactSubstring` for search exact substring matching.";
+                break;
+            case ("definition", "exact"):
+            case ("references", "exact"):
+            case ("callers", "exact"):
+            case ("callees", "exact"):
+            case ("symbols", "exact"):
+            case ("analyze_symbol", "exact"):
+                error["alias_of"] = "exactName";
+                error["deprecated"] = true;
+                error["deprecation_reason"] = "Use `exactName` for exact symbol-name matching.";
+                break;
+            case ("impact_analysis", "maxDepth"):
+                error["alias_of"] = "maxHops";
+                error["deprecated"] = true;
+                error["deprecation_reason"] = "Use `maxHops`; `maxDepth` is retained for compatibility.";
+                break;
+        }
+
         return error;
     }
 
@@ -606,7 +648,7 @@ public partial class McpServer
             if (TryGetExpectedJsonType(toolName, property.Key, out var expected)
                 && !MatchesExpectedJsonType(property.Value, expected))
             {
-                return new JsonObject
+                return AddArgumentCompatibilityData(new JsonObject
                 {
                     ["message"] = $"Invalid type for argument '{property.Key}' on tool '{toolName}'. Expected {expected}.",
                     ["tool"] = toolName,
@@ -614,7 +656,7 @@ public partial class McpServer
                     ["expected"] = expected,
                     ["actual"] = DescribeJsonType(property.Value),
                     ["jsonrpc_invalid_params"] = true,
-                };
+                }, toolName, property.Key);
             }
         }
 
@@ -623,10 +665,16 @@ public partial class McpServer
 
     private static bool TryGetExpectedJsonType(string toolName, string argumentName, out string expected)
     {
-        if (argumentName is "excludePaths" or "names" or "sections" or "files" or "commits" or "changedBetween")
+        if (argumentName is "names" or "sections" or "files" or "commits" or "changedBetween")
         {
-            expected = string.Empty;
-            return false;
+            expected = "array";
+            return true;
+        }
+
+        if (argumentName == "excludePaths")
+        {
+            expected = "string_or_array";
+            return true;
         }
 
         if (argumentName == "path")
@@ -643,6 +691,7 @@ public partial class McpServer
                 "guardWindow" or "maxOutputBytes" => "integer",
             "excludeTests" or "includeGenerated" or "rawQuery" or "noDedup" or "exactSubstring" or
                 "exactName" or "exact" or "prefix" or "countOnly" or "includeBody" or "lsp_compatible" or
+                "lspCompatible" or
                 "regex" or "withPaths" or "rebuild" or "dryRun" or "dry_run" or "force" or
                 "optimize" or "reverse" or "cycles" => "boolean",
             "project" or "requireBefore" or "requireAfter" or "rejectBefore" or "rejectAfter" => "string_or_array",
@@ -706,8 +755,8 @@ public partial class McpServer
     private static IReadOnlySet<string> GetAllowedToolArguments(string toolName) => toolName switch
     {
         "search" => new HashSet<string>(StringComparer.Ordinal) { "query", "limit", "lang", "snippetLines", "maxLineWidth", "rawQuery", "cursor", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "noDedup", "exactSubstring", "exact", "prefix", "requireBefore", "requireAfter", "rejectBefore", "rejectAfter", "guardWindow", "countOnly", "format", "project", "solution" },
-        "definition" => new HashSet<string>(StringComparer.Ordinal) { "query", "kind", "lang", "limit", "includeBody", "lsp_compatible", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "exactName", "exact", "format", "project", "solution" },
-        "references" => new HashSet<string>(StringComparer.Ordinal) { "query", "kind", "lang", "limit", "offset", "maxLineWidth", "lsp_compatible", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "countOnly", "format", "project", "solution" },
+        "definition" => new HashSet<string>(StringComparer.Ordinal) { "query", "kind", "lang", "limit", "includeBody", "lsp_compatible", "lspCompatible", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "exactName", "exact", "format", "project", "solution" },
+        "references" => new HashSet<string>(StringComparer.Ordinal) { "query", "kind", "lang", "limit", "offset", "maxLineWidth", "lsp_compatible", "lspCompatible", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "countOnly", "format", "project", "solution" },
         "callers" or "callees" => new HashSet<string>(StringComparer.Ordinal) { "query", "kind", "rankBy", "lang", "limit", "offset", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "countOnly", "format", "project", "solution" },
         "symbols" => new HashSet<string>(StringComparer.Ordinal) { "query", "names", "kind", "lang", "limit", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "exactName", "exact", "project", "solution" },
         "files" => new HashSet<string>(StringComparer.Ordinal) { "query", "lang", "limit", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "project", "solution" },
@@ -776,7 +825,7 @@ public partial class McpServer
 
         if (node is JsonValue scalar && scalar.TryGetValue<string>(out var scalarText))
         {
-            if (propertyName is "excludePaths" or "names" or "sections")
+            if (propertyName is "names" or "sections")
                 return new JsonObject
                 {
                     ["message"] = $"{propertyName} must be an array of strings.",
@@ -853,6 +902,27 @@ public partial class McpServer
         }
 
         exact = legacyExact || exactName;
+        error = null;
+        return true;
+    }
+
+    private static bool TryReadLspCompatibleArgument(JsonNode? args, out bool lspCompatible, out string? error)
+    {
+        var snakeNode = args?["lsp_compatible"];
+        var camelNode = args?["lspCompatible"];
+        var snakeProvided = snakeNode is not null;
+        var camelProvided = camelNode is not null;
+        var snakeValue = snakeNode?.GetValue<bool>() ?? false;
+        var camelValue = camelNode?.GetValue<bool>() ?? false;
+
+        if (snakeProvided && camelProvided && snakeValue != camelValue)
+        {
+            lspCompatible = false;
+            error = "Pass only one of 'lsp_compatible' or 'lspCompatible', or give both aliases the same value.";
+            return false;
+        }
+
+        lspCompatible = snakeProvided ? snakeValue : camelValue;
         error = null;
         return true;
     }
@@ -1493,7 +1563,8 @@ public partial class McpServer
         var lang = QueryCommandRunner.NormalizeLangFilterValue(args?["lang"]?.GetValue<string>());
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? QueryCommandRunner.DefaultQueryLimit);
         var includeBody = args?["includeBody"]?.GetValue<bool>() ?? false;
-        var lspCompatible = args?["lsp_compatible"]?.GetValue<bool>() ?? false;
+        if (!TryReadLspCompatibleArgument(args, out var lspCompatible, out var lspCompatibleError))
+            return CreateToolErrorResponse(id, lspCompatibleError!);
         var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
@@ -1571,7 +1642,8 @@ public partial class McpServer
         var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
         var lang = QueryCommandRunner.NormalizeLangFilterValue(args?["lang"]?.GetValue<string>());
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? QueryCommandRunner.DefaultQueryLimit);
-        var lspCompatible = args?["lsp_compatible"]?.GetValue<bool>() ?? false;
+        if (!TryReadLspCompatibleArgument(args, out var lspCompatible, out var lspCompatibleError))
+            return CreateToolErrorResponse(id, lspCompatibleError!);
         var offset = ReadOffset(args);
         if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
             return maxLineWidthError;

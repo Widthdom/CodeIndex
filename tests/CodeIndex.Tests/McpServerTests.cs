@@ -3829,8 +3829,11 @@ public class McpServerTests : IDisposable
         Assert.Equal(QueryCommandRunner.MaxQueryPathFilterCount, pathArraySchema["maxItems"]!.GetValue<int>());
         Assert.Equal(QueryCommandRunner.MaxQueryPathFilterLength, pathArraySchema["items"]!["maxLength"]!.GetValue<int>());
         var excludePathsSchema = searchProperties["excludePaths"]!;
-        Assert.Equal(QueryCommandRunner.MaxQueryPathFilterCount, excludePathsSchema["maxItems"]!.GetValue<int>());
-        Assert.Equal(QueryCommandRunner.MaxQueryPathFilterLength, excludePathsSchema["items"]!["maxLength"]!.GetValue<int>());
+        var excludePathsStringSchema = excludePathsSchema["oneOf"]!.AsArray()[0]!;
+        Assert.Equal(QueryCommandRunner.MaxQueryPathFilterLength, excludePathsStringSchema["maxLength"]!.GetValue<int>());
+        var excludePathsArraySchema = excludePathsSchema["oneOf"]!.AsArray()[1]!;
+        Assert.Equal(QueryCommandRunner.MaxQueryPathFilterCount, excludePathsArraySchema["maxItems"]!.GetValue<int>());
+        Assert.Equal(QueryCommandRunner.MaxQueryPathFilterLength, excludePathsArraySchema["items"]!["maxLength"]!.GetValue<int>());
 
         var referencesTool = tools.First(t => t!["name"]!.GetValue<string>() == "references")!;
         var kindEnum = referencesTool["inputSchema"]!["properties"]!["kind"]!["enum"]!.AsArray()
@@ -4323,6 +4326,42 @@ public class McpServerTests : IDisposable
         Assert.NotNull(structured["results"]![0]!["matchLines"]);
         Assert.NotNull(structured["results"]![0]!["highlights"]);
         Assert.Null(structured["results"]![0]!["content"]);
+    }
+
+    [Fact]
+    public void ToolsCall_Search_AcceptsScalarExcludePaths_Issue3538()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"App","excludePaths":"src/app.cs"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Null(response["error"]);
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(0, structured["count"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsCall_Definition_AcceptsLspCompatibleAlias_Issue3538()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"definition","arguments":{"query":"App","lspCompatible":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Null(response["error"]);
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.True(structured["lspCompatible"]!.GetValue<bool>());
+        Assert.Equal("file", structured["results"]![0]!["uri"]!.GetValue<string>().Split(':')[0]);
+    }
+
+    [Fact]
+    public void ToolsCall_DeprecatedAliasTypeError_CarriesCompatibilityMetadata_Issue3538()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"references","arguments":{"query":"App","exact":"yes"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Null(response["result"]);
+        var data = response["error"]!["data"]!;
+        Assert.Equal("exactName", data["alias_of"]!.GetValue<string>());
+        Assert.True(data["deprecated"]!.GetValue<bool>());
+        Assert.Equal("boolean", data["expected"]!.GetValue<string>());
     }
 
     [Fact]
@@ -6938,7 +6977,6 @@ public class McpServerTests : IDisposable
     }
 
     [Theory]
-    [InlineData("""{"names":""}""", "must be an array")]
     [InlineData("""{"names":[]}""", "no usable entries")]
     [InlineData("""{"names":[""]}""", "no usable entries")]
     [InlineData("""{"names":["   "]}""", "no usable entries")]
@@ -6952,6 +6990,21 @@ public class McpServerTests : IDisposable
         Assert.True(response["result"]!["isError"]!.GetValue<bool>(), $"expected isError for arguments {argsJson}");
         var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
         Assert.Contains(expectedMessageFragment, text);
+    }
+
+    [Fact]
+    public void ToolsCall_Symbols_RejectsScalarNamesAsInvalidParams_Issue3538()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbols","arguments":{"names":""}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Null(response["result"]);
+        var error = response["error"]!;
+        Assert.Equal(-32602, error["code"]!.GetValue<int>());
+        Assert.Contains("Invalid type for argument 'names'", error["message"]!.GetValue<string>(), StringComparison.Ordinal);
+        var data = error["data"]!;
+        Assert.Equal("names", data["parameter"]!.GetValue<string>());
+        Assert.Equal("array", data["expected"]!.GetValue<string>());
     }
 
     [Fact]

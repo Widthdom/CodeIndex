@@ -2130,6 +2130,8 @@ Graph-oriented MCP tools such as `references`, `callers`, and `callees` also ret
 
 All MCP tools include `annotations` (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) so AI clients can auto-approve safe read-only queries without prompting the user.
 
+`tools/list` also advertises argument compatibility metadata. Common path filters such as `excludePaths` accept either a scalar string or a string array, matching `path`; schemas expose `x-expectedType`, aliases through `x-aliases` / `x-aliasOf`, and deprecated aliases through `deprecated` plus `x-deprecationReason`. Validation errors echo `expected` and, where relevant, `alias_of` / `deprecated` so clients can recover without parsing prose. `definition` and `references` accept both `lsp_compatible` and the JSON-style `lspCompatible` alias.
+
 #### MCP error responses
 
 MCP JSON-RPC failures use the standard `error` object. Clients should route on
@@ -4418,6 +4420,8 @@ cdidx backfill-fold
 `references`、`callers`、`callees` などの graph 系 MCP ツールも、言語フィルタが指定されている場合は `graph_language`、`graph_supported`、`graph_support_reason` を返し、未対応言語と単なる 0 件ヒットを区別できるようにしています。
 
 全 MCP ツールは `annotations`（`readOnlyHint`、`destructiveHint`、`idempotentHint`、`openWorldHint`）を含み、AIクライアントがユーザーへの確認なしに安全な読み取り専用クエリを自動承認できるようにしています。
+
+`tools/list` は引数互換メタデータも公開します。`excludePaths` などの共通 path filter は `path` と同じくスカラー文字列または文字列配列を受け付け、schema には `x-expectedType`、`x-aliases` / `x-aliasOf` による alias、`deprecated` と `x-deprecationReason` による非推奨 alias 情報が含まれます。検証エラーも `expected` と、該当する場合は `alias_of` / `deprecated` を返すため、クライアントは説明文を parse せず復旧できます。`definition` と `references` は `lsp_compatible` と JSON 風 alias の `lspCompatible` の両方を受け付けます。
 
 #### MCP エラー応答
 
