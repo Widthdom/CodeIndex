@@ -8355,6 +8355,38 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_DryRun_WithFiles_NormalizesUnicodeDbPathForEstimates()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var nfdFileName = "cafe\u0301.py";
+            File.WriteAllText(Path.Combine(projectRoot, nfdFileName), "print('hello')\n");
+
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--files", nfdFileName, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            Assert.Equal(1, CountRows(dbPath, "files"));
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", nfdFileName, "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("dry_run", json.GetProperty("status").GetString());
+            Assert.Equal(1, json.GetProperty("files_total").GetInt32());
+            Assert.Equal(1, json.GetProperty("projected_file_updates").GetInt32());
+            Assert.Equal(0, json.GetProperty("projected_file_deletes").GetInt32());
+            Assert.Equal(0, json.GetProperty("projected_file_purges").GetInt32());
+            Assert.True(json.GetProperty("estimated_table_mutations").GetProperty("chunks").GetInt64() > 0);
+            Assert.Equal(1, CountRows(dbPath, "files"));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_DryRun_WithFiles_ReportsChecksumRenamePurgeWithoutWriting()
     {
         var projectRoot = CreateTempProject();

@@ -93,13 +93,14 @@ public static partial class IndexCommandRunner
 
         foreach (var f in dryCandidates)
         {
-            var relativePath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectPath, f));
+            var displayRelativePath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectPath, f));
+            var dbRelativePath = FileIndexer.NormalizeIndexPath(displayRelativePath);
             var pathFilter = dryIndexer.EvaluatePathFilter(f);
             RecordDryRunScanErrors(pathFilter.Errors);
             if (pathFilter.ShouldSkip)
             {
-                if (pathFilter.ShouldDeleteExisting && dbSnapshot.Files.ContainsKey(relativePath))
-                    projectedDeletePaths.Add(relativePath);
+                if (pathFilter.ShouldDeleteExisting && dbSnapshot.Files.ContainsKey(dbRelativePath))
+                    projectedDeletePaths.Add(dbRelativePath);
                 continue;
             }
 
@@ -111,9 +112,9 @@ public static partial class IndexCommandRunner
                 else if (probe.Unsupported)
                     unsupportedTotal++;
 
-                if (dbSnapshot.Files.ContainsKey(relativePath))
+                if (dbSnapshot.Files.ContainsKey(dbRelativePath))
                 {
-                    projectedDeletePaths.Add(relativePath);
+                    projectedDeletePaths.Add(dbRelativePath);
                 }
                 else if (!authoritativeFullScan && projectRootWritten && probe.Error == null)
                 {
@@ -121,27 +122,27 @@ public static partial class IndexCommandRunner
                         projectedPurgePaths,
                         dbSnapshot,
                         projectPath,
-                        relativePath);
+                        dbRelativePath);
                 }
 
                 if (probe.Error != null)
                 {
-                    RecordDryRunError(relativePath, probe.Error);
+                    RecordDryRunError(displayRelativePath, probe.Error);
                     if (!options.Json && !options.Quiet)
-                        ConsoleUi.PrintWarning($"{relativePath}: {probe.Error}");
+                        ConsoleUi.PrintWarning($"{displayRelativePath}: {probe.Error}");
                 }
                 continue;
             }
 
             dryFileCount++;
-            retainedRelativePaths.Add(relativePath);
+            retainedRelativePaths.Add(dbRelativePath);
             if (!authoritativeFullScan)
             {
                 AddProjectedPartialChecksumPurges(
                     projectedPurgePaths,
                     dbSnapshot,
                     projectPath,
-                    relativePath,
+                    dbRelativePath,
                     probe.Checksum);
                 if (projectRootWritten)
                 {
@@ -149,19 +150,20 @@ public static partial class IndexCommandRunner
                         projectedPurgePaths,
                         dbSnapshot,
                         projectPath,
-                        relativePath);
+                        dbRelativePath);
                 }
             }
-            AddEstimatedUpdateMutation(estimatedTableMutations, dbSnapshot, relativePath);
+            AddEstimatedUpdateMutation(estimatedTableMutations, dbSnapshot, dbRelativePath);
             if (dryFileSamples.Count < DryRunFileSampleLimit)
-                dryFileSamples.Add(relativePath);
+                dryFileSamples.Add(displayRelativePath);
             langCounts[probe.Language] = langCounts.GetValueOrDefault(probe.Language) + 1;
         }
 
         foreach (var relativePath in dryDeleteCandidates)
         {
-            if (dbSnapshot.Files.ContainsKey(relativePath))
-                projectedDeletePaths.Add(relativePath);
+            var dbRelativePath = FileIndexer.NormalizeIndexPath(relativePath);
+            if (dbSnapshot.Files.ContainsKey(dbRelativePath))
+                projectedDeletePaths.Add(dbRelativePath);
         }
 
         if (authoritativeFullScan && dbSnapshot.Files.Count > 0)
