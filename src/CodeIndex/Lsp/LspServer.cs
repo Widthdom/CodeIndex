@@ -14,6 +14,8 @@ namespace CodeIndex.Lsp;
 internal sealed class LspServer : IDisposable
 {
     private const int DefaultLimit = 50;
+    internal const int MaxWorkspaceSymbols = 1000;
+    private const int MaxWorkspaceFolders = 32;
     internal const int MaxLspFrameBytes = 8 * 1024 * 1024;
     internal const int MaxLspHeaderLineBytes = 8 * 1024;
     internal const int MaxLspHeaderCount = 64;
@@ -64,8 +66,10 @@ internal sealed class LspServer : IDisposable
     private bool _shutdownRequested;
     private bool _exitRequested;
     private bool _exitRequestedBeforeShutdown;
+    private readonly List<string> _workspaceFolders = [];
 
-    private readonly record struct PositionTokenContext(string Token, string IndexedPath);
+    private readonly record struct PositionTokenContext(string Token, string IndexedPath, string? WorkspaceRoot);
+    private readonly record struct DocumentSymbolNode(SymbolResult Symbol, JsonObject Item);
 
     public LspServer(DbReader reader, string version, JsonSerializerOptions jsonOptions, string? projectRoot = null)
     {
@@ -74,6 +78,8 @@ internal sealed class LspServer : IDisposable
         _jsonOptions = jsonOptions;
         _projectRoot = string.IsNullOrWhiteSpace(projectRoot) ? null : projectRoot;
         _pathStringComparison = PathCasing.ComparisonFor(_projectRoot ?? Environment.CurrentDirectory);
+        if (_projectRoot != null)
+            _workspaceFolders.Add(Path.GetFullPath(_projectRoot));
     }
 
     public int Run(Stream input, Stream output) => Run(input, output, CancellationToken.None);
@@ -127,14 +133,18 @@ internal sealed class LspServer : IDisposable
                 using var activity = StartLspRequestActivity(method);
                 return method switch
                 {
-                    "initialize" => Result(id, BuildInitializeResult()),
+                    "initialize" => HandleInitialize(id, root),
                     "initialized" => null,
                     "shutdown" => HandleShutdown(id),
                     "exit" => HandleExit(),
+                    "workspace/didChangeWorkspaceFolders" => HandleDidChangeWorkspaceFolders(root),
                     "workspace/symbol" => Result(id, WorkspaceSymbol(root)),
                     "textDocument/documentSymbol" => Result(id, DocumentSymbol(root)),
-                    "textDocument/definition" => Result(id, Definition(root)),
-                    "textDocument/references" => Result(id, References(root)),
+                    "textDocument/definition" => Result(id, Definition(root, "textDocument/definition")),
+                    "textDocument/declaration" => Result(id, Definition(root, "textDocument/declaration")),
+                    "textDocument/typeDefinition" => Result(id, Definition(root, "textDocument/typeDefinition")),
+                    "textDocument/implementation" => Result(id, Definition(root, "textDocument/implementation")),
+                    "textDocument/references" => Result(id, References(root, "textDocument/references")),
                     _ => hasId ? Error(id, -32601, $"Method not found: {SanitizeUnknownMethod(method)}") : null,
                 };
             }
@@ -271,6 +281,41 @@ internal sealed class LspServer : IDisposable
         return null;
     }
 
+    private JsonObject HandleInitialize(JsonNode? id, JsonElement root)
+    {
+        CaptureInitializeWorkspaceFolders(root);
+        return Result(id, BuildInitializeResult());
+    }
+
+    private JsonObject? HandleDidChangeWorkspaceFolders(JsonElement root)
+    {
+        if (TryGet(root, out var removed, "params", "event", "removed") && removed.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var folder in removed.EnumerateArray())
+            {
+                if (TryGetWorkspaceFolderPath(folder, out var path))
+                    _workspaceFolders.RemoveAll(existing => string.Equals(existing, path, _pathStringComparison));
+            }
+        }
+
+        if (TryGet(root, out var added, "params", "event", "added") && added.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var folder in added.EnumerateArray())
+            {
+                if (_workspaceFolders.Count >= MaxWorkspaceFolders)
+                    break;
+                if (TryGetWorkspaceFolderPath(folder, out var path)
+                    && !_workspaceFolders.Any(existing => string.Equals(existing, path, _pathStringComparison)))
+                {
+                    _workspaceFolders.Add(path);
+                }
+            }
+        }
+
+        Activity.Current?.SetTag("lsp.workspace_folder_count", _workspaceFolders.Count);
+        return null;
+    }
+
     private static Activity? StartLspRequestActivity(string method)
     {
         var activity = CodeIndexTelemetry.ActivitySource.StartActivity("lsp.request", ActivityKind.Server);
@@ -285,10 +330,21 @@ internal sealed class LspServer : IDisposable
         ["capabilities"] = new JsonObject
         {
             ["definitionProvider"] = true,
+            ["declarationProvider"] = true,
+            ["typeDefinitionProvider"] = true,
+            ["implementationProvider"] = true,
             ["referencesProvider"] = true,
             ["documentSymbolProvider"] = true,
             ["workspaceSymbolProvider"] = true,
             ["textDocumentSync"] = 0,
+            ["workspace"] = new JsonObject
+            {
+                ["workspaceFolders"] = new JsonObject
+                {
+                    ["supported"] = true,
+                    ["changeNotifications"] = true,
+                },
+            },
         },
         ["serverInfo"] = new JsonObject
         {
@@ -303,10 +359,13 @@ internal sealed class LspServer : IDisposable
         if (query != null && query.Length > QueryLimits.MaxQueryLength)
             throw new ArgumentException(QueryLimits.FormatQueryTooLongError());
 
-        var symbols = _reader.SearchSymbols(query, DefaultLimit);
+        var limit = GetLimit(root, DefaultLimit, MaxWorkspaceSymbols, "params", "limit")
+            ?? GetLimit(root, DefaultLimit, MaxWorkspaceSymbols, "params", "maxResults")
+            ?? DefaultLimit;
+        IReadOnlyList<SymbolResult> symbols = limit == 0 ? [] : _reader.SearchSymbols(query, limit);
         var array = new JsonArray();
         foreach (var symbol in symbols)
-            array.Add(ToWorkspaceSymbol(symbol));
+            array.Add((JsonNode)ToWorkspaceSymbol(symbol));
         return array;
     }
 
@@ -317,51 +376,102 @@ internal sealed class LspServer : IDisposable
         if (indexedPath == null)
             return [];
 
-        var symbols = _reader.SearchSymbols((string?)null, MaxDocumentSymbols, pathPatterns: [indexedPath]);
-        var array = new JsonArray();
-        var responseBytes = 2;
-        foreach (var symbol in symbols.OrderBy(s => s.StartLine).ThenBy(s => s.Name, StringComparer.Ordinal))
-        {
-            var item = ToDocumentSymbol(symbol);
-            var itemBytes = Encoding.UTF8.GetByteCount(item.ToJsonString(_jsonOptions));
-            var separatorBytes = array.Count == 0 ? 0 : 1;
-            if (responseBytes + separatorBytes + itemBytes > MaxDocumentSymbolResponseBytes)
-                break;
-
-            responseBytes += separatorBytes + itemBytes;
-            array.Add(item);
-        }
-        return array;
+        var symbols = _reader.SearchSymbols((string?)null, MaxDocumentSymbols, pathPatterns: [indexedPath])
+            .OrderBy(s => s.StartLine)
+            .ThenByDescending(s => s.EndLine)
+            .ThenBy(s => s.ContainerName == null ? 0 : 1)
+            .ThenBy(s => s.Name, StringComparer.Ordinal)
+            .ToList();
+        return BuildDocumentSymbolTree(symbols);
     }
 
-    private JsonArray Definition(JsonElement root)
+    private JsonArray BuildDocumentSymbolTree(IReadOnlyList<SymbolResult> symbols)
+    {
+        var roots = new JsonArray();
+        var nodes = new List<DocumentSymbolNode>(symbols.Count);
+        foreach (var symbol in symbols)
+        {
+            var item = ToDocumentSymbol(symbol);
+            var node = new DocumentSymbolNode(symbol, item);
+            var parent = FindDocumentSymbolParent(nodes, symbol);
+            if (parent == null)
+                roots.Add((JsonNode)item);
+            else
+                AddDocumentSymbolChild(parent.Value.Item, item);
+            nodes.Add(node);
+        }
+
+        TrimDocumentSymbolsToBudget(roots);
+        return roots;
+    }
+
+    private JsonArray Definition(JsonElement root, string method)
     {
         if (!TryExtractPositionToken(root, out var context, out var failureReason))
         {
-            RecordLookupFailure("textDocument/definition", failureReason);
+            RecordLookupFailure(method, failureReason);
             return [];
         }
 
         var definitions = ResolveLspDefinitions(context);
         var array = new JsonArray();
         foreach (var definition in definitions)
-            array.Add(ToLocation(definition.Path, definition.StartLine, 1, definition.EndLine, 1));
+            array.Add((JsonNode)ToLocation(definition.Path, definition.StartLine, 1, definition.EndLine, 1, GetLocationWorkspaceRoot(definition.Path, context)));
         return array;
     }
 
-    private JsonArray References(JsonElement root)
+    private JsonArray References(JsonElement root, string method)
     {
         if (!TryExtractPositionToken(root, out var context, out var failureReason))
         {
-            RecordLookupFailure("textDocument/references", failureReason);
+            RecordLookupFailure(method, failureReason);
             return [];
         }
 
+        var includeDeclaration = GetBool(root, "params", "context", "includeDeclaration") == true;
         var analysis = ResolveLspReferences(context);
         var array = new JsonArray();
+        var seenLocations = new HashSet<string>(StringComparer.Ordinal);
+        if (includeDeclaration)
+        {
+            foreach (var definition in ResolveLspDefinitions(context))
+                AddLocation(array, seenLocations, definition.Path, definition.StartLine, 1, definition.EndLine, 1, context);
+        }
+
         foreach (var reference in analysis.References)
-            array.Add(ToLocation(reference.Path, reference.Line, Math.Max(reference.Column, 1), reference.Line, Math.Max(reference.Column, 1) + Math.Max(context.Token.Length, 1)));
+            AddLocation(
+                array,
+                seenLocations,
+                reference.Path,
+                reference.Line,
+                Math.Max(reference.Column, 1),
+                reference.Line,
+                Math.Max(reference.Column, 1) + Math.Max(context.Token.Length, 1),
+                context);
         return array;
+    }
+
+    private void AddLocation(
+        JsonArray array,
+        HashSet<string> seenLocations,
+        string path,
+        int startLine,
+        int startColumn,
+        int endLine,
+        int endColumn,
+        PositionTokenContext context)
+    {
+        var workspaceRoot = GetLocationWorkspaceRoot(path, context);
+        var key = string.Join('\0', PathToUri(path, workspaceRoot ?? _projectRoot), startLine, startColumn, endLine, endColumn);
+        if (seenLocations.Add(key))
+            array.Add((JsonNode)ToLocation(path, startLine, startColumn, endLine, endColumn, workspaceRoot));
+    }
+
+    private string? GetLocationWorkspaceRoot(string path, PositionTokenContext context)
+    {
+        if (Path.IsPathRooted(path))
+            return null;
+        return _projectRoot ?? context.WorkspaceRoot;
     }
 
     private static void RecordLookupFailure(string method, string? failureReason)
@@ -378,6 +488,91 @@ internal sealed class LspServer : IDisposable
             }));
     }
 
+    private DocumentSymbolNode? FindDocumentSymbolParent(IReadOnlyList<DocumentSymbolNode> nodes, SymbolResult symbol)
+    {
+        for (var i = nodes.Count - 1; i >= 0; i--)
+        {
+            var candidate = nodes[i].Symbol;
+            if (!ContainsDocumentSymbol(candidate, symbol))
+                continue;
+            if (symbol.ContainerName != null
+                && !string.Equals(candidate.Name, symbol.ContainerName, StringComparison.Ordinal))
+            {
+                continue;
+            }
+            if (symbol.ContainerKind != null
+                && !string.Equals(candidate.Kind, symbol.ContainerKind, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            return nodes[i];
+        }
+
+        if (symbol.ContainerName != null)
+            return null;
+
+        for (var i = nodes.Count - 1; i >= 0; i--)
+        {
+            var candidate = nodes[i].Symbol;
+            if (ContainsDocumentSymbol(candidate, symbol))
+                return nodes[i];
+        }
+
+        return null;
+    }
+
+    private static bool ContainsDocumentSymbol(SymbolResult candidate, SymbolResult symbol) =>
+        candidate.StartLine <= symbol.StartLine
+        && candidate.EndLine >= symbol.EndLine
+        && (candidate.StartLine < symbol.StartLine
+            || candidate.EndLine > symbol.EndLine
+            || (symbol.ContainerName != null
+                && symbol.ContainerKind != null
+                && string.Equals(candidate.Name, symbol.ContainerName, StringComparison.Ordinal)
+                && string.Equals(candidate.Kind, symbol.ContainerKind, StringComparison.Ordinal)));
+
+    private static void AddDocumentSymbolChild(JsonObject parent, JsonObject child)
+    {
+        if (parent["children"] is not JsonArray children)
+        {
+            children = [];
+            parent["children"] = children;
+        }
+
+        children.Add((JsonNode)child);
+    }
+
+    private void TrimDocumentSymbolsToBudget(JsonArray roots)
+    {
+        while (roots.Count > 0
+            && Encoding.UTF8.GetByteCount(roots.ToJsonString(_jsonOptions)) > MaxDocumentSymbolResponseBytes
+            && RemoveLastDocumentSymbol(roots))
+        {
+        }
+    }
+
+    private static bool RemoveLastDocumentSymbol(JsonArray symbols)
+    {
+        if (symbols.Count == 0)
+            return false;
+
+        if (symbols[symbols.Count - 1] is JsonObject last
+            && last["children"] is JsonArray children
+            && children.Count > 0)
+        {
+            if (RemoveLastDocumentSymbol(children))
+            {
+                if (children.Count == 0)
+                    last.Remove("children");
+                return true;
+            }
+        }
+
+        symbols.RemoveAt(symbols.Count - 1);
+        return true;
+    }
+
     private List<DefinitionResult> ResolveLspDefinitions(PositionTokenContext context)
     {
         var localDefinitions = _reader.GetDefinitions(context.Token, DefaultLimit, exact: true, pathPatterns: [context.IndexedPath]);
@@ -385,7 +580,7 @@ internal sealed class LspServer : IDisposable
             return localDefinitions;
 
         var workspaceDefinitions = _reader.GetDefinitions(context.Token, DefaultLimit, exact: true);
-        return HasSingleLspDefinitionTarget(workspaceDefinitions) ? workspaceDefinitions : [];
+        return workspaceDefinitions;
     }
 
     private SymbolAnalysisResult ResolveLspReferences(PositionTokenContext context)
@@ -426,17 +621,18 @@ internal sealed class LspServer : IDisposable
             return false;
         }
 
-        if (!TryResolveDocumentPath(path, out var resolvedPath, out var projectRelativePath, out failureReason))
+        if (!TryResolveDocumentPath(path, out var resolvedPath, out var projectRelativePath, out var workspaceRoot, out failureReason))
             return false;
 
-        var indexedPath = ResolveIndexedPath(path, resolvedPath, projectRelativePath);
+        var indexedPath = ResolveIndexedPath(path, resolvedPath, projectRelativePath, workspaceRoot);
         if (indexedPath == null)
         {
             failureReason = FailureFileNotIndexed;
             return false;
         }
 
-        if (!TryResolveIndexedFilePath(indexedPath, out var indexedFullPath))
+        var indexedPathRoot = _projectRoot == null ? workspaceRoot : null;
+        if (!TryResolveIndexedFilePath(indexedPath, indexedPathRoot, out var indexedFullPath))
         {
             failureReason = FailureIndexedFileUnresolved;
             return false;
@@ -458,7 +654,7 @@ internal sealed class LspServer : IDisposable
             return false;
         }
 
-        context = new PositionTokenContext(token, indexedPath);
+        context = new PositionTokenContext(token, indexedPath, workspaceRoot);
         return true;
     }
 
@@ -556,22 +752,20 @@ internal sealed class LspServer : IDisposable
 
     private static bool IsTokenChar(char c) => char.IsLetterOrDigit(c) || c == '_' || c == '@';
 
-    private bool MatchesDocumentPath(string indexedPath, string documentPath, string? projectRelativePath)
+    private bool MatchesDocumentPath(string indexedPath, string documentPath, string? projectRelativePath, string resolvedPath, string? workspaceRoot)
     {
-        var normalizedIndexed = indexedPath.Replace('\\', '/');
-        if (_projectRoot != null)
-        {
-            if (Path.IsPathRooted(indexedPath)
-                && TryResolveIndexedFilePath(indexedPath, out var indexedFullPath)
-                && TryGetProjectRelativePath(indexedFullPath, out var indexedRelativePath)
-                && indexedRelativePath != null)
-            {
-                normalizedIndexed = indexedRelativePath.Replace('\\', '/');
-            }
+        if (TryResolveIndexedFilePath(indexedPath, null, out var indexedFullPath)
+            && string.Equals(resolvedPath, indexedFullPath, _pathStringComparison))
+            return true;
 
-            return projectRelativePath != null
+        if (Path.IsPathRooted(indexedPath))
+            return false;
+
+        var normalizedIndexed = indexedPath.Replace('\\', '/');
+        if (projectRelativePath != null)
+            return _projectRoot == null
+                && workspaceRoot != null
                 && string.Equals(normalizedIndexed, projectRelativePath.Replace('\\', '/'), _pathStringComparison);
-        }
 
         if (string.Equals(indexedPath, documentPath, StringComparison.Ordinal))
             return true;
@@ -582,19 +776,19 @@ internal sealed class LspServer : IDisposable
 
     private string? ResolveIndexedPath(string documentPath)
     {
-        if (!TryResolveDocumentPath(documentPath, out var resolvedPath, out var projectRelativePath))
+        if (!TryResolveDocumentPath(documentPath, out var resolvedPath, out var projectRelativePath, out var workspaceRoot))
             return null;
 
-        return ResolveIndexedPath(documentPath, resolvedPath, projectRelativePath);
+        return ResolveIndexedPath(documentPath, resolvedPath, projectRelativePath, workspaceRoot);
     }
 
-    private string? ResolveIndexedPath(string documentPath, string resolvedPath, string? projectRelativePath)
+    private string? ResolveIndexedPath(string documentPath, string resolvedPath, string? projectRelativePath, string? workspaceRoot)
     {
         if (projectRelativePath != null)
         {
             var exactPath = projectRelativePath.Replace('\\', '/');
             var exactFile = _reader.GetFileByPath(exactPath);
-            if (exactFile != null)
+            if (exactFile != null && MatchesDocumentPath(exactFile.Path, documentPath, projectRelativePath, resolvedPath, workspaceRoot))
                 return exactFile.Path;
         }
 
@@ -606,23 +800,32 @@ internal sealed class LspServer : IDisposable
 
         var files = _reader.ListFiles(fileName, MaxDocumentPathFallbackCandidates);
         var matches = files
-            .Where(file => MatchesDocumentPath(file.Path, documentPath, projectRelativePath))
+            .Where(file => MatchesDocumentPath(file.Path, documentPath, projectRelativePath, resolvedPath, workspaceRoot))
             .Take(2)
             .ToList();
         return matches.Count == 1 ? matches[0].Path : null;
     }
 
     private bool TryResolveDocumentPath(string documentPath, out string resolvedPath, out string? projectRelativePath) =>
-        TryResolveDocumentPath(documentPath, out resolvedPath, out projectRelativePath, out _);
+        TryResolveDocumentPath(documentPath, out resolvedPath, out projectRelativePath, out _, out _);
 
     private bool TryResolveDocumentPath(
         string documentPath,
         out string resolvedPath,
         out string? projectRelativePath,
+        out string? workspaceRoot) =>
+        TryResolveDocumentPath(documentPath, out resolvedPath, out projectRelativePath, out workspaceRoot, out _);
+
+    private bool TryResolveDocumentPath(
+        string documentPath,
+        out string resolvedPath,
+        out string? projectRelativePath,
+        out string? workspaceRoot,
         out string? failureReason)
     {
         resolvedPath = string.Empty;
         projectRelativePath = null;
+        workspaceRoot = null;
         failureReason = null;
         try
         {
@@ -636,10 +839,10 @@ internal sealed class LspServer : IDisposable
             return false;
         }
 
-        if (_projectRoot == null)
+        if (_workspaceFolders.Count == 0)
             return true;
 
-        if (TryGetProjectRelativePath(resolvedPath, out projectRelativePath))
+        if (TryGetWorkspaceRelativePath(resolvedPath, out projectRelativePath, out workspaceRoot))
             return true;
 
         failureReason = FailureOutsideProject;
@@ -647,13 +850,16 @@ internal sealed class LspServer : IDisposable
     }
 
     private bool TryResolveIndexedFilePath(string indexedPath, out string resolvedPath)
+        => TryResolveIndexedFilePath(indexedPath, null, out resolvedPath);
+
+    private bool TryResolveIndexedFilePath(string indexedPath, string? workspaceRoot, out string resolvedPath)
     {
         resolvedPath = string.Empty;
         try
         {
             resolvedPath = Path.IsPathRooted(indexedPath)
                 ? Path.GetFullPath(indexedPath)
-                : Path.GetFullPath(indexedPath, _projectRoot ?? Environment.CurrentDirectory);
+                : Path.GetFullPath(indexedPath, workspaceRoot ?? _projectRoot ?? Environment.CurrentDirectory);
             return true;
         }
         catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException or UnauthorizedAccessException)
@@ -668,9 +874,32 @@ internal sealed class LspServer : IDisposable
         if (_projectRoot == null)
             return false;
 
+        return TryGetRelativePath(Path.GetFullPath(_projectRoot), resolvedPath, out relativePath);
+    }
+
+    private bool TryGetWorkspaceRelativePath(string resolvedPath, out string? relativePath, out string? workspaceRoot)
+    {
+        relativePath = null;
+        workspaceRoot = null;
+        foreach (var candidateRoot in _workspaceFolders)
+        {
+            if (!TryGetRelativePath(candidateRoot, resolvedPath, out var candidateRelativePath))
+                continue;
+
+            relativePath = candidateRelativePath;
+            workspaceRoot = candidateRoot;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryGetRelativePath(string root, string resolvedPath, out string? relativePath)
+    {
+        relativePath = null;
         try
         {
-            var relative = Path.GetRelativePath(Path.GetFullPath(_projectRoot), resolvedPath);
+            var relative = Path.GetRelativePath(Path.GetFullPath(root), resolvedPath);
             if (relative == "."
                 || relative == ".."
                 || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal)
@@ -713,9 +942,9 @@ internal sealed class LspServer : IDisposable
         return detail[..(MaxDocumentSymbolDetailChars - "...".Length)] + "...";
     }
 
-    private JsonObject ToLocation(string path, int startLine, int startColumn, int endLine, int endColumn) => new()
+    private JsonObject ToLocation(string path, int startLine, int startColumn, int endLine, int endColumn, string? workspaceRoot = null) => new()
     {
-        ["uri"] = PathToUri(path, _projectRoot),
+        ["uri"] = PathToUri(path, workspaceRoot ?? _projectRoot),
         ["range"] = ToRange(startLine, startColumn, endLine, endColumn),
     };
 
@@ -772,6 +1001,27 @@ internal sealed class LspServer : IDisposable
         return value.GetString();
     }
 
+    private static bool? GetBool(JsonElement root, params string[] path)
+    {
+        if (!TryGet(root, out var value, path))
+            return null;
+        return value.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            _ => null,
+        };
+    }
+
+    private static int? GetLimit(JsonElement root, int defaultLimit, int maxLimit, params string[] path)
+    {
+        if (!TryGet(root, out var value, path))
+            return null;
+        if (value.ValueKind != JsonValueKind.Number || !value.TryGetInt32(out var limit))
+            return defaultLimit;
+        return Math.Clamp(limit, 0, maxLimit);
+    }
+
     private static int GetInt32(JsonElement root, params string[] path)
     {
         if (!TryGet(root, out var value, path) || value.ValueKind != JsonValueKind.Number || !value.TryGetInt32(out var result))
@@ -803,6 +1053,50 @@ internal sealed class LspServer : IDisposable
         if (!Uri.TryCreate(uri, UriKind.Absolute, out var parsed) || !parsed.IsFile)
             throw new ArgumentException("textDocument.uri must be an absolute file URI.");
         return parsed.LocalPath;
+    }
+
+    private void CaptureInitializeWorkspaceFolders(JsonElement root)
+    {
+        if (!TryGet(root, out var folders, "params", "workspaceFolders") || folders.ValueKind != JsonValueKind.Array)
+            return;
+
+        foreach (var folder in folders.EnumerateArray())
+        {
+            if (_workspaceFolders.Count >= MaxWorkspaceFolders)
+                break;
+            if (TryGetWorkspaceFolderPath(folder, out var path)
+                && !_workspaceFolders.Any(existing => string.Equals(existing, path, _pathStringComparison)))
+            {
+                _workspaceFolders.Add(path);
+            }
+        }
+
+        Activity.Current?.SetTag("lsp.workspace_folder_count", _workspaceFolders.Count);
+    }
+
+    private static bool TryGetWorkspaceFolderPath(JsonElement folder, out string path)
+    {
+        path = string.Empty;
+        if (folder.ValueKind != JsonValueKind.Object
+            || !folder.TryGetProperty("uri", out var uriElement)
+            || uriElement.ValueKind != JsonValueKind.String)
+        {
+            return false;
+        }
+
+        var uri = uriElement.GetString();
+        if (string.IsNullOrWhiteSpace(uri) || uri.Length > MaxTextDocumentUriChars)
+            return false;
+
+        try
+        {
+            path = Path.GetFullPath(UriToPath(uri));
+            return true;
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException or UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     private static JsonObject Result(JsonNode? id, JsonNode? result) => new()
