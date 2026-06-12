@@ -461,6 +461,94 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_MaxResultsAliasLimitsSearchResults_Issue3521()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_max_results_3521");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/one.cs", "csharp", "class One { string Value = \"needle\"; }");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/two.cs", "csharp", "class Two { string Value = \"needle\"; }");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["needle", "--db", dbPath, "--json=array", "--max-results", "1"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Single(document.RootElement.EnumerateArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_MissingDashLiteralQuerySuggestsEscapes_Issue3521()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["--exact", "--profile", "--limit", "5"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("Error: search requires a query argument", stderr);
+        Assert.Contains("`--query \"--profile\"`", stderr);
+        Assert.Contains("`cdidx search -- \"--profile\"`", stderr);
+    }
+
+    [Fact]
+    public void RunSearch_PathGlobExpansionHintSuggestsQuotedPath_Issue3445()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["needle", "--path", "src/CodeIndex/Cli", "src/CodeIndex/Database"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("Error: unexpected extra positional 1 argument for search: `src/CodeIndex/Database`.", stderr);
+        Assert.Contains("quote --path globs so the shell passes one literal pattern", stderr);
+        Assert.Contains("`--path 'src/CodeIndex/**'`", stderr);
+    }
+
+    [Fact]
+    public void RunSearch_MultiwordLiteralRanksExactPhraseContentFirst_Issue3389()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_multiword_phrase_3389");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/not supported noise.cs",
+                "csharp",
+                "class Noise { string Message = \"not every platform is supported\"; }");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/z_phrase.cs",
+                "csharp",
+                "class Phrase { string Message = \"feature is not supported here\"; }");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["not supported", "--db", dbPath, "--json=array", "--limit", "2"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var rows = document.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(2, rows.Count);
+            Assert.Equal("src/z_phrase.cs", rows[0].GetProperty("path").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_NamedQueriesReturnGroupedCompactResults_Issue3481()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_named_queries");

@@ -4999,6 +4999,9 @@ public class McpServerTests : IDisposable
 
         var recoveryHint = response["result"]!["structuredContent"]!["recovery_hint"]!;
         Assert.Equal("punctuation_heavy_query", recoveryHint["reason"]!.GetValue<string>());
+        Assert.Equal(
+            "This looks like a literal code phrase; rerun the search with exactSubstring=true for punctuation-sensitive matching.",
+            recoveryHint["suggested_action"]!.GetValue<string>());
         Assert.Equal("search", recoveryHint["tool"]!.GetValue<string>());
         Assert.Equal("CommandText = $", recoveryHint["args"]!["query"]!.GetValue<string>());
         Assert.True(recoveryHint["args"]!["exactSubstring"]!.GetValue<bool>());
