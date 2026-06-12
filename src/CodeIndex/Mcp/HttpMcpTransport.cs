@@ -129,8 +129,8 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             FullMode = BoundedChannelFullMode.Wait,
             AllowSynchronousContinuations = false,
         });
-        if (McpAuthenticationLimits.IsTokenOversized(bearerToken))
-            throw new ArgumentException($"Token must not exceed {McpAuthenticationLimits.MaxTokenCharacters.ToString(CultureInfo.InvariantCulture)} characters.", nameof(bearerToken));
+        if (bearerToken is { Length: > 0 } && !McpAuthenticationLimits.IsTokenShapeValid(bearerToken))
+            throw new ArgumentException(McpAuthenticationLimits.FormatTokenShapeError("Token"), nameof(bearerToken));
         _handlerSemaphore = new SemaphoreSlim(_maxConcurrentHandlers, _maxConcurrentHandlers);
         _listener = new HttpListener();
         _listener.Prefixes.Add(prefix);
@@ -656,8 +656,8 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         if (header.Length < BearerPrefix.Length || !header.StartsWith(BearerPrefix, StringComparison.OrdinalIgnoreCase))
             return false;
 
-        var candidate = header.AsSpan(BearerPrefix.Length).Trim();
-        if (candidate.Length > McpAuthenticationLimits.MaxTokenCharacters)
+        var candidate = header.AsSpan(BearerPrefix.Length);
+        if (!McpAuthenticationLimits.IsTokenShapeValid(candidate))
             return true;
 
         token = candidate.ToString();

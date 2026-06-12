@@ -2197,8 +2197,8 @@ public class McpServerTests : IDisposable
     public void McpAuthenticatorFactory_NoEnv_ReturnsLocalStdio()
     {
         // FromEnvironment() must default to permissive stdio when the env var is unset or
-        // whitespace, so unconfigured installs preserve the historical behaviour.
-        // 環境変数が未設定 or 空白の場合は permissive stdio に fallback し、未設定インストールの
+        // empty, so unconfigured installs preserve the historical behaviour.
+        // 環境変数が未設定 or 空文字の場合は permissive stdio に fallback し、未設定インストールの
         // 従来動作を維持する。
         var previous = Environment.GetEnvironmentVariable(McpAuthenticatorFactory.AuthTokenEnvVar);
         try
@@ -2206,13 +2206,37 @@ public class McpServerTests : IDisposable
             Environment.SetEnvironmentVariable(McpAuthenticatorFactory.AuthTokenEnvVar, null);
             Assert.IsType<LocalStdioAuthenticator>(McpAuthenticatorFactory.FromEnvironment());
 
-            Environment.SetEnvironmentVariable(McpAuthenticatorFactory.AuthTokenEnvVar, "   ");
+            Environment.SetEnvironmentVariable(McpAuthenticatorFactory.AuthTokenEnvVar, string.Empty);
             Assert.IsType<LocalStdioAuthenticator>(McpAuthenticatorFactory.FromEnvironment());
         }
         finally
         {
             Environment.SetEnvironmentVariable(McpAuthenticatorFactory.AuthTokenEnvVar, previous);
         }
+    }
+
+    [Fact]
+    public void McpAuthenticatorFactory_WhitespaceTokenIsRejected_Issue3505()
+    {
+        var previous = Environment.GetEnvironmentVariable(McpAuthenticatorFactory.AuthTokenEnvVar);
+        try
+        {
+            Environment.SetEnvironmentVariable(McpAuthenticatorFactory.AuthTokenEnvVar, " token");
+
+            var ex = Assert.Throws<FormatException>(McpAuthenticatorFactory.FromEnvironment);
+            Assert.Contains(McpAuthenticatorFactory.AuthTokenEnvVar, ex.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(McpAuthenticatorFactory.AuthTokenEnvVar, previous);
+        }
+    }
+
+    [Fact]
+    public void TokenAuthenticator_ConfiguredWhitespaceTokenIsRejected_Issue3505()
+    {
+        var ex = Assert.Throws<ArgumentException>(() => new TokenMcpAuthenticator("token "));
+        Assert.Contains("whitespace", ex.Message, StringComparison.Ordinal);
     }
 
     [Fact]

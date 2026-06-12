@@ -861,6 +861,23 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
+    public async Task HttpTransport_BearerToken_RejectsWhitespacePaddedHeader_Issue3505()
+    {
+        const string token = "s3cret-token";
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: token);
+
+        using var client = new HttpClient();
+        using var request = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
+        {
+            Content = new StringContent("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", Encoding.UTF8, "application/json"),
+        };
+        request.Headers.TryAddWithoutValidation("Authorization", "Bearer  " + token);
+        using var response = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
     public async Task HttpTransport_BearerToken_RejectsOversizedHeaderBeforeHashing()
     {
         var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
