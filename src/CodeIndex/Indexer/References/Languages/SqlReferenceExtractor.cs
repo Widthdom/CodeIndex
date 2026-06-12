@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 using Regex = CodeIndex.Indexer.BoundedRegex;
@@ -2637,10 +2638,11 @@ internal static partial class SqlReferenceExtractor
         {
             if (IsInsideDoubleQuotedRegion(statement, match.Index))
                 continue;
-            var nameGroup = match.Groups["name"];
-            if (nameGroup.Index < statementLineOffset)
+            if (!TryGetTrailingQualifiedIdentifierLeaf(match, out var rawName, out var rawIndex))
                 continue;
-            NormalizeIdentifier(nameGroup.Value, nameGroup.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
+            if (rawIndex < statementLineOffset)
+                continue;
+            NormalizeIdentifier(rawName, rawIndex, out var resolvedName, out var nameIndex, out var wasQuoted);
             int nameColumn = nameIndex + statementStart - lineOffset;
             if (!wasQuoted && shouldIgnoreName(resolvedName))
                 continue;
@@ -2653,11 +2655,133 @@ internal static partial class SqlReferenceExtractor
                 && match.Value.StartsWith("UPDATE", StringComparison.OrdinalIgnoreCase))
                 continue;
 
-            var container = resolveContainerForCall(nameGroup.Index);
+            var container = resolveContainerForCall(rawIndex);
             ReferenceExtractor.AddReference(references, seen, fileId, resolvedName, nameColumn, "reference", context, lineNumber, container);
-            if (IsFollowedByOpenParen(statement, nameGroup.Index + nameGroup.Length))
-                AddCallLikeSuppressionIndices(suppressedCallIndices, statement, nameGroup.Index, statementStart, lineOffset);
+            if (IsFollowedByOpenParen(statement, rawIndex + rawName.Length))
+                AddCallLikeSuppressionIndices(suppressedCallIndices, statement, rawIndex, statementStart, lineOffset);
         }
+    }
+
+    private static bool TryGetTrailingQualifiedIdentifierLeaf(Match match, out string rawName, out int rawIndex) =>
+        TryGetTrailingQualifiedIdentifierLeaf(match.Value, match.Index, out rawName, out rawIndex);
+
+    private static bool TryGetTrailingQualifiedIdentifierLeaf(
+        string text,
+        int absoluteOffset,
+        out string rawName,
+        out int rawIndex)
+    {
+        rawName = string.Empty;
+        rawIndex = -1;
+
+        var end = text.Length;
+        while (end > 0 && char.IsWhiteSpace(text[end - 1]))
+            end--;
+        if (end <= 0)
+            return false;
+
+        var last = text[end - 1];
+        if (last == ']')
+        {
+            var bracketStart = text.LastIndexOf('[', end - 2);
+            if (bracketStart >= 0)
+            {
+                rawName = text[bracketStart..end];
+                rawIndex = absoluteOffset + bracketStart;
+                return true;
+            }
+
+            return false;
+        }
+
+        if (last == '`')
+        {
+            var backtickStart = text.LastIndexOf('`', end - 2);
+            if (backtickStart >= 0)
+            {
+                rawName = text[backtickStart..end];
+                rawIndex = absoluteOffset + backtickStart;
+                return true;
+            }
+
+            return false;
+        }
+
+        if (last == '"')
+        {
+            var doubleQuoteStart = FindOpeningDoubleQuoteForIdentifier(text, end - 1);
+            if (doubleQuoteStart >= 0)
+            {
+                rawName = text[doubleQuoteStart..end];
+                rawIndex = absoluteOffset + doubleQuoteStart;
+                return true;
+            }
+
+            return false;
+        }
+
+        var bareStart = end - 1;
+        while (bareStart >= 0 && IsSqlBareIdentifierPart(text[bareStart]))
+            bareStart--;
+        bareStart++;
+        if (bareStart >= end)
+            return false;
+
+        var identifierStart = bareStart;
+        if (identifierStart > 0 && text[identifierStart - 1] == '#')
+        {
+            identifierStart--;
+            if (identifierStart > 0 && text[identifierStart - 1] == '#')
+                identifierStart--;
+            if (identifierStart > 0 && text[identifierStart - 1] == '#')
+                return false;
+        }
+        else if (!IsSqlBareIdentifierStart(text[identifierStart]))
+        {
+            return false;
+        }
+
+        rawName = text[identifierStart..end];
+        rawIndex = absoluteOffset + identifierStart;
+        return true;
+    }
+
+    private static int FindOpeningDoubleQuoteForIdentifier(string text, int closingQuoteIndex)
+    {
+        var index = closingQuoteIndex - 1;
+        while (index >= 0)
+        {
+            if (text[index] != '"')
+            {
+                index--;
+                continue;
+            }
+
+            var runStart = index;
+            while (runStart > 0 && text[runStart - 1] == '"')
+                runStart--;
+            var runLength = index - runStart + 1;
+            if (runLength % 2 == 1)
+                return runStart;
+
+            index = runStart - 1;
+        }
+
+        return -1;
+    }
+
+    private static bool IsSqlBareIdentifierStart(char value) =>
+        value == '_' || char.IsLetter(value);
+
+    private static bool IsSqlBareIdentifierPart(char value)
+    {
+        if (char.IsLetterOrDigit(value) || value == '_' || value == '$')
+            return true;
+
+        var category = CharUnicodeInfo.GetUnicodeCategory(value);
+        return category is UnicodeCategory.NonSpacingMark
+            or UnicodeCategory.SpacingCombiningMark
+            or UnicodeCategory.ConnectorPunctuation;
     }
 
     private static void EmitMultiTargetReferences(
@@ -3068,11 +3192,26 @@ internal static partial class SqlReferenceExtractor
         string statement,
         HashSet<string> names)
     {
-        CollectTempObjectNamesFromMatches(TargetReferenceRegex.Matches(statement), statement, names);
+        CollectTempObjectNamesFromTargetMatches(TargetReferenceRegex.Matches(statement), statement, names);
         CollectTempObjectNamesFromMatches(TruncateTargetRegex.Matches(statement), statement, names);
         CollectTempObjectNamesFromMatches(SelectIntoTargetStatementRegex.Matches(statement), statement, names);
         CollectTempObjectNamesFromMatches(CreateTempTableRegex.Matches(statement), statement, names);
         CollectTempObjectNamesFromMatches(CreateTempRoutineRegex.Matches(statement), statement, names);
+    }
+
+    private static void CollectTempObjectNamesFromTargetMatches(MatchCollection matches, string statement, HashSet<string> names)
+    {
+        foreach (Match match in matches)
+        {
+            if (IsInsideDoubleQuotedRegion(statement, match.Index))
+                continue;
+            if (!TryGetTrailingQualifiedIdentifierLeaf(match, out var rawName, out var rawIndex))
+                continue;
+
+            NormalizeIdentifier(rawName, rawIndex, out var resolvedName, out _, out _);
+            if (resolvedName.StartsWith("#", StringComparison.Ordinal))
+                names.Add(resolvedName);
+        }
     }
 
     private static void CollectTempObjectNamesFromMatches(MatchCollection matches, string statement, HashSet<string> names)
