@@ -1718,6 +1718,75 @@ public class LspServerTests
         }
     }
 
+    [Fact]
+    public void HandleMessage_Definition_RootlessRejectsRelativeIndexedPathWithoutWorkspace_Issue3426()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_definition_rootless_relative");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var sourcePath = Path.Combine(projectRoot, "src", "app.cs");
+            Directory.CreateDirectory(Path.GetDirectoryName(sourcePath)!);
+            var source = "class Target { void Needle() { } void Call() { Needle(); } }\n";
+            File.WriteAllText(sourcePath, source);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", source);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions());
+            var request = CreateDefinitionRequest(
+                sourcePath,
+                3426,
+                0,
+                source.IndexOf("Needle();", StringComparison.Ordinal));
+            var activities = new List<Activity>();
+            using var listener = CaptureCodeIndexActivities(activities);
+
+            var response = server.HandleMessage(request);
+
+            Assert.NotNull(response);
+            Assert.Empty(response!["result"]!.AsArray());
+            var requestActivity = Assert.Single(activities.Where(activity => activity.OperationName == "lsp.request"));
+            var failureEvent = Assert.Single(requestActivity.Events.Where(activityEvent => activityEvent.Name == "lsp.lookup_failed"));
+            var tags = failureEvent.Tags.ToDictionary(tag => tag.Key, tag => tag.Value?.ToString(), StringComparer.Ordinal);
+            Assert.Equal("file_not_indexed", tags["lsp.lookup.failure_reason"]);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void HandleMessage_Definition_RootlessUsesWorkspaceFolderForRelativeIndexedPath_Issue3426()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_definition_rootless_workspace");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var sourcePath = Path.Combine(projectRoot, "src", "app.cs");
+            Directory.CreateDirectory(Path.GetDirectoryName(sourcePath)!);
+            var source = "class Target { void Needle() { } void Call() { Needle(); } }\n";
+            File.WriteAllText(sourcePath, source);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", source);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions());
+            Assert.NotNull(server.HandleMessage(CreateInitializeRequestWithWorkspaceFolder(projectRoot, 34260)));
+            var request = CreateDefinitionRequest(
+                sourcePath,
+                34261,
+                0,
+                source.IndexOf("Needle();", StringComparison.Ordinal));
+
+            var response = server.HandleMessage(request);
+
+            Assert.NotNull(response);
+            Assert.NotEmpty(response!["result"]!.AsArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     private static string CreateDefinitionRequest(string sourcePath, int id, int line, int character) =>
         CreatePositionRequest("textDocument/definition", sourcePath, id, line, character);
 

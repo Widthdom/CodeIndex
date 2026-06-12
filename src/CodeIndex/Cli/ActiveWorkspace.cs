@@ -20,11 +20,9 @@ internal static class ActiveWorkspace
     {
         get
         {
-            var configHome = Environment.GetEnvironmentVariable("XDG_CONFIG_HOME");
-            var root = string.IsNullOrWhiteSpace(configHome)
-                ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".config")
-                : configHome;
-            return Path.Combine(root, "cdidx", "active.json");
+            if (TryGetStatePath(out var path, out var reason))
+                return path;
+            throw new InvalidOperationException($"Active workspace state path is invalid: {reason}.");
         }
     }
 
@@ -34,7 +32,12 @@ internal static class ActiveWorkspace
         if (!string.IsNullOrWhiteSpace(envPath))
             return LoadFromEnvironment(envPath);
 
-        var path = StatePath;
+        if (!TryGetStatePath(out var path, out var statePathReason))
+        {
+            WriteLoadWarning("config home", statePathReason);
+            return null;
+        }
+
         if (!File.Exists(LongPath.EnsureWindowsPrefix(path)))
             return null;
 
@@ -50,11 +53,15 @@ internal static class ActiveWorkspace
             using var document = JsonDocument.Parse(text, StateJsonDocumentOptions);
             var root = document.RootElement;
             var name = ReadString(root, "name") ?? "default";
-            var workspaceRoot = ReadString(root, "root") ?? Environment.CurrentDirectory;
+            var workspaceRoot = ReadString(root, "root");
             var dbPath = ReadString(root, "db_path");
-            if (string.IsNullOrWhiteSpace(dbPath))
+            if (!TryNormalizeState(name, workspaceRoot, dbPath, out var state, out var stateReason))
+            {
+                WriteLoadWarning("state file", stateReason);
                 return null;
-            return new ActiveWorkspaceState(name, Path.GetFullPath(workspaceRoot), Path.GetFullPath(dbPath));
+            }
+
+            return state;
         }
         catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
@@ -65,9 +72,13 @@ internal static class ActiveWorkspace
 
     internal static void Save(ActiveWorkspaceState state)
     {
-        DataDirectorySecurity.CreateSensitiveDirectory(Path.GetDirectoryName(StatePath)!);
-        var payload = new ActiveWorkspaceState(state.Name, Path.GetFullPath(state.Root), Path.GetFullPath(state.DbPath));
-        DataDirectorySecurity.WritePrivateText(StatePath, JsonSerializer.Serialize(payload, ProgramRunner.CreateDefaultJsonOptions()));
+        if (!TryGetStatePath(out var statePath, out var statePathReason))
+            throw new InvalidOperationException($"Active workspace state path is invalid: {statePathReason}.");
+        if (!TryNormalizeState(state.Name, state.Root, state.DbPath, out var payload, out var stateReason))
+            throw new InvalidOperationException($"Active workspace state is invalid: {stateReason}.");
+
+        DataDirectorySecurity.CreateSensitiveDirectory(Path.GetDirectoryName(statePath)!);
+        DataDirectorySecurity.WritePrivateText(statePath, JsonSerializer.Serialize(payload, ProgramRunner.CreateDefaultJsonOptions()));
     }
 
     private static string? ReadString(JsonElement element, string name)
@@ -90,6 +101,139 @@ internal static class ActiveWorkspace
         {
             WriteLoadWarning($"environment variable {EnvironmentVariable}", DescribeLoadFailure(ex));
             return null;
+        }
+    }
+
+    private static bool TryGetStatePath(out string path, out string reason)
+    {
+        path = string.Empty;
+        reason = string.Empty;
+        var configHome = Environment.GetEnvironmentVariable("XDG_CONFIG_HOME");
+        string root;
+        if (string.IsNullOrWhiteSpace(configHome))
+        {
+            var profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            if (string.IsNullOrWhiteSpace(profile))
+            {
+                reason = "user profile directory is unavailable";
+                return false;
+            }
+
+            root = Path.Combine(profile, ".config");
+        }
+        else
+        {
+            if (configHome.Length > MaxEnvironmentPathChars)
+            {
+                reason = $"XDG_CONFIG_HOME exceeds {MaxEnvironmentPathChars} characters";
+                return false;
+            }
+
+            if (!IsFullyQualifiedPath(configHome))
+            {
+                reason = "XDG_CONFIG_HOME must be an absolute path";
+                return false;
+            }
+
+            root = configHome;
+        }
+
+        try
+        {
+            path = Path.Combine(NormalizeBoundaryPath(root), "cdidx", "active.json");
+            return true;
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException or PathTooLongException)
+        {
+            reason = "XDG_CONFIG_HOME is invalid";
+            return false;
+        }
+    }
+
+    private static bool TryNormalizeState(
+        string? name,
+        string? root,
+        string? dbPath,
+        out ActiveWorkspaceState? state,
+        out string reason)
+    {
+        state = null;
+        reason = string.Empty;
+        if (string.IsNullOrWhiteSpace(root))
+        {
+            reason = "`root` is required";
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(dbPath))
+        {
+            reason = "`db_path` is required";
+            return false;
+        }
+
+        if (root.Length > MaxEnvironmentPathChars)
+        {
+            reason = $"`root` exceeds {MaxEnvironmentPathChars} characters";
+            return false;
+        }
+
+        if (dbPath.Length > MaxEnvironmentPathChars)
+        {
+            reason = $"`db_path` exceeds {MaxEnvironmentPathChars} characters";
+            return false;
+        }
+
+        if (!IsFullyQualifiedPath(root))
+        {
+            reason = "`root` must be an absolute path";
+            return false;
+        }
+
+        if (!IsFullyQualifiedPath(dbPath))
+        {
+            reason = "`db_path` must be an absolute path";
+            return false;
+        }
+
+        try
+        {
+            var normalizedRoot = NormalizeBoundaryPath(root);
+            var normalizedDbPath = Path.GetFullPath(dbPath);
+            if (PathCasing.PathsEqual(normalizedRoot, normalizedDbPath)
+                || !PathCasing.IsPathEqualOrParent(normalizedRoot, normalizedDbPath))
+            {
+                reason = "`db_path` must be inside `root`";
+                return false;
+            }
+
+            state = new ActiveWorkspaceState(string.IsNullOrWhiteSpace(name) ? "default" : name, normalizedRoot, normalizedDbPath);
+            return true;
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException or PathTooLongException)
+        {
+            reason = "state paths are invalid";
+            return false;
+        }
+    }
+
+    private static string NormalizeBoundaryPath(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        var root = Path.GetPathRoot(fullPath);
+        if (!string.IsNullOrEmpty(root) && string.Equals(fullPath, root, StringComparison.Ordinal))
+            return fullPath;
+        return fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+    }
+
+    private static bool IsFullyQualifiedPath(string path)
+    {
+        try
+        {
+            return Path.IsPathFullyQualified(path);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
         }
     }
 

@@ -33,6 +33,9 @@ internal static class CdidxConfigFile
     internal const int MaxConfigJsonDepth = 32;
     internal const int MaxConfigStringArrayItems = 128;
     internal const int MaxConfigStringArrayItemChars = 256;
+    internal const int MaxConfigScalarStringChars = 1024;
+    internal const int MaxConfigPathStringChars = 4096;
+    internal const int MaxConfigDurationStringChars = 256;
 
     private static readonly IReadOnlyList<string> KnownTopLevelKeys = new[]
     {
@@ -152,7 +155,7 @@ internal static class CdidxConfigFile
     {
         if (root.TryGetProperty("debug", out var debug))
         {
-            if (!TryReadString(debug, "debug", path, out var value, out var err))
+            if (!TryReadString(debug, "debug", path, MaxConfigScalarStringChars, out var value, out var err))
                 errors.Add(err!);
             else
                 pending.Add(("CDIDX_DEBUG", value!));
@@ -184,7 +187,7 @@ internal static class CdidxConfigFile
 
         if (root.TryGetProperty("stale_after", out var staleAfter))
         {
-            if (!TryReadString(staleAfter, "stale_after", path, out var value, out var err))
+            if (!TryReadString(staleAfter, "stale_after", path, MaxConfigDurationStringChars, out var value, out var err))
                 errors.Add(err!);
             else
                 pending.Add((QueryCommandRunner.StaleAfterEnvironmentVariable, value!));
@@ -195,14 +198,15 @@ internal static class CdidxConfigFile
     {
         if (root.TryGetProperty("suggestion_dedup_threshold", out var suggestionDedupThreshold))
         {
-            if (!TryReadNumberAsString(suggestionDedupThreshold, "suggestion_dedup_threshold", path, out var value, out var err))
+            if (!TryReadFiniteDoubleAsString(
+                    suggestionDedupThreshold,
+                    "suggestion_dedup_threshold",
+                    path,
+                    maxInclusive: 1.0,
+                    allowZero: true,
+                    out var value,
+                    out var err))
                 errors.Add(err!);
-            else if (!double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var threshold)
-                || threshold < 0
-                || threshold > 1)
-            {
-                errors.Add($"[cdidx] {path}: `suggestion_dedup_threshold` must be between 0 and 1.");
-            }
             else
             {
                 pending.Add((SuggestionStore.DedupThresholdEnvironmentVariable, value!));
@@ -368,7 +372,14 @@ internal static class CdidxConfigFile
 
         if (rateLimit.TryGetProperty("rps", out var rps))
         {
-            if (!TryReadNumberAsString(rps, "mcp.rate_limit.rps", path, out var value, out var err))
+            if (!TryReadFiniteDoubleAsString(
+                    rps,
+                    "mcp.rate_limit.rps",
+                    path,
+                    maxInclusive: RateLimiterOptions.MaxRefillTokensPerSecond,
+                    allowZero: false,
+                    out var value,
+                    out var err))
                 errors.Add(err!);
             else
                 pending.Add((RateLimiterOptions.RpsEnvVar, value!));
@@ -376,7 +387,14 @@ internal static class CdidxConfigFile
 
         if (rateLimit.TryGetProperty("burst", out var burst))
         {
-            if (!TryReadNumberAsString(burst, "mcp.rate_limit.burst", path, out var value, out var err))
+            if (!TryReadFiniteDoubleAsString(
+                    burst,
+                    "mcp.rate_limit.burst",
+                    path,
+                    maxInclusive: RateLimiterOptions.MaxBurstCapacity,
+                    allowZero: false,
+                    out var value,
+                    out var err))
                 errors.Add(err!);
             else
                 pending.Add((RateLimiterOptions.BurstEnvVar, value!));
@@ -384,7 +402,14 @@ internal static class CdidxConfigFile
 
         if (rateLimit.TryGetProperty("bucket_idle_seconds", out var bucketIdleSeconds))
         {
-            if (!TryReadNumberAsString(bucketIdleSeconds, "mcp.rate_limit.bucket_idle_seconds", path, out var value, out var err))
+            if (!TryReadFiniteDoubleAsString(
+                    bucketIdleSeconds,
+                    "mcp.rate_limit.bucket_idle_seconds",
+                    path,
+                    maxInclusive: TimeSpan.MaxValue.TotalSeconds,
+                    allowZero: false,
+                    out var value,
+                    out var err))
                 errors.Add(err!);
             else
                 pending.Add((RateLimiterOptions.BucketIdleSecondsEnvVar, value!));
@@ -539,7 +564,7 @@ internal static class CdidxConfigFile
         }
     }
 
-    private static bool TryReadString(JsonElement element, string key, string path, out string? value, out string? error)
+    private static bool TryReadString(JsonElement element, string key, string path, int maxChars, out string? value, out string? error)
     {
         value = null;
         error = null;
@@ -554,6 +579,12 @@ internal static class CdidxConfigFile
             error = $"[cdidx] {path}: `{key}` must be a non-empty string.";
             return false;
         }
+        if (raw.Length > maxChars)
+        {
+            error = $"[cdidx] {path}: `{key}` must be <= {maxChars} characters.";
+            return false;
+        }
+
         value = raw;
         return true;
     }
@@ -562,7 +593,7 @@ internal static class CdidxConfigFile
     {
         value = null;
         error = null;
-        if (!TryReadString(element, key, path, out var raw, out error))
+        if (!TryReadString(element, key, path, MaxConfigPathStringChars, out var raw, out error))
             return false;
 
         var workspaceRoot = ResolveConfigWorkspaceRoot(path);
@@ -601,7 +632,7 @@ internal static class CdidxConfigFile
                                            or PathTooLongException
                                            or UnauthorizedAccessException)
             {
-                pathError = $"[cdidx] {path}: `{key}` path is invalid: {ex.Message}";
+                pathError = $"[cdidx] {path}: `{key}` path is invalid (invalid_path).";
                 return false;
             }
         }
@@ -654,7 +685,14 @@ internal static class CdidxConfigFile
         return true;
     }
 
-    private static bool TryReadNumberAsString(JsonElement element, string key, string path, out string? value, out string? error)
+    private static bool TryReadFiniteDoubleAsString(
+        JsonElement element,
+        string key,
+        string path,
+        double maxInclusive,
+        bool allowZero,
+        out string? value,
+        out string? error)
     {
         value = null;
         error = null;
@@ -663,7 +701,18 @@ internal static class CdidxConfigFile
             error = $"[cdidx] {path}: `{key}` must be a number.";
             return false;
         }
-        value = element.GetRawText();
+
+        if (!element.TryGetDouble(out var parsed)
+            || !double.IsFinite(parsed)
+            || (allowZero ? parsed < 0 : parsed <= 0)
+            || parsed > maxInclusive)
+        {
+            var minimum = allowZero ? "non-negative" : "positive";
+            error = $"[cdidx] {path}: `{key}` must be a finite {minimum} number <= {maxInclusive.ToString(CultureInfo.InvariantCulture)}.";
+            return false;
+        }
+
+        value = parsed.ToString(CultureInfo.InvariantCulture);
         return true;
     }
 
