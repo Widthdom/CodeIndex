@@ -875,6 +875,8 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
+      id-token: write
+      attestations: write
     environment: nuget-production
     steps:
       - name: Checkout
@@ -990,16 +992,29 @@ jobs:
             exit 1
           fi
 
+      - name: Attest NuGet package artifacts
+        uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
+        with:
+          subject-path: |
+            nupkg/*.nupkg
+            nupkg/*.snupkg
+
+      - name: NuGet trusted publishing login
+        id: nuget-login
+        uses: NuGet/login@ebc737b6fc418a6ca0073cf116ec8dc156d8b81e # v1
+        with:
+          user: Widthdom
+
       - name: Publish to NuGet
         run: |
           set -euo pipefail
           dotnet nuget push nupkg/*.nupkg \
-            --api-key ${{ secrets.NUGET_API_KEY }} \
-            --source https://api.nuget.org/v3/index.json \
+            --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" \
+            --source https://www.nuget.org/api/v2/package \
             --no-symbols
           dotnet nuget push nupkg/*.snupkg \
-            --api-key ${{ secrets.NUGET_API_KEY }} \
-            --source https://api.nuget.org/v3/index.json
+            --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" \
+            --source https://www.nuget.org/api/v2/package
 
   publish-container:
     if: github.repository == 'Widthdom/CodeIndex'
