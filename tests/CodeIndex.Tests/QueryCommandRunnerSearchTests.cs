@@ -661,7 +661,7 @@ public partial class QueryCommandRunnerTests
             Assert.Contains("## Replay command", body, StringComparison.Ordinal);
             Assert.Contains("cdidx search --recipe risky-code/unbounded-json-parse --format issue-drafts --limit 5", body, StringComparison.Ordinal);
             Assert.Contains("--lang csharp --path src/app.cs --exclude-tests", body, StringComparison.Ordinal);
-            Assert.Contains($"--open-issues {openIssuesPath}", body, StringComparison.Ordinal);
+            Assert.Contains($"--open-issues {QuoteReplayShellArgForAssertion(openIssuesPath)}", body, StringComparison.Ordinal);
             Assert.DoesNotContain("public sealed class App", body, StringComparison.Ordinal);
             Assert.Equal("unbounded-json-parse", draft.GetProperty("source").GetProperty("query_name").GetString());
             Assert.Equal(1, duplicatePreflight.GetProperty("match_count").GetInt32());
@@ -4348,5 +4348,12 @@ jobs:
             Environment.SetEnvironmentVariable(QueryCommandRunner.StaleAfterEnvironmentVariable, prior);
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
+    }
+
+    private static string QuoteReplayShellArgForAssertion(string arg)
+    {
+        if (arg.Length > 0 && arg.All(c => char.IsLetterOrDigit(c) || c is '_' or '-' or '.' or '/' or ':' or '='))
+            return arg;
+        return "'" + arg.Replace("'", "'\\''", StringComparison.Ordinal) + "'";
     }
 }
