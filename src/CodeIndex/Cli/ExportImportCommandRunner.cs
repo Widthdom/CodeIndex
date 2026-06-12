@@ -93,14 +93,23 @@ internal static class ExportImportCommandRunner
         if (string.IsNullOrWhiteSpace(dbDirectory))
             return WriteImportError(wantsJson, jsonOptions, PhaseParseArgs, "import_db_directory_unresolved", $"could not resolve destination DB directory for `{dbPath}`.", "pass an explicit `--db <path>`.", ImportUsage);
 
-        var tempDirectory = dryRun ? Path.GetTempPath() : dbDirectory;
-        var tempPath = Path.Combine(tempDirectory, $".codeindex-import-{Guid.NewGuid():N}.db");
+        string? tempDirectory = null;
+        string? tempPath = null;
         var validationPhases = new List<ImportValidationPhaseResult>();
         var phase = PhaseOpenArchive;
         try
         {
-            if (!dryRun)
+            if (dryRun)
+            {
+                tempDirectory = DataDirectorySecurity.CreateSensitiveTempDirectory("codeindex-import-").FullName;
+                tempPath = Path.Combine(tempDirectory, "codeindex.db");
+            }
+            else
+            {
                 Directory.CreateDirectory(dbDirectory);
+                tempPath = Path.Combine(dbDirectory, $".codeindex-import-{Guid.NewGuid():N}.db");
+            }
+
             using (var archive = ZipFile.OpenRead(archivePath))
             {
                 AddImportValidationPhase(validationPhases, PhaseOpenArchive);
@@ -187,8 +196,13 @@ internal static class ExportImportCommandRunner
         }
         finally
         {
-            TryDeleteFile(tempPath, "import temporary database");
-            DeleteSqliteSidecars(tempPath, "import temporary database sidecar");
+            if (tempPath != null)
+            {
+                TryDeleteFile(tempPath, "import temporary database");
+                DeleteSqliteSidecars(tempPath, "import temporary database sidecar");
+            }
+            if (tempDirectory != null)
+                TryDeleteDirectoryIfEmpty(tempDirectory, "import temporary directory");
         }
     }
 

@@ -246,6 +246,57 @@ public class ExportImportCommandRunnerTests
     }
 
     [Fact]
+    public void RunImport_DryRunUsesPrivateTemporaryDirectory_Issue3411()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("import_dry_run_private_temp");
+        string? cleanupPath = null;
+        try
+        {
+            var sourceDbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var archivePath = Path.Combine(projectRoot, "codeindex.cdidx.zip");
+            var exportResult = ConsoleCapture.Capture(() =>
+                ExportImportCommandRunner.RunExport([archivePath, "--db", sourceDbPath], new JsonSerializerOptions(), "test"));
+            Assert.Equal(CommandExitCodes.Success, exportResult.ExitCode);
+
+            var importDbPath = Path.Combine(projectRoot, "imported.db");
+            ExportImportCommandRunner.DeleteFileForTesting = path =>
+            {
+                if (Path.GetFileName(path) == "codeindex.db"
+                    && Path.GetFileName(Path.GetDirectoryName(path)!).StartsWith("codeindex-import-", StringComparison.Ordinal))
+                {
+                    cleanupPath = path;
+                    throw new IOException("simulated import dry-run temp cleanup failure");
+                }
+
+                File.Delete(path);
+            };
+
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
+                ExportImportCommandRunner.RunImport([archivePath, "--db", importDbPath, "--dry-run"], new JsonSerializerOptions()));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("Validated CodeIndex archive", stdout);
+            Assert.False(File.Exists(importDbPath));
+            Assert.Contains("Warning: failed to delete import temporary database", stderr);
+            Assert.NotNull(cleanupPath);
+            Assert.True(File.Exists(cleanupPath));
+            if (!OperatingSystem.IsWindows())
+            {
+                Assert.Equal(
+                    DataDirectorySecurity.PrivateDirectoryMode,
+                    File.GetUnixFileMode(Path.GetDirectoryName(cleanupPath)!) & DataDirectorySecurity.PermissionBits);
+            }
+        }
+        finally
+        {
+            ExportImportCommandRunner.DeleteFileForTesting = null;
+            if (cleanupPath != null && File.Exists(cleanupPath))
+                TestProjectHelper.DeleteDirectory(Path.GetDirectoryName(cleanupPath)!);
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunExportArchive_FailureOmitsRawExceptionMessage()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("export_error_sanitize");
