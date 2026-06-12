@@ -1107,6 +1107,11 @@ jobs:
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
+      - name: Download release artifacts for checksum calculation
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: homebrew-artifacts
+
       - name: Bump Homebrew formula
         env:
           TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
@@ -1121,26 +1126,28 @@ jobs:
           VERSION="${TAG_NAME#v}"
           REPO_URL="https://github.com/${GITHUB_REPOSITORY}"
           RELEASE_URL="${REPO_URL}/releases/download/${TAG_NAME}"
-          CHECKSUMS_URL="${RELEASE_URL}/sha256sums.txt"
-          checksums="$(mktemp)"
+          artifact_root="homebrew-artifacts"
           tap_dir=""
           cleanup() {
-            rm -f "$checksums"
             if [ -n "$tap_dir" ]; then
               rm -rf "$tap_dir"
             fi
           }
           trap cleanup EXIT
 
-          curl -fsSL --connect-timeout 10 --max-time 60 --retry 5 --retry-delay 5 --retry-all-errors "$CHECKSUMS_URL" -o "$checksums"
-
-          sha_for() {
-            awk -v name="$1" '$2 == name { print $1; found=1 } END { exit found ? 0 : 1 }' "$checksums"
+          sha_for_artifact() {
+            asset="$1"
+            path="$(find "$artifact_root" -type f -name "$asset" -print -quit)"
+            if [ -z "$path" ]; then
+              echo "Release artifact ${asset} was not found under ${artifact_root}." >&2
+              exit 1
+            fi
+            sha256sum "$path" | awk '{ print $1 }'
           }
 
-          linux_x64_sha="$(sha_for CodeIndex-linux-x64.tar.gz)"
-          linux_arm64_sha="$(sha_for CodeIndex-linux-arm64.tar.gz)"
-          osx_arm64_sha="$(sha_for CodeIndex-osx-arm64.tar.gz)"
+          linux_x64_sha="$(sha_for_artifact CodeIndex-linux-x64.tar.gz)"
+          linux_arm64_sha="$(sha_for_artifact CodeIndex-linux-arm64.tar.gz)"
+          osx_arm64_sha="$(sha_for_artifact CodeIndex-osx-arm64.tar.gz)"
 
           tap_dir="$(mktemp -d)"
           credential_helper='!f() { echo username=x-access-token; echo "password=${TAP_TOKEN}"; }; f'
