@@ -129,6 +129,10 @@ public class HttpMcpTransportTests : IDisposable
         Assert.True(root.GetProperty("transport_ready").GetBoolean());
         Assert.True(DateTimeOffset.TryParse(root.GetProperty("last_request_at").GetString(), out _));
         Assert.True(DateTimeOffset.TryParse(root.GetProperty("last_db_check_at").GetString(), out _));
+        Assert.Equal(0, root.GetProperty("http_event_stream_count").GetInt32());
+        Assert.True(root.GetProperty("http_event_stream_limit").GetInt32() >= 1);
+        Assert.True(root.GetProperty("http_max_concurrent_handlers").GetInt32() >= 1);
+        Assert.Equal(0, root.GetProperty("http_queued_request_count").GetInt32());
     }
 
     [Fact]
@@ -653,6 +657,9 @@ public class HttpMcpTransportTests : IDisposable
 
         Assert.Equal(HttpStatusCode.OK, events.StatusCode);
         Assert.Equal("text/event-stream", events.Content.Headers.ContentType!.MediaType);
+        Assert.True(events.Headers.TryGetValues("X-Accel-Buffering", out var bufferingValues));
+        Assert.Contains("no", bufferingValues);
+        Assert.True(events.Headers.Contains("X-Cdidx-Mcp-Event-Stream-Id"));
 
         var response = await harness.PostJsonAsync("""{"jsonrpc":"2.0","id":11,"method":"ping"}""");
 
@@ -753,6 +760,53 @@ public class HttpMcpTransportTests : IDisposable
             var progressFrame = await progressTask.WaitAsync(TimeSpan.FromSeconds(5));
             Assert.Contains("\"method\":\"notifications/progress\"", progressFrame, StringComparison.Ordinal);
             Assert.Contains("\"progressToken\":\"http-progress\"", progressFrame, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public async Task HttpTransport_IndexWithProgressToken_BroadcastsProgressToMultipleEventStreams_Issue3522()
+    {
+        var projectRoot = Path.Combine(Directory.GetCurrentDirectory(), $".tmp_mcp_http_multistream_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(projectRoot);
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "one.cs"), "public class One { public void Run() { } }");
+            File.WriteAllText(Path.Combine(projectRoot, "two.cs"), "public class Two { public void Run() { } }");
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+            await using var harness = await McpHttpHarness.StartAsync(dbPath);
+
+            using var client = new HttpClient();
+            using var firstEvents = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "events"), HttpCompletionOption.ResponseHeadersRead);
+            using var secondEvents = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "events"), HttpCompletionOption.ResponseHeadersRead);
+            Assert.Equal(HttpStatusCode.OK, firstEvents.StatusCode);
+            Assert.Equal(HttpStatusCode.OK, secondEvents.StatusCode);
+            Assert.NotEqual(
+                firstEvents.Headers.GetValues("X-Cdidx-Mcp-Event-Stream-Id").Single(),
+                secondEvents.Headers.GetValues("X-Cdidx-Mcp-Event-Stream-Id").Single());
+            await WaitUntilAsync(() => harness.EventStreamCount == 2, "two event streams to be registered");
+
+            await using var firstStream = await firstEvents.Content.ReadAsStreamAsync();
+            await using var secondStream = await secondEvents.Content.ReadAsStreamAsync();
+            using var firstReader = new StreamReader(firstStream, Encoding.UTF8, leaveOpen: true);
+            using var secondReader = new StreamReader(secondStream, Encoding.UTF8, leaveOpen: true);
+            var firstProgressTask = ReadUntilAsync(firstReader, "notifications/progress");
+            var secondProgressTask = ReadUntilAsync(secondReader, "notifications/progress");
+
+            var body = "{\"jsonrpc\":\"2.0\",\"id\":3522,\"method\":\"tools/call\",\"params\":{\"name\":\"index\",\"arguments\":{\"path\":"
+                + JsonSerializer.Serialize(projectRoot)
+                + "},\"_meta\":{\"progressToken\":\"http-progress-multi\"}}}";
+            using var response = await harness.PostJsonAsync(body);
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            var firstProgressFrame = await firstProgressTask.WaitAsync(TimeSpan.FromSeconds(5));
+            var secondProgressFrame = await secondProgressTask.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Contains("\"progressToken\":\"http-progress-multi\"", firstProgressFrame, StringComparison.Ordinal);
+            Assert.Contains("\"progressToken\":\"http-progress-multi\"", secondProgressFrame, StringComparison.Ordinal);
         }
         finally
         {
@@ -1068,6 +1122,8 @@ public class HttpMcpTransportTests : IDisposable
         public string Endpoint { get; }
 
         public bool HasEventStreams => _transport.HasEventStreams;
+
+        public int EventStreamCount => _transport.EventStreamCount;
 
         public static async Task<McpHttpHarness> StartAsync(
             string dbPath,

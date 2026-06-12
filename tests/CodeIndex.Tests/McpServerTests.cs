@@ -3723,15 +3723,19 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
-    public void ToolsList_SearchHasRequiredQueryParam()
+    public void ToolsList_SearchAdvertisesQueryOrRecipeModes_Issue3545()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
         var response = _server.HandleMessage(request)!;
 
         var tools = response["result"]!["tools"]!.AsArray();
         var searchTool = tools.First(t => t!["name"]!.GetValue<string>() == "search")!;
-        var required = searchTool["inputSchema"]!["required"]!.AsArray();
-        Assert.Contains("query", required.Select(r => r!.GetValue<string>()));
+        var modes = searchTool["inputSchema"]!["anyOf"]!.AsArray()
+            .Select(mode => mode!["required"]!.AsArray().Single()!.GetValue<string>())
+            .ToArray();
+        Assert.Contains("query", modes);
+        Assert.Contains("recipe", modes);
+        Assert.Contains("listRecipes", modes);
     }
 
     [Fact]
@@ -4430,6 +4434,101 @@ public class McpServerTests : IDisposable
         Assert.NotNull(structured["results"]![0]!["matchLines"]);
         Assert.NotNull(structured["results"]![0]!["highlights"]);
         Assert.Null(structured["results"]![0]!["content"]);
+    }
+
+    [Fact]
+    public void ToolsCall_Search_ListRecipesReturnsBuiltIns_Issue3545()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_SEARCH_RECIPE_PATHS");
+        env.Set("CDIDX_SEARCH_RECIPE_PATHS", null);
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"listRecipes":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Null(response["error"]);
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.True(structured["count"]!.GetValue<int>() >= 1);
+        var recipes = structured["recipes"]!.AsArray();
+        var risky = recipes.Single(recipe => recipe!["name"]!.GetValue<string>() == "risky-code")!;
+        Assert.Contains(risky["queries"]!.AsArray(), query => query!["name"]!.GetValue<string>() == "unbounded-json-parse");
+    }
+
+    [Fact]
+    public void ToolsCall_Search_RunRecipeReturnsGroupedResults_Issue3545()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_SEARCH_RECIPE_PATHS");
+        env.Set("CDIDX_SEARCH_RECIPE_PATHS", null);
+        InsertIndexedFile("src/json.cs", "csharp", "var doc = JsonDocument.Parse(payload);\n");
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"recipe":"risky-code","limit":5}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Null(response["error"]);
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal("risky-code", structured["recipe"]!["name"]!.GetValue<string>());
+        Assert.True(structured["result_count"]!.GetValue<int>() >= 1);
+        var jsonParseQuery = structured["queries"]!.AsArray()
+            .Single(query => query!["name"]!.GetValue<string>() == "unbounded-json-parse")!;
+        Assert.Equal(1, jsonParseQuery["count"]!.GetValue<int>());
+        Assert.Equal("src/json.cs", jsonParseQuery["results"]![0]!["path"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Search_ListRecipesIncludesConfiguredSources_Issue3545()
+    {
+        var recipePath = Path.Combine(_projectRoot, "search-recipes.json");
+        File.WriteAllText(recipePath, """
+            {
+              "recipes": [
+                {
+                  "name": "local-audit",
+                  "description": "Local audit recipe",
+                  "queries": [
+                    {
+                      "name": "todo-comments",
+                      "query": "TODO",
+                      "description": "Find local TODO markers",
+                      "recommendedLabels": ["audit"],
+                      "falsePositiveGuidance": "Ignore deliberate test fixtures.",
+                      "exactSubstring": true
+                    }
+                  ]
+                }
+              ]
+            }
+            """);
+        using var env = EnvironmentVariableScope.Capture("CDIDX_SEARCH_RECIPE_PATHS");
+        env.Set("CDIDX_SEARCH_RECIPE_PATHS", recipePath);
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"listRecipes":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Null(response["error"]);
+        var structured = response["result"]!["structuredContent"]!;
+        var recipes = structured["recipes"]!.AsArray();
+        var local = recipes.Single(recipe => recipe!["name"]!.GetValue<string>() == "local-audit")!;
+        Assert.Equal("todo-comments", local["queries"]![0]!["name"]!.GetValue<string>());
+        Assert.Null(structured["recipe_source_diagnostics"]);
+    }
+
+    [Fact]
+    public void ToolsCall_Search_ListRecipesBoundsConfiguredSourceDiagnostics_Issue3545()
+    {
+        var recipePaths = new List<string>();
+        for (var i = 0; i < 8; i++)
+        {
+            var recipePath = Path.Combine(_projectRoot, $"invalid-search-recipes-{i}.json");
+            File.WriteAllText(recipePath, "[" + string.Join(",", Enumerable.Repeat("42", 40)) + "]");
+            recipePaths.Add(recipePath);
+        }
+
+        using var env = EnvironmentVariableScope.Capture("CDIDX_SEARCH_RECIPE_PATHS");
+        env.Set("CDIDX_SEARCH_RECIPE_PATHS", string.Join(Path.PathSeparator, recipePaths));
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"listRecipes":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Null(response["error"]);
+        var structured = response["result"]!["structuredContent"]!;
+        var diagnostics = structured["recipe_source_diagnostics"]!.AsArray();
+        Assert.True(diagnostics.Count <= 65);
+        Assert.Contains(diagnostics, diagnostic => diagnostic!.GetValue<string>().Contains("truncated after 64 entries", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -12417,6 +12516,8 @@ public class McpServerTests : IDisposable
     [Fact]
     public void SuggestImprovement_WhenSamplingAvailable_StoresSampledMetadata()
     {
+        using var samplingEnv = EnvironmentVariableScope.Capture("CDIDX_MCP_SAMPLING");
+        samplingEnv.Set("CDIDX_MCP_SAMPLING", "1");
         _server.HandleMessage(JsonNode.Parse(
             """{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"capabilities":{"sampling":{}}}}""")!);
         _server.ClientRequestHandlerForTests = (method, _) =>
@@ -12452,6 +12553,7 @@ public class McpServerTests : IDisposable
         var response = _server.HandleMessage(request)!;
 
         var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal("sampled", structured["sampling_status"]!.GetValue<string>());
         Assert.Equal("Improve TypeScript arrow symbol extraction", structured["sampled_title"]!.GetValue<string>());
         Assert.Contains(structured["sampled_tags"]!.AsArray(), tag => tag!.GetValue<string>() == "typescript");
         var stored = new SuggestionStore(Path.GetDirectoryName(_dbPath)!, Path.GetFileNameWithoutExtension(_dbPath)).LoadAll()
@@ -12465,6 +12567,8 @@ public class McpServerTests : IDisposable
     {
         using var env = EnvironmentVariableScope.Capture("CDIDX_GITHUB_TOKEN");
         env.Set("CDIDX_GITHUB_TOKEN", null);
+        using var samplingEnv = EnvironmentVariableScope.Capture("CDIDX_MCP_SAMPLING");
+        samplingEnv.Set("CDIDX_MCP_SAMPLING", "1");
         _server.HandleMessage(JsonNode.Parse(
             """{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"capabilities":{"sampling":{}}}}""")!);
         var secret = $"sample-secret-{Guid.NewGuid():N}";
@@ -12521,6 +12625,8 @@ public class McpServerTests : IDisposable
     [Fact]
     public void SuggestImprovement_WhenSamplingResponseIsTooLarge_IgnoresSampledMetadata()
     {
+        using var samplingEnv = EnvironmentVariableScope.Capture("CDIDX_MCP_SAMPLING");
+        samplingEnv.Set("CDIDX_MCP_SAMPLING", "1");
         _server.HandleMessage(JsonNode.Parse(
             """{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"capabilities":{"sampling":{}}}}""")!);
         _server.ClientRequestHandlerForTests = (method, _) =>
@@ -12556,6 +12662,7 @@ public class McpServerTests : IDisposable
 
         var structured = response["result"]!["structuredContent"]!;
         Assert.Equal("recorded", structured["status"]!.GetValue<string>());
+        Assert.Equal("enabled", structured["sampling_status"]!.GetValue<string>());
         Assert.Null(structured["sampled_title"]);
         var stored = new SuggestionStore(Path.GetDirectoryName(_dbPath)!, Path.GetFileNameWithoutExtension(_dbPath)).LoadAll()
             .Single(s => s.Description == uniqueDesc);
@@ -12566,6 +12673,8 @@ public class McpServerTests : IDisposable
     [Fact]
     public void SuggestImprovement_WhenSamplingClientResponseJsonIsTooLarge_IgnoresSampledMetadata_Issue3098()
     {
+        using var samplingEnv = EnvironmentVariableScope.Capture("CDIDX_MCP_SAMPLING");
+        samplingEnv.Set("CDIDX_MCP_SAMPLING", "1");
         _server.HandleMessage(JsonNode.Parse(
             """{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"capabilities":{"sampling":{}}}}""")!);
         _server.ClientRequestHandlerForTests = (method, _) =>
@@ -12611,6 +12720,8 @@ public class McpServerTests : IDisposable
     [Fact]
     public void SuggestImprovement_WhenSamplingResponseJsonIsTooDeep_IgnoresSampledMetadata()
     {
+        using var samplingEnv = EnvironmentVariableScope.Capture("CDIDX_MCP_SAMPLING");
+        samplingEnv.Set("CDIDX_MCP_SAMPLING", "1");
         _server.HandleMessage(JsonNode.Parse(
             """{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"capabilities":{"sampling":{}}}}""")!);
         _server.ClientRequestHandlerForTests = (method, _) =>
@@ -12657,6 +12768,8 @@ public class McpServerTests : IDisposable
     [Fact]
     public void SuggestImprovement_WhenSamplingAvailable_BoundsPromptAndSummarizesInvocationContext()
     {
+        using var samplingEnv = EnvironmentVariableScope.Capture("CDIDX_MCP_SAMPLING");
+        samplingEnv.Set("CDIDX_MCP_SAMPLING", "1");
         _server.HandleMessage(JsonNode.Parse(
             """{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"capabilities":{"sampling":{}}}}""")!);
         string? capturedPrompt = null;
@@ -12712,6 +12825,88 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void SuggestImprovement_WhenSamplingEnvUnset_DoesNotCallClientSampling_Issue3405()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_MCP_SAMPLING");
+        env.Set("CDIDX_MCP_SAMPLING", null);
+        _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"capabilities":{"sampling":{}}}}""")!);
+        var called = false;
+        _server.ClientRequestHandlerForTests = (_, _) =>
+        {
+            called = true;
+            return null;
+        };
+        var uniqueDesc = $"Sampling unset fail-closed regression {Guid.NewGuid():N}";
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "suggest_improvement",
+                ["arguments"] = new JsonObject
+                {
+                    ["category"] = "other",
+                    ["description"] = uniqueDesc,
+                }
+            }
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.False(called);
+        Assert.Equal("recorded", structured["status"]!.GetValue<string>());
+        Assert.Equal("disabled", structured["sampling_status"]!.GetValue<string>());
+        Assert.Contains("requires explicit opt-in", structured["sampling_diagnostic"]!.GetValue<string>());
+        Assert.Null(structured["sampled_title"]);
+    }
+
+    [Fact]
+    public void SuggestImprovement_WhenSamplingEnvInvalid_DoesNotCallClientSampling_Issue3405()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_MCP_SAMPLING");
+        env.Set("CDIDX_MCP_SAMPLING", new string('x', 512));
+        _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"capabilities":{"sampling":{}}}}""")!);
+        var called = false;
+        _server.ClientRequestHandlerForTests = (_, _) =>
+        {
+            called = true;
+            return null;
+        };
+        var uniqueDesc = $"Sampling invalid env fail-closed regression {Guid.NewGuid():N}";
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "suggest_improvement",
+                ["arguments"] = new JsonObject
+                {
+                    ["category"] = "other",
+                    ["description"] = uniqueDesc,
+                }
+            }
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        var diagnostic = structured["sampling_diagnostic"]!.GetValue<string>();
+        Assert.False(called);
+        Assert.Equal("disabled", structured["sampling_status"]!.GetValue<string>());
+        Assert.Contains("unrecognized value", diagnostic);
+        Assert.True(diagnostic.Length < 200);
+        Assert.DoesNotContain(new string('x', 80), diagnostic);
+        Assert.Null(structured["sampled_title"]);
+    }
+
+    [Fact]
     public void SuggestImprovement_WhenSamplingDisabled_DoesNotCallClientSampling()
     {
         using var env = EnvironmentVariableScope.Capture("CDIDX_MCP_SAMPLING");
@@ -12744,8 +12939,11 @@ public class McpServerTests : IDisposable
         var response = _server.HandleMessage(request)!;
 
         Assert.False(called);
-        Assert.Equal("recorded", response["result"]!["structuredContent"]!["status"]!.GetValue<string>());
-        Assert.Null(response["result"]!["structuredContent"]!["sampled_title"]);
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal("recorded", structured["status"]!.GetValue<string>());
+        Assert.Equal("disabled", structured["sampling_status"]!.GetValue<string>());
+        Assert.Contains("opt-out", structured["sampling_diagnostic"]!.GetValue<string>());
+        Assert.Null(structured["sampled_title"]);
     }
 
     [Fact]
