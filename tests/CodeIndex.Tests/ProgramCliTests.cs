@@ -1065,6 +1065,27 @@ public class ProgramCliTests
     }
 
     [Fact]
+    public void Suggestions_ExportIssueDraftsGitHubOpenIssuesRequiresRepository_Issue3449()
+    {
+        using var fixture = SuggestionFixture.Create();
+        fixture.Add(
+            "output_format",
+            "csharp",
+            "Issue draft export should fetch duplicate preflight issues from GitHub",
+            submitted: false,
+            sampledTitle: "Fetch duplicate preflight issues from GitHub");
+
+        var (exitCode, stdout, stderr) = RunCliInSubprocess([
+            "suggestions", "export", "--db", fixture.DbPath, "--format", "issue-drafts", "--open-issues", "github"
+        ]);
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("--open-issues github requires --repo", stderr);
+        Assert.DoesNotContain("could not read --open-issues file 'github'", stderr);
+    }
+
+    [Fact]
     public void Suggestions_ExportIssueDraftsRedactsSensitiveSampledTitle()
     {
         using var fixture = SuggestionFixture.Create();

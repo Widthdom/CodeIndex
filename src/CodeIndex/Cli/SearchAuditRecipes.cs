@@ -392,7 +392,27 @@ internal sealed record SearchRecipeListItemJsonResult(
     [property: JsonPropertyName("name")] string Name,
     [property: JsonPropertyName("description")] string Description,
     [property: JsonPropertyName("recommended_labels")] List<string> RecommendedLabels,
+    [property: JsonPropertyName("supported_formats")] List<string> SupportedFormats,
+    [property: JsonPropertyName("filter_support")] SearchRecipeFilterSupportJsonResult FilterSupport,
+    [property: JsonPropertyName("limit_semantics")] SearchRecipeLimitSemanticsJsonResult LimitSemantics,
     [property: JsonPropertyName("queries")] List<SearchRecipeQueryListItemJsonResult> Queries);
+
+internal sealed record SearchRecipeFilterSupportJsonResult(
+    [property: JsonPropertyName("lang")] bool Lang,
+    [property: JsonPropertyName("path")] bool Path,
+    [property: JsonPropertyName("exclude_path")] bool ExcludePath,
+    [property: JsonPropertyName("exclude_tests")] bool ExcludeTests,
+    [property: JsonPropertyName("since")] bool Since,
+    [property: JsonPropertyName("dedup")] bool Dedup,
+    [property: JsonPropertyName("visibility_rank")] bool VisibilityRank,
+    [property: JsonPropertyName("guard_filters")] bool GuardFilters,
+    [property: JsonPropertyName("snippet_controls")] bool SnippetControls,
+    [property: JsonPropertyName("exact_mode_override")] bool ExactModeOverride);
+
+internal sealed record SearchRecipeLimitSemanticsJsonResult(
+    [property: JsonPropertyName("scope")] string Scope,
+    [property: JsonPropertyName("default")] int Default,
+    [property: JsonPropertyName("description")] string Description);
 
 internal sealed record SearchRecipeQueryListItemJsonResult(
     [property: JsonPropertyName("name")] string Name,
@@ -430,11 +450,42 @@ internal sealed record SearchRecipeQueryResultJsonResult(
     [property: JsonPropertyName("false_positive_guidance")] string FalsePositiveGuidance,
     [property: JsonPropertyName("exact_substring")] bool ExactSubstring,
     [property: JsonPropertyName("count")] int Count,
+    [property: JsonPropertyName("next_cursor")] string? NextCursor,
     [property: JsonPropertyName("results")] List<CompactSearchResult> Results);
+
+internal sealed record SearchRecipeCompactRunJsonResult(
+    [property: JsonPropertyName("api_version")] string ApiVersion,
+    [property: JsonPropertyName("recipe")] SearchRecipeListItemJsonResult Recipe,
+    [property: JsonPropertyName("query_count")] int QueryCount,
+    [property: JsonPropertyName("result_count")] int ResultCount,
+    [property: JsonPropertyName("queries")] List<SearchRecipeCompactQueryResultJsonResult> Queries);
+
+internal sealed record SearchRecipeCompactQueryResultJsonResult(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("query")] string Query,
+    [property: JsonPropertyName("description")] string Description,
+    [property: JsonPropertyName("count")] int Count,
+    [property: JsonPropertyName("top_files")] List<SearchRecipeTopFileJsonResult> TopFiles,
+    [property: JsonPropertyName("next_cursor")] string? NextCursor,
+    [property: JsonPropertyName("results")] List<SearchRecipeCompactResultJsonResult> Results);
+
+internal sealed record SearchRecipeTopFileJsonResult(
+    [property: JsonPropertyName("path")] string Path,
+    [property: JsonPropertyName("count")] int Count);
+
+internal sealed record SearchRecipeCompactResultJsonResult(
+    [property: JsonPropertyName("path")] string Path,
+    [property: JsonPropertyName("lang")] string? Lang,
+    [property: JsonPropertyName("visibility")] string? Visibility,
+    [property: JsonPropertyName("chunk_start_line")] int ChunkStartLine,
+    [property: JsonPropertyName("chunk_end_line")] int ChunkEndLine,
+    [property: JsonPropertyName("match_lines")] List<int> MatchLines,
+    [property: JsonPropertyName("enclosing_symbol_name")] string? EnclosingSymbolName,
+    [property: JsonPropertyName("enclosing_symbol_kind")] string? EnclosingSymbolKind);
 
 internal sealed record SearchIssueDraftExportJsonResult(
     [property: JsonPropertyName("api_version")] string ApiVersion,
-    [property: JsonPropertyName("recipe")] SearchRecipeListItemJsonResult Recipe,
+    [property: JsonPropertyName("recipe")] SearchRecipeListItemJsonResult? Recipe,
     [property: JsonPropertyName("query_count")] int QueryCount,
     [property: JsonPropertyName("result_count")] int ResultCount,
     [property: JsonPropertyName("count")] int Count,
@@ -451,8 +502,8 @@ internal sealed record SearchIssueDraftJsonResult(
     [property: JsonPropertyName("duplicate_preflight")] SuggestionIssueDraftDuplicatePreflightJsonResult DuplicatePreflight);
 
 internal sealed record SearchIssueDraftSourceJsonResult(
-    [property: JsonPropertyName("recipe")] string Recipe,
-    [property: JsonPropertyName("query_name")] string QueryName,
+    [property: JsonPropertyName("recipe")] string? Recipe,
+    [property: JsonPropertyName("query_name")] string? QueryName,
     [property: JsonPropertyName("query")] string Query,
     [property: JsonPropertyName("description")] string Description,
     [property: JsonPropertyName("false_positive_guidance")] string FalsePositiveGuidance,
