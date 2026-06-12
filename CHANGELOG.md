@@ -11,6 +11,123 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.30.0] - 2026-06-13
+
+#### Added
+
+- **Windows upgrade now reports a first-class handoff path (#3374)** — when `cdidx upgrade` runs on Windows, it returns a NuGet update command plus release page and matching `CodeIndex-win-*.zip` asset details in human and JSON output instead of only reporting an unsupported platform.
+- **Upgrade can now select stable, prerelease, or explicit release tags (#3375)** — `cdidx upgrade` accepts `--channel stable|prerelease`, `--prerelease`, and `--version <tag>`, and JSON output now reports the selected version, channel, selection source, and prerelease inclusion.
+- **Search audit recipes now default to production source scope and cover more security/code-smell patterns (#3385, #3387, #3390, #3440, #3448)** — `search --recipe risky-code` now suppresses recipe definitions, docs, changelog text, and tests by default, reports the effective audit scope in JSON, supports `--audit-scope all` for intentional docs/test audits, and includes additional risky-code, C# smell, process, regex, timeout, path-case, and credential/token/security queries.
+- **Search supports grouped count ranking (#3388)** — `cdidx search --group-by file|symbol --count` now ranks broad search results by file or enclosing symbol, with JSON output for audit triage.
+- **Recipe search now supports compact JSON and pagination cursors (#3392)** — `cdidx search --recipe recipe/query --format compact` emits summary-first JSON with top files, snippet-free locations, and `next_cursor` values for paging one child query.
+- **Added summary-only map output (#3393)** — `cdidx map --summary-only --json` now returns only aggregate counts and freshness metadata, while `--sections` remains available for selected detail sections.
+- **Inspect can page long definition bodies (#3394)** — `inspect --body` now accepts `--body-start` and `--body-lines`, and JSON definition rows include the returned body slice range plus `body_content_next_start_line` for fetching the next page; byte-capped single-line slices advance to the following source line so clients do not loop.
+- **Search JSON now reports match origin facets (#3423)** — `search --json` exposes `match_origins`, `match_facets`, and per-highlight `match_origins` so tools can distinguish code, comment, string literal, regex literal, and CLI help-text matches. New `--exclude-comments` and `--exclude-strings` filters suppress comment-only and string-like matches.
+- **Guarded search JSON now exposes machine-readable guard checks (#3424)** — guarded `search --json` results include `guard_checks` for each evaluated guard, with compact pass/fail summaries, plus richer `guard_evidence` fields for guard name, pattern, relationship, span, and origin category.
+- **LSP position lookup misses now emit structured trace diagnostics (#3428)** — empty `definition` / `references` results caused by safe preflight failures now add an `lsp.lookup_failed` `ActivitySource` event with a bounded `lsp.lookup.failure_reason` code such as `outside_project`, `file_not_indexed`, `position_file_too_large`, or `no_token_at_position`.
+- **Recipe metadata and issue-draft replay commands are now exposed (#3447)** — `search --list-recipes --json` includes supported formats, filter support, and per-query limit semantics, and recipe issue drafts include a replayable `cdidx search` command.
+- **Issue-draft duplicate preflight can fetch open GitHub issues directly (#3449)** — `cdidx search --format issue-drafts --open-issues github --repo owner/name` and `cdidx suggestions export --format issue-drafts --open-issues github --repo owner/name` now preflight drafts against live open GitHub issues without requiring a local JSON export.
+- **Search JSON now identifies test fixture matches (#3450)** — search results, highlights, and match facets expose `test_file`, `test_symbol`, and `test_fixture`, and the new `--exclude-fixtures` filter suppresses fixture-only matches in tests while preserving real code matches.
+- **Added audit-oriented symbol ordering (#3451)** — `cdidx symbols --sort hotspot|references|size|complexity|path` now orders symbol output for audit workflows and emits JSON ranking metadata such as reference counts, hotspot scores, size, and complexity.
+- **Search supports named ad hoc batches with compact snippets (#3481)** — `cdidx search --named-query <name>=<query>` can now be repeated to run related searches with grouped results, and `search --format compact` preserves bounded snippet, match line, highlight, and truncation context.
+- **JSON and YAML files now expose structural symbols (#3482)** — `symbols`, `definition`, `outline`, and language capability probes can now see JSON/YAML configuration key paths, while unsupported symbol extractor languages explain the `search` fallback instead of returning an unexplained empty result.
+- **Search recipes can now run selected child queries (#3519)** — `cdidx search --recipe recipe/query` runs one child query directly, while repeatable `--include-query` and `--exclude-query` select recipe subsets.
+- **Ad hoc search issue-drafts are now supported (#3520)** — `cdidx search <query> --format issue-drafts` can emit issue-ready draft JSON without a named recipe, with `--issue-title` and repeatable `--issue-label` hints for triage metadata.
+- **HTTP MCP multi-client SSE fan-out is now observable (#3522)** — event streams include proxy buffering and per-stream id headers, `/healthz` reports HTTP transport counters, and regression coverage verifies progress notifications reach multiple concurrent `/events` clients.
+- **Markup and schema languages now expose references and graph support (#3525)** — GraphQL, HTML, and Markdown now emit conservative references for schema types/fragments/directives, assets/components, links, anchors, and reference definitions.
+- **Build automation files now expose structural symbols and references (#3526)** — CMake, Justfile, and MSBuild files now surface targets, recipes, properties, imports, and dependency references for graph-aware commands and capability probes.
+- **MCP `languages` now supports CLI-compatible filters (#3540)** — `languages` accepts `indexedOnly`, `capability`, `extension`, and `alias` arguments so agents can discover supported and indexed languages the same way CLI users do.
+- **MCP `status` and `validate` now expose CLI-style health-check views (#3541)** — `status` can run scoped freshness/readiness checks with compact diagnostics, and `validate` supports severity filters plus count and compact output modes.
+- **MCP code-query tools now expose more CLI query controls (#3542)** — search accepts `snippetFocus`, definition/symbol/unused/hotspot tools accept visibility filters, callers/callees accept `rawKinds`, files/map expose byte-oriented and entrypoint-confidence controls, and `analyze_symbol` supports count and compact response shapes.
+- **MCP `index` now exposes safe advanced indexing controls (#3543)** — the tool supports dry-run planning, max-symbol limits, symlink policy, symbol-kind filters, and memory/duration diagnostics, while explicitly rejecting unsupported scoped/watch modes instead of silently widening the run.
+- **MCP `deps` now exposes generated-code filtering (#3544)** — `deps` accepts `includeGenerated`, applies it to dependency source and target files, and returns generated-code scope diagnostics in structured responses.
+- **MCP search can list and run audit recipes (#3545)** — `search` now accepts `listRecipes:true` and `recipe:"name"`, and `CDIDX_SEARCH_RECIPE_PATHS` adds bounded JSON recipe sources with diagnostics for invalid files.
+- **Import can now dry-run archive validation (#3550)** — `cdidx import <archive> --dry-run` and `--check` validate the archive through the same manifest, size, checksum, SQLite, compatibility, and optional prune-path phases without replacing the destination DB; JSON output reports each phase and whether replacement would be allowed.
+- **PackageNormalize now supports release diagnostics without rewriting packages (#3553)** — `--dry-run` / `--check`, `--summary`, `--json`, and `--continue-on-error` report inspected, normalized, unchanged, failed, and skipped package counts while keeping positional-only normalization compatible.
+- **Explicit repository-wide find scans are now bounded and observable (#3560)** — `find --all` searches every indexed file with candidate-file and line-scan caps, and `find --count` now reports scan summaries in JSON and human output.
+
+#### Changed
+
+- **MCP tool argument contracts now live in a focused module (#3382)** — The server keeps tool-name and argument allow-list validation separate from handler execution so the MCP surface is easier to review and maintain.
+- **Clarified unused-symbol audit JSON filters (#3395)** — `cdidx unused` JSON now includes `query_context` for bucket and confidence filters, and `--compact` keeps audit counts and taxonomy without returning the full `symbols` array.
+- **Inspect now reports body output mode metadata (#3441)** — `inspect --json` includes a `body_mode` block describing whether body content was requested or present, while human `inspect` output prints a body hint when source bodies are omitted.
+- **Dockerfile symbols now use Docker-specific kinds (#3483)** — `symbols --lang dockerfile` reports stages, base images, build arguments, environment variables, copies, workdirs, users, runs, and related instructions with dedicated symbol kinds instead of generic `function` / `class` / `property` buckets.
+- **Dependency manifests and lockfiles now have first-class language buckets (#3484)** — common package manifests are indexed as `dependency_manifest`, lockfiles such as `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `Gemfile.lock`, `Cargo.lock`, `go.sum`, and `uv.lock` are no longer skipped and are searchable with `--lang dependency_lock`.
+- **Language capability output now separates references from graph support (#3518)** — `cdidx languages --json` and the MCP `languages` tool now expose `reference_extraction` and `capability_gaps`, and `--capability` can filter missing capability gaps or search-only languages.
+- **LSP navigation now preserves more client semantics (#3537)** — `references` honors `context.includeDeclaration`, ambiguous workspace definitions return all matching locations instead of an empty result, declaration/type-definition/implementation requests reuse indexed definition lookup, tracked `workspaceFolders` feed position-based absolute-path resolution while relative paths stay anchored to the DB root, `workspace/symbol` accepts a bounded client limit, and `documentSymbol` returns hierarchical children when container metadata is available.
+- **MCP argument schemas now expose compatibility metadata (#3538)** — `tools/list` advertises expected JSON types, alias/deprecation metadata, scalar `excludePaths` filters, and the `lspCompatible` alias for `definition` / `references`.
+- **MCP `batch_query` now advertises limits and resumable truncation hints (#3539)** — `tools/list` and `status` expose batch-query-specific caps, callers can use `estimateOnly`, `maxResponseBytes`, and slot ids, and truncated responses now include `split_hint` plus per-slot summaries for deterministic resume planning.
+- **Export manifests now include index readiness and summary metadata (#3549)** — `cdidx export` writes bounded file/chunk/symbol/reference counts, readiness flags, writer and indexed-head metadata, schema contract stamps, and unknown-extension summary when available, and `cdidx import` validates present summary counts before replacing the destination DB.
+
+#### Fixed
+
+- **SQL target extraction avoids a compiled-regex group crash** — `cdidx . --verbose` no longer relies on a large SQL mutation-target regex's repeated named captures when emitting target references, avoiding a possible `System.AccessViolationException` while preserving target reference extraction.
+- **Upgrade installer launches bash through a trusted absolute path (#3378)** — `cdidx upgrade` now resolves the POSIX installer shell from known absolute paths instead of relying on the ambient `PATH`.
+- **Punctuation-heavy search hints now include a concrete exact-substring rerun path (#3386)** — CLI and MCP search recovery hints now tell users to rerun punctuation-heavy code phrases with `--exact-substring` or `exactSubstring=true`.
+- **Multiword literal searches rank exact phrase chunks first (#3389)** — normal `search` now boosts chunks containing the exact whitespace phrase, such as `not supported`, ahead of token-only matches.
+- **MCP tool filters now warn on invalid or unknown names (#3406)** — allow/deny filters emit bounded `stderr` warnings for empty entries and unknown tool names, and explicitly set allowlists fail closed when they contain no known tools.
+- **Sensitive temporary and cache files now use private directories (#3411)** — upgrade installer scripts, export snapshots, update-check cache writes, and persistent log directories now create owner-only storage before writing sensitive material.
+- **LSP frame reads now observe cancellation and reuse bounded header buffers (#3427)** — `cdidx lsp` now threads the CLI cancellation token through the stdio request loop, message body reads, and header parsing while avoiding per-header `List<byte>` growth.
+- **Workspace manifest member validation is stricter and more deterministic (#3429)** — invalid member entries are reported with bounded diagnostics, while valid member paths are normalized and deduplicated consistently before DB paths are materialized.
+- **Config validation now reports multiple diagnostics and covers the MCP bucket idle TTL (#3432)** — project config files now list all detected schema/value errors in one validation pass, and `mcp.rate_limit.bucket_idle_seconds` maps to `CDIDX_MCP_RATE_LIMIT_BUCKET_IDLE_SECONDS`.
+- **MCP clamped arguments now report requested and effective values (#3436)** — successful MCP responses add `warnings` and `argument_adjustments` when supported arguments such as `limit`, `offset`, `snippetLines`, `map.depth`, or `impact_analysis.maxHops` are clamped or ignored.
+- **Dockerfile JSON-form extraction now surfaces skipped payloads (#3437)** — malformed Dockerfile JSON-form `VOLUME`, `SHELL`, `COPY`, and `ADD` instructions, plus arrays beyond the extractor item cap, now emit bounded `file_issues` diagnostics instead of failing silently.
+- **Search explains expanded `--path` globs (#3445)** — when a shell-expanded path glob leaves extra path-like positional arguments, `cdidx search` now suggests quoting `--path` so one literal glob reaches the CLI.
+- **Format aliases now work consistently on map, symbols, and inspect (#3446)** — `map` and `inspect` accept `--format json` / `--format compact`, `symbols` accepts `--format json` / `--format count`, and unsupported format combinations now return command-specific hints.
+- **Project filter current-directory fallback is now explicit (#3461)** — CLI query context and MCP structured payloads now expose the effective `project_filter_root` and `project_filter_root_fallback_reason` when project expansion falls back to the process current directory.
+- **`install.sh --purge-cache` now validates cache roots before deletion (#3499)** — uninstall cache purges now reject unsafe, relative, empty, or root cache locations before recursively removing the cdidx cache directory.
+- **Rollback cleanup now validates promoted asset names before deletion (#3503)** — installer rollback removal rejects unsafe or unexpected asset names before deleting any promoted files.
+- **Search accepts `--max-results` and guides dash-prefixed queries (#3521)** — `cdidx search` now treats `--max-results` as a `--limit` alias and tells users how to pass a literal query such as `--profile` through `--query` or `--`.
+- **Status now classifies unknown-extension files (#3523)** — `status --json` keeps the existing bounded sample and now adds extension counts, category counts, grouped classifications, and recommended next actions for language support, ignore configuration, or structural extraction.
+- **Export/import JSON errors now include stable validation phases (#3548)** — `cdidx export --json` and `cdidx import --json` now return structured error payloads with `phase` and `error_code` fields for expected parse, manifest, archive, checksum, SQLite validation, prune, replacement, and archive-write failures.
+- **Search snippets now explain focus selection and dropped-match navigation (#3556)** — compact search JSON includes `focus_mode`, `focus_line`, `focus_column`, `focus_reason`, and `next_match` metadata so clients can understand the selected window and jump to omitted matches.
+- **Search highlight occurrences now expose visible ranges after line clamping (#3557)** — search JSON keeps original source coordinates while adding `visible`, `visible_column`, and `visible_length` so clients can highlight only text present in the returned snippet.
+- **Search JSON now exposes effective snippet options and raw-FTS highlight availability (#3558)** — compact CLI and MCP search rows include effective snippet/mode metadata so clients can distinguish literal highlight support from raw FTS syntax gaps.
+- **Find JSON now exposes match spans and snippet truncation context (#3561)** — `cdidx find --json` rows include `length`, `original_line_length`, and `snippet_truncation_context` so clients can highlight repeated file matches and detect line-width elisions without parsing snippet markers.
+- **Excerpt and body JSON now expose range and recovery metadata (#3562)** — excerpt rows include requested/effective ranges, truncation reasons, and replayable recovery commands, while body JSON reports line and byte cap reasons with follow-up excerpt ranges.
+- **Status and vacuum now provide DB maintenance guidance (#3564)** — `status --json` reports `maintenance_guidance` with WAL/freelist states, thresholds, reclaim estimates, auto-vacuum mode, recommended commands, and follow-up text; `vacuum --dry-run --json` returns the same guidance without running vacuum pragmas.
+- **DB diagnostic JSON now exposes stable severity and schema object coverage (#3565)** — `db --integrity-check --json` and `db schema --json` include `severity` and `diagnostic_code`, while schema JSON also reports total and omitted object counts for SQLite tables, indexes, triggers, and views.
+- **Count-only JSON responses now include a stable automation envelope (#3566)** — `search`, `symbols`, `definition`, `files`, `references`, `callers`, `callees`, `impact`, and `find` count JSON include applied query context, freshness metadata, file-count aliases where relevant, and `authoritative_count`/`degraded` readiness signals.
+- **status --check JSON now exposes structured repair commands (#3567)** — failed checks include `repair_commands` entries with command names, args, reasons, and safety notes, and status can surface bounded `last_failed_or_partial_index_run` metadata without raw exception text or file paths.
+- **Watch JSON events now expose batch health summaries (#3568)** — `cdidx index --watch --json` event headers now include incremental phase metadata, bounded batch path samples, parsed sub-run update/remove/error counts, parse-gap diagnostics, and structured overflow recovery commands.
+- **Index dry-run now reports projected cleanup work (#3569)** — `cdidx index --dry-run --json` now marks mutation estimates explicitly and reports projected file updates, deletes, purges, unsupported/unknown counts, and estimated table mutation counts without writing to the database.
+
+#### Security
+
+- **MCP tool errors no longer echo raw exception messages (#3370)** — tool error responses and MCP tool error logs now use sanitized exception details so parser, SQLite, and filesystem exception text cannot leak matched content or bound values.
+- **Global tool logs now classify exception messages before persistence (#3371)** — persistent exception chains store stable message categories and redact stack-line diagnostics instead of writing raw exception messages that can contain paths, SQL, queries, or secret-looking values.
+- **Temporary checkpoint cleanup now rejects unsafe recursive-delete targets (#3379)** — checkpoint and restore cleanup paths now require temporary directories to live under an explicit safe root and match the expected temporary-name prefix before recursive deletion is attempted.
+- **Environment-variable diagnostics now redact secret-looking invalid values (#3403)** — invalid `CDIDX_DEBUG` and MCP response/keep-alive environment warnings bound and redact displayed values before writing to stderr.
+- **MCP suggestion sampling now requires explicit opt-in (#3405)** — `suggest_improvement` only sends `sampling/createMessage` when `CDIDX_MCP_SAMPLING` is set to an affirmative value, and disabled or invalid settings return bounded sampling diagnostics instead of calling the client.
+- **Slow-query SQL diagnostics now redact literals (#3416)** — slow-query stderr and global tool log entries redact SQL string, blob, and numeric literals before applying the existing length bound.
+- **Worker and batch diagnostics now avoid raw exception text (#3425)** — symbol workers, hook callback workers, and `cdidx batch` JSON parse failures now report stable sanitized categories such as `worker_protocol_error` and `invalid_batch_json` instead of echoing exception messages.
+- **LSP path resolution now applies explicit rootless trust rules (#3426)** — workspace containment now uses the shared path-casing helper, rootless LSP requests only trust relative indexed paths after a workspace folder is known, and position reads remain bounded if files grow while being read.
+- **Active workspace state now validates root, db_path, and config-home inputs (#3430)** — malformed active workspace state must provide absolute root and database paths with the database under the active root, invalid config-home values are rejected before path composition, and warnings avoid echoing untrusted path values.
+- **cdidx config validation now bounds scalar, path, and numeric values (#3431)** — config loading enforces field-specific string limits, validates MCP rate-limit numbers before staging them into environment settings, and reports invalid path values with sanitized stable diagnostics.
+- **HTTP MCP auth logs now coarsen failures by default (#3469)** — request log auth outcomes report failed bearer authentication as `unauthorized` unless unsafe debug diagnostics are explicitly enabled.
+- **Index freshness and scanner probe diagnostics now use stable IO categories (#3471)** — status freshness scan errors and ancestor ignore directory probes no longer include raw filesystem exception messages.
+- **Release dispatch tags are validated before privileged checkouts (#3485)** — manual release inputs now pass through a low-privilege preflight job that normalizes the release tag/ref before release, NuGet, container, or Homebrew jobs check out code.
+- **Release and build workflows now declare privilege and runtime bounds (#3486)** — release permissions are scoped per job, release runs use a tag/ref concurrency group, release/build jobs have explicit timeouts, and release curl probes have connection and total-time limits.
+- **Release and mutation workflow actions are pinned by commit SHA (#3487)** — remaining mutable Docker, attestation, checkout, and setup-dotnet action tags now use reviewed commit SHAs with version comments.
+- **NuGet publishing now uses OIDC trusted publishing and package attestation (#3489)** — the NuGet release job exchanges GitHub OIDC for a short-lived NuGet API key and attests both `.nupkg` and `.snupkg` artifacts before publishing.
+- **Homebrew publishing no longer stores tap tokens in clone URLs (#3490)** — the tap update job now authenticates clone/push through a temporary credential helper and cleans up its checksum file and temporary clone on exit.
+- **Homebrew formula checksums now come from workflow-owned artifacts (#3491)** — the tap update job downloads this workflow run's release artifacts and computes formula SHA-256 values locally instead of re-downloading the public release checksum manifest.
+- **Container releases now minimize runtime git dependency and publish attestations (#3495)** — the GHCR runtime image no longer installs `git`, and release image builds now request provenance and SBOM attestations.
+- **Release and build NuGet caches now avoid broad fallback restore keys (#3496)** — CI restores NuGet package caches only from the exact lockfile-derived key instead of falling back to an OS-wide package cache prefix.
+- **Windows Defender CI exclusions now emit reason-coded audit records (#3497)** — Windows build and release lanes log each effective Defender exclusion path with its justification and append the same table to the job summary before applying the exclusions.
+- **Installer verification policy is now explicit (#3502)** — `CDIDX_VERIFY_POLICY=compat` remains the default warning-compatible mode, while `CDIDX_VERIFY_POLICY=strict` or `--verify-policy strict` fail closed on missing GitHub attestation, GPG signature verification, or signer fingerprint pinning.
+- **MCP auth tokens now reject ambiguous whitespace (#3505)** — configured stdio and HTTP bearer tokens must be non-empty and free of whitespace or control characters, and HTTP bearer headers no longer trim token candidates before comparison.
+- **MCP stdio and worker protocols now cap lines while reading (#3506)** — line-delimited MCP and worker frames are rejected at the protocol boundary before unbounded `ReadLine` allocation can occur.
+- **NuGet publish preflight now uses a private temporary response file (#3508)** — the release job writes NuGet availability probe headers to a `mktemp` file under the job temp root and removes it on exit instead of using a fixed `/tmp` path.
+- **Normal install and uninstall now reject risky install directories (#3511)** — `install.sh` validates `CDIDX_INSTALL_DIR` before locking, installing, or removing files, and requires `CDIDX_ALLOW_RISKY_INSTALL_DIR=1` for root, home, or system install targets.
+- **Database checkpoint operations now report hardened cleanup and restore diagnostics (#3514)** — checkpoint listing surfaces sanitized diagnostics, restore preserves the primary failure when rollback also fails, checkpoint restore rejects symlinked or non-regular payload files, and prune reports WAL cleanup warnings after a committed apply.
+- **Report bundle redaction is now consistent across JSON and log tails (#3554)** — report JSON redacts local path fields, log tail redaction preserves unrelated key-value fields after sensitive values, and `--include-args` keeps safe arguments while redacting secret-looking values and local paths.
+
+#### Internal
+
+- **Centralized more CLI stdout/stderr writing through the shared command writer (#3417)** — command runners now route duplicated error, warning, and JSON/human error output paths through `CommandErrorWriter`.
+- **Split the one-file installer source into focused generated fragments (#3498)** — `install.sh` is now generated from dedicated installer, path guidance, uninstall, self-test, reinstall, doctor, and dispatch fragments, with tests that keep the generated one-liner synchronized.
+
 ### [1.29.1] - 2026-06-07
 
 #### Documentation
@@ -3645,6 +3762,123 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.30.0] - 2026-06-13
+
+#### 追加
+
+- **Windows upgrade が first-class handoff path を返すようになりました (#3374)** — Windows で `cdidx upgrade` を実行した場合、単なる unsupported platform ではなく、NuGet update command と release page、対応する `CodeIndex-win-*.zip` asset 情報を human / JSON 出力で返します。
+- **upgrade で stable、prerelease、明示 release tag を選択できるようにしました (#3375)** — `cdidx upgrade` は `--channel stable|prerelease`、`--prerelease`、`--version <tag>` を受け付け、JSON 出力で選択 version、channel、selection source、prerelease inclusion を返します。
+- **search audit recipe が既定で本番 source scope を使い、security / code smell pattern を拡充しました (#3385, #3387, #3390, #3440, #3448)** — `search --recipe risky-code` は既定で recipe 定義、docs、changelog text、tests を抑制し、JSON に有効な audit scope を出力し、docs / tests を意図的に監査するための `--audit-scope all` に対応しました。加えて risky code、C# smell、process、regex、timeout、path case、credential / token / security 関連 query を追加しました。
+- **search が grouped count ranking に対応しました (#3388)** — `cdidx search --group-by file|symbol --count` で、広い検索結果を file または enclosing symbol 別にランク付けできるようにしました。audit triage 用の JSON 出力にも対応しています。
+- **recipe search が compact JSON と pagination cursor に対応しました (#3392)** — `cdidx search --recipe recipe/query --format compact` は top files、snippet なしの位置情報、child query 1件をページングするための `next_cursor` を含む summary-first JSON を出力します。
+- **map の summary-only 出力を追加しました (#3393)** — `cdidx map --summary-only --json` が集計値と freshness メタデータのみを返し、必要な詳細セクションには引き続き `--sections` を使えます。
+- **長い定義 body を `inspect` で page 取得できるようになりました (#3394)** — `inspect --body` は `--body-start` と `--body-lines` を受け付け、JSON の definition 行には返却した body slice 範囲と次ページ用の `body_content_next_start_line` が含まれるようになりました。byte cap に当たった単一行 slice でも次の source line へ進むため、client が同じ行で loop しません。
+- **検索 JSON が一致 origin の facet を返すようになりました (#3423)** — `search --json` は `match_origins`、`match_facets`、highlight ごとの `match_origins` を公開し、ツールがコード、コメント、文字列リテラル、正規表現リテラル、CLI ヘルプ文言の一致を区別できるようにしました。新しい `--exclude-comments` と `--exclude-strings` は、コメントだけ、または文字列系だけの一致を抑制します。
+- **guard 付き検索 JSON が機械可読な guard check を返すようになりました (#3424)** — guard 付きの `search --json` 結果は、簡潔な pass/fail summary を含む評価済み guard ごとの `guard_checks` と、guard 名、pattern、関係、span、origin category を含む詳細な `guard_evidence` を返します。
+- **LSP position lookup miss が構造化 trace diagnostic を出すようになりました (#3428)** — safe preflight failure による空の `definition` / `references` result は、`outside_project`、`file_not_indexed`、`position_file_too_large`、`no_token_at_position` などの bounded な `lsp.lookup.failure_reason` code を持つ `lsp.lookup_failed` `ActivitySource` event を追加します。
+- **recipe metadata と issue-draft replay command を出力するようになりました (#3447)** — `search --list-recipes --json` は対応 format、filter support、per-query の limit semantics を含み、recipe issue draft には再実行可能な `cdidx search` コマンドを含めます。
+- **issue-draft の重複事前確認で GitHub の open issue を直接取得できるようになりました (#3449)** — `cdidx search --format issue-drafts --open-issues github --repo owner/name` と `cdidx suggestions export --format issue-drafts --open-issues github --repo owner/name` は、ローカル JSON export を用意せずに GitHub の live open issue と draft を照合できます。
+- **検索 JSON がテスト fixture の一致を識別できるようになりました (#3450)** — 検索結果、highlight、match facet は `test_file`、`test_symbol`、`test_fixture` を返し、新しい `--exclude-fixtures` は実コードの一致を残したままテスト内 fixture だけの一致を抑制します。
+- **audit 向けの symbols ordering を追加しました (#3451)** — `cdidx symbols --sort hotspot|references|size|complexity|path` で audit workflow 向けに symbol output を並べ替え、reference count、hotspot score、size、complexity などの JSON ranking metadata を出力します。
+- **search が compact snippet 付きの名前付き ad hoc batch に対応しました (#3481)** — `cdidx search --named-query <name>=<query>` を繰り返して関連検索を grouped result として実行できるようになり、`search --format compact` は bounded snippet、match line、highlight、truncation context を保持します。
+- **JSON と YAML が構造シンボルを公開するようになりました (#3482)** — `symbols`、`definition`、`outline`、言語 capability probe で JSON/YAML の configuration key path が見えるようになり、シンボル抽出未対応言語では空結果だけでなく `search` fallback の説明を返します。
+- **search recipe で選択した child query を実行できるようになりました (#3519)** — `cdidx search --recipe recipe/query` で child query を1つだけ直接実行でき、繰り返し指定可能な `--include-query` と `--exclude-query` で recipe subset を選択できます。
+- **ad hoc search から issue-drafts を出力できるようになりました (#3520)** — `cdidx search <query> --format issue-drafts` は named recipe なしで Issue 作成用 draft JSON を出力でき、`--issue-title` と繰り返し指定可能な `--issue-label` で triage metadata を補えます。
+- **HTTP MCP multi-client SSE fan-out を確認しやすくしました (#3522)** — event stream に proxy buffering と stream id header を追加し、`/healthz` が HTTP transport counter を返し、progress notification が複数の同時 `/events` client に届くことを regression test で検証します。
+- **マークアップと schema 言語が references と graph 対応を公開するようになりました (#3525)** — GraphQL、HTML、Markdown で schema type / fragment / directive、asset / component、link、anchor、reference definition の保守的な参照を抽出します。
+- **ビルド自動化ファイルが構造シンボルと参照を公開するようになりました (#3526)** — CMake、Justfile、MSBuild の target、recipe、property、import、依存参照を graph 対応コマンドと capability probe から扱えるようになりました。
+- **MCP `languages` が CLI 互換のフィルタに対応しました (#3540)** — `languages` は `indexedOnly`、`capability`、`extension`、`alias` 引数を受け付け、エージェントが CLI と同じ基準で対応言語とインデックス済み言語を確認できるようになりました。
+- **MCP `status` と `validate` が CLI 風の health-check view に対応しました (#3541)** — `status` は scope 指定の freshness/readiness check と compact diagnostics を返せるようになり、`validate` は severity filter と count / compact 出力に対応しました。
+- **MCP の code-query tools が CLI query control を追加しました (#3542)** — search は `snippetFocus`、definition/symbol/unused/hotspot 系は visibility filter、callers/callees は `rawKinds`、files/map は byte-oriented/entrypoint confidence control、`analyze_symbol` は count / compact response shape に対応しました。
+- **MCP `index` が安全な advanced indexing control に対応しました (#3543)** — dry-run planning、max-symbol limit、symlink policy、symbol-kind filter、memory/duration diagnostics を扱えるようになり、未対応の scope/watch mode は silently full scan にせず明示的に拒否します。
+- **MCP `deps` が generated-code filter に対応しました (#3544)** — `deps` は `includeGenerated` を受け付け、依存関係の source / target file の両方へ適用し、structured response で generated-code scope diagnostic を返します。
+- **MCP search が audit recipe の一覧・実行に対応しました (#3545)** — `search` は `listRecipes:true` と `recipe:"name"` を受け付け、`CDIDX_SEARCH_RECIPE_PATHS` で bounded な JSON recipe source を追加し、不正 file の diagnostic を返せます。
+- **import で archive validation を dry-run できるようになりました (#3550)** — `cdidx import <archive> --dry-run` と `--check` は、destination DB を置き換えずに同じ manifest、size、checksum、SQLite、compatibility、任意の prune-path phase で archive を検証し、JSON output では各 phase と置換可能かどうかを報告します。
+- **PackageNormalize が package を書き換えない release diagnostics に対応しました (#3553)** — `--dry-run` / `--check`、`--summary`、`--json`、`--continue-on-error` により inspected、normalized、unchanged、failed、skipped の package 件数を返しつつ、従来の positional-only normalize 挙動は維持します。
+- **リポジトリ全体の find scan を明示的かつ観測可能にしました (#3560)** — `find --all` は候補ファイル数と走査行数の上限付きで全インデックス済みファイルを検索し、`find --count` は JSON と human 出力で scan summary を返します。
+
+#### 変更
+
+- **MCP tool argument contract を専用 module に分離しました (#3382)** — tool name と argument allow-list の検証を handler 実行から分け、MCP surface を確認・保守しやすくしました。
+- **unused-symbol audit JSON の filter 表示を明確にしました (#3395)** — `cdidx unused` JSON に bucket/confidence filter の `query_context` を含め、`--compact` では full `symbols` array を返さず audit count と taxonomy を維持します。
+- **`inspect` が body 出力 mode metadata を返すようになりました (#3441)** — `inspect --json` は body content が要求済みか、存在するかを示す `body_mode` block を含み、人間向け `inspect` 出力では source body が省略されたときに body hint を表示します。
+- **Dockerfile の symbol が Docker 専用 kind を使うようになりました (#3483)** — `symbols --lang dockerfile` は stage、base image、build argument、environment variable、copy、workdir、user、run などの命令を generic な `function` / `class` / `property` ではなく専用の symbol kind で報告します。
+- **Dependency manifest と lockfile が first-class language bucket を持つようになりました (#3484)** — 一般的な package manifest は `dependency_manifest` として index され、`package-lock.json`、`yarn.lock`、`pnpm-lock.yaml`、`Gemfile.lock`、`Cargo.lock`、`go.sum`、`uv.lock` などの lockfile は skip されず `--lang dependency_lock` で検索できます。
+- **言語 capability 出力で references と graph 対応を分離しました (#3518)** — `cdidx languages --json` と MCP の `languages` ツールは `reference_extraction` と `capability_gaps` を返すようになり、`--capability` で未対応 gap や search-only 言語を絞り込めます。
+- **LSP navigation がより多くの client semantics を保持するようになりました (#3537)** — `references` は `context.includeDeclaration` を尊重し、曖昧な workspace definition は空 result ではなく一致 location をすべて返し、declaration / type-definition / implementation request は indexed definition lookup を再利用し、追跡中の `workspaceFolders` は position-based な absolute path 解決に反映される一方で relative path は DB root に固定され、`workspace/symbol` は bounded な client limit を受け取り、`documentSymbol` は container metadata がある場合に階層化された children を返します。
+- **MCP 引数 schema が互換メタデータを公開するようになりました (#3538)** — `tools/list` は期待 JSON 型、alias / 非推奨メタデータ、スカラー `excludePaths` filter、`definition` / `references` 向けの `lspCompatible` alias を広告するようになりました。
+- **MCP `batch_query` が上限と再開用 truncation hint を公開するようになりました (#3539)** — `tools/list` と `status` が batch_query 専用 cap を返し、呼び出し側は `estimateOnly`、`maxResponseBytes`、slot id を使えます。切り詰められたレスポンスには deterministic な再開計画向けに `split_hint` と slot 別 summary が含まれます。
+- **export manifest に index readiness と summary metadata が含まれるようになりました (#3549)** — `cdidx export` は bounded な file / chunk / symbol / reference count、readiness flag、writer と indexed-head metadata、schema contract stamp、利用可能な unknown-extension summary を書き込み、`cdidx import` は destination DB を置き換える前に存在する summary count を検証します。
+
+#### 修正
+
+- **SQL target 抽出で compiled regex の group crash を回避しました** — `cdidx . --verbose` は SQL mutation target 参照の発行時に巨大な regex の繰り返し名前付き capture へ依存しなくなり、target reference 抽出を維持したまま `System.AccessViolationException` が起きうる経路を避けます。
+- **upgrade installer が信頼済みの絶対パスから bash を起動するようになりました (#3378)** — `cdidx upgrade` は周囲の `PATH` に頼らず、既知の絶対パスから POSIX installer shell を解決します。
+- **記号の多い検索ヒントが exact-substring の再実行方法を具体的に案内するようになりました (#3386)** — CLI と MCP の search recovery hint は、記号の多いコード片を `--exact-substring` または `exactSubstring=true` で再実行するよう案内します。
+- **複数語の literal search が exact phrase を含む chunk を先に並べるようになりました (#3389)** — 通常の `search` は `not supported` のような空白を含む exact phrase を持つ chunk を、token-only match より前に並べます。
+- **MCP tool filter が不正または未知の名前を警告するようになりました (#3406)** — allow / deny filter は空 entry と未知 tool 名を bounded な `stderr` warning として出力し、明示設定された allowlist に既知 tool が 0 件の場合は fail closed します。
+- **機微な一時ファイルとキャッシュファイルが private directory を使うようになりました (#3411)** — upgrade installer script、export snapshot、update-check cache、persistent log directory は、機微な内容を書き込む前に所有者限定の保存先を作成します。
+- **LSP frame read が cancellation を監視し、bounded header buffer を再利用するようになりました (#3427)** — `cdidx lsp` は CLI cancellation token を stdio request loop、message body read、header parsing に渡し、header ごとの `List<byte>` 増加を避けるようになりました。
+- **workspace manifest member validation を厳密かつ決定的にしました (#3429)** — invalid member entries を件数制限つき diagnostics で報告しつつ、有効な member path を DB path 作成前に一貫して正規化・重複排除するようにしました。
+- **config validation が複数診断を返し、MCP bucket idle TTL も設定できるようになりました (#3432)** — project config file は 1 回の検証で検出できた schema/value error をまとめて返し、`mcp.rate_limit.bucket_idle_seconds` が `CDIDX_MCP_RATE_LIMIT_BUCKET_IDLE_SECONDS` に対応するようになりました。
+- **MCP のクランプ済み引数が requested/effective を返すようになりました (#3436)** — `limit`、`offset`、`snippetLines`、`map.depth`、`impact_analysis.maxHops` などの対応済み引数がクランプまたは無視された場合、MCP の成功レスポンスに `warnings` と `argument_adjustments` が含まれるようになりました。
+- **Dockerfile JSON-form 抽出でスキップ理由を確認できるようになりました (#3437)** — malformed な Dockerfile JSON-form の `VOLUME`、`SHELL`、`COPY`、`ADD` 命令と、extractor の item cap を超えた配列は、黙って無視されるのではなく bounded な `file_issues` diagnostics として報告されます。
+- **`search` が展開済み `--path` glob の対処を案内するようになりました (#3445)** — shell 展開された path glob が余剰の path 風 positional argument として残った場合、`cdidx search` は `--path` を引用して 1 つの literal glob として渡すよう案内します。
+- **map、symbols、inspect の format alias を揃えました (#3446)** — `map` と `inspect` は `--format json` / `--format compact` を受け付け、`symbols` は `--format json` / `--format count` を受け付けます。未対応の format 組み合わせではコマンド別のヒントを返します。
+- **project filter の current-directory fallback を明示しました (#3461)** — project expansion が process current directory に fallback した場合、CLI query context と MCP structured payload が有効な `project_filter_root` と `project_filter_root_fallback_reason` を返すようにしました。
+- **`install.sh --purge-cache` が削除前に cache root を検証するようになりました (#3499)** — uninstall 時の cache purge は、cdidx cache directory を再帰削除する前に、危険な値・相対パス・空・root の cache location を拒否します。
+- **Rollback cleanup が削除前に promoted asset name を検証するようになりました (#3503)** — installer の rollback removal は、promoted file を削除する前に危険または想定外の asset name を拒否します。
+- **`search` が `--max-results` と dash 始まりの query を案内するようになりました (#3521)** — `cdidx search` は `--max-results` を `--limit` のエイリアスとして扱い、`--profile` のような literal query を `--query` または `--` で渡す方法を案内します。
+- **`status` が未知拡張子ファイルを分類するようになりました (#3523)** — `status --json` は既存の上限付き sample を維持しつつ、拡張子別件数、カテゴリ別件数、分類グループ、language support / ignore configuration / structural extraction の推奨 next action を追加します。
+- **export/import の JSON エラーに安定した検証 phase が含まれるようになりました (#3548)** — `cdidx export --json` と `cdidx import --json` は、想定される parse、manifest、archive、checksum、SQLite 検証、prune、置換、archive 書き込み失敗について `phase` と `error_code` を含む構造化エラー payload を返します。
+- **検索 snippet が focus 選択理由と dropped match の移動先を返すようになりました (#3556)** — compact search JSON に `focus_mode` / `focus_line` / `focus_column` / `focus_reason` / `next_match` を追加し、クライアントが選択された window を理解して省略された一致へ移動できるようにしました。
+- **行幅クランプ後の検索 highlight occurrence が可視範囲を返すようになりました (#3557)** — search JSON は元ソース座標を維持しつつ、返却 snippet 内に存在する文字だけを強調できるよう `visible` / `visible_column` / `visible_length` を追加しました。
+- **検索 JSON が有効な snippet options と raw FTS の highlight 可否を返すようになりました (#3558)** — compact CLI と MCP search row に有効な snippet / mode metadata を追加し、literal highlight 対応と raw FTS 構文由来の不足を区別できるようにしました。
+- **find JSON が match span と snippet truncation context を返すようになりました (#3561)** — `cdidx find --json` の各 row に `length` / `original_line_length` / `snippet_truncation_context` を追加し、クライアントが同一ファイル内の複数一致を highlight し、snippet marker を解析せずに行幅省略を検出できるようにしました。
+- **excerpt と body JSON が range と recovery metadata を返すようになりました (#3562)** — excerpt row に requested/effective range、truncation reason、再実行可能な recovery command を追加し、body JSON でも行数上限と byte 上限の reason と follow-up excerpt range を返すようにしました。
+- **status と vacuum が DB maintenance guidance を返すようになりました (#3564)** — `status --json` は WAL/freelist 状態、しきい値、回収見積もり、auto-vacuum mode、推奨コマンド、follow-up を含む `maintenance_guidance` を返し、`vacuum --dry-run --json` は vacuum pragma を実行せず同じ guidance を返します。
+- **DB diagnostic JSON が安定した severity と schema object coverage を返すようになりました (#3565)** — `db --integrity-check --json` と `db schema --json` は `severity` と `diagnostic_code` を含み、schema JSON は SQLite の table / index / trigger / view の総数と省略数も返します。
+- **count-only JSON に自動化向け envelope を追加しました (#3566)** — `search`、`symbols`、`definition`、`files`、`references`、`callers`、`callees`、`impact`、`find` の count JSON が、適用済み query context、freshness メタデータ、必要な file count alias、`authoritative_count` / `degraded` の readiness signal を含むようになりました。
+- **status --check JSON が構造化 repair command を返すようになりました (#3567)** — failed check は command name、args、reason、safety notes を持つ `repair_commands` を含み、status は raw exception text や file path を含めず bounded な `last_failed_or_partial_index_run` metadata を返せます。
+- **watch JSON イベントがバッチ健全性サマリーを公開するようになりました (#3568)** — `cdidx index --watch --json` のイベントヘッダに incremental phase メタデータ、上限付きバッチ path sample、サブ実行の update/remove/error 件数、parse gap 診断、overflow 復旧コマンドを構造化して含めるようになりました。
+- **index dry-run が予測される cleanup 作業を報告するようになりました (#3569)** — `cdidx index --dry-run --json` は mutation estimate であることを明示し、DB に書き込まずに予測される file update/delete/purge、unsupported/unknown 件数、table 別 mutation 推定件数を報告するようになりました。
+
+#### セキュリティ
+
+- **MCP tool エラーが raw exception message を返さないようになりました (#3370)** — tool error response と MCP tool error log はサニタイズ済みの例外詳細を使うようになり、parser / SQLite / filesystem の例外文から一致内容や bind 値が漏れないようになりました。
+- **Global tool log が例外メッセージを永続化前に分類するようになりました (#3371)** — 永続化される例外チェーンは、パス、SQL、クエリ、機密値らしき文字列を含み得る raw exception message ではなく、安定した message category と redacted stack-line diagnostics を記録します。
+- **checkpoint の一時クリーンアップが安全でない recursive delete 対象を拒否するようになりました (#3379)** — checkpoint / restore の cleanup は、recursive delete の前に一時ディレクトリが明示された safe root 配下にあり、期待される一時名 prefix と一致することを確認します。
+- **環境変数診断が機密値らしき不正値を redaction するようになりました (#3403)** — 不正な `CDIDX_DEBUG` と MCP response / keep-alive 環境変数の警告は、stderr へ出力する前に表示値を bounded かつ redacted にします。
+- **MCP suggestion sampling が明示 opt-in 必須になりました (#3405)** — `suggest_improvement` は `CDIDX_MCP_SAMPLING` が有効値の場合だけ `sampling/createMessage` を送信し、無効または不正な設定では client を呼ばず bounded な sampling diagnostic を返します。
+- **slow-query SQL 診断がリテラルを redaction するようになりました (#3416)** — slow-query の stderr / global tool log 出力は、既存の長さ制限を適用する前に SQL 文字列・blob・数値リテラルを redaction します。
+- **worker と batch 診断が raw exception text を避けるようになりました (#3425)** — symbol worker、hook callback worker、`cdidx batch` の JSON parse failure は、例外メッセージをそのまま返さず `worker_protocol_error` や `invalid_batch_json` などの安定したサニタイズ済みカテゴリを報告します。
+- **LSP のパス解決が明示的な rootless trust rules を適用するようになりました (#3426)** — workspace containment は共有の path-casing helper を使い、rootless LSP request は workspace folder が判明した後だけ相対 indexed path を信頼し、position read は読み取り中にファイルが増えても上限内に収めます。
+- **active workspace state が root、db_path、config-home 入力を検証するようになりました (#3430)** — active workspace state は絶対 root / database path と active root 配下の database を必須にし、不正な config-home 値は path 合成前に拒否し、警告では未信頼の path 値を出力しません。
+- **cdidx config validation が scalar、path、numeric value を上限検証するようになりました (#3431)** — config load は field-specific string limit を適用し、MCP rate-limit 数値を環境設定へ展開する前に検証し、不正な path 値は sanitize された安定診断で報告します。
+- **HTTP MCP auth log は既定で認証失敗を丸めるようになりました (#3469)** — request log の auth outcome は、unsafe debug 診断が明示的に有効な場合を除き、bearer 認証失敗を `unauthorized` として記録します。
+- **index freshness と scanner probe の診断が安定した IO カテゴリを使うようになりました (#3471)** — status freshness の scan error と ancestor ignore directory probe は、生の filesystem 例外メッセージを含めなくなりました。
+- **release dispatch の tag を privileged checkout 前に検証するようになりました (#3485)** — 手動リリース入力は低権限の preflight job で release tag/ref を正規化してから、release / NuGet / container / Homebrew の各 job が checkout するようになりました。
+- **release / build workflow が権限と実行時間の境界を明示するようになりました (#3486)** — release 権限は job 単位に絞り、release 実行は tag/ref ごとの concurrency group を使い、release / build job には明示 timeout を設定し、release の curl probe には接続時間と総実行時間の上限を追加しました。
+- **release / mutation workflow のactionをcommit SHAで固定しました (#3487)** — 残っていた可変の Docker / attestation / checkout / setup-dotnet action tag を、確認済みcommit SHAとversion comment付きの参照へ置き換えました。
+- **NuGet publishing が OIDC trusted publishing と package attestation を使うようになりました (#3489)** — NuGet release job は GitHub OIDC を短命 NuGet API key に交換し、公開前に `.nupkg` と `.snupkg` の両方を attest するようになりました。
+- **Homebrew publishing が tap token を clone URL に保存しなくなりました (#3490)** — tap 更新jobは一時credential helperで clone / push を認証し、終了時にchecksumファイルと一時cloneを削除するようになりました。
+- **Homebrew formula のchecksumをworkflow所有artifactから計算するようになりました (#3491)** — tap 更新jobは同一workflow runのrelease artifactをdownloadし、public releaseのchecksum manifestを再downloadせずにformula用SHA-256をローカル計算するようになりました。
+- **コンテナリリースで runtime の git 依存を最小化し、attestation を公開するようにしました (#3495)** — GHCR runtime image は `git` をインストールしなくなり、release image build は provenance と SBOM の attestation を要求するようになりました。
+- **release / build の NuGet cache が broad fallback restore key を使わないようになりました (#3496)** — CI は NuGet package cache を lockfile 由来の完全一致 key からのみ復元し、OS 単位の package cache prefix へ fallback しなくなりました。
+- **Windows Defender の CI 除外が理由付き audit record を出力するようになりました (#3497)** — Windows の build / release lane は、Defender 除外を適用する前に、有効な各除外パスと理由をログと job summary に出力するようになりました。
+- **installer の verification policy を明示しました (#3502)** — 既定は警告互換の `CDIDX_VERIFY_POLICY=compat` のまま、`CDIDX_VERIFY_POLICY=strict` または `--verify-policy strict` では GitHub attestation、GPG signature verification、signer fingerprint pinning が欠けた場合に fail closed します。
+- **MCP auth token が曖昧な空白を拒否するようになりました (#3505)** — stdio と HTTP bearer の設定 token は空でなく、空白や制御文字を含まない必要があります。HTTP bearer header も比較前に token candidate を trim しなくなりました。
+- **MCP stdio と worker protocol が読み取り中に line cap を適用するようになりました (#3506)** — line-delimited な MCP / worker frame は、無制限の `ReadLine` 確保が起きる前に protocol 境界で拒否されます。
+- **NuGet publish preflight がprivateな一時response fileを使うようになりました (#3508)** — release job はNuGet公開可否probeのheadersを固定 `/tmp` path ではなくjob temp root配下の `mktemp` fileへ書き込み、終了時に削除するようになりました。
+- **通常 install / uninstall が危険な install directory を拒否するようになりました (#3511)** — `install.sh` は lock・install・file removal の前に `CDIDX_INSTALL_DIR` を検証し、root・home・system install target には `CDIDX_ALLOW_RISKY_INSTALL_DIR=1` を要求します。
+- **database checkpoint 操作が hardened cleanup / restore 診断を返すようになりました (#3514)** — checkpoint list は sanitized diagnostics を返し、restore は rollback 失敗時も元の失敗を保持し、symlink や通常ファイルではない checkpoint payload を拒否し、prune apply 後の WAL cleanup 警告を報告します。
+- **report bundle の redaction が JSON と log tail で一貫するようになりました (#3554)** — report JSON はローカル path field を redaction し、log tail redaction は機密値の後続 key-value field を保持し、`--include-args` は安全な引数を残しつつ secret らしき値とローカル path を redaction します。
+
+#### 内部変更
+
+- **CLI の stdout/stderr 出力を共有 command writer へさらに集約しました (#3417)** — command runner の重複した error、warning、JSON/human error 出力経路を `CommandErrorWriter` 経由にしました。
+- **単一ファイル installer の source を focused fragment に分割しました (#3498)** — `install.sh` は installer、PATH guidance、uninstall、self-test、reinstall、doctor、dispatch 用の fragment から生成されるようになり、生成された one-liner との同期をテストで固定します。
+
 ### [1.29.1] - 2026-06-07
 
 #### ドキュメント
@@ -7268,7 +7502,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.29.1...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.30.0...HEAD
+[1.30.0]: https://github.com/Widthdom/CodeIndex/compare/v1.29.1...v1.30.0
 [1.29.1]: https://github.com/Widthdom/CodeIndex/compare/v1.29.0...v1.29.1
 [1.29.0]: https://github.com/Widthdom/CodeIndex/compare/v1.28.5...v1.29.0
 [1.28.5]: https://github.com/Widthdom/CodeIndex/compare/v1.28.4...v1.28.5
