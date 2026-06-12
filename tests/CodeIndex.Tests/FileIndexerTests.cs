@@ -5115,6 +5115,53 @@ public class FileIndexerTests
         Assert.DoesNotContain(issues, i => i.Kind == "mixed_line_endings_three_way");
     }
 
+    [Theory]
+    [InlineData("VOLUME [\"/var/lib/app\",", "VOLUME")]
+    [InlineData("SHELL [\"/bin/sh\",", "SHELL")]
+    [InlineData("COPY --chmod=0644 [\"package.json\",", "COPY")]
+    [InlineData("ADD [\"archive.tar.gz\",", "ADD")]
+    public void ValidateContent_DockerfileMalformedJsonForms_EmitValidationIssue(string line, string instruction)
+    {
+        var content = line + "\n";
+        var rawBytes = Encoding.UTF8.GetBytes(content);
+
+        var issues = FileIndexer.ValidateContent("Dockerfile", rawBytes, content, "dockerfile");
+
+        var issue = Assert.Single(issues, i => i.Kind == "dockerfile_json_form_invalid");
+        Assert.Equal(1, issue.Line);
+        Assert.Equal(FileIssue.SeverityWarning, issue.Severity);
+        Assert.Contains(instruction, issue.Message);
+    }
+
+    [Theory]
+    [InlineData("VOLUME")]
+    [InlineData("COPY")]
+    public void ValidateContent_DockerfileJsonFormsBeyondItemCap_EmitTruncationIssue(string instruction)
+    {
+        var items = Enumerable.Range(0, SymbolExtractor.DockerfileJsonFormMaxItems + 1)
+            .Select(i => JsonSerializer.Serialize($"/item{i}"));
+        var content = instruction + " [" + string.Join(", ", items) + "]\n";
+        var rawBytes = Encoding.UTF8.GetBytes(content);
+
+        var issues = FileIndexer.ValidateContent("Dockerfile", rawBytes, content, "dockerfile");
+
+        var issue = Assert.Single(issues, i => i.Kind == "dockerfile_json_form_truncated");
+        Assert.Equal(1, issue.Line);
+        Assert.Equal(FileIssue.SeverityWarning, issue.Severity);
+        Assert.Contains(instruction, issue.Message);
+    }
+
+    [Fact]
+    public void ValidateContent_NonDockerfileJsonLikeLine_DoesNotEmitDockerfileJsonIssue()
+    {
+        var content = "VOLUME [\"not docker\",";
+        var rawBytes = Encoding.UTF8.GetBytes(content);
+
+        var issues = FileIndexer.ValidateContent("script.sh", rawBytes, content, "shell");
+
+        Assert.DoesNotContain(issues, i => i.Kind.StartsWith("dockerfile_json_form_", StringComparison.Ordinal));
+    }
+
     [Fact]
     public void ValidateContent_ThreeWayLineEndings_EmitsThreeWayIssue()
     {

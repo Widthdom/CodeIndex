@@ -971,7 +971,7 @@ public static partial class IndexCommandRunner
                                     record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
                                     extractionCancellationToken);
                                 activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "validating");
-                                issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
+                                issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang);
                             }
                             extractionResults.Add(
                                 FullScanFileWorkItem.Success(filePath, record, content, rawBytes, warning, chunks, symbols, references, issues),
@@ -1237,7 +1237,7 @@ public static partial class IndexCommandRunner
                     postExtractionHooks.OnReferencesExtracted(fileContext, AsMutableList(references));
                     writer.InsertReferences(references);
                     currentJsonIndexFile = FormatIndexPhasePath(record.Path, "validating");
-                    var issues = item.Issues ?? FileIndexer.ValidateContent(record.Path, item.RawBytes!, item.Content!);
+                    var issues = item.Issues ?? FileIndexer.ValidateContent(record.Path, item.RawBytes!, item.Content!, record.Lang);
                     writer.InsertIssues(fileId, issues);
                     currentJsonIndexFile = FormatIndexPhasePath(record.Path, "committing");
                     WriteProjectRootOnce();

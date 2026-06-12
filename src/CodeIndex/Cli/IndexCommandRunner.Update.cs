@@ -719,7 +719,7 @@ public static partial class IndexCommandRunner
                     writer.InsertReferences(references);
                     // Validate content for encoding issues / エンコーディング問題を検証
                     currentUpdatePath = FormatIndexPhasePath(relPath, "validating");
-                    var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
+                    var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang);
                     writer.InsertIssues(fileId, issues);
                     currentUpdatePath = FormatIndexPhasePath(relPath, "committing");
                     writer.ClearBatchInProgress();
