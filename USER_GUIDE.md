@@ -1997,25 +1997,46 @@ cdidx includes a built-in **MCP (Model Context Protocol) server**. MCP is a stan
 `cdidx lsp --db .cdidx/codeindex.db` starts a read-only Language Server Protocol
 server over stdio. It reuses the existing CodeIndex database and exposes
 `initialize`, `workspace/symbol`, `textDocument/documentSymbol`,
-`textDocument/definition`, and `textDocument/references` for editors that can
-launch an arbitrary LSP command but do not speak MCP.
+`textDocument/definition`, `textDocument/declaration`,
+`textDocument/typeDefinition`, `textDocument/implementation`, and
+`textDocument/references` for editors that can launch an arbitrary LSP command
+but do not speak MCP.
 Incoming `textDocument.uri` values must be strings, must be absolute `file:`
 URIs, and are rejected before URI parsing when they exceed 4096 characters,
 matching the MCP resource URI limit and keeping error responses bounded. LSP
 frame parsing also rejects more than 64 header lines, more than 65536 aggregate
 header bytes, any one header line above 8192 bytes, duplicate `Content-Length`
 headers, or a body above 8388608 bytes before reading the message body.
+The stdio loop observes the CLI cancellation token while reading headers and
+message bodies, so Ctrl-C / host cancellation can interrupt pending frame reads
+instead of waiting for another complete request.
 Unknown-method diagnostics echo at most 240 method-name characters with `...`
 when the method name is longer. Request IDs must be bounded JSON-RPC scalar
 values: strings are capped at 256
 characters, integer IDs must fit in `Int64`, and non-scalar IDs are rejected as
 invalid requests before response IDs are cloned. `workspace/symbol` query
 strings are capped at 1000 characters before symbol search runs.
-`textDocument/documentSymbol` returns at most 1000 indexed symbols, truncates
-each `detail` string to 512 characters with `...`, and stops adding symbols
-before the result array exceeds 524288 JSON bytes.
+`workspace/symbol` accepts optional numeric `limit` / `maxResults` parameters
+and clamps them to 1000 results. `textDocument/documentSymbol` returns
+hierarchical `DocumentSymbol` children when container metadata is available,
+returns at most 1000 indexed symbols, truncates each `detail` string to 512
+characters with `...`, and trims the tree before the result array exceeds
+524288 JSON bytes.
 Position-based `definition` and `references` lookups read at most 16384
 characters from the target source line before returning an empty result.
+`textDocument/references` honors `context.includeDeclaration`; when true, the
+definition locations are prepended to the reference result without duplicating
+identical locations. `declaration`, `typeDefinition`, and `implementation`
+requests reuse the same indexed definition lookup and return the same location
+shape as `definition`.
+Tracked `workspaceFolders` are used when resolving position-based requests for
+indexed absolute paths, including folders added or removed through
+`workspace/didChangeWorkspaceFolders`; relative indexed paths remain anchored to
+the database project root.
+When a position lookup returns an empty result because the request cannot be
+resolved safely, the `CodeIndex` `ActivitySource` emits an `lsp.lookup_failed`
+event with a safe `lsp.lookup.failure_reason` code such as `outside_project`,
+`file_not_indexed`, `position_file_too_large`, or `no_token_at_position`.
 When exact indexed path resolution misses, LSP document path fallback inspects
 at most 32 basename candidates before treating the document as unresolved.
 
@@ -4326,23 +4347,38 @@ cdidxには**MCP（Model Context Protocol）サーバー**が組み込まれて�
 サーバーを stdio で起動します。既存の CodeIndex database を再利用し、
 任意の LSP command を起動できるが MCP には対応していない editor 向けに
 `initialize`、`workspace/symbol`、`textDocument/documentSymbol`、
-`textDocument/definition`、`textDocument/references` を公開します。
+`textDocument/definition`、`textDocument/declaration`、
+`textDocument/typeDefinition`、`textDocument/implementation`、
+`textDocument/references` を公開します。
 受信した `textDocument.uri` は string かつ absolute `file:` URI である必要があり、
 4096 文字を超える場合は URI parse の前に拒否されます。これは MCP resource URI の上限と
 揃えており、エラー応答が過大にならないようにします。
 LSP frame parsing は、message body を読む前に 64 行を超える header、合計 65536 bytes を
 超える header、8192 bytes を超える単一 header 行、重複した `Content-Length` header、
 8388608 bytes を超える body を拒否します。
+stdio loop は header / message body 読み取り中も CLI cancellation token を監視するため、
+Ctrl-C や host cancellation が次の完全な request を待たずに pending frame read を中断できます。
 method-not-found diagnostic で echo する method name は最大 240 文字に制限され、
 長い場合は `...` を付けて切り詰めます。
 request ID は bounded な JSON-RPC scalar value に限定され、string は 256 文字まで、
 integer ID は `Int64` に収まるものだけを受理し、non-scalar ID は response ID を複製する前に
 invalid request として拒否します。
 `workspace/symbol` の query string は symbol search を実行する前に 1000 文字で上限をかけます。
-`textDocument/documentSymbol` は最大 1000 件の indexed symbol を返し、各 `detail` string を
-`...` 付きの 512 文字に切り詰め、result array が 524288 JSON bytes を超える前に symbol 追加を止めます。
+`workspace/symbol` は任意の numeric `limit` / `maxResults` parameter を受け取り、1000 件までに
+clamp します。`textDocument/documentSymbol` は container metadata がある場合に階層化された
+`DocumentSymbol` children を返し、最大 1000 件の indexed symbol を返し、各 `detail` string を
+`...` 付きの 512 文字に切り詰め、result tree が 524288 JSON bytes を超える前に trim します。
 position-based な `definition` / `references` lookup は、対象 source line を最大 16384 文字まで読み、
 超過時は空の result を返します。
+`textDocument/references` は `context.includeDeclaration` を尊重し、true の場合は definition location を
+重複なしで reference result の先頭に追加します。`declaration`、`typeDefinition`、`implementation`
+request は同じ indexed definition lookup を再利用し、`definition` と同じ location shape を返します。
+追跡中の `workspaceFolders` は indexed absolute path に対する position-based request の解決に使われ、
+`workspace/didChangeWorkspaceFolders` で追加・削除された folder も反映されます。relative indexed path は
+database project root に紐づいたままです。
+position lookup が安全に解決できず空の result を返す場合、`CodeIndex` `ActivitySource` は
+`outside_project`、`file_not_indexed`、`position_file_too_large`、`no_token_at_position`
+などの安全な `lsp.lookup.failure_reason` code を持つ `lsp.lookup_failed` event を出します。
 exact indexed path resolution が失敗した場合、LSP document path fallback は最大 32 件の
 basename candidate だけを確認し、見つからなければ unresolved document として扱います。
 

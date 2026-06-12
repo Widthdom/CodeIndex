@@ -352,7 +352,7 @@ internal static class ProgramRunner
 
         if (args[0] is "lsp" or "--lsp")
         {
-            var lspExitCode = RunLsp(args[1..], context.AppVersion, context.JsonOptions);
+            var lspExitCode = RunLsp(args[1..], context.AppVersion, context.JsonOptions, context.CancellationToken);
             GlobalToolLog.Info($"command_complete exit_code={lspExitCode} command=lsp");
             EmitCommandMetric("lsp", args, context.StartTimestamp, context.Stopwatch, lspExitCode);
             return lspExitCode;
@@ -2290,7 +2290,11 @@ internal static class ProgramRunner
     private const string DefaultMcpHttpListen = "127.0.0.1:38080";
     internal const string McpHttpTokenEnvVar = "CDIDX_MCP_HTTP_TOKEN";
 
-    private static int RunLsp(string[] cmdArgs, string appVersion, JsonSerializerOptions jsonOptions)
+    private static int RunLsp(
+        string[] cmdArgs,
+        string appVersion,
+        JsonSerializerOptions jsonOptions,
+        CancellationToken cancellationToken = default)
     {
         var options = QueryCommandRunner.ParseArgs(cmdArgs, jsonDefault: true);
         if (options.ParseError != null)
@@ -2350,7 +2354,7 @@ internal static class ProgramRunner
             }
 
             using var server = new LspServer(new DbReader(db), appVersion, jsonOptions, indexedProjectRoot);
-            return server.Run(Console.OpenStandardInput(), Console.OpenStandardOutput());
+            return server.Run(Console.OpenStandardInput(), Console.OpenStandardOutput(), cancellationToken);
         }
         catch (OperationCanceledException)
         {
