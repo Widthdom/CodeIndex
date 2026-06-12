@@ -9,6 +9,7 @@ using System.Text.Json.Nodes;
 using System.Text.Json.Serialization.Metadata;
 using CodeIndex.Cli;
 using CodeIndex.Database;
+using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
 
 namespace CodeIndex.Mcp;
@@ -1453,8 +1454,9 @@ public partial class McpServer : IDisposable
             || seconds < MinKeepAliveIntervalSeconds
             || seconds > MaxKeepAliveIntervalSeconds)
         {
+            var displayValue = DiagnosticRedactor.FormatEnvironmentValue(KeepAliveIntervalEnvironmentVariable, raw);
             Console.Error.WriteLine(
-                $"[cdidx-mcp] Ignoring invalid {KeepAliveIntervalEnvironmentVariable}='{ConsoleUi.FormatBoundedValue(raw)}'. Expected a finite value between {MinKeepAliveIntervalSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} and {MaxKeepAliveIntervalSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} seconds. Keep-alive notifications stay disabled.");
+                $"[cdidx-mcp] Ignoring invalid {KeepAliveIntervalEnvironmentVariable}='{displayValue}'. Expected a finite value between {MinKeepAliveIntervalSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} and {MaxKeepAliveIntervalSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} seconds. Keep-alive notifications stay disabled.");
             return null;
         }
         return TimeSpan.FromSeconds(seconds);
@@ -3943,13 +3945,15 @@ public partial class McpServer : IDisposable
         if (!int.TryParse(raw, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var limit)
             || limit <= 0)
         {
-            Console.Error.WriteLine($"[cdidx-mcp] Ignoring invalid {envVar}='{raw}'. Expected a positive integer for {description}. Using default {defaultValue.ToString(System.Globalization.CultureInfo.InvariantCulture)}.");
+            var displayValue = DiagnosticRedactor.FormatEnvironmentValue(envVar, raw);
+            Console.Error.WriteLine($"[cdidx-mcp] Ignoring invalid {envVar}='{displayValue}'. Expected a positive integer for {description}. Using default {defaultValue.ToString(System.Globalization.CultureInfo.InvariantCulture)}.");
             return defaultValue;
         }
 
         if (limit > maximumValue)
         {
-            Console.Error.WriteLine($"[cdidx-mcp] Clamping {envVar}='{raw}' to maximum {maximumValue.ToString(System.Globalization.CultureInfo.InvariantCulture)} for {description}.");
+            var displayValue = DiagnosticRedactor.FormatEnvironmentValue(envVar, raw);
+            Console.Error.WriteLine($"[cdidx-mcp] Clamping {envVar}='{displayValue}' to maximum {maximumValue.ToString(System.Globalization.CultureInfo.InvariantCulture)} for {description}.");
             return maximumValue;
         }
 
