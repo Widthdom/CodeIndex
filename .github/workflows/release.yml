@@ -17,15 +17,18 @@ on:
         type: boolean
 
 permissions:
-  contents: write
-  id-token: write
-  attestations: write
+  contents: read
+
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref }}
+  cancel-in-progress: false
 
 jobs:
   preflight:
     name: Validate release tag
     if: github.repository == 'Widthdom/CodeIndex'
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: read
     outputs:
@@ -64,6 +67,9 @@ jobs:
   release:
     if: github.repository == 'Widthdom/CodeIndex'
     needs: preflight
+    timeout-minutes: 90
+    permissions:
+      contents: read
     strategy:
       matrix:
         # Keep this matrix in sync with docs/platform-support.md and install.sh
@@ -515,6 +521,11 @@ jobs:
     if: github.repository == 'Widthdom/CodeIndex'
     runs-on: ubuntu-latest
     needs: [preflight, release]
+    timeout-minutes: 45
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     environment: release-production
     steps:
       - name: Checkout
@@ -774,7 +785,7 @@ jobs:
             deadline=$((SECONDS + wait_seconds))
             attempt=1
             while :; do
-              code="$(curl -fsSL --range 0-0 -o /dev/null -w '%{http_code}' "$url" || true)"
+              code="$(curl -fsSL --connect-timeout 10 --max-time 60 --retry 5 --retry-delay 5 --retry-all-errors --range 0-0 -o /dev/null -w '%{http_code}' "$url" || true)"
               if [ "$code" = "200" ] || [ "$code" = "206" ]; then
                 echo "Asset ${asset} reachable after $attempt attempt(s)."
                 reachable=1
@@ -861,6 +872,9 @@ jobs:
     if: github.repository == 'Widthdom/CodeIndex'
     runs-on: ubuntu-latest
     needs: [preflight, release]
+    timeout-minutes: 30
+    permissions:
+      contents: read
     environment: nuget-production
     steps:
       - name: Checkout
@@ -899,7 +913,7 @@ jobs:
         run: |
           set -euo pipefail
           package_url="https://api.nuget.org/v3-flatcontainer/cdidx/${VERSION}/cdidx.${VERSION}.nupkg"
-          status="$(curl -sS -o /tmp/cdidx-nuget-head -w '%{http_code}' -I "$package_url")"
+          status="$(curl -sS --connect-timeout 10 --max-time 30 --retry 3 --retry-delay 2 --retry-all-errors -o /tmp/cdidx-nuget-head -w '%{http_code}' -I "$package_url")"
           if [ "$status" = "200" ]; then
             echo "NuGet package cdidx ${VERSION} is already published; refusing to mask this as a duplicate." >&2
             exit 1
@@ -991,6 +1005,7 @@ jobs:
     if: github.repository == 'Widthdom/CodeIndex'
     runs-on: ubuntu-latest
     needs: [preflight, create-release]
+    timeout-minutes: 90
     permissions:
       contents: read
       id-token: write
@@ -1053,6 +1068,9 @@ jobs:
     if: github.repository == 'Widthdom/CodeIndex'
     runs-on: ubuntu-latest
     needs: [preflight, create-release]
+    timeout-minutes: 30
+    permissions:
+      contents: read
     environment: homebrew-production
     steps:
       - name: Checkout release tag
@@ -1090,7 +1108,7 @@ jobs:
           RELEASE_URL="${REPO_URL}/releases/download/${TAG_NAME}"
           CHECKSUMS_URL="${RELEASE_URL}/sha256sums.txt"
           checksums="$(mktemp)"
-          curl -fsSL "$CHECKSUMS_URL" -o "$checksums"
+          curl -fsSL --connect-timeout 10 --max-time 60 --retry 5 --retry-delay 5 --retry-all-errors "$CHECKSUMS_URL" -o "$checksums"
 
           sha_for() {
             awk -v name="$1" '$2 == name { print $1; found=1 } END { exit found ? 0 : 1 }' "$checksums"
