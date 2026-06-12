@@ -972,12 +972,17 @@ public class ProgramRunnerTests
     [Fact]
     public void CreateInstallerProcessStartInfo_UsesArgumentList()
     {
+        if (OperatingSystem.IsWindows())
+            return;
+
         var startInfo = ProgramRunner.CreateInstallerProcessStartInfo(
             "/tmp/install script's path.sh",
             "v1.27.0",
             "/opt/cdidx install");
 
-        Assert.Equal("bash", startInfo.FileName);
+        Assert.True(Path.IsPathFullyQualified(startInfo.FileName));
+        Assert.Equal("bash", Path.GetFileName(startInfo.FileName));
+        Assert.NotEqual("bash", startInfo.FileName);
         Assert.False(startInfo.UseShellExecute);
         Assert.Equal(string.Empty, startInfo.Arguments);
         Assert.Equal(["/tmp/install script's path.sh", "v1.27.0"], startInfo.ArgumentList.ToArray());

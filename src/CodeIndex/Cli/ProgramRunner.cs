@@ -3198,13 +3198,27 @@ internal static class ProgramRunner
     {
         var startInfo = new ProcessStartInfo
         {
-            FileName = "bash",
+            FileName = ResolveTrustedBashPath(),
             UseShellExecute = false,
         };
         startInfo.ArgumentList.Add(scriptPath);
         startInfo.ArgumentList.Add(releaseTag);
         startInfo.Environment["CDIDX_INSTALL_DIR"] = installDir;
         return startInfo;
+    }
+
+    internal static string ResolveTrustedBashPath()
+    {
+        if (OperatingSystem.IsWindows())
+            throw new PlatformNotSupportedException("The install.sh upgrade path requires a POSIX bash executable.");
+
+        foreach (var candidate in new[] { "/bin/bash", "/usr/bin/bash" })
+        {
+            if (File.Exists(candidate))
+                return candidate;
+        }
+
+        throw new FileNotFoundException("Could not find a trusted absolute bash path for running install.sh.");
     }
 
     internal static int RunInstallerProcess(
