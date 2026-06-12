@@ -44,10 +44,18 @@ internal sealed record UpgradeJsonResult(
     [property: JsonPropertyName("latest_version")] string? LatestVersion,
     [property: JsonPropertyName("update_available")] bool UpdateAvailable,
     [property: JsonPropertyName("from_cache")] bool FromCache,
+    [property: JsonPropertyName("selected_version")] string? SelectedVersion,
+    [property: JsonPropertyName("selected_channel")] string SelectedChannel,
+    [property: JsonPropertyName("selection_source")] string SelectionSource,
+    [property: JsonPropertyName("include_prerelease")] bool IncludePrerelease,
     [property: JsonPropertyName("error")] string? Error,
     [property: JsonPropertyName("install_attempted")] bool InstallAttempted,
     [property: JsonPropertyName("install_exit_code")] int? InstallExitCode,
-    [property: JsonPropertyName("install_succeeded")] bool? InstallSucceeded);
+    [property: JsonPropertyName("install_succeeded")] bool? InstallSucceeded,
+    [property: JsonPropertyName("handoff_command")] string? HandoffCommand,
+    [property: JsonPropertyName("handoff_url")] string? HandoffUrl,
+    [property: JsonPropertyName("handoff_asset")] string? HandoffAsset,
+    [property: JsonPropertyName("handoff_asset_url")] string? HandoffAssetUrl);
 
 internal sealed record DbIntegrityCheckJsonResult(
     [property: JsonPropertyName("db_path")] string DbPath,
@@ -75,7 +83,8 @@ internal sealed record DbCheckpointListJsonResult(
     [property: JsonPropertyName("checkpoints")] List<DbCheckpointListEntryJsonResult> Checkpoints,
     [property: JsonPropertyName("truncated")] bool Truncated = false,
     [property: JsonPropertyName("checkpoint_limit")] int CheckpointLimit = 0,
-    [property: JsonPropertyName("file_limit")] int FileLimit = 0);
+    [property: JsonPropertyName("file_limit")] int FileLimit = 0,
+    [property: JsonPropertyName("diagnostics")] List<DbDiagnosticJsonResult>? Diagnostics = null);
 
 internal sealed record DbCheckpointListEntryJsonResult(
     [property: JsonPropertyName("name")] string Name,
@@ -118,7 +127,13 @@ internal sealed record DbPruneJsonResult(
     [property: JsonPropertyName("orphan_symbol_references")] int OrphanSymbolReferences,
     [property: JsonPropertyName("orphan_reference_lines")] int OrphanReferenceLines,
     [property: JsonPropertyName("orphan_symbols")] int OrphanSymbols,
-    [property: JsonPropertyName("total")] int Total);
+    [property: JsonPropertyName("total")] int Total,
+    [property: JsonPropertyName("warnings")] List<DbDiagnosticJsonResult>? Warnings = null);
+
+internal sealed record DbDiagnosticJsonResult(
+    [property: JsonPropertyName("code")] string Code,
+    [property: JsonPropertyName("message")] string Message,
+    [property: JsonPropertyName("path")] string? Path = null);
 
 internal sealed record DiffSummaryJsonResult(
     [property: JsonPropertyName("left_file_count")] long LeftFileCount,
@@ -172,6 +187,24 @@ internal sealed record QueryCountFilesJsonResult(
     [property: JsonPropertyName("files")] int Files,
     [property: JsonPropertyName("query")] string Query);
 
+internal sealed record SearchGroupedCountJsonResult(
+    [property: JsonPropertyName("api_version")] string ApiVersion,
+    [property: JsonPropertyName("query")] string Query,
+    [property: JsonPropertyName("group_by")] string GroupBy,
+    [property: JsonPropertyName("count")] int Count,
+    [property: JsonPropertyName("files")] int Files,
+    [property: JsonPropertyName("groups")] List<SearchGroupedCountItemJsonResult> Groups);
+
+internal sealed record SearchGroupedCountItemJsonResult(
+    [property: JsonPropertyName("key")] string Key,
+    [property: JsonPropertyName("count")] int Count,
+    [property: JsonPropertyName("file")] string? File,
+    [property: JsonPropertyName("symbol_name")] string? SymbolName,
+    [property: JsonPropertyName("symbol_kind")] string? SymbolKind,
+    [property: JsonPropertyName("symbol_start_line")] int? SymbolStartLine,
+    [property: JsonPropertyName("symbol_end_line")] int? SymbolEndLine,
+    [property: JsonPropertyName("container_name")] string? ContainerName);
+
 internal sealed record QueryFindCountJsonResult(
     [property: JsonPropertyName("count")] int Count,
     [property: JsonPropertyName("files")] int Files,
@@ -192,7 +225,9 @@ internal sealed record LanguageEntryJsonResult(
     [property: JsonPropertyName("extensions")] List<string> Extensions,
     [property: JsonPropertyName("aliases")] List<string> Aliases,
     [property: JsonPropertyName("symbol_extraction")] bool SymbolExtraction,
-    [property: JsonPropertyName("graph_queries")] bool GraphQueries);
+    [property: JsonPropertyName("reference_extraction")] bool ReferenceExtraction,
+    [property: JsonPropertyName("graph_queries")] bool GraphQueries,
+    [property: JsonPropertyName("capability_gaps")] List<string> CapabilityGaps);
 
 internal sealed record LanguagesJsonResult(
     [property: JsonPropertyName("languages")] List<LanguageEntryJsonResult> Languages);
@@ -419,6 +454,7 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(DbCheckpointJsonResult))]
 [JsonSerializable(typeof(DbCheckpointListEntryJsonResult))]
 [JsonSerializable(typeof(DbCheckpointListJsonResult))]
+[JsonSerializable(typeof(DbDiagnosticJsonResult))]
 [JsonSerializable(typeof(DbIntegrityCheckJsonResult))]
 [JsonSerializable(typeof(DbPruneJsonResult))]
 [JsonSerializable(typeof(DbRestoreJsonResult))]
@@ -436,10 +472,12 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(ExportImportCommandRunner.ExportManifest))]
 [JsonSerializable(typeof(ExportImportCommandRunner.ImportDryRunResult))]
 [JsonSerializable(typeof(ExportImportCommandRunner.ImportValidationPhaseResult))]
+[JsonSerializable(typeof(ExcerptRecoveryHint))]
 [JsonSerializable(typeof(ExcerptSemanticToken))]
 [JsonSerializable(typeof(FileDependencyResult))]
 [JsonSerializable(typeof(FileExcerptResult))]
 [JsonSerializable(typeof(FileFindResult))]
+[JsonSerializable(typeof(FileFindSnippetTruncationContext))]
 [JsonSerializable(typeof(FileIssue))]
 [JsonSerializable(typeof(FileResult))]
 [JsonSerializable(typeof(FreshnessHintResult))]
@@ -483,6 +521,8 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(QueryCountFilesJsonResult))]
 [JsonSerializable(typeof(QueryFindCountJsonResult))]
 [JsonSerializable(typeof(QueryPathErrorJsonResult))]
+[JsonSerializable(typeof(SearchGroupedCountJsonResult))]
+[JsonSerializable(typeof(SearchGroupedCountItemJsonResult))]
 [JsonSerializable(typeof(List<ReferenceResult>))]
 [JsonSerializable(typeof(List<List<string>>))]
 [JsonSerializable(typeof(List<string>))]
@@ -509,14 +549,24 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(SearchMatchFacet))]
 [JsonSerializable(typeof(List<SearchMatchFacet>))]
 [JsonSerializable(typeof(SearchQueryHint))]
+[JsonSerializable(typeof(SearchNamedBatchQueryResultJsonResult))]
+[JsonSerializable(typeof(SearchNamedBatchRunJsonResult))]
 [JsonSerializable(typeof(SearchRecipeListItemJsonResult))]
 [JsonSerializable(typeof(SearchRecipeListJsonResult))]
+[JsonSerializable(typeof(SearchRecipeFilterSupportJsonResult))]
+[JsonSerializable(typeof(SearchRecipeLimitSemanticsJsonResult))]
+[JsonSerializable(typeof(SearchRecipeCompactRunJsonResult))]
+[JsonSerializable(typeof(SearchRecipeCompactQueryResultJsonResult))]
+[JsonSerializable(typeof(SearchRecipeCompactResultJsonResult))]
+[JsonSerializable(typeof(SearchRecipeTopFileJsonResult))]
 [JsonSerializable(typeof(SearchRecipeQueryListItemJsonResult))]
 [JsonSerializable(typeof(SearchRecipeQueryResultJsonResult))]
 [JsonSerializable(typeof(SearchRecipeRunJsonResult))]
+[JsonSerializable(typeof(SearchRecipeScopeJsonResult))]
 [JsonSerializable(typeof(SearchIssueDraftExportJsonResult))]
 [JsonSerializable(typeof(SearchIssueDraftJsonResult))]
 [JsonSerializable(typeof(SearchIssueDraftSourceJsonResult))]
+[JsonSerializable(typeof(SearchNextMatchHint))]
 [JsonSerializable(typeof(SearchResult))]
 [JsonSerializable(typeof(SearchTermOccurrence))]
 [JsonSerializable(typeof(SearchTruncationContext))]

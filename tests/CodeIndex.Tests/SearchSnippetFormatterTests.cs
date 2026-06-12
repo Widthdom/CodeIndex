@@ -43,6 +43,11 @@ public class SearchSnippetFormatterTests
 
         Assert.Equal([20, 21, 22], excerpt.MatchLines);
         Assert.Equal(2, excerpt.DroppedMatchLineCount);
+        Assert.Equal("quality", excerpt.FocusMode);
+        Assert.Equal(20, excerpt.FocusLine);
+        Assert.Equal(1, excerpt.FocusColumn);
+        Assert.Equal("full_query", excerpt.FocusReason);
+        Assert.Equal(23, excerpt.NextMatchLine);
     }
 
     [Fact]
@@ -62,6 +67,24 @@ public class SearchSnippetFormatterTests
             Assert.Equal(7, occurrence.Line);
             Assert.Equal(3, occurrence.Length);
         });
+    }
+
+    [Fact]
+    public void BuildExcerpt_ReportsVisibleOccurrenceRangesAfterLineClamping_Issue3557()
+    {
+        var content = "Target " + new string('x', 200) + " Target";
+
+        var excerpt = SearchSnippetFormatter.BuildExcerpt(content, "Target", absoluteStartLine: 3, maxLines: 1, maxLineWidth: 48);
+
+        var highlight = Assert.Single(excerpt.Highlights);
+        var occurrences = highlight.TermOccurrences.OrderBy(occurrence => occurrence.Column).ToArray();
+        Assert.Equal(2, occurrences.Length);
+        Assert.True(occurrences[0].Visible);
+        Assert.Equal(1, occurrences[0].VisibleColumn);
+        Assert.Equal("Target".Length, occurrences[0].VisibleLength);
+        Assert.False(occurrences[1].Visible);
+        Assert.Null(occurrences[1].VisibleColumn);
+        Assert.Null(occurrences[1].VisibleLength);
     }
 
     [Fact]
@@ -432,6 +455,31 @@ public class SearchSnippetFormatterTests
         Assert.True(compact.Highlights[0].Truncated);
         Assert.Equal(hugeLine.Length, compact.Highlights[0].OriginalLineLength);
         Assert.Equal(compact.TruncationContext.CharCounts, compact.Highlights[0].TruncatedCharCounts);
+    }
+
+    [Fact]
+    public void ToCompactResult_ReportsFocusAndNextDroppedMatchMetadata_Issue3556()
+    {
+        var content = string.Join('\n', Enumerable.Range(1, 5).Select(i => $"Target {i}"));
+        var result = new SearchResult
+        {
+            Path = "src/app.cs",
+            Lang = "csharp",
+            StartLine = 10,
+            EndLine = 14,
+            Content = content,
+            Score = -1.0,
+        };
+
+        var compact = SearchSnippetFormatter.ToCompactResult(result, "Target", maxLines: 3);
+
+        Assert.Equal("quality", compact.FocusMode);
+        Assert.Equal(10, compact.FocusLine);
+        Assert.Equal(1, compact.FocusColumn);
+        Assert.Equal("full_query", compact.FocusReason);
+        Assert.NotNull(compact.NextMatch);
+        Assert.Equal(13, compact.NextMatch.Line);
+        Assert.Equal(2, compact.NextMatch.RemainingMatchLineCount);
     }
 
     [Fact]

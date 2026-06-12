@@ -1,10 +1,27 @@
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 
 namespace CodeIndex.Cli;
 
 internal static class SearchAuditRecipes
 {
-    private static readonly List<SearchAuditRecipe> Recipes =
+    internal const string DefaultAuditScope = "source";
+    internal const string AllAuditScope = "all";
+    internal const string RecipePathsEnvironmentVariable = "CDIDX_SEARCH_RECIPE_PATHS";
+    private const int MaxRecipeSourceFiles = 8;
+    private const long MaxRecipeSourceBytes = 128 * 1024;
+    private const int MaxExternalRecipesPerFile = 32;
+    private const int MaxExternalQueriesPerRecipe = 32;
+    private const int MaxExternalNameLength = 80;
+    private const int MaxExternalDescriptionLength = 512;
+    private const int MaxExternalFalsePositiveGuidanceLength = 512;
+    private const int MaxExternalLabelCount = 16;
+    private const int MaxExternalLabelLength = 64;
+    private const int MaxRecipeDiagnosticCount = 64;
+    private const int MaxRecipeDiagnosticLength = 512;
+
+    private static readonly List<SearchAuditRecipe> BuiltInRecipes =
     [
         new(
             "risky-code",
@@ -39,24 +56,434 @@ internal static class SearchAuditRecipes
                     "CancellationToken.None",
                     "Find async or stream paths that may be ignoring caller cancellation.",
                     ["audit", "bug"],
-                    "False positives include intentionally fire-and-forget work and APIs that have no meaningful caller cancellation token.")
+                    "False positives include intentionally fire-and-forget work and APIs that have no meaningful caller cancellation token."),
+                new(
+                    "empty-catch-review",
+                    "catch",
+                    "Find catch blocks that may be empty, overly broad, or swallowing diagnostic context.",
+                    ["audit", "bug"],
+                    "False positives include catch blocks that rethrow, translate exceptions safely, or intentionally ignore best-effort cleanup failures."),
+                new(
+                    "broad-exception-catch",
+                    "catch (Exception",
+                    "Find broad C# exception catches that may need narrower exception types or explicit recovery boundaries.",
+                    ["audit", "bug"],
+                    "False positives include top-level command boundaries that intentionally normalize all recoverable failures."),
+                new(
+                    "process-start-info",
+                    "ProcessStartInfo",
+                    "Find external process launch configuration that may need argument, environment, cwd, and shell-use review.",
+                    ["audit", "security"],
+                    "False positives include tests and launch wrappers that already validate arguments and disable shell expansion."),
+                new(
+                    "process-start-direct",
+                    "Process.Start",
+                    "Find direct process launches that may need a shared safe-launch wrapper or explicit argument handling.",
+                    ["audit", "security"],
+                    "False positives include simple URL/document open helpers or test fixtures with trusted inputs."),
+                new(
+                    "recursive-delete",
+                    "Directory.Delete",
+                    "Find recursive or broad delete operations that may need path-boundary and symlink/reparse-point review.",
+                    ["audit", "security"],
+                    "False positives include isolated temporary-directory cleanup guarded by test helpers or workspace-root containment checks."),
+                new(
+                    "infinite-timeout",
+                    "Timeout.InfiniteTimeSpan",
+                    "Find infinite waits that may need bounded timeouts, cancellation, or liveness reporting.",
+                    ["audit", "bug"],
+                    "False positives include deliberate sentinel values that are never passed to blocking waits."),
+                new(
+                    "path-case-heuristic",
+                    "OrdinalIgnoreCase",
+                    "Find case-insensitive path or identifier comparisons that may need filesystem case-sensitivity awareness.",
+                    ["audit", "portability"],
+                    "False positives include non-path protocol tokens, CLI option names, labels, and other intentionally case-insensitive domains."),
+                new(
+                    "regex-construction",
+                    "new Regex",
+                    "Find direct regex construction that may need a timeout, non-backtracking mode, or bounded input review.",
+                    ["audit", "performance"],
+                    "False positives include precompiled bounded patterns with explicit timeouts or tiny trusted inputs."),
+                new(
+                    "regex-timeout-handling",
+                    "RegexMatchTimeoutException",
+                    "Find regex timeout handling boundaries that may need consistent diagnostics and recovery behavior.",
+                    ["audit", "bug"],
+                    "False positives include tests and already-normalized parse/validation errors."),
+                new(
+                    "environment-secret-source",
+                    "GetEnvironmentVariable",
+                    "Find environment-variable reads that may source tokens, secrets, credentials, or operational policy.",
+                    ["audit", "security"],
+                    "False positives include non-secret feature flags and documented public configuration."),
+                new(
+                    "authorization-handling",
+                    "Authorization",
+                    "Find authorization header or auth-boundary handling that may need redaction and egress review.",
+                    ["audit", "security"],
+                    "False positives include documentation, tests, and already-redacted header-name-only handling."),
+                new(
+                    "bearer-token-handling",
+                    "Bearer",
+                    "Find bearer token handling that may need storage, logging, and outbound request review.",
+                    ["audit", "security"],
+                    "False positives include examples, tests, and redacted token placeholders."),
+                new(
+                    "credential-term",
+                    "credential",
+                    "Find credential-related code paths that may need source, persistence, and redaction boundary review.",
+                    ["audit", "security"],
+                    "False positives include natural-language documentation or non-secret credential-type names.",
+                    ExactSubstring: false),
+                new(
+                    "secret-term",
+                    "secret",
+                    "Find secret-related code paths that may need source, persistence, and redaction boundary review.",
+                    ["audit", "security"],
+                    "False positives include documentation, labels, and comments that do not touch secret material.",
+                    ExactSubstring: false),
+                new(
+                    "token-term",
+                    "token",
+                    "Find token-related code paths that may need lexical-token versus auth-token triage.",
+                    ["audit", "security"],
+                    "False positives include parser/tokenizer code, syntax tokens, and non-auth identifiers.",
+                    ExactSubstring: false)
             ])
+        {
+            DefaultPathPatterns = ["src/**"],
+            DefaultExcludePaths =
+            [
+                "src/CodeIndex/Cli/SearchAuditRecipes.cs",
+                "tests/**",
+                "docs/**",
+                "CHANGELOG.md",
+                "changelog.d/**",
+                "README.md",
+                "USER_GUIDE.md",
+                "DEVELOPER_GUIDE.md",
+                "TESTING_GUIDE.md",
+                "AGENT_GUIDE.md",
+                ".codex/**",
+                ".github/**"
+            ]
+        }
     ];
 
-    internal static IReadOnlyList<SearchAuditRecipe> All => Recipes;
+    internal static IReadOnlyList<SearchAuditRecipe> All => Load().Recipes;
+
+    internal static SearchAuditRecipeRegistry Load()
+    {
+        var recipes = BuiltInRecipes.ToList();
+        var diagnostics = new List<string>();
+        var knownNames = new HashSet<string>(recipes.Select(recipe => recipe.Name), StringComparer.OrdinalIgnoreCase);
+
+        foreach (var sourcePath in ReadConfiguredRecipeSourcePaths(diagnostics))
+        {
+            if (!TryLoadExternalRecipes(sourcePath, diagnostics, out var externalRecipes))
+                continue;
+
+            foreach (var recipe in externalRecipes)
+            {
+                if (!knownNames.Add(recipe.Name))
+                {
+                    AddDiagnostic(diagnostics, $"recipe source '{sourcePath}' defines duplicate recipe '{recipe.Name}'; keeping the first definition.");
+                    continue;
+                }
+
+                recipes.Add(recipe);
+            }
+        }
+
+        return new SearchAuditRecipeRegistry(recipes, diagnostics);
+    }
 
     internal static bool TryGet(string name, out SearchAuditRecipe recipe)
     {
-        recipe = Recipes.FirstOrDefault(r => string.Equals(r.Name, name, StringComparison.OrdinalIgnoreCase))!;
+        var registry = Load();
+        recipe = registry.Recipes.FirstOrDefault(r => string.Equals(r.Name, name, StringComparison.OrdinalIgnoreCase))!;
         return recipe != null;
     }
+
+    private static List<string> ReadConfiguredRecipeSourcePaths(List<string> diagnostics)
+    {
+        var raw = Environment.GetEnvironmentVariable(RecipePathsEnvironmentVariable);
+        if (string.IsNullOrWhiteSpace(raw))
+            return [];
+
+        var paths = new List<string>();
+        foreach (var part in raw.Split(Path.PathSeparator, StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (paths.Count >= MaxRecipeSourceFiles)
+            {
+                AddDiagnostic(diagnostics, $"{RecipePathsEnvironmentVariable} lists more than {MaxRecipeSourceFiles} recipe sources; extra entries are ignored.");
+                break;
+            }
+
+            paths.Add(part);
+        }
+
+        return paths;
+    }
+
+    private static bool TryLoadExternalRecipes(string sourcePath, List<string> diagnostics, out List<SearchAuditRecipe> recipes)
+    {
+        recipes = [];
+        string fullPath;
+        try
+        {
+            fullPath = Path.GetFullPath(sourcePath);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            AddDiagnostic(diagnostics, $"recipe source '{sourcePath}' is not a valid path: {ex.Message}");
+            return false;
+        }
+
+        if (!File.Exists(fullPath))
+        {
+            AddDiagnostic(diagnostics, $"recipe source '{sourcePath}' does not exist.");
+            return false;
+        }
+
+        try
+        {
+            var info = new FileInfo(fullPath);
+            if (info.Length > MaxRecipeSourceBytes)
+            {
+                AddDiagnostic(diagnostics, $"recipe source '{sourcePath}' is too large ({info.Length} bytes; max {MaxRecipeSourceBytes}).");
+                return false;
+            }
+
+            var root = JsonNode.Parse(
+                File.ReadAllText(fullPath),
+                documentOptions: new JsonDocumentOptions { MaxDepth = 16 });
+            var recipeArray = root as JsonArray ?? root?["recipes"] as JsonArray;
+            if (recipeArray is null)
+            {
+                AddDiagnostic(diagnostics, $"recipe source '{sourcePath}' must be a JSON array or an object with a 'recipes' array.");
+                return false;
+            }
+
+            for (var i = 0; i < recipeArray.Count && i < MaxExternalRecipesPerFile; i++)
+            {
+                if (TryParseRecipe(recipeArray[i], sourcePath, i, diagnostics, out var recipe))
+                    recipes.Add(recipe);
+            }
+
+            if (recipeArray.Count > MaxExternalRecipesPerFile)
+                AddDiagnostic(diagnostics, $"recipe source '{sourcePath}' has more than {MaxExternalRecipesPerFile} recipes; extra entries are ignored.");
+            return true;
+        }
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            AddDiagnostic(diagnostics, $"recipe source '{sourcePath}' could not be loaded: {ex.Message}");
+            return false;
+        }
+    }
+
+    private static bool TryParseRecipe(
+        JsonNode? node,
+        string sourcePath,
+        int recipeIndex,
+        List<string> diagnostics,
+        out SearchAuditRecipe recipe)
+    {
+        recipe = null!;
+        if (node is not JsonObject obj)
+        {
+            AddDiagnostic(diagnostics, $"recipe source '{sourcePath}' recipe #{recipeIndex + 1} must be an object.");
+            return false;
+        }
+
+        if (!TryReadRequiredString(obj, "name", MaxExternalNameLength, sourcePath, recipeIndex, diagnostics, out var name)
+            || !TryReadRequiredString(obj, "description", MaxExternalDescriptionLength, sourcePath, recipeIndex, diagnostics, out var description))
+        {
+            return false;
+        }
+
+        if (obj["queries"] is not JsonArray queryArray)
+        {
+            AddDiagnostic(diagnostics, $"recipe source '{sourcePath}' recipe '{name}' must include a 'queries' array.");
+            return false;
+        }
+
+        var queries = new List<SearchAuditRecipeQuery>();
+        for (var i = 0; i < queryArray.Count && i < MaxExternalQueriesPerRecipe; i++)
+        {
+            if (TryParseRecipeQuery(queryArray[i], sourcePath, name, i, diagnostics, out var query))
+                queries.Add(query);
+        }
+
+        if (queryArray.Count > MaxExternalQueriesPerRecipe)
+            AddDiagnostic(diagnostics, $"recipe source '{sourcePath}' recipe '{name}' has more than {MaxExternalQueriesPerRecipe} queries; extra entries are ignored.");
+        if (queries.Count == 0)
+        {
+            AddDiagnostic(diagnostics, $"recipe source '{sourcePath}' recipe '{name}' has no valid queries and was ignored.");
+            return false;
+        }
+
+        recipe = new SearchAuditRecipe(name, description, queries);
+        return true;
+    }
+
+    private static bool TryParseRecipeQuery(
+        JsonNode? node,
+        string sourcePath,
+        string recipeName,
+        int queryIndex,
+        List<string> diagnostics,
+        out SearchAuditRecipeQuery query)
+    {
+        query = null!;
+        if (node is not JsonObject obj)
+        {
+            AddDiagnostic(diagnostics, $"recipe source '{sourcePath}' recipe '{recipeName}' query #{queryIndex + 1} must be an object.");
+            return false;
+        }
+
+        if (!TryReadRequiredString(obj, "name", MaxExternalNameLength, sourcePath, queryIndex, diagnostics, out var name)
+            || !TryReadRequiredString(obj, "query", QueryLimits.MaxQueryLength, sourcePath, queryIndex, diagnostics, out var queryText)
+            || !TryReadRequiredString(obj, "description", MaxExternalDescriptionLength, sourcePath, queryIndex, diagnostics, out var description))
+        {
+            return false;
+        }
+
+        var labels = ReadLabels(obj, sourcePath, recipeName, name, diagnostics);
+        var falsePositiveGuidance = TryReadString(obj["falsePositiveGuidance"] ?? obj["false_positive_guidance"], out var guidance)
+            && !string.IsNullOrWhiteSpace(guidance)
+            ? guidance.Trim()
+            : "Review surrounding context before filing an issue.";
+        if (falsePositiveGuidance.Length > MaxExternalFalsePositiveGuidanceLength)
+            falsePositiveGuidance = falsePositiveGuidance[..MaxExternalFalsePositiveGuidanceLength].TrimEnd();
+        var exactSubstring = TryReadBool(obj["exactSubstring"] ?? obj["exact_substring"], out var exactValue)
+            ? exactValue
+            : true;
+
+        query = new SearchAuditRecipeQuery(name, queryText, description, labels, falsePositiveGuidance, exactSubstring);
+        return true;
+    }
+
+    private static bool TryReadRequiredString(
+        JsonObject obj,
+        string propertyName,
+        int maxLength,
+        string sourcePath,
+        int itemIndex,
+        List<string> diagnostics,
+        out string value)
+    {
+        value = string.Empty;
+        if (!TryReadString(obj[propertyName], out var raw) || string.IsNullOrWhiteSpace(raw))
+        {
+            AddDiagnostic(diagnostics, $"recipe source '{sourcePath}' item #{itemIndex + 1} must include a non-empty '{propertyName}' string.");
+            return false;
+        }
+
+        value = raw.Trim();
+        if (value.Length <= maxLength)
+            return true;
+
+        AddDiagnostic(diagnostics, $"recipe source '{sourcePath}' item #{itemIndex + 1} field '{propertyName}' exceeds {maxLength} characters.");
+        value = string.Empty;
+        return false;
+    }
+
+    private static List<string> ReadLabels(
+        JsonObject obj,
+        string sourcePath,
+        string recipeName,
+        string queryName,
+        List<string> diagnostics)
+    {
+        var labelsNode = obj["recommendedLabels"] ?? obj["recommended_labels"];
+        if (labelsNode is null)
+            return [];
+        if (labelsNode is not JsonArray labelArray)
+        {
+            AddDiagnostic(diagnostics, $"recipe source '{sourcePath}' recipe '{recipeName}' query '{queryName}' labels must be an array.");
+            return [];
+        }
+
+        var labels = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        for (var i = 0; i < labelArray.Count && i < MaxExternalLabelCount; i++)
+        {
+            if (!TryReadString(labelArray[i], out var label) || string.IsNullOrWhiteSpace(label))
+                continue;
+            label = label.Trim();
+            if (label.Length > MaxExternalLabelLength)
+                continue;
+            if (seen.Add(label))
+                labels.Add(label);
+        }
+
+        if (labelArray.Count > MaxExternalLabelCount)
+            AddDiagnostic(diagnostics, $"recipe source '{sourcePath}' recipe '{recipeName}' query '{queryName}' has more than {MaxExternalLabelCount} labels; extra entries are ignored.");
+        return labels;
+    }
+
+    private static void AddDiagnostic(List<string> diagnostics, string message)
+    {
+        if (diagnostics.Count >= MaxRecipeDiagnosticCount)
+        {
+            if (diagnostics.Count == MaxRecipeDiagnosticCount)
+                diagnostics.Add($"recipe source diagnostics were truncated after {MaxRecipeDiagnosticCount} entries.");
+            return;
+        }
+
+        if (message.Length > MaxRecipeDiagnosticLength)
+            message = message[..MaxRecipeDiagnosticLength].TrimEnd() + " ... [truncated]";
+        diagnostics.Add(message);
+    }
+
+    private static bool TryReadString(JsonNode? node, out string value)
+    {
+        value = string.Empty;
+        if (node is null)
+            return false;
+        try
+        {
+            value = node.GetValue<string>();
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TryReadBool(JsonNode? node, out bool value)
+    {
+        value = false;
+        if (node is null)
+            return false;
+        try
+        {
+            value = node.GetValue<bool>();
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
 }
+
+internal sealed record SearchAuditRecipeRegistry(
+    IReadOnlyList<SearchAuditRecipe> Recipes,
+    IReadOnlyList<string> Diagnostics);
 
 internal sealed record SearchAuditRecipe(
     string Name,
     string Description,
     List<SearchAuditRecipeQuery> Queries)
 {
+    public string DefaultScope { get; init; } = SearchAuditRecipes.DefaultAuditScope;
+    public List<string> DefaultPathPatterns { get; init; } = [];
+    public List<string> DefaultExcludePaths { get; init; } = [];
+
     public List<string> RecommendedLabels =>
         Queries
             .SelectMany(query => query.RecommendedLabels)
@@ -82,7 +509,30 @@ internal sealed record SearchRecipeListItemJsonResult(
     [property: JsonPropertyName("name")] string Name,
     [property: JsonPropertyName("description")] string Description,
     [property: JsonPropertyName("recommended_labels")] List<string> RecommendedLabels,
+    [property: JsonPropertyName("default_scope")] string DefaultScope,
+    [property: JsonPropertyName("default_path_patterns")] List<string> DefaultPathPatterns,
+    [property: JsonPropertyName("default_exclude_paths")] List<string> DefaultExcludePaths,
+    [property: JsonPropertyName("supported_formats")] List<string> SupportedFormats,
+    [property: JsonPropertyName("filter_support")] SearchRecipeFilterSupportJsonResult FilterSupport,
+    [property: JsonPropertyName("limit_semantics")] SearchRecipeLimitSemanticsJsonResult LimitSemantics,
     [property: JsonPropertyName("queries")] List<SearchRecipeQueryListItemJsonResult> Queries);
+
+internal sealed record SearchRecipeFilterSupportJsonResult(
+    [property: JsonPropertyName("lang")] bool Lang,
+    [property: JsonPropertyName("path")] bool Path,
+    [property: JsonPropertyName("exclude_path")] bool ExcludePath,
+    [property: JsonPropertyName("exclude_tests")] bool ExcludeTests,
+    [property: JsonPropertyName("since")] bool Since,
+    [property: JsonPropertyName("dedup")] bool Dedup,
+    [property: JsonPropertyName("visibility_rank")] bool VisibilityRank,
+    [property: JsonPropertyName("guard_filters")] bool GuardFilters,
+    [property: JsonPropertyName("snippet_controls")] bool SnippetControls,
+    [property: JsonPropertyName("exact_mode_override")] bool ExactModeOverride);
+
+internal sealed record SearchRecipeLimitSemanticsJsonResult(
+    [property: JsonPropertyName("scope")] string Scope,
+    [property: JsonPropertyName("default")] int Default,
+    [property: JsonPropertyName("description")] string Description);
 
 internal sealed record SearchRecipeQueryListItemJsonResult(
     [property: JsonPropertyName("name")] string Name,
@@ -95,9 +545,23 @@ internal sealed record SearchRecipeQueryListItemJsonResult(
 internal sealed record SearchRecipeRunJsonResult(
     [property: JsonPropertyName("api_version")] string ApiVersion,
     [property: JsonPropertyName("recipe")] SearchRecipeListItemJsonResult Recipe,
+    [property: JsonPropertyName("scope")] SearchRecipeScopeJsonResult Scope,
     [property: JsonPropertyName("query_count")] int QueryCount,
     [property: JsonPropertyName("result_count")] int ResultCount,
     [property: JsonPropertyName("queries")] List<SearchRecipeQueryResultJsonResult> Queries);
+
+internal sealed record SearchNamedBatchRunJsonResult(
+    [property: JsonPropertyName("api_version")] string ApiVersion,
+    [property: JsonPropertyName("query_count")] int QueryCount,
+    [property: JsonPropertyName("result_count")] int ResultCount,
+    [property: JsonPropertyName("queries")] List<SearchNamedBatchQueryResultJsonResult> Queries);
+
+internal sealed record SearchNamedBatchQueryResultJsonResult(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("query")] string Query,
+    [property: JsonPropertyName("exact_substring")] bool ExactSubstring,
+    [property: JsonPropertyName("count")] int Count,
+    [property: JsonPropertyName("results")] List<CompactSearchResult> Results);
 
 internal sealed record SearchRecipeQueryResultJsonResult(
     [property: JsonPropertyName("name")] string Name,
@@ -107,11 +571,44 @@ internal sealed record SearchRecipeQueryResultJsonResult(
     [property: JsonPropertyName("false_positive_guidance")] string FalsePositiveGuidance,
     [property: JsonPropertyName("exact_substring")] bool ExactSubstring,
     [property: JsonPropertyName("count")] int Count,
+    [property: JsonPropertyName("next_cursor")] string? NextCursor,
     [property: JsonPropertyName("results")] List<CompactSearchResult> Results);
+
+internal sealed record SearchRecipeCompactRunJsonResult(
+    [property: JsonPropertyName("api_version")] string ApiVersion,
+    [property: JsonPropertyName("recipe")] SearchRecipeListItemJsonResult Recipe,
+    [property: JsonPropertyName("scope")] SearchRecipeScopeJsonResult Scope,
+    [property: JsonPropertyName("query_count")] int QueryCount,
+    [property: JsonPropertyName("result_count")] int ResultCount,
+    [property: JsonPropertyName("queries")] List<SearchRecipeCompactQueryResultJsonResult> Queries);
+
+internal sealed record SearchRecipeCompactQueryResultJsonResult(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("query")] string Query,
+    [property: JsonPropertyName("description")] string Description,
+    [property: JsonPropertyName("count")] int Count,
+    [property: JsonPropertyName("top_files")] List<SearchRecipeTopFileJsonResult> TopFiles,
+    [property: JsonPropertyName("next_cursor")] string? NextCursor,
+    [property: JsonPropertyName("results")] List<SearchRecipeCompactResultJsonResult> Results);
+
+internal sealed record SearchRecipeTopFileJsonResult(
+    [property: JsonPropertyName("path")] string Path,
+    [property: JsonPropertyName("count")] int Count);
+
+internal sealed record SearchRecipeCompactResultJsonResult(
+    [property: JsonPropertyName("path")] string Path,
+    [property: JsonPropertyName("lang")] string? Lang,
+    [property: JsonPropertyName("visibility")] string? Visibility,
+    [property: JsonPropertyName("chunk_start_line")] int ChunkStartLine,
+    [property: JsonPropertyName("chunk_end_line")] int ChunkEndLine,
+    [property: JsonPropertyName("match_lines")] List<int> MatchLines,
+    [property: JsonPropertyName("enclosing_symbol_name")] string? EnclosingSymbolName,
+    [property: JsonPropertyName("enclosing_symbol_kind")] string? EnclosingSymbolKind);
 
 internal sealed record SearchIssueDraftExportJsonResult(
     [property: JsonPropertyName("api_version")] string ApiVersion,
-    [property: JsonPropertyName("recipe")] SearchRecipeListItemJsonResult Recipe,
+    [property: JsonPropertyName("recipe")] SearchRecipeListItemJsonResult? Recipe,
+    [property: JsonPropertyName("scope")] SearchRecipeScopeJsonResult? Scope,
     [property: JsonPropertyName("query_count")] int QueryCount,
     [property: JsonPropertyName("result_count")] int ResultCount,
     [property: JsonPropertyName("count")] int Count,
@@ -128,10 +625,18 @@ internal sealed record SearchIssueDraftJsonResult(
     [property: JsonPropertyName("duplicate_preflight")] SuggestionIssueDraftDuplicatePreflightJsonResult DuplicatePreflight);
 
 internal sealed record SearchIssueDraftSourceJsonResult(
-    [property: JsonPropertyName("recipe")] string Recipe,
-    [property: JsonPropertyName("query_name")] string QueryName,
+    [property: JsonPropertyName("recipe")] string? Recipe,
+    [property: JsonPropertyName("query_name")] string? QueryName,
     [property: JsonPropertyName("query")] string Query,
     [property: JsonPropertyName("description")] string Description,
     [property: JsonPropertyName("false_positive_guidance")] string FalsePositiveGuidance,
     [property: JsonPropertyName("exact_substring")] bool ExactSubstring,
     [property: JsonPropertyName("result_count")] int ResultCount);
+
+internal sealed record SearchRecipeScopeJsonResult(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("path_patterns")] List<string> PathPatterns,
+    [property: JsonPropertyName("exclude_paths")] List<string> ExcludePaths,
+    [property: JsonPropertyName("exclude_tests")] bool ExcludeTests,
+    [property: JsonPropertyName("recipe_default_path_patterns")] List<string> RecipeDefaultPathPatterns,
+    [property: JsonPropertyName("recipe_default_exclude_paths")] List<string> RecipeDefaultExcludePaths);

@@ -9,7 +9,7 @@ namespace CodeIndex.Cli;
 
 internal static class SuggestionsCommandRunner
 {
-    private const string Usage = "Usage: cdidx suggestions <list|show|export> [id] [--db <path>] [--json] [--status <all|draft|submitted_pending_triage|open_in_upstream|resolved_in_upstream|wont_fix|duplicate|superseded|submitted|unsubmitted>] [--language <lang>] [--category <category>] [--since <datetime>] [--agent <name>] [--limit <n>] [--offset <n>] [--format <json|markdown|issue-drafts>] [--open-issues <path>]";
+    private const string Usage = "Usage: cdidx suggestions <list|show|export> [id] [--db <path>] [--json] [--status <all|draft|submitted_pending_triage|open_in_upstream|resolved_in_upstream|wont_fix|duplicate|superseded|submitted|unsubmitted>] [--language <lang>] [--category <category>] [--since <datetime>] [--agent <name>] [--limit <n>] [--offset <n>] [--format <json|markdown|issue-drafts>] [--open-issues <path|github|github:owner/name>] [--repo <owner/name>]";
     internal const int MaxOpenIssuesJsonBytes = IssueDuplicatePreflight.MaxOpenIssuesJsonBytes;
     internal const int MaxOpenIssuesJsonDepth = IssueDuplicatePreflight.MaxOpenIssuesJsonDepth;
     internal const int MaxSuggestionExportTextFieldLength = 4096;
@@ -34,6 +34,8 @@ internal static class SuggestionsCommandRunner
         }
         if (options.OpenIssuesPath != null && (verb != "export" || options.ExportFormat != "issue-drafts"))
             return WriteUsageError("--open-issues can only be used with `suggestions export --format issue-drafts`.");
+        if (options.OpenIssuesRepository != null && (verb != "export" || options.ExportFormat != "issue-drafts"))
+            return WriteUsageError("--repo can only be used with `suggestions export --format issue-drafts --open-issues github`.");
         if (verb == "show" && options.HasPagination)
             return WriteUsageError("--limit and --offset can only be used with `suggestions list` or `suggestions export`.");
 
@@ -165,7 +167,7 @@ internal static class SuggestionsCommandRunner
 
     private static int RunIssueDraftExport(List<SuggestionRecord> records, Options options, JsonSerializerOptions jsonOptions)
     {
-        if (!IssueDuplicatePreflight.TryLoad(options.OpenIssuesPath, out var preflight, out var error))
+        if (!IssueDuplicatePreflight.TryLoad(options.OpenIssuesPath, options.OpenIssuesRepository, out var preflight, out var error))
             return WriteUsageError(error!);
 
         var drafts = records.Select(record => ToIssueDraft(record, preflight)).ToList();
@@ -646,6 +648,14 @@ internal static class SuggestionsCommandRunner
                     }
                     options.OpenIssuesPath = openIssuesPath;
                     break;
+                case "--repo":
+                    if (!TryReadValue(args, ref i, "--repo", out var repository, out var repositoryError))
+                    {
+                        options.Error = repositoryError;
+                        return options;
+                    }
+                    options.OpenIssuesRepository = repository;
+                    break;
                 default:
                     if (arg.StartsWith("--db=", StringComparison.Ordinal))
                         options.DbPath = arg["--db=".Length..];
@@ -684,6 +694,8 @@ internal static class SuggestionsCommandRunner
                         options.ExportFormat = arg["--format=".Length..];
                     else if (arg.StartsWith("--open-issues=", StringComparison.Ordinal))
                         options.OpenIssuesPath = arg["--open-issues=".Length..];
+                    else if (arg.StartsWith("--repo=", StringComparison.Ordinal))
+                        options.OpenIssuesRepository = arg["--repo=".Length..];
                     else if (arg.StartsWith("--since=", StringComparison.Ordinal))
                     {
                         var inlineSince = arg["--since=".Length..];
@@ -757,6 +769,7 @@ internal static class SuggestionsCommandRunner
         public int Offset { get; set; }
         public bool OffsetSpecified { get; set; }
         public string? OpenIssuesPath { get; set; }
+        public string? OpenIssuesRepository { get; set; }
         public DateTimeOffset? Since { get; set; }
         public string? Error { get; set; }
         public bool HasPagination => Limit.HasValue || OffsetSpecified;

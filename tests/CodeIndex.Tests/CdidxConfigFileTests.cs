@@ -471,6 +471,75 @@ public class CdidxConfigFileTests
     }
 
     [Fact]
+    public void LoadAndApply_ScalarStringAboveMaximumLength_ReturnsError_Issue3431()
+    {
+        var dir = CreateTempDir();
+        try
+        {
+            var value = new string('x', CdidxConfigFile.MaxConfigScalarStringChars + 1);
+            File.WriteAllText(
+                Path.Combine(dir, ".cdidxrc.json"),
+                $$"""{ "debug": "{{value}}" }""");
+
+            var env = new TestEnvironment();
+            var result = CdidxConfigFile.LoadAndApply(dir, env.Read, env.Write);
+
+            Assert.True(result.Failed);
+            Assert.Contains("debug", result.Error);
+            Assert.Contains($"<= {CdidxConfigFile.MaxConfigScalarStringChars} characters", result.Error);
+            Assert.Empty(env.Writes);
+        }
+        finally { TestProjectHelper.DeleteDirectory(dir); }
+    }
+
+    [Fact]
+    public void LoadAndApply_PathStringAboveMaximumLength_ReturnsError_Issue3431()
+    {
+        var dir = CreateTempDir();
+        const string Sentinel = "PATH_LENGTH_SENTINEL_3431";
+        try
+        {
+            var value = new string('x', CdidxConfigFile.MaxConfigPathStringChars + 1) + Sentinel;
+            File.WriteAllText(
+                Path.Combine(dir, ".cdidxrc.json"),
+                $$"""{ "metrics_path": "{{value}}" }""");
+
+            var env = new TestEnvironment();
+            var result = CdidxConfigFile.LoadAndApply(dir, env.Read, env.Write);
+
+            Assert.True(result.Failed);
+            Assert.Contains("metrics_path", result.Error);
+            Assert.Contains($"<= {CdidxConfigFile.MaxConfigPathStringChars} characters", result.Error);
+            Assert.DoesNotContain(Sentinel, result.Error);
+            Assert.Empty(env.Writes);
+        }
+        finally { TestProjectHelper.DeleteDirectory(dir); }
+    }
+
+    [Fact]
+    public void LoadAndApply_InvalidOutputPathUsesSanitizedDiagnostic_Issue3431()
+    {
+        var dir = CreateTempDir();
+        const string Sentinel = "PATH_EXCEPTION_SENTINEL_3431";
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(dir, ".cdidxrc.json"),
+                $$"""{ "metrics_path": "{{Sentinel}}\u0000.txt" }""");
+
+            var env = new TestEnvironment();
+            var result = CdidxConfigFile.LoadAndApply(dir, env.Read, env.Write);
+
+            Assert.True(result.Failed);
+            Assert.Contains("metrics_path", result.Error);
+            Assert.Contains("invalid_path", result.Error);
+            Assert.DoesNotContain(Sentinel, result.Error);
+            Assert.Empty(env.Writes);
+        }
+        finally { TestProjectHelper.DeleteDirectory(dir); }
+    }
+
+    [Fact]
     public void LoadAndApply_WrongType_ReturnsError()
     {
         var dir = CreateTempDir();
@@ -484,6 +553,59 @@ public class CdidxConfigFileTests
 
             Assert.True(result.Failed);
             Assert.Contains("must be a boolean", result.Error);
+        }
+        finally { TestProjectHelper.DeleteDirectory(dir); }
+    }
+
+    [Theory]
+    [InlineData("""{ "mcp": { "rate_limit": { "rps": 0 } } }""", "mcp.rate_limit.rps")]
+    [InlineData("""{ "mcp": { "rate_limit": { "bucket_idle_seconds": 1e9999 } } }""", "mcp.rate_limit.bucket_idle_seconds")]
+    public void LoadAndApply_InvalidMcpRateLimitNumber_ReturnsError_Issue3431(string json, string expectedKey)
+    {
+        var dir = CreateTempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, ".cdidxrc.json"), json);
+
+            var env = new TestEnvironment();
+            var result = CdidxConfigFile.LoadAndApply(dir, env.Read, env.Write);
+
+            Assert.True(result.Failed);
+            Assert.Contains(expectedKey, result.Error);
+            Assert.Contains("finite", result.Error);
+            Assert.Empty(env.Writes);
+        }
+        finally { TestProjectHelper.DeleteDirectory(dir); }
+    }
+
+    [Fact]
+    public void LoadAndApply_McpRateLimitAboveMaximum_ReturnsError_Issue3431()
+    {
+        var dir = CreateTempDir();
+        try
+        {
+            var rps = RateLimiterOptions.MaxRefillTokensPerSecond + 1;
+            var burst = RateLimiterOptions.MaxBurstCapacity + 1;
+            File.WriteAllText(Path.Combine(dir, ".cdidxrc.json"), $$"""
+                {
+                  "mcp": {
+                    "rate_limit": {
+                      "rps": {{rps.ToString(System.Globalization.CultureInfo.InvariantCulture)}},
+                      "burst": {{burst.ToString(System.Globalization.CultureInfo.InvariantCulture)}}
+                    }
+                  }
+                }
+                """);
+
+            var env = new TestEnvironment();
+            var result = CdidxConfigFile.LoadAndApply(dir, env.Read, env.Write);
+
+            Assert.True(result.Failed);
+            Assert.Contains("mcp.rate_limit.rps", result.Error);
+            Assert.Contains(RateLimiterOptions.MaxRefillTokensPerSecond.ToString(System.Globalization.CultureInfo.InvariantCulture), result.Error);
+            Assert.Contains("mcp.rate_limit.burst", result.Error);
+            Assert.Contains(RateLimiterOptions.MaxBurstCapacity.ToString(System.Globalization.CultureInfo.InvariantCulture), result.Error);
+            Assert.Empty(env.Writes);
         }
         finally { TestProjectHelper.DeleteDirectory(dir); }
     }

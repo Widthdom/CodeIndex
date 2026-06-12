@@ -5,11 +5,12 @@
 # Usage / 使い方:
 #   curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash
 #   curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/v1.5.0/install.sh | bash -s -- v1.5.0
-#   export CDIDX_INSTALL_DIR=/usr/local/bin; curl -fsSL ... | bash
+#   export CDIDX_ALLOW_RISKY_INSTALL_DIR=1 CDIDX_INSTALL_DIR=/usr/local/bin; curl -fsSL ... | bash
 #   bash ./install.sh --self-test-local-mirror [--self-test-allow-overwrite] [vX.Y.Z]
 #   bash ./install.sh --reinstall-real vX.Y.Z
 #   bash ./install.sh --doctor [vX.Y.Z]
 #   bash ./install.sh --uninstall [--purge-cache]
+#   bash ./install.sh --verify-policy strict vX.Y.Z
 #   HTTPS_PROXY=http://proxy.example:8080 bash ./install.sh --doctor
 #   CDIDX_GITHUB_BASE_URL=https://github.example.internal \
 #     CDIDX_GITHUB_API_BASE_URL=https://github.example.internal/api/v3 \
@@ -18,9 +19,11 @@
 # Optional env vars / 任意環境変数:
 #   CDIDX_GITHUB_BASE_URL       Release download base URL override
 #   CDIDX_GITHUB_API_BASE_URL   API base URL override for latest-release lookup
+#   CDIDX_VERIFY_POLICY=compat|strict Verification policy (default: compat)
 #   CDIDX_REQUIRE_ATTESTATION=1 Require GitHub provenance verification via gh
 #   CDIDX_STRICT_VERIFY=1       Require GPG checksum-manifest signature verification
 #   CDIDX_RELEASE_GPG_FINGERPRINT Expected checksum signer fingerprint
+#   CDIDX_ALLOW_RISKY_INSTALL_DIR=1 Allow root/home/system install targets
 #   CDIDX_LOCAL_MIRROR_PORT     Local self-test HTTP server port (default: 18765)
 #   HTTPS_PROXY / HTTP_PROXY    Proxy used by curl for release and API probes
 #   NO_PROXY                    Hosts that should bypass the proxy
@@ -74,16 +77,18 @@
 set -euo pipefail
 
 REPO="Widthdom/CodeIndex"
-INSTALL_DIR="${CDIDX_INSTALL_DIR:-$HOME/.local/bin}"
+INSTALL_DIR="${CDIDX_INSTALL_DIR-${HOME:-}/.local/bin}"
 BINARY_NAME="cdidx"
 MANIFEST_REQUIRED_VERSION="1.24.6"
 GITHUB_BASE_URL="${CDIDX_GITHUB_BASE_URL:-https://github.com}"
 GITHUB_API_BASE_URL="${CDIDX_GITHUB_API_BASE_URL:-https://api.github.com}"
 CURL_STDERR_SAMPLE_BYTES=8192
 LATEST_RELEASE_RESPONSE_MAX_BYTES=65536
+VERIFY_POLICY="${CDIDX_VERIFY_POLICY:-compat}"
 REQUIRE_ATTESTATION="${CDIDX_REQUIRE_ATTESTATION:-0}"
 STRICT_VERIFY="${CDIDX_STRICT_VERIFY:-0}"
-RELEASE_GPG_FINGERPRINT="${CDIDX_RELEASE_GPG_FINGERPRINT:-}"
+DEFAULT_RELEASE_GPG_FINGERPRINT=""
+RELEASE_GPG_FINGERPRINT="${CDIDX_RELEASE_GPG_FINGERPRINT:-$DEFAULT_RELEASE_GPG_FINGERPRINT}"
 # Normalize optional base URL overrides by removing a trailing slash.
 # 末尾スラッシュ付きでも URL 連結が壊れないようにする。
 GITHUB_BASE_URL="${GITHUB_BASE_URL%/}"
@@ -194,6 +199,21 @@ has_cmd() {
     command -v "$1" > /dev/null 2>&1
 }
 
+apply_verification_policy() {
+    case "$VERIFY_POLICY" in
+        ""|compat)
+            VERIFY_POLICY="compat"
+            ;;
+        strict)
+            REQUIRE_ATTESTATION=1
+            STRICT_VERIFY=1
+            ;;
+        *)
+            error "CDIDX_VERIFY_POLICY must be 'compat' or 'strict' (got '${VERIFY_POLICY}')."
+            ;;
+    esac
+}
+
 release_attestation_supported() {
     if [ "${CDIDX_INSTALL_SH_LIB_ONLY:-0}" = "1" ] && [ "${CDIDX_TEST_ENABLE_ATTESTATION:-0}" != "1" ]; then
         return 1
@@ -208,16 +228,16 @@ verify_release_attestation() {
 
     if ! release_attestation_supported; then
         if [ "$REQUIRE_ATTESTATION" = "1" ]; then
-            error "GitHub provenance attestation verification is required, but the release host is not github.com. Unset CDIDX_REQUIRE_ATTESTATION or install from the public GitHub release."
+            error "GitHub provenance attestation verification is required, but the release host is not github.com. Set CDIDX_VERIFY_POLICY=compat or unset CDIDX_REQUIRE_ATTESTATION, or install from the public GitHub release."
         fi
         return 0
     fi
 
     if ! has_cmd gh; then
         if [ "$REQUIRE_ATTESTATION" = "1" ]; then
-            error "GitHub provenance attestation verification is required, but the 'gh' command was not found. Install GitHub CLI or unset CDIDX_REQUIRE_ATTESTATION."
+            error "GitHub provenance attestation verification is required, but the 'gh' command was not found. Install GitHub CLI, set CDIDX_VERIFY_POLICY=compat, or unset CDIDX_REQUIRE_ATTESTATION."
         fi
-        warn "Skipping GitHub provenance attestation for ${artifact_name}: 'gh' command not found. Set CDIDX_REQUIRE_ATTESTATION=1 to require this verification."
+        warn "Skipping GitHub provenance attestation for ${artifact_name}: 'gh' command not found. Set CDIDX_VERIFY_POLICY=strict or CDIDX_REQUIRE_ATTESTATION=1 to require this verification."
         return 0
     fi
 
@@ -230,7 +250,7 @@ verify_release_attestation() {
         error "GitHub provenance attestation verification failed for ${artifact_name}."
     fi
 
-    warn "GitHub provenance attestation verification failed for ${artifact_name}; continuing with checksum verification. Set CDIDX_REQUIRE_ATTESTATION=1 to fail closed."
+    warn "GitHub provenance attestation verification failed for ${artifact_name}; continuing with checksum verification. Set CDIDX_VERIFY_POLICY=strict or CDIDX_REQUIRE_ATTESTATION=1 to fail closed."
 }
 
 checksum_signature_supported() {
@@ -255,9 +275,9 @@ verify_checksum_signature() {
 
     if ! has_cmd gpg; then
         if [ "$STRICT_VERIFY" = "1" ]; then
-            error "GPG signature verification is required, but the 'gpg' command was not found. Install GnuPG or unset CDIDX_STRICT_VERIFY."
+            error "GPG signature verification is required, but the 'gpg' command was not found. Install GnuPG, set CDIDX_VERIFY_POLICY=compat, or unset CDIDX_STRICT_VERIFY."
         fi
-        warn "Skipping GPG signature verification for sha256sums.txt: 'gpg' command not found. Set CDIDX_STRICT_VERIFY=1 to require this verification."
+        warn "Skipping GPG signature verification for sha256sums.txt: 'gpg' command not found. Set CDIDX_VERIFY_POLICY=strict or CDIDX_STRICT_VERIFY=1 to require this verification."
         return 0
     fi
 
@@ -268,7 +288,7 @@ verify_checksum_signature() {
         if [ "$STRICT_VERIFY" = "1" ]; then
             error "GPG signature verification failed for sha256sums.txt."
         fi
-        warn "GPG signature verification failed for sha256sums.txt; continuing with checksum verification. Set CDIDX_STRICT_VERIFY=1 to fail closed."
+        warn "GPG signature verification failed for sha256sums.txt; continuing with checksum verification. Set CDIDX_VERIFY_POLICY=strict or CDIDX_STRICT_VERIFY=1 to fail closed."
         return 0
     fi
 
@@ -284,9 +304,9 @@ verify_checksum_signature() {
 
     if [ -z "$RELEASE_GPG_FINGERPRINT" ]; then
         if [ "$STRICT_VERIFY" = "1" ]; then
-            error "GPG signature verification is strict, but CDIDX_RELEASE_GPG_FINGERPRINT is not set."
+            error "GPG signature verification is strict, but no expected release signer fingerprint is configured. Set CDIDX_RELEASE_GPG_FINGERPRINT to the trusted release signing key fingerprint, or set CDIDX_VERIFY_POLICY=compat."
         fi
-        warn "GPG signature verification succeeded for sha256sums.txt, but no expected release signing fingerprint is configured. Set CDIDX_RELEASE_GPG_FINGERPRINT to pin the signer."
+        warn "GPG signature verification succeeded for sha256sums.txt, but no expected release signing fingerprint is configured. Set CDIDX_RELEASE_GPG_FINGERPRINT to pin the signer, or set CDIDX_VERIFY_POLICY=strict to require it."
         return 0
     fi
 
@@ -585,6 +605,221 @@ is_self_test_install_dir_risky() {
     fi
 
     return 1
+}
+
+allow_risky_install_dir() {
+    [ "${CDIDX_ALLOW_RISKY_INSTALL_DIR:-0}" = "1" ]
+}
+
+expand_install_dir_path() {
+    local dir="$1"
+
+    case "$dir" in
+        "~"|"~/"*)
+            if [ -z "${HOME:-}" ] || [ "$HOME" = "/" ]; then
+                report_error "Cannot expand cdidx install directory ${dir}: HOME is empty or root."
+                return 1
+            fi
+            dir="${HOME}${dir#\~}"
+            ;;
+    esac
+
+    while [ "${#dir}" -gt 1 ]; do
+        case "$dir" in
+            */) dir="${dir%/}" ;;
+            *) break ;;
+        esac
+    done
+
+    printf '%s\n' "$dir"
+}
+
+normalize_install_dir_path() {
+    local path="$1"
+    local existing="$path"
+    local suffix=""
+    local base
+    local normalized_existing
+
+    while [ ! -e "$existing" ] && [ "$existing" != "/" ]; do
+        base="$(basename -- "$existing")"
+        suffix="/${base}${suffix}"
+        existing="$(dirname -- "$existing")"
+    done
+
+    if [ ! -d "$existing" ]; then
+        report_error "Install directory ancestor is not a directory: ${existing}"
+        return 1
+    fi
+
+    normalized_existing="$(CDPATH= cd -P -- "$existing" && pwd)" || return 1
+    if [ "$normalized_existing" = "/" ]; then
+        if [ -n "$suffix" ]; then
+            printf '%s\n' "$suffix"
+        else
+            printf '/\n'
+        fi
+    else
+        printf '%s%s\n' "$normalized_existing" "$suffix"
+    fi
+}
+
+normalized_home_dir() {
+    local home_dir="${HOME:-}"
+
+    if [ -z "$home_dir" ]; then
+        return 1
+    fi
+
+    while [ "${#home_dir}" -gt 1 ]; do
+        case "$home_dir" in
+            */) home_dir="${home_dir%/}" ;;
+            *) break ;;
+        esac
+    done
+
+    if [ -d "$home_dir" ]; then
+        (CDPATH= cd -P -- "$home_dir" && pwd)
+    else
+        printf '%s\n' "$home_dir"
+    fi
+}
+
+is_high_risk_install_dir() {
+    local dir="$1"
+    local home_dir
+
+    case "$dir" in
+        /|/bin|/sbin|/tmp|/var|/var/tmp|/private/tmp|/private/var|/private/var/tmp|/usr|/usr/bin|/usr/sbin|/usr/local|/usr/local/bin|/usr/local/sbin|/usr/share|/usr/local/share|/usr/lib|/usr/local/lib|/opt|/opt/bin|/opt/homebrew|/opt/homebrew/bin|/opt/local|/opt/local/bin|/Applications|/Library|/System)
+            return 0
+            ;;
+    esac
+
+    home_dir="$(normalized_home_dir || true)"
+    if [ -n "$home_dir" ] && [ "$dir" = "$home_dir" ]; then
+        return 0
+    fi
+
+    return 1
+}
+
+validate_normal_install_dir() {
+    local expanded
+    local normalized
+
+    if [ -z "${CDIDX_INSTALL_DIR+x}" ] && { [ -z "${HOME:-}" ] || [ "$HOME" = "/" ]; }; then
+        report_error "Cannot safely derive cdidx install directory: HOME is empty or root."
+        return 1
+    fi
+
+    if ! expanded="$(expand_install_dir_path "$INSTALL_DIR")"; then
+        return 1
+    fi
+
+    case "$expanded" in
+        "")
+            report_error "Refusing empty cdidx install directory. Set CDIDX_INSTALL_DIR to an absolute directory."
+            return 1
+            ;;
+        //*)
+            report_error "Refusing ambiguous cdidx install directory: ${expanded}"
+            return 1
+            ;;
+        "."|".."|./*|../*|*/./*|*/../*|*/.|*/..)
+            report_error "Refusing ambiguous cdidx install directory: ${expanded}"
+            return 1
+            ;;
+        /*) ;;
+        *)
+            report_error "Refusing non-absolute cdidx install directory: ${expanded}"
+            return 1
+            ;;
+    esac
+
+    if ! normalized="$(normalize_install_dir_path "$expanded")"; then
+        return 1
+    fi
+
+    if is_high_risk_install_dir "$normalized" && ! allow_risky_install_dir; then
+        report_error "Refusing risky install directory: ${normalized}. Set CDIDX_ALLOW_RISKY_INSTALL_DIR=1 to override."
+        return 1
+    fi
+
+    INSTALL_DIR="$normalized"
+    return 0
+}
+
+normalize_existing_or_parent_directory() {
+    local path="$1"
+    local parent
+    local base
+    local normalized_parent
+
+    while [ "${#path}" -gt 1 ]; do
+        case "$path" in
+            */) path="${path%/}" ;;
+            *) break ;;
+        esac
+    done
+
+    if [ -d "$path" ]; then
+        (CDPATH= cd -P -- "$path" && pwd)
+        return
+    fi
+
+    parent="$(dirname -- "$path")"
+    base="$(basename -- "$path")"
+    if [ ! -d "$parent" ]; then
+        report_error "Cache root parent does not exist: ${parent}"
+        return 1
+    fi
+
+    normalized_parent="$(CDPATH= cd -P -- "$parent" && pwd)" || return 1
+    if [ "$normalized_parent" = "/" ]; then
+        printf '/%s\n' "$base"
+    else
+        printf '%s/%s\n' "$normalized_parent" "$base"
+    fi
+}
+
+resolve_purge_cache_dir() {
+    local cache_root
+    local normalized_root
+
+    if [ -n "${XDG_CACHE_HOME:-}" ]; then
+        cache_root="$XDG_CACHE_HOME"
+    else
+        if [ -z "${HOME:-}" ] || [ "$HOME" = "/" ]; then
+            report_error "Cannot safely derive cdidx cache directory: HOME is empty or root."
+            return 1
+        fi
+        cache_root="${HOME}/.cache"
+    fi
+
+    case "$cache_root" in
+        ""|"/"|".")
+            report_error "Refusing to purge cdidx cache from unsafe cache root: ${cache_root:-<empty>}"
+            return 1
+            ;;
+        /*) ;;
+        *)
+            report_error "Refusing to purge cdidx cache from non-absolute cache root: ${cache_root}"
+            return 1
+            ;;
+    esac
+
+    if ! normalized_root="$(normalize_existing_or_parent_directory "$cache_root")"; then
+        return 1
+    fi
+
+    case "$normalized_root" in
+        ""|"/")
+            report_error "Refusing to purge cdidx cache from unsafe normalized cache root: ${normalized_root:-<empty>}"
+            return 1
+            ;;
+    esac
+
+    printf '%s/cdidx\n' "$normalized_root"
 }
 
 release_download_base_url() {
@@ -891,10 +1126,45 @@ restore_backed_up_files() {
     return 0
 }
 
+is_expected_release_asset_name() {
+    case "$1" in
+        "$BINARY_NAME"|version.json|libe_sqlite3.so|libe_sqlite3.dylib|LICENSE|COMMERCIAL_LICENSE.md|INTEGRATION_POLICY.md|TRADEMARKS.md|MANIFEST.sha256|LICENSES)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+validate_promoted_asset_name() {
+    local asset="$1"
+
+    case "$asset" in
+        ""|"."|".."|/*|*/*|*\\*)
+            report_error "Refusing to remove unsafe rollback asset name: ${asset:-<empty>}"
+            return 1
+            ;;
+    esac
+
+    if ! is_expected_release_asset_name "$asset"; then
+        report_error "Refusing to remove unexpected rollback asset name: ${asset}"
+        return 1
+    fi
+
+    return 0
+}
+
 remove_promoted_files() {
     local install_dir="$1"
     local promoted_files="$2"
     local asset
+
+    for asset in $promoted_files; do
+        if ! validate_promoted_asset_name "$asset"; then
+            return 1
+        fi
+    done
 
     for asset in $promoted_files; do
         if [ -e "${install_dir}/${asset}" ]; then
@@ -1445,10 +1715,20 @@ check_path() {
 
 uninstall_cdidx() {
     info "cdidx uninstaller"
+    if ! validate_normal_install_dir; then
+        return 1
+    fi
     acquire_install_lock
 
     local removed=0
     local path
+    local cache_dir=""
+    if [ "$PURGE_CACHE_ON_UNINSTALL" = "1" ]; then
+        if ! cache_dir="$(resolve_purge_cache_dir)"; then
+            return 1
+        fi
+    fi
+
     for path in \
         "${INSTALL_DIR}/${BINARY_NAME}" \
         "${INSTALL_DIR}/version.json" \
@@ -1473,7 +1753,6 @@ uninstall_cdidx() {
     fi
 
     if [ "$PURGE_CACHE_ON_UNINSTALL" = "1" ]; then
-        local cache_dir="${XDG_CACHE_HOME:-${HOME}/.cache}/cdidx"
         if [ -d "$cache_dir" ]; then
             rm -rf "$cache_dir"
             info "Removed ${cache_dir}"
@@ -2175,6 +2454,11 @@ format_doctor_probe_status() {
 
 main() {
     info "cdidx installer"
+    if [ "${SELF_TEST_LOCAL_MIRROR:-0}" != "1" ]; then
+        if ! validate_normal_install_dir; then
+            exit 1
+        fi
+    fi
     detect_platform
     info "Detected platform: ${RID}"
     acquire_install_lock
@@ -2200,11 +2484,32 @@ main() {
     echo ""
 }
 
-if [ "${CDIDX_INSTALL_SH_LIB_ONLY:-0}" != "1" ]; then
-    while [ "${1:-}" = "--strict-verify" ]; do
-        STRICT_VERIFY=1
-        shift
+if [ "${CDIDX_INSTALL_SH_LIB_ONLY:-0}" = "1" ]; then
+    apply_verification_policy
+else
+    while [ $# -gt 0 ]; do
+        case "${1:-}" in
+            --strict-verify)
+                STRICT_VERIFY=1
+                shift
+                ;;
+            --verify-policy)
+                if [ $# -lt 2 ]; then
+                    error "--verify-policy requires a value: compat or strict."
+                fi
+                VERIFY_POLICY="$2"
+                shift 2
+                ;;
+            --verify-policy=*)
+                VERIFY_POLICY="${1#--verify-policy=}"
+                shift
+                ;;
+            *)
+                break
+                ;;
+        esac
     done
+    apply_verification_policy
 
     case "${1:-}" in
         --self-test-local-mirror)

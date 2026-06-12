@@ -31,12 +31,21 @@ public partial class McpServer
         "category",
         "format",
         "groupBy",
+        "alias",
+        "capability",
+        "extension",
         "kind",
         "lang",
         "language",
         "rankBy",
+        "severity",
+        "snippetFocus",
+        "visibility",
+        "excludeVisibility",
+        "followSymlinks",
     };
     internal const int MaxMcpIndexFailureMessageLength = 512;
+    internal static Action<string>? McpIndexFileCommittedForTesting { get; set; }
     private QueryCommandRunner.ProjectFilterRootResolution? _projectFilterRootResolutionForCurrentToolCall;
 
     // --- Tool implementations / ツール実装 ---
@@ -520,6 +529,30 @@ public partial class McpServer
         return [];
     }
 
+    private static List<string> ReadStringOrArrayList(JsonNode? args, string propertyName)
+    {
+        var node = args?[propertyName];
+        if (node is JsonArray array)
+        {
+            return array.Select(item => item is JsonValue value && value.TryGetValue<string>(out var text) ? text : null)
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .Cast<string>()
+                .ToList();
+        }
+
+        return node is JsonValue scalar && scalar.TryGetValue<string>(out var scalarText) && !string.IsNullOrWhiteSpace(scalarText)
+            ? [scalarText]
+            : [];
+    }
+
+    private static List<string> ReadStringOrCommaSeparatedList(JsonNode? args, string propertyName)
+        => ReadStringOrArrayList(args, propertyName)
+            .SelectMany(value => value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => value.ToLowerInvariant())
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
     private JsonNode? TryReadSearchGuardFilters(JsonNode? id, JsonNode? args, out List<SearchGuardFilter> filters)
     {
         filters = [];
@@ -578,7 +611,7 @@ public partial class McpServer
 
     private static JsonObject? ValidateCommonListArguments(JsonNode? args)
     {
-        foreach (var propertyName in new[] { "path", "project", "excludePaths", "names", "sections" })
+        foreach (var propertyName in new[] { "path", "project", "excludePaths", "names", "sections", "capability", "scopes", "visibility", "excludeVisibility", "includeSymbolKind", "excludeSymbolKind", "commits", "changedBetween", "files" })
         {
             if (ValidateStringListArgument(args, propertyName) is JsonObject error)
                 return error;
@@ -652,6 +685,21 @@ public partial class McpServer
             && offset < 0)
             return CreateIntegerMinimumArgumentError(toolName, "offset", minimum: 0, actual: offset);
 
+        if (args["maxSymbolsPerFile"] is JsonValue maxSymbolsValue
+            && maxSymbolsValue.TryGetValue<int>(out var maxSymbolsPerFile)
+            && (maxSymbolsPerFile <= 0 || maxSymbolsPerFile > IndexCommandRunner.MaxSymbolsPerFileLimit))
+            return CreateIntegerRangeArgumentError(toolName, "maxSymbolsPerFile", 1, IndexCommandRunner.MaxSymbolsPerFileLimit, maxSymbolsPerFile);
+
+        if (args["parallelism"] is JsonValue parallelismValue
+            && parallelismValue.TryGetValue<int>(out var parallelism)
+            && (parallelism <= 0 || parallelism > IndexCommandRunner.MaxIndexParallelism))
+            return CreateIntegerRangeArgumentError(toolName, "parallelism", 1, IndexCommandRunner.MaxIndexParallelism, parallelism);
+
+        if (args["debounce"] is JsonValue debounceValue
+            && debounceValue.TryGetValue<int>(out var debounce)
+            && (debounce < 0 || debounce > IndexWatchRunner.MaxDebounceMs))
+            return CreateIntegerRangeArgumentError(toolName, "debounce", 0, IndexWatchRunner.MaxDebounceMs, debounce);
+
         if (args["maxResponseBytes"] is JsonValue maxResponseBytesValue
             && maxResponseBytesValue.TryGetValue<int>(out var maxResponseBytes)
             && maxResponseBytes <= 0)
@@ -666,6 +714,17 @@ public partial class McpServer
         ["tool"] = toolName,
         ["parameter"] = argumentName,
         ["minimum"] = minimum,
+        ["actual"] = actual,
+        ["jsonrpc_invalid_params"] = true,
+    };
+
+    private static JsonObject CreateIntegerRangeArgumentError(string toolName, string argumentName, int minimum, int maximum, int actual) => new()
+    {
+        ["message"] = $"Argument '{argumentName}' on tool '{toolName}' must be between {minimum} and {maximum}; got {actual}.",
+        ["tool"] = toolName,
+        ["parameter"] = argumentName,
+        ["minimum"] = minimum,
+        ["maximum"] = maximum,
         ["actual"] = actual,
         ["jsonrpc_invalid_params"] = true,
     };
@@ -763,7 +822,7 @@ public partial class McpServer
 
     private static bool TryGetExpectedJsonType(string toolName, string argumentName, out string expected)
     {
-        if (argumentName is "names" or "sections" or "files" or "commits" or "changedBetween")
+        if (argumentName is "names" or "sections")
         {
             expected = "array";
             return true;
@@ -785,17 +844,26 @@ public partial class McpServer
         {
             "limit" or "offset" or "snippetLines" or "maxLineWidth" or "before" or "after" or
                 "focusLine" or "focusColumn" or "focusLength" or "startLine" or "endLine" or
-                "maxHops" or "maxDepth" or "depth" or "parallelism" or "maxFileBytes" or
+                "maxHops" or "maxDepth" or "depth" or "parallelism" or "maxFileBytes" or "maxSymbolsPerFile" or "debounce" or
+                "maxHops" or "maxDepth" or "depth" or "parallelism" or "maxFileBytes" or "maxSymbolsPerFile" or "debounce" or
+                "staleAfterSeconds" or
                 "guardWindow" or "maxOutputBytes" or "maxResponseBytes" => "integer",
-            "excludeTests" or "includeGenerated" or "rawQuery" or "noDedup" or "exactSubstring" or
+            "check" or "excludeTests" or "includeGenerated" or "indexedOnly" or "rawQuery" or "noDedup" or "exactSubstring" or
                 "exactName" or "exact" or "prefix" or "countOnly" or "includeBody" or "lsp_compatible" or
                 "lspCompatible" or
                 "regex" or "withPaths" or "rebuild" or "dryRun" or "dry_run" or "force" or
-                "optimize" or "reverse" or "cycles" or "estimateOnly" => "boolean",
-            "project" or "requireBefore" or "requireAfter" or "rejectBefore" or "rejectAfter" => "string_or_array",
+                "optimize" or "reverse" or "cycles" or "config" or "logPath" or "updateCheck" or
+                "optimize" or "reverse" or "cycles" or "config" or "logPath" or "updateCheck" or
+                "rawKinds" or "orderBySize" or "rawBytes" or "byBucket" or "memoryTrace" or "watch" or
+                "estimateOnly" or "listRecipes" => "boolean",
+            "project" or "capability" or "scopes" or "visibility" or "excludeVisibility" or "includeSymbolKind" or "excludeSymbolKind" or
+                "commits" or "changedBetween" or "files" or
+                "requireBefore" or "requireAfter" or "rejectBefore" or "rejectAfter" => "string_or_array",
             "query" or "lang" or "kind" or "format" or "rankBy" or "since" or "cursor" or
-                "solution" or "symbol" or "groupBy" or "category" or "language" or
-                "bucket" or "minConfidence" or "description" or "context" or "toolInvocationContext" or "db" => "string",
+                "solution" or "symbol" or "groupBy" or "category" or "language" or "severity" or "explain" or "snippetFocus" or
+                "bucket" or "minConfidence" or "extension" or "alias" or "description" or "context" or "toolInvocationContext" or "db" or
+                "followSymlinks" or "recipe" => "string",
+            "minEntrypointConfidence" => "number",
             "queries" or "evidencePaths" or "evidence_paths" => "array",
             _ => string.Empty,
         };
@@ -821,6 +889,7 @@ public partial class McpServer
         "string" => node is JsonValue value && value.TryGetValue<string>(out _),
         "string_or_array" => node is JsonArray || node is JsonValue value && value.TryGetValue<string>(out _),
         "array" => node is JsonArray,
+        "number" => node is JsonValue value && value.TryGetValue<double>(out _),
         _ => true,
     };
 
@@ -839,41 +908,6 @@ public partial class McpServer
             _ => "unknown",
         };
     }
-
-    private static bool IsKnownToolName(string toolName) => toolName switch
-    {
-        "search" or "definition" or "references" or "callers" or "callees" or "symbols" or
-        "files" or "find_in_file" or "excerpt" or "map" or "analyze_symbol" or "status" or
-        "outline" or "batch_query" or "deps" or "impact_analysis" or "languages" or "validate" or
-        "unused_symbols" or "symbol_hotspots" or "ping" or "index" or "backfill_fold" or
-        "suggest_improvement" => true,
-        _ => false,
-    };
-
-    private static IReadOnlySet<string> GetAllowedToolArguments(string toolName) => toolName switch
-    {
-        "search" => new HashSet<string>(StringComparer.Ordinal) { "query", "limit", "lang", "snippetLines", "maxLineWidth", "rawQuery", "cursor", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "noDedup", "exactSubstring", "exact", "prefix", "requireBefore", "requireAfter", "rejectBefore", "rejectAfter", "guardWindow", "countOnly", "format", "project", "solution" },
-        "definition" => new HashSet<string>(StringComparer.Ordinal) { "query", "kind", "lang", "limit", "includeBody", "lsp_compatible", "lspCompatible", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "exactName", "exact", "format", "project", "solution" },
-        "references" => new HashSet<string>(StringComparer.Ordinal) { "query", "kind", "lang", "limit", "offset", "maxLineWidth", "lsp_compatible", "lspCompatible", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "countOnly", "format", "project", "solution" },
-        "callers" or "callees" => new HashSet<string>(StringComparer.Ordinal) { "query", "kind", "rankBy", "lang", "limit", "offset", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "countOnly", "format", "project", "solution" },
-        "symbols" => new HashSet<string>(StringComparer.Ordinal) { "query", "names", "kind", "lang", "limit", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "exactName", "exact", "project", "solution" },
-        "files" => new HashSet<string>(StringComparer.Ordinal) { "query", "lang", "limit", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "project", "solution" },
-        "find_in_file" => new HashSet<string>(StringComparer.Ordinal) { "query", "path", "limit", "lang", "excludePaths", "excludeTests", "includeGenerated", "before", "after", "snippetLines", "focusLine", "focusColumn", "maxLineWidth", "exact", "regex" },
-        "excerpt" => new HashSet<string>(StringComparer.Ordinal) { "path", "startLine", "endLine", "before", "after", "focusLine", "focusColumn", "focusLength", "maxLineWidth", "maxOutputBytes" },
-        "map" => new HashSet<string>(StringComparer.Ordinal) { "limit", "lang", "path", "excludePaths", "excludeTests", "sections", "depth", "project", "solution" },
-        "analyze_symbol" => new HashSet<string>(StringComparer.Ordinal) { "query", "lang", "limit", "includeBody", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "maxLineWidth", "project", "solution" },
-        "outline" => new HashSet<string>(StringComparer.Ordinal) { "path" },
-        "batch_query" => new HashSet<string>(StringComparer.Ordinal) { "queries", "maxResponseBytes", "estimateOnly" },
-        "deps" => new HashSet<string>(StringComparer.Ordinal) { "path", "reverse", "format", "cycles", "lang", "limit", "excludePaths", "excludeTests", "project", "solution" },
-        "impact_analysis" => new HashSet<string>(StringComparer.Ordinal) { "query", "lang", "maxHops", "maxDepth", "limit", "path", "excludePaths", "excludeTests", "includeGenerated", "withPaths", "countOnly", "project", "solution" },
-        "validate" => new HashSet<string>(StringComparer.Ordinal) { "kind", "path", "excludePaths", "excludeTests", "project", "solution" },
-        "unused_symbols" => new HashSet<string>(StringComparer.Ordinal) { "kind", "lang", "limit", "path", "excludePaths", "excludeTests", "bucket", "minConfidence", "project", "solution" },
-        "symbol_hotspots" => new HashSet<string>(StringComparer.Ordinal) { "kind", "lang", "limit", "groupBy", "path", "excludePaths", "excludeTests", "project", "solution" },
-        "index" => new HashSet<string>(StringComparer.Ordinal) { "path", "rebuild", "maxFileBytes" },
-        "backfill_fold" => new HashSet<string>(StringComparer.Ordinal) { "dry_run", "dryRun", "force" },
-        "suggest_improvement" => new HashSet<string>(StringComparer.Ordinal) { "category", "language", "description", "context", "toolInvocationContext", "evidencePaths", "evidence_paths" },
-        _ => new HashSet<string>(StringComparer.Ordinal),
-    };
 
     private static JsonObject? ValidateStringListArgument(JsonNode? args, string propertyName)
     {
@@ -1105,6 +1139,198 @@ public partial class McpServer
             ["results"] = new JsonArray(),
         };
         AddResultEnvelope(payload, count, total, truncated);
+        return payload;
+    }
+
+    private static JsonArray ToJsonStringArray(IEnumerable<string> values)
+    {
+        var array = new JsonArray();
+        foreach (var value in values)
+            array.Add(value);
+        return array;
+    }
+
+    private static void AddVisibilityFilterEcho(JsonObject payload, IReadOnlyList<string> visibilityFilters, IReadOnlyList<string> excludeVisibilityFilters)
+    {
+        payload["visibility"] = ToJsonStringArray(visibilityFilters);
+        payload["excludeVisibility"] = ToJsonStringArray(excludeVisibilityFilters);
+    }
+
+    private static JsonArray BuildCompactSymbolRows(IEnumerable<SymbolResult> results)
+    {
+        var rows = new JsonArray();
+        foreach (var result in results)
+        {
+            var row = new JsonObject
+            {
+                ["file"] = result.Path,
+                ["line"] = result.Line,
+                ["kind"] = result.Kind,
+                ["name"] = result.Name,
+            };
+            if (result.Lang != null)
+                row["lang"] = result.Lang;
+            if (result.Visibility != null)
+                row["visibility"] = result.Visibility;
+            if (result.ContainerName != null)
+                row["container"] = result.ContainerName;
+            rows.Add(row);
+        }
+        return rows;
+    }
+
+    private static JsonArray BuildCompactReferenceRows(IEnumerable<ReferenceResult> results)
+    {
+        var rows = new JsonArray();
+        foreach (var result in results)
+        {
+            rows.Add(new JsonObject
+            {
+                ["file"] = result.Path,
+                ["line"] = result.Line,
+                ["column"] = result.Column,
+                ["symbol"] = result.SymbolName,
+                ["kind"] = result.ReferenceKind,
+            });
+        }
+        return rows;
+    }
+
+    private static JsonArray BuildCompactCallerRows(IEnumerable<CallerResult> results)
+    {
+        var rows = new JsonArray();
+        foreach (var result in results)
+        {
+            rows.Add(new JsonObject
+            {
+                ["file"] = result.Path,
+                ["line"] = result.FirstLine,
+                ["caller_kind"] = result.CallerKind,
+                ["caller"] = result.CallerName,
+                ["callee"] = result.CalleeName,
+                ["reference_kind"] = result.ReferenceKind,
+                ["reference_count"] = result.ReferenceCount,
+            });
+        }
+        return rows;
+    }
+
+    private static JsonArray BuildCompactCalleeRows(IEnumerable<CalleeResult> results)
+    {
+        var rows = new JsonArray();
+        foreach (var result in results)
+        {
+            rows.Add(new JsonObject
+            {
+                ["file"] = result.Path,
+                ["line"] = result.FirstLine,
+                ["caller_kind"] = result.CallerKind,
+                ["caller"] = result.CallerName,
+                ["callee"] = result.CalleeName,
+                ["reference_kind"] = result.ReferenceKind,
+                ["reference_count"] = result.ReferenceCount,
+            });
+        }
+        return rows;
+    }
+
+    private JsonObject BuildUnusedSymbolsByBucket(IEnumerable<UnusedSymbolResult> results)
+    {
+        var grouped = results
+            .GroupBy(result => result.UnusedBucket, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.ToList(), StringComparer.Ordinal);
+        var buckets = new JsonObject();
+        foreach (var bucket in QueryCommandRunner.OrderedUnusedBuckets)
+        {
+            if (grouped.TryGetValue(bucket, out var rows))
+                buckets[bucket] = ToJsonArray(rows);
+        }
+        foreach (var (bucket, rows) in grouped.OrderBy(kv => kv.Key, StringComparer.Ordinal))
+        {
+            if (!buckets.ContainsKey(bucket))
+                buckets[bucket] = ToJsonArray(rows);
+        }
+        return buckets;
+    }
+
+    private JsonObject BuildAnalyzeSymbolCountPayload(SymbolAnalysisResult analysis, string? lang, JsonNode? pathEcho, bool excludeTests, int maxLineWidth)
+    {
+        var paths = analysis.Definitions.Select(definition => definition.Path)
+            .Concat(analysis.References.Select(reference => reference.Path))
+            .Concat(analysis.Callers.Select(caller => caller.Path))
+            .Concat(analysis.Callees.Select(callee => callee.Path));
+        var payload = new JsonObject
+        {
+            ["format"] = "count",
+            ["count_only"] = true,
+            ["query"] = analysis.Query,
+            ["lang"] = lang,
+            ["path"] = pathEcho?.DeepClone(),
+            ["excludeTests"] = excludeTests,
+            ["maxLineWidth"] = maxLineWidth,
+            ["file_found"] = analysis.File != null,
+            ["definition_count"] = analysis.Definitions.Count,
+            ["nearby_symbol_count"] = analysis.NearbySymbols.Count,
+            ["reference_count"] = analysis.References.Count,
+            ["caller_count"] = analysis.Callers.Count,
+            ["callee_count"] = analysis.Callees.Count,
+            ["graph_language"] = analysis.GraphLanguage,
+            ["graph_supported"] = analysis.GraphSupported,
+            ["graph_support_reason"] = analysis.GraphSupportReason,
+            ["graph_table_available"] = analysis.GraphTableAvailable,
+            ["workspace_indexed_at"] = JsonSerializer.SerializeToNode(analysis.WorkspaceIndexedAt, _jsonOptions),
+            ["workspace_latest_modified"] = JsonSerializer.SerializeToNode(analysis.WorkspaceLatestModified, _jsonOptions),
+            ["top_files"] = BuildTopFileHistogram(paths, path => path),
+            ["results"] = new JsonArray(),
+        };
+        if (analysis.ExactIndexAvailable.HasValue)
+            payload["exact_index_available"] = analysis.ExactIndexAvailable.Value;
+        if (analysis.DegradedReason != null)
+            payload["degraded_reason"] = analysis.DegradedReason;
+        return payload;
+    }
+
+    private JsonObject BuildAnalyzeSymbolCompactPayload(SymbolAnalysisResult analysis, string? lang, JsonNode? pathEcho, bool excludeTests, int maxLineWidth)
+    {
+        var payload = new JsonObject
+        {
+            ["api_version"] = analysis.ApiVersion,
+            ["format"] = "compact",
+            ["query"] = analysis.Query,
+            ["lang"] = lang,
+            ["path"] = pathEcho?.DeepClone(),
+            ["excludeTests"] = excludeTests,
+            ["maxLineWidth"] = maxLineWidth,
+            ["file"] = analysis.File == null
+                ? null
+                : new JsonObject
+                {
+                    ["path"] = analysis.File.Path,
+                    ["lang"] = analysis.File.Lang,
+                    ["lines"] = analysis.File.Lines,
+                    ["size"] = analysis.File.Size,
+                },
+            ["workspace_indexed_at"] = JsonSerializer.SerializeToNode(analysis.WorkspaceIndexedAt, _jsonOptions),
+            ["workspace_latest_modified"] = JsonSerializer.SerializeToNode(analysis.WorkspaceLatestModified, _jsonOptions),
+            ["graph_language"] = analysis.GraphLanguage,
+            ["graph_supported"] = analysis.GraphSupported,
+            ["graph_support_reason"] = analysis.GraphSupportReason,
+            ["graph_table_available"] = analysis.GraphTableAvailable,
+            ["definition_count"] = analysis.Definitions.Count,
+            ["nearby_symbol_count"] = analysis.NearbySymbols.Count,
+            ["reference_count"] = analysis.References.Count,
+            ["caller_count"] = analysis.Callers.Count,
+            ["callee_count"] = analysis.Callees.Count,
+            ["definitions"] = BuildCompactSymbolRows(analysis.Definitions),
+            ["nearby_symbols"] = BuildCompactSymbolRows(analysis.NearbySymbols),
+            ["references"] = BuildCompactReferenceRows(analysis.References),
+            ["callers"] = BuildCompactCallerRows(analysis.Callers),
+            ["callees"] = BuildCompactCalleeRows(analysis.Callees),
+        };
+        if (analysis.ExactIndexAvailable.HasValue)
+            payload["exact_index_available"] = analysis.ExactIndexAvailable.Value;
+        if (analysis.DegradedReason != null)
+            payload["degraded_reason"] = analysis.DegradedReason;
         return payload;
     }
 
@@ -1408,8 +1634,27 @@ public partial class McpServer
         return false;
     }
 
+    private static string FormatLiteralSearchQueryLimitError()
+        => $"literal search query is too long; maximum is {DbReader.MaxLiteralSearchQueryLength} characters. Split generated input into smaller queries.";
+
+    private static string FormatSearchGuardCandidateLimitError(SearchGuardCandidateLimitException ex)
+        => $"guarded search is too broad: inspected the maximum {ex.CandidateLimit} candidate chunks before satisfying the requested page (limit {ex.RequestedLimit}, offset {ex.RequestedOffset}). Narrow the search with more specific query text, lang/path filters, or a smaller cursor offset.";
+
     private JsonNode ExecuteSearch(JsonNode? id, JsonNode? args)
     {
+        var listRecipes = args?["listRecipes"]?.GetValue<bool>() ?? false;
+        if (listRecipes)
+            return ExecuteSearchRecipeList(id);
+
+        var recipeNode = args?["recipe"];
+        if (recipeNode is not null)
+        {
+            var recipeName = recipeNode.GetValue<string>();
+            if (string.IsNullOrWhiteSpace(recipeName))
+                return CreateToolErrorResponse(id, "'recipe' must be a non-empty search recipe name.");
+            return ExecuteSearchRecipe(id, args, recipeName.Trim());
+        }
+
         if (!TryReadRequiredStringParameter(args, "query", out var query, out var requiredError))
             return CreateToolErrorResponse(id, requiredError!);
         if (query.Length > QueryLimits.MaxQueryLength)
@@ -1419,6 +1664,9 @@ public partial class McpServer
         var limit = ReadLimit(args, QueryCommandRunner.DefaultQueryLimit, adjustments);
         var lang = QueryCommandRunner.NormalizeLangFilterValue(args?["lang"]?.GetValue<string>());
         var snippetLines = ReadSnippetLines(args, SearchSnippetFormatter.DefaultSnippetLines, adjustments);
+        var snippetFocusText = args?["snippetFocus"]?.GetValue<string>() ?? "quality";
+        if (!QueryCommandRunner.TryParseSnippetFocusMode(snippetFocusText, out var snippetFocus))
+            return CreateToolErrorResponse(id, "snippetFocus must be one of quality, leftmost, proximity");
         if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
             return maxLineWidthError;
         var rawQuery = args?["rawQuery"]?.GetValue<bool>() ?? false;
@@ -1461,18 +1709,19 @@ public partial class McpServer
                 {
                     countResults = reader.Search(query, MaxLimit, lang, rawQuery, pathPatterns, excludePaths, excludeTests, deduplicate, since, exact, prefix, guardFilters: guardFilters, guardWindow: guardWindow);
                 }
-                catch (SearchQueryLimitException ex)
+                catch (SearchQueryLimitException)
                 {
-                    return CreateToolErrorResponse(id, ex.Message);
+                    return CreateToolErrorResponse(id, FormatLiteralSearchQueryLimitError());
                 }
                 catch (SearchGuardCandidateLimitException ex)
                 {
-                    return CreateToolErrorResponse(id, $"guarded search is too broad: {ex.Message} Narrow the search with more specific query text, lang/path filters, or a smaller cursor offset.");
+                    return CreateToolErrorResponse(id, FormatSearchGuardCandidateLimitError(ex));
                 }
                 var truncatedCount = countResults.Count >= MaxLimit;
                 var payload = BuildCountOnlyPayload(countResults.Count, truncatedCount ? null : countResults.Count, truncatedCount, countResults, result => result.Path);
                 payload["query"] = query;
                 payload["rawQuery"] = rawQuery;
+                payload["snippetFocus"] = snippetFocusText.Trim().ToLowerInvariant();
                 payload["path"] = PathEcho(pathPatterns);
                 payload["excludeTests"] = excludeTests;
                 AddSearchStabilityMetadata(payload, reader, cursor, []);
@@ -1489,13 +1738,13 @@ public partial class McpServer
             {
                 results = reader.Search(query, FetchLimitForEnvelope(limit), lang, rawQuery, pathPatterns, excludePaths, excludeTests, deduplicate, since, exact, prefix, cursor: cursor, guardFilters: guardFilters, guardWindow: guardWindow);
             }
-            catch (SearchQueryLimitException ex)
+            catch (SearchQueryLimitException)
             {
-                return CreateToolErrorResponse(id, ex.Message);
+                return CreateToolErrorResponse(id, FormatLiteralSearchQueryLimitError());
             }
             catch (SearchGuardCandidateLimitException ex)
             {
-                return CreateToolErrorResponse(id, $"guarded search is too broad: {ex.Message} Narrow the search with more specific query text, lang/path filters, or a smaller cursor offset.");
+                return CreateToolErrorResponse(id, FormatSearchGuardCandidateLimitError(ex));
             }
             var ftsDiagnostics = DbReader.AnalyzeFtsQuery(query, rawQuery, prefix, lang);
             var truncated = TrimToRequestedLimit(results, limit);
@@ -1506,6 +1755,7 @@ public partial class McpServer
                     ["query"] = query,
                     ["rawQuery"] = rawQuery,
                     ["snippetLines"] = snippetLines,
+                    ["snippetFocus"] = snippetFocusText.Trim().ToLowerInvariant(),
                     ["maxLineWidth"] = maxLineWidth,
                     ["path"] = PathEcho(pathPatterns),
                     ["excludeTests"] = excludeTests,
@@ -1533,16 +1783,22 @@ public partial class McpServer
             }
 
             var queryContext = SearchSnippetFormatter.PrepareQueryContext(query);
+            var compactResults = SearchSnippetFormatter
+                .ToCompactResults(results, queryContext, snippetLines, exact, maxLineWidth, lang, snippetFocus, exposeLiteralHighlights: exact)
+                .ToList();
+            foreach (var compact in compactResults)
+                SearchSnippetFormatter.ApplyOutputMetadata(compact, snippetLines, maxLineWidth, exact, rawQuery);
             var structured = new JsonObject
             {
                 ["query"] = query,
                 ["rawQuery"] = rawQuery,
                 ["cursor"] = cursorValue,
                 ["snippetLines"] = snippetLines,
+                ["snippetFocus"] = snippetFocusText.Trim().ToLowerInvariant(),
                 ["maxLineWidth"] = maxLineWidth,
                 ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
-                ["results"] = ToJsonArray(SearchSnippetFormatter.ToCompactResults(results, queryContext, snippetLines, exact, maxLineWidth, exposeLiteralHighlights: exact))
+                ["results"] = ToJsonArray(compactResults)
             };
             AddSearchStabilityMetadata(structured, reader, cursor, results);
             AddResultEnvelope(structured, results.Count, truncated ? null : results.Count, truncated);
@@ -1562,6 +1818,157 @@ public partial class McpServer
             var summary = $"Found {results.Count} search result(s) in {string.Join(", ", topPaths)}.";
             return CreateToolResult(id, summary, structured);
         });
+    }
+
+    private JsonNode ExecuteSearchRecipeList(JsonNode? id)
+    {
+        var registry = SearchAuditRecipes.Load();
+        var payload = new JsonObject
+        {
+            ["count"] = registry.Recipes.Count,
+            ["recipes"] = ToSearchRecipeArray(registry.Recipes)
+        };
+        AddSearchRecipeSourceDiagnostics(payload, registry.Diagnostics);
+        return CreateToolResult(id, $"Found {registry.Recipes.Count} search recipe(s).", payload);
+    }
+
+    private JsonNode ExecuteSearchRecipe(JsonNode? id, JsonNode? args, string recipeName)
+    {
+        var registry = SearchAuditRecipes.Load();
+        var recipe = registry.Recipes.FirstOrDefault(r => string.Equals(r.Name, recipeName, StringComparison.OrdinalIgnoreCase));
+        if (recipe is null)
+        {
+            var available = string.Join(", ", registry.Recipes.Select(r => r.Name));
+            return CreateToolErrorResponse(id, $"unknown search recipe '{recipeName}'. Available recipes: {available}.");
+        }
+
+        var adjustments = new ArgumentAdjustmentCollector();
+        var limit = ReadLimit(args, QueryCommandRunner.DefaultQueryLimit, adjustments);
+        var lang = QueryCommandRunner.NormalizeLangFilterValue(args?["lang"]?.GetValue<string>());
+        var snippetLines = ReadSnippetLines(args, SearchSnippetFormatter.DefaultSnippetLines, adjustments);
+        if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
+            return maxLineWidthError;
+        var pathPatterns = ReadScopedPathList(args);
+        var excludePaths = ReadStringList(args, "excludePaths");
+        var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
+        if (!TryReadSinceArgument(args, out var since, out var sinceError))
+            return CreateToolErrorResponse(id, sinceError!);
+        var deduplicate = !(args?["noDedup"]?.GetValue<bool>() ?? false);
+        if (!TryResolveSearchExactArgument(args, out var userExact, out var exactError))
+            return CreateToolErrorResponse(id, exactError!);
+        var hasExactOverride = args?["exact"] is not null || args?["exactSubstring"] is not null;
+        if (args?["prefix"]?.GetValue<bool>() ?? false)
+            return CreateToolErrorResponse(id, "'prefix' cannot be combined with recipe execution.");
+        if (args?["cursor"] is not null)
+            return CreateToolErrorResponse(id, "'cursor' is not supported for recipe execution.");
+        if (TryReadSearchGuardFilters(id, args, out var guardFilters) is JsonNode guardError)
+            return guardError;
+        var guardWindow = args?["guardWindow"]?.GetValue<int>() ?? DbReader.DefaultSearchGuardWindow;
+        if (guardWindow < 0 || guardWindow > DbReader.MaxSearchGuardWindow)
+            return CreateToolErrorResponse(id, $"'guardWindow' must be between 0 and {DbReader.MaxSearchGuardWindow}; got {guardWindow}.");
+
+        return WithDbReader(id, args, reader =>
+        {
+            var queryResults = new JsonArray();
+            var total = 0;
+            foreach (var recipeQuery in recipe.Queries)
+            {
+                var exact = hasExactOverride ? userExact : recipeQuery.ExactSubstring;
+                List<SearchResult> results;
+                try
+                {
+                    results = reader.Search(
+                        recipeQuery.Query,
+                        limit,
+                        lang,
+                        false,
+                        pathPatterns,
+                        excludePaths,
+                        excludeTests,
+                        deduplicate,
+                        since,
+                        exact,
+                        false,
+                        guardFilters: guardFilters,
+                        guardWindow: guardWindow);
+                }
+                catch (SearchQueryLimitException ex)
+                {
+                    return CreateToolErrorResponse(id, ex.Message);
+                }
+                catch (SearchGuardCandidateLimitException ex)
+                {
+                    return CreateToolErrorResponse(id, $"guarded search is too broad for recipe '{recipe.Name}' query '{recipeQuery.Name}': {ex.Message} Narrow the search with more specific path/lang filters or guards.");
+                }
+
+                var queryContext = SearchSnippetFormatter.PrepareQueryContext(recipeQuery.Query);
+                var compactResults = SearchSnippetFormatter
+                    .ToCompactResults(results, queryContext, snippetLines, exact, maxLineWidth, exposeLiteralHighlights: exact)
+                    .ToList();
+                foreach (var compact in compactResults)
+                    SearchSnippetFormatter.ApplyOutputMetadata(compact, snippetLines, maxLineWidth, exact, rawFts: false);
+                total += compactResults.Count;
+                queryResults.Add(new JsonObject
+                {
+                    ["name"] = recipeQuery.Name,
+                    ["query"] = recipeQuery.Query,
+                    ["description"] = recipeQuery.Description,
+                    ["recommended_labels"] = ToJsonArray(recipeQuery.RecommendedLabels),
+                    ["false_positive_guidance"] = recipeQuery.FalsePositiveGuidance,
+                    ["exact_substring"] = exact,
+                    ["count"] = compactResults.Count,
+                    ["results"] = ToJsonArray(compactResults)
+                });
+            }
+
+            var payload = new JsonObject
+            {
+                ["recipe"] = ToSearchRecipeJson(recipe),
+                ["query_count"] = recipe.Queries.Count,
+                ["result_count"] = total,
+                ["limit_per_query"] = limit,
+                ["snippetLines"] = snippetLines,
+                ["maxLineWidth"] = maxLineWidth,
+                ["lang"] = lang,
+                ["path"] = PathEcho(pathPatterns),
+                ["excludeTests"] = excludeTests,
+                ["queries"] = queryResults
+            };
+            AddFreshnessHint(payload, reader);
+            AddSearchRecipeSourceDiagnostics(payload, registry.Diagnostics);
+            adjustments.ApplyTo(payload);
+            var summary = total == 0
+                ? $"Recipe '{recipe.Name}' returned no search results."
+                : $"Recipe '{recipe.Name}' returned {total} search result(s) across {recipe.Queries.Count} query(ies).";
+            return CreateToolResult(id, summary, payload);
+        });
+    }
+
+    private JsonArray ToSearchRecipeArray(IEnumerable<SearchAuditRecipe> recipes)
+        => new(recipes.Select(recipe => ToSearchRecipeJson(recipe)).ToArray<JsonNode?>());
+
+    private JsonObject ToSearchRecipeJson(SearchAuditRecipe recipe)
+        => new()
+        {
+            ["name"] = recipe.Name,
+            ["description"] = recipe.Description,
+            ["recommended_labels"] = ToJsonArray(recipe.RecommendedLabels),
+            ["queries"] = new JsonArray(recipe.Queries.Select(query => new JsonObject
+            {
+                ["name"] = query.Name,
+                ["query"] = query.Query,
+                ["description"] = query.Description,
+                ["recommended_labels"] = ToJsonArray(query.RecommendedLabels),
+                ["false_positive_guidance"] = query.FalsePositiveGuidance,
+                ["exact_substring"] = query.ExactSubstring
+            }).ToArray<JsonNode?>())
+        };
+
+    private static void AddSearchRecipeSourceDiagnostics(JsonObject payload, IReadOnlyList<string> diagnostics)
+    {
+        if (diagnostics.Count == 0)
+            return;
+        payload["recipe_source_diagnostics"] = new JsonArray(diagnostics.Select(diagnostic => JsonValue.Create(diagnostic)).ToArray<JsonNode?>());
     }
 
     private JsonNode ExecuteSymbols(JsonNode? id, JsonNode? args)
@@ -1601,6 +2008,12 @@ public partial class McpServer
             return CreateToolErrorResponse(id, sinceError!);
         if (!TryResolveNameExactArgument(args, "symbols", out var exact, out var exactError))
             return CreateToolErrorResponse(id, exactError!);
+        var visibilityFilters = ReadStringOrCommaSeparatedList(args, "visibility");
+        var excludeVisibilityFilters = ReadStringOrCommaSeparatedList(args, "excludeVisibility");
+        var format = ReadResponseFormat(args);
+        if (ValidateResponseFormat(format) is string formatError)
+            return CreateToolErrorResponse(id, formatError);
+        var countOnly = ReadCountOnly(args) || format == "count";
 
         // Merge query + names into a de-duplicated OR list. `|` is treated as a literal name character
         // so operator symbols (e.g. `operator |`) stay searchable; multi-name must use repeated `names[]`.
@@ -1619,23 +2032,42 @@ public partial class McpServer
 
         return WithDbReader(id, args, reader =>
         {
-            var results = reader.SearchSymbols(effectiveQueries, limit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact);
+            JsonNode? namesEcho = effectiveQueries == null ? null : JsonSerializer.SerializeToNode(effectiveQueries, _jsonOptions);
             var hasExactPredicate = exact && effectiveQueries is { Count: > 0 };
             var exactSignal = reader.GetSymbolsExactQuerySignal(lang, pathPatterns, excludePaths, excludeTests, since);
+            if (countOnly)
+            {
+                var countSummary = reader.CountSearchSymbolsTotal(effectiveQueries, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact, visibilityFilters, excludeVisibilityFilters);
+                var histogramResults = countSummary.Count > 0
+                    ? reader.SearchSymbols(effectiveQueries, Math.Min(countSummary.Count, MaxLimit), kind, lang, pathPatterns, excludePaths, excludeTests, since, exact, visibilityFilters, excludeVisibilityFilters)
+                    : [];
+                var payload = BuildCountOnlyPayload(countSummary.Count, countSummary.Count, truncated: false, histogramResults, result => result.Path);
+                payload["query"] = query;
+                payload["names"] = namesEcho;
+                payload["kind"] = kind;
+                payload["lang"] = lang;
+                payload["path"] = PathEcho(pathPatterns);
+                payload["excludeTests"] = excludeTests;
+                AddVisibilityFilterEcho(payload, visibilityFilters, excludeVisibilityFilters);
+                if (hasExactPredicate)
+                    AddExactGraphSignal(payload, exactSignal);
+                return CreateToolResult(id, $"Counted {ConsoleUi.Counted(countSummary.Count, "symbol")}.", payload);
+            }
+
+            var results = reader.SearchSymbols(effectiveQueries, limit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact, visibilityFilters, excludeVisibilityFilters);
             var multiNameExactHint = effectiveQueries != null && effectiveQueries.Count > 1;
             var exactZeroHint = multiNameExactHint
                 ? QueryCommandRunner.BuildExactZeroHint(
                     exact,
-                    () => reader.AnySearchSymbols(effectiveQueries, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false),
-                    () => reader.SearchSymbols(effectiveQueries, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false),
+                    () => reader.AnySearchSymbols(effectiveQueries, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false, visibilityFilters: visibilityFilters, excludeVisibilityFilters: excludeVisibilityFilters),
+                    () => reader.SearchSymbols(effectiveQueries, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false, visibilityFilters: visibilityFilters, excludeVisibilityFilters: excludeVisibilityFilters),
                     r => r.Name)
                 : QueryCommandRunner.BuildExactZeroHint(
                     exact && effectiveQueries != null && effectiveQueries.Count > 0,
-                    () => reader.CountSearchSymbols(effectiveQueries, QueryCommandRunner.ExactZeroHintProbeLimit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false) > 0,
-                    () => reader.CountSearchSymbols(effectiveQueries, limit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false),
-                    () => reader.SearchSymbols(effectiveQueries, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false),
+                    () => reader.CountSearchSymbols(effectiveQueries, QueryCommandRunner.ExactZeroHintProbeLimit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false, visibilityFilters: visibilityFilters, excludeVisibilityFilters: excludeVisibilityFilters) > 0,
+                    () => reader.CountSearchSymbols(effectiveQueries, limit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false, visibilityFilters: visibilityFilters, excludeVisibilityFilters: excludeVisibilityFilters),
+                    () => reader.SearchSymbols(effectiveQueries, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false, visibilityFilters: visibilityFilters, excludeVisibilityFilters: excludeVisibilityFilters),
                     r => r.Name);
-            JsonNode? namesEcho = effectiveQueries == null ? null : JsonSerializer.SerializeToNode(effectiveQueries, _jsonOptions);
             if (results.Count == 0)
             {
                 var payload = new JsonObject
@@ -1649,6 +2081,7 @@ public partial class McpServer
                     ["count"] = 0,
                     ["results"] = new JsonArray()
                 };
+                AddVisibilityFilterEcho(payload, visibilityFilters, excludeVisibilityFilters);
                 if (hasExactPredicate)
                     AddExactGraphSignal(payload, exactSignal);
                 AddExactZeroHint(payload, exactZeroHint);
@@ -1668,6 +2101,12 @@ public partial class McpServer
                 ["count"] = results.Count,
                 ["results"] = ToJsonArray(results)
             };
+            AddVisibilityFilterEcho(structured, visibilityFilters, excludeVisibilityFilters);
+            if (format == "compact")
+            {
+                structured["results"] = BuildCompactSymbolRows(results);
+                structured["format"] = "compact";
+            }
             if (hasExactPredicate)
                 AddExactGraphSignal(structured, exactSignal);
             adjustments.ApplyTo(structured);
@@ -1698,18 +2137,20 @@ public partial class McpServer
             return CreateToolErrorResponse(id, sinceError!);
         if (!TryResolveNameExactArgument(args, "definition", out var exact, out var exactError))
             return CreateToolErrorResponse(id, exactError!);
+        var visibilityFilters = ReadStringOrCommaSeparatedList(args, "visibility");
+        var excludeVisibilityFilters = ReadStringOrCommaSeparatedList(args, "excludeVisibility");
         var format = ReadResponseFormat(args);
         if (ValidateResponseFormat(format) is string formatError)
             return CreateToolErrorResponse(id, formatError);
 
         return WithDbReader(id, args, reader =>
         {
-            var results = reader.GetDefinitions(query, FetchLimitForEnvelope(limit), kind, lang, includeBody, pathPatterns, excludePaths, excludeTests, since, exact);
+            var results = reader.GetDefinitions(query, FetchLimitForEnvelope(limit), kind, lang, includeBody, pathPatterns, excludePaths, excludeTests, since, exact, visibilityFilters, excludeVisibilityFilters);
             var truncated = TrimToRequestedLimit(results, limit);
             if (format == "count")
             {
                 var total = truncated
-                    ? reader.CountDefinitionsTotal(query, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact).Count
+                    ? reader.CountDefinitionsTotal(query, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact, visibilityFilters, excludeVisibilityFilters).Count
                     : results.Count;
                 var countPayload = BuildCountOnlyPayload(total, total, truncated: false, results, result => result.Path);
                 countPayload["query"] = query;
@@ -1717,17 +2158,19 @@ public partial class McpServer
                 countPayload["lang"] = lang;
                 countPayload["path"] = PathEcho(pathPatterns);
                 countPayload["excludeTests"] = excludeTests;
+                AddVisibilityFilterEcho(countPayload, visibilityFilters, excludeVisibilityFilters);
                 adjustments.ApplyTo(countPayload);
                 return CreateToolResult(id, $"Counted {ConsoleUi.Counted(total, "definition")}.", countPayload);
             }
             if (lspCompatible)
                 QueryCommandRunner.AttachLspLocations(results);
+            ApplyExcerptRecoveryDbPath(results);
             var exactSignal = reader.GetDefinitionExactQuerySignal(lang, pathPatterns, excludePaths, excludeTests, since);
             var exactZeroHint = QueryCommandRunner.BuildExactZeroHint(
                 exact,
-                () => reader.CountSearchSymbols(query, QueryCommandRunner.ExactZeroHintProbeLimit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false) > 0,
-                () => reader.CountSearchSymbols(query, limit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false),
-                () => reader.SearchSymbols(query, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false),
+                () => reader.CountSearchSymbols(query, QueryCommandRunner.ExactZeroHintProbeLimit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false, visibilityFilters: visibilityFilters, excludeVisibilityFilters: excludeVisibilityFilters) > 0,
+                () => reader.CountSearchSymbols(query, limit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false, visibilityFilters: visibilityFilters, excludeVisibilityFilters: excludeVisibilityFilters),
+                () => reader.SearchSymbols(query, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false, visibilityFilters: visibilityFilters, excludeVisibilityFilters: excludeVisibilityFilters),
                 r => r.Name);
             var payload = new JsonObject
             {
@@ -1740,6 +2183,7 @@ public partial class McpServer
                 ["excludeTests"] = excludeTests,
                 ["results"] = ToJsonArray(results)
             };
+            AddVisibilityFilterEcho(payload, visibilityFilters, excludeVisibilityFilters);
             AddResultEnvelope(payload, results.Count, truncated ? null : results.Count, truncated);
             if (format == "compact")
                 ApplyCompactResults(payload, results, result => result.Path, result => result.StartLine);
@@ -1756,6 +2200,30 @@ public partial class McpServer
                 ConsoleUi.FoundSummary(results.Count, "definition"),
                 payload);
         });
+    }
+
+    private void ApplyExcerptRecoveryDbPath(IEnumerable<DefinitionResult> results)
+    {
+        foreach (var result in results)
+            ExcerptRecoveryCommandFormatter.ApplyDbPath(result.BodyContentRecovery, result.Path, _dbPath);
+    }
+
+    private void ApplyExcerptRecoveryDbPath(IEnumerable<ReferenceResult> results)
+    {
+        foreach (var result in results)
+            ExcerptRecoveryCommandFormatter.ApplyDbPath(result.BodyContentRecovery, result.Path, _dbPath);
+    }
+
+    private void ApplyExcerptRecoveryDbPath(IEnumerable<CallerResult> results)
+    {
+        foreach (var result in results)
+            ExcerptRecoveryCommandFormatter.ApplyDbPath(result.BodyContentRecovery, result.Path, _dbPath);
+    }
+
+    private void ApplyExcerptRecoveryDbPath(IEnumerable<CalleeResult> results)
+    {
+        foreach (var result in results)
+            ExcerptRecoveryCommandFormatter.ApplyDbPath(result.BodyContentRecovery, result.Path, _dbPath);
     }
 
     private JsonNode ExecuteReferences(JsonNode? id, JsonNode? args)
@@ -1892,18 +2360,20 @@ public partial class McpServer
         if (ValidateResponseFormat(format) is string formatError)
             return CreateToolErrorResponse(id, formatError);
         var countOnly = ReadCountOnly(args) || format == "count";
+        var rawKinds = args?["rawKinds"]?.GetValue<bool>() ?? false;
 
         return WithDbReader(id, args, reader =>
         {
             if (countOnly)
             {
-                var countOnlyTotal = reader.CountCallersTotal(query, lang, kind, pathPatterns, excludePaths, excludeTests, exact).Count;
+                var countOnlyTotal = reader.CountCallersTotal(query, lang, kind, pathPatterns, excludePaths, excludeTests, exact, rawKinds).Count;
                 var histogramResults = countOnlyTotal > 0
-                    ? reader.GetCallers(query, Math.Min(countOnlyTotal, MaxLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, rankMode: rankMode)
+                    ? reader.GetCallers(query, Math.Min(countOnlyTotal, MaxLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, rawKinds, rankMode: rankMode)
                     : [];
                 var countOnlyPayload = BuildCountOnlyPayload(countOnlyTotal, countOnlyTotal, truncated: false, histogramResults, result => result.Path);
                 countOnlyPayload["query"] = query;
                 countOnlyPayload["kind"] = kind;
+                countOnlyPayload["rawKinds"] = rawKinds;
                 countOnlyPayload["lang"] = lang;
                 countOnlyPayload["path"] = PathEcho(pathPatterns);
                 countOnlyPayload["excludeTests"] = excludeTests;
@@ -1911,10 +2381,10 @@ public partial class McpServer
                 return CreateToolResult(id, $"Counted {ConsoleUi.Counted(countOnlyTotal, "caller")}.", countOnlyPayload);
             }
 
-            var results = reader.GetCallers(query, FetchLimitForEnvelope(limit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, rankMode: rankMode, offset: offset);
+            var results = reader.GetCallers(query, FetchLimitForEnvelope(limit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, rawKinds, rankMode: rankMode, offset: offset);
             var truncated = TrimToRequestedLimit(results, limit);
             var total = truncated || offset > 0
-                ? reader.CountCallersTotal(query, lang, kind, pathPatterns, excludePaths, excludeTests, exact).Count
+                ? reader.CountCallersTotal(query, lang, kind, pathPatterns, excludePaths, excludeTests, exact, rawKinds).Count
                 : results.Count;
             var graphSupport = ResolveGraphSupport(reader, exact, query, lang, pathPatterns, excludePaths, excludeTests);
             var sqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignalByLanguages(
@@ -1925,14 +2395,15 @@ public partial class McpServer
             var exactSignal = reader.GetCallersExactQuerySignal(lang, pathPatterns, excludePaths, excludeTests, includeSqlGraphContractSignal: sqlGraphSignal.Relevant);
             var exactZeroHint = QueryCommandRunner.BuildExactZeroHint(
                 exact && reader._hasReferencesTable,
-                () => reader.CountCallers(query, QueryCommandRunner.ExactZeroHintProbeLimit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false) > 0,
-                () => reader.CountCallers(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
-                () => reader.GetCallers(query, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact: false, rankMode: rankMode),
+                () => reader.CountCallers(query, QueryCommandRunner.ExactZeroHintProbeLimit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false, rawKinds: rawKinds) > 0,
+                () => reader.CountCallers(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false, rawKinds: rawKinds),
+                () => reader.GetCallers(query, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact: false, rawKinds: rawKinds, rankMode: rankMode),
                 r => r.CalleeName);
             var payload = new JsonObject
             {
                 ["query"] = query,
                 ["kind"] = kind,
+                ["rawKinds"] = rawKinds,
                 ["lang"] = lang,
                 ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
@@ -1989,18 +2460,20 @@ public partial class McpServer
         if (ValidateResponseFormat(format) is string formatError)
             return CreateToolErrorResponse(id, formatError);
         var countOnly = ReadCountOnly(args) || format == "count";
+        var rawKinds = args?["rawKinds"]?.GetValue<bool>() ?? false;
 
         return WithDbReader(id, args, reader =>
         {
             if (countOnly)
             {
-                var countOnlyTotal = reader.CountCalleesTotal(query, lang, kind, pathPatterns, excludePaths, excludeTests, exact).Count;
+                var countOnlyTotal = reader.CountCalleesTotal(query, lang, kind, pathPatterns, excludePaths, excludeTests, exact, rawKinds).Count;
                 var histogramResults = countOnlyTotal > 0
-                    ? reader.GetCallees(query, Math.Min(countOnlyTotal, MaxLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, rankMode: rankMode)
+                    ? reader.GetCallees(query, Math.Min(countOnlyTotal, MaxLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, rawKinds, rankMode: rankMode)
                     : [];
                 var countOnlyPayload = BuildCountOnlyPayload(countOnlyTotal, countOnlyTotal, truncated: false, histogramResults, result => result.Path);
                 countOnlyPayload["query"] = query;
                 countOnlyPayload["kind"] = kind;
+                countOnlyPayload["rawKinds"] = rawKinds;
                 countOnlyPayload["lang"] = lang;
                 countOnlyPayload["path"] = PathEcho(pathPatterns);
                 countOnlyPayload["excludeTests"] = excludeTests;
@@ -2008,10 +2481,10 @@ public partial class McpServer
                 return CreateToolResult(id, $"Counted {ConsoleUi.Counted(countOnlyTotal, "callee")}.", countOnlyPayload);
             }
 
-            var results = reader.GetCallees(query, FetchLimitForEnvelope(limit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, rankMode: rankMode, offset: offset);
+            var results = reader.GetCallees(query, FetchLimitForEnvelope(limit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, rawKinds, rankMode: rankMode, offset: offset);
             var truncated = TrimToRequestedLimit(results, limit);
             var total = truncated || offset > 0
-                ? reader.CountCalleesTotal(query, lang, kind, pathPatterns, excludePaths, excludeTests, exact).Count
+                ? reader.CountCalleesTotal(query, lang, kind, pathPatterns, excludePaths, excludeTests, exact, rawKinds).Count
                 : results.Count;
             var graphSupport = ResolveGraphSupport(reader, exact, query, lang, pathPatterns, excludePaths, excludeTests);
             var sqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignalByLanguages(
@@ -2022,14 +2495,15 @@ public partial class McpServer
             var exactSignal = reader.GetCalleesExactQuerySignal(lang, pathPatterns, excludePaths, excludeTests, includeSqlGraphContractSignal: sqlGraphSignal.Relevant);
             var exactZeroHint = QueryCommandRunner.BuildExactZeroHint(
                 exact && reader._hasReferencesTable,
-                () => reader.CountCallees(query, QueryCommandRunner.ExactZeroHintProbeLimit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false) > 0,
-                () => reader.CountCallees(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
-                () => reader.GetCallees(query, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact: false, rankMode: rankMode),
+                () => reader.CountCallees(query, QueryCommandRunner.ExactZeroHintProbeLimit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false, rawKinds: rawKinds) > 0,
+                () => reader.CountCallees(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false, rawKinds: rawKinds),
+                () => reader.GetCallees(query, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact: false, rawKinds: rawKinds, rankMode: rankMode),
                 r => r.CallerName);
             var payload = new JsonObject
             {
                 ["query"] = query,
                 ["kind"] = kind,
+                ["rawKinds"] = rawKinds,
                 ["lang"] = lang,
                 ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
@@ -2072,10 +2546,12 @@ public partial class McpServer
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
         if (!TryReadSinceArgument(args, out var since, out var sinceError))
             return CreateToolErrorResponse(id, sinceError!);
+        var orderBySize = args?["orderBySize"]?.GetValue<bool>() ?? false;
+        var rawBytes = args?["rawBytes"]?.GetValue<bool>() ?? false;
 
         return WithDbReader(id, args, reader =>
         {
-            var results = reader.ListFiles(query, limit, lang, pathPatterns, excludePaths, excludeTests, since);
+            var results = reader.ListFiles(query, limit, lang, pathPatterns, excludePaths, excludeTests, since, orderBySize || rawBytes);
             if (results.Count == 0)
             {
                 var payload = new JsonObject
@@ -2084,9 +2560,16 @@ public partial class McpServer
                     ["lang"] = lang,
                     ["path"] = PathEcho(pathPatterns),
                     ["excludeTests"] = excludeTests,
+                    ["orderBySize"] = orderBySize,
+                    ["rawBytes"] = rawBytes,
                     ["count"] = 0,
                     ["results"] = new JsonArray()
                 };
+                if (rawBytes)
+                {
+                    payload["raw_bytes_payload_supported"] = false;
+                    payload["raw_bytes_note"] = "MCP returns indexed file size metadata; raw file bytes are not returned.";
+                }
                 AddFreshnessHint(payload, reader);
                 adjustments.ApplyTo(payload);
                 return CreateToolResult(id, "No files found.", payload);
@@ -2098,9 +2581,16 @@ public partial class McpServer
                 ["lang"] = lang,
                 ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
+                ["orderBySize"] = orderBySize,
+                ["rawBytes"] = rawBytes,
                 ["count"] = results.Count,
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
+            if (rawBytes)
+            {
+                structured["raw_bytes_payload_supported"] = false;
+                structured["raw_bytes_note"] = "MCP returns indexed file size metadata; raw file bytes are not returned.";
+            }
             adjustments.ApplyTo(structured);
             return CreateToolResult(id, ConsoleUi.FoundSummary(results.Count, "file"), structured);
         });
@@ -2116,10 +2606,13 @@ public partial class McpServer
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
         var sections = ReadStringList(args, "sections").Select(section => section.ToLowerInvariant()).ToHashSet(StringComparer.Ordinal);
         var depth = ReadMapDepth(args, adjustments);
+        var minEntrypointConfidence = args?["minEntrypointConfidence"]?.GetValue<double>() ?? 0;
+        if (minEntrypointConfidence is < 0 or > 1)
+            return CreateToolErrorResponse(id, "minEntrypointConfidence must be between 0.0 and 1.0");
 
         return WithDbReader(id, args, reader =>
         {
-            var map = reader.GetRepoMap(limit, lang, pathPatterns, excludePaths, excludeTests);
+            var map = reader.GetRepoMap(limit, lang, pathPatterns, excludePaths, excludeTests, minEntrypointConfidence);
             WorkspaceMetadataEnricher.Enrich(map, _dbPath, _dbPathExplicit);
             var structured = JsonSerializer.SerializeToNode(map, _jsonOptions)!.AsObject();
             if (depth is >= 0)
@@ -2145,6 +2638,7 @@ public partial class McpServer
             structured["lang"] = lang;
             structured["path"] = PathEcho(pathPatterns);
             structured["excludeTests"] = excludeTests;
+            structured["minEntrypointConfidence"] = minEntrypointConfidence;
             var hasFilter = (pathPatterns is { Count: > 0 }) || excludePaths.Count > 0 || excludeTests || lang != null;
             if (map.FileCount == 0 && hasFilter)
                 AddFreshnessHint(structured, reader);
@@ -2163,7 +2657,7 @@ public partial class McpServer
             "api_version", "fileCount", "totalLines", "totalSymbols", "totalReferences",
             "indexedAt", "latestModified", "workspaceIndexedAt", "workspaceLatestModified",
             "projectRoot", "gitHead", "gitIsDirty", "indexed_head_commit", "worktree_head_changed",
-            "graphTableAvailable", "limit", "lang", "path", "excludeTests", "depth",
+            "graphTableAvailable", "limit", "lang", "path", "excludeTests", "depth", "minEntrypointConfidence",
         };
         if (sections.Contains("languages"))
             keep.Add("languages");
@@ -2203,6 +2697,10 @@ public partial class McpServer
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
         if (!TryResolveNameExactArgument(args, "analyze_symbol", out var exact, out var exactError))
             return CreateToolErrorResponse(id, exactError!);
+        var format = ReadResponseFormat(args);
+        if (ValidateResponseFormat(format) is string formatError)
+            return CreateToolErrorResponse(id, formatError);
+        var countOnly = ReadCountOnly(args) || format == "count";
 
         return WithDbReader(id, args, reader =>
         {
@@ -2219,13 +2717,22 @@ public partial class McpServer
             analysis.SqlGraphContractReady = sqlGraphSignal.Relevant ? sqlGraphSignal.Ready : null;
             analysis.SqlGraphContractDegradedReason = sqlGraphSignal.Relevant ? sqlGraphSignal.DegradedReason : null;
             WorkspaceMetadataEnricher.Enrich(analysis, _dbPath, _dbPathExplicit);
-            var structured = ToAnalyzeSymbolJsonObject(analysis);
+            ApplyExcerptRecoveryDbPath(analysis.Definitions);
+            ApplyExcerptRecoveryDbPath(analysis.References);
+            ApplyExcerptRecoveryDbPath(analysis.Callers);
+            ApplyExcerptRecoveryDbPath(analysis.Callees);
+            var pathEcho = PathEcho(pathPatterns);
+            var structured = countOnly
+                ? BuildAnalyzeSymbolCountPayload(analysis, lang, pathEcho, excludeTests, maxLineWidth)
+                : format == "compact"
+                    ? BuildAnalyzeSymbolCompactPayload(analysis, lang, pathEcho, excludeTests, maxLineWidth)
+                    : ToAnalyzeSymbolJsonObject(analysis);
             AddSqlGraphContractSignal(structured, sqlGraphSignal);
             structured.Remove("exactZeroHint");
             AddExactZeroHint(structured, analysis.ExactZeroHint);
             structured["maxLineWidth"] = maxLineWidth;
             structured["lang"] = lang;
-            structured["path"] = PathEcho(pathPatterns);
+            structured["path"] = pathEcho;
             structured["excludeTests"] = excludeTests;
             adjustments.ApplyTo(structured);
             return CreateToolResult(id, BuildAnalyzeSymbolSummary(analysis), structured);
@@ -2432,13 +2939,39 @@ public partial class McpServer
         }
     }
 
-    private JsonNode ExecuteStatus(JsonNode? id)
+    private JsonNode ExecuteStatus(JsonNode? id, JsonNode? args)
     {
-        return WithDbReader(id, args: null, reader =>
+        var checkWorkspace = args?["check"]?.GetValue<bool>() ?? false;
+        var staleAfterSeconds = args?["staleAfterSeconds"]?.GetValue<int>() ?? (int)TimeSpan.FromDays(1).TotalSeconds;
+        if (staleAfterSeconds <= 0)
+            return CreateToolErrorResponse(id, "staleAfterSeconds must be greater than or equal to 1");
+        var explain = args?["explain"]?.GetValue<string>()?.Trim().ToLowerInvariant();
+        if (explain is not (null or "freshness" or "readiness" or "all"))
+            return CreateToolErrorResponse(id, "explain must be one of freshness, readiness, all");
+        var format = ReadResponseFormat(args);
+        if (format is not ("full" or "compact"))
+            return CreateToolErrorResponse(id, "format must be one of full, compact");
+        if (!TryReadStatusScopes(args, out var statusScopes, out var scopeError))
+            return CreateToolErrorResponse(id, scopeError!);
+        var includeConfig = args?["config"]?.GetValue<bool>() ?? false;
+        var includeLogPath = args?["logPath"]?.GetValue<bool>() ?? false;
+        var runUpdateCheck = args?["updateCheck"]?.GetValue<bool>() ?? false;
+
+        return WithDbReader(id, args, reader =>
         {
             var status = reader.GetStatus();
             WorkspaceMetadataEnricher.Enrich(status, _dbPath, _dbPathExplicit);
             status.MacProfile = MacProfileDetector.DetectCurrent();
+            if (checkWorkspace)
+            {
+                status.WorkspaceCheck = IndexFreshnessChecker.Check(reader, status.ProjectRoot);
+                status.IndexMatchesWorkspace = status.WorkspaceCheck.Checked
+                    ? status.WorkspaceCheck.MatchesWorkspace
+                    : null;
+                status.StaleAfterSeconds = staleAfterSeconds;
+                if (status.IndexedAt.HasValue)
+                    status.IndexAgeSeconds = Math.Max(0, (long)Math.Round((GetUtcNow() - status.IndexedAt.Value).TotalSeconds, MidpointRounding.AwayFromZero));
+            }
             ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(status.ProjectRoot);
             status.GraphSupportedLanguages = ReferenceExtractor.GetSupportedLanguages().OrderBy(l => l).ToList();
             status.Extractors = ExtractorPluginRegistry.GetStatusSnapshot();
@@ -2457,12 +2990,21 @@ public partial class McpServer
                     .ToList();
             }
             status.Version = _version;
+            status.UpdateCheck = runUpdateCheck
+                ? UpdateChecker.Check(_version, CancellationToken.None)
+                : null;
             if (!status.FoldReady)
             {
                 status.DegradedReason = DegradationReasonCodes.BuildFoldNotReadyExplanation(status.FoldReadyReason);
                 status.RecommendedAction = BuildFoldBackfillCommand(_dbPath, _dbPathExplicit);
                 status.AlternativeAction = BuildFoldRebuildRepairCommand(status.ProjectRoot, _dbPath, _dbPathExplicit);
             }
+            var checkFailures = checkWorkspace
+                ? BuildMcpStatusCheckFailures(status, statusScopes)
+                : [];
+            if (checkWorkspace)
+                status.FailedChecks = checkFailures.Select(failure => failure.Name).ToList();
+
             var structured = JsonSerializer.SerializeToNode(status, _jsonOptions)!.AsObject();
             structured["project_root"] = status.ProjectRoot;
             structured["git_head"] = status.GitHead;
@@ -2502,8 +3044,213 @@ public partial class McpServer
                     ["burst"] = RateLimiter.Options.BurstCapacity,
                 },
             };
+            var effectiveConfig = includeConfig
+                ? BuildMcpStatusEffectiveConfig(status, staleAfterSeconds, checkWorkspace, runUpdateCheck)
+                : null;
+            var logPath = includeLogPath ? GlobalToolLog.ResolveLogDirectoryForStatus() : null;
+            var explainPayload = explain is null
+                ? null
+                : BuildMcpStatusExplain(status, checkFailures, explain);
+            if (effectiveConfig is not null)
+                structured["effective_config"] = effectiveConfig.DeepClone();
+            if (logPath is not null)
+                structured["log_path"] = logPath;
+            if (explainPayload is not null)
+                structured["explain"] = explainPayload.DeepClone();
+            if (format == "compact")
+            {
+                structured = BuildMcpCompactStatusPayload(status, checkFailures);
+                if (effectiveConfig is not null)
+                    structured["effective_config"] = effectiveConfig;
+                if (logPath is not null)
+                    structured["log_path"] = logPath;
+                if (explainPayload is not null)
+                    structured["explain"] = explainPayload;
+            }
             return CreateToolResult(id, "Database stats returned.", structured);
         });
+    }
+
+    private sealed record McpStatusCheckFailure(string Name, bool IsStale, string Diagnostic);
+
+    private static bool TryReadStatusScopes(JsonNode? args, out HashSet<string>? scopes, out string? error)
+    {
+        scopes = null;
+        error = null;
+        if (args?["scopes"] is null)
+            return true;
+
+        var values = ReadStringOrArrayList(args, "scopes")
+            .Select(scope => scope.Trim().ToLowerInvariant())
+            .ToList();
+        if (args["scopes"] is JsonArray array && values.Count != array.Count)
+        {
+            error = "scopes entries must be non-empty strings.";
+            return false;
+        }
+        if (values.Count == 0)
+        {
+            error = "scopes cannot be empty or whitespace-only.";
+            return false;
+        }
+
+        scopes = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var value in values)
+        {
+            if (!IsKnownMcpStatusScope(value))
+            {
+                error = $"Invalid status scope '{value}'. Use one of: workspace, graph, issues, sql, hotspot, csharp, fold, newer.";
+                return false;
+            }
+            scopes.Add(value);
+        }
+        return true;
+    }
+
+    private static bool IsKnownMcpStatusScope(string scope) =>
+        scope is "workspace" or "graph" or "issues" or "sql" or "hotspot" or "csharp" or "fold" or "newer";
+
+    private static IReadOnlyList<McpStatusCheckFailure> BuildMcpStatusCheckFailures(StatusResult status, IReadOnlySet<string>? scopes)
+    {
+        var failures = new List<McpStatusCheckFailure>();
+        var checkAll = scopes is not { Count: > 0 };
+        bool Includes(string scope) => checkAll || scopes!.Contains(scope);
+
+        if (Includes("workspace"))
+        {
+            if (status.WorkspaceCheck?.Checked != true)
+            {
+                failures.Add(new McpStatusCheckFailure("workspace_unavailable", true, "[stale] workspace_check unavailable"));
+            }
+            else if (!status.WorkspaceCheck.MatchesWorkspace)
+            {
+                var check = status.WorkspaceCheck;
+                failures.Add(new McpStatusCheckFailure(
+                    "workspace_stale",
+                    true,
+                    $"[stale] workspace_check reason={check.Reason} changed={check.ChangedFileCount} missing={check.MissingFileCount} unindexed={check.UnindexedFileCount}"));
+            }
+        }
+
+        if (Includes("graph") && !status.GraphTableAvailable)
+            failures.Add(new McpStatusCheckFailure("graph_table_available", false, "[degraded] graph_table_available=false"));
+        if (Includes("issues") && !status.IssuesTableAvailable)
+            failures.Add(new McpStatusCheckFailure("issues_table_available", false, "[degraded] issues_table_available=false"));
+        if (Includes("issues") && status.IssuesTableAvailable && !status.FileIssuesDataCurrent)
+            failures.Add(new McpStatusCheckFailure("file_issues_data_current", false, "[degraded] file_issues_data_current=false"));
+        if (Includes("workspace") && status.MigrationInProgress)
+            failures.Add(new McpStatusCheckFailure("migration_in_progress", false, "[degraded] migration_in_progress=true"));
+        if (Includes("sql") && !status.SqlGraphContractReady)
+            failures.Add(new McpStatusCheckFailure("sql_graph_contract_ready", false, $"[degraded] sql_graph_contract_ready=false reason={status.SqlGraphContractDegradedReason ?? "unknown"}"));
+        if (Includes("hotspot") && !status.HotspotFamilyReady)
+            failures.Add(new McpStatusCheckFailure("hotspot_family_ready", false, $"[degraded] hotspot_family_ready=false reason={status.HotspotFamilyDegradedReason ?? "unknown"}"));
+        if (Includes("csharp") && !status.CSharpSymbolNameReady)
+            failures.Add(new McpStatusCheckFailure("csharp_symbol_name_ready", false, "[degraded] csharp_symbol_name_ready=false"));
+        if (Includes("csharp") && !status.CSharpMetadataTargetReady)
+            failures.Add(new McpStatusCheckFailure("csharp_metadata_target_ready", false, $"[degraded] csharp_metadata_target_ready=false reason={status.CSharpMetadataTargetDegradedReason ?? "unknown"}"));
+        if (Includes("fold") && !status.FoldReady)
+            failures.Add(new McpStatusCheckFailure("fold_ready", false, $"[degraded] fold_ready=false reason={status.FoldReadyReason ?? "unknown"}"));
+        if (Includes("newer") && status.IndexNewerThanReader)
+            failures.Add(new McpStatusCheckFailure("index_newer_than_reader", false, $"[degraded] index_newer_than_reader=true reason={status.IndexNewerThanReaderReason ?? "unknown"}"));
+
+        return failures;
+    }
+
+    private JsonObject BuildMcpStatusEffectiveConfig(StatusResult status, int staleAfterSeconds, bool checkWorkspace, bool runUpdateCheck) => new()
+    {
+        ["db_path"] = _dbPath,
+        ["db_explicit"] = _dbPathExplicit,
+        ["project_root"] = status.ProjectRoot,
+        ["data_dir"] = status.DataDir,
+        ["data_dir_source"] = status.DataDirSource,
+        ["global_tool_log_dir"] = GlobalToolLog.ResolveLogDirectoryForStatus(),
+        ["stale_after_seconds"] = staleAfterSeconds,
+        ["check"] = checkWorkspace,
+        ["update_check_requested"] = runUpdateCheck,
+        ["version"] = status.Version,
+    };
+
+    private JsonObject BuildMcpStatusExplain(StatusResult status, IReadOnlyList<McpStatusCheckFailure> failures, string explain)
+    {
+        var payload = new JsonObject();
+        if (explain is "freshness" or "all")
+        {
+            payload["freshness"] = new JsonObject
+            {
+                ["index_matches_workspace"] = status.IndexMatchesWorkspace.HasValue ? JsonValue.Create(status.IndexMatchesWorkspace.Value) : null,
+                ["stale_after_seconds"] = status.StaleAfterSeconds.HasValue ? JsonValue.Create(status.StaleAfterSeconds.Value) : null,
+                ["index_age_seconds"] = status.IndexAgeSeconds.HasValue ? JsonValue.Create(status.IndexAgeSeconds.Value) : null,
+                ["workspace_check"] = status.WorkspaceCheck is null ? null : JsonSerializer.SerializeToNode(status.WorkspaceCheck, _jsonOptions),
+            };
+        }
+        if (explain is "readiness" or "all")
+        {
+            payload["readiness"] = BuildMcpStatusReadiness(status);
+            payload["failed_check_details"] = BuildMcpStatusFailureArray(failures);
+        }
+        return payload;
+    }
+
+    private static JsonObject BuildMcpStatusReadiness(StatusResult status) => new()
+    {
+        ["graph_table_available"] = status.GraphTableAvailable,
+        ["issues_table_available"] = status.IssuesTableAvailable,
+        ["file_issues_data_current"] = status.FileIssuesDataCurrent,
+        ["sql_graph_contract_ready"] = status.SqlGraphContractReady,
+        ["hotspot_family_ready"] = status.HotspotFamilyReady,
+        ["csharp_symbol_name_ready"] = status.CSharpSymbolNameReady,
+        ["csharp_metadata_target_ready"] = status.CSharpMetadataTargetReady,
+        ["fold_ready"] = status.FoldReady,
+        ["index_newer_than_reader"] = status.IndexNewerThanReader,
+        ["migration_in_progress"] = status.MigrationInProgress,
+    };
+
+    private static JsonArray BuildMcpStatusFailureArray(IReadOnlyList<McpStatusCheckFailure> failures)
+    {
+        var array = new JsonArray();
+        foreach (var failure in failures)
+        {
+            array.Add(new JsonObject
+            {
+                ["name"] = failure.Name,
+                ["is_stale"] = failure.IsStale,
+                ["diagnostic"] = failure.Diagnostic,
+            });
+        }
+        return array;
+    }
+
+    private static JsonObject BuildMcpCompactStatusPayload(StatusResult status, IReadOnlyList<McpStatusCheckFailure> failures)
+    {
+        var payload = new JsonObject
+        {
+            ["format"] = "compact",
+            ["summary"] = status.Summary,
+            ["version"] = status.Version,
+            ["project_root"] = status.ProjectRoot,
+            ["files"] = status.Files,
+            ["chunks"] = status.Chunks,
+            ["symbols"] = status.Symbols,
+            ["references"] = status.References,
+            ["language_count"] = status.Languages.Count,
+            ["top_languages"] = new JsonArray(status.Languages
+                .OrderByDescending(kv => kv.Value)
+                .ThenBy(kv => kv.Key, StringComparer.Ordinal)
+                .Take(5)
+                .Select(kv => new JsonObject { ["lang"] = kv.Key, ["files"] = kv.Value })
+                .ToArray<JsonNode?>()),
+            ["git_head"] = status.GitHead,
+            ["git_is_dirty"] = status.GitIsDirty.HasValue ? JsonValue.Create(status.GitIsDirty.Value) : null,
+            ["index_matches_workspace"] = status.IndexMatchesWorkspace.HasValue ? JsonValue.Create(status.IndexMatchesWorkspace.Value) : null,
+            ["stale_after_seconds"] = status.StaleAfterSeconds.HasValue ? JsonValue.Create(status.StaleAfterSeconds.Value) : null,
+            ["index_age_seconds"] = status.IndexAgeSeconds.HasValue ? JsonValue.Create(status.IndexAgeSeconds.Value) : null,
+            ["failed_checks"] = new JsonArray(failures.Select(failure => JsonValue.Create(failure.Name)).ToArray()),
+            ["failed_check_details"] = BuildMcpStatusFailureArray(failures),
+            ["readiness"] = BuildMcpStatusReadiness(status),
+        };
+        if (status.WorkspaceCheck is not null)
+            payload["workspace_check"] = JsonSerializer.SerializeToNode(status.WorkspaceCheck);
+        return payload;
     }
 
     private JsonObject BuildMcpSessionStatus()
@@ -2710,6 +3457,7 @@ public partial class McpServer
                 return CreateToolResult(id, "No excerpt found.", emptyPayload);
             }
 
+            ExcerptRecoveryCommandFormatter.ApplyDbPath(excerpt, _dbPath);
             var payload = JsonSerializer.SerializeToNode(excerpt, _jsonOptions)!.AsObject();
             ApplyExcerptOutputBudget(payload, maxOutputBytes);
             payload["maxOutputBytes"] = maxOutputBytes;
@@ -2824,11 +3572,11 @@ public partial class McpServer
             List<FileFindResult> results;
             try
             {
-                results = reader.FindInFiles(query, limit, lang, pathPatterns, excludePaths, excludeTests, before, after, exact, maxLineWidth, focusLine, focusColumn, regex);
+                results = reader.FindInFiles(query, limit, lang, pathPatterns, excludePaths, excludeTests, before, after, exact, maxLineWidth, focusLine, focusColumn, regex).Results;
             }
             catch (Exception ex) when (regex && (ex is ArgumentException || ex is RegexMatchTimeoutException))
             {
-                return CreateToolErrorResponse(id, $"invalid regular expression: {ex.Message}");
+                return CreateToolErrorResponse(id, "invalid regular expression. Check regex syntax and retry.");
             }
             var structured = new JsonObject
             {
@@ -3173,11 +3921,11 @@ public partial class McpServer
                     "excerpt" => ExecuteExcerpt(null, toolArgs),
                     "map" => ExecuteMap(null, toolArgs),
                     "analyze_symbol" => ExecuteAnalyzeSymbol(null, toolArgs),
-                    "status" => ExecuteStatus(null),
+                    "status" => ExecuteStatus(null, toolArgs),
                     "outline" => ExecuteOutline(null, toolArgs),
                     "deps" => ExecuteDeps(null, toolArgs),
                     "impact_analysis" => ExecuteImpactAnalysis(null, toolArgs),
-                    "languages" => ExecuteLanguages(null),
+                    "languages" => ExecuteLanguages(null, toolArgs),
                     "validate" => ExecuteValidate(null, toolArgs),
                     "unused_symbols" => ExecuteUnusedSymbols(null, toolArgs),
                     "symbol_hotspots" => ExecuteSymbolHotspots(null, toolArgs),
@@ -3245,7 +3993,7 @@ public partial class McpServer
                 // in stderr instead of the batch_query response.
                 DeferFrameLog(() =>
                 {
-                    WriteMcpLogLine(BuildToolErrorLog(toolName, ex.Message));
+                    WriteMcpLogLine(BuildToolErrorLog(toolName, ex));
                     Database.DbDebug.DumpToStderr(ex);
                 });
                 var classification = McpErrorEnvelope.ClassifyException(ex);
@@ -3575,6 +4323,7 @@ public partial class McpServer
         var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
+        var includeGenerated = args?["includeGenerated"]?.GetValue<bool>() ?? false;
         var reverse = args?["reverse"]?.GetValue<bool>() ?? false;
         var cyclesOnly = args?["cycles"]?.GetValue<bool>() ?? false;
         var format = args?["format"]?.GetValue<string>()?.ToLowerInvariant() ?? "edgelist";
@@ -3610,6 +4359,9 @@ public partial class McpServer
             else
                 payload["edges"] = JsonSerializer.SerializeToNode(outputEdges, _jsonOptions);
             payload["format"] = format;
+            payload["includeGenerated"] = includeGenerated;
+            payload["generated_code_filter_supported"] = true;
+            payload["generated_code_scope"] = "source_and_target_files";
             AddSqlGraphContractSignal(payload, sqlGraphSignal);
             var summary = payload["count"]!.GetValue<int>() > 0
                 ? cyclesOnly ? $"Found {ConsoleUi.Counted(cycles.Count, "dependency cycle")}." : $"Found {ConsoleUi.Counted(results.Count, "dependency edge")}."
@@ -3829,22 +4581,78 @@ public partial class McpServer
 
     private JsonNode ExecuteValidate(JsonNode? id, JsonNode? args)
     {
+        var adjustments = new ArgumentAdjustmentCollector();
         var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
+        var severity = args?["severity"]?.GetValue<string>()?.Trim().ToLowerInvariant();
+        if (severity is not (null or "error" or FileIssue.SeverityWarning or FileIssue.SeverityInfo))
+            return CreateToolErrorResponse(id, "severity must be one of error, warning, info");
+        var limit = ReadLimit(args, QueryCommandRunner.DefaultQueryLimit, adjustments);
+        var format = ReadResponseFormat(args);
+        if (ValidateResponseFormat(format) is string formatError)
+            return CreateToolErrorResponse(id, formatError);
+        var countOnly = ReadCountOnly(args) || format == "count";
         var pathPatterns = ReadScopedPathList(args);
 
         return WithDbReader(id, args, reader =>
         {
-            var issues = reader.GetIssues(kind, pathPatterns);
+            var issues = reader.GetIssues(kind, pathPatterns, countOnly ? null : FetchLimitForEnvelope(limit), severity);
+            var truncated = !countOnly && TrimToRequestedLimit(issues, limit);
+            var pathFilterArray = new JsonArray();
+            if (pathPatterns is not null)
+            {
+                foreach (var path in pathPatterns)
+                    pathFilterArray.Add(path);
+            }
             var payload = new JsonObject
             {
                 ["count"] = issues.Count,
-                ["issues"] = JsonSerializer.SerializeToNode(issues, _jsonOptions)
+                ["truncated"] = truncated,
+                ["more_available"] = truncated,
+                ["filters"] = new JsonObject
+                {
+                    ["kind"] = kind,
+                    ["severity"] = severity,
+                    ["path"] = pathFilterArray,
+                },
+                ["top_files"] = BuildTopFileHistogram(issues, issue => issue.Path),
             };
+            if (countOnly)
+            {
+                payload["format"] = "count";
+            }
+            else if (format == "compact")
+            {
+                payload["format"] = "compact";
+                payload["issues"] = BuildCompactValidateIssues(issues);
+            }
+            else
+            {
+                payload["issues"] = JsonSerializer.SerializeToNode(issues, _jsonOptions);
+            }
             var summary = issues.Count > 0
                 ? $"Found {issues.Count} encoding issue(s)."
                 : "No encoding issues found.";
+            adjustments.ApplyTo(payload);
             return CreateToolResult(id, summary, payload);
         });
+    }
+
+    private static JsonArray BuildCompactValidateIssues(IEnumerable<FileIssue> issues)
+    {
+        var compact = new JsonArray();
+        foreach (var issue in issues)
+        {
+            compact.Add(new JsonObject
+            {
+                ["path"] = issue.Path,
+                ["line"] = issue.Line,
+                ["kind"] = issue.Kind,
+                ["severity"] = issue.Severity,
+                ["origin"] = issue.Origin,
+                ["message"] = issue.Message,
+            });
+        }
+        return compact;
     }
 
     private JsonNode ExecuteSymbolHotspots(JsonNode? id, JsonNode? args)
@@ -3875,14 +4683,16 @@ public partial class McpServer
         var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
+        var visibilityFilters = ReadStringOrCommaSeparatedList(args, "visibility");
+        var excludeVisibilityFilters = ReadStringOrCommaSeparatedList(args, "excludeVisibility");
 
         return WithDbReader(id, args, reader =>
         {
             var fileResults = groupBy == "file"
-                ? reader.GetFileSymbolHotspots(limit, kind, lang, pathPatterns, excludePaths, excludeTests)
+                ? reader.GetFileSymbolHotspots(limit, kind, lang, pathPatterns, excludePaths, excludeTests, visibilityFilters, excludeVisibilityFilters)
                 : null;
             var results = fileResults == null
-                ? reader.GetSymbolHotspots(limit, kind, lang, pathPatterns, excludePaths, excludeTests)
+                ? reader.GetSymbolHotspots(limit, kind, lang, pathPatterns, excludePaths, excludeTests, visibilityFilters, excludeVisibilityFilters)
                 : [];
             var hotspotSignal = reader.GetHotspotFamilySignal(lang);
             var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests);
@@ -3935,6 +4745,7 @@ public partial class McpServer
                 ["grouped_by"] = groupBy,
                 ["hotspots"] = hotspotsNode
             };
+            AddVisibilityFilterEcho(payload, visibilityFilters, excludeVisibilityFilters);
             if (fileResults != null)
                 payload["files"] = fileResults.Count;
             AddHotspotFamilySignal(payload, hotspotSignal);
@@ -3973,6 +4784,9 @@ public partial class McpServer
         var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
+        var visibilityFilters = ReadStringOrCommaSeparatedList(args, "visibility");
+        var excludeVisibilityFilters = ReadStringOrCommaSeparatedList(args, "excludeVisibility");
+        var byBucket = args?["byBucket"]?.GetValue<bool>() ?? false;
         if (bucket != null && !QueryCommandRunner.IsKnownUnusedBucket(bucket))
             return CreateToolErrorResponse(id, $"Invalid bucket '{bucket}'. Use one of: {string.Join(", ", QueryCommandRunner.OrderedUnusedBuckets)}.");
         if (minConfidence != null && !QueryCommandRunner.IsKnownUnusedConfidence(minConfidence))
@@ -3992,6 +4806,8 @@ public partial class McpServer
                 pathPatterns,
                 excludePaths,
                 excludeTests,
+                visibilityFilters,
+                excludeVisibilityFilters,
                 bucketFilter: bucket,
                 minConfidence: minConfidence);
             var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests);
@@ -4015,6 +4831,10 @@ public partial class McpServer
                 ["bucket_taxonomy"] = QueryCommandRunner.BuildUnusedBucketTaxonomyJson(),
                 ["symbols"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
+            AddVisibilityFilterEcho(payload, visibilityFilters, excludeVisibilityFilters);
+            payload["byBucket"] = byBucket;
+            if (byBucket)
+                payload["symbols_by_bucket"] = BuildUnusedSymbolsByBucket(results);
             AddSqlGraphContractSignal(payload, sqlGraphSignal);
             var summary = results.Count > 0
                 ? $"Found {ConsoleUi.Counted(results.Count, "potentially unused symbol")} across {ConsoleUi.Counted(bucketCounts.Count, "returned bucket")}. Private hits are ranked ahead of exported/config suspects, but not labeled high-confidence from indexed refs alone. Note: name-based matching — same-named symbols in different contexts may mask true unused symbols."
@@ -4055,49 +4875,271 @@ public partial class McpServer
         return CreateToolResult(id, $"cdidx v{_version} is ready.", payload);
     }
 
-    private JsonNode ExecuteLanguages(JsonNode? id)
+    private JsonNode ExecuteLanguages(JsonNode? id, JsonNode? args)
     {
         var langExtensions = FileIndexer.GetLanguageExtensions();
         var symbolLangs = SymbolExtractor.GetSupportedLanguages();
-        var graphLangs = ReferenceExtractor.GetSupportedLanguages();
+        var referenceLangs = ReferenceExtractor.GetSupportedLanguages();
+        var indexedOnly = args?["indexedOnly"]?.GetValue<bool>() ?? false;
+        var capabilities = ReadStringOrArrayList(args, "capability")
+            .Select(value => value.Trim().ToLowerInvariant())
+            .ToList();
+        var extensionFilter = args?["extension"]?.GetValue<string>()?.Trim();
+        var normalizedExtension = string.IsNullOrWhiteSpace(extensionFilter)
+            ? null
+            : extensionFilter.StartsWith(".", StringComparison.Ordinal) ? extensionFilter : "." + extensionFilter;
+        var aliasFilter = QueryCommandRunner.NormalizeLangFilterValue(args?["alias"]?.GetValue<string>());
+
+        if (args?["capability"] is JsonArray capabilityArray && capabilities.Count != capabilityArray.Count)
+            return CreateToolErrorResponse(id, "capability entries must be non-empty strings.");
+
+        foreach (var capability in capabilities)
+        {
+            if (!IsKnownLanguageCapability(capability))
+                return CreateToolErrorResponse(id, $"Invalid language capability '{capability}'. Use one of: symbols, graph, references.");
+        }
 
         // Build consolidated language info / 統合言語情報を構築
-        var allLangs = new Dictionary<string, (List<string> Extensions, List<string> Aliases, bool Symbols, bool Graph)>(StringComparer.Ordinal);
+        var allLangs = new Dictionary<string, (List<string> Extensions, List<string> Aliases, bool Symbols, bool References, bool Graph, List<string> CapabilityGaps)>(StringComparer.Ordinal);
         foreach (var (ext, lang) in langExtensions)
         {
             if (!allLangs.TryGetValue(lang, out var info))
             {
-                info = (new List<string>(), QueryCommandRunner.GetLanguageAliases(lang).ToList(), symbolLangs.Contains(lang), graphLangs.Contains(lang));
+                var hasSymbols = symbolLangs.Contains(lang);
+                var hasReferences = referenceLangs.Contains(lang);
+                info = (
+                    new List<string>(),
+                    QueryCommandRunner.GetLanguageAliases(lang).ToList(),
+                    hasSymbols,
+                    hasReferences,
+                    hasReferences,
+                    BuildLanguageCapabilityGaps(hasSymbols, hasReferences, hasReferences));
                 allLangs[lang] = info;
             }
             info.Extensions.Add(ext);
         }
 
-        var sorted = allLangs.OrderBy(kv => kv.Key).ToList();
-        var languagesArray = new JsonArray();
-        foreach (var (lang, info) in sorted)
+        JsonNode BuildResponse(HashSet<string>? indexedLanguages)
         {
-            var extArray = new JsonArray();
-            foreach (var ext in info.Extensions.OrderBy(e => e))
-                extArray.Add(ext);
+            var sorted = allLangs
+                .Where(kv => !indexedOnly || indexedLanguages?.Contains(kv.Key) == true)
+                .Where(kv => capabilities.All(capability => LanguageMatchesCapability(kv.Value.Symbols, kv.Value.References, kv.Value.Graph, capability)))
+                .Where(kv => normalizedExtension is null || kv.Value.Extensions.Contains(normalizedExtension, StringComparer.OrdinalIgnoreCase))
+                .Where(kv => aliasFilter is null
+                    || string.Equals(kv.Key, aliasFilter, StringComparison.OrdinalIgnoreCase)
+                    || kv.Value.Aliases.Contains(aliasFilter, StringComparer.OrdinalIgnoreCase))
+                .OrderBy(kv => kv.Key, StringComparer.Ordinal)
+                .ToList();
 
-            languagesArray.Add(new JsonObject
+            var languagesArray = new JsonArray();
+            foreach (var (lang, info) in sorted)
             {
-                ["lang"] = lang,
-                ["extensions"] = extArray,
-                ["aliases"] = new JsonArray(info.Aliases.OrderBy(alias => alias).Select(alias => JsonValue.Create(alias)).ToArray()),
-                ["symbol_extraction"] = info.Symbols,
-                ["graph_queries"] = info.Graph,
-            });
+                var extArray = new JsonArray();
+                foreach (var ext in info.Extensions.OrderBy(e => e, StringComparer.Ordinal))
+                    extArray.Add(ext);
+
+                languagesArray.Add(new JsonObject
+                {
+                    ["lang"] = lang,
+                    ["extensions"] = extArray,
+                    ["aliases"] = new JsonArray(info.Aliases.OrderBy(alias => alias, StringComparer.Ordinal).Select(alias => JsonValue.Create(alias)).ToArray()),
+                    ["symbol_extraction"] = info.Symbols,
+                    ["reference_extraction"] = info.References,
+                    ["graph_queries"] = info.Graph,
+                    ["capability_gaps"] = new JsonArray(info.CapabilityGaps.Select(gap => JsonValue.Create(gap)).ToArray()),
+                });
+            }
+
+            var payload = new JsonObject
+            {
+                ["languages"] = languagesArray,
+                ["filters"] = new JsonObject
+                {
+                    ["indexedOnly"] = indexedOnly,
+                    ["capability"] = new JsonArray(capabilities.Select(capability => JsonValue.Create(capability)).ToArray()),
+                    ["extension"] = normalizedExtension,
+                    ["alias"] = aliasFilter,
+                },
+            };
+            if (normalizedExtension is not null)
+            {
+                payload["extension_lookup"] = new JsonObject
+                {
+                    ["extension"] = normalizedExtension,
+                    ["matched"] = sorted.Count,
+                    ["languages"] = new JsonArray(sorted.Select(kv => JsonValue.Create(kv.Key)).ToArray()),
+                };
+            }
+            if (aliasFilter is not null)
+            {
+                payload["alias_lookup"] = new JsonObject
+                {
+                    ["alias"] = aliasFilter,
+                    ["matched"] = sorted.Count,
+                    ["languages"] = new JsonArray(sorted.Select(kv => JsonValue.Create(kv.Key)).ToArray()),
+                };
+            }
+
+            var summary = $"{sorted.Count} languages supported. {symbolLangs.Count} with symbol extraction, {referenceLangs.Count} with reference extraction, {referenceLangs.Count} with call-graph queries.";
+            return CreateToolResult(id, summary, payload);
         }
 
-        var payload = new JsonObject { ["languages"] = languagesArray };
-        var summary = $"{sorted.Count} languages supported. {symbolLangs.Count} with symbol extraction, {graphLangs.Count} with call-graph queries.";
-        return CreateToolResult(id, summary, payload);
+        if (!indexedOnly)
+            return BuildResponse(null);
+
+        return WithDbReader(id, args, reader => BuildResponse(new HashSet<string>(reader.GetStatus().Languages.Keys, StringComparer.Ordinal)));
+    }
+
+    private static bool IsKnownLanguageCapability(string capability) =>
+        capability is "symbols" or "graph" or "references";
+
+    private static bool LanguageMatchesCapability(bool symbols, bool references, bool graph, string capability) =>
+        capability switch
+        {
+            "symbols" => symbols,
+            "references" => references,
+            "graph" => graph,
+            _ => false,
+        };
+
+    private static List<string> BuildLanguageCapabilityGaps(bool symbols, bool references, bool graph)
+    {
+        var gaps = new List<string>();
+        if (!symbols)
+            gaps.Add("missing-symbols");
+        if (!references)
+            gaps.Add("missing-references");
+        if (!graph)
+            gaps.Add("missing-graph");
+        return gaps;
     }
 
     private JsonNode ExecuteIndex(JsonNode? id, JsonNode? args, JsonNode? progressToken = null)
         => ExecuteIndexAsync(id, args, progressToken).GetAwaiter().GetResult();
+
+    private sealed record McpIndexUnsupportedMode(string Name, string Reason, bool BlocksIndexing);
+
+    private static FileIssue BuildMcpSymbolCountExceededIssue(string path, int symbolCount, int maxSymbolsPerFile) =>
+        new()
+        {
+            Path = path,
+            Kind = "symbol_count_exceeded",
+            Line = 0,
+            Message = $"Symbol extraction produced {symbolCount:N0} symbols, exceeding the maxSymbolsPerFile limit of {maxSymbolsPerFile:N0}; file content, symbols, and references were not indexed. Exclude the generated/pathological file or raise maxSymbolsPerFile if this is expected.",
+        };
+
+    private static bool TryReadMcpIndexSymlinkPolicy(JsonNode? args, out FileIndexer.SymlinkPolicy symlinkPolicy, out string? error)
+    {
+        symlinkPolicy = FileIndexer.SymlinkPolicy.None;
+        error = null;
+        var value = args?["followSymlinks"]?.GetValue<string>()?.Trim().ToLowerInvariant();
+        if (string.IsNullOrEmpty(value) || value == "none")
+            return true;
+        if (value == "internal")
+        {
+            symlinkPolicy = FileIndexer.SymlinkPolicy.Internal;
+            return true;
+        }
+        if (value == "all")
+        {
+            symlinkPolicy = FileIndexer.SymlinkPolicy.All;
+            return true;
+        }
+
+        error = "followSymlinks must be one of none, internal, all";
+        return false;
+    }
+
+    private static string FormatMcpIndexSymlinkPolicy(FileIndexer.SymlinkPolicy symlinkPolicy)
+        => symlinkPolicy switch
+        {
+            FileIndexer.SymlinkPolicy.Internal => "internal",
+            FileIndexer.SymlinkPolicy.All => "all",
+            _ => "none",
+        };
+
+    private static List<McpIndexUnsupportedMode> BuildMcpIndexUnsupportedModes(JsonNode? args, int? requestedParallelism, int? requestedDebounce)
+    {
+        var modes = new List<McpIndexUnsupportedMode>();
+        if (requestedParallelism.HasValue && requestedParallelism.Value != 1)
+            modes.Add(new McpIndexUnsupportedMode("parallelism", "MCP index currently runs serially; requested parallelism is reported but effective_parallelism remains 1.", false));
+        if (ReadStringOrArrayList(args, "commits").Count > 0)
+            modes.Add(new McpIndexUnsupportedMode("commits", "Commit-scoped MCP indexing is not implemented; use CLI `cdidx index --commits ...` for this scope.", true));
+        if (ReadStringOrArrayList(args, "changedBetween").Count > 0)
+            modes.Add(new McpIndexUnsupportedMode("changedBetween", "Changed-between MCP indexing is not implemented; use CLI `cdidx index --changed-between ...` for this scope.", true));
+        if (ReadStringOrArrayList(args, "files").Count > 0)
+            modes.Add(new McpIndexUnsupportedMode("files", "File-scoped MCP indexing is not implemented; use CLI `cdidx index --files ...` for this scope.", true));
+
+        var watchRequested = args?["watch"]?.GetValue<bool>() ?? false;
+        if (watchRequested)
+        {
+            modes.Add(new McpIndexUnsupportedMode("watch", "Long-running watch mode is intentionally disabled for MCP tool calls; use the CLI watch command instead.", true));
+        }
+        else if (requestedDebounce.HasValue)
+        {
+            modes.Add(new McpIndexUnsupportedMode("debounce", "debounce only applies to watch mode, which is disabled for MCP tool calls.", false));
+        }
+        return modes;
+    }
+
+    private static JsonArray BuildMcpIndexUnsupportedModesJson(IEnumerable<McpIndexUnsupportedMode> unsupportedModes)
+    {
+        var array = new JsonArray();
+        foreach (var mode in unsupportedModes)
+        {
+            array.Add(new JsonObject
+            {
+                ["name"] = mode.Name,
+                ["reason"] = mode.Reason,
+                ["blocks_indexing"] = mode.BlocksIndexing,
+            });
+        }
+        return array;
+    }
+
+    private static bool HasBlockingMcpIndexUnsupportedMode(IEnumerable<McpIndexUnsupportedMode> unsupportedModes)
+        => unsupportedModes.Any(mode => mode.BlocksIndexing);
+
+    private static JsonObject CaptureMcpIndexMemorySample(string stage, Stopwatch stopwatch)
+    {
+        using var process = Process.GetCurrentProcess();
+        return new JsonObject
+        {
+            ["stage"] = stage,
+            ["elapsed_ms"] = stopwatch.ElapsedMilliseconds,
+            ["managed_bytes"] = GC.GetTotalMemory(forceFullCollection: false),
+            ["working_set_bytes"] = process.WorkingSet64,
+            ["private_bytes"] = process.PrivateMemorySize64,
+        };
+    }
+
+    private static JsonObject BuildMcpIndexOptionsPayload(
+        bool dryRun,
+        bool rebuild,
+        long? maxFileBytes,
+        int maxSymbolsPerFile,
+        FileIndexer.SymlinkPolicy symlinkPolicy,
+        IReadOnlyList<string> includeSymbolKinds,
+        IReadOnlyList<string> excludeSymbolKinds,
+        bool memoryTrace,
+        int? requestedParallelism,
+        int? requestedDebounce,
+        JsonNode? args)
+        => new()
+        {
+            ["dryRun"] = dryRun,
+            ["rebuild"] = rebuild,
+            ["maxFileBytes"] = maxFileBytes.HasValue ? JsonValue.Create(maxFileBytes.Value) : null,
+            ["maxSymbolsPerFile"] = maxSymbolsPerFile,
+            ["followSymlinks"] = FormatMcpIndexSymlinkPolicy(symlinkPolicy),
+            ["includeSymbolKind"] = ToJsonStringArray(includeSymbolKinds),
+            ["excludeSymbolKind"] = ToJsonStringArray(excludeSymbolKinds),
+            ["memoryTrace"] = memoryTrace,
+            ["parallelism_requested"] = requestedParallelism.HasValue ? JsonValue.Create(requestedParallelism.Value) : null,
+            ["effective_parallelism"] = 1,
+            ["watch_requested"] = args?["watch"]?.GetValue<bool>() ?? false,
+            ["debounce"] = requestedDebounce.HasValue ? JsonValue.Create(requestedDebounce.Value) : null,
+        };
 
     private async Task RefreshClientRootsIfNeededAsync()
     {
@@ -4162,6 +5204,21 @@ public partial class McpServer
             return CreateToolErrorResponse(id, requiredError!);
 
         var rebuild = args?["rebuild"]?.GetValue<bool>() ?? false;
+        var dryRun = args?["dryRun"]?.GetValue<bool>() ?? args?["dry_run"]?.GetValue<bool>() ?? false;
+        var memoryTrace = args?["memoryTrace"]?.GetValue<bool>() ?? false;
+        var requestedParallelism = args?["parallelism"]?.GetValue<int>();
+        var requestedDebounce = args?["debounce"]?.GetValue<int>();
+        var maxSymbolsPerFile = args?["maxSymbolsPerFile"]?.GetValue<int>() ?? IndexCommandRunner.DefaultMaxSymbolsPerFile;
+        if (maxSymbolsPerFile <= 0 || maxSymbolsPerFile > IndexCommandRunner.MaxSymbolsPerFileLimit)
+            return CreateToolErrorResponse(id, $"maxSymbolsPerFile must be between 1 and {IndexCommandRunner.MaxSymbolsPerFileLimit}");
+        if (!TryReadMcpIndexSymlinkPolicy(args, out var symlinkPolicy, out var symlinkPolicyError))
+            return CreateToolErrorResponse(id, symlinkPolicyError!);
+        var includeSymbolKinds = ReadStringOrCommaSeparatedList(args, "includeSymbolKind");
+        var excludeSymbolKinds = ReadStringOrCommaSeparatedList(args, "excludeSymbolKind");
+        var symbolKindFilter = SymbolKindFilter.Create(includeSymbolKinds, excludeSymbolKinds, parseError: null);
+        if (symbolKindFilter.ParseError != null)
+            return CreateToolErrorResponse(id, symbolKindFilter.ParseError);
+        var unsupportedModes = BuildMcpIndexUnsupportedModes(args, requestedParallelism, requestedDebounce);
         long? maxFileBytes = null;
         if (args?["maxFileBytes"] is { } maxFileBytesNode)
         {
@@ -4179,6 +5236,21 @@ public partial class McpServer
         var projectPath = Path.GetFullPath(path);
         var runStartedAtUtc = DateTime.UtcNow;
         var runStopwatch = Stopwatch.StartNew();
+        var memorySamples = memoryTrace
+            ? new JsonArray { CaptureMcpIndexMemorySample("start", runStopwatch) }
+            : null;
+        var optionsPayload = BuildMcpIndexOptionsPayload(
+            dryRun,
+            rebuild,
+            maxFileBytes,
+            maxSymbolsPerFile,
+            symlinkPolicy,
+            includeSymbolKinds,
+            excludeSymbolKinds,
+            memoryTrace,
+            requestedParallelism,
+            requestedDebounce,
+            args);
 
         // Prevent path traversal — only allow indexing within current working directory
         // パストラバーサル防止 — カレントディレクトリ配下のみインデックスを許可
@@ -4191,6 +5263,66 @@ public partial class McpServer
 
         if (!Directory.Exists(projectPath))
             return CreateToolErrorResponse(id, "Directory not found");
+
+        var unsupportedModesJson = BuildMcpIndexUnsupportedModesJson(unsupportedModes);
+        if (dryRun)
+        {
+            var ignoreCase = GitHelper.ResolveIgnoreCase(projectPath, _currentRequestToken.Value);
+            var dryRunIndexer = new FileIndexer(
+                projectPath,
+                ignoreCase,
+                GitHelper.TryGetRepositoryRoot(projectPath, _currentRequestToken.Value) ?? Path.GetFullPath(projectPath),
+                maxFileBytes,
+                directoryIgnoreCaseProbe: null,
+                symlinkPolicy: symlinkPolicy);
+            var scan = dryRunIndexer.ScanFilesDetailed(cancellationToken: _currentRequestToken.Value);
+            if (memorySamples != null)
+                memorySamples.Add(CaptureMcpIndexMemorySample("scan", runStopwatch));
+            var dryRunFatalScanErrors = scan.Errors.Where(error => error.IsFatal).ToList();
+            var dryRunPayload = new JsonObject
+            {
+                ["path"] = projectPath,
+                ["dry_run"] = true,
+                ["would_rebuild"] = rebuild,
+                ["max_file_bytes"] = maxFileBytes,
+                ["index_options"] = optionsPayload,
+                ["unsupported_modes"] = unsupportedModesJson,
+                ["summary"] = new JsonObject
+                {
+                    ["files_scanned"] = scan.Files.Count,
+                    ["scan_errors"] = scan.Errors.Count,
+                    ["fatal_scan_errors"] = dryRunFatalScanErrors.Count,
+                    ["unknown_extension_file_count"] = scan.UnknownExtensionFiles.Count,
+                    ["would_mutate_database"] = false,
+                },
+                ["duration_ms"] = runStopwatch.ElapsedMilliseconds,
+                ["started_at"] = runStartedAtUtc.ToString("o", System.Globalization.CultureInfo.InvariantCulture),
+                ["completed_at"] = GetUtcNow().ToString("o", System.Globalization.CultureInfo.InvariantCulture),
+            };
+            if (memorySamples != null)
+            {
+                memorySamples.Add(CaptureMcpIndexMemorySample("finalize", runStopwatch));
+                dryRunPayload["memory_trace"] = memorySamples;
+            }
+            return CreateToolResult(id, "Index dry run complete.", dryRunPayload);
+        }
+
+        if (HasBlockingMcpIndexUnsupportedMode(unsupportedModes))
+        {
+            var unsupportedData = new JsonObject
+            {
+                ["unsupported_modes"] = unsupportedModesJson,
+                ["index_options"] = optionsPayload,
+                ["index_started"] = false,
+            };
+            return CreateToolErrorResponse(
+                id,
+                "MCP index does not support the requested scoped or watch indexing mode; no indexing started.",
+                category: McpErrorEnvelope.CategoryInvalidArgument,
+                suggestion: "Use dryRun:true to inspect the plan, remove unsupported scope/watch arguments, or run the equivalent cdidx index command in the CLI.",
+                retrySafe: false,
+                extraData: unsupportedData);
+        }
 
         if (!McpIndexRunLock.TryAcquire(_dbPath, out var indexLock, out var lockError))
             return CreateToolErrorResponse(id, lockError!);
@@ -4210,6 +5342,7 @@ public partial class McpServer
         var priorHotspotFamilyVersions = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyVersionMetaKey);
         var priorHotspotFamilyMarkerFingerprints = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyMarkerFingerprintMetaKey);
         var priorIndexedProjectRoot = db.GetMetaString(DbContext.IndexedProjectRootMetaKey);
+        var priorSymbolKindFilterSignature = db.GetMetaString(IndexCommandRunner.SymbolKindFilterMetaKey);
         var requestToken = _currentRequestToken.Value;
         requestToken.ThrowIfCancellationRequested();
         // Capture git HEAD so subsequent queries can detect a worktree branch / HEAD switch
@@ -4244,8 +5377,10 @@ public partial class McpServer
             projectPath,
             GitHelper.ResolveIgnoreCase(projectPath, requestToken),
             GitHelper.TryGetRepositoryRoot(projectPath, requestToken) ?? Path.GetFullPath(projectPath),
-            maxFileBytes);
-        using var postExtractionHooks = PostExtractionHookRunner.DiscoverDefault();
+            maxFileBytes,
+            directoryIgnoreCaseProbe: null,
+            symlinkPolicy: symlinkPolicy);
+        using var postExtractionHooks = PostExtractionHookRunner.DiscoverDefault(maxFileBytes);
         var currentHotspotFamilyMarkerFingerprints = GetHotspotFamilyMarkerFingerprints(indexer, requestToken);
         var currentCSharpSymbolNameContractVersion = DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var csharpSymbolNameContractMatchesCurrent = priorCSharpSymbolNameContractVersion == currentCSharpSymbolNameContractVersion;
@@ -4255,6 +5390,11 @@ public partial class McpServer
             priorHotspotFamilyVersions,
             priorHotspotFamilyMarkerFingerprints,
             currentHotspotFamilyMarkerFingerprints);
+        var symbolKindFilterMatchesPrior = string.Equals(
+            priorSymbolKindFilterSignature,
+            symbolKindFilter.Signature,
+            StringComparison.Ordinal);
+        var symbolKindFilterMetaMarkedIncomplete = symbolKindFilterMatchesPrior;
         var normalizedProjectPath = Path.GetFullPath(projectPath);
         var normalizedPriorIndexedProjectRoot = string.IsNullOrWhiteSpace(priorIndexedProjectRoot)
             ? null
@@ -4276,6 +5416,14 @@ public partial class McpServer
                 writer.SetMeta(DbContext.IndexedProjectRootMetaKey, normalizedProjectPath);
                 projectRootWritten = true;
             }
+        }
+
+        void MarkSymbolKindFilterMetaIncompleteOnce()
+        {
+            if (symbolKindFilterMetaMarkedIncomplete)
+                return;
+            writer.SetMeta(IndexCommandRunner.SymbolKindFilterMetaKey, null);
+            symbolKindFilterMetaMarkedIncomplete = true;
         }
 
         static long SumReadableFileBytes(IEnumerable<string> paths)
@@ -4316,6 +5464,8 @@ public partial class McpServer
 
         // Scan and index / スキャン・インデックス
         var scanResult = indexer.ScanFilesDetailed(cancellationToken: requestToken);
+        if (memorySamples != null)
+            memorySamples.Add(CaptureMcpIndexMemorySample("scan", runStopwatch));
         var files = scanResult.Files;
         EmitProgressNotification(progressToken, 0, files.Count, "Index scan complete; indexing files.");
         var csharpWorkspace = BuildMcpCSharpStaticInterfaceWorkspaceSymbols(writer, indexer, projectPath, files, requestToken);
@@ -4329,6 +5479,7 @@ public partial class McpServer
             .Select(BuildScanFailure)
             .ToList();
         var reusedHotspotFamilyLanguages = new HashSet<string>(StringComparer.Ordinal);
+        var symbolsDroppedByKindFilter = 0;
 
         foreach (var filePath in files)
         {
@@ -4343,11 +5494,20 @@ public partial class McpServer
                     record.Checksum,
                     size: record.Size,
                     language: record.Lang,
-                    allowReuse: record.Lang is not ("javascript" or "typescript")
+                    allowReuse: symbolKindFilterMatchesPrior
+                        && record.Lang is not ("javascript" or "typescript")
                         && (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
                         && (record.Lang != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
                         && (record.Lang != "sql" || sqlGraphContractMatchesCurrent)
                         && AllowReuseWithCurrentHotspotFamilyTrust(record.Lang, hotspotFamilyTrustMatchesCurrent));
+                if (existingId != null)
+                {
+                    if (writer.CountSymbolsForFile(existingId.Value) > maxSymbolsPerFile
+                        || writer.HasIssueForFile(existingId.Value, "symbol_count_exceeded"))
+                    {
+                        existingId = null;
+                    }
+                }
                 if (existingId != null)
                 {
                     skipped++;
@@ -4359,32 +5519,45 @@ public partial class McpServer
 
                 writer.MarkBatchInProgress();
                 fileBatchMarked = true;
+                MarkSymbolKindFilterMetaIncompleteOnce();
                 using var txn = writer.BeginTransaction();
                 var fileId = writer.UpsertFile(record);
                 var chunks = ChunkSplitter.Split(fileId, content);
-                writer.InsertChunks(chunks);
-                var symbols = SymbolExtractor.Extract(fileId, record.Lang, content, filePath, projectPath, requestToken);
+                var symbols = SymbolExtractor.Extract(fileId, record.Lang, content, filePath, projectPath, requestToken).ToList();
                 SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(filePath, record.Lang));
                 var fileContext = new FileContext(projectPath, record.Path, filePath, record.Lang);
                 postExtractionHooks.OnSymbolsExtracted(fileContext, symbols);
-                writer.InsertSymbols(symbols);
-                var references = ReferenceExtractor.Extract(
-                    fileId,
-                    record.Lang,
-                    content,
-                    symbols,
-                    record.Path,
-                    record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
-                    requestToken);
-                postExtractionHooks.OnReferencesExtracted(fileContext, references);
-                writer.InsertReferences(references);
-                // Keep MCP index parity with CLI index: persist file-level validation issues too.
-                // MCPインデックスもCLIインデックスと同等に、ファイル検証issueを保存する。
-                var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
-                writer.InsertIssues(fileId, issues);
+                symbolsDroppedByKindFilter += symbolKindFilter.Apply(symbols);
+                if (symbols.Count > maxSymbolsPerFile)
+                {
+                    var issue = BuildMcpSymbolCountExceededIssue(record.Path, symbols.Count, maxSymbolsPerFile);
+                    writer.InsertSymbols([]);
+                    writer.InsertReferences([]);
+                    writer.InsertIssues(fileId, [issue]);
+                }
+                else
+                {
+                    writer.InsertChunks(chunks);
+                    writer.InsertSymbols(symbols);
+                    var references = ReferenceExtractor.Extract(
+                        fileId,
+                        record.Lang,
+                        content,
+                        symbols,
+                        record.Path,
+                        record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
+                        requestToken);
+                    postExtractionHooks.OnReferencesExtracted(fileContext, references);
+                    writer.InsertReferences(references);
+                    // Keep MCP index parity with CLI index: persist file-level validation issues too.
+                    // MCPインデックスもCLIインデックスと同等に、ファイル検証issueを保存する。
+                    var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang);
+                    writer.InsertIssues(fileId, issues);
+                }
                 WriteProjectRootOnce();
                 writer.ClearBatchInProgress();
                 txn.Commit();
+                McpIndexFileCommittedForTesting?.Invoke(record.Path);
             }
             catch (FileIndexer.BinaryFileSkippedException)
             {
@@ -4522,6 +5695,7 @@ public partial class McpServer
             }
 
             writer.WriteCdidxWriterVersion(_version);
+            writer.SetMeta(IndexCommandRunner.SymbolKindFilterMetaKey, symbolKindFilter.Signature);
 
             // Successful no-op MCP full scans should repair explicit-DB roots only after
             // readiness is stamped, preserving the failure-path safety contract.
@@ -4592,12 +5766,17 @@ public partial class McpServer
         }
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
         EmitProgressNotification(progressToken, files.Count, files.Count, errors == 0 ? "Indexing complete." : "Indexing completed with errors.");
+        if (memorySamples != null)
+            memorySamples.Add(CaptureMcpIndexMemorySample("finalize", runStopwatch));
 
         var structured = new JsonObject
         {
             ["path"] = projectPath,
             ["rebuild"] = rebuild,
+            ["dry_run"] = false,
             ["max_file_bytes"] = maxFileBytes,
+            ["index_options"] = optionsPayload,
+            ["unsupported_modes"] = unsupportedModesJson,
             ["summary"] = new JsonObject
             {
                 ["files"] = totalFiles,
@@ -4609,8 +5788,18 @@ public partial class McpServer
                 ["purged"] = purged,
                 ["unknown_extension_file_count"] = scanResult.UnknownExtensionFiles.Count,
                 ["errors"] = errors,
-                ["failed_count"] = failures.Count
+                ["failed_count"] = failures.Count,
+                ["symbols_dropped_by_kind_filter"] = symbolsDroppedByKindFilter
             },
+            ["symbol_kind_filter"] = new JsonObject
+            {
+                ["include"] = ToJsonStringArray(symbolKindFilter.Include),
+                ["exclude"] = ToJsonStringArray(symbolKindFilter.Exclude),
+                ["active"] = symbolKindFilter.IsActive,
+            },
+            ["duration_ms"] = runStopwatch.ElapsedMilliseconds,
+            ["started_at"] = runStartedAtUtc.ToString("o", System.Globalization.CultureInfo.InvariantCulture),
+            ["completed_at"] = GetUtcNow().ToString("o", System.Globalization.CultureInfo.InvariantCulture),
             ["sql_graph_contract_ready"] = sqlGraphContractReadyAfter,
             ["csharp_symbol_name_ready"] = csharpSymbolNameReadyAfter,
             ["csharp_metadata_target_ready"] = csharpMetadataTargetReadyAfter,
@@ -4619,6 +5808,8 @@ public partial class McpServer
             ["fold_ready"] = foldReadyAfter,
             ["fold_ready_reason"] = foldReadyReason
         };
+        if (memorySamples != null)
+            structured["memory_trace"] = memorySamples;
         if (failures.Count > 0)
         {
             var failureArray = new JsonArray();
@@ -4857,7 +6048,7 @@ public partial class McpServer
         {
             DeferFrameLog(() =>
             {
-                WriteMcpLogLine(BuildToolErrorLog("backfill_fold", ex.Message));
+                WriteMcpLogLine(BuildToolErrorLog("backfill_fold", ex));
                 Database.DbDebug.DumpToStderr(ex);
             });
             var classification = McpErrorEnvelope.ClassifyException(ex);
@@ -4959,12 +6150,14 @@ public partial class McpServer
         if (toolInvocationContext != null && SourceCodeDetector.ContainsSourceCode(toolInvocationContext))
             return CreateToolErrorResponse(id, "Tool invocation context appears to contain source code. Please describe the invocation without including code.");
 
+        var samplingDecision = ResolveSuggestionSamplingDecision();
         var sampling = await TrySampleSuggestionMetadataAsync(
             category,
             language,
             RedactSuggestionSamplingInput(description),
             context == null ? null : RedactSuggestionSamplingInput(context),
-            toolInvocationContext == null ? null : RedactSuggestionSamplingInput(toolInvocationContext)).ConfigureAwait(false);
+            toolInvocationContext == null ? null : RedactSuggestionSamplingInput(toolInvocationContext),
+            samplingDecision).ConfigureAwait(false);
         sampling = RedactSuggestionSamplingResult(sampling);
 
         // 4. Compute dedup hash / 重複排除ハッシュを計算
@@ -5051,6 +6244,7 @@ public partial class McpServer
                 dupPayload["upstream_url"] = result.UpstreamUrl;
                 dupPayload["github_issue_url"] = result.UpstreamUrl;
             }
+            AddSuggestionSamplingDiagnostics(dupPayload, samplingDecision, sampling);
             return CreateToolResult(id, "Duplicate suggestion (already recorded).", dupPayload);
         }
 
@@ -5067,6 +6261,7 @@ public partial class McpServer
             ["lifecycle_status"] = JsonNamingPolicy.SnakeCaseLower.ConvertName(result.Status.ToString()),
             ["cdidx_dir"] = cdidxDir,
         };
+        AddSuggestionSamplingDiagnostics(payload, samplingDecision, sampling);
         if (result.SubmissionError != null)
             payload["github_submission_error"] = result.SubmissionError;
         if (result.UpstreamUrl != null)
@@ -5149,6 +6344,11 @@ public partial class McpServer
 
     private sealed record SuggestionSamplingResult(string? Title, string[]? Tags);
 
+    private readonly record struct SuggestionSamplingDecision(
+        bool ShouldRequestClient,
+        string Status,
+        string? Diagnostic);
+
     private static string RedactSuggestionSamplingInput(string value)
         => SuggestionStore.RedactSensitiveText(value, out _);
 
@@ -5181,9 +6381,10 @@ public partial class McpServer
         string? language,
         string description,
         string? context,
-        string? toolInvocationContext)
+        string? toolInvocationContext,
+        SuggestionSamplingDecision samplingDecision)
     {
-        if (!IsSamplingEnabled() || !HasClientCapability("sampling"))
+        if (!samplingDecision.ShouldRequestClient)
             return null;
 
         var prompt = BuildSuggestionSamplingPrompt(category, language, description, context, toolInvocationContext);
@@ -5383,12 +6584,62 @@ public partial class McpServer
                 && node is not null,
         };
 
-    private static bool IsSamplingEnabled()
+    private SuggestionSamplingDecision ResolveSuggestionSamplingDecision()
     {
         var raw = Environment.GetEnvironmentVariable(SamplingEnabledEnvironmentVariable);
-        return raw is null || !(raw.Equals("0", StringComparison.OrdinalIgnoreCase)
-            || raw.Equals("false", StringComparison.OrdinalIgnoreCase)
-            || raw.Equals("off", StringComparison.OrdinalIgnoreCase));
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return new SuggestionSamplingDecision(
+                false,
+                "disabled",
+                $"{SamplingEnabledEnvironmentVariable} is unset; suggestion metadata sampling requires explicit opt-in with true, 1, yes, or on.");
+        }
+
+        var value = raw.Trim();
+        if (IsSamplingOptInValue(value))
+        {
+            return HasClientCapability("sampling")
+                ? new SuggestionSamplingDecision(true, "enabled", null)
+                : new SuggestionSamplingDecision(
+                    false,
+                    "client_capability_missing",
+                    "Client did not advertise MCP sampling capability; suggestion metadata sampling skipped.");
+        }
+
+        if (IsSamplingOptOutValue(value))
+        {
+            return new SuggestionSamplingDecision(
+                false,
+                "disabled",
+                $"{SamplingEnabledEnvironmentVariable} is set to an opt-out value; suggestion metadata sampling disabled.");
+        }
+
+        return new SuggestionSamplingDecision(
+            false,
+            "disabled",
+            $"{SamplingEnabledEnvironmentVariable} contains an unrecognized value; suggestion metadata sampling disabled. Use true, 1, yes, or on to enable.");
+    }
+
+    private static bool IsSamplingOptInValue(string value)
+        => value.Equals("1", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("true", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("yes", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("on", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsSamplingOptOutValue(string value)
+        => value.Equals("0", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("false", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("no", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("off", StringComparison.OrdinalIgnoreCase);
+
+    private static void AddSuggestionSamplingDiagnostics(
+        JsonObject payload,
+        SuggestionSamplingDecision samplingDecision,
+        SuggestionSamplingResult? sampling)
+    {
+        payload["sampling_status"] = sampling != null ? "sampled" : samplingDecision.Status;
+        if (samplingDecision.Diagnostic != null)
+            payload["sampling_diagnostic"] = samplingDecision.Diagnostic;
     }
 
     private static string? ExtractSamplingText(JsonNode? result)
@@ -5439,7 +6690,7 @@ public partial class McpServer
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            error = $"Cannot write to .cdidx directory {cdidxDir}; check directory ownership, permissions, and read-only mounts. {ex.Message}";
+            error = $"Cannot write to .cdidx directory {cdidxDir}; check directory ownership, permissions, and read-only mounts.";
             return false;
         }
         finally

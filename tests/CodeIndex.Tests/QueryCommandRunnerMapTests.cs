@@ -106,6 +106,37 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunMap_FormatCompact_ActsLikeCompactJson_Issue3446()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_map_format_compact");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/App.cs",
+                "csharp",
+                "namespace Demo; public class App { public void Run() { } }\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunMap(
+                ["--db", dbPath, "--format", "compact"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(json.GetProperty("compact").GetBoolean());
+            Assert.Equal(QueryCommandRunner.DefaultCompactSectionLimit, json.GetProperty("compact_limit").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunMap_ParseInvalidMinEntrypointConfidence_TruncatesOversizedValue()
     {
         var value = new string('x', ConsoleUi.DefaultDiagnosticValueCharLimit + 1);

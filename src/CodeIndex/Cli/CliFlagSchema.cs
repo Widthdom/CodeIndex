@@ -128,7 +128,7 @@ internal static class CliFlagSchema
     private static readonly string[] SymbolSortCommands = ["symbols"];
     private static readonly string[] ByBucketCommands = ["unused"];
     private static readonly string[] UnusedFilterCommands = ["unused"];
-    private static readonly string[] AllResultCommands = ["goto"];
+    private static readonly string[] AllResultCommands = ["goto", "find"];
 
     private static readonly string[] SinceCommands = ["search", "definition", "symbols", "files", "suggestions"];
     private static readonly string[] ByteFormatCommands = ["files", "map"];
@@ -194,14 +194,14 @@ internal static class CliFlagSchema
     [
         "index", "backfill-fold", "optimize", "vacuum", "search", "definition", "goto", "references", "callers", "callees",
         "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status",
-        "validate", "deps", "impact", "unused", "hotspots", "suggestions", "languages", "db", "report",
+        "validate", "deps", "impact", "unused", "hotspots", "suggestions", "languages", "db", "report", "upgrade",
     ];
 
     private static readonly string[] CompactJsonCommands = ["map", "inspect", "outline", "unused"];
 
     private static readonly string[] FormatCommands =
     [
-        "search", "definition", "references", "callers", "callees", "find", "validate", "deps", "suggestions",
+        "search", "definition", "references", "callers", "callees", "symbols", "find", "map", "inspect", "validate", "deps", "suggestions",
     ];
 
     private static readonly string[] ProfileCommands =
@@ -228,7 +228,7 @@ internal static class CliFlagSchema
             new() { Name = "--json", Description = "JSON output; search/files/validate also accept --json=array for a single JSON array", Commands = Set(JsonCommands) },
             new() { Name = "--pretty", Description = "Pretty-print JSON output with indentation", Commands = Set(JsonCommands), TopLevel = true },
             new() { Name = "--compact", Description = "AI-oriented compact JSON with capped list sections and truncation metadata", Commands = Set(CompactJsonCommands) },
-            new() { Name = "--format", ValuePlaceholder = "<text|json|count|compact|csv|tsv|lsp|qf|sarif|markdown|issue-drafts>", Description = "Standard output format for token budgets, editor integrations, and CI; search recipes and suggestions export also accept issue-drafts", Commands = Set(FormatCommands) },
+            new() { Name = "--format", ValuePlaceholder = "<text|json|count|compact|csv|tsv|lsp|qf|sarif|markdown|issue-drafts>", Description = "Standard output format for token budgets, editor integrations, and CI; supported values vary by command, and search recipes/suggestions export also accept issue-drafts", Commands = Set(FormatCommands) },
             new() { Name = "--quiet", ShortName = "-q", Description = "Suppress informational stderr output; errors still print", Commands = Set(AllCommands.ToArray()), TopLevel = true },
             new() { Name = "--silent", Description = "Alias for --quiet", Commands = Set(AllCommands.ToArray()), TopLevel = true },
             new() { Name = "--color", ValuePlaceholder = "<auto|always|never>", Description = "Color output mode", Commands = Set(), TopLevel = true },
@@ -246,6 +246,7 @@ internal static class CliFlagSchema
             new() { Name = "--slow-query-ms", ValuePlaceholder = "<n>", Description = "Log profiled SQL statements at or above this millisecond threshold", Commands = Set(ProfileCommands) },
             new() { Name = "--trace", ValuePlaceholder = "<none|stderr|file>", Description = "Emit one structured JSON query trace line to stderr or a daily log file", Commands = Set(TraceCommands) },
             new() { Name = "--limit", ValuePlaceholder = "<n>", Description = "Max results", Commands = Set(LimitCapableCommands.Concat(new[] { "suggestions" }).ToArray()) },
+            new() { Name = "--max-results", ValuePlaceholder = "<n>", Description = "Search alias for --limit", Commands = Set("search") },
             new() { Name = "--top", ValuePlaceholder = "<n>", Description = "Max results", Commands = Set(LimitCapableCommands) },
             new() { Name = "--offset", ValuePlaceholder = "<n>", Description = "Suggestions: skip this many filtered rows before output", Commands = Set("suggestions") },
             new() { Name = "--lang", ValuePlaceholder = "<lang>", Description = "Filter by language", Commands = Set(LangCapableCommands) },
@@ -263,7 +264,7 @@ internal static class CliFlagSchema
             new() { Name = "--by-bucket", Description = "Unused: include per-bucket grouped result arrays in JSON output", Commands = Set(ByBucketCommands) },
             new() { Name = "--bucket", ValuePlaceholder = "<bucket>", Description = "Unused: return only one confidence bucket", Commands = Set(UnusedFilterCommands) },
             new() { Name = "--min-confidence", ValuePlaceholder = "<medium|low>", Description = "Unused: return symbols at or above this confidence", Commands = Set(UnusedFilterCommands) },
-            new() { Name = "--all", Description = "goto: return all matching LSP locations instead of requiring a single target", Commands = Set(AllResultCommands) },
+            new() { Name = "--all", Description = "goto: return all matching LSP locations; find: search all indexed files instead of requiring --path", Commands = Set(AllResultCommands) },
             new() { Name = "--rank-by", ValuePlaceholder = "<weighted|count|kind>", Description = "Rank callers/callees by weighted structural score, raw count, or kind bucket", Commands = Set(RankByCommands) },
             new() { Name = "--sort", ValuePlaceholder = "<hotspot|references|size|complexity|path>", Description = "Symbols: order audit output by a ranking signal", Commands = Set(SymbolSortCommands) },
             new() { Name = "--raw-kinds", Description = "Show raw reference kinds instead of logical graph kinds", Commands = Set(RawKindsCommands) },
@@ -277,11 +278,19 @@ internal static class CliFlagSchema
             new() { Name = "--summary-only", Description = "Map/Diff: return only aggregate summary fields", Commands = Set(SummaryOnlyCommands) },
             new() { Name = "--cycles", Description = "Deps: return dependency cycles instead of edge rows", Commands = Set(DependencyCycleCommands) },
             new() { Name = "--indexed-only", Description = "Languages: list only languages present in the current index", Commands = Set(LanguagesFilterCommands) },
-            new() { Name = "--capability", ValuePlaceholder = "<graph|symbols|references>", Description = "Languages: filter by language capability", Commands = Set(LanguagesFilterCommands) },
+            new() { Name = "--capability", ValuePlaceholder = "<graph|references|symbols|missing-graph|missing-references|missing-symbols|search-only>", Description = "Languages: filter by language capability or capability gap", Commands = Set(LanguagesFilterCommands) },
             new() { Name = "--query", ValuePlaceholder = "<query>", Description = "Literal query", Commands = Set(QueryCommands) },
-            new() { Name = "--recipe", ValuePlaceholder = "<name>", Description = "Search: run a built-in audit recipe query set", Commands = Set("search") },
+            new() { Name = "--recipe", ValuePlaceholder = "<name|name/query>", Description = "Search: run a built-in audit recipe query set, optionally selecting one child query", Commands = Set("search") },
+            new() { Name = "--include-query", ValuePlaceholder = "<name>", Description = "Search recipe: include one child query; repeat or comma-separate values", Commands = Set("search") },
+            new() { Name = "--exclude-query", ValuePlaceholder = "<name>", Description = "Search recipe: exclude one child query; repeat or comma-separate values", Commands = Set("search") },
             new() { Name = "--list-recipes", Description = "Search: list built-in audit recipes", Commands = Set("search") },
-            new() { Name = "--open-issues", ValuePlaceholder = "<path>", Description = "Preflight issue drafts against open issue JSON", Commands = Set("search", "suggestions") },
+            new() { Name = "--audit-scope", ValuePlaceholder = "<source|all>", Description = "Search recipes: use production source defaults or include all indexed paths", Commands = Set("search") },
+            new() { Name = "--named-query", ValuePlaceholder = "<name>=<query>", Description = "Search: add one named ad hoc batch query", Commands = Set("search") },
+            new() { Name = "--open-issues", ValuePlaceholder = "<path|github|github:owner/name>", Description = "Preflight issue drafts against open issue JSON or GitHub open issues", Commands = Set("search", "suggestions") },
+            new() { Name = "--repo", ValuePlaceholder = "<owner/name>", Description = "Issue-drafts: GitHub repository for --open-issues github", Commands = Set("search", "suggestions") },
+            new() { Name = "--issue-title", ValuePlaceholder = "<title>", Description = "Search issue-drafts: override the title for an ad hoc search draft", Commands = Set("search") },
+            new() { Name = "--issue-label", ValuePlaceholder = "<label>", Description = "Search issue-drafts: add a label hint; repeat or comma-separate values", Commands = Set("search") },
+            new() { Name = "--cursor", ValuePlaceholder = "<cursor>", Description = "Search recipe: pagination cursor returned as next_cursor", Commands = Set("search") },
             new() { Name = "--status", ValuePlaceholder = "<status>", Description = "Suggestions: filter by suggestion status", Commands = Set("suggestions") },
             new() { Name = "--category", ValuePlaceholder = "<category>", Description = "Suggestions: filter by category", Commands = Set("suggestions") },
             new() { Name = "--agent", ValuePlaceholder = "<agent>", Description = "Suggestions: filter by agent", Commands = Set("suggestions") },
@@ -324,7 +333,7 @@ internal static class CliFlagSchema
             new() { Name = "--depth", ValuePlaceholder = "<n>", Description = "Map: cap module depth; impact: deprecated alias for --max-hops", Commands = Set("impact", "map") },
             new() { Name = "--with-paths", Description = "Impact: include shortest call chains per caller", Commands = Set("impact") },
             new() { Name = "--reverse", Description = "Reverse direction (show dependents)", Commands = Set("deps") },
-            new() { Name = "--group-by", ValuePlaceholder = "<symbol|file|statement>", Description = "Hotspots: choose grouping unit", Commands = Set("hotspots") },
+            new() { Name = "--group-by", ValuePlaceholder = "<file|symbol|statement>", Description = "Search: group --count rows by file or symbol; hotspots: choose grouping unit", Commands = Set("hotspots", "search") },
             new() { Name = "--group-by-name", Description = "Hotspots: collapse same-name rows; JSON paths capped per group", Commands = Set("hotspots") },
             new() { Name = "--check", Description = "Verify status freshness/readiness", Commands = Set("status") },
             new() { Name = "--config", Description = "Print effective configuration with source attribution", Commands = Set("status") },
@@ -333,8 +342,9 @@ internal static class CliFlagSchema
             new() { Name = "--log-path", Description = "Print the active persistent log directory", Commands = Set("status") },
             new() { Name = "--check-updates", Description = "Check whether a newer cdidx release is available", Commands = Set("status", "upgrade") },
             new() { Name = "--check-only", Description = "Upgrade: only report whether an upgrade is available", Commands = Set("upgrade") },
-            new() { Name = "--channel", ValuePlaceholder = "<stable|beta>", Description = "Upgrade channel selector (reserved)", Commands = Set("upgrade") },
-            new() { Name = "--prerelease", Description = "Upgrade: include prerelease versions (reserved)", Commands = Set("upgrade") },
+            new() { Name = "--channel", ValuePlaceholder = "<stable|latest|prerelease>", Description = "Upgrade: select stable/latest or prerelease releases", Commands = Set("upgrade") },
+            new() { Name = "--prerelease", Description = "Upgrade: select the newest prerelease", Commands = Set("upgrade") },
+            new() { Name = "--version", ValuePlaceholder = "<tag>", Description = "Upgrade: install a specific release tag", Commands = Set("upgrade") },
             new() { Name = "--integrity-check", Description = "Run PRAGMA integrity_check on the database", Commands = Set("db") },
             new() { Name = "--rebuild", Description = "Delete existing DB and rebuild from scratch", Commands = Set("index") },
             new() { Name = "--optimize", Description = "Optimize the existing FTS5 table without scanning files", Commands = Set("index") },

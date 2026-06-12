@@ -91,10 +91,26 @@ internal static class WorkspaceCommandRunner
         if (member is { Exists: false })
             return CommandErrorWriter.WriteJsonOrHuman(json, jsonOptions, "workspace member is missing on disk.", CommandExitCodes.UsageError, "create the missing member directory or run `cdidx workspace list` and choose an existing member.");
 
-        var root = member?.Path ?? Environment.CurrentDirectory;
+        var root = Environment.CurrentDirectory;
+        if (member != null)
+        {
+            var manifestRoot = manifest ?? throw new InvalidOperationException("workspace manifest was not found.");
+            root = string.Equals(manifestRoot.IndexStrategy, "single", StringComparison.OrdinalIgnoreCase)
+                ? manifestRoot.Root
+                : member.Path;
+        }
+
         var dbPath = member?.DbPath ?? DbPathResolver.ResolveForIndex(root, explicitDbPath: null);
         var state = new ActiveWorkspaceState(name, root, dbPath);
-        ActiveWorkspace.Save(state);
+        try
+        {
+            ActiveWorkspace.Save(state);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return CommandErrorWriter.WriteJsonOrHuman(json, jsonOptions, ex.Message, CommandExitCodes.UsageError, "set XDG_CONFIG_HOME to an absolute writable directory or choose a workspace whose database is inside its root.");
+        }
+
         if (json)
             Console.WriteLine(JsonSerializer.Serialize(new ActiveWorkspaceJsonResult(state, ActiveWorkspace.StatePath), jsonOptions));
         else
