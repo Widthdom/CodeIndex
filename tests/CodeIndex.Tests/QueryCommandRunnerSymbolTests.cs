@@ -9,6 +9,57 @@ namespace CodeIndex.Tests;
 public partial class QueryCommandRunnerTests
 {
     [Fact]
+    public void RunSymbols_FormatCount_ActsLikeCountJson_Issue3446()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_format_count");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/App.cs",
+                "csharp",
+                """
+                namespace Demo;
+
+                public class App
+                {
+                    public void Run() { }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["App", "--db", dbPath, "--format", "count"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(json.GetProperty("count").GetInt32() > 0);
+            Assert.Equal(1, json.GetProperty("files").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbols_FormatCompact_ReturnsTargetedHint_Issue3446()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+            ["--format", "compact"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("--format compact is not supported by symbols.", stderr);
+        Assert.Contains("Usage: cdidx symbols", stderr);
+        Assert.Contains("--format json", stderr);
+    }
+
+    [Fact]
     public void RunDefinition_JsonBodyIncludesTruncationMetadata_Issue3131()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_definition_body_truncated_issue3131");

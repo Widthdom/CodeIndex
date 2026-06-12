@@ -127,7 +127,7 @@ internal static class CliFlagSchema
     private static readonly string[] RankByCommands = ["callers", "callees"];
     private static readonly string[] ByBucketCommands = ["unused"];
     private static readonly string[] UnusedFilterCommands = ["unused"];
-    private static readonly string[] AllResultCommands = ["goto"];
+    private static readonly string[] AllResultCommands = ["goto", "find"];
 
     private static readonly string[] SinceCommands = ["search", "definition", "symbols", "files", "suggestions"];
     private static readonly string[] ByteFormatCommands = ["files", "map"];
@@ -199,7 +199,7 @@ internal static class CliFlagSchema
 
     private static readonly string[] FormatCommands =
     [
-        "search", "definition", "references", "callers", "callees", "find", "validate", "deps", "suggestions",
+        "search", "definition", "references", "callers", "callees", "symbols", "find", "map", "inspect", "validate", "deps", "suggestions",
     ];
 
     private static readonly string[] ProfileCommands =
@@ -226,7 +226,7 @@ internal static class CliFlagSchema
             new() { Name = "--json", Description = "JSON output; search/files/validate also accept --json=array for a single JSON array", Commands = Set(JsonCommands) },
             new() { Name = "--pretty", Description = "Pretty-print JSON output with indentation", Commands = Set(JsonCommands), TopLevel = true },
             new() { Name = "--compact", Description = "AI-oriented compact JSON with capped list sections and truncation metadata", Commands = Set(CompactJsonCommands) },
-            new() { Name = "--format", ValuePlaceholder = "<text|json|count|compact|csv|tsv|lsp|qf|sarif|markdown|issue-drafts>", Description = "Standard output format for token budgets, editor integrations, and CI; search recipes and suggestions export also accept issue-drafts", Commands = Set(FormatCommands) },
+            new() { Name = "--format", ValuePlaceholder = "<text|json|count|compact|csv|tsv|lsp|qf|sarif|markdown|issue-drafts>", Description = "Standard output format for token budgets, editor integrations, and CI; supported values vary by command, and search recipes/suggestions export also accept issue-drafts", Commands = Set(FormatCommands) },
             new() { Name = "--quiet", ShortName = "-q", Description = "Suppress informational stderr output; errors still print", Commands = Set(AllCommands.ToArray()), TopLevel = true },
             new() { Name = "--silent", Description = "Alias for --quiet", Commands = Set(AllCommands.ToArray()), TopLevel = true },
             new() { Name = "--color", ValuePlaceholder = "<auto|always|never>", Description = "Color output mode", Commands = Set(), TopLevel = true },
@@ -261,7 +261,7 @@ internal static class CliFlagSchema
             new() { Name = "--by-bucket", Description = "Unused: include per-bucket grouped result arrays in JSON output", Commands = Set(ByBucketCommands) },
             new() { Name = "--bucket", ValuePlaceholder = "<bucket>", Description = "Unused: return only one confidence bucket", Commands = Set(UnusedFilterCommands) },
             new() { Name = "--min-confidence", ValuePlaceholder = "<medium|low>", Description = "Unused: return symbols at or above this confidence", Commands = Set(UnusedFilterCommands) },
-            new() { Name = "--all", Description = "goto: return all matching LSP locations instead of requiring a single target", Commands = Set(AllResultCommands) },
+            new() { Name = "--all", Description = "goto: return all matching LSP locations; find: search all indexed files instead of requiring --path", Commands = Set(AllResultCommands) },
             new() { Name = "--rank-by", ValuePlaceholder = "<weighted|count|kind>", Description = "Rank callers/callees by weighted structural score, raw count, or kind bucket", Commands = Set(RankByCommands) },
             new() { Name = "--raw-kinds", Description = "Show raw reference kinds instead of logical graph kinds", Commands = Set(RawKindsCommands) },
             new() { Name = "--count", Description = "Count only", Commands = Set(CountCommands) },

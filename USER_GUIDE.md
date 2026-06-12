@@ -319,6 +319,14 @@ source line hits the body byte cap, continuation still advances to the following
 source line because body paging is line-based. `inspect --json` also includes
 `body_mode` metadata so clients can see whether body content was requested,
 whether it is present, and which follow-up flags to use.
+Count-only JSON (`--count --json` or `--format count` where supported) is a
+single object with `count`, applied `query_context`, freshness metadata
+(`indexed_file_count`, `indexed_at`, `freshness_available`), and trust flags
+`degraded` / `authoritative_count`. Commands that count matched files also
+include `files`; the older `file_count` field remains as a compatibility alias
+with the same value and is not scheduled for removal before the next major
+release. New consumers should read `files` and treat `authoritative_count=false`
+as a signal to inspect the accompanying readiness or graph/exact trust fields.
 
 ```bash
 cdidx search authenticate --json          # ndjson stream, one result per line
@@ -328,11 +336,6 @@ cdidx map --compact                       # capped JSON with truncation metadata
 cdidx inspect Compute --body-only         # definitions with body_content only
 cdidx inspect Compute --body --body-start 40 --body-lines 40
 ```
-
-For `cdidx find --count --json`, `files` is the canonical matched-file count.
-The older `file_count` field remains as a deprecated compatibility alias with
-the same value and is not scheduled for removal before the next major release;
-new consumers should read `files`.
 
 ## Editor and index portability
 
@@ -1086,9 +1089,11 @@ cdidx excerpt src/CodeIndex/Cli/GitHelper.cs --start 19 --end 28 --before 3 --af
 ```bash
 cdidx find "graph table" --path src/CodeIndex/Cli/QueryCommandRunner.cs
 cdidx find "Graph Table" --path src/CodeIndex/Cli/QueryCommandRunner.cs --exact --before 1 --after 1 --json
+cdidx find "guard" --all --count --json
 ```
 
 `find` fills the gap between repo-wide `search` and line-number-based `excerpt`: when you already know the target file, it returns matching line numbers, columns, and short surrounding context from the indexed file without falling back to raw-text tools. The query text is capped at 1,000 characters, matching `search`.
+Use `--path <glob>` for a bounded file set, or pass `--all` to opt in to a repo-wide indexed-file scan with safety caps. `--all` and `--path` are mutually exclusive. Count JSON includes scan summary fields such as `candidate_files`, `files_scanned`, `lines_scanned`, `scan_truncated`, `scan_cap_reached`, `candidate_file_limit`, and `line_scan_limit`; human count output writes the scan summary to stderr.
 
 ### List files
 
@@ -2667,6 +2672,14 @@ shorthand です。definition body が返却 slice より長い場合は
 `--body-lines` で page size を指定できます。`inspect --json` には `body_mode`
 metadata も含まれるため、body content が要求済みか、存在するか、次に使う flag が何かを
 client 側で判断できます。
+count-only JSON（対応 command の `--count --json` または `--format count`）は、
+`count`、適用済み `query_context`、freshness metadata（`indexed_file_count`、
+`indexed_at`、`freshness_available`）、trust flag の `degraded` /
+`authoritative_count` を持つ単一 object です。matched file を数える command は
+`files` も含みます。古い `file_count` field は同じ値の互換 alias として残っており、
+少なくとも次の major release までは削除予定はありません。新しい consumer は
+`files` を読み、`authoritative_count=false` の場合は同じ payload の readiness または
+graph/exact trust field を確認してください。
 
 ```bash
 cdidx search authenticate --json          # ndjson stream、1 行 1 result
@@ -3442,9 +3455,11 @@ cdidx excerpt src/CodeIndex/Cli/GitHelper.cs --start 19 --end 28 --before 3 --af
 ```bash
 cdidx find "graph table" --path src/CodeIndex/Cli/QueryCommandRunner.cs
 cdidx find "Graph Table" --path src/CodeIndex/Cli/QueryCommandRunner.cs --exact --before 1 --after 1 --json
+cdidx find "guard" --all --count --json
 ```
 
 `find` は、リポジトリ全体を対象にする `search` と、行番号が必要な `excerpt` の間を埋めるコマンドです。対象ファイルが既に分かっているときに、raw text ツールへ戻らずに、インデックス済みファイルから一致行番号・列番号・短い前後文脈を返します。query text は `search` と同じく 1,000 文字までです。
+対象を絞る場合は `--path <glob>` を使い、repo-wide の index 済みファイル走査が必要な場合だけ `--all` を明示します。`--all` と `--path` は併用できません。count JSON には `candidate_files`、`files_scanned`、`lines_scanned`、`scan_truncated`、`scan_cap_reached`、`candidate_file_limit`、`line_scan_limit` などの scan summary field が入り、human count output では同じ scan summary が stderr に出ます。
 
 ### ファイル一覧
 

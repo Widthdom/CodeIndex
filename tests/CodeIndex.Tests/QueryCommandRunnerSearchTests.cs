@@ -3716,7 +3716,195 @@ jobs:
             _jsonOptions));
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
-        Assert.Contains("requires at least one --path", stderr);
+        Assert.Contains("requires at least one --path <glob> or explicit --all", stderr);
+    }
+
+    [Fact]
+    public void RunFind_AllAndPathScopeFailsClosed_Issue3560()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+            ["guard", "--path", "src/*.cs", "--all"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("find accepts either --path <glob> or --all, not both", stderr);
+    }
+
+    [Fact]
+    public void RunFind_AllScopeCountJsonIncludesScanSummary_Issue3560()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_find_all_count_json_3560");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.txt",
+                "text",
+                "alpha\nbeta\n");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "docs/readme.txt",
+                "text",
+                "gamma\nalpha\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["alpha", "--db", dbPath, "--all", "--json", "--count"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(2, json.GetProperty("count").GetInt32());
+            Assert.Equal(2, json.GetProperty("files").GetInt32());
+            Assert.Equal(2, json.GetProperty("file_count").GetInt32());
+            Assert.Equal(2, json.GetProperty("candidate_files").GetInt32());
+            Assert.Equal(2, json.GetProperty("files_scanned").GetInt32());
+            Assert.Equal(4, json.GetProperty("lines_scanned").GetInt32());
+            Assert.False(json.GetProperty("scan_truncated").GetBoolean());
+            Assert.False(json.GetProperty("scan_cap_reached").GetBoolean());
+            Assert.False(json.GetProperty("scan_timed_out").GetBoolean());
+            Assert.Equal(QueryCommandRunner.FindAllCandidateFileLimit, json.GetProperty("candidate_file_limit").GetInt32());
+            Assert.Equal(QueryCommandRunner.FindAllLineScanLimit, json.GetProperty("line_scan_limit").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunFind_AllScopeHumanCountIncludesScanSummary_Issue3560()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_find_all_count_human_3560");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.txt",
+                "text",
+                "alpha\nbeta\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["alpha", "--db", dbPath, "--all", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("1", stdout.Trim());
+            Assert.Contains("scanned 1/1 candidate files, 2 lines", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunFind_AllScopeRegexCountJsonIncludesScanSummary_Issue3560()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_find_all_regex_count_3560");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.txt",
+                "text",
+                "alpha\nbeta\n");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "docs/readme.txt",
+                "text",
+                "gamma\nalpha\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["alpha|gamma", "--db", dbPath, "--all", "--regex", "--json", "--count"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(3, json.GetProperty("count").GetInt32());
+            Assert.Equal(2, json.GetProperty("files").GetInt32());
+            Assert.Equal(2, json.GetProperty("candidate_files").GetInt32());
+            Assert.Equal(2, json.GetProperty("files_scanned").GetInt32());
+            Assert.Equal(4, json.GetProperty("lines_scanned").GetInt32());
+            Assert.False(json.GetProperty("scan_truncated").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void CountFindInFiles_LineCapReportsTruncation_Issue3560()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_find_line_cap_3560");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.txt",
+                "text",
+                "alpha\nalpha\n");
+
+            using var db = new DbContext(dbPath);
+            var reader = new DbReader(db.Connection);
+            var counts = reader.CountFindInFiles("alpha", maxLinesScanned: 1);
+
+            Assert.Equal(1, counts.Count);
+            Assert.Equal(1, counts.FileCount);
+            Assert.Equal(1, counts.Scan.LinesScanned);
+            Assert.True(counts.Scan.Truncated);
+            Assert.True(counts.Scan.CapReached);
+            Assert.False(counts.Scan.TimedOut);
+            Assert.Equal("line_scan_limit", counts.Scan.TruncationReason);
+            Assert.Equal(1, counts.Scan.LineLimit);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunFind_AllScopeCountJsonLineCapIsNonAuthoritative_Issue3566()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_find_all_line_cap_authority_3566");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var content = string.Concat(Enumerable.Repeat("alpha\n", QueryCommandRunner.FindAllLineScanLimit + 1));
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/large.txt", "text", content);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["alpha", "--db", dbPath, "--all", "--json", "--count"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(QueryCommandRunner.FindAllLineScanLimit, json.GetProperty("count").GetInt32());
+            Assert.True(json.GetProperty("scan_truncated").GetBoolean());
+            Assert.True(json.GetProperty("scan_cap_reached").GetBoolean());
+            Assert.Equal("line_scan_limit", json.GetProperty("scan_truncation_reason").GetString());
+            Assert.True(json.GetProperty("degraded").GetBoolean());
+            Assert.False(json.GetProperty("authoritative_count").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
     }
 
     [Fact]
@@ -3851,7 +4039,7 @@ jobs:
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
+            Assert.Contains("scanned 1/1 candidate files, 1 line", stderr);
             Assert.Equal("1", stdout.Trim());
         }
         finally
@@ -3878,7 +4066,7 @@ jobs:
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
+            Assert.Contains("scanned 1/1 candidate files, 1 line", stderr);
             Assert.Equal("1", stdout.Trim());
         }
         finally

@@ -185,6 +185,42 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunInspect_FormatCompact_ActsLikeCompactJson_Issue3446()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_format_compact");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Target.cs",
+                "csharp",
+                """
+                public class Target
+                {
+                    public void Compute() { }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["Target", "--db", dbPath, "--format", "compact"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(json.GetProperty("compact").GetBoolean());
+            Assert.Equal(QueryCommandRunner.DefaultCompactSectionLimit, json.GetProperty("compact_limit").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunInspect_FieldsJson_EmitsOnlySelectedTopLevelGroups_Issue3056()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_fields_json");

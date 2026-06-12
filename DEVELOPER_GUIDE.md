@@ -955,10 +955,12 @@ For the AI agent search-rule template, see [AI Integration](USER_GUIDE.md#ai-int
 |---|---|
 | Human-readable default | Query commands (`search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `excerpt`, `map`, `inspect`, `suggestions`) default to **human-readable output**. |
 | `--json` | Emits JSON lines output, one JSON object per line, designed for easy parsing by AI agents. |
+| `--count --json` envelope | Count-only JSON for `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, and `impact` is a single automation-oriented object. It always includes `count`, applied `query_context`, freshness metadata (`indexed_file_count`, `indexed_at`, `freshness_available`), and trust flags `degraded` / `authoritative_count`; commands with matched-file totals also include `files` and compatibility alias `file_count`. `authoritative_count=false` means a readiness or graph/exact trust signal made the count non-authoritative, while the freshness fields describe the indexed snapshot used for the count. |
 | `search --json` sentinel | Appends a final `{"done":true,"count":N,"interrupted":false}` sentinel after result rows, including zero-result responses, so stream consumers can distinguish a clean end from a truncated/interrupted stream. |
 | `--json-envelope` commands | Applies to `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `excerpt`, `map`, `inspect`, `outline`, `status`, `validate`, `languages`, `impact`, `deps`, `unused`, and `hotspots`. |
 | `--json-envelope` shape | Wraps the per-line `--json` stream into a single `{"metadata": {...}, "results": [...]}` document. `metadata` carries `api_version`, `command`, `cdidx_version`, `elapsed_ms`, `db_path`, `result_count`, `exit_code`, and, when applicable, `query_normalized` and `indexed_at_head_sha`. |
 | Envelope migration | `--json-envelope` implies `--json`, so callers do not need to pass both. The default output remains the legacy NDJSON / array form for one release; the envelope will become the default in the next major release, when the flat form becomes opt-in via `--json-flat`. |
+| `find --all` scan summary | `find` requires either repeatable `--path <glob>` filters or explicit `--all`. `--all` scans indexed files repo-wide with safety caps and cannot be combined with `--path`. JSON count output includes `candidate_files`, `files_scanned`, `lines_scanned`, `scan_truncated`, `scan_cap_reached`, optional `scan_truncation_reason`, and the active `candidate_file_limit` / `line_scan_limit`; human count output writes the same scan summary to stderr. |
 
 #### JSON output API version contract
 
@@ -3095,10 +3097,12 @@ AI エージェント向け検索ルールのテンプレートについては�
 |---|---|
 | human-readable default | query command（`search`、`definition`、`references`、`callers`、`callees`、`symbols`、`files`、`excerpt`、`map`、`inspect`、`suggestions`）は既定で**人間向け出力**です。 |
 | `--json` | JSON lines output（1 行 1 JSON object）に切り替えます。AI agent が容易に parse できるよう設計されています。 |
+| `--count --json` envelope | `search`、`definition`、`references`、`callers`、`callees`、`symbols`、`files`、`find`、`impact` の count-only JSON は単一の自動化向け object です。常に `count`、適用済み `query_context`、freshness metadata（`indexed_file_count`、`indexed_at`、`freshness_available`）、trust flag の `degraded` / `authoritative_count` を含みます。matched-file total を持つ command は `files` と互換 alias の `file_count` も含みます。`authoritative_count=false` は readiness または graph/exact trust signal により count が authoritative ではないことを示し、freshness field は count に使った index snapshot を説明します。 |
 | `search --json` sentinel | result row の後に、0 件応答も含めて最後の `{"done":true,"count":N,"interrupted":false}` sentinel を追加します。stream consumer は clean end と truncated / interrupted stream を区別できます。 |
 | `--json-envelope` 対象 command | `search`、`definition`、`references`、`callers`、`callees`、`symbols`、`files`、`find`、`excerpt`、`map`、`inspect`、`outline`、`status`、`validate`、`languages`、`impact`、`deps`、`unused`、`hotspots`。 |
 | `--json-envelope` shape | per-line `--json` stream を単一の `{"metadata": {...}, "results": [...]}` document に包みます。`metadata` は `api_version`、`command`、`cdidx_version`、`elapsed_ms`、`db_path`、`result_count`、`exit_code`、該当時は `query_normalized` と `indexed_at_head_sha` を持ちます。 |
 | envelope migration | `--json-envelope` は `--json` を imply するため、caller は両方を指定する必要がありません。既定 output は 1 release の間 legacy NDJSON / array form のままです。次の major release では envelope が既定になり、flat form は `--json-flat` による opt-in になります。 |
+| `find --all` scan summary | `find` は repeatable な `--path <glob>` か明示的な `--all` のどちらかを要求します。`--all` は safety cap 付きで index 済みファイルを repo-wide に走査し、`--path` とは併用できません。JSON count output は `candidate_files`、`files_scanned`、`lines_scanned`、`scan_truncated`、`scan_cap_reached`、任意の `scan_truncation_reason`、有効な `candidate_file_limit` / `line_scan_limit` を含みます。human count output は同じ scan summary を stderr に出します。 |
 
 #### JSON 出力 API バージョン契約
 
