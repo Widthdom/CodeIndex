@@ -254,6 +254,7 @@ public static class QueryCommandRunner
         "--silent",
         "--by-bucket",
         "--all",
+        "--summary-only",
         "--cycles",
         "--group-by-name",
         "--with-paths",
@@ -3218,6 +3219,12 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteUnexpectedPositionals("map", options))
             return CommandExitCodes.UsageError;
+        if (options.MapSummaryOnly && options.MapSections != null)
+            return CommandErrorWriter.Write(
+                "--summary-only cannot be combined with --sections.",
+                CommandExitCodes.UsageError,
+                "choose --summary-only for aggregate fields only, or --sections <tree,languages,hotspots,metrics> for selected detail sections.",
+                ConsoleUi.GetUsageLine("map"));
 
         return WithDb(options, jsonOptions, reader =>
         {
@@ -3297,7 +3304,7 @@ public static class QueryCommandRunner
     }
 
     private static bool MapSectionEnabled(QueryCommandOptions options, string section)
-        => options.MapSections == null || options.MapSections.Contains(section, StringComparer.Ordinal);
+        => !options.MapSummaryOnly && (options.MapSections == null || options.MapSections.Contains(section, StringComparer.Ordinal));
 
     private static void ApplyRepoMapDepth(RepoMapResult map, int depth)
     {
@@ -3312,6 +3319,14 @@ public static class QueryCommandRunner
     private static JsonObject BuildRepoMapJsonPayload(RepoMapResult map, QueryCommandOptions options, JsonSerializerOptions jsonOptions, JsonObject? compactTruncation = null)
     {
         var payload = JsonSerializer.SerializeToNode(map, CliJsonSerializerContextFactory.Create(jsonOptions).RepoMapResult)!.AsObject();
+        if (options.MapSummaryOnly)
+        {
+            KeepRepoMapJsonProperties(payload, RepoMapSummaryJsonProperties);
+            payload["summary_only"] = true;
+            payload["sections"] = new JsonArray();
+            return payload;
+        }
+
         if (options.MapSections == null)
         {
             if (options.ContextAfterExplicit)
@@ -3321,24 +3336,7 @@ public static class QueryCommandRunner
             return payload;
         }
 
-        var keep = new HashSet<string>(StringComparer.Ordinal)
-        {
-            "api_version",
-            "fileCount",
-            "totalLines",
-            "totalSymbols",
-            "totalReferences",
-            "indexedAt",
-            "latestModified",
-            "workspaceIndexedAt",
-            "workspaceLatestModified",
-            "projectRoot",
-            "gitHead",
-            "gitIsDirty",
-            "indexed_head_commit",
-            "worktree_head_changed",
-            "graphTableAvailable",
-        };
+        var keep = new HashSet<string>(RepoMapSummaryJsonProperties, StringComparer.Ordinal);
         if (MapSectionEnabled(options, "languages"))
             keep.Add("languages");
         if (MapSectionEnabled(options, "tree"))
@@ -3353,14 +3351,38 @@ public static class QueryCommandRunner
         if (MapSectionEnabled(options, "metrics"))
             keep.Add("largestFiles");
 
-        foreach (var propertyName in payload.Select(property => property.Key).Where(key => !keep.Contains(key)).ToList())
-            payload.Remove(propertyName);
+        KeepRepoMapJsonProperties(payload, keep);
         payload["sections"] = new JsonArray(options.MapSections.Select(section => JsonValue.Create(section)).ToArray<JsonNode?>());
         if (options.ContextAfterExplicit)
             payload["depth"] = options.ContextAfter;
         if (options.Compact && compactTruncation != null)
             AddCompactJsonFields(payload, GetCompactSectionLimit(options), compactTruncation);
         return payload;
+    }
+
+    private static readonly HashSet<string> RepoMapSummaryJsonProperties = new(StringComparer.Ordinal)
+    {
+        "api_version",
+        "file_count",
+        "total_lines",
+        "total_symbols",
+        "total_references",
+        "indexed_at",
+        "latest_modified",
+        "workspace_indexed_at",
+        "workspace_latest_modified",
+        "project_root",
+        "git_head",
+        "git_is_dirty",
+        "indexed_head_commit",
+        "worktree_head_changed",
+        "graph_table_available",
+    };
+
+    private static void KeepRepoMapJsonProperties(JsonObject payload, IReadOnlySet<string> keep)
+    {
+        foreach (var propertyName in payload.Select(property => property.Key).Where(key => !keep.Contains(key)).ToList())
+            payload.Remove(propertyName);
     }
 
     private static int GetCompactSectionLimit(QueryCommandOptions options)
@@ -6426,6 +6448,7 @@ public static class QueryCommandRunner
         var extraNames = new List<string>();
         bool impactDeprecatedDepthUsed = false;
         List<string>? mapSections = null;
+        bool mapSummaryOnly = false;
         bool dependencyCycles = false;
         string? recipeName = null;
         bool listRecipes = false;
@@ -6829,6 +6852,9 @@ public static class QueryCommandRunner
                     }
                     else
                         AddParseError(sectionsError!);
+                    break;
+                case "--summary-only":
+                    mapSummaryOnly = true;
                     break;
                 case "--fields":
                     if (TryReadStringOptionValue(args, ref i, "--fields", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var fieldsValue, out var fieldsError))
@@ -7382,6 +7408,7 @@ public static class QueryCommandRunner
             RankMode = rankMode,
             ExtraNames = extraNames,
             MapSections = mapSections,
+            MapSummaryOnly = mapSummaryOnly,
             DependencyCycles = dependencyCycles,
             RecipeName = recipeName,
             ListRecipes = listRecipes,
@@ -10527,6 +10554,7 @@ public sealed class QueryCommandOptions
     public ReferenceRankMode RankMode { get; init; } = ReferenceRankMode.Weighted;
     public List<string> ExtraNames { get; init; } = [];
     public List<string>? MapSections { get; init; }
+    public bool MapSummaryOnly { get; init; }
     public bool DependencyCycles { get; init; }
     public string? RecipeName { get; init; }
     public bool ListRecipes { get; init; }

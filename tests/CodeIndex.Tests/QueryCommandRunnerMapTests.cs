@@ -25,6 +25,71 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunMap_ParseSummaryOnly_StoresSelector()
+    {
+        var options = QueryCommandRunner.ParseArgs(
+            ["--summary-only"],
+            jsonDefault: false,
+            validateDefaultSnippetLines: false,
+            validateDefaultMaxLineWidth: false);
+
+        Assert.True(options.MapSummaryOnly);
+        Assert.Null(options.ParseError);
+    }
+
+    [Fact]
+    public void RunMap_SummaryOnlyAndSections_ReturnsUsageError()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunMap(
+            ["--summary-only", "--sections", "tree"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("--summary-only cannot be combined with --sections", stderr);
+        Assert.Contains("Usage: cdidx map", stderr);
+    }
+
+    [Fact]
+    public void RunMap_SummaryOnlyJson_OmitsDetailSections_Issue3393()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_map_summary_only");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/App.cs",
+                "csharp",
+                "namespace App; public class Program { public static void Main() { } }\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunMap(
+                ["--db", dbPath, "--summary-only", "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(json.GetProperty("summary_only").GetBoolean());
+            Assert.Equal(1, json.GetProperty("file_count").GetInt32());
+            Assert.Empty(json.GetProperty("sections").EnumerateArray());
+            Assert.False(json.TryGetProperty("languages", out _));
+            Assert.False(json.TryGetProperty("modules", out _));
+            Assert.False(json.TryGetProperty("top_files", out _));
+            Assert.False(json.TryGetProperty("largest_files", out _));
+            Assert.False(json.TryGetProperty("symbol_rich_files", out _));
+            Assert.False(json.TryGetProperty("reference_rich_files", out _));
+            Assert.False(json.TryGetProperty("entrypoints", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunMap_ParseCompact_ImpliesJsonAndPreservesExplicitLimit_Issue3009()
     {
         var options = QueryCommandRunner.ParseArgs(
