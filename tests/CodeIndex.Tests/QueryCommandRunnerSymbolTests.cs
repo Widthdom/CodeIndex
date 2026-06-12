@@ -83,9 +83,70 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.True(json.GetProperty("body_content_truncated").GetBoolean());
+            Assert.Equal(2, json.GetProperty("body_requested_start_line").GetInt32());
+            Assert.True(json.GetProperty("body_requested_end_line").GetInt32() > json.GetProperty("body_effective_end_line").GetInt32());
+            Assert.Equal(2, json.GetProperty("body_effective_start_line").GetInt32());
+            var bodyReasons = json.GetProperty("body_content_truncation_reasons")
+                .EnumerateArray()
+                .Select(reason => reason.GetString())
+                .ToArray();
+            Assert.Contains("body_line_cap", bodyReasons);
+            var recovery = json.GetProperty("body_content_recovery");
+            Assert.Equal(json.GetProperty("body_effective_end_line").GetInt32() + 1, recovery.GetProperty("start_line").GetInt32());
+            var recoveryCommand = recovery.GetProperty("command").GetString();
+            Assert.Contains("cdidx excerpt src/long_body.py", recoveryCommand);
+            Assert.Contains("--db", recoveryCommand);
+            Assert.Contains(dbPath, recoveryCommand);
+            Assert.Contains("--max-line-width 0 --json", recoveryCommand);
             Assert.False(json.TryGetProperty("complexity", out _));
             Assert.True(CountLines(json.GetProperty("body_content").GetString()!) <= DbReader.DefinitionBodyMaxLines);
             Assert.DoesNotContain("value_23", json.GetProperty("body_content").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunDefinition_JsonBodyReportsByteCapRecovery_Issue3562()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_definition_body_byte_recovery_3562");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var longLiteral = new string('a', DbReader.DefinitionBodyMaxBytes + 1024);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/huge_body.py",
+                "python",
+                $"def huge_body():\n    value = \"{longLiteral}\"\n    return value\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                ["huge_body", "--db", dbPath, "--json", "--body", "--lang", "python", "--exact-name"],
+                _jsonOptions));
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(json.GetProperty("body_content_truncated").GetBoolean());
+            var bodyReasons = json.GetProperty("body_content_truncation_reasons")
+                .EnumerateArray()
+                .Select(reason => reason.GetString())
+                .ToArray();
+            Assert.Contains("body_byte_cap", bodyReasons);
+            Assert.Equal(2, json.GetProperty("body_effective_start_line").GetInt32());
+            Assert.Equal(3, json.GetProperty("body_effective_end_line").GetInt32());
+            var recovery = json.GetProperty("body_content_recovery");
+            Assert.Equal(2, recovery.GetProperty("start_line").GetInt32());
+            Assert.Equal(3, recovery.GetProperty("end_line").GetInt32());
+            var recoveryCommand = recovery.GetProperty("command").GetString();
+            Assert.Contains("cdidx excerpt src/huge_body.py", recoveryCommand);
+            Assert.Contains("--db", recoveryCommand);
+            Assert.Contains(dbPath, recoveryCommand);
+            Assert.Contains("--start 2 --end 3 --max-line-width 0 --json", recoveryCommand);
+            Assert.False(json.TryGetProperty("complexity", out _));
         }
         finally
         {

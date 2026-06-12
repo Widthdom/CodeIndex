@@ -4532,6 +4532,55 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_SearchRecipe_AppliesResultOutputMetadata_Issue3558()
+    {
+        InsertIndexedFile(
+            "src/todo.cs",
+            "csharp",
+            """
+            // TODO: inspect generated SQL.
+            public class TodoFixture { }
+            """);
+        var recipePath = Path.Combine(_projectRoot, "search-recipes-metadata.json");
+        File.WriteAllText(recipePath, """
+            {
+              "recipes": [
+                {
+                  "name": "local-audit",
+                  "description": "Local audit recipe",
+                  "queries": [
+                    {
+                      "name": "todo-comments",
+                      "query": "TODO",
+                      "description": "Find local TODO markers",
+                      "recommendedLabels": ["audit"],
+                      "falsePositiveGuidance": "Ignore deliberate test fixtures.",
+                      "exactSubstring": true
+                    }
+                  ]
+                }
+              ]
+            }
+            """);
+        using var env = EnvironmentVariableScope.Capture("CDIDX_SEARCH_RECIPE_PATHS");
+        env.Set("CDIDX_SEARCH_RECIPE_PATHS", recipePath);
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"recipe":"local-audit","snippetLines":3,"maxLineWidth":96}}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Null(response["error"]);
+        var structured = response["result"]!["structuredContent"]!;
+        var query = structured["queries"]![0]!;
+        var result = query["results"]![0]!;
+        Assert.Equal(3, result["snippetLines"]!.GetValue<int>());
+        Assert.Equal(96, result["maxLineWidth"]!.GetValue<int>());
+        Assert.True(result["exact"]!.GetValue<bool>());
+        Assert.False(result["rawFts"]!.GetValue<bool>());
+        Assert.True(result["literalHighlightsAvailable"]!.GetValue<bool>());
+        Assert.Null(result["literalHighlightWarning"]);
+    }
+
+    [Fact]
     public void ToolsCall_Search_AcceptsScalarExcludePaths_Issue3538()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"App","excludePaths":"src/app.cs"}}}""")!;
@@ -4789,7 +4838,29 @@ public class McpServerTests : IDisposable
 
         Assert.Equal(1, response["result"]!["structuredContent"]!["count"]!.GetValue<int>());
         Assert.True(response["result"]!["structuredContent"]!["rawQuery"]!.GetValue<bool>());
-        Assert.Equal("src/app.cs", response["result"]!["structuredContent"]!["results"]![0]!["path"]!.GetValue<string>());
+        var result = response["result"]!["structuredContent"]!["results"]![0]!;
+        Assert.Equal("src/app.cs", result["path"]!.GetValue<string>());
+        Assert.True(result["rawFts"]!.GetValue<bool>());
+        Assert.False(result["exact"]!.GetValue<bool>());
+        Assert.False(result["literalHighlightsAvailable"]!.GetValue<bool>());
+        Assert.Equal("literal_highlights_unavailable_raw_fts", result["literalHighlightWarning"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Search_ExactWithRawQueryReportsEffectiveLiteralHighlightMode_Issue3558()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"App","rawQuery":true,"exact":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal(1, response["result"]!["structuredContent"]!["count"]!.GetValue<int>());
+        Assert.True(response["result"]!["structuredContent"]!["rawQuery"]!.GetValue<bool>());
+        var result = response["result"]!["structuredContent"]!["results"]![0]!;
+        Assert.True(result["exact"]!.GetValue<bool>());
+        Assert.False(result["rawFts"]!.GetValue<bool>());
+        Assert.True(result["literalHighlightsAvailable"]!.GetValue<bool>());
+        Assert.Null(result["literalHighlightWarning"]);
+        var highlight = result["highlights"]![0]!;
+        Assert.Equal("App", highlight["literalTerms"]![0]!.GetValue<string>());
     }
 
     [Theory]
@@ -7863,6 +7934,14 @@ public class McpServerTests : IDisposable
         Assert.Contains("TARGET", structured["content"]!.GetValue<string>());
         Assert.True(structured["content"]!.GetValue<string>().Length <= 96);
         Assert.Equal(96, structured["maxLineWidth"]!.GetValue<int>());
+        var recovery = structured["contentRecovery"]!;
+        Assert.Equal(1, recovery["startLine"]!.GetValue<int>());
+        Assert.Equal(1, recovery["endLine"]!.GetValue<int>());
+        var recoveryCommand = recovery["command"]!.GetValue<string>();
+        Assert.Contains("cdidx excerpt dist/data.txt", recoveryCommand);
+        Assert.Contains("--db", recoveryCommand);
+        Assert.Contains(_dbPath, recoveryCommand);
+        Assert.Contains("--start 1 --end 1 --max-line-width 0 --json", recoveryCommand);
     }
 
     [Fact]

@@ -798,6 +798,53 @@ public partial class QueryCommandRunnerTests
         }
     }
 
+    [Fact]
+    public void RunSearch_RecipeJsonWithRawFtsReportsEffectiveSanitizedMode_Issue3558()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_recipe_json_raw_fts_3558");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                """
+                using System.Text.Json;
+
+                public sealed class App
+                {
+                    public void Run()
+                    {
+                        JsonDocument.Parse("{}");
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "risky-code", "--db", dbPath, "--lang", "csharp", "--limit", "2", "--json", "--fts"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var result = document.RootElement
+                .GetProperty("queries")
+                .EnumerateArray()
+                .Single(item => item.GetProperty("name").GetString() == "unbounded-json-parse")
+                .GetProperty("results")
+                .EnumerateArray()
+                .Single();
+
+            Assert.False(result.GetProperty("raw_fts").GetBoolean());
+            Assert.False(result.TryGetProperty("literal_highlight_warning", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Theory]
     [InlineData("count")]
     [InlineData("compact")]
@@ -2291,7 +2338,24 @@ jobs:
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
+            Assert.Equal(1, json.GetProperty("requested_start_line").GetInt32());
+            Assert.Equal(1, json.GetProperty("requested_end_line").GetInt32());
+            Assert.Equal(1, json.GetProperty("effective_start_line").GetInt32());
+            Assert.Equal(1, json.GetProperty("effective_end_line").GetInt32());
             Assert.True(json.GetProperty("content_truncated").GetBoolean());
+            var truncationReasons = json.GetProperty("content_truncation_reasons")
+                .EnumerateArray()
+                .Select(reason => reason.GetString())
+                .ToArray();
+            Assert.Contains("line_width_cap", truncationReasons);
+            var recovery = json.GetProperty("content_recovery");
+            Assert.Equal(1, recovery.GetProperty("start_line").GetInt32());
+            Assert.Equal(1, recovery.GetProperty("end_line").GetInt32());
+            var recoveryCommand = recovery.GetProperty("command").GetString();
+            Assert.Contains("cdidx excerpt dist/data.txt", recoveryCommand);
+            Assert.Contains("--db", recoveryCommand);
+            Assert.Contains(dbPath, recoveryCommand);
+            Assert.Contains("--start 1 --end 1 --max-line-width 0 --json", recoveryCommand);
             Assert.DoesNotContain(longLine, json.GetProperty("content").GetString());
             Assert.Contains("TARGET", json.GetProperty("content").GetString());
             Assert.True(json.GetProperty("content").GetString()!.Length <= 96);
@@ -2519,9 +2583,18 @@ jobs:
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
+            Assert.Equal(321, json.GetProperty("column").GetInt32());
+            Assert.Equal(6, json.GetProperty("length").GetInt32());
+            Assert.Equal(longLine.Length, json.GetProperty("original_line_length").GetInt32());
             Assert.True(json.GetProperty("snippet_truncated").GetBoolean());
             Assert.Contains("target", json.GetProperty("snippet").GetString());
             Assert.True(json.GetProperty("snippet").GetString()!.Length <= 96);
+            var truncationContext = json.GetProperty("snippet_truncation_context");
+            Assert.Equal(1, truncationContext.GetProperty("line_count").GetInt32());
+            var charCount = Assert.Single(truncationContext.GetProperty("char_counts").EnumerateArray());
+            Assert.True(charCount.GetInt32() > 0);
+            Assert.Equal(charCount.GetInt32(), truncationContext.GetProperty("total_chars").GetInt32());
+            Assert.Equal("line_width", truncationContext.GetProperty("reason").GetString());
         }
         finally
         {
@@ -4251,10 +4324,63 @@ jobs:
             Assert.Equal("src/Auth.cs", json.GetProperty("path").GetString());
             Assert.Equal(3, json.GetProperty("line").GetInt32());
             Assert.Equal(10, json.GetProperty("column").GetInt32());
+            Assert.Equal(5, json.GetProperty("length").GetInt32());
+            Assert.Equal("    void Guard() {}".Length, json.GetProperty("original_line_length").GetInt32());
             Assert.Equal(2, json.GetProperty("start_line").GetInt32());
             Assert.Equal(4, json.GetProperty("end_line").GetInt32());
             Assert.Contains("void Guard()", json.GetProperty("snippet").GetString());
             Assert.Contains("void Next()", json.GetProperty("snippet").GetString());
+            var truncationContext = json.GetProperty("snippet_truncation_context");
+            Assert.Equal(0, truncationContext.GetProperty("line_count").GetInt32());
+            Assert.Empty(truncationContext.GetProperty("char_counts").EnumerateArray());
+            Assert.Equal(0, truncationContext.GetProperty("total_chars").GetInt32());
+            Assert.False(truncationContext.TryGetProperty("reason", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunFind_WithJsonReportsSpanMetadataForMultipleMatchesInOneFile_Issue3561()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_find_span_metadata_3561");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/search.txt",
+                "text",
+                "alpha target\nmiddle\nsecond target here\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["target", "--db", dbPath, "--path", "src/search.txt", "--json"],
+                _jsonOptions));
+
+            var rows = ParseJsonLines(stdout).Select(document => document.RootElement).ToList();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(2, rows.Count);
+            Assert.All(rows, row =>
+            {
+                Assert.Equal("src/search.txt", row.GetProperty("path").GetString());
+                Assert.Equal(6, row.GetProperty("length").GetInt32());
+                Assert.False(row.GetProperty("snippet_truncated").GetBoolean());
+                var truncationContext = row.GetProperty("snippet_truncation_context");
+                Assert.Equal(0, truncationContext.GetProperty("line_count").GetInt32());
+                Assert.Empty(truncationContext.GetProperty("char_counts").EnumerateArray());
+                Assert.Equal(0, truncationContext.GetProperty("total_chars").GetInt32());
+                Assert.False(truncationContext.TryGetProperty("reason", out _));
+            });
+            Assert.Equal(1, rows[0].GetProperty("line").GetInt32());
+            Assert.Equal(7, rows[0].GetProperty("column").GetInt32());
+            Assert.Equal("alpha target".Length, rows[0].GetProperty("original_line_length").GetInt32());
+            Assert.Equal(3, rows[1].GetProperty("line").GetInt32());
+            Assert.Equal(8, rows[1].GetProperty("column").GetInt32());
+            Assert.Equal("second target here".Length, rows[1].GetProperty("original_line_length").GetInt32());
         }
         finally
         {

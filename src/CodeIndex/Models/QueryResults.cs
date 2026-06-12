@@ -232,10 +232,36 @@ public class FileExcerptResult
     public string? Lang { get; set; }
     public int StartLine { get; set; }
     public int EndLine { get; set; }
+    public int RequestedStartLine { get; set; }
+    public int RequestedEndLine { get; set; }
+    public int EffectiveStartLine { get; set; }
+    public int EffectiveEndLine { get; set; }
     public string Content { get; set; } = string.Empty;
     public bool ContentTruncated { get; set; }
+    public List<string> ContentTruncationReasons { get; set; } = [];
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ExcerptRecoveryHint? ContentRecovery { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<ExcerptSemanticToken>? SemanticTokens { get; set; }
+
+    public static ExcerptRecoveryHint CreateRecoveryHint(string path, int startLine, int endLine)
+        => new()
+        {
+            StartLine = startLine,
+            EndLine = endLine,
+            Command = $"cdidx excerpt {QuoteCliArgument(path)} --start {startLine} --end {endLine} --max-line-width 0 --json",
+        };
+
+    private static string QuoteCliArgument(string value)
+    {
+        if (!string.IsNullOrEmpty(value) && value.All(IsSafeCliArgumentChar))
+            return value;
+
+        return "'" + value.Replace("'", "'\\''", StringComparison.Ordinal) + "'";
+    }
+
+    private static bool IsSafeCliArgumentChar(char c)
+        => char.IsLetterOrDigit(c) || c is '/' or '.' or '_' or '-' or ':';
 }
 
 public class ExcerptSemanticToken
@@ -248,6 +274,13 @@ public class ExcerptSemanticToken
     public List<string> Modifiers { get; set; } = [];
 }
 
+public class ExcerptRecoveryHint
+{
+    public int StartLine { get; set; }
+    public int EndLine { get; set; }
+    public string Command { get; set; } = string.Empty;
+}
+
 public class FileFindResult
 {
     [JsonPropertyName("api_version")]
@@ -256,10 +289,22 @@ public class FileFindResult
     public string? Lang { get; set; }
     public int Line { get; set; }
     public int Column { get; set; }
+    public int Length { get; set; }
+    public int OriginalLineLength { get; set; }
     public int StartLine { get; set; }
     public int EndLine { get; set; }
     public string Snippet { get; set; } = string.Empty;
     public bool SnippetTruncated { get; set; }
+    public FileFindSnippetTruncationContext SnippetTruncationContext { get; set; } = new();
+}
+
+public class FileFindSnippetTruncationContext
+{
+    public int LineCount { get; set; }
+    public List<int> CharCounts { get; set; } = [];
+    public int TotalChars { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Reason { get; set; }
 }
 
 public class IndexFreshnessCheckResult
@@ -308,6 +353,18 @@ public class DefinitionResult : SymbolResult
     public int? BodyContentNextStartLine { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool BodyContentTruncated { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? BodyRequestedStartLine { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? BodyRequestedEndLine { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? BodyEffectiveStartLine { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? BodyEffectiveEndLine { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? BodyContentTruncationReasons { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ExcerptRecoveryHint? BodyContentRecovery { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? Complexity { get; set; }
 }
@@ -397,6 +454,18 @@ public class ReferenceResult
     public int? BodyEndLine { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool BodyContentTruncated { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? BodyRequestedStartLine { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? BodyRequestedEndLine { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? BodyEffectiveStartLine { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? BodyEffectiveEndLine { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? BodyContentTruncationReasons { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ExcerptRecoveryHint? BodyContentRecovery { get; set; }
 }
 
 public class CallerResult
@@ -434,6 +503,18 @@ public class CallerResult
     public int? BodyEndLine { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool BodyContentTruncated { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? BodyRequestedStartLine { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? BodyRequestedEndLine { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? BodyEffectiveStartLine { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? BodyEffectiveEndLine { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? BodyContentTruncationReasons { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ExcerptRecoveryHint? BodyContentRecovery { get; set; }
 }
 
 public class CalleeResult
@@ -462,6 +543,18 @@ public class CalleeResult
     public int? BodyEndLine { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool BodyContentTruncated { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? BodyRequestedStartLine { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? BodyRequestedEndLine { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? BodyEffectiveStartLine { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? BodyEffectiveEndLine { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? BodyContentTruncationReasons { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ExcerptRecoveryHint? BodyContentRecovery { get; set; }
 }
 
 public class ImpactResult
@@ -500,6 +593,18 @@ public class ImpactResult
     public int? BodyEndLine { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool BodyContentTruncated { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? BodyRequestedStartLine { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? BodyRequestedEndLine { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? BodyEffectiveStartLine { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? BodyEffectiveEndLine { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? BodyContentTruncationReasons { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ExcerptRecoveryHint? BodyContentRecovery { get; set; }
 }
 
 public static class ImpactResultKinds

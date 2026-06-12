@@ -957,7 +957,7 @@ public static class QueryCommandRunner
                 !options.NoVisibilityRank,
                 guardFilters: options.GuardFilters,
                 guardWindow: options.GuardWindow);
-            var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query);
+            var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, rawFtsOverride: false);
             total += rows.Count;
             queryResults.Add(new SearchRecipeQueryResultJsonResult(
                 recipeQuery.Name,
@@ -1064,12 +1064,19 @@ public static class QueryCommandRunner
             query.FalsePositiveGuidance,
             query.ExactSubstring)).ToList());
 
-    private static List<SearchDisplayRow> BuildSearchDisplayRows(List<SearchResult> results, QueryCommandOptions options, bool exact, string? queryOverride = null)
+    private static List<SearchDisplayRow> BuildSearchDisplayRows(
+        List<SearchResult> results,
+        QueryCommandOptions options,
+        bool exact,
+        string? queryOverride = null,
+        bool? rawFtsOverride = null)
     {
         var rows = new List<SearchDisplayRow>(results.Count);
         var seenMatchLocations = options.NoDedup ? null : new HashSet<string>(StringComparer.Ordinal);
         var displayQuery = queryOverride ?? options.Query!;
-        var queryContext = options.RawFts
+        var rawFts = rawFtsOverride ?? options.RawFts;
+        var effectiveRawFts = rawFts && !exact;
+        var queryContext = effectiveRawFts
             ? SearchSnippetFormatter.PrepareRawFtsQueryContext(displayQuery)
             : SearchSnippetFormatter.PrepareQueryContext(displayQuery);
         foreach (var result in results)
@@ -1097,8 +1104,9 @@ public static class QueryCommandRunner
                     exposeLiteralHighlights: exact,
                     preferredMatchLine: preferredOriginFilterLine.Value);
             }
+            SearchSnippetFormatter.ApplyOutputMetadata(compact, options.SnippetLines, options.MaxLineWidth, exact, rawFts);
 
-            if (!options.RawFts && compact.MatchLines.Count == 0 && compact.Highlights.Count == 0)
+            if (!effectiveRawFts && compact.MatchLines.Count == 0 && compact.Highlights.Count == 0)
                 continue;
 
             if (!ApplySearchOriginFilters(compact, options))
@@ -1732,6 +1740,7 @@ public static class QueryCommandRunner
                 return ZeroResultExitCode(options);
             }
 
+            ApplyBodyRecoveryCommands(results, options.DbPath);
             if (options.Json)
             {
                 if (TryWriteFormattedLocations(
@@ -1944,6 +1953,7 @@ public static class QueryCommandRunner
             var results = reader.SearchReferences(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.MaxLineWidth);
             if (options.IncludeBody)
                 AttachBodyExcerpts(reader, results, options.SnippetLines, options.MaxLineWidth);
+            ApplyBodyRecoveryCommands(results, options.DbPath);
             var sqlGraphSignal = NarrowSqlGraphContractSignalByLanguages(baseSqlGraphSignal, results.Select(result => result.Lang), options.Lang, exactGraphLanguage);
             var exactSignal = reader.GetReferencesExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, includeSqlGraphContractSignal: sqlGraphSignal.Relevant);
             var exactZeroHint = BuildExactZeroHint(
@@ -2095,6 +2105,7 @@ public static class QueryCommandRunner
             var results = reader.GetCallers(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.RawKinds, options.RankMode);
             if (options.IncludeBody)
                 AttachBodyExcerpts(reader, results, options.SnippetLines, options.MaxLineWidth);
+            ApplyBodyRecoveryCommands(results, options.DbPath);
             var sqlGraphSignal = NarrowSqlGraphContractSignalByLanguages(baseSqlGraphSignal, results.Select(result => result.Lang), options.Lang, exactGraphLanguage);
             var exactSignal = reader.GetCallersExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, includeSqlGraphContractSignal: sqlGraphSignal.Relevant);
             var exactZeroHint = BuildExactZeroHint(
@@ -2246,6 +2257,7 @@ public static class QueryCommandRunner
             var results = reader.GetCallees(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.RawKinds, options.RankMode);
             if (options.IncludeBody)
                 AttachBodyExcerpts(reader, results, options.SnippetLines, options.MaxLineWidth);
+            ApplyBodyRecoveryCommands(results, options.DbPath);
             var sqlGraphSignal = NarrowSqlGraphContractSignalByLanguages(baseSqlGraphSignal, results.Select(result => result.Lang), options.Lang, exactGraphLanguage);
             var exactSignal = reader.GetCalleesExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, includeSqlGraphContractSignal: sqlGraphSignal.Relevant);
             var exactZeroHint = BuildExactZeroHint(
@@ -2381,10 +2393,19 @@ public static class QueryCommandRunner
 
         var startLine = symbol.StartLine;
         var naturalEndLine = symbol.BodyEndLine ?? symbol.EndLine;
-        var cappedEndLine = (int)Math.Min(naturalEndLine, (long)startLine + SearchSnippetFormatter.ClampSnippetLines(snippetLines) - 1);
+        var cappedLines = SearchSnippetFormatter.ClampSnippetLines(snippetLines);
+        var cappedEndLine = (int)Math.Min(naturalEndLine, (long)startLine + cappedLines - 1);
         var excerpt = reader.GetExcerpt(path, startLine, cappedEndLine, maxLineWidth: maxLineWidth, focusLine: startLine);
         if (excerpt != null && cappedEndLine < naturalEndLine)
-            excerpt.ContentTruncated = true;
+        {
+            excerpt.RequestedStartLine = startLine;
+            excerpt.RequestedEndLine = naturalEndLine;
+            excerpt.EffectiveStartLine = excerpt.StartLine;
+            excerpt.EffectiveEndLine = excerpt.EndLine;
+            var recoveryStartLine = cappedEndLine + 1;
+            var recoveryEndLine = (int)Math.Min(naturalEndLine, (long)recoveryStartLine + cappedLines - 1);
+            AddExcerptTruncation(excerpt, "body_line_cap", recoveryStartLine, recoveryEndLine);
+        }
         return excerpt;
     }
 
@@ -2410,6 +2431,12 @@ public static class QueryCommandRunner
         result.BodyStartLine = excerpt.StartLine;
         result.BodyEndLine = excerpt.EndLine;
         result.BodyContentTruncated = excerpt.ContentTruncated;
+        result.BodyRequestedStartLine = excerpt.RequestedStartLine;
+        result.BodyRequestedEndLine = excerpt.RequestedEndLine;
+        result.BodyEffectiveStartLine = excerpt.EffectiveStartLine;
+        result.BodyEffectiveEndLine = excerpt.EffectiveEndLine;
+        result.BodyContentTruncationReasons = CopyTruncationReasons(excerpt);
+        result.BodyContentRecovery = excerpt.ContentRecovery;
     }
 
     private static void ApplyBodyExcerpt(CallerResult result, FileExcerptResult? excerpt)
@@ -2420,6 +2447,12 @@ public static class QueryCommandRunner
         result.BodyStartLine = excerpt.StartLine;
         result.BodyEndLine = excerpt.EndLine;
         result.BodyContentTruncated = excerpt.ContentTruncated;
+        result.BodyRequestedStartLine = excerpt.RequestedStartLine;
+        result.BodyRequestedEndLine = excerpt.RequestedEndLine;
+        result.BodyEffectiveStartLine = excerpt.EffectiveStartLine;
+        result.BodyEffectiveEndLine = excerpt.EffectiveEndLine;
+        result.BodyContentTruncationReasons = CopyTruncationReasons(excerpt);
+        result.BodyContentRecovery = excerpt.ContentRecovery;
     }
 
     private static void ApplyBodyExcerpt(CalleeResult result, FileExcerptResult? excerpt)
@@ -2430,6 +2463,12 @@ public static class QueryCommandRunner
         result.BodyStartLine = excerpt.StartLine;
         result.BodyEndLine = excerpt.EndLine;
         result.BodyContentTruncated = excerpt.ContentTruncated;
+        result.BodyRequestedStartLine = excerpt.RequestedStartLine;
+        result.BodyRequestedEndLine = excerpt.RequestedEndLine;
+        result.BodyEffectiveStartLine = excerpt.EffectiveStartLine;
+        result.BodyEffectiveEndLine = excerpt.EffectiveEndLine;
+        result.BodyContentTruncationReasons = CopyTruncationReasons(excerpt);
+        result.BodyContentRecovery = excerpt.ContentRecovery;
     }
 
     private static void ApplyBodyExcerpt(ImpactResult result, FileExcerptResult? excerpt)
@@ -2440,6 +2479,61 @@ public static class QueryCommandRunner
         result.BodyStartLine = excerpt.StartLine;
         result.BodyEndLine = excerpt.EndLine;
         result.BodyContentTruncated = excerpt.ContentTruncated;
+        result.BodyRequestedStartLine = excerpt.RequestedStartLine;
+        result.BodyRequestedEndLine = excerpt.RequestedEndLine;
+        result.BodyEffectiveStartLine = excerpt.EffectiveStartLine;
+        result.BodyEffectiveEndLine = excerpt.EffectiveEndLine;
+        result.BodyContentTruncationReasons = CopyTruncationReasons(excerpt);
+        result.BodyContentRecovery = excerpt.ContentRecovery;
+    }
+
+    private static void AddExcerptTruncation(FileExcerptResult excerpt, string reason, int recoveryStartLine, int recoveryEndLine)
+    {
+        excerpt.ContentTruncated = true;
+        if (!excerpt.ContentTruncationReasons.Any(existing => string.Equals(existing, reason, StringComparison.Ordinal)))
+            excerpt.ContentTruncationReasons.Add(reason);
+        excerpt.ContentRecovery ??= FileExcerptResult.CreateRecoveryHint(excerpt.Path, recoveryStartLine, recoveryEndLine);
+    }
+
+    private static List<string>? CopyTruncationReasons(FileExcerptResult excerpt)
+        => excerpt.ContentTruncationReasons.Count > 0 ? [.. excerpt.ContentTruncationReasons] : null;
+
+    private static void ApplyBodyRecoveryCommands(IEnumerable<DefinitionResult> results, string dbPath)
+    {
+        foreach (var result in results)
+            ExcerptRecoveryCommandFormatter.ApplyDbPath(result.BodyContentRecovery, result.Path, dbPath);
+    }
+
+    private static void ApplyBodyRecoveryCommands(IEnumerable<ReferenceResult> results, string dbPath)
+    {
+        foreach (var result in results)
+            ExcerptRecoveryCommandFormatter.ApplyDbPath(result.BodyContentRecovery, result.Path, dbPath);
+    }
+
+    private static void ApplyBodyRecoveryCommands(IEnumerable<CallerResult> results, string dbPath)
+    {
+        foreach (var result in results)
+            ExcerptRecoveryCommandFormatter.ApplyDbPath(result.BodyContentRecovery, result.Path, dbPath);
+    }
+
+    private static void ApplyBodyRecoveryCommands(IEnumerable<CalleeResult> results, string dbPath)
+    {
+        foreach (var result in results)
+            ExcerptRecoveryCommandFormatter.ApplyDbPath(result.BodyContentRecovery, result.Path, dbPath);
+    }
+
+    private static void ApplyBodyRecoveryCommands(IEnumerable<ImpactResult> results, string dbPath)
+    {
+        foreach (var result in results)
+            ExcerptRecoveryCommandFormatter.ApplyDbPath(result.BodyContentRecovery, result.Path, dbPath);
+    }
+
+    private static void ApplyBodyRecoveryCommands(SymbolAnalysisResult result, string dbPath)
+    {
+        ApplyBodyRecoveryCommands(result.Definitions, dbPath);
+        ApplyBodyRecoveryCommands(result.References, dbPath);
+        ApplyBodyRecoveryCommands(result.Callers, dbPath);
+        ApplyBodyRecoveryCommands(result.Callees, dbPath);
     }
 
     private static void WriteOptionalBodyExcerpt(int? startLine, string? content, string indent = "")
@@ -2812,7 +2906,10 @@ public static class QueryCommandRunner
                 return ZeroResultExitCode(options);
             }
             if (options.Json)
+            {
+                ExcerptRecoveryCommandFormatter.ApplyDbPath(excerpt, options.DbPath);
                 excerpt.SemanticTokens = BuildExcerptSemanticTokens(excerpt);
+            }
 
             if (options.Json)
             {
@@ -3740,6 +3837,7 @@ public static class QueryCommandRunner
             if (options.Json)
             {
                 var compactTruncation = options.Compact ? ApplySymbolAnalysisCompactCaps(analysis, compactLimit) : null;
+                ApplyBodyRecoveryCommands(analysis, options.DbPath);
                 var payload = JsonSerializer.SerializeToNode(analysis, CliJsonSerializerContextFactory.Create(jsonOptions).SymbolAnalysisResult)!.AsObject();
                 AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
                 if (compactTruncation != null)
@@ -4542,6 +4640,7 @@ public static class QueryCommandRunner
             var analysis = reader.AnalyzeImpact(options.Query, maxDepth, options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.WithPaths);
             if (options.IncludeBody)
                 AttachBodyExcerpts(reader, analysis.Callers, options.SnippetLines, options.MaxLineWidth);
+            ApplyBodyRecoveryCommands(analysis.Callers, options.DbPath);
             var sqlGraphSignal = NarrowSqlGraphContractSignal(
                 reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests),
                 DbReader.IsSqlLanguage(options.Lang)

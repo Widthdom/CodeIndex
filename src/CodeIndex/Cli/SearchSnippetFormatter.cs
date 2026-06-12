@@ -105,6 +105,17 @@ public static class SearchSnippetFormatter
             ContextAfter = excerpt.ContextAfter,
             TruncatedLineCount = excerpt.TruncatedLineCount,
             DroppedMatchLineCount = excerpt.DroppedMatchLineCount,
+            FocusMode = excerpt.FocusMode,
+            FocusLine = excerpt.FocusLine,
+            FocusColumn = excerpt.FocusColumn,
+            FocusReason = excerpt.FocusReason,
+            NextMatch = excerpt.NextMatchLine.HasValue
+                ? new SearchNextMatchHint
+                {
+                    Line = excerpt.NextMatchLine.Value,
+                    RemainingMatchLineCount = excerpt.DroppedMatchLineCount,
+                }
+                : null,
             TruncationContext = excerpt.TruncationContext,
             GuardEvidence = result.GuardEvidence,
             GuardChecks = result.GuardChecks,
@@ -209,6 +220,19 @@ public static class SearchSnippetFormatter
             yield return ToCompactResult(result, queryContext, maxLines, caseSensitive, maxLineWidth, lang ?? result.Lang, focusMode, exposeLiteralHighlights);
     }
 
+    public static void ApplyOutputMetadata(CompactSearchResult result, int snippetLines, int maxLineWidth, bool exact, bool rawFts)
+    {
+        var effectiveRawFts = rawFts && !exact;
+        result.SnippetLines = ClampSnippetLines(snippetLines);
+        result.MaxLineWidth = LineWidthFormatter.ClampMaxLineWidth(maxLineWidth);
+        result.Exact = exact;
+        result.RawFts = effectiveRawFts;
+        result.LiteralHighlightsAvailable = exact && !effectiveRawFts;
+        result.LiteralHighlightWarning = effectiveRawFts
+            ? "literal_highlights_unavailable_raw_fts"
+            : null;
+    }
+
     public static SearchSnippetExcerpt BuildExcerpt(string content, string query, int absoluteStartLine, int maxLines = DefaultSnippetLines, bool caseSensitive = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, string? lang = null, SearchSnippetFocusMode focusMode = SearchSnippetFocusMode.Quality, bool exposeLiteralHighlights = false, int? preferredMatchLine = null)
     {
         return BuildExcerpt(content, PrepareQueryContext(query), absoluteStartLine, maxLines, caseSensitive, maxLineWidth, lang, focusMode, exposeLiteralHighlights, preferredMatchLine);
@@ -241,6 +265,8 @@ public static class SearchSnippetFormatter
         var matchIndexes = matchScan.MatchIndexes;
         var focusStart = SelectFocusStart(matchIndexes, absoluteStartLine, preferredMatchLine);
         var focusEnd = focusStart;
+        int? focusColumn = null;
+        string? focusReason = null;
         var includedMatchLineCount = matchIndexes.Count > 0 ? 1 : 0;
         foreach (var matchIndex in matchIndexes.Where(index => index > focusStart))
         {
@@ -293,10 +319,14 @@ public static class SearchSnippetFormatter
             if (normalizeCSharpVerbatimNames && isMatch && snippetLine.NormalizedText != null && snippetLine.RawIndexMap != null)
             {
                 clamped = ClampNormalizedSnippetLine(originalLine, snippetLine.NormalizedText, snippetLine.RawIndexMap, maxLineWidth, normalizedQuery, tokens, caseSensitive, focusMode);
+                if (i == focusStart)
+                    CaptureNormalizedFocus(snippetLine.NormalizedText, snippetLine.RawIndexMap, normalizedQuery, tokens, caseSensitive, focusMode, out focusColumn, out focusReason);
             }
             else
             {
                 clamped = ClampSnippetLine(originalLine, maxLineWidth, isMatch ? normalizedQuery : null, tokens, caseSensitive, focusMode);
+                if (i == focusStart && isMatch)
+                    CaptureFocus(originalLine, normalizedQuery, tokens, caseSensitive, focusMode, out focusColumn, out focusReason);
             }
             clampedLines.Add(clamped.Text);
             if (clamped.Truncated)
@@ -319,6 +349,9 @@ public static class SearchSnippetFormatter
                     ? GetMatchedTermOccurrences(snippetLine.NormalizedText, absoluteLine, normalizedQuery, [], caseSensitive, originalLine, snippetLine.RawIndexMap)
                     : GetMatchedTermOccurrences(originalLine, absoluteLine, normalizedQuery, [], caseSensitive)
                 : null;
+            ApplyVisibleRanges(termOccurrences, clamped);
+            if (literalTermOccurrences != null)
+                ApplyVisibleRanges(literalTermOccurrences, clamped);
             highlights.Add(new SearchHighlight
             {
                 Line = absoluteLine,
@@ -346,6 +379,11 @@ public static class SearchSnippetFormatter
             TruncatedAfter = end < lineCount - 1,
             TruncatedLineCount = truncatedLineCount,
             DroppedMatchLineCount = droppedMatchLineCount,
+            FocusMode = ToJsonFocusMode(focusMode),
+            FocusLine = matchIndexes.Count > 0 ? absoluteStartLine + focusStart : null,
+            FocusColumn = focusColumn,
+            FocusReason = focusReason,
+            NextMatchLine = matchScan.FirstDroppedMatchIndex.HasValue ? absoluteStartLine + matchScan.FirstDroppedMatchIndex.Value : null,
             TruncationContext = new SearchTruncationContext
             {
                 LineCount = truncatedLineCount,
@@ -375,25 +413,25 @@ public static class SearchSnippetFormatter
     private static ClampedTextResult ClampSnippetLine(string line, int maxLineWidth, string? normalizedQuery, string[] tokens, bool caseSensitive, SearchSnippetFocusMode focusMode)
     {
         if (line.Length <= maxLineWidth)
-            return new ClampedTextResult(line, false);
+            return ClampedTextResult.Unclamped(line);
 
         if (normalizedQuery == null)
             return LineWidthFormatter.ClampLine(line, maxLineWidth);
 
-        var (matchColumn, matchLength) = FindBestMatchColumn(line, normalizedQuery, tokens, caseSensitive, focusMode);
-        if (matchColumn <= 0)
+        var focus = FindBestMatchFocus(line, normalizedQuery, tokens, caseSensitive, focusMode);
+        if (!focus.IsValid)
             return LineWidthFormatter.ClampLine(line, maxLineWidth);
 
-        return LineWidthFormatter.ClampLine(line, maxLineWidth, matchColumn, matchLength);
+        return LineWidthFormatter.ClampLine(line, maxLineWidth, focus.Column, focus.Length);
     }
 
     private static ClampedTextResult ClampNormalizedSnippetLine(string originalLine, string normalizedLine, int[] rawIndexMap, int maxLineWidth, string normalizedQuery, string[] tokens, bool caseSensitive, SearchSnippetFocusMode focusMode)
     {
-        var (matchColumn, matchLength) = FindBestMatchColumn(normalizedLine, normalizedQuery, tokens, caseSensitive, focusMode);
-        if (matchColumn <= 0)
+        var focus = FindBestMatchFocus(normalizedLine, normalizedQuery, tokens, caseSensitive, focusMode);
+        if (!focus.IsValid)
             return LineWidthFormatter.ClampLine(originalLine, maxLineWidth);
 
-        if (!TryReconstructRawSpan(rawIndexMap, normalizedStart: matchColumn - 1, matchLength, out var rawFocusColumn, out var rawFocusLength))
+        if (!TryReconstructRawSpan(rawIndexMap, normalizedStart: focus.Column - 1, focus.Length, out var rawFocusColumn, out var rawFocusLength))
             return LineWidthFormatter.ClampLine(originalLine, maxLineWidth);
 
         return LineWidthFormatter.ClampLine(originalLine, maxLineWidth, rawFocusColumn, rawFocusLength);
@@ -421,11 +459,11 @@ public static class SearchSnippetFormatter
         return true;
     }
 
-    private static (int Column, int Length) FindBestMatchColumn(string line, string normalizedQuery, string[] tokens, bool caseSensitive, SearchSnippetFocusMode focusMode)
+    private static SearchMatchFocus FindBestMatchFocus(string line, string normalizedQuery, string[] tokens, bool caseSensitive, SearchSnippetFocusMode focusMode)
     {
         var comparison = caseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
         if (focusMode == SearchSnippetFocusMode.Leftmost)
-            return FindLeftmostMatchColumn(line, normalizedQuery, tokens, comparison);
+            return FindLeftmostMatchFocus(line, normalizedQuery, tokens, comparison);
 
         MatchCandidate best = default;
         var fullQueryScore = focusMode == SearchSnippetFocusMode.Proximity ? 3_000 : 4_000;
@@ -435,7 +473,7 @@ public static class SearchSnippetFormatter
             var idx = 0;
             while ((idx = line.IndexOf(normalizedQuery, idx, comparison)) >= 0)
             {
-                best = ChooseBetter(best, new MatchCandidate(idx, normalizedQuery.Length, fullQueryScore + ScoreLength(normalizedQuery.Length), null));
+                best = ChooseBetter(best, new MatchCandidate(idx, normalizedQuery.Length, fullQueryScore + ScoreLength(normalizedQuery.Length), null, "full_query"));
                 idx += Math.Max(1, normalizedQuery.Length);
             }
         }
@@ -449,7 +487,7 @@ public static class SearchSnippetFormatter
             var idx = 0;
             while ((idx = line.IndexOf(token, idx, comparison)) >= 0)
             {
-                var occurrence = new MatchCandidate(idx, token.Length, 1_000 + ScoreLength(token.Length), token);
+                var occurrence = new MatchCandidate(idx, token.Length, 1_000 + ScoreLength(token.Length), token, "token");
                 tokenOccurrences.Add(occurrence);
                 best = ChooseBetter(best, occurrence);
                 idx += Math.Max(1, token.Length);
@@ -476,22 +514,23 @@ public static class SearchSnippetFormatter
 
                 var clusterEnd = cluster.Max(candidate => candidate.Index + candidate.Length);
                 var totalTokenLength = cluster.Sum(candidate => ScoreLength(candidate.Length));
-                best = ChooseBetter(best, new MatchCandidate(start, clusterEnd - start, clusterScore + (tokenCount * 100) + totalTokenLength, null));
+                best = ChooseBetter(best, new MatchCandidate(start, clusterEnd - start, clusterScore + (tokenCount * 100) + totalTokenLength, null, "token_cluster"));
             }
         }
 
         if (!best.IsValid)
-            return (0, 0);
+            return default;
 
         // LineWidthFormatter.ClampLine accepts a 1-based focusColumn.
         // LineWidthFormatter.ClampLine は 1-based の focusColumn を受け取る。
-        return (best.Index + 1, Math.Max(1, best.Length));
+        return new SearchMatchFocus(best.Index + 1, Math.Max(1, best.Length), best.Reason);
     }
 
-    private static (int Column, int Length) FindLeftmostMatchColumn(string line, string normalizedQuery, string[] tokens, StringComparison comparison)
+    private static SearchMatchFocus FindLeftmostMatchFocus(string line, string normalizedQuery, string[] tokens, StringComparison comparison)
     {
         int bestIndex = -1;
         int bestLength = 0;
+        var reason = "leftmost_token";
         if (!string.IsNullOrEmpty(normalizedQuery))
         {
             var idx = line.IndexOf(normalizedQuery, comparison);
@@ -499,6 +538,7 @@ public static class SearchSnippetFormatter
             {
                 bestIndex = idx;
                 bestLength = normalizedQuery.Length;
+                reason = "leftmost_full_query";
             }
         }
 
@@ -513,10 +553,11 @@ public static class SearchSnippetFormatter
             {
                 bestIndex = idx;
                 bestLength = token.Length;
+                reason = "leftmost_token";
             }
         }
 
-        return bestIndex < 0 ? (0, 0) : (bestIndex + 1, Math.Max(1, bestLength));
+        return bestIndex < 0 ? default : new SearchMatchFocus(bestIndex + 1, Math.Max(1, bestLength), reason);
     }
 
     private static MatchCandidate ChooseBetter(MatchCandidate current, MatchCandidate candidate)
@@ -534,7 +575,31 @@ public static class SearchSnippetFormatter
 
     private static int ScoreLength(int length) => Math.Min(length, 99);
 
-    private readonly record struct MatchCandidate(int Index, int Length, int Score, string? Token)
+    private static void CaptureFocus(string line, string normalizedQuery, string[] tokens, bool caseSensitive, SearchSnippetFocusMode focusMode, out int? focusColumn, out string? focusReason)
+    {
+        var focus = FindBestMatchFocus(line, normalizedQuery, tokens, caseSensitive, focusMode);
+        focusColumn = focus.IsValid ? focus.Column : null;
+        focusReason = focus.IsValid ? focus.Reason : null;
+    }
+
+    private static void CaptureNormalizedFocus(string normalizedLine, int[] rawIndexMap, string normalizedQuery, string[] tokens, bool caseSensitive, SearchSnippetFocusMode focusMode, out int? focusColumn, out string? focusReason)
+    {
+        var focus = FindBestMatchFocus(normalizedLine, normalizedQuery, tokens, caseSensitive, focusMode);
+        focusReason = focus.IsValid ? focus.Reason : null;
+        focusColumn = focus.IsValid && TryReconstructRawSpan(rawIndexMap, focus.Column - 1, focus.Length, out var rawColumn, out _)
+            ? rawColumn
+            : null;
+    }
+
+    private static string ToJsonFocusMode(SearchSnippetFocusMode focusMode) =>
+        focusMode.ToString().ToLowerInvariant();
+
+    private readonly record struct SearchMatchFocus(int Column, int Length, string Reason)
+    {
+        public bool IsValid => Column > 0 && Length > 0 && !string.IsNullOrEmpty(Reason);
+    }
+
+    private readonly record struct MatchCandidate(int Index, int Length, int Score, string? Token, string Reason)
     {
         public bool IsValid => Index >= 0 && Length > 0;
     }
@@ -559,6 +624,7 @@ public static class SearchSnippetFormatter
         var lineCount = 0;
         var totalMatchCount = 0;
         int? focusStart = null;
+        int? firstDroppedMatchIndex = null;
 
         if (!string.IsNullOrWhiteSpace(query))
         {
@@ -567,7 +633,7 @@ public static class SearchSnippetFormatter
                 lineCount++;
                 var line = normalizeCSharpVerbatimNames ? CSharpVerbatimNameNormalizer.Normalize(rawLine) : rawLine;
                 if (line.Contains(query, comparison))
-                    AddTrackedMatchIndex(matches, i, maxTrackedWindowLines, ref focusStart, ref totalMatchCount);
+                    AddTrackedMatchIndex(matches, i, maxTrackedWindowLines, ref focusStart, ref totalMatchCount, ref firstDroppedMatchIndex);
             }
         }
         else
@@ -576,29 +642,35 @@ public static class SearchSnippetFormatter
         }
 
         if (matches.Count > 0 || tokens.Length == 0)
-            return new SearchSnippetLineMatchScan(matches, lineCount, totalMatchCount);
+            return new SearchSnippetLineMatchScan(matches, lineCount, totalMatchCount, firstDroppedMatchIndex);
 
         matches.Clear();
         lineCount = 0;
         totalMatchCount = 0;
         focusStart = null;
+        firstDroppedMatchIndex = null;
         foreach (var (i, rawLine) in EnumerateContentLines(content))
         {
             lineCount++;
             var line = normalizeCSharpVerbatimNames ? CSharpVerbatimNameNormalizer.Normalize(rawLine) : rawLine;
             if (tokens.Any(token => line.Contains(token, comparison)))
-                AddTrackedMatchIndex(matches, i, maxTrackedWindowLines, ref focusStart, ref totalMatchCount);
+                AddTrackedMatchIndex(matches, i, maxTrackedWindowLines, ref focusStart, ref totalMatchCount, ref firstDroppedMatchIndex);
         }
 
-        return new SearchSnippetLineMatchScan(matches, lineCount, totalMatchCount);
+        return new SearchSnippetLineMatchScan(matches, lineCount, totalMatchCount, firstDroppedMatchIndex);
     }
 
-    private static void AddTrackedMatchIndex(List<int> matches, int lineIndex, int maxTrackedWindowLines, ref int? focusStart, ref int totalMatchCount)
+    private static void AddTrackedMatchIndex(List<int> matches, int lineIndex, int maxTrackedWindowLines, ref int? focusStart, ref int totalMatchCount, ref int? firstDroppedMatchIndex)
     {
         totalMatchCount++;
         focusStart ??= lineIndex;
         if ((lineIndex - focusStart.Value) + 1 <= maxTrackedWindowLines)
+        {
             matches.Add(lineIndex);
+            return;
+        }
+
+        firstDroppedMatchIndex ??= lineIndex;
     }
 
     private static List<SearchSnippetLine> ReadSnippetLines(string content, int start, int end, bool normalizeCSharpVerbatimNames)
@@ -653,7 +725,7 @@ public static class SearchSnippetFormatter
         yield return (lineIndex, content[lineStart..]);
     }
 
-    private sealed record SearchSnippetLineMatchScan(List<int> MatchIndexes, int LineCount, int TotalMatchCount);
+    private sealed record SearchSnippetLineMatchScan(List<int> MatchIndexes, int LineCount, int TotalMatchCount, int? FirstDroppedMatchIndex);
 
     private sealed record SearchSnippetLine(int Index, string Text, string? NormalizedText, int[]? RawIndexMap);
 
@@ -668,6 +740,28 @@ public static class SearchSnippetFormatter
             AddTermOccurrences(occurrences, line, absoluteLine, token, comparison, rawLine, rawIndexMap);
 
         return occurrences;
+    }
+
+    private static void ApplyVisibleRanges(List<SearchTermOccurrence> occurrences, ClampedTextResult clamped)
+    {
+        var visibleStart = clamped.OriginalVisibleStartColumn;
+        var visibleEndExclusive = clamped.OriginalVisibleEndColumn + 1;
+        foreach (var occurrence in occurrences)
+        {
+            var occurrenceStart = occurrence.Column;
+            var occurrenceEndExclusive = occurrence.Column + occurrence.Length;
+            var intersectionStart = Math.Max(occurrenceStart, visibleStart);
+            var intersectionEndExclusive = Math.Min(occurrenceEndExclusive, visibleEndExclusive);
+            if (intersectionEndExclusive <= intersectionStart)
+            {
+                occurrence.Visible = false;
+                continue;
+            }
+
+            occurrence.Visible = true;
+            occurrence.VisibleColumn = clamped.TextVisibleStartColumn + (intersectionStart - visibleStart);
+            occurrence.VisibleLength = intersectionEndExclusive - intersectionStart;
+        }
     }
 
     private static void AddTermOccurrences(List<SearchTermOccurrence> occurrences, string line, int absoluteLine, string term, StringComparison comparison, string? rawLine, int[]? rawIndexMap)
@@ -785,6 +879,22 @@ public sealed class CompactSearchResult
     public int ContextAfter { get; set; }
     public int TruncatedLineCount { get; set; }
     public int DroppedMatchLineCount { get; set; }
+    public int SnippetLines { get; set; }
+    public int MaxLineWidth { get; set; }
+    public bool Exact { get; set; }
+    public bool RawFts { get; set; }
+    public bool LiteralHighlightsAvailable { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? LiteralHighlightWarning { get; set; }
+    public string FocusMode { get; set; } = string.Empty;
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? FocusLine { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? FocusColumn { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? FocusReason { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SearchNextMatchHint? NextMatch { get; set; }
     public SearchTruncationContext TruncationContext { get; set; } = new();
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<SearchGuardEvidence>? GuardEvidence { get; set; }
@@ -803,6 +913,12 @@ public sealed class CompactSearchResult
     public int? EnclosingSymbolEndLine { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? EnclosingContainerName { get; set; }
+}
+
+public sealed class SearchNextMatchHint
+{
+    public int Line { get; set; }
+    public int RemainingMatchLineCount { get; set; }
 }
 
 public enum SearchSnippetFocusMode
@@ -837,6 +953,11 @@ public sealed class SearchTermOccurrence
     public int Line { get; set; }
     public int Column { get; set; }
     public int Length { get; set; }
+    public bool Visible { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? VisibleColumn { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? VisibleLength { get; set; }
 }
 
 public sealed class SearchTruncationContext
@@ -859,5 +980,10 @@ public sealed class SearchSnippetExcerpt
     public bool TruncatedAfter { get; set; }
     public int TruncatedLineCount { get; set; }
     public int DroppedMatchLineCount { get; set; }
+    public string FocusMode { get; set; } = string.Empty;
+    public int? FocusLine { get; set; }
+    public int? FocusColumn { get; set; }
+    public string? FocusReason { get; set; }
+    public int? NextMatchLine { get; set; }
     public SearchTruncationContext TruncationContext { get; set; } = new();
 }

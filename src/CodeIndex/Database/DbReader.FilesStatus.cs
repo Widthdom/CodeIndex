@@ -376,12 +376,13 @@ public partial class DbReader
                 continue;
 
             var snippetLines = snippetLineNumbers.Select(line => snippetLinesByNumber[line]).ToList();
-            var clampedSnippet = LineWidthFormatter.ClampLines(
+            var (snippet, truncationContext) = ClampFindSnippetLines(
                 snippetLines,
                 maxLineWidth,
                 focusLineIndex: snippetLineNumbers.IndexOf(pending.LineNumber),
                 focusColumn: pending.Column + 1,
                 focusLength: pending.Length);
+            var matchLine = snippetLinesByNumber[pending.LineNumber];
 
             results.Add(new FileFindResult
             {
@@ -389,12 +390,48 @@ public partial class DbReader
                 Lang = fileLang,
                 Line = pending.LineNumber,
                 Column = pending.Column + 1,
+                Length = pending.Length,
+                OriginalLineLength = matchLine.Length,
                 StartLine = snippetLineNumbers[0],
                 EndLine = snippetLineNumbers[^1],
-                Snippet = clampedSnippet.Text,
-                SnippetTruncated = clampedSnippet.Truncated,
+                Snippet = snippet,
+                SnippetTruncated = truncationContext.LineCount > 0,
+                SnippetTruncationContext = truncationContext,
             });
         }
+    }
+
+    private static (string Text, FileFindSnippetTruncationContext Context) ClampFindSnippetLines(
+        IReadOnlyList<string> lines,
+        int maxLineWidth,
+        int focusLineIndex,
+        int focusColumn,
+        int focusLength)
+    {
+        if (lines.Count == 0)
+            return (string.Empty, new FileFindSnippetTruncationContext());
+
+        var output = new string[lines.Count];
+        var truncatedCharCounts = new List<int>();
+        for (var i = 0; i < lines.Count; i++)
+        {
+            var clamped = i == focusLineIndex
+                ? LineWidthFormatter.ClampLine(lines[i], maxLineWidth, focusColumn, focusLength)
+                : LineWidthFormatter.ClampLine(lines[i], maxLineWidth);
+            output[i] = clamped.Text;
+            if (clamped.Truncated)
+                truncatedCharCounts.Add(clamped.TruncatedCharCount);
+        }
+
+        return (
+            string.Join('\n', output),
+            new FileFindSnippetTruncationContext
+            {
+                LineCount = truncatedCharCounts.Count,
+                CharCounts = truncatedCharCounts,
+                TotalChars = truncatedCharCounts.Sum(),
+                Reason = truncatedCharCounts.Count > 0 ? "line_width" : null,
+            });
     }
 
     private static void PruneFindWindow(
@@ -539,8 +576,16 @@ public partial class DbReader
             Lang = lang,
             StartLine = selectedLines[0],
             EndLine = selectedLines[^1],
+            RequestedStartLine = requestedStart,
+            RequestedEndLine = requestedEndCeiling,
+            EffectiveStartLine = selectedLines[0],
+            EffectiveEndLine = selectedLines[^1],
             Content = clampedContent.Text,
             ContentTruncated = clampedContent.Truncated,
+            ContentTruncationReasons = clampedContent.Truncated ? ["line_width_cap"] : [],
+            ContentRecovery = clampedContent.Truncated
+                ? FileExcerptResult.CreateRecoveryHint(path, selectedLines[0], selectedLines[^1])
+                : null,
         };
     }
 
