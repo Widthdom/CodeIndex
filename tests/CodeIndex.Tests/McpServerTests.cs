@@ -3723,15 +3723,19 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
-    public void ToolsList_SearchHasRequiredQueryParam()
+    public void ToolsList_SearchAdvertisesQueryOrRecipeModes_Issue3545()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
         var response = _server.HandleMessage(request)!;
 
         var tools = response["result"]!["tools"]!.AsArray();
         var searchTool = tools.First(t => t!["name"]!.GetValue<string>() == "search")!;
-        var required = searchTool["inputSchema"]!["required"]!.AsArray();
-        Assert.Contains("query", required.Select(r => r!.GetValue<string>()));
+        var modes = searchTool["inputSchema"]!["anyOf"]!.AsArray()
+            .Select(mode => mode!["required"]!.AsArray().Single()!.GetValue<string>())
+            .ToArray();
+        Assert.Contains("query", modes);
+        Assert.Contains("recipe", modes);
+        Assert.Contains("listRecipes", modes);
     }
 
     [Fact]
@@ -4430,6 +4434,78 @@ public class McpServerTests : IDisposable
         Assert.NotNull(structured["results"]![0]!["matchLines"]);
         Assert.NotNull(structured["results"]![0]!["highlights"]);
         Assert.Null(structured["results"]![0]!["content"]);
+    }
+
+    [Fact]
+    public void ToolsCall_Search_ListRecipesReturnsBuiltIns_Issue3545()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_SEARCH_RECIPE_PATHS");
+        env.Set("CDIDX_SEARCH_RECIPE_PATHS", null);
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"listRecipes":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Null(response["error"]);
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.True(structured["count"]!.GetValue<int>() >= 1);
+        var recipes = structured["recipes"]!.AsArray();
+        var risky = recipes.Single(recipe => recipe!["name"]!.GetValue<string>() == "risky-code")!;
+        Assert.Contains(risky["queries"]!.AsArray(), query => query!["name"]!.GetValue<string>() == "unbounded-json-parse");
+    }
+
+    [Fact]
+    public void ToolsCall_Search_RunRecipeReturnsGroupedResults_Issue3545()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_SEARCH_RECIPE_PATHS");
+        env.Set("CDIDX_SEARCH_RECIPE_PATHS", null);
+        InsertIndexedFile("src/json.cs", "csharp", "var doc = JsonDocument.Parse(payload);\n");
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"recipe":"risky-code","limit":5}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Null(response["error"]);
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal("risky-code", structured["recipe"]!["name"]!.GetValue<string>());
+        Assert.True(structured["result_count"]!.GetValue<int>() >= 1);
+        var jsonParseQuery = structured["queries"]!.AsArray()
+            .Single(query => query!["name"]!.GetValue<string>() == "unbounded-json-parse")!;
+        Assert.Equal(1, jsonParseQuery["count"]!.GetValue<int>());
+        Assert.Equal("src/json.cs", jsonParseQuery["results"]![0]!["path"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Search_ListRecipesIncludesConfiguredSources_Issue3545()
+    {
+        var recipePath = Path.Combine(_projectRoot, "search-recipes.json");
+        File.WriteAllText(recipePath, """
+            {
+              "recipes": [
+                {
+                  "name": "local-audit",
+                  "description": "Local audit recipe",
+                  "queries": [
+                    {
+                      "name": "todo-comments",
+                      "query": "TODO",
+                      "description": "Find local TODO markers",
+                      "recommendedLabels": ["audit"],
+                      "falsePositiveGuidance": "Ignore deliberate test fixtures.",
+                      "exactSubstring": true
+                    }
+                  ]
+                }
+              ]
+            }
+            """);
+        using var env = EnvironmentVariableScope.Capture("CDIDX_SEARCH_RECIPE_PATHS");
+        env.Set("CDIDX_SEARCH_RECIPE_PATHS", recipePath);
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"listRecipes":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Null(response["error"]);
+        var structured = response["result"]!["structuredContent"]!;
+        var recipes = structured["recipes"]!.AsArray();
+        var local = recipes.Single(recipe => recipe!["name"]!.GetValue<string>() == "local-audit")!;
+        Assert.Equal("todo-comments", local["queries"]![0]!["name"]!.GetValue<string>());
+        Assert.Null(structured["recipe_source_diagnostics"]);
     }
 
     [Fact]

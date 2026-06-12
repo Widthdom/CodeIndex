@@ -791,11 +791,12 @@ public partial class McpServer
                 "exactName" or "exact" or "prefix" or "countOnly" or "includeBody" or "lsp_compatible" or
                 "lspCompatible" or
                 "regex" or "withPaths" or "rebuild" or "dryRun" or "dry_run" or "force" or
-                "optimize" or "reverse" or "cycles" or "estimateOnly" => "boolean",
+                "optimize" or "reverse" or "cycles" or "estimateOnly" or "listRecipes" => "boolean",
             "project" or "requireBefore" or "requireAfter" or "rejectBefore" or "rejectAfter" => "string_or_array",
             "query" or "lang" or "kind" or "format" or "rankBy" or "since" or "cursor" or
                 "solution" or "symbol" or "groupBy" or "category" or "language" or
-                "bucket" or "minConfidence" or "description" or "context" or "toolInvocationContext" or "db" => "string",
+                "bucket" or "minConfidence" or "description" or "context" or "toolInvocationContext" or "db" or
+                "recipe" => "string",
             "queries" or "evidencePaths" or "evidence_paths" => "array",
             _ => string.Empty,
         };
@@ -1375,6 +1376,19 @@ public partial class McpServer
 
     private JsonNode ExecuteSearch(JsonNode? id, JsonNode? args)
     {
+        var listRecipes = args?["listRecipes"]?.GetValue<bool>() ?? false;
+        if (listRecipes)
+            return ExecuteSearchRecipeList(id);
+
+        var recipeNode = args?["recipe"];
+        if (recipeNode is not null)
+        {
+            var recipeName = recipeNode.GetValue<string>();
+            if (string.IsNullOrWhiteSpace(recipeName))
+                return CreateToolErrorResponse(id, "'recipe' must be a non-empty search recipe name.");
+            return ExecuteSearchRecipe(id, args, recipeName.Trim());
+        }
+
         if (!TryReadRequiredStringParameter(args, "query", out var query, out var requiredError))
             return CreateToolErrorResponse(id, requiredError!);
         if (query.Length > QueryLimits.MaxQueryLength)
@@ -1527,6 +1541,155 @@ public partial class McpServer
             var summary = $"Found {results.Count} search result(s) in {string.Join(", ", topPaths)}.";
             return CreateToolResult(id, summary, structured);
         });
+    }
+
+    private JsonNode ExecuteSearchRecipeList(JsonNode? id)
+    {
+        var registry = SearchAuditRecipes.Load();
+        var payload = new JsonObject
+        {
+            ["count"] = registry.Recipes.Count,
+            ["recipes"] = ToSearchRecipeArray(registry.Recipes)
+        };
+        AddSearchRecipeSourceDiagnostics(payload, registry.Diagnostics);
+        return CreateToolResult(id, $"Found {registry.Recipes.Count} search recipe(s).", payload);
+    }
+
+    private JsonNode ExecuteSearchRecipe(JsonNode? id, JsonNode? args, string recipeName)
+    {
+        var registry = SearchAuditRecipes.Load();
+        var recipe = registry.Recipes.FirstOrDefault(r => string.Equals(r.Name, recipeName, StringComparison.OrdinalIgnoreCase));
+        if (recipe is null)
+        {
+            var available = string.Join(", ", registry.Recipes.Select(r => r.Name));
+            return CreateToolErrorResponse(id, $"unknown search recipe '{recipeName}'. Available recipes: {available}.");
+        }
+
+        var adjustments = new ArgumentAdjustmentCollector();
+        var limit = ReadLimit(args, QueryCommandRunner.DefaultQueryLimit, adjustments);
+        var lang = QueryCommandRunner.NormalizeLangFilterValue(args?["lang"]?.GetValue<string>());
+        var snippetLines = ReadSnippetLines(args, SearchSnippetFormatter.DefaultSnippetLines, adjustments);
+        if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
+            return maxLineWidthError;
+        var pathPatterns = ReadScopedPathList(args);
+        var excludePaths = ReadStringList(args, "excludePaths");
+        var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
+        if (!TryReadSinceArgument(args, out var since, out var sinceError))
+            return CreateToolErrorResponse(id, sinceError!);
+        var deduplicate = !(args?["noDedup"]?.GetValue<bool>() ?? false);
+        if (!TryResolveSearchExactArgument(args, out var userExact, out var exactError))
+            return CreateToolErrorResponse(id, exactError!);
+        var hasExactOverride = args?["exact"] is not null || args?["exactSubstring"] is not null;
+        if (args?["prefix"]?.GetValue<bool>() ?? false)
+            return CreateToolErrorResponse(id, "'prefix' cannot be combined with recipe execution.");
+        if (args?["cursor"] is not null)
+            return CreateToolErrorResponse(id, "'cursor' is not supported for recipe execution.");
+        if (TryReadSearchGuardFilters(id, args, out var guardFilters) is JsonNode guardError)
+            return guardError;
+        var guardWindow = args?["guardWindow"]?.GetValue<int>() ?? DbReader.DefaultSearchGuardWindow;
+        if (guardWindow < 0 || guardWindow > DbReader.MaxSearchGuardWindow)
+            return CreateToolErrorResponse(id, $"'guardWindow' must be between 0 and {DbReader.MaxSearchGuardWindow}; got {guardWindow}.");
+
+        return WithDbReader(id, args, reader =>
+        {
+            var queryResults = new JsonArray();
+            var total = 0;
+            foreach (var recipeQuery in recipe.Queries)
+            {
+                var exact = hasExactOverride ? userExact : recipeQuery.ExactSubstring;
+                List<SearchResult> results;
+                try
+                {
+                    results = reader.Search(
+                        recipeQuery.Query,
+                        limit,
+                        lang,
+                        false,
+                        pathPatterns,
+                        excludePaths,
+                        excludeTests,
+                        deduplicate,
+                        since,
+                        exact,
+                        false,
+                        guardFilters: guardFilters,
+                        guardWindow: guardWindow);
+                }
+                catch (SearchQueryLimitException ex)
+                {
+                    return CreateToolErrorResponse(id, ex.Message);
+                }
+                catch (SearchGuardCandidateLimitException ex)
+                {
+                    return CreateToolErrorResponse(id, $"guarded search is too broad for recipe '{recipe.Name}' query '{recipeQuery.Name}': {ex.Message} Narrow the search with more specific path/lang filters or guards.");
+                }
+
+                var queryContext = SearchSnippetFormatter.PrepareQueryContext(recipeQuery.Query);
+                var compactResults = SearchSnippetFormatter
+                    .ToCompactResults(results, queryContext, snippetLines, exact, maxLineWidth, exposeLiteralHighlights: exact)
+                    .ToList();
+                total += compactResults.Count;
+                queryResults.Add(new JsonObject
+                {
+                    ["name"] = recipeQuery.Name,
+                    ["query"] = recipeQuery.Query,
+                    ["description"] = recipeQuery.Description,
+                    ["recommended_labels"] = ToJsonArray(recipeQuery.RecommendedLabels),
+                    ["false_positive_guidance"] = recipeQuery.FalsePositiveGuidance,
+                    ["exact_substring"] = exact,
+                    ["count"] = compactResults.Count,
+                    ["results"] = ToJsonArray(compactResults)
+                });
+            }
+
+            var payload = new JsonObject
+            {
+                ["recipe"] = ToSearchRecipeJson(recipe),
+                ["query_count"] = recipe.Queries.Count,
+                ["result_count"] = total,
+                ["limit_per_query"] = limit,
+                ["snippetLines"] = snippetLines,
+                ["maxLineWidth"] = maxLineWidth,
+                ["lang"] = lang,
+                ["path"] = PathEcho(pathPatterns),
+                ["excludeTests"] = excludeTests,
+                ["queries"] = queryResults
+            };
+            AddFreshnessHint(payload, reader);
+            AddSearchRecipeSourceDiagnostics(payload, registry.Diagnostics);
+            adjustments.ApplyTo(payload);
+            var summary = total == 0
+                ? $"Recipe '{recipe.Name}' returned no search results."
+                : $"Recipe '{recipe.Name}' returned {total} search result(s) across {recipe.Queries.Count} query(ies).";
+            return CreateToolResult(id, summary, payload);
+        });
+    }
+
+    private JsonArray ToSearchRecipeArray(IEnumerable<SearchAuditRecipe> recipes)
+        => new(recipes.Select(recipe => ToSearchRecipeJson(recipe)).ToArray<JsonNode?>());
+
+    private JsonObject ToSearchRecipeJson(SearchAuditRecipe recipe)
+        => new()
+        {
+            ["name"] = recipe.Name,
+            ["description"] = recipe.Description,
+            ["recommended_labels"] = ToJsonArray(recipe.RecommendedLabels),
+            ["queries"] = new JsonArray(recipe.Queries.Select(query => new JsonObject
+            {
+                ["name"] = query.Name,
+                ["query"] = query.Query,
+                ["description"] = query.Description,
+                ["recommended_labels"] = ToJsonArray(query.RecommendedLabels),
+                ["false_positive_guidance"] = query.FalsePositiveGuidance,
+                ["exact_substring"] = query.ExactSubstring
+            }).ToArray<JsonNode?>())
+        };
+
+    private static void AddSearchRecipeSourceDiagnostics(JsonObject payload, IReadOnlyList<string> diagnostics)
+    {
+        if (diagnostics.Count == 0)
+            return;
+        payload["recipe_source_diagnostics"] = new JsonArray(diagnostics.Select(diagnostic => JsonValue.Create(diagnostic)).ToArray<JsonNode?>());
     }
 
     private JsonNode ExecuteSymbols(JsonNode? id, JsonNode? args)

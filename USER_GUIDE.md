@@ -916,6 +916,12 @@ Recipe runs support text output, `--json` / `--format json`, and
 `--format issue-drafts`; `--list-recipes` supports text or JSON. Other search
 export formats and `--json=array` are rejected for recipe modes because recipe
 output is grouped by query or list metadata.
+The MCP `search` tool exposes the same recipe surface with
+`{"listRecipes":true}` for discovery and `{"recipe":"risky-code"}` for
+execution. Set `CDIDX_SEARCH_RECIPE_PATHS` to one or more JSON files separated
+by the platform path separator to add configured recipe sources; each file may
+be a recipe array or `{ "recipes": [...] }`, and invalid sources are reported as
+bounded `recipe_source_diagnostics`.
 For triage automation, `--format issue-drafts` emits draft issue objects with
 titles, labels, evidence paths, Markdown bodies, and duplicate-preflight
 metadata. `--open-issues <path>` accepts an open-issue JSON list such as
@@ -3276,6 +3282,11 @@ recipe run が対応する形式は text output、`--json` / `--format json`、
 `--format issue-drafts` です。`--list-recipes` は text または JSON に対応します。
 その他の search export format と `--json=array` は、recipe output が query または
 list metadata ごとに grouped されるため usage error で拒否します。
+MCP `search` tool では `{"listRecipes":true}` で recipe を発見し、
+`{"recipe":"risky-code"}` で実行できます。`CDIDX_SEARCH_RECIPE_PATHS` に
+platform path separator 区切りの JSON file を指定すると、設定済み recipe source を
+追加できます。各 file は recipe array または `{ "recipes": [...] }` を受け付け、
+不正な source は bounded な `recipe_source_diagnostics` として報告されます。
 triage automation では `--format issue-drafts` を使うと、title、label、evidence path、
 Markdown body、duplicate-preflight metadata を持つ issue draft object を出力します。
 `--open-issues <path>` は `gh issue list --state open --json number,title,labels,url`
