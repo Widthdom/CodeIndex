@@ -333,6 +333,30 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void SymbolExtractionWorker_OversizedRequestLineReturnsProtocolError_Issue3506()
+    {
+        using var input = new StringReader("abcdef\n");
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        var handled = SymbolExtractionWorker.TryRunCommand(
+            [SymbolExtractionWorker.CommandName],
+            input,
+            output,
+            error,
+            out var exitCode,
+            maxProtocolLineCharacters: 5,
+            maxProtocolLineUtf8Bytes: 100);
+
+        Assert.True(handled);
+        Assert.Equal(1, exitCode);
+        Assert.Equal(string.Empty, error.ToString());
+        using var document = JsonDocument.Parse(output.ToString());
+        var workerError = document.RootElement.GetProperty("WorkerError").GetString();
+        Assert.Equal("worker_protocol_error: BoundedLineLengthException", workerError);
+    }
+
+    [Fact]
     public void PostExtractionHookCallbackWorker_InvalidRequestJsonDoesNotEchoParserMessage_Issue3425()
     {
         const string secret = "SECRET_HOOK_WORKER_3425";
@@ -354,6 +378,30 @@ public class IndexCommandRunnerTests
         var workerError = document.RootElement.GetProperty("WorkerError").GetString();
         Assert.Equal("worker_protocol_error: JsonException", workerError);
         Assert.DoesNotContain(secret, output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PostExtractionHookCallbackWorker_OversizedRequestLineReturnsProtocolError_Issue3506()
+    {
+        using var input = new StringReader("abcdef\n");
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        var handled = PostExtractionHookCallbackWorker.TryRunCommand(
+            [PostExtractionHookCallbackWorker.CommandName, "/tmp/demo-hook.dll", "Demo.Hook"],
+            input,
+            output,
+            error,
+            out var exitCode,
+            maxProtocolLineCharacters: 5,
+            maxProtocolLineUtf8Bytes: 100);
+
+        Assert.True(handled);
+        Assert.Equal(1, exitCode);
+        Assert.Equal(string.Empty, error.ToString());
+        using var document = JsonDocument.Parse(output.ToString());
+        var workerError = document.RootElement.GetProperty("WorkerError").GetString();
+        Assert.Equal("worker_protocol_error: BoundedLineLengthException", workerError);
     }
 
     [Fact]

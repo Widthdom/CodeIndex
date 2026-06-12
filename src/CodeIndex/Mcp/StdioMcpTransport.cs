@@ -16,6 +16,8 @@ internal sealed class StdioMcpTransport : IMcpTransport
     private readonly Stream _stdout;
     private readonly StreamReader _reader;
     private readonly StreamWriter _writer;
+    private readonly int _maxLineCharacters;
+    private readonly int _maxLineUtf8Bytes;
     private bool _disposed;
 
     public StdioMcpTransport(int bufferSize)
@@ -23,10 +25,17 @@ internal sealed class StdioMcpTransport : IMcpTransport
     {
     }
 
-    internal StdioMcpTransport(Stream stdin, Stream stdout, int bufferSize)
+    internal StdioMcpTransport(
+        Stream stdin,
+        Stream stdout,
+        int bufferSize,
+        int maxLineCharacters = McpServer.MaxLineCharacterCount,
+        int maxLineUtf8Bytes = McpServer.MaxLineByteLength)
     {
         _stdin = stdin;
         _stdout = stdout;
+        _maxLineCharacters = maxLineCharacters;
+        _maxLineUtf8Bytes = maxLineUtf8Bytes;
         _reader = new StreamReader(
             _stdin,
             new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true),
@@ -47,12 +56,11 @@ internal sealed class StdioMcpTransport : IMcpTransport
     public async Task<string?> ReadFrameAsync(CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        // ReadLineAsync's CancellationToken overload was added in .NET 7; the legacy overload
-        // remains the call shape used by the existing MCP loop, so we keep it here too and
-        // honour cancellation only when the writer fails. Stdin closure is the canonical exit.
-        // ReadLineAsync の CancellationToken 版は .NET 7 で追加されたが、既存ループと同じ
-        // 呼び出し形を使い、stdin クローズを正規の終了経路として保つ。
-        var line = await _reader.ReadLineAsync(cancellationToken).ConfigureAwait(false);
+        var line = await BoundedLineReader.ReadLineAsync(
+            _reader,
+            _maxLineCharacters,
+            _maxLineUtf8Bytes,
+            cancellationToken).ConfigureAwait(false);
         return line;
     }
 

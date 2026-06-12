@@ -73,7 +73,11 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
             Task sendTask;
             try
             {
-                responseTask = process!.StandardOutput.ReadLineAsync();
+                responseTask = BoundedLineReader.ReadLineAsync(
+                    process!.StandardOutput,
+                    WorkerProtocolLineLimits.MaxLineCharacters,
+                    WorkerProtocolLineLimits.MaxLineUtf8Bytes,
+                    CancellationToken.None);
                 sendTask = SendRequestAsync(process.StandardInput, requestJson);
             }
             catch (Exception ex)
@@ -341,7 +345,9 @@ internal static class PostExtractionHookCallbackWorker
         TextReader input,
         TextWriter output,
         TextWriter error,
-        out int exitCode)
+        out int exitCode,
+        int maxProtocolLineCharacters = WorkerProtocolLineLimits.MaxLineCharacters,
+        int maxProtocolLineUtf8Bytes = WorkerProtocolLineLimits.MaxLineUtf8Bytes)
     {
         if (args.Length == 0 || !StringComparer.Ordinal.Equals(args[0], CommandName))
         {
@@ -349,7 +355,7 @@ internal static class PostExtractionHookCallbackWorker
             return false;
         }
 
-        exitCode = RunCommand(args, input, output, error);
+        exitCode = RunCommand(args, input, output, error, maxProtocolLineCharacters, maxProtocolLineUtf8Bytes);
         return true;
     }
 
@@ -424,7 +430,13 @@ internal static class PostExtractionHookCallbackWorker
         }
     }
 
-    private static int RunCommand(string[] args, TextReader input, TextWriter output, TextWriter error)
+    private static int RunCommand(
+        string[] args,
+        TextReader input,
+        TextWriter output,
+        TextWriter error,
+        int maxProtocolLineCharacters,
+        int maxProtocolLineUtf8Bytes)
     {
         if (args.Length != 3)
         {
@@ -437,11 +449,26 @@ internal static class PostExtractionHookCallbackWorker
         try
         {
             IPostExtractionHook? hook = null;
-            string? requestJson;
-            while ((requestJson = input.ReadLine()) != null)
+            while (true)
             {
                 WorkerResponse response;
                 WorkerRequest request;
+                string? requestJson;
+                try
+                {
+                    requestJson = BoundedLineReader.ReadLine(input, maxProtocolLineCharacters, maxProtocolLineUtf8Bytes);
+                }
+                catch (BoundedLineLengthException ex)
+                {
+                    response = new WorkerResponse(null, null, null, SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", ex));
+                    output.WriteLine(JsonSerializer.Serialize(response, JsonOptions));
+                    output.Flush();
+                    return 1;
+                }
+
+                if (requestJson is null)
+                    break;
+
                 try
                 {
                     request = JsonSerializer.Deserialize<WorkerRequest>(requestJson, JsonOptions)

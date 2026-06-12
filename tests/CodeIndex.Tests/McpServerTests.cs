@@ -3174,6 +3174,55 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public async Task StdioTransport_ReadFrameAsync_RejectsOversizedLineWhileReading_Issue3506()
+    {
+        await using var input = new MemoryStream(Encoding.UTF8.GetBytes("abcdef\n"));
+        await using var output = new MemoryStream();
+        await using var transport = new StdioMcpTransport(
+            input,
+            output,
+            bufferSize: 2,
+            maxLineCharacters: 5,
+            maxLineUtf8Bytes: 100);
+
+        var ex = await Assert.ThrowsAsync<BoundedLineLengthException>(() => transport.ReadFrameAsync(CancellationToken.None));
+
+        Assert.Equal(6, ex.CharactersRead);
+        Assert.Equal(5, ex.MaxCharacters);
+    }
+
+    [Fact]
+    public async Task RunAsync_StdioOversizedFrame_ReturnsMessageTooLarge_Issue3506()
+    {
+        await using var input = new MemoryStream(Encoding.UTF8.GetBytes("abcdef\n"));
+        await using var output = new MemoryStream();
+        await using var transport = new StdioMcpTransport(
+            input,
+            output,
+            bufferSize: 2,
+            maxLineCharacters: 5,
+            maxLineUtf8Bytes: 100);
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
+        using var error = new StringWriter();
+        var previousError = Console.Error;
+        Console.SetError(error);
+        try
+        {
+            await server.RunAsync(transport, CancellationToken.None);
+        }
+        finally
+        {
+            Console.SetError(previousError);
+        }
+
+        var raw = Encoding.UTF8.GetString(output.ToArray());
+        using var response = JsonDocument.Parse(raw);
+        Assert.Equal(-32700, response.RootElement.GetProperty("error").GetProperty("code").GetInt32());
+        Assert.Equal("message_too_large", response.RootElement.GetProperty("error").GetProperty("data").GetProperty("category").GetString());
+        Assert.Contains("Message too large", error.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task StdioTransport_WriteFrameAsync_FlushesBeforeReturning()
     {
         await using var input = new MemoryStream();
