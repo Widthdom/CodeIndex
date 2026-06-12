@@ -1767,11 +1767,14 @@ Piping `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}` into
   caller as `stdio` / `local`). Setting `CDIDX_MCP_AUTH_TOKEN` swaps in
   `TokenMcpAuthenticator` for stdio, which requires every responded request
   to carry a matching `params.auth.token` and compares it in constant time
-  via `CryptographicOperations.FixedTimeEquals`. HTTP does not also use this
-  body-token gate: `ProgramRunner` resolves a bearer secret for the HTTP
-  transport from `CDIDX_MCP_HTTP_TOKEN`, falling back to `CDIDX_MCP_AUTH_TOKEN`
-  when the HTTP-specific variable is unset, and then relies on the
-  `Authorization: Bearer ...` transport check (#3156). For the JSON-RPC
+  via `CryptographicOperations.FixedTimeEquals`. Unset or empty configured
+  tokens keep the stdio gate disabled, while configured tokens must be 1-4096
+  characters and cannot contain whitespace or control characters (#3505).
+  HTTP does not also use this body-token gate: `ProgramRunner` resolves a
+  bearer secret for the HTTP transport from `CDIDX_MCP_HTTP_TOKEN`, falling
+  back to `CDIDX_MCP_AUTH_TOKEN` when the HTTP-specific variable is unset,
+  and then relies on the `Authorization: Bearer ...` transport check (#3156).
+  For the JSON-RPC
   body-token gate, failures uniformly return JSON-RPC `-32001 "Unauthorized"`
   (per #1530 sanitization — the
   wire never distinguishes missing-from-wrong), and `BuildAuthFailureLog`
@@ -1866,8 +1869,12 @@ return `-32600`.
   HTTP falls back to `CDIDX_MCP_AUTH_TOKEN` as the bearer secret; when both
   are set, `CDIDX_MCP_HTTP_TOKEN` wins. HTTP clients never need to also send
   `params.auth.token`. The CLI refuses to bind to a non-loopback host without
-  either token to keep the MCP catalog off the LAN by default. Configured and
-  supplied tokens over 4096 characters are rejected before hashing.
+  either token to keep the MCP catalog off the LAN by default. Unset or empty
+  configured bearer tokens disable the HTTP token gate where allowed by the
+  listen host policy, while configured tokens must be 1-4096 characters and
+  cannot contain whitespace or control characters (#3505). Supplied HTTP
+  bearer values are compared exactly after the `Bearer ` prefix: they are not
+  trimmed, and invalid-shape or oversized values are rejected before hashing.
 - Optional request-loop logging: `ProgramRunner` connects `HttpMcpTransport`
   to `GlobalToolLog`, so persistent logging records one `mcp_http_request`
   line per HTTP request when the lifecycle log is enabled. The record includes
