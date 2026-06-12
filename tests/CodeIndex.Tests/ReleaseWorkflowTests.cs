@@ -129,8 +129,14 @@ public class ReleaseWorkflowTests
         Assert.Contains("Attest NuGet package artifacts", workflow);
         Assert.Contains("nupkg/*.nupkg", workflow);
         Assert.Contains("nupkg/*.snupkg", workflow);
+        Assert.Contains("Resolve NuGet trusted publishing user", workflow);
+        Assert.Contains("NUGET_TRUSTED_PUBLISHING_USER: ${{ vars.NUGET_TRUSTED_PUBLISHING_USER }}", workflow);
+        Assert.Contains("GitHub Actions variable NUGET_TRUSTED_PUBLISHING_USER must be set to the NuGet.org username that created the trusted publishing policy", workflow);
+        Assert.Contains("NuGet trusted publishing matches the policy creator, not the package owner", workflow);
         Assert.Contains("NuGet/login@ebc737b6fc418a6ca0073cf116ec8dc156d8b81e # v1", workflow);
+        Assert.Contains("user: ${{ steps.nuget-user.outputs.user }}", workflow);
         Assert.Contains("steps.nuget-login.outputs.NUGET_API_KEY", workflow);
+        Assert.DoesNotContain("user: Widthdom", workflow);
         Assert.DoesNotContain("secrets.NUGET_API_KEY", workflow);
         Assert.DoesNotContain("--skip-duplicate", workflow);
     }
@@ -461,6 +467,7 @@ public class ReleaseWorkflowTests
         var root = GetRepositoryRoot();
         var workflow = File.ReadAllText(Path.Combine(root, ".github", "workflows", "release.yml"));
         var dockerfile = File.ReadAllText(Path.Combine(root, "Dockerfile"));
+        var project = File.ReadAllText(Path.Combine(root, "src", "CodeIndex", "CodeIndex.csproj"));
 
         Assert.Contains("publish-container:", workflow);
         Assert.Contains("needs: [preflight, create-release]", workflow);
@@ -473,10 +480,22 @@ public class ReleaseWorkflowTests
         Assert.Contains("ghcr.io/widthdom/codeindex:latest", workflow);
         Assert.Contains("tags: ${{ steps.image-tags.outputs.tags }}", workflow);
         Assert.Contains("*-*) ;;", workflow);
+        Assert.Contains("FROM mcr.microsoft.com/dotnet/sdk:8.0-alpine AS build", dockerfile);
         Assert.Contains("ARG TARGETARCH=amd64", dockerfile);
         Assert.Contains("linux-musl-x64", dockerfile);
         Assert.Contains("linux-musl-arm64", dockerfile);
         Assert.Contains("ENTRYPOINT [\"cdidx\"]", dockerfile);
+        Assert.Contains("Microsoft.NET.ILLink.Tasks\" Version=\"8.", project);
+        Assert.DoesNotContain("Microsoft.NET.ILLink.Tasks\" Version=\"10.", project);
+    }
+
+    [Fact]
+    public void Dependabot_DoesNotBumpIlLinkPastReleaseSdkMajor()
+    {
+        var dependabot = File.ReadAllText(Path.Combine(GetRepositoryRoot(), ".github", "dependabot.yml"));
+
+        Assert.Contains("dependency-name: Microsoft.NET.ILLink.Tasks", dependabot);
+        Assert.Contains("version-update:semver-major", dependabot);
     }
 
     [Fact]

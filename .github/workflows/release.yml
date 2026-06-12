@@ -1005,11 +1005,31 @@ jobs:
             nupkg/*.nupkg
             nupkg/*.snupkg
 
+      - name: Resolve NuGet trusted publishing user
+        id: nuget-user
+        env:
+          NUGET_TRUSTED_PUBLISHING_USER: ${{ vars.NUGET_TRUSTED_PUBLISHING_USER }}
+        run: |
+          set -euo pipefail
+          user="${NUGET_TRUSTED_PUBLISHING_USER:-}"
+          if [ -z "$user" ]; then
+            echo "GitHub Actions variable NUGET_TRUSTED_PUBLISHING_USER must be set to the NuGet.org username that created the trusted publishing policy." >&2
+            echo "NuGet trusted publishing matches the policy creator, not the package owner." >&2
+            exit 1
+          fi
+
+          if [[ "$user" =~ [[:space:]] ]]; then
+            echo "NUGET_TRUSTED_PUBLISHING_USER must be a single NuGet.org username without whitespace." >&2
+            exit 1
+          fi
+
+          echo "user=${user}" >> "$GITHUB_OUTPUT"
+
       - name: NuGet trusted publishing login
         id: nuget-login
         uses: NuGet/login@ebc737b6fc418a6ca0073cf116ec8dc156d8b81e # v1
         with:
-          user: Widthdom
+          user: ${{ steps.nuget-user.outputs.user }}
 
       - name: Publish to NuGet
         run: |
