@@ -94,6 +94,22 @@ or publishing NuGet artifacts:
 dotnet run --project tools/CodeIndex.PackageNormalize -- nupkg/*.nupkg nupkg/*.snupkg
 ```
 
+For release diagnostics, inspect without rewriting and request a bounded
+summary across all candidate packages:
+
+```bash
+dotnet run --project tools/CodeIndex.PackageNormalize -- --dry-run --summary nupkg/*.nupkg nupkg/*.snupkg
+dotnet run --project tools/CodeIndex.PackageNormalize -- --dry-run --json --continue-on-error nupkg/*.nupkg nupkg/*.snupkg
+```
+
+`install.sh` is generated from focused fragments under `install_modules/`.
+After editing installer, doctor, self-test, reinstall, uninstall, or dispatch
+logic, regenerate the checked-in one-file installer before testing:
+
+```bash
+bash tools/build-install-sh.sh
+```
+
 | Normalizer rule | Detail |
 |---|---|
 | Reproducible OPC metadata (#2756) | NuGet's OPC package writer generates a random `package/services/metadata/core-properties/*.psmdcp` part name on each pack run. The normalizer rewrites that part to `package/services/metadata/core-properties/core-properties.psmdcp`, updates the matching content-type and relationship references, and gives ZIP entries stable timestamps. This is the package reproducibility boundary for `.nupkg` and `.snupkg` archives. |
@@ -352,9 +368,13 @@ On startup, `cdidx` walks up from the current directory looking for `.cdidx-vers
 `cdidx upgrade --json` has a stdout contract suitable for automation. Check-only
 and no-update results use the update-check fields
 (`current_version`, `latest_version`, `update_available`, `from_cache`,
-`error`). When an update is installed, installer stdout/stderr is captured so
-stdout remains one JSON document, with `install_attempted`, `install_exit_code`,
-and `install_succeeded` added to the update-check fields.
+`error`) plus release-selection fields (`selected_version`,
+`selected_channel`, `selection_source`, `include_prerelease`). When an update is
+installed, installer stdout/stderr is captured so stdout remains one JSON
+document, with `install_attempted`, `install_exit_code`, and
+`install_succeeded` added to the update-check fields. Windows handoff responses
+also include `handoff_command`, `handoff_url`, `handoff_asset`, and
+`handoff_asset_url`.
 
 ### Degradation reason codes
 
@@ -2223,6 +2243,22 @@ package normalization を実行します:
 dotnet run --project tools/CodeIndex.PackageNormalize -- nupkg/*.nupkg nupkg/*.snupkg
 ```
 
+release diagnostics では、書き換えずに検査し、candidate package 全体の bounded
+summary を取得できます:
+
+```bash
+dotnet run --project tools/CodeIndex.PackageNormalize -- --dry-run --summary nupkg/*.nupkg nupkg/*.snupkg
+dotnet run --project tools/CodeIndex.PackageNormalize -- --dry-run --json --continue-on-error nupkg/*.nupkg nupkg/*.snupkg
+```
+
+`install.sh` は `install_modules/` 配下の focused fragment から生成されます。
+installer、doctor、self-test、reinstall、uninstall、dispatch logic を変更した場合は、
+テスト前に checked-in の単一ファイル installer を再生成してください:
+
+```bash
+bash tools/build-install-sh.sh
+```
+
 | normalizer rule | 詳細 |
 |---|---|
 | 再現可能な OPC metadata (#2756) | NuGet の OPC package writer は `package/services/metadata/core-properties/*.psmdcp` part 名を pack ごとにランダム生成します。normalizer はその part を `package/services/metadata/core-properties/core-properties.psmdcp` に書き換え、対応する content-type / relationship 参照も更新し、ZIP entry timestamp を固定します。これが `.nupkg` / `.snupkg` archive の package 再現性境界です。 |
@@ -2533,10 +2569,13 @@ latest release の installer を実行します。
 
 `cdidx upgrade --json` は automation 向けの stdout contract を持ちます。check-only と
 no-update の結果は update-check fields (`current_version`, `latest_version`,
-`update_available`, `from_cache`, `error`) を使います。update を install する場合、
-installer stdout/stderr は capture されるため stdout は 1 個の JSON document のままになり、
-update-check fields に `install_attempted`、`install_exit_code`、`install_succeeded` が
-追加されます。
+`update_available`, `from_cache`, `error`) に release-selection fields
+(`selected_version`, `selected_channel`, `selection_source`, `include_prerelease`)
+を加えたものを使います。update を install する場合、installer stdout/stderr は
+capture されるため stdout は 1 個の JSON document のままになり、update-check fields に
+`install_attempted`、`install_exit_code`、`install_succeeded` が追加されます。Windows
+handoff response には `handoff_command`、`handoff_url`、`handoff_asset`、
+`handoff_asset_url` も含まれます。
 
 ### 劣化理由コード
 

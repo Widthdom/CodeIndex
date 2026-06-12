@@ -114,6 +114,26 @@ public class CliFlagSchemaTests
     }
 
     [Fact]
+    public void UpgradeFlags_SurfaceImplementedSelectionAndJsonOptions()
+    {
+        var accepted = CliFlagSchema.GetAcceptedFlagNamesForCommand("upgrade");
+        Assert.Contains("--json", accepted);
+        Assert.Contains("--channel", accepted);
+        Assert.Contains("--prerelease", accepted);
+        Assert.Contains("--version", accepted);
+
+        var channel = Assert.Single(CliFlagSchema.GetCompletionFlagsForCommand("upgrade"), f => f.Name == "--channel");
+        Assert.Equal("<stable|latest|prerelease>", channel.ValuePlaceholder);
+        Assert.DoesNotContain("reserved", channel.Description, StringComparison.OrdinalIgnoreCase);
+
+        var prerelease = Assert.Single(CliFlagSchema.GetCompletionFlagsForCommand("upgrade"), f => f.Name == "--prerelease");
+        Assert.DoesNotContain("reserved", prerelease.Description, StringComparison.OrdinalIgnoreCase);
+
+        var version = Assert.Single(CliFlagSchema.GetCompletionFlagsForCommand("upgrade"), f => f.Name == "--version");
+        Assert.Equal("<tag>", version.ValuePlaceholder);
+    }
+
+    [Fact]
     public void TopLevelGlobalSchema_IncludesLogFlagsAndMatchesProgramRunnerParserSets()
     {
         var topLevel = CliFlagSchema.GetTopLevelGlobalOptionNames(includeLogOptions: true);

@@ -123,7 +123,7 @@ public static class ConsoleUi
         ("lsp", "cdidx lsp [--db <path>]"),
         ("completions", "cdidx completions <shell>"),
         ("--completions", "cdidx --completions <shell>"),
-        ("upgrade", "cdidx upgrade [--check-only]"),
+        ("upgrade", "cdidx upgrade [--check-only] [--json] [--channel <stable|latest|prerelease>] [--prerelease] [--version <tag>]"),
         ("license", "cdidx license"),
     ];
 

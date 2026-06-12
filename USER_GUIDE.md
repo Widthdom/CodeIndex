@@ -580,6 +580,22 @@ automatically when the `gh` command is available and the public GitHub release
 host is used. Set `CDIDX_REQUIRE_ATTESTATION=1` to make the installer fail
 closed when provenance verification cannot be completed.
 
+Installer verification policy is explicit:
+
+- `CDIDX_VERIFY_POLICY=compat` is the default. The installer always enforces
+  archive checksums, runs GitHub attestation and GPG checksum-signature checks
+  when the required tools/configuration are available, and warns before
+  continuing when an optional second-channel check cannot run.
+- `CDIDX_VERIFY_POLICY=strict` or `--verify-policy strict` makes public GitHub
+  attestation and GPG checksum-signature verification fail closed. Strict mode
+  also requires signer fingerprint pinning through
+  `CDIDX_RELEASE_GPG_FINGERPRINT`.
+- `CDIDX_REQUIRE_ATTESTATION=1` and `CDIDX_STRICT_VERIFY=1` remain available as
+  narrower compatibility knobs when only one second-channel check should be
+  required. Until an official default release-signing fingerprint is bundled,
+  strict GPG verification requires operators to distribute the trusted
+  fingerprint through `CDIDX_RELEASE_GPG_FINGERPRINT`.
+
 ### Option A: One-liner install (no .NET required)
 
 Works in containers, CI, and any Linux/macOS environment — no .NET SDK needed.
@@ -651,6 +667,31 @@ bash ./install.sh --self-test-local-mirror
 
 If the default local self-test port is busy, set
 `CDIDX_LOCAL_MIRROR_PORT=18766`.
+
+#### Upgrade an install.sh installation
+
+`cdidx upgrade` checks GitHub releases and reruns the verified installer for
+the selected release. It defaults to the stable/latest release channel.
+
+```bash
+cdidx upgrade
+cdidx upgrade --check-only --json
+cdidx upgrade --prerelease
+cdidx upgrade --channel prerelease
+cdidx upgrade --version v1.29.0-rc.1
+```
+
+Use `--channel stable` (or `--channel latest`) to stay on stable releases,
+`--prerelease` / `--channel prerelease` to dogfood the newest prerelease, and
+`--version <tag>` to install a specific release tag. JSON output includes
+`selected_version`, `selected_channel`, `selection_source`, and
+`include_prerelease` so automation can record why a release was selected.
+
+On Windows, `cdidx upgrade` selects the same release but does not replace the
+running binary in place. It prints a NuGet handoff command such as
+`dotnet tool update -g cdidx --version <version>` plus the matching release
+page and `CodeIndex-win-*.zip` asset URL; JSON output carries those values in
+`handoff_command`, `handoff_url`, `handoff_asset`, and `handoff_asset_url`.
 
 ### Option B: NuGet Global Tool
 
@@ -2934,6 +2975,22 @@ installer はこの provenance verification を自動実行します。
 `CDIDX_REQUIRE_ATTESTATION=1` を設定すると、provenance verification を完了
 できない場合に installer は fail closed します。
 
+installer の verification policy は明示的です:
+
+- 既定は `CDIDX_VERIFY_POLICY=compat` です。installer は archive checksum を常に
+  検証し、必要な tool/configuration がある場合は GitHub attestation と GPG
+  checksum-signature verification を実行します。任意の second-channel check を
+  実行できない場合は警告して続行します。
+- `CDIDX_VERIFY_POLICY=strict` または `--verify-policy strict` は、public GitHub
+  attestation と GPG checksum-signature verification を fail closed にします。
+  strict mode では `CDIDX_RELEASE_GPG_FINGERPRINT` による signer fingerprint
+  pinning も必須です。
+- `CDIDX_REQUIRE_ATTESTATION=1` と `CDIDX_STRICT_VERIFY=1` は、片方の
+  second-channel check だけを必須化したい場合の互換 knob として残っています。
+  公式の default release-signing fingerprint が bundled されるまでは、strict GPG
+  verification を使う operator が信頼する fingerprint を
+  `CDIDX_RELEASE_GPG_FINGERPRINT` 経由で配布してください。
+
 GitHub attestation は、その artifact が repository workflow identity により
 生成されたことを検証します。
 
@@ -3008,6 +3065,32 @@ bash ./install.sh --self-test-local-mirror
 
 既定の local self-test port が埋まっている場合は
 `CDIDX_LOCAL_MIRROR_PORT=18766` を設定してください。
+
+#### install.sh で入れた cdidx のアップグレード
+
+`cdidx upgrade` は GitHub releases を確認し、選択した release に対して検証済み
+installer を再実行します。既定では stable/latest release channel を使います。
+
+```bash
+cdidx upgrade
+cdidx upgrade --check-only --json
+cdidx upgrade --prerelease
+cdidx upgrade --channel prerelease
+cdidx upgrade --version v1.29.0-rc.1
+```
+
+stable release に留まる場合は `--channel stable`（または `--channel latest`）、
+最新 prerelease を試す場合は `--prerelease` / `--channel prerelease`、特定
+release tag を入れる場合は `--version <tag>` を使います。JSON 出力には
+`selected_version`、`selected_channel`、`selection_source`、
+`include_prerelease` が含まれるため、automation 側で選択理由を記録できます。
+
+Windows では `cdidx upgrade` は同じ release を選択しますが、実行中 binary を
+その場では置き換えません。代わりに
+`dotnet tool update -g cdidx --version <version>` 形式の NuGet handoff command
+と、対応する release page / `CodeIndex-win-*.zip` asset URL を表示します。JSON 出力では
+`handoff_command`、`handoff_url`、`handoff_asset`、`handoff_asset_url` に
+同じ値が入ります。
 
 ### 方法B: NuGet グローバルツール
 

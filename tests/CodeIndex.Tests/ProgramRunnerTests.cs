@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Net;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -1228,6 +1229,84 @@ exit 0
     }
 
     [Fact]
+    public void RunUpgrade_CheckOnlyJsonExplicitVersion_ReportsSelection()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["upgrade", "--check-only", "--json", "--version", "2.0.0-rc.1"],
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Empty(stderr);
+            using var doc = JsonDocument.Parse(stdout);
+            var root = doc.RootElement;
+            Assert.Equal("v2.0.0-rc.1", root.GetProperty("latest_version").GetString());
+            Assert.Equal("v2.0.0-rc.1", root.GetProperty("selected_version").GetString());
+            Assert.Equal("prerelease", root.GetProperty("selected_channel").GetString());
+            Assert.Equal("explicit_version", root.GetProperty("selection_source").GetString());
+            Assert.True(root.GetProperty("include_prerelease").GetBoolean());
+            Assert.False(root.GetProperty("install_attempted").GetBoolean());
+        }
+    }
+
+    [Fact]
+    public void RunUpgrade_CheckOnlyJsonPrerelease_ReportsSelection()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var previousFactory = ProgramRunner.UpgradeHttpClientFactory;
+            ProgramRunner.UpgradeHttpClientFactory = () => new HttpClient(
+                new StaticResponseHandler(new ByteArrayContent(Encoding.UTF8.GetBytes("""
+                    [
+                      { "tag_name": "v9.9.9", "draft": false, "prerelease": false },
+                      { "tag_name": "v9.9.9-rc.2", "draft": true, "prerelease": true },
+                      { "tag_name": "v9.9.9-rc.1", "draft": false, "prerelease": true }
+                    ]
+                    """))))
+            {
+                Timeout = Timeout.InfiniteTimeSpan,
+            };
+
+            try
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                    ["upgrade", "--check-only", "--json", "--prerelease"],
+                    appVersion: "1.10.0"));
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Empty(stderr);
+                using var doc = JsonDocument.Parse(stdout);
+                var root = doc.RootElement;
+                Assert.Equal("v9.9.9-rc.1", root.GetProperty("latest_version").GetString());
+                Assert.Equal("v9.9.9-rc.1", root.GetProperty("selected_version").GetString());
+                Assert.Equal("prerelease", root.GetProperty("selected_channel").GetString());
+                Assert.Equal("prerelease", root.GetProperty("selection_source").GetString());
+                Assert.True(root.GetProperty("include_prerelease").GetBoolean());
+            }
+            finally
+            {
+                ProgramRunner.UpgradeHttpClientFactory = previousFactory;
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData(Architecture.X64, "CodeIndex-win-x64.zip")]
+    [InlineData(Architecture.Arm64, "CodeIndex-win-arm64.zip")]
+    public void CreateWindowsUpgradeHandoff_UsesNuGetVersionAndMatchingAsset(Architecture architecture, string expectedAsset)
+    {
+        var handoff = ProgramRunner.CreateWindowsUpgradeHandoff("v2.0.0-rc.1", architecture);
+
+        Assert.Equal("dotnet tool update -g cdidx --version 2.0.0-rc.1", handoff.Command);
+        Assert.Equal("https://github.com/Widthdom/CodeIndex/releases/tag/v2.0.0-rc.1", handoff.Url);
+        Assert.Equal(expectedAsset, handoff.Asset);
+        Assert.Equal(
+            $"https://github.com/Widthdom/CodeIndex/releases/download/v2.0.0-rc.1/{expectedAsset}",
+            handoff.AssetUrl);
+    }
+
+    [Fact]
     public async Task DownloadReleaseChecksumManifestAsync_RejectsOverLimitResponse()
     {
         using var client = new HttpClient(new StaticResponseHandler(new ByteArrayContent(new byte[(int)ProgramRunner.MaxReleaseChecksumBytes + 1])))
@@ -1274,6 +1353,22 @@ exit 0
 
         await Assert.ThrowsAnyAsync<JsonException>(() =>
             UpdateChecker.ReadLatestReleaseTagAsync(content, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task UpdateChecker_ReadLatestPrereleaseTagAsync_SkipsDraftsAndStableReleases()
+    {
+        using var content = new ByteArrayContent(Encoding.UTF8.GetBytes("""
+            [
+              { "tag_name": "v3.0.0", "draft": false, "prerelease": false },
+              { "tag_name": "v3.1.0-rc.2", "draft": true, "prerelease": true },
+              { "tag_name": "v3.1.0-rc.1", "draft": false, "prerelease": true }
+            ]
+            """));
+
+        var tag = await UpdateChecker.ReadLatestPrereleaseTagAsync(content, CancellationToken.None);
+
+        Assert.Equal("v3.1.0-rc.1", tag);
     }
 
     [Fact]
