@@ -119,6 +119,56 @@ public sealed class InstallScriptTests : IDisposable
     }
 
     [Fact]
+    public void RemovePromotedFiles_RemovesExpectedAssets_Issue3503()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var installDir = Path.Combine(_tempRoot, "rollback_remove_expected");
+        Directory.CreateDirectory(Path.Combine(installDir, "LICENSES"));
+        File.WriteAllText(Path.Combine(installDir, "version.json"), "{}");
+        File.WriteAllText(Path.Combine(installDir, "libe_sqlite3.so"), "");
+        File.WriteAllText(Path.Combine(installDir, "LICENSES", "notice.txt"), "");
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            remove_promoted_files "{{installDir}}" "version.json libe_sqlite3.so LICENSES"
+            echo "REMOVE_OK"
+            """);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("REMOVE_OK", stdout);
+        Assert.Equal(string.Empty, stderr);
+        Assert.False(File.Exists(Path.Combine(installDir, "version.json")));
+        Assert.False(File.Exists(Path.Combine(installDir, "libe_sqlite3.so")));
+        Assert.False(Directory.Exists(Path.Combine(installDir, "LICENSES")));
+    }
+
+    [Fact]
+    public void RemovePromotedFiles_RejectsUnsafeAssetBeforeDeletingAny_Issue3503()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var installDir = Path.Combine(_tempRoot, "rollback_reject_unsafe");
+        Directory.CreateDirectory(installDir);
+        var versionPath = Path.Combine(installDir, "version.json");
+        File.WriteAllText(versionPath, "{}");
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            remove_promoted_files "{{installDir}}" "version.json ../outside"
+            echo "UNREACHABLE"
+            """,
+            enforceStrictMode: false);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.DoesNotContain("UNREACHABLE", stdout);
+        Assert.Contains("Refusing to remove unsafe rollback asset name", stderr);
+        Assert.True(File.Exists(versionPath));
+    }
+
+    [Fact]
     public void DownloadAndInstall_SecuresStageDirectoryAfterMktemp()
     {
         var script = File.ReadAllText(Path.Combine(GetRepositoryRoot(), "install.sh"));

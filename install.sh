@@ -964,10 +964,45 @@ restore_backed_up_files() {
     return 0
 }
 
+is_expected_release_asset_name() {
+    case "$1" in
+        "$BINARY_NAME"|version.json|libe_sqlite3.so|libe_sqlite3.dylib|LICENSE|COMMERCIAL_LICENSE.md|INTEGRATION_POLICY.md|TRADEMARKS.md|MANIFEST.sha256|LICENSES)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+validate_promoted_asset_name() {
+    local asset="$1"
+
+    case "$asset" in
+        ""|"."|".."|/*|*/*|*\\*)
+            report_error "Refusing to remove unsafe rollback asset name: ${asset:-<empty>}"
+            return 1
+            ;;
+    esac
+
+    if ! is_expected_release_asset_name "$asset"; then
+        report_error "Refusing to remove unexpected rollback asset name: ${asset}"
+        return 1
+    fi
+
+    return 0
+}
+
 remove_promoted_files() {
     local install_dir="$1"
     local promoted_files="$2"
     local asset
+
+    for asset in $promoted_files; do
+        if ! validate_promoted_asset_name "$asset"; then
+            return 1
+        fi
+    done
 
     for asset in $promoted_files; do
         if [ -e "${install_dir}/${asset}" ]; then
