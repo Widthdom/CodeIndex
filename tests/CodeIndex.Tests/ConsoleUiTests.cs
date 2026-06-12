@@ -1101,6 +1101,18 @@ public class ConsoleUiTests
     }
 
     [Fact]
+    public void UpgradeUsageLine_ShowsImplementedSelectionAndJsonOptions()
+    {
+        var usage = ConsoleUi.GetUsageLine("upgrade");
+
+        Assert.NotNull(usage);
+        Assert.Contains("--json", usage);
+        Assert.Contains("--channel <stable|latest|prerelease>", usage);
+        Assert.Contains("--prerelease", usage);
+        Assert.Contains("--version <tag>", usage);
+    }
+
+    [Fact]
     public void PrintUsageBrief_IsConciseAndPointsToExtendedHelp()
     {
         var output = CaptureBriefUsageOutput(showBanner: false);

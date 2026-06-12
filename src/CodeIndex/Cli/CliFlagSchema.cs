@@ -192,7 +192,7 @@ internal static class CliFlagSchema
     [
         "index", "backfill-fold", "optimize", "vacuum", "search", "definition", "goto", "references", "callers", "callees",
         "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status",
-        "validate", "deps", "impact", "unused", "hotspots", "suggestions", "languages", "db", "report",
+        "validate", "deps", "impact", "unused", "hotspots", "suggestions", "languages", "db", "report", "upgrade",
     ];
 
     private static readonly string[] CompactJsonCommands = ["map", "inspect", "outline"];
@@ -329,8 +329,9 @@ internal static class CliFlagSchema
             new() { Name = "--log-path", Description = "Print the active persistent log directory", Commands = Set("status") },
             new() { Name = "--check-updates", Description = "Check whether a newer cdidx release is available", Commands = Set("status", "upgrade") },
             new() { Name = "--check-only", Description = "Upgrade: only report whether an upgrade is available", Commands = Set("upgrade") },
-            new() { Name = "--channel", ValuePlaceholder = "<stable|beta>", Description = "Upgrade channel selector (reserved)", Commands = Set("upgrade") },
-            new() { Name = "--prerelease", Description = "Upgrade: include prerelease versions (reserved)", Commands = Set("upgrade") },
+            new() { Name = "--channel", ValuePlaceholder = "<stable|latest|prerelease>", Description = "Upgrade: select stable/latest or prerelease releases", Commands = Set("upgrade") },
+            new() { Name = "--prerelease", Description = "Upgrade: select the newest prerelease", Commands = Set("upgrade") },
+            new() { Name = "--version", ValuePlaceholder = "<tag>", Description = "Upgrade: install a specific release tag", Commands = Set("upgrade") },
             new() { Name = "--integrity-check", Description = "Run PRAGMA integrity_check on the database", Commands = Set("db") },
             new() { Name = "--rebuild", Description = "Delete existing DB and rebuild from scratch", Commands = Set("index") },
             new() { Name = "--optimize", Description = "Optimize the existing FTS5 table without scanning files", Commands = Set("index") },

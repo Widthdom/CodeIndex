@@ -668,6 +668,25 @@ bash ./install.sh --self-test-local-mirror
 If the default local self-test port is busy, set
 `CDIDX_LOCAL_MIRROR_PORT=18766`.
 
+#### Upgrade an install.sh installation
+
+`cdidx upgrade` checks GitHub releases and reruns the verified installer for
+the selected release. It defaults to the stable/latest release channel.
+
+```bash
+cdidx upgrade
+cdidx upgrade --check-only --json
+cdidx upgrade --prerelease
+cdidx upgrade --channel prerelease
+cdidx upgrade --version v1.29.0-rc.1
+```
+
+Use `--channel stable` (or `--channel latest`) to stay on stable releases,
+`--prerelease` / `--channel prerelease` to dogfood the newest prerelease, and
+`--version <tag>` to install a specific release tag. JSON output includes
+`selected_version`, `selected_channel`, `selection_source`, and
+`include_prerelease` so automation can record why a release was selected.
+
 ### Option B: NuGet Global Tool
 
 Requires the [.NET 8.x SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
@@ -3040,6 +3059,25 @@ bash ./install.sh --self-test-local-mirror
 
 既定の local self-test port が埋まっている場合は
 `CDIDX_LOCAL_MIRROR_PORT=18766` を設定してください。
+
+#### install.sh で入れた cdidx のアップグレード
+
+`cdidx upgrade` は GitHub releases を確認し、選択した release に対して検証済み
+installer を再実行します。既定では stable/latest release channel を使います。
+
+```bash
+cdidx upgrade
+cdidx upgrade --check-only --json
+cdidx upgrade --prerelease
+cdidx upgrade --channel prerelease
+cdidx upgrade --version v1.29.0-rc.1
+```
+
+stable release に留まる場合は `--channel stable`（または `--channel latest`）、
+最新 prerelease を試す場合は `--prerelease` / `--channel prerelease`、特定
+release tag を入れる場合は `--version <tag>` を使います。JSON 出力には
+`selected_version`、`selected_channel`、`selection_source`、
+`include_prerelease` が含まれるため、automation 側で選択理由を記録できます。
 
 ### 方法B: NuGet グローバルツール
 

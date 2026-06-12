@@ -360,9 +360,13 @@ On startup, `cdidx` walks up from the current directory looking for `.cdidx-vers
 `cdidx upgrade --json` has a stdout contract suitable for automation. Check-only
 and no-update results use the update-check fields
 (`current_version`, `latest_version`, `update_available`, `from_cache`,
-`error`). When an update is installed, installer stdout/stderr is captured so
-stdout remains one JSON document, with `install_attempted`, `install_exit_code`,
-and `install_succeeded` added to the update-check fields.
+`error`) plus release-selection fields (`selected_version`,
+`selected_channel`, `selection_source`, `include_prerelease`). When an update is
+installed, installer stdout/stderr is captured so stdout remains one JSON
+document, with `install_attempted`, `install_exit_code`, and
+`install_succeeded` added to the update-check fields. Windows handoff responses
+also include `handoff_command`, `handoff_url`, `handoff_asset`, and
+`handoff_asset_url`.
 
 ### Degradation reason codes
 
@@ -2547,10 +2551,13 @@ latest release の installer を実行します。
 
 `cdidx upgrade --json` は automation 向けの stdout contract を持ちます。check-only と
 no-update の結果は update-check fields (`current_version`, `latest_version`,
-`update_available`, `from_cache`, `error`) を使います。update を install する場合、
-installer stdout/stderr は capture されるため stdout は 1 個の JSON document のままになり、
-update-check fields に `install_attempted`、`install_exit_code`、`install_succeeded` が
-追加されます。
+`update_available`, `from_cache`, `error`) に release-selection fields
+(`selected_version`, `selected_channel`, `selection_source`, `include_prerelease`)
+を加えたものを使います。update を install する場合、installer stdout/stderr は
+capture されるため stdout は 1 個の JSON document のままになり、update-check fields に
+`install_attempted`、`install_exit_code`、`install_succeeded` が追加されます。Windows
+handoff response には `handoff_command`、`handoff_url`、`handoff_asset`、
+`handoff_asset_url` も含まれます。
 
 ### 劣化理由コード
 

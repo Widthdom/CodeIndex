@@ -3059,8 +3059,13 @@ internal static class ProgramRunner
     {
         var checkOnly = false;
         var wantsJson = false;
-        foreach (var arg in cmdArgs)
+        var selectedChannel = "stable";
+        var includePrerelease = false;
+        var selectionSource = "latest";
+        string? explicitVersion = null;
+        for (var i = 0; i < cmdArgs.Length; i++)
         {
+            var arg = cmdArgs[i];
             if (arg is "--check-only" or "--check-updates")
             {
                 checkOnly = true;
@@ -3071,35 +3076,111 @@ internal static class ProgramRunner
                 wantsJson = true;
                 continue;
             }
-            if (arg is "--channel" or "--prerelease" || arg.StartsWith("--channel=", StringComparison.Ordinal))
+            if (arg == "--prerelease")
             {
-                Console.Error.WriteLine("Error: upgrade channels and prerelease upgrades are not supported yet.");
-                Console.Error.WriteLine("Hint: rerun `install.sh` with an explicit release tag if you need a non-latest version.");
-                return CommandExitCodes.UsageError;
+                selectedChannel = "prerelease";
+                includePrerelease = true;
+                selectionSource = "prerelease";
+                continue;
             }
-            Console.Error.WriteLine($"Error: upgrade does not accept '{arg}'.");
-            Console.Error.WriteLine("Hint: use `cdidx upgrade` or `cdidx upgrade --check-only`.");
-            return CommandExitCodes.UsageError;
+            if (arg == "--channel")
+            {
+                if (i + 1 >= cmdArgs.Length)
+                    return WriteUpgradeUsageError("--channel requires a value: stable, latest, or prerelease.");
+
+                if (!TryApplyUpgradeChannel(cmdArgs[++i], out selectedChannel, out includePrerelease, out var channelError))
+                    return WriteUpgradeUsageError(channelError);
+
+                selectionSource = selectedChannel == "prerelease" ? "prerelease" : "latest";
+                continue;
+            }
+            if (arg.StartsWith("--channel=", StringComparison.Ordinal))
+            {
+                if (!TryApplyUpgradeChannel(arg["--channel=".Length..], out selectedChannel, out includePrerelease, out var channelError))
+                    return WriteUpgradeUsageError(channelError);
+
+                selectionSource = selectedChannel == "prerelease" ? "prerelease" : "latest";
+                continue;
+            }
+            if (arg == "--version")
+            {
+                if (i + 1 >= cmdArgs.Length)
+                    return WriteUpgradeUsageError("--version requires a release tag such as v1.29.0.");
+
+                if (!TryNormalizeReleaseTag(cmdArgs[++i], out explicitVersion, out var versionError))
+                    return WriteUpgradeUsageError(versionError);
+
+                selectionSource = "explicit_version";
+                continue;
+            }
+            if (arg.StartsWith("--version=", StringComparison.Ordinal))
+            {
+                if (!TryNormalizeReleaseTag(arg["--version=".Length..], out explicitVersion, out var versionError))
+                    return WriteUpgradeUsageError(versionError);
+
+                selectionSource = "explicit_version";
+                continue;
+            }
+            return WriteUpgradeUsageError($"upgrade does not accept '{arg}'.");
         }
 
-        var result = UpdateChecker.Check(appVersion, cancellationToken);
-        if (checkOnly || !result.UpdateAvailable || result.LatestVersion == null)
+        if (explicitVersion != null && IsPrereleaseTag(explicitVersion) && selectedChannel == "stable")
+        {
+            selectedChannel = "prerelease";
+            includePrerelease = true;
+        }
+
+        var result = explicitVersion != null
+            ? new UpdateCheckResult(
+                appVersion,
+                explicitVersion,
+                UpdateChecker.IsNewerRelease(explicitVersion, appVersion),
+                FromCache: false,
+                Error: null)
+            : includePrerelease
+                ? CheckLatestPrerelease(appVersion, cancellationToken)
+                : UpdateChecker.Check(appVersion, cancellationToken);
+
+        var shouldInstall = result.LatestVersion != null && (explicitVersion != null || result.UpdateAvailable);
+        if (checkOnly || !shouldInstall)
         {
             if (wantsJson)
-                Console.WriteLine(JsonSerializer.Serialize(result, jsonOptions));
+            {
+                Console.WriteLine(JsonSerializer.Serialize(
+                    CreateUpgradeJsonResult(
+                        result,
+                        selectedChannel,
+                        selectionSource,
+                        includePrerelease,
+                        installAttempted: false,
+                        installExitCode: null,
+                        error: null),
+                    jsonOptions));
+            }
             else if (result.UpdateAvailable && result.LatestVersion != null)
-                Console.WriteLine($"A newer cdidx release is available: {result.LatestVersion} (current: {result.CurrentVersion}).");
+                Console.WriteLine($"A newer cdidx {selectedChannel} release is available: {result.LatestVersion} (current: {result.CurrentVersion}).");
+            else if (result.Error != null)
+                Console.WriteLine($"Could not select a cdidx {selectedChannel} release ({result.Error}); current: {result.CurrentVersion}.");
             else
                 Console.WriteLine($"cdidx is up to date (current: {result.CurrentVersion}).");
             return CommandExitCodes.Success;
         }
+
+        var selectedReleaseTag = result.LatestVersion!;
 
         if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
         {
             if (wantsJson)
             {
                 Console.WriteLine(JsonSerializer.Serialize(
-                    CreateUpgradeJsonResult(result, installAttempted: false, installExitCode: null, "unsupported_platform"),
+                    CreateUpgradeJsonResult(
+                        result,
+                        selectedChannel,
+                        selectionSource,
+                        includePrerelease,
+                        installAttempted: false,
+                        installExitCode: null,
+                        error: "unsupported_platform"),
                     jsonOptions));
             }
             else
@@ -3116,7 +3197,14 @@ internal static class ProgramRunner
             if (wantsJson)
             {
                 Console.WriteLine(JsonSerializer.Serialize(
-                    CreateUpgradeJsonResult(result, installAttempted: false, installExitCode: null, "install_directory_not_writable"),
+                    CreateUpgradeJsonResult(
+                        result,
+                        selectedChannel,
+                        selectionSource,
+                        includePrerelease,
+                        installAttempted: false,
+                        installExitCode: null,
+                        error: "install_directory_not_writable"),
                     jsonOptions));
             }
             else
@@ -3137,7 +3225,7 @@ internal static class ProgramRunner
             {
                 var checksumManifest = DownloadReleaseChecksumManifestAsync(
                         client,
-                        result.LatestVersion,
+                        selectedReleaseTag,
                         TimeSpan.FromSeconds(20),
                         cancellationToken)
                     .GetAwaiter()
@@ -3146,7 +3234,7 @@ internal static class ProgramRunner
 
                 DownloadInstallerScriptAsync(
                         client,
-                        result.LatestVersion,
+                        selectedReleaseTag,
                         scriptPath,
                         TimeSpan.FromSeconds(20),
                         cancellationToken)
@@ -3155,7 +3243,7 @@ internal static class ProgramRunner
                 VerifyFileSha256(scriptPath, expectedInstallerSha256, InstallerScriptAssetName);
             }
 
-            var startInfo = CreateInstallerProcessStartInfo(scriptPath, result.LatestVersion, installDir);
+            var startInfo = CreateInstallerProcessStartInfo(scriptPath, selectedReleaseTag, installDir);
             var installExitCode = RunInstallerProcess(
                 startInfo,
                 InstallerRunTimeout,
@@ -3167,7 +3255,14 @@ internal static class ProgramRunner
                     ? null
                     : $"installer_exit_code_{installExitCode.ToString(CultureInfo.InvariantCulture)}";
                 Console.WriteLine(JsonSerializer.Serialize(
-                    CreateUpgradeJsonResult(result, installAttempted: true, installExitCode, error),
+                    CreateUpgradeJsonResult(
+                        result,
+                        selectedChannel,
+                        selectionSource,
+                        includePrerelease,
+                        installAttempted: true,
+                        installExitCode: installExitCode,
+                        error: error),
                     jsonOptions));
             }
             return installExitCode;
@@ -3181,7 +3276,14 @@ internal static class ProgramRunner
             if (wantsJson)
             {
                 Console.WriteLine(JsonSerializer.Serialize(
-                    CreateUpgradeJsonResult(result, installAttempted: false, installExitCode: null, ex.GetType().Name),
+                    CreateUpgradeJsonResult(
+                        result,
+                        selectedChannel,
+                        selectionSource,
+                        includePrerelease,
+                        installAttempted: false,
+                        installExitCode: null,
+                        error: ex.GetType().Name),
                     jsonOptions));
             }
             else
@@ -3197,6 +3299,92 @@ internal static class ProgramRunner
                 try { File.Delete(scriptPath); } catch { }
             if (scriptDirectory != null)
                 try { Directory.Delete(scriptDirectory, recursive: true); } catch { }
+        }
+    }
+
+    private static int WriteUpgradeUsageError(string message)
+    {
+        Console.Error.WriteLine($"Error: {message}");
+        Console.Error.WriteLine("Hint: use `cdidx upgrade [--check-only] [--channel stable|prerelease] [--prerelease] [--version vX.Y.Z]`.");
+        return CommandExitCodes.UsageError;
+    }
+
+    private static bool TryApplyUpgradeChannel(
+        string rawChannel,
+        out string selectedChannel,
+        out bool includePrerelease,
+        out string error)
+    {
+        selectedChannel = "stable";
+        includePrerelease = false;
+        error = string.Empty;
+
+        switch (rawChannel.Trim().ToLowerInvariant())
+        {
+            case "stable":
+            case "latest":
+                selectedChannel = "stable";
+                return true;
+            case "prerelease":
+            case "preview":
+                selectedChannel = "prerelease";
+                includePrerelease = true;
+                return true;
+            default:
+                error = $"unsupported upgrade channel '{rawChannel}'.";
+                return false;
+        }
+    }
+
+    private static bool TryNormalizeReleaseTag(string rawVersion, out string? normalizedVersion, out string error)
+    {
+        normalizedVersion = null;
+        error = string.Empty;
+
+        var trimmed = rawVersion.Trim();
+        if (trimmed.Length == 0)
+        {
+            error = "--version requires a non-empty release tag.";
+            return false;
+        }
+
+        normalizedVersion = trimmed[0] is 'v' or 'V'
+            ? "v" + trimmed[1..]
+            : "v" + trimmed;
+        return true;
+    }
+
+    private static bool IsPrereleaseTag(string releaseTag)
+        => releaseTag.Contains('-', StringComparison.Ordinal);
+
+    private static UpdateCheckResult CheckLatestPrerelease(string appVersion, CancellationToken cancellationToken)
+    {
+        if (UpdateChecker.IsDisabled())
+            return new UpdateCheckResult(appVersion, null, false, FromCache: false, Error: "disabled");
+
+        try
+        {
+            using var client = UpgradeHttpClientFactory();
+            var tag = UpdateChecker.FetchLatestPrereleaseTagAsync(
+                    client,
+                    TimeSpan.FromSeconds(20),
+                    cancellationToken)
+                .GetAwaiter()
+                .GetResult();
+            return new UpdateCheckResult(
+                appVersion,
+                tag,
+                UpdateChecker.IsNewerRelease(tag, appVersion),
+                FromCache: false,
+                Error: tag is null ? "prerelease_not_found" : null);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return new UpdateCheckResult(appVersion, null, false, FromCache: false, Error: ex.GetType().Name);
         }
     }
 
@@ -3302,6 +3490,9 @@ internal static class ProgramRunner
 
     private static UpgradeJsonResult CreateUpgradeJsonResult(
         UpdateCheckResult result,
+        string selectedChannel,
+        string selectionSource,
+        bool includePrerelease,
         bool installAttempted,
         int? installExitCode,
         string? error)
@@ -3310,6 +3501,10 @@ internal static class ProgramRunner
             result.LatestVersion,
             result.UpdateAvailable,
             result.FromCache,
+            result.LatestVersion,
+            selectedChannel,
+            selectionSource,
+            includePrerelease,
             error ?? result.Error,
             installAttempted,
             installExitCode,
