@@ -2725,7 +2725,7 @@ public partial class McpServer : IDisposable
             // パスや索引内容が漏れる（#1530）。
             DeferFrameLog(() =>
             {
-                WriteMcpLogLine(BuildToolErrorLog(toolName, ex.Message));
+                WriteMcpLogLine(BuildToolErrorLog(toolName, ex));
                 Database.DbDebug.DumpToStderr(ex);
             });
             metricsError = ex.GetType().Name;
@@ -3259,8 +3259,21 @@ public partial class McpServer : IDisposable
     internal static string BuildResponseWriteErrorLog(string detail) =>
         $"[cdidx-mcp] Error writing response: {detail}. The request was handled but the client connection may already be closed.";
 
-    internal static string BuildToolErrorLog(string toolName, string detail) =>
-        $"[cdidx-mcp] Tool error ({BoundToolNameForDisplay(toolName).Text}): {detail}. Fix the tool arguments, refresh the index if needed, then retry.";
+    internal static string BuildToolErrorLog(string toolName, Exception ex) =>
+        $"[cdidx-mcp] Tool error ({BoundToolNameForDisplay(toolName).Text}): {BuildSanitizedExceptionLogDetail(ex)}. Fix the tool arguments, refresh the index if needed, then retry.";
+
+    internal static string BuildSanitizedExceptionLogDetail(Exception ex)
+    {
+        var exceptionType = McpBoundedText.ForDisplay(ex.GetType().Name).Text;
+        if (ex is CodeIndexException codeIndexEx)
+        {
+            var code = McpBoundedText.ForDisplay(codeIndexEx.Code).Text;
+            var category = McpBoundedText.ForDisplay(codeIndexEx.Category).Text;
+            return $"{exceptionType} code={code} category={category}{BuildPathFragment(codeIndexEx)}{BuildHintFragment(codeIndexEx)}";
+        }
+
+        return exceptionType;
+    }
 
     internal static string BuildClientResponseTooLargeLog(string member, int bytesWritten) =>
         $"[cdidx-mcp] Client response {member} exceeded the server byte limit ({bytesWritten} > {MaxClientResponseJsonBytes}); rejecting without retaining the payload.";

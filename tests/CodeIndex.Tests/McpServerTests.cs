@@ -2434,9 +2434,9 @@ public class McpServerTests : IDisposable
     [Fact]
     public void BuildToolErrorLog_IsActionable()
     {
-        var message = McpServer.BuildToolErrorLog("search", "bad db");
+        var message = McpServer.BuildToolErrorLog("search", new InvalidOperationException("bad db"));
 
-        Assert.Contains("Tool error (search): bad db", message);
+        Assert.Contains("Tool error (search): InvalidOperationException", message);
         Assert.Contains("Fix the tool arguments", message);
         Assert.Contains("refresh the index if needed", message);
         Assert.Contains("retry", message);
@@ -8864,6 +8864,34 @@ public class McpServerTests : IDisposable
             Environment.SetEnvironmentVariable(McpServer.DebugEnvironmentVariable, previous);
             DeleteFileRobust(corruptDbPath);
         }
+    }
+
+    [Fact]
+    public void BuildToolErrorLog_SuppressesRawExceptionMessage_Issue3370()
+    {
+        const string secret = "SECRET_TOOL_LOG_3370";
+
+        var log = McpServer.BuildToolErrorLog("search", new InvalidOperationException($"near '{secret}': syntax error"));
+
+        Assert.Contains("InvalidOperationException", log, StringComparison.Ordinal);
+        Assert.DoesNotContain(secret, log, StringComparison.Ordinal);
+        Assert.DoesNotContain("syntax error", log, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ToolsCall_FindInFileInvalidRegex_DoesNotEchoRegexExceptionMessage_Issue3370()
+    {
+        const string secret = "SECRET_REGEX_3370";
+        var request = JsonNode.Parse(
+            "{\"jsonrpc\":\"2.0\",\"id\":3370,\"method\":\"tools/call\",\"params\":{\"name\":\"find_in_file\",\"arguments\":{\"path\":\"src/app.cs\",\"query\":\"(?<"
+            + secret
+            + "\",\"regex\":true}}}")!;
+
+        var response = _server.HandleMessage(request)!;
+
+        var error = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Equal("invalid regular expression. Check regex syntax and retry.", error);
+        Assert.DoesNotContain(secret, error, StringComparison.Ordinal);
     }
 
     [Fact]
