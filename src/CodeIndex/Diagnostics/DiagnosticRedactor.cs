@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Data.Sqlite;
 
@@ -24,6 +25,11 @@ internal static class DiagnosticRedactor
 
     private static readonly Regex SensitiveAssignmentPattern = new(
         @"(?<![\w.-])(?<name>--?[\w.-]*(?:token|password|passwd|pwd|secret|auth|apikey|api-key|api_key|access-key|access_key|credential)[\w.-]*)(?<sep>=|:)(?<value>[^\s,;]+)",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled,
+        RegexTimeout);
+
+    private static readonly Regex SensitiveSeparatedArgumentPattern = new(
+        @"(?<![\w.-])(?<name>--?[\w.-]*(?:token|password|passwd|pwd|secret|auth|apikey|api-key|api_key|access-key|access_key|credential)[\w.-]*)\s+(?<value>""[^""]*""|'[^']*'|[^\s,;]+)",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled,
         RegexTimeout);
 
@@ -133,6 +139,35 @@ internal static class DiagnosticRedactor
         return builder.ToString();
     }
 
+    internal static string RedactReportLogLine(string line, bool includeArgs, string placeholder = AngleRedacted)
+    {
+        if (string.IsNullOrEmpty(line))
+            return line;
+
+        if (TryRedactReportJsonLogLine(line, includeArgs, placeholder, out var redactedJsonLine))
+            return redactedJsonLine;
+
+        return RedactReportKeyValueLogLine(line, includeArgs, placeholder);
+    }
+
+    private static string RedactReportKeyValueLogLine(string line, bool includeArgs, string placeholder)
+    {
+        var builder = new StringBuilder(line.Length);
+        var position = 0;
+        while (TryFindReportKey(line, position, out var keyStart, out var keyEnd, out var valueStart))
+        {
+            builder.Append(RedactSensitiveText(line[position..valueStart], placeholder, redactPaths: true));
+            var valueEnd = FindReportValueEnd(line, valueStart);
+            var key = line[keyStart..keyEnd];
+            var value = line[valueStart..valueEnd];
+            builder.Append(RedactReportLogValue(key, value, includeArgs, placeholder));
+            position = valueEnd;
+        }
+
+        builder.Append(RedactSensitiveText(line[position..], placeholder, redactPaths: true));
+        return builder.ToString();
+    }
+
     internal static string RedactSensitiveText(string value, string placeholder = AngleRedacted, bool redactPaths = false)
     {
         if (string.IsNullOrEmpty(value))
@@ -143,6 +178,8 @@ internal static class DiagnosticRedactor
         redacted = BearerTokenPattern.Replace(redacted, "Bearer " + placeholder);
         redacted = SensitiveAssignmentPattern.Replace(redacted, match =>
             match.Groups["name"].Value + match.Groups["sep"].Value + placeholder);
+        redacted = SensitiveSeparatedArgumentPattern.Replace(redacted, match =>
+            match.Groups["name"].Value + " " + placeholder);
         redacted = GitHubTokenPattern.Replace(redacted, placeholder);
         redacted = LongHexPattern.Replace(redacted, placeholder);
         redacted = LongBase64Pattern.Replace(redacted, match =>
@@ -189,6 +226,177 @@ internal static class DiagnosticRedactor
             || name.Contains("access-key", StringComparison.OrdinalIgnoreCase)
             || name.Contains("access_key", StringComparison.OrdinalIgnoreCase)
             || name.Contains("credential", StringComparison.OrdinalIgnoreCase));
+
+    private static bool TryRedactReportJsonLogLine(
+        string line,
+        bool includeArgs,
+        string placeholder,
+        out string redacted)
+    {
+        redacted = line;
+        if (!LooksLikeJsonObject(line))
+            return false;
+
+        try
+        {
+            using var document = JsonDocument.Parse(line);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+                return false;
+
+            using var stream = new MemoryStream();
+            using (var writer = new Utf8JsonWriter(stream))
+            {
+                writer.WriteStartObject();
+                foreach (var property in document.RootElement.EnumerateObject())
+                {
+                    writer.WritePropertyName(property.Name);
+                    if (property.Value.ValueKind == JsonValueKind.String)
+                    {
+                        writer.WriteStringValue(RedactReportJsonStringProperty(
+                            property.Name,
+                            property.Value.GetString() ?? string.Empty,
+                            includeArgs,
+                            placeholder));
+                    }
+                    else
+                    {
+                        property.Value.WriteTo(writer);
+                    }
+                }
+
+                writer.WriteEndObject();
+            }
+
+            redacted = Encoding.UTF8.GetString(stream.ToArray());
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+    }
+
+    private static bool LooksLikeJsonObject(string line)
+    {
+        var start = 0;
+        while (start < line.Length && char.IsWhiteSpace(line[start]))
+            start++;
+        if (start >= line.Length || line[start] != '{')
+            return false;
+
+        var end = line.Length - 1;
+        while (end >= start && char.IsWhiteSpace(line[end]))
+            end--;
+
+        return end > start && line[end] == '}';
+    }
+
+    private static string RedactReportJsonStringProperty(string key, string value, bool includeArgs, string placeholder)
+    {
+        if (key.Equals("msg", StringComparison.Ordinal))
+        {
+            var redactedMessage = RedactReportKeyValueLogLine(value, includeArgs, placeholder);
+            return RedactSensitiveText(redactedMessage, placeholder, redactPaths: true);
+        }
+
+        return RedactReportLogValue(key, value, includeArgs, placeholder);
+    }
+
+    private static string RedactReportLogValue(string key, string value, bool includeArgs, string placeholder)
+    {
+        if (key.Equals("args", StringComparison.Ordinal))
+        {
+            return includeArgs
+                ? RedactSensitiveText(value, placeholder, redactPaths: true)
+                : placeholder;
+        }
+
+        if (IsReportPathKey(key) || IsSensitiveName(key))
+            return placeholder;
+
+        return RedactSensitiveText(value, placeholder, redactPaths: true);
+    }
+
+    private static bool IsReportPathKey(string key) =>
+        key is "cwd" or "process_path" or "base_dir" or "db" or "path";
+
+    private static bool TryFindReportKey(
+        string line,
+        int start,
+        out int keyStart,
+        out int keyEnd,
+        out int valueStart)
+    {
+        for (var i = start; i < line.Length; i++)
+        {
+            if (i > 0 && !char.IsWhiteSpace(line[i - 1]))
+                continue;
+            if (TryReadReportKeyAt(line, i, out keyEnd, out valueStart))
+            {
+                keyStart = i;
+                return true;
+            }
+        }
+
+        keyStart = -1;
+        keyEnd = -1;
+        valueStart = -1;
+        return false;
+    }
+
+    private static bool TryReadReportKeyAt(string line, int index, out int keyEnd, out int valueStart)
+    {
+        keyEnd = -1;
+        valueStart = -1;
+        if (index >= line.Length || !IsReportKeyStart(line[index]))
+            return false;
+
+        var i = index + 1;
+        while (i < line.Length && IsReportKeyChar(line[i]))
+            i++;
+        if (i >= line.Length || line[i] != '=')
+            return false;
+
+        keyEnd = i;
+        valueStart = i + 1;
+        return true;
+    }
+
+    private static int FindReportValueEnd(string line, int valueStart)
+    {
+        var inSingleQuote = false;
+        var inDoubleQuote = false;
+        for (var i = valueStart; i < line.Length; i++)
+        {
+            var ch = line[i];
+            if (ch == '\'' && !inDoubleQuote)
+            {
+                inSingleQuote = !inSingleQuote;
+            }
+            else if (ch == '"' && !inSingleQuote)
+            {
+                inDoubleQuote = !inDoubleQuote;
+            }
+            else if (!inSingleQuote && !inDoubleQuote && char.IsWhiteSpace(ch))
+            {
+                var next = i + 1;
+                if (next < line.Length && TryReadReportKeyAt(line, next, out _, out _))
+                    return i;
+            }
+        }
+
+        return line.Length;
+    }
+
+    private static bool IsReportKeyStart(char ch) =>
+        char.IsLetter(ch) || ch == '_';
+
+    private static bool IsReportKeyChar(char ch) =>
+        char.IsLetterOrDigit(ch) || ch is '_' or '-' or '.';
 
     private static bool LooksLikeOpaqueToken(string value)
     {
