@@ -4,6 +4,7 @@ using System.Text;
 using System.Diagnostics;
 using CodeIndex;
 using CodeIndex.Cli;
+using CodeIndex.Diagnostics;
 using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Database;
@@ -155,8 +156,9 @@ public static class DbDebug
     {
         if (Interlocked.Exchange(ref _invalidDebugValueWarned, 1) != 0)
             return;
+        var displayValue = DiagnosticRedactor.FormatEnvironmentValue("CDIDX_DEBUG", value);
         Console.Error.WriteLine(
-            $"[cdidx] CDIDX_DEBUG value '{value}' is not recognized. Expected one of: 1, 0, true, false, yes, no, on, off, unsafe, full. Falling back to off.");
+            $"[cdidx] CDIDX_DEBUG value '{displayValue}' is not recognized. Expected one of: 1, 0, true, false, yes, no, on, off, unsafe, full. Falling back to off.");
     }
 
     private static void WarnUnsafeDowngradedOnce()

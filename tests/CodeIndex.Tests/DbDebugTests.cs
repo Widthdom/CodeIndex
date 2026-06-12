@@ -229,6 +229,50 @@ public class DbDebugTests
     }
 
     [Fact]
+    public void IsEnabled_InvalidDebugValue_RedactsSecretLookingValue_Issue3403()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_DEBUG");
+        const string secret = "0123456789abcdef0123456789abcdef";
+        env.Set("CDIDX_DEBUG", $"token={secret}");
+        try
+        {
+            DbDebug.ResetForTesting();
+            var output = CaptureStderr(() => Assert.False(DbDebug.IsEnabled));
+
+            Assert.Contains("CDIDX_DEBUG value 'token=<redacted>' is not recognized", output);
+            Assert.DoesNotContain(secret, output);
+        }
+        finally
+        {
+            DbDebug.ResetForTesting();
+        }
+    }
+
+    [Fact]
+    public void IsEnabled_InvalidDebugValue_RedactsPathAndUrlValue_Issue3403()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_DEBUG");
+        const string path = "/Users/example/private/project";
+        const string url = "https://example.test/private/project/config.json";
+        const string queryUrl = "https://example.test?query=user-content";
+        env.Set("CDIDX_DEBUG", $"path={path} url={url} query={queryUrl}");
+        try
+        {
+            DbDebug.ResetForTesting();
+            var output = CaptureStderr(() => Assert.False(DbDebug.IsEnabled));
+
+            Assert.Contains("CDIDX_DEBUG value 'path=<redacted> url=https://example.test<redacted> query=https://example.test<redacted>' is not recognized", output);
+            Assert.DoesNotContain(path, output);
+            Assert.DoesNotContain("/private/project/config.json", output);
+            Assert.DoesNotContain("query=user-content", output);
+        }
+        finally
+        {
+            DbDebug.ResetForTesting();
+        }
+    }
+
+    [Fact]
     public void DumpToStderr_RedactsTextByDefault()
     {
         using var env = EnvironmentVariableScope.Capture("CDIDX_DEBUG");

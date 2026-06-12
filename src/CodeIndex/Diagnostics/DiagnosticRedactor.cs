@@ -9,7 +9,6 @@ internal static class DiagnosticRedactor
 {
     internal const int DefaultDiagnosticValueCharLimit = 120;
     internal const string AngleRedacted = "<redacted>";
-    internal const string TruncationMarker = "... <truncated>";
 
     private static readonly TimeSpan RegexTimeout = TimeSpan.FromSeconds(1);
 
@@ -48,8 +47,13 @@ internal static class DiagnosticRedactor
         RegexOptions.CultureInvariant | RegexOptions.Compiled,
         RegexTimeout);
 
+    private static readonly Regex UriPathPattern = new(
+        @"\b(?<prefix>[a-z][a-z0-9+\-.]*://[^/\s""'<>?#]*)(?<tail>[/?#][^\s""'<>]*)",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled,
+        RegexTimeout);
+
     private static readonly Regex UnixAbsolutePathPattern = new(
-        @"(?<![A-Za-z0-9+\-.]:)/[^\s""'<>]+(?:/[^\s""'<>]+)*",
+        @"(?<![A-Za-z0-9+\-.]:)(?<!/)/[^\s""'<>]+(?:/[^\s""'<>]+)*",
         RegexOptions.CultureInvariant | RegexOptions.Compiled,
         RegexTimeout);
 
@@ -76,6 +80,21 @@ internal static class DiagnosticRedactor
     internal static string FormatExceptionStackLine(string line, int maxChars = 512) =>
         BoundDiagnosticText(RedactSensitiveText(line, AngleRedacted, redactPaths: true), maxChars);
 
+    internal static string FormatEnvironmentValue(string? raw, int maxChars = DefaultDiagnosticValueCharLimit) =>
+        FormatEnvironmentValue(envVarName: null, raw, maxChars);
+
+    internal static string FormatEnvironmentValue(string? envVarName, string? raw, int maxChars = DefaultDiagnosticValueCharLimit)
+    {
+        if (raw is null)
+            return "<null>";
+        if (raw.Length == 0)
+            return "<empty>";
+        if (IsSensitiveName(envVarName))
+            return AngleRedacted;
+
+        return BoundDiagnosticText(RedactSensitiveText(raw, AngleRedacted, redactPaths: true), maxChars);
+    }
+
     internal static string RedactSensitiveText(string value, string placeholder = AngleRedacted, bool redactPaths = false)
     {
         if (string.IsNullOrEmpty(value))
@@ -88,9 +107,11 @@ internal static class DiagnosticRedactor
             match.Groups["name"].Value + match.Groups["sep"].Value + placeholder);
         redacted = GitHubTokenPattern.Replace(redacted, placeholder);
         redacted = LongHexPattern.Replace(redacted, placeholder);
-        redacted = LongBase64Pattern.Replace(redacted, placeholder);
+        redacted = LongBase64Pattern.Replace(redacted, match =>
+            LooksLikeOpaqueToken(match.Value) ? placeholder : match.Value);
         if (redactPaths)
         {
+            redacted = UriPathPattern.Replace(redacted, match => match.Groups["prefix"].Value + placeholder);
             redacted = WindowsAbsolutePathPattern.Replace(redacted, placeholder);
             redacted = UnixAbsolutePathPattern.Replace(redacted, placeholder);
         }
@@ -110,12 +131,36 @@ internal static class DiagnosticRedactor
         if (flattened.Length <= maxChars)
             return flattened;
 
-        if (maxChars == 0)
-            return TruncationMarker.TrimStart('.', ' ');
-        if (maxChars <= TruncationMarker.Length)
-            return TruncationMarker[..maxChars];
+        var marker = string.Create(CultureInfo.InvariantCulture, $"... <truncated; original length {flattened.Length} chars>");
+        return maxChars == 0
+            ? marker.TrimStart('.', ' ')
+            : flattened[..maxChars] + marker;
+    }
 
-        return flattened[..(maxChars - TruncationMarker.Length)] + TruncationMarker;
+    private static bool IsSensitiveName(string? name) =>
+        !string.IsNullOrWhiteSpace(name)
+        && (name.Contains("token", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("password", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("passwd", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("pwd", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("secret", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("auth", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("apikey", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("api-key", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("api_key", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("access-key", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("access_key", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("credential", StringComparison.OrdinalIgnoreCase));
+
+    private static bool LooksLikeOpaqueToken(string value)
+    {
+        foreach (var ch in value)
+        {
+            if (char.IsDigit(ch) || ch is '+' or '/' or '=')
+                return true;
+        }
+
+        return false;
     }
 
     private static string FlattenDiagnosticControlChars(string value)
