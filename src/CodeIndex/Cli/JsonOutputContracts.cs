@@ -75,7 +75,8 @@ internal sealed record DbCheckpointListJsonResult(
     [property: JsonPropertyName("checkpoints")] List<DbCheckpointListEntryJsonResult> Checkpoints,
     [property: JsonPropertyName("truncated")] bool Truncated = false,
     [property: JsonPropertyName("checkpoint_limit")] int CheckpointLimit = 0,
-    [property: JsonPropertyName("file_limit")] int FileLimit = 0);
+    [property: JsonPropertyName("file_limit")] int FileLimit = 0,
+    [property: JsonPropertyName("diagnostics")] List<DbDiagnosticJsonResult>? Diagnostics = null);
 
 internal sealed record DbCheckpointListEntryJsonResult(
     [property: JsonPropertyName("name")] string Name,
@@ -118,7 +119,13 @@ internal sealed record DbPruneJsonResult(
     [property: JsonPropertyName("orphan_symbol_references")] int OrphanSymbolReferences,
     [property: JsonPropertyName("orphan_reference_lines")] int OrphanReferenceLines,
     [property: JsonPropertyName("orphan_symbols")] int OrphanSymbols,
-    [property: JsonPropertyName("total")] int Total);
+    [property: JsonPropertyName("total")] int Total,
+    [property: JsonPropertyName("warnings")] List<DbDiagnosticJsonResult>? Warnings = null);
+
+internal sealed record DbDiagnosticJsonResult(
+    [property: JsonPropertyName("code")] string Code,
+    [property: JsonPropertyName("message")] string Message,
+    [property: JsonPropertyName("path")] string? Path = null);
 
 internal sealed record DiffSummaryJsonResult(
     [property: JsonPropertyName("left_file_count")] long LeftFileCount,
@@ -419,6 +426,7 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(DbCheckpointJsonResult))]
 [JsonSerializable(typeof(DbCheckpointListEntryJsonResult))]
 [JsonSerializable(typeof(DbCheckpointListJsonResult))]
+[JsonSerializable(typeof(DbDiagnosticJsonResult))]
 [JsonSerializable(typeof(DbIntegrityCheckJsonResult))]
 [JsonSerializable(typeof(DbPruneJsonResult))]
 [JsonSerializable(typeof(DbRestoreJsonResult))]
