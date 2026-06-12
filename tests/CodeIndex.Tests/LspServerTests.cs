@@ -1,6 +1,8 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Lsp;
@@ -98,6 +100,38 @@ public class LspServerTests
     }
 
     [Fact]
+    public void TryReadMessage_CanceledBeforeRead_ThrowsOperationCanceled_Issue3427()
+    {
+        using var stream = new MemoryStream(Encoding.UTF8.GetBytes("Content-Length: 2\r\n\r\n{}"));
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        Assert.Throws<OperationCanceledException>(() => LspServer.TryReadMessage(stream, out _, cts.Token));
+    }
+
+    [Fact]
+    public void Run_CanceledBeforeRead_ThrowsOperationCanceled_Issue3427()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_canceled");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            using var input = new MemoryStream(Encoding.UTF8.GetBytes("Content-Length: 2\r\n\r\n{}"));
+            using var output = new MemoryStream();
+            using var cts = new CancellationTokenSource();
+            cts.Cancel();
+
+            Assert.Throws<OperationCanceledException>(() => server.Run(input, output, cts.Token));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void HandleMessage_Initialize_AdvertisesCoreCapabilities()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_initialize");
@@ -111,7 +145,12 @@ public class LspServerTests
 
             Assert.NotNull(response);
             Assert.True(response!["result"]!["capabilities"]!["definitionProvider"]!.GetValue<bool>());
+            Assert.True(response["result"]!["capabilities"]!["declarationProvider"]!.GetValue<bool>());
+            Assert.True(response["result"]!["capabilities"]!["typeDefinitionProvider"]!.GetValue<bool>());
+            Assert.True(response["result"]!["capabilities"]!["implementationProvider"]!.GetValue<bool>());
             Assert.True(response["result"]!["capabilities"]!["documentSymbolProvider"]!.GetValue<bool>());
+            Assert.True(response["result"]!["capabilities"]!["workspace"]!["workspaceFolders"]!["supported"]!.GetValue<bool>());
+            Assert.True(response["result"]!["capabilities"]!["workspace"]!["workspaceFolders"]!["changeNotifications"]!.GetValue<bool>());
             Assert.Equal("cdidx", response["result"]!["serverInfo"]!["name"]!.GetValue<string>());
         }
         finally
@@ -395,6 +434,47 @@ public class LspServerTests
     }
 
     [Fact]
+    public void HandleMessage_WorkspaceSymbol_HonorsClientLimit_Issue3537()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_workspace_symbol_limit");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            for (var i = 0; i < 5; i++)
+            {
+                TestProjectHelper.InsertIndexedFile(
+                    dbPath,
+                    $"file{i}.cs",
+                    "csharp",
+                    $"class Needle{i} {{ }}\n");
+            }
+
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var request = JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0",
+                id = 3537,
+                method = "workspace/symbol",
+                @params = new
+                {
+                    query = "Needle",
+                    limit = 2,
+                },
+            });
+
+            var response = server.HandleMessage(request);
+
+            Assert.NotNull(response);
+            Assert.Equal(2, response!["result"]!.AsArray().Count);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_MalformedJsonFrame_WritesParseErrorAndContinues()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_malformed_json");
@@ -512,8 +592,124 @@ public class LspServerTests
 
             Assert.NotNull(response);
             var symbols = response!["result"]!.AsArray();
-            Assert.Contains(symbols, symbol => symbol?["name"]?.GetValue<string>() == "App");
-            Assert.Contains(symbols, symbol => symbol?["name"]?.GetValue<string>() == "Needle");
+            var app = Assert.Single(symbols.Where(symbol => symbol?["name"]?.GetValue<string>() == "App"));
+            var children = app!["children"]!.AsArray();
+            Assert.Contains(children, symbol => symbol?["name"]?.GetValue<string>() == "Needle");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void HandleMessage_DocumentSymbol_DoesNotNestSameRangeTopLevelSymbols_Issue3537()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_document_symbol_same_range");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            var source = "class Alpha { } class Beta { }\n";
+            File.WriteAllText(sourcePath, source);
+            TestProjectHelper.InsertIndexedFile(dbPath, "app.cs", "csharp", source);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var request = JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0",
+                id = 35374,
+                method = "textDocument/documentSymbol",
+                @params = new
+                {
+                    textDocument = new { uri = new Uri(sourcePath).AbsoluteUri },
+                },
+            });
+
+            var response = server.HandleMessage(request);
+
+            Assert.NotNull(response);
+            var symbols = response!["result"]!.AsArray();
+            var alpha = Assert.Single(symbols.Where(symbol => symbol?["name"]?.GetValue<string>() == "Alpha"));
+            var beta = Assert.Single(symbols.Where(symbol => symbol?["name"]?.GetValue<string>() == "Beta"));
+            Assert.Null(alpha!["children"]);
+            Assert.Null(beta!["children"]);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void HandleMessage_DocumentSymbol_NestsSameRangeChildAfterContainer_Issue3537()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_document_symbol_same_range_child");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            var source = "class Z { void A() { } }\n";
+            File.WriteAllText(sourcePath, source);
+            TestProjectHelper.InsertIndexedFile(dbPath, "app.cs", "csharp", source);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var request = JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0",
+                id = 35375,
+                method = "textDocument/documentSymbol",
+                @params = new
+                {
+                    textDocument = new { uri = new Uri(sourcePath).AbsoluteUri },
+                },
+            });
+
+            var response = server.HandleMessage(request);
+
+            Assert.NotNull(response);
+            var symbols = response!["result"]!.AsArray();
+            var z = Assert.Single(symbols.Where(symbol => symbol?["name"]?.GetValue<string>() == "Z"));
+            var children = z!["children"]!.AsArray();
+            Assert.Contains(children, symbol => symbol?["name"]?.GetValue<string>() == "A");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void HandleMessage_DocumentSymbol_NestsSameStartLongerContainerBeforeChild_Issue3537()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_document_symbol_same_start_container");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            var source = "namespace N { class C {\n}\n}\n";
+            File.WriteAllText(sourcePath, source);
+            TestProjectHelper.InsertIndexedFile(dbPath, "app.cs", "csharp", source);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var request = JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0",
+                id = 35376,
+                method = "textDocument/documentSymbol",
+                @params = new
+                {
+                    textDocument = new { uri = new Uri(sourcePath).AbsoluteUri },
+                },
+            });
+
+            var response = server.HandleMessage(request);
+
+            Assert.NotNull(response);
+            var symbols = response!["result"]!.AsArray();
+            var n = Assert.Single(symbols.Where(symbol => symbol?["name"]?.GetValue<string>() == "N"));
+            var children = n!["children"]!.AsArray();
+            Assert.Contains(children, symbol => symbol?["name"]?.GetValue<string>() == "C");
         }
         finally
         {
@@ -558,6 +754,43 @@ public class LspServerTests
                 .ToArray();
             Assert.Contains("TestApp", names);
             Assert.DoesNotContain("SrcApp", names);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void HandleMessage_DocumentSymbol_DoesNotSuffixMatchProjectRootedUnindexedFile_Issue3537()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_document_symbol_unindexed_same_name");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var indexedPath = Path.Combine(projectRoot, "app.cs");
+            var unindexedPath = Path.Combine(projectRoot, "dir", "app.cs");
+            Directory.CreateDirectory(Path.GetDirectoryName(unindexedPath)!);
+            File.WriteAllText(indexedPath, "class IndexedApp { }\n");
+            File.WriteAllText(unindexedPath, "class UnindexedApp { }\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "app.cs", "csharp", File.ReadAllText(indexedPath));
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var request = JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0",
+                id = 35377,
+                method = "textDocument/documentSymbol",
+                @params = new
+                {
+                    textDocument = new { uri = new Uri(unindexedPath).AbsoluteUri },
+                },
+            });
+
+            var response = server.HandleMessage(request);
+
+            Assert.NotNull(response);
+            Assert.Empty(response!["result"]!.AsArray());
         }
         finally
         {
@@ -638,13 +871,14 @@ public class LspServerTests
             Assert.NotEmpty(symbols);
             Assert.True(symbols.Count < LspServer.MaxDocumentSymbols);
             Assert.True(Encoding.UTF8.GetByteCount(symbols.ToJsonString()) <= LspServer.MaxDocumentSymbolResponseBytes);
-            Assert.Contains(symbols, symbol =>
+            var allSymbols = FlattenDocumentSymbols(symbols).ToArray();
+            Assert.Contains(allSymbols, symbol =>
             {
                 var detail = symbol?["detail"]?.GetValue<string>();
                 return detail is { Length: <= LspServer.MaxDocumentSymbolDetailChars }
                     && detail.EndsWith("...", StringComparison.Ordinal);
             });
-            Assert.All(symbols, symbol =>
+            Assert.All(allSymbols, symbol =>
             {
                 var detail = symbol?["detail"]?.GetValue<string>();
                 if (detail != null)
@@ -766,6 +1000,187 @@ public class LspServerTests
         }
     }
 
+    [Theory]
+    [InlineData("textDocument/declaration")]
+    [InlineData("textDocument/typeDefinition")]
+    [InlineData("textDocument/implementation")]
+    public void HandleMessage_DefinitionAliasMethods_ReturnLocations_Issue3537(string method)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_definition_alias");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            var source = "class App { void Needle() { } void Call() { Needle(); } }\n";
+            File.WriteAllText(sourcePath, source);
+            TestProjectHelper.InsertIndexedFile(dbPath, "app.cs", "csharp", source);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var request = CreatePositionRequest(
+                method,
+                sourcePath,
+                3537,
+                0,
+                source.IndexOf("Needle();", StringComparison.Ordinal));
+
+            var response = server.HandleMessage(request);
+
+            Assert.NotNull(response);
+            var locations = response!["result"]!.AsArray();
+            Assert.NotEmpty(locations);
+            Assert.Equal(new Uri(sourcePath).AbsoluteUri, locations[0]!["uri"]!.GetValue<string>());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void HandleMessage_Definition_UsesTrackedWorkspaceFolders_Issue3537()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_workspace_root_primary");
+        var secondaryRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_workspace_root_secondary");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var sourcePath = Path.Combine(secondaryRoot, "app.cs");
+            var source = "class App { void Needle() { } void Call() { Needle(); } }\n";
+            File.WriteAllText(sourcePath, source);
+            TestProjectHelper.InsertIndexedFile(dbPath, sourcePath, "csharp", source);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var request = CreateDefinitionRequest(
+                sourcePath,
+                35370,
+                0,
+                source.IndexOf("Needle();", StringComparison.Ordinal));
+
+            var beforeInitialize = server.HandleMessage(request);
+            Assert.NotNull(beforeInitialize);
+            Assert.Empty(beforeInitialize!["result"]!.AsArray());
+
+            var initialize = JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0",
+                id = 35371,
+                method = "initialize",
+                @params = new
+                {
+                    workspaceFolders = new[]
+                    {
+                        new { uri = new Uri(secondaryRoot).AbsoluteUri, name = "secondary" },
+                    },
+                },
+            });
+            Assert.NotNull(server.HandleMessage(initialize));
+
+            var afterInitialize = server.HandleMessage(request);
+            Assert.NotNull(afterInitialize);
+            var locations = afterInitialize!["result"]!.AsArray();
+            var location = Assert.Single(locations);
+            Assert.Equal(new Uri(sourcePath).AbsoluteUri, location!["uri"]!.GetValue<string>());
+
+            var removeFolder = JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0",
+                method = "workspace/didChangeWorkspaceFolders",
+                @params = new
+                {
+                    @event = new
+                    {
+                        added = Array.Empty<object>(),
+                        removed = new[]
+                        {
+                            new { uri = new Uri(secondaryRoot).AbsoluteUri, name = "secondary" },
+                        },
+                    },
+                },
+            });
+            Assert.Null(server.HandleMessage(removeFolder));
+
+            var afterRemove = server.HandleMessage(request);
+            Assert.NotNull(afterRemove);
+            Assert.Empty(afterRemove!["result"]!.AsArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            TestProjectHelper.DeleteDirectory(secondaryRoot);
+        }
+    }
+
+    [Fact]
+    public void HandleMessage_Definition_DoesNotMapRelativeIndexPathToAddedWorkspaceFolder_Issue3537()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_workspace_relative_primary");
+        var secondaryRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_workspace_relative_secondary");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var secondaryPath = Path.Combine(secondaryRoot, "app.cs");
+            var primarySource = "class Primary { void Needle() { } }\n";
+            var secondarySource = "class Secondary { void Call() { Needle(); } }\n";
+            File.WriteAllText(secondaryPath, secondarySource);
+            TestProjectHelper.InsertIndexedFile(dbPath, "app.cs", "csharp", primarySource);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            Assert.NotNull(server.HandleMessage(CreateInitializeRequestWithWorkspaceFolder(secondaryRoot, 35372)));
+
+            var response = server.HandleMessage(CreateDefinitionRequest(
+                secondaryPath,
+                35373,
+                0,
+                secondarySource.IndexOf("Needle();", StringComparison.Ordinal)));
+
+            Assert.NotNull(response);
+            Assert.Empty(response!["result"]!.AsArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            TestProjectHelper.DeleteDirectory(secondaryRoot);
+        }
+    }
+
+    [Fact]
+    public void HandleMessage_Definition_KeepsRelativeResultUriAtProjectRoot_Issue3537()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_workspace_relative_result_primary");
+        var secondaryRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_workspace_relative_result_secondary");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var targetPath = Path.Combine(projectRoot, "app.cs");
+            var callerPath = Path.Combine(secondaryRoot, "caller.cs");
+            var targetSource = "class App { void Needle() { } }\n";
+            var callerSource = "class Caller { void Call() { Needle(); } }\n";
+            File.WriteAllText(targetPath, targetSource);
+            File.WriteAllText(callerPath, callerSource);
+            TestProjectHelper.InsertIndexedFile(dbPath, "app.cs", "csharp", targetSource);
+            TestProjectHelper.InsertIndexedFile(dbPath, callerPath, "csharp", callerSource);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            Assert.NotNull(server.HandleMessage(CreateInitializeRequestWithWorkspaceFolder(secondaryRoot, 35376)));
+
+            var response = server.HandleMessage(CreateDefinitionRequest(
+                callerPath,
+                35377,
+                0,
+                callerSource.IndexOf("Needle();", StringComparison.Ordinal)));
+
+            Assert.NotNull(response);
+            var locations = response!["result"]!.AsArray();
+            Assert.Contains(locations, location => location?["uri"]?.GetValue<string>() == new Uri(targetPath).AbsoluteUri);
+            Assert.DoesNotContain(locations, location => location?["uri"]?.GetValue<string>() == new Uri(Path.Combine(secondaryRoot, "app.cs")).AbsoluteUri);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            TestProjectHelper.DeleteDirectory(secondaryRoot);
+        }
+    }
+
     [Fact]
     public void HandleMessage_Definition_PrefersCurrentIndexedDocumentForCommonToken()
     {
@@ -803,6 +1218,45 @@ public class LspServerTests
             var locations = response!["result"]!.AsArray();
             var location = Assert.Single(locations);
             Assert.Equal(new Uri(betaPath).AbsoluteUri, location!["uri"]!.GetValue<string>());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void HandleMessage_Definition_ReturnsMultipleWorkspaceCandidates_Issue3537()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_definition_multiple_candidates");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var alphaPath = Path.Combine(projectRoot, "alpha.cs");
+            var betaPath = Path.Combine(projectRoot, "beta.cs");
+            var callerPath = Path.Combine(projectRoot, "caller.cs");
+            var alphaSource = "class Alpha { void Shared() { } }\n";
+            var betaSource = "class Beta { void Shared() { } }\n";
+            var callerSource = "class Caller { void Call() { Shared(); } }\n";
+            File.WriteAllText(alphaPath, alphaSource);
+            File.WriteAllText(betaPath, betaSource);
+            File.WriteAllText(callerPath, callerSource);
+            TestProjectHelper.InsertIndexedFile(dbPath, "alpha.cs", "csharp", alphaSource);
+            TestProjectHelper.InsertIndexedFile(dbPath, "beta.cs", "csharp", betaSource);
+            TestProjectHelper.InsertIndexedFile(dbPath, "caller.cs", "csharp", callerSource);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var request = CreateDefinitionRequest(callerPath, 3537, 0, callerSource.IndexOf("Shared();", StringComparison.Ordinal));
+
+            var response = server.HandleMessage(request);
+
+            Assert.NotNull(response);
+            var uris = response!["result"]!
+                .AsArray()
+                .Select(location => location!["uri"]!.GetValue<string>())
+                .ToArray();
+            Assert.Contains(new Uri(alphaPath).AbsoluteUri, uris);
+            Assert.Contains(new Uri(betaPath).AbsoluteUri, uris);
         }
         finally
         {
@@ -850,6 +1304,52 @@ public class LspServerTests
             var locations = response!["result"]!.AsArray();
             Assert.NotEmpty(locations);
             Assert.All(locations, location => Assert.Equal(new Uri(betaPath).AbsoluteUri, location!["uri"]!.GetValue<string>()));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void HandleMessage_References_HonorsIncludeDeclaration_Issue3537()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_references_include_declaration");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            var source = """
+                class App
+                {
+                    void Needle() { }
+                    void Call() { Needle(); }
+                }
+                """;
+            File.WriteAllText(sourcePath, source);
+            TestProjectHelper.InsertIndexedFile(dbPath, "app.cs", "csharp", source);
+            MarkGraphReady(dbPath);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var character = CharacterOf(source, 3, "Needle();");
+            var withoutDeclaration = CreateReferencesRequest(sourcePath, 3537, 3, character, includeDeclaration: false);
+            var withDeclaration = CreateReferencesRequest(sourcePath, 3538, 3, character, includeDeclaration: true);
+
+            var withoutResponse = server.HandleMessage(withoutDeclaration);
+            var withResponse = server.HandleMessage(withDeclaration);
+
+            Assert.NotNull(withoutResponse);
+            Assert.NotNull(withResponse);
+            var withoutLines = withoutResponse!["result"]!
+                .AsArray()
+                .Select(location => location!["range"]!["start"]!["line"]!.GetValue<int>())
+                .ToArray();
+            var withLines = withResponse!["result"]!
+                .AsArray()
+                .Select(location => location!["range"]!["start"]!["line"]!.GetValue<int>())
+                .ToArray();
+            Assert.DoesNotContain(2, withoutLines);
+            Assert.Contains(2, withLines);
         }
         finally
         {
@@ -926,6 +1426,46 @@ public class LspServerTests
 
             Assert.NotNull(response);
             Assert.Empty(response!["result"]!.AsArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void HandleMessage_Definition_UnindexedDocument_EmitsLookupFailureTrace_Issue3428()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_definition_unindexed_trace");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var indexedPath = Path.Combine(projectRoot, "indexed.cs");
+            var indexedSource = "class Indexed { void Needle() { } }\n";
+            File.WriteAllText(indexedPath, indexedSource);
+            TestProjectHelper.InsertIndexedFile(dbPath, "indexed.cs", "csharp", indexedSource);
+            var unindexedPath = Path.Combine(projectRoot, "unindexed.cs");
+            var unindexedSource = "class Unindexed { void Call() { Needle(); } }\n";
+            File.WriteAllText(unindexedPath, unindexedSource);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var request = CreateDefinitionRequest(
+                unindexedPath,
+                3428,
+                0,
+                unindexedSource.IndexOf("Needle();", StringComparison.Ordinal));
+            var activities = new List<Activity>();
+            using var listener = CaptureCodeIndexActivities(activities);
+
+            var response = server.HandleMessage(request);
+
+            Assert.NotNull(response);
+            Assert.Empty(response!["result"]!.AsArray());
+            var requestActivity = Assert.Single(activities.Where(activity => activity.OperationName == "lsp.request"));
+            var failureEvent = Assert.Single(requestActivity.Events.Where(activityEvent => activityEvent.Name == "lsp.lookup_failed"));
+            var tags = failureEvent.Tags.ToDictionary(tag => tag.Key, tag => tag.Value?.ToString(), StringComparer.Ordinal);
+            Assert.Equal("textDocument/definition", tags["lsp.method"]);
+            Assert.Equal("file_not_indexed", tags["lsp.lookup.failure_reason"]);
         }
         finally
         {
@@ -1178,12 +1718,99 @@ public class LspServerTests
         }
     }
 
+    [Fact]
+    public void HandleMessage_Definition_RootlessRejectsRelativeIndexedPathWithoutWorkspace_Issue3426()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_definition_rootless_relative");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var sourcePath = Path.Combine(projectRoot, "src", "app.cs");
+            Directory.CreateDirectory(Path.GetDirectoryName(sourcePath)!);
+            var source = "class Target { void Needle() { } void Call() { Needle(); } }\n";
+            File.WriteAllText(sourcePath, source);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", source);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions());
+            var request = CreateDefinitionRequest(
+                sourcePath,
+                3426,
+                0,
+                source.IndexOf("Needle();", StringComparison.Ordinal));
+            var activities = new List<Activity>();
+            using var listener = CaptureCodeIndexActivities(activities);
+
+            var response = server.HandleMessage(request);
+
+            Assert.NotNull(response);
+            Assert.Empty(response!["result"]!.AsArray());
+            var requestActivity = Assert.Single(activities.Where(activity => activity.OperationName == "lsp.request"));
+            var failureEvent = Assert.Single(requestActivity.Events.Where(activityEvent => activityEvent.Name == "lsp.lookup_failed"));
+            var tags = failureEvent.Tags.ToDictionary(tag => tag.Key, tag => tag.Value?.ToString(), StringComparer.Ordinal);
+            Assert.Equal("file_not_indexed", tags["lsp.lookup.failure_reason"]);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void HandleMessage_Definition_RootlessUsesWorkspaceFolderForRelativeIndexedPath_Issue3426()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_definition_rootless_workspace");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var sourcePath = Path.Combine(projectRoot, "src", "app.cs");
+            Directory.CreateDirectory(Path.GetDirectoryName(sourcePath)!);
+            var source = "class Target { void Needle() { } void Call() { Needle(); } }\n";
+            File.WriteAllText(sourcePath, source);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", source);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions());
+            Assert.NotNull(server.HandleMessage(CreateInitializeRequestWithWorkspaceFolder(projectRoot, 34260)));
+            var request = CreateDefinitionRequest(
+                sourcePath,
+                34261,
+                0,
+                source.IndexOf("Needle();", StringComparison.Ordinal));
+
+            var response = server.HandleMessage(request);
+
+            Assert.NotNull(response);
+            Assert.NotEmpty(response!["result"]!.AsArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     private static string CreateDefinitionRequest(string sourcePath, int id, int line, int character) =>
+        CreatePositionRequest("textDocument/definition", sourcePath, id, line, character);
+
+    private static string CreateInitializeRequestWithWorkspaceFolder(string workspaceRoot, int id) =>
         JsonSerializer.Serialize(new
         {
             jsonrpc = "2.0",
             id,
-            method = "textDocument/definition",
+            method = "initialize",
+            @params = new
+            {
+                workspaceFolders = new[]
+                {
+                    new { uri = new Uri(workspaceRoot).AbsoluteUri, name = "workspace" },
+                },
+            },
+        });
+
+    private static string CreatePositionRequest(string method, string sourcePath, int id, int line, int character) =>
+        JsonSerializer.Serialize(new
+        {
+            jsonrpc = "2.0",
+            id,
+            method,
             @params = new
             {
                 textDocument = new { uri = new Uri(sourcePath).AbsoluteUri },
@@ -1194,7 +1821,7 @@ public class LspServerTests
     private static string Frame(string payload) =>
         $"Content-Length: {Encoding.UTF8.GetByteCount(payload)}\r\n\r\n{payload}";
 
-    private static string CreateReferencesRequest(string sourcePath, int id, int line, int character) =>
+    private static string CreateReferencesRequest(string sourcePath, int id, int line, int character, bool includeDeclaration = false) =>
         JsonSerializer.Serialize(new
         {
             jsonrpc = "2.0",
@@ -1204,6 +1831,7 @@ public class LspServerTests
             {
                 textDocument = new { uri = new Uri(sourcePath).AbsoluteUri },
                 position = new { line, character },
+                context = new { includeDeclaration },
             },
         });
 
@@ -1211,6 +1839,19 @@ public class LspServerTests
     {
         var lines = source.Split('\n');
         return lines[line].IndexOf(value, StringComparison.Ordinal);
+    }
+
+    private static IEnumerable<JsonNode?> FlattenDocumentSymbols(JsonArray symbols)
+    {
+        foreach (var symbol in symbols)
+        {
+            yield return symbol;
+            if (symbol?["children"] is JsonArray children)
+            {
+                foreach (var child in FlattenDocumentSymbols(children))
+                    yield return child;
+            }
+        }
     }
 
     private static string BuildNestedLspRequest(int nestedObjectCount)
@@ -1225,6 +1866,18 @@ public class LspServerTests
             builder.Append('}');
         builder.Append('}');
         return builder.ToString();
+    }
+
+    private static ActivityListener CaptureCodeIndexActivities(List<Activity> activities)
+    {
+        var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == CodeIndexTelemetry.ActivitySourceName,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = activities.Add,
+        };
+        ActivitySource.AddActivityListener(listener);
+        return listener;
     }
 
     private static void MarkGraphReady(string dbPath)

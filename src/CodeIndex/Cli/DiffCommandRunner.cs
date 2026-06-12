@@ -234,6 +234,9 @@ public static class DiffCommandRunner
             OR key = 'unknown_extension_file_paths_json'
             OR key = 'unknown_extension_files_truncated'
             OR key = 'unknown_extension_file_path_limit'
+            OR key = 'unknown_extension_extension_counts_json'
+            OR key = 'unknown_extension_category_counts_json'
+            OR key = 'unknown_extension_groups_json'
             OR key = 'cdidx_writer_version'
         ORDER BY
             key,

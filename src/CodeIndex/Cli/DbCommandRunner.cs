@@ -126,10 +126,13 @@ public static class DbCommandRunner
 
             if (options.Json)
             {
+                var severity = ok ? "ok" : "error";
                 Console.WriteLine(JsonSerializer.Serialize(
                     new DbIntegrityCheckJsonResult(
                         displayDbPath,
                         ok,
+                        severity,
+                        ok ? "integrity_ok" : "integrity_failed",
                         ok ? new List<string>() : issues,
                         result.Truncated,
                         result.RowsTruncated,
@@ -181,11 +184,16 @@ public static class DbCommandRunner
             var fullPath = DbPathResolver.FormatDbPathForDisplay(dbPath);
             if (options.Json)
             {
+                var severity = schema.Truncated ? "warn" : "ok";
                 var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
                 Console.WriteLine(JsonSerializer.Serialize(
                     new DbSchemaJsonResult(
                         fullPath,
                         schema.UserVersion,
+                        severity,
+                        schema.Truncated ? "schema_truncated" : "schema_ok",
+                        schema.ObjectTypeCounts,
+                        schema.ObjectTypeOmittedCounts,
                         schema.Entries,
                         schema.Truncated,
                         schema.EntriesTruncated,
@@ -271,7 +279,8 @@ public static class DbCommandRunner
                         result.OrphanSymbolReferences,
                         result.OrphanReferenceLines,
                         result.OrphanSymbols,
-                        result.Total),
+                        result.Total,
+                        result.Warnings),
                     jsonContext.DbPruneJsonResult));
             }
             else
@@ -282,6 +291,8 @@ public static class DbCommandRunner
                 Console.WriteLine($"  orphan reference_lines   : {result.OrphanReferenceLines:N0}");
                 Console.WriteLine($"  orphan symbols           : {result.OrphanSymbols:N0}");
                 Console.WriteLine($"  total                    : {result.Total:N0}");
+                foreach (var warning in result.Warnings)
+                    Console.Error.WriteLine($"Warning [{warning.Code}]: {warning.Message}");
             }
 
             return CommandExitCodes.Success;
@@ -359,7 +370,8 @@ public static class DbCommandRunner
                     result.Entries,
                     result.Truncated,
                     CheckpointListEntryLimit,
-                    CheckpointFileInspectLimit),
+                    CheckpointFileInspectLimit,
+                    result.Diagnostics),
                 CliJsonSerializerContextFactory.Create(jsonOptions).DbCheckpointListJsonResult));
         }
         else
@@ -377,6 +389,9 @@ public static class DbCommandRunner
                 foreach (var entry in result.Entries)
                     Console.WriteLine($"  {entry.Name}  {entry.CreatedAtUtc}  {entry.Bytes:N0} bytes{(entry.FilesTruncated ? " (files truncated)" : string.Empty)}");
             }
+
+            foreach (var diagnostic in result.Diagnostics)
+                Console.Error.WriteLine($"Warning [{diagnostic.Code}]: {diagnostic.Message}");
         }
 
         return CommandExitCodes.Success;
@@ -468,6 +483,7 @@ public static class DbCommandRunner
         versionCmd.CommandText = "PRAGMA user_version";
         var rawVersion = versionCmd.ExecuteScalar();
         var userVersion = rawVersion is long l ? (int)l : (rawVersion is int i ? i : 0);
+        var objectTypeCounts = ReadSchemaObjectTypeCounts(connection);
 
         using var cmd = connection.CreateCommand();
         cmd.CommandText = @"
@@ -500,7 +516,42 @@ public static class DbCommandRunner
                 boundedSql.Text));
         }
 
-        return new DbSchemaReadResult(userVersion, entries, entriesTruncated, sqlTruncated);
+        var emittedTypeCounts = entries
+            .GroupBy(entry => entry.Type, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
+        var omittedTypeCounts = objectTypeCounts.ToDictionary(
+            kv => kv.Key,
+            kv => Math.Max(0, kv.Value - (emittedTypeCounts.TryGetValue(kv.Key, out var emitted) ? emitted : 0)),
+            StringComparer.Ordinal);
+
+        return new DbSchemaReadResult(userVersion, entries, objectTypeCounts, omittedTypeCounts, entriesTruncated, sqlTruncated);
+    }
+
+    private static Dictionary<string, int> ReadSchemaObjectTypeCounts(SqliteConnection connection)
+    {
+        var counts = new Dictionary<string, int>(StringComparer.Ordinal)
+        {
+            ["table"] = 0,
+            ["index"] = 0,
+            ["trigger"] = 0,
+            ["view"] = 0,
+        };
+
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT type, COUNT(*)
+            FROM sqlite_master
+            WHERE type IN ('table', 'index', 'trigger', 'view')
+            GROUP BY type";
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            var type = reader.GetString(0);
+            if (counts.ContainsKey(type))
+                counts[type] = Convert.ToInt32(reader.GetInt64(1), System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        return counts;
     }
 
     private static DbIntegrityCheckReadResult BoundIntegrityRows(IEnumerable<string> rawRows)
@@ -531,10 +582,11 @@ public static class DbCommandRunner
         return (text[..limit] + " [truncated]", true);
     }
 
-    private static (int OrphanSymbolReferences, int OrphanReferenceLines, int OrphanSymbols, int Total) PruneOrphans(string dbPath, bool apply)
+    private static (int OrphanSymbolReferences, int OrphanReferenceLines, int OrphanSymbols, int Total, List<DbDiagnosticJsonResult> Warnings) PruneOrphans(string dbPath, bool apply)
     {
         using var connection = OpenConnection(dbPath, writable: apply);
         using var transaction = apply ? connection.BeginTransaction() : null;
+        var warnings = new List<DbDiagnosticJsonResult>();
 
         var orphanSymbolReferences = Count(connection, transaction, @"
             SELECT COUNT(*)
@@ -569,11 +621,13 @@ public static class DbCommandRunner
             Execute(connection, transaction, "DELETE FROM symbols WHERE file_id NOT IN (SELECT id FROM files)");
             transaction!.Commit();
             Execute(connection, null, "PRAGMA optimize");
-            RunWalCheckpointTruncate(connection);
+            var walWarning = RunWalCheckpointTruncate(connection);
+            if (walWarning is not null)
+                warnings.Add(walWarning);
         }
 
         var total = orphanSymbolReferences + orphanReferenceLines + orphanSymbols;
-        return (orphanSymbolReferences, orphanReferenceLines, orphanSymbols, total);
+        return (orphanSymbolReferences, orphanReferenceLines, orphanSymbols, total, warnings);
     }
 
     private static SqliteConnection OpenConnection(string dbPath, bool writable)
@@ -602,7 +656,7 @@ public static class DbCommandRunner
         cmd.ExecuteNonQuery();
     }
 
-    private static void RunWalCheckpointTruncate(SqliteConnection connection)
+    private static DbDiagnosticJsonResult? RunWalCheckpointTruncate(SqliteConnection connection)
     {
         try
         {
@@ -610,12 +664,29 @@ public static class DbCommandRunner
             cmd.CommandText = "PRAGMA wal_checkpoint(TRUNCATE)";
             DbContext.WalCheckpointTruncateExecutedForTesting?.Invoke(connection.DataSource);
             cmd.ExecuteNonQuery();
+            return null;
         }
         catch (Exception)
         {
-            // WAL truncation is opportunistic cleanup. Prune has already committed.
+            return new DbDiagnosticJsonResult(
+                "wal_checkpoint_truncate_failed",
+                "WAL checkpoint truncation failed after database prune committed.",
+                ConsoleUi.FormatBoundedValue(connection.DataSource));
         }
     }
+
+    private static DbDiagnosticJsonResult CreateCheckpointDiagnostic(string code, string message, string path)
+        => new(code, message, ConsoleUi.FormatBoundedValue(path));
+
+    private static bool IsRecoverableFilesystemException(Exception ex)
+        => ex is IOException
+            or UnauthorizedAccessException
+            or ArgumentException
+            or NotSupportedException
+            or PathTooLongException;
+
+    private static bool IsRecoverableRestoreException(Exception ex)
+        => IsRecoverableFilesystemException(ex) || ex is InvalidOperationException;
 
     private static bool ValidateWritableFileDb(DbCommandOptions options, JsonSerializerOptions jsonOptions, string command, out string fullDbPath, out int exitCode)
     {
@@ -691,7 +762,11 @@ public static class DbCommandRunner
         }
         catch
         {
-            TryDeleteTemporaryDirectory(tempPath, "checkpoint temporary directory");
+            TryDeleteTemporaryDirectory(
+                tempPath,
+                "checkpoint temporary directory",
+                root,
+                ".tmp-");
             throw;
         }
 
@@ -702,14 +777,17 @@ public static class DbCommandRunner
     private static DbCheckpointListReadResult ListCheckpoints(string fullDbPath)
     {
         var root = GetCheckpointRoot(fullDbPath);
+        var diagnostics = new List<DbDiagnosticJsonResult>();
         if (!Directory.Exists(root))
-            return new DbCheckpointListReadResult([], Truncated: false);
+            return new DbCheckpointListReadResult([], Truncated: false, diagnostics);
 
         var dbFileName = Path.GetFileName(fullDbPath);
         var entries = new List<DbCheckpointListEntryJsonResult>();
         var checkpointsTruncated = false;
         var directoriesInspected = 0;
-        foreach (var path in Directory.EnumerateDirectories(root))
+        var directories = EnumerateCheckpointDirectories(root, diagnostics, CheckpointListEntryLimit + 1);
+        checkpointsTruncated |= directories.Truncated;
+        foreach (var path in directories.Items)
         {
             if (directoriesInspected >= CheckpointListEntryLimit)
             {
@@ -723,18 +801,55 @@ public static class DbCommandRunner
             if (!File.Exists(LongPath.EnsureWindowsPrefix(Path.Combine(path, dbFileName))))
                 continue;
 
-            var info = new DirectoryInfo(path);
-            var bytes = SumCheckpointBytes(path);
+            DirectoryInfo info;
+            DateTime createdAtUtc;
+            try
+            {
+                info = new DirectoryInfo(path);
+                createdAtUtc = info.CreationTimeUtc;
+            }
+            catch (Exception ex) when (IsRecoverableFilesystemException(ex))
+            {
+                diagnostics.Add(CreateCheckpointDiagnostic("checkpoint_directory_stat_failed", "Unable to inspect checkpoint directory metadata.", path));
+                checkpointsTruncated = true;
+                continue;
+            }
+
+            var bytes = SumCheckpointBytes(path, diagnostics);
             entries.Add(new DbCheckpointListEntryJsonResult(
                 info.Name,
                 path,
-                info.CreationTimeUtc.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
+                createdAtUtc.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
                 bytes.Bytes,
                 bytes.Truncated));
         }
 
         entries.Sort((left, right) => string.Compare(left.Name, right.Name, StringComparison.Ordinal));
-        return new DbCheckpointListReadResult(entries, checkpointsTruncated || entries.Any(entry => entry.FilesTruncated));
+        return new DbCheckpointListReadResult(entries, checkpointsTruncated || entries.Any(entry => entry.FilesTruncated), diagnostics);
+    }
+
+    private static (List<string> Items, bool Truncated) EnumerateCheckpointDirectories(
+        string root,
+        List<DbDiagnosticJsonResult> diagnostics,
+        int limit)
+    {
+        var directories = new List<string>();
+        try
+        {
+            foreach (var directory in Directory.EnumerateDirectories(root))
+            {
+                if (directories.Count >= limit)
+                    return (directories, Truncated: true);
+                directories.Add(directory);
+            }
+
+            return (directories, Truncated: false);
+        }
+        catch (Exception ex) when (IsRecoverableFilesystemException(ex))
+        {
+            diagnostics.Add(CreateCheckpointDiagnostic("checkpoint_directory_enumeration_failed", "Unable to enumerate every checkpoint directory.", root));
+            return (directories, Truncated: true);
+        }
     }
 
     private static (List<string> Items, bool Truncated) EnumerateCheckpointFileNames(string checkpointPath)
@@ -758,20 +873,54 @@ public static class DbCommandRunner
         return (files, truncated);
     }
 
-    private static (long Bytes, bool Truncated) SumCheckpointBytes(string checkpointPath)
+    private static (long Bytes, bool Truncated) SumCheckpointBytes(string checkpointPath, List<DbDiagnosticJsonResult> diagnostics)
     {
         long bytes = 0;
         var filesSeen = 0;
-        foreach (var file in Directory.EnumerateFiles(checkpointPath))
+        var files = EnumerateCheckpointFiles(checkpointPath, diagnostics, CheckpointFileInspectLimit + 1);
+        foreach (var file in files.Items)
         {
             if (filesSeen >= CheckpointFileInspectLimit)
                 return (bytes, Truncated: true);
 
-            bytes += new FileInfo(file).Length;
+            try
+            {
+                bytes += new FileInfo(file).Length;
+            }
+            catch (Exception ex) when (IsRecoverableFilesystemException(ex))
+            {
+                diagnostics.Add(CreateCheckpointDiagnostic("checkpoint_file_stat_failed", "Unable to inspect every checkpoint file.", file));
+                return (bytes, Truncated: true);
+            }
+
             filesSeen++;
         }
 
-        return (bytes, Truncated: false);
+        return (bytes, files.Truncated);
+    }
+
+    private static (List<string> Items, bool Truncated) EnumerateCheckpointFiles(
+        string checkpointPath,
+        List<DbDiagnosticJsonResult> diagnostics,
+        int limit)
+    {
+        var files = new List<string>();
+        try
+        {
+            foreach (var file in Directory.EnumerateFiles(checkpointPath))
+            {
+                if (files.Count >= limit)
+                    return (files, Truncated: true);
+                files.Add(file);
+            }
+
+            return (files, Truncated: false);
+        }
+        catch (Exception ex) when (IsRecoverableFilesystemException(ex))
+        {
+            diagnostics.Add(CreateCheckpointDiagnostic("checkpoint_file_enumeration_failed", "Unable to enumerate every checkpoint file.", checkpointPath));
+            return (files, Truncated: true);
+        }
     }
 
     private static string RestoreCheckpoint(string fullDbPath, string name, string checkpointPath)
@@ -807,12 +956,24 @@ public static class DbCommandRunner
         }
         catch
         {
-            RestoreBackedUpFiles(fullDbPath, backupPath);
+            try
+            {
+                RestoreBackedUpFiles(fullDbPath, backupPath);
+            }
+            catch (Exception rollbackEx) when (IsRecoverableRestoreException(rollbackEx))
+            {
+                Console.Error.WriteLine($"Warning: failed to roll back database restore from backup {ConsoleUi.FormatBoundedValue(backupPath)} ({CommandErrorWriter.FormatSanitizedException(rollbackEx)}).");
+            }
+
             throw;
         }
         finally
         {
-            TryDeleteTemporaryDirectory(restoreTempPath, "restore temporary directory");
+            TryDeleteTemporaryDirectory(
+                restoreTempPath,
+                "restore temporary directory",
+                Path.GetDirectoryName(fullDbPath) ?? Path.GetPathRoot(fullDbPath) ?? Path.GetFullPath("."),
+                Path.GetFileName(fullDbPath) + ".restore-tmp-");
         }
 
         return backupPath;
@@ -853,22 +1014,35 @@ public static class DbCommandRunner
 
     private static void CopyIfExists(string source, string destination, bool privateDestination = false)
     {
-        if (File.Exists(LongPath.EnsureWindowsPrefix(source)))
-        {
-            File.Copy(LongPath.EnsureWindowsPrefix(source), LongPath.EnsureWindowsPrefix(destination), overwrite: false);
-            if (privateDestination)
-                DataDirectorySecurity.ApplyPrivateFileMode(destination);
-        }
+        if (!TryGetRegularExistingFile(source, out var normalizedSource))
+            return;
+
+        File.Copy(normalizedSource, LongPath.EnsureWindowsPrefix(destination), overwrite: false);
+        if (privateDestination)
+            DataDirectorySecurity.ApplyPrivateFileMode(destination);
     }
 
     private static void MoveIfExists(string source, string destination, bool privateDestination = false)
     {
-        if (File.Exists(LongPath.EnsureWindowsPrefix(source)))
-        {
-            File.Move(LongPath.EnsureWindowsPrefix(source), LongPath.EnsureWindowsPrefix(destination));
-            if (privateDestination)
-                DataDirectorySecurity.ApplyPrivateFileMode(destination);
-        }
+        if (!TryGetRegularExistingFile(source, out var normalizedSource))
+            return;
+
+        File.Move(normalizedSource, LongPath.EnsureWindowsPrefix(destination));
+        if (privateDestination)
+            DataDirectorySecurity.ApplyPrivateFileMode(destination);
+    }
+
+    private static bool TryGetRegularExistingFile(string path, out string normalizedPath)
+    {
+        normalizedPath = LongPath.EnsureWindowsPrefix(path);
+        if (!File.Exists(normalizedPath))
+            return false;
+
+        var attributes = File.GetAttributes(normalizedPath);
+        if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint | FileAttributes.Device)) != 0)
+            throw new InvalidOperationException($"checkpoint file is not a regular file: {ConsoleUi.FormatBoundedValue(path)}");
+
+        return true;
     }
 
     private static void RestoreBackedUpFiles(string fullDbPath, string backupPath)
@@ -890,22 +1064,72 @@ public static class DbCommandRunner
             File.Delete(LongPath.EnsureWindowsPrefix(path));
     }
 
-    private static void TryDeleteTemporaryDirectory(string path, string cleanupDescription)
+    internal static void TryDeleteTemporaryDirectory(string path, string cleanupDescription, string safeRoot, string expectedNamePrefix)
     {
         try
         {
-            if (!Directory.Exists(path))
+            if (!TryValidateTemporaryDirectoryCleanupTarget(path, safeRoot, expectedNamePrefix, out var fullPath, out var validationFailure))
+            {
+                Console.Error.WriteLine($"Warning: skipped deleting {cleanupDescription} {ConsoleUi.FormatBoundedValue(path)} ({validationFailure}).");
+                return;
+            }
+
+            if (!Directory.Exists(LongPath.EnsureWindowsPrefix(fullPath)))
                 return;
 
             if (DeleteTemporaryDirectoryForTesting != null)
-                DeleteTemporaryDirectoryForTesting(path);
+                DeleteTemporaryDirectoryForTesting(fullPath);
             else
-                Directory.Delete(path, recursive: true);
+                Directory.Delete(LongPath.EnsureWindowsPrefix(fullPath), recursive: true);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or PathTooLongException)
         {
             Console.Error.WriteLine($"Warning: failed to delete {cleanupDescription} {ConsoleUi.FormatBoundedValue(path)} ({CommandErrorWriter.FormatSanitizedException(ex)}).");
         }
+    }
+
+    private static bool TryValidateTemporaryDirectoryCleanupTarget(
+        string path,
+        string safeRoot,
+        string expectedNamePrefix,
+        out string fullPath,
+        out string failureReason)
+    {
+        fullPath = string.Empty;
+        failureReason = string.Empty;
+        try
+        {
+            fullPath = NormalizeBoundaryPath(Path.GetFullPath(path));
+            var normalizedRoot = NormalizeBoundaryPath(Path.GetFullPath(safeRoot));
+            if (string.Equals(fullPath, normalizedRoot, PathCasing.ComparisonFor(normalizedRoot))
+                || !PathCasing.IsPathEqualOrParent(normalizedRoot, fullPath))
+            {
+                failureReason = "target is outside the expected cleanup root";
+                return false;
+            }
+
+            if (!Path.GetFileName(fullPath).StartsWith(expectedNamePrefix, StringComparison.Ordinal))
+            {
+                failureReason = "target name does not match the expected temporary-directory prefix";
+                return false;
+            }
+
+            return true;
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException or UnauthorizedAccessException or PathTooLongException)
+        {
+            failureReason = "target path is invalid";
+            return false;
+        }
+    }
+
+    private static string NormalizeBoundaryPath(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        var root = Path.GetPathRoot(fullPath);
+        if (!string.IsNullOrEmpty(root) && string.Equals(fullPath, root, StringComparison.Ordinal))
+            return fullPath;
+        return fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
     }
 
     internal static DbCommandOptions ParseArgs(string[] args)
@@ -1038,7 +1262,7 @@ internal sealed class DbCommandOptions
 
 internal sealed record DbCheckpointOperationResult(string Name, string CheckpointPath, List<string> Files, bool FilesTruncated);
 
-internal sealed record DbCheckpointListReadResult(List<DbCheckpointListEntryJsonResult> Entries, bool Truncated);
+internal sealed record DbCheckpointListReadResult(List<DbCheckpointListEntryJsonResult> Entries, bool Truncated, List<DbDiagnosticJsonResult> Diagnostics);
 
 internal sealed record DbIntegrityCheckReadResult(List<string> Rows, bool RowsTruncated, bool TextTruncated)
 {
@@ -1048,6 +1272,8 @@ internal sealed record DbIntegrityCheckReadResult(List<string> Rows, bool RowsTr
 internal sealed record DbSchemaReadResult(
     int UserVersion,
     List<DbSchemaEntryJsonResult> Entries,
+    Dictionary<string, int> ObjectTypeCounts,
+    Dictionary<string, int> ObjectTypeOmittedCounts,
     bool EntriesTruncated,
     bool SqlTruncated)
 {

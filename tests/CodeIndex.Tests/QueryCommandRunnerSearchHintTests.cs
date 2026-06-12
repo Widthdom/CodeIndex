@@ -23,16 +23,94 @@ public partial class QueryCommandRunnerTests
                 _jsonOptions));
 
             using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
             var highlight = document.RootElement.GetProperty("highlights")[0];
             var literalOccurrence = highlight.GetProperty("literal_term_occurrences")[0];
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
+            Assert.Equal(2, root.GetProperty("snippet_lines").GetInt32());
+            Assert.Equal(512, root.GetProperty("max_line_width").GetInt32());
+            Assert.True(root.GetProperty("exact").GetBoolean());
+            Assert.False(root.GetProperty("raw_fts").GetBoolean());
+            Assert.True(root.GetProperty("literal_highlights_available").GetBoolean());
+            Assert.False(root.TryGetProperty("literal_highlight_warning", out _));
             Assert.Equal("CommandText = $", highlight.GetProperty("literal_terms")[0].GetString());
             Assert.Equal("CommandText = $", literalOccurrence.GetProperty("term").GetString());
             Assert.Equal(1, literalOccurrence.GetProperty("line").GetInt32());
             Assert.Equal(5, literalOccurrence.GetProperty("column").GetInt32());
             Assert.Equal("CommandText = $".Length, literalOccurrence.GetProperty("length").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_ExactSubstringWithRawFtsReportsEffectiveLiteralHighlightMode_Issue3558()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_exact_raw_fts_metadata_3558");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/sql.cs",
+                "csharp",
+                "var CommandText = $\"SELECT 1\";\nvar CommandText = other;");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["CommandText = $", "--db", dbPath, "--json", "--fts", "--exact-substring"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            var highlight = root.GetProperty("highlights")[0];
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(root.GetProperty("exact").GetBoolean());
+            Assert.False(root.GetProperty("raw_fts").GetBoolean());
+            Assert.True(root.GetProperty("literal_highlights_available").GetBoolean());
+            Assert.False(root.TryGetProperty("literal_highlight_warning", out _));
+            Assert.Equal("CommandText = $", highlight.GetProperty("literal_terms")[0].GetString());
+            Assert.Equal("CommandText = $", highlight.GetProperty("literal_term_occurrences")[0].GetProperty("term").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_RawFtsJsonReportsLiteralHighlightGapMetadata_Issue3558()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_raw_fts_metadata_3558");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/sql.cs",
+                "csharp",
+                "var CommandText = $\"SELECT 1\";\nvar CommandText = other;");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["CommandText", "--db", dbPath, "--json", "--fts", "--snippet-lines", "3", "--max-line-width", "80"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(3, root.GetProperty("snippet_lines").GetInt32());
+            Assert.Equal(80, root.GetProperty("max_line_width").GetInt32());
+            Assert.False(root.GetProperty("exact").GetBoolean());
+            Assert.True(root.GetProperty("raw_fts").GetBoolean());
+            Assert.False(root.GetProperty("literal_highlights_available").GetBoolean());
+            Assert.Equal("literal_highlights_unavailable_raw_fts", root.GetProperty("literal_highlight_warning").GetString());
         }
         finally
         {

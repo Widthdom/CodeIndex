@@ -518,6 +518,42 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunReferences_CountOnlyJson_WithMissingGraphTable_ReturnsNonAuthoritativeEnvelope_Issue3566()
+    {
+        var (projectRoot, readOnlyUri) = CreateReadOnlyMissingGraphTableDb("cdidx_references_count_json_missing_graph_3566");
+        try
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Run", "--db", readOnlyUri, "--json", "--exact", "--count", "--lang", "csharp"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var queryContext = json.GetProperty("query_context");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Equal(0, json.GetProperty("files").GetInt32());
+            Assert.Equal(0, json.GetProperty("file_count").GetInt32());
+            Assert.False(json.GetProperty("graph_table_available").GetBoolean());
+            Assert.True(json.GetProperty("degraded").GetBoolean());
+            Assert.False(json.GetProperty("authoritative_count").GetBoolean());
+            Assert.False(json.GetProperty("exact_index_available").GetBoolean());
+            Assert.True(json.GetProperty("freshness_available").GetBoolean());
+            Assert.True(json.GetProperty("indexed_file_count").GetInt32() > 0);
+            Assert.Equal("Run", queryContext.GetProperty("text").GetString());
+            Assert.Equal("csharp", queryContext.GetProperty("lang").GetString());
+            Assert.True(queryContext.GetProperty("count").GetBoolean());
+            Assert.True(queryContext.GetProperty("exact").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_ExactJson_CSharpInterpolatedRawStringPreservesCallSite()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_references_csharp_interpolated_raw");
@@ -1607,7 +1643,11 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(1, json.GetProperty("count").GetInt32());
+            Assert.Equal(1, json.GetProperty("files").GetInt32());
+            Assert.Equal(1, json.GetProperty("file_count").GetInt32());
             Assert.False(json.GetProperty("sql_graph_contract_ready").GetBoolean());
+            Assert.True(json.GetProperty("degraded").GetBoolean());
+            Assert.False(json.GetProperty("authoritative_count").GetBoolean());
             Assert.Contains("sql_graph_contract_ready=false", json.GetProperty("sql_graph_contract_degraded_reason").GetString());
         }
         finally
@@ -1716,12 +1756,12 @@ public partial class QueryCommandRunnerTests
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
 
             var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
-                ["MissingSymbol", "--db", dbPath, "--lang", "markdown"],
+                ["MissingSymbol", "--db", dbPath, "--lang", "toml"],
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Contains("No references found.", stderr);
-            Assert.Contains("call-graph queries are not indexed for 'markdown'", stderr);
+            Assert.Contains("call-graph queries are not indexed for 'toml'", stderr);
         }
         finally
         {
@@ -12012,11 +12052,59 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("file_dependency_hints", json.GetProperty("impact_mode").GetString());
             Assert.Equal(1, json.GetProperty("count").GetInt32());
+            Assert.Equal(1, json.GetProperty("files").GetInt32());
             Assert.Equal(1, json.GetProperty("file_count").GetInt32());
             Assert.Equal(0, json.GetProperty("confirmed_count").GetInt32());
             Assert.Equal(0, json.GetProperty("confirmed_file_count").GetInt32());
             Assert.Equal(1, json.GetProperty("hint_count").GetInt32());
             Assert.Equal(1, json.GetProperty("hint_file_count").GetInt32());
+            Assert.False(json.GetProperty("degraded").GetBoolean());
+            Assert.True(json.GetProperty("authoritative_count").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunImpact_CountOnlyJson_UserLimitTruncationIsNonAuthoritative_Issue3566()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_impact_count_truncated_authority_3566");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/lib.py", "python",
+                """
+                def target():
+                    return 0
+                """);
+            for (int i = 0; i < 6; i++)
+            {
+                TestProjectHelper.InsertIndexedFile(dbPath, $"src/caller_{i:D2}.py", "python",
+                    $$"""
+                    def caller_{{i:D2}}():
+                        return target()
+                    """);
+            }
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["target", "--db", dbPath, "--json", "--count", "--limit", "2"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(2, json.GetProperty("count").GetInt32());
+            Assert.Equal(2, json.GetProperty("files").GetInt32());
+            Assert.Equal(2, json.GetProperty("file_count").GetInt32());
+            Assert.True(json.GetProperty("truncated").GetBoolean());
+            Assert.Equal("user_limit", json.GetProperty("truncated_reason").GetString());
+            Assert.True(json.GetProperty("degraded").GetBoolean());
+            Assert.False(json.GetProperty("authoritative_count").GetBoolean());
         }
         finally
         {

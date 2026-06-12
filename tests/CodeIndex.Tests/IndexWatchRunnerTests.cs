@@ -3,6 +3,7 @@ using System.Reflection;
 using System.Text.Json;
 using CodeIndex.Cli;
 using CodeIndex.Database;
+using CodeIndex.Indexer;
 using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
@@ -154,10 +155,11 @@ public class IndexWatchRunnerTests
         var method = typeof(IndexWatchRunner).GetMethod("BuildSubRunArgs", BindingFlags.NonPublic | BindingFlags.Static);
 
         Assert.NotNull(method);
-        var args = Assert.IsType<List<string>>(method.Invoke(null, [options]));
+        var args = Assert.IsType<List<string>>(method.Invoke(null, [options, "/repo/.cdidx/codeindex.db"]));
 
         Assert.Contains("--json", args);
         Assert.Contains("--quiet", args);
+        AssertOptionValue(args, "--db", "/repo/.cdidx/codeindex.db");
     }
 
     [Fact]
@@ -173,7 +175,7 @@ public class IndexWatchRunnerTests
         var method = typeof(IndexWatchRunner).GetMethod("BuildSubRunArgs", BindingFlags.NonPublic | BindingFlags.Static);
 
         Assert.NotNull(method);
-        var args = Assert.IsType<List<string>>(method.Invoke(null, [options]));
+        var args = Assert.IsType<List<string>>(method.Invoke(null, [options, "/repo/.cdidx/codeindex.db"]));
 
         var flagIndex = args.IndexOf("--max-file-bytes");
         Assert.True(flagIndex >= 0);
@@ -193,7 +195,7 @@ public class IndexWatchRunnerTests
         var method = typeof(IndexWatchRunner).GetMethod("BuildSubRunArgs", BindingFlags.NonPublic | BindingFlags.Static);
 
         Assert.NotNull(method);
-        var args = Assert.IsType<List<string>>(method.Invoke(null, [options]));
+        var args = Assert.IsType<List<string>>(method.Invoke(null, [options, "/repo/.cdidx/codeindex.db"]));
 
         var flagIndex = args.IndexOf("--max-symbols-per-file");
         Assert.True(flagIndex >= 0);
@@ -231,7 +233,16 @@ public class IndexWatchRunnerTests
                 {
                     exitCode = Assert.IsType<int>(method.Invoke(
                         null,
-                        [options, _jsonOptions, args, Stopwatch.StartNew(), "updated", 3]));
+                        [
+                            options,
+                            _jsonOptions,
+                            args,
+                            Stopwatch.StartNew(),
+                            "updated",
+                            3,
+                            "incremental",
+                            new[] { Path.Combine(projectRoot, "a.cs"), Path.Combine(projectRoot, "b.cs") },
+                        ]));
                 }
                 finally
                 {
@@ -245,8 +256,14 @@ public class IndexWatchRunnerTests
             var firstLine = Assert.Single(capturedOut.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Take(1));
             using var doc = JsonDocument.Parse(firstLine);
             Assert.Equal("failed", doc.RootElement.GetProperty("status").GetString());
+            Assert.Equal("incremental", doc.RootElement.GetProperty("phase").GetString());
             Assert.Equal(3, doc.RootElement.GetProperty("batch_size").GetInt32());
+            Assert.Equal(IndexWatchRunner.BatchPathSampleLimit, doc.RootElement.GetProperty("batch_path_sample_limit").GetInt32());
+            Assert.False(doc.RootElement.GetProperty("batch_path_samples_truncated").GetBoolean());
+            Assert.Equal(2, doc.RootElement.GetProperty("batch_path_samples").GetArrayLength());
+            Assert.Equal("a.cs", doc.RootElement.GetProperty("batch_path_samples")[0].GetString());
             Assert.Equal(exitCode, doc.RootElement.GetProperty("exit_code").GetInt32());
+            Assert.Equal("missing_summary", doc.RootElement.GetProperty("sub_run_parse_status").GetString());
             var reason = doc.RootElement.GetProperty("reason").GetString();
             Assert.NotNull(reason);
             Assert.Contains("updated sub-run exited with code", reason);
@@ -288,7 +305,7 @@ public class IndexWatchRunnerTests
                 {
                     exitCode = Assert.IsType<int>(method.Invoke(
                         null,
-                        [options, _jsonOptions, args, Stopwatch.StartNew(), "updated", 3]));
+                        [options, _jsonOptions, args, Stopwatch.StartNew(), "updated", 3, "incremental", Array.Empty<string>()]));
                 }
                 finally
                 {
@@ -306,6 +323,63 @@ public class IndexWatchRunnerTests
         {
             DeleteDirectory(projectRoot);
         }
+    }
+
+    [Fact]
+    public void EmitWatchOverflow_Json_EmitsStructuredRecoveryCommand()
+    {
+        var parallelism = IndexCommandRunner.DefaultIndexParallelism() == 1 ? 2 : 1;
+        var options = new IndexCommandOptions
+        {
+            ProjectPath = "/repo",
+            DataDir = "/custom-data",
+            Json = true,
+            Watch = true,
+            MaxFileSizeBytes = 4096,
+            MaxSymbolsPerFile = 42,
+            Parallelism = parallelism,
+            SymlinkPolicy = FileIndexer.SymlinkPolicy.All,
+            SymbolKindFilter = SymbolKindFilter.Create(["class", "function"], ["test.method"], parseError: null),
+        };
+        var method = typeof(IndexWatchRunner).GetMethod("EmitWatchOverflow", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(method);
+        const string resolvedDbPath = "/custom-data/codeindex.db";
+
+        string capturedOut;
+        lock (TestConsoleLock.Gate)
+        {
+            var originalOut = Console.Out;
+            using var stdout = new StringWriter();
+            Console.SetOut(stdout);
+            try
+            {
+                method.Invoke(null, [options, "buffer full", resolvedDbPath]);
+            }
+            finally
+            {
+                Console.SetOut(originalOut);
+            }
+            capturedOut = stdout.ToString();
+        }
+
+        using var doc = JsonDocument.Parse(capturedOut);
+        Assert.Equal("overflow", doc.RootElement.GetProperty("status").GetString());
+        Assert.Equal("incremental", doc.RootElement.GetProperty("phase").GetString());
+        Assert.Equal("buffer full", doc.RootElement.GetProperty("overflow_reason").GetString());
+        var recovery = doc.RootElement.GetProperty("recovery_command");
+        Assert.Equal("cdidx", recovery.GetProperty("command").GetString());
+        var args = recovery.GetProperty("args").EnumerateArray().Select(static item => item.GetString()).ToList();
+        Assert.Equal("index", args[0]);
+        Assert.Equal("/repo", args[1]);
+        Assert.Contains("--json", args);
+        Assert.Contains("--quiet", args);
+        AssertOptionValue(args, "--db", resolvedDbPath);
+        AssertOptionValue(args, "--max-file-bytes", "4096");
+        AssertOptionValue(args, "--max-symbols-per-file", "42");
+        AssertOptionValue(args, "--parallelism", parallelism.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        AssertOptionValue(args, "--follow-symlinks", "all");
+        AssertOptionValue(args, "--include-symbol-kind", "class,function");
+        AssertOptionValue(args, "--exclude-symbol-kind", "test.method");
     }
 
     [Fact]
@@ -512,6 +586,23 @@ public class IndexWatchRunnerTests
             if (File.Exists(dbPath))
                 File.Delete(dbPath);
         }
+    }
+
+    private static void AssertOptionValue(IReadOnlyList<string?> args, string option, string expectedValue)
+    {
+        var index = -1;
+        for (var i = 0; i < args.Count; i++)
+        {
+            if (string.Equals(args[i], option, StringComparison.Ordinal))
+            {
+                index = i;
+                break;
+            }
+        }
+
+        Assert.True(index >= 0, $"Expected option {option} in recovery command.");
+        Assert.True(index + 1 < args.Count, $"Expected value after option {option}.");
+        Assert.Equal(expectedValue, args[index + 1]);
     }
 
     private static string? ExtractStatus(string jsonLine)

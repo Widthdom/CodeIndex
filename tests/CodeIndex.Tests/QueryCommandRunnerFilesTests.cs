@@ -1421,6 +1421,15 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("changed_files", check.GetProperty("reason").GetString());
             Assert.Equal(1, check.GetProperty("changed_file_count").GetInt32());
             Assert.Equal("src/app.cs", check.GetProperty("changed_files")[0].GetString());
+            var repairCommand = Assert.Single(json.GetProperty("repair_commands").EnumerateArray());
+            Assert.Equal("cdidx", repairCommand.GetProperty("name").GetString());
+            Assert.Equal("workspace_stale", repairCommand.GetProperty("reason").GetString());
+            var repairArgs = repairCommand.GetProperty("args").EnumerateArray().Select(arg => arg.GetString()).ToArray();
+            Assert.Contains("index", repairArgs);
+            Assert.Contains(projectRoot, repairArgs);
+            Assert.Contains("--db", repairArgs);
+            Assert.Contains(dbPath, repairArgs);
+            Assert.NotEmpty(repairCommand.GetProperty("safety_notes").EnumerateArray());
             Assert.Contains("index stale", json.GetProperty("summary").GetString());
         }
         finally
@@ -1456,6 +1465,100 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(1, check.GetProperty("unindexed_file_count").GetInt32());
             Assert.Equal("src/old.cs", check.GetProperty("missing_files")[0].GetString());
             Assert.Equal("src/new.cs", check.GetProperty("unindexed_files")[0].GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunStatus_CheckJson_ReportsBackfillRepairCommandForFoldDegradation_Issue3567()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_status_repair_fold");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), "class App {}\n");
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.MarkGraphReady();
+                writer.MarkIssuesReady();
+                writer.MarkCSharpSymbolNameContractReady();
+                writer.MarkMetadataTargetReady("csharp");
+                writer.MarkSqlGraphContractReady();
+                writer.MarkHotspotFamilyReady("csharp", "test");
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath, "--check", "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var repairCommand = Assert.Single(json.GetProperty("repair_commands").EnumerateArray());
+            var repairArgs = repairCommand.GetProperty("args").EnumerateArray().Select(arg => arg.GetString()).ToArray();
+
+            Assert.Equal(2, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("fold_ready", json.GetProperty("failed_checks")[0].GetString());
+            Assert.Equal("cdidx", repairCommand.GetProperty("name").GetString());
+            Assert.Equal("fold_ready", repairCommand.GetProperty("reason").GetString());
+            Assert.Equal("backfill-fold", repairArgs[0]);
+            Assert.Contains("--db", repairArgs);
+            Assert.Contains(dbPath, repairArgs);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunStatus_CheckJson_ReportsLastFailedOrPartialIndexRun_Issue3567()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_status_failed_run");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), "class App {}\n");
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
+            MarkStatusReadinessReady(dbPath);
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.SetMeta(DbContext.LastFailedIndexRunStatusMetaKey, "partial");
+                writer.SetMeta(DbContext.LastFailedIndexRunModeMetaKey, "update");
+                writer.SetMeta(DbContext.LastFailedIndexRunStartedAtMetaKey, "2026-06-11T00:00:00.0000000Z");
+                writer.SetMeta(DbContext.LastFailedIndexRunDurationMsMetaKey, "1234");
+                writer.SetMeta(DbContext.LastFailedIndexRunFilesProcessedMetaKey, "3");
+                writer.SetMeta(DbContext.LastFailedIndexRunFilesTotalMetaKey, "9");
+                writer.SetMeta(DbContext.LastFailedIndexRunErrorCodeMetaKey, CommandErrorCodes.Interrupted);
+                writer.SetMeta(DbContext.LastFailedIndexRunReasonMetaKey, "interrupted");
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath, "--check", "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var run = document.RootElement.GetProperty("last_failed_or_partial_index_run");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("partial", run.GetProperty("status").GetString());
+            Assert.Equal("update", run.GetProperty("mode").GetString());
+            Assert.Equal(1234, run.GetProperty("duration_ms").GetInt64());
+            Assert.Equal(3, run.GetProperty("files_processed").GetInt64());
+            Assert.Equal(9, run.GetProperty("files_total").GetInt64());
+            Assert.Equal(CommandErrorCodes.Interrupted, run.GetProperty("error_code").GetString());
+            Assert.Equal("interrupted", run.GetProperty("reason").GetString());
+            Assert.False(run.TryGetProperty("exception", out _));
+            Assert.False(run.TryGetProperty("active_path", out _));
         }
         finally
         {

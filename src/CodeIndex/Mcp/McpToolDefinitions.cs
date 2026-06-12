@@ -20,13 +20,15 @@ public partial class McpServer
         {
             CreateToolDefinition(
                 "search",
-                "Full-text search across indexed code chunks. Returns match-centered snippets with line metadata plus `result_stable_at` for index-drift checks, `next_cursor` for non-empty paginated responses, and `next_step_suggestion` or `recovery_hint`. Use `prefix` or trailing `*` to widen token matching, `rawQuery` for FTS5 syntax, and `exactSubstring` for case-sensitive text identity. Details and examples: USER_GUIDE.md#search. / インデックス済みコードチャンクの全文検索。レスポンスには index drift 検出用の `result_stable_at`、非空ページ継続用の `next_cursor`、`next_step_suggestion` または `recovery_hint` を含める。`prefix` / 末尾 `*` / `rawQuery` / `exactSubstring` の詳細と例は USER_GUIDE.md#search を参照。",
+                "Full-text search across indexed code chunks, or list/run named search audit recipes. Returns match-centered snippets with line metadata plus `result_stable_at` for index-drift checks, `next_cursor` for non-empty paginated query responses, and `next_step_suggestion` or `recovery_hint`. Use `listRecipes:true` to list recipes and `recipe:\"name\"` to run one. Use `prefix` or trailing `*` to widen token matching, `rawQuery` for FTS5 syntax, and `exactSubstring` for case-sensitive text identity. Details and examples: USER_GUIDE.md#search. / インデックス済みコードチャンクの全文検索、または名前付き search audit recipe の一覧・実行。レスポンスには index drift 検出用の `result_stable_at`、非空ページ継続用の `next_cursor`、`next_step_suggestion` または `recovery_hint` を含める。`listRecipes:true` で recipe 一覧、`recipe:\"name\"` で実行。`prefix` / 末尾 `*` / `rawQuery` / `exactSubstring` の詳細と例は USER_GUIDE.md#search を参照。",
                 new JsonObject
                 {
                     ["type"] = "object",
                     ["properties"] = new JsonObject
                     {
                         ["query"] = new JsonObject { ["type"] = "string", ["description"] = "Search query text. Append `*` to a token to make that token a prefix phrase (`計算*` matches `計算する`)." },
+                        ["recipe"] = new JsonObject { ["type"] = "string", ["description"] = "Run a named search audit recipe instead of a single query. Use `listRecipes:true` to discover available recipe names." },
+                        ["listRecipes"] = new JsonObject { ["type"] = "boolean", ["description"] = "List built-in and configured search audit recipes without running a search.", ["default"] = false },
                         ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20). Responses include `truncated` and `more_available` when more rows exist.", ["default"] = QueryCommandRunner.DefaultQueryLimit },
                         ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language (e.g. csharp, python, javascript)" },
                         ["snippetLines"] = new JsonObject { ["type"] = "integer", ["description"] = "Max snippet lines per result (default: 8, max: 20)", ["default"] = 8, ["minimum"] = 1, ["maximum"] = SearchSnippetFormatter.MaxSnippetLines },
@@ -34,7 +36,7 @@ public partial class McpServer
                         ["rawQuery"] = new JsonObject { ["type"] = "boolean", ["description"] = "Use raw FTS5 syntax instead of literal-safe quoting: content:term, NEAR(a b, 5), OR, NOT, parenthesized groups, prefix*, and quoted phrases.", ["default"] = false },
                         ["cursor"] = new JsonObject { ["type"] = "string", ["description"] = "Optional pagination cursor returned as `next_cursor` by a previous search response with the same query and filters. Compare `result_stable_at` across pages to detect index drift." },
                         ["path"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Prefer or restrict glob-style path patterns. `*` and `?` are wildcards. Accepts a single string or an array; multiple values are OR'd together." },
-                        ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude glob-style path patterns. `*` and `?` are wildcards." },
+                        ["excludePaths"] = StringOrArraySchema("Exclude glob-style path patterns. `*` and `?` are wildcards."),
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },
                         ["includeGenerated"] = new JsonObject { ["type"] = "boolean", ["description"] = "Include files detected as generated code", ["default"] = false },
                         ["since"] = new JsonObject { ["type"] = "string", ["description"] = "Filter to files modified since this ISO 8601 timestamp" },
@@ -50,7 +52,12 @@ public partial class McpServer
                         ["countOnly"] = new JsonObject { ["type"] = "boolean", ["description"] = "Return only count metadata and a small top-file histogram; omit row payloads.", ["default"] = false },
                         ["format"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray { "full", "count", "compact" }, ["description"] = "Response shape: full rows, count-only metadata, or compact file/line rows without snippets.", ["default"] = "full" }
                     },
-                    ["required"] = new JsonArray { "query" }
+                    ["anyOf"] = new JsonArray
+                    {
+                        new JsonObject { ["required"] = new JsonArray { "query" } },
+                        new JsonObject { ["required"] = new JsonArray { "recipe" } },
+                        new JsonObject { ["required"] = new JsonArray { "listRecipes" } }
+                    }
                 },
                 ReadOnlyAnnotations()),
             CreateToolDefinition(
@@ -67,8 +74,9 @@ public partial class McpServer
                         ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20)", ["default"] = QueryCommandRunner.DefaultQueryLimit },
                         ["includeBody"] = new JsonObject { ["type"] = "boolean", ["description"] = "Include body content when body ranges are available", ["default"] = false },
                         ["lsp_compatible"] = new JsonObject { ["type"] = "boolean", ["description"] = "Add file:// uri and LSP range fields to each result", ["default"] = false },
+                        ["lspCompatible"] = new JsonObject { ["type"] = "boolean", ["description"] = "Alias for `lsp_compatible` for JSON-style clients.", ["default"] = false },
                         ["path"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Prefer or restrict matches to paths containing this text. Accepts a single string or an array; multiple values are OR'd together." },
-                        ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
+                        ["excludePaths"] = StringOrArraySchema("Exclude any paths containing these texts"),
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },
                         ["includeGenerated"] = new JsonObject { ["type"] = "boolean", ["description"] = "Include files detected as generated code", ["default"] = false },
                         ["since"] = new JsonObject { ["type"] = "string", ["description"] = "Filter to symbols in files modified since this ISO 8601 timestamp" },
@@ -94,8 +102,9 @@ public partial class McpServer
                         ["offset"] = new JsonObject { ["type"] = "integer", ["description"] = "Zero-based result offset for pagination; use `next_offset` from a truncated response.", ["default"] = 0, ["minimum"] = 0 },
                         ["maxLineWidth"] = new JsonObject { ["type"] = "integer", ["description"] = "Clamp very long single-line context payloads per result (default: 512; 0 disables clamping)", ["default"] = LineWidthFormatter.DefaultMaxLineWidth, ["minimum"] = 0, ["maximum"] = LineWidthFormatter.MaxAllowedLineWidth },
                         ["lsp_compatible"] = new JsonObject { ["type"] = "boolean", ["description"] = "Add file:// uri and LSP range fields to each result", ["default"] = false },
+                        ["lspCompatible"] = new JsonObject { ["type"] = "boolean", ["description"] = "Alias for `lsp_compatible` for JSON-style clients.", ["default"] = false },
                         ["path"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Prefer or restrict matches to paths containing this text. Accepts a single string or an array; multiple values are OR'd together." },
-                        ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
+                        ["excludePaths"] = StringOrArraySchema("Exclude any paths containing these texts"),
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },
                         ["includeGenerated"] = new JsonObject { ["type"] = "boolean", ["description"] = "Include files detected as generated code", ["default"] = false },
                         ["exactName"] = new JsonObject { ["type"] = "boolean", ["description"] = "Preferred explicit name for exact referenced-symbol equality. Uses NFKC + Unicode CaseFold so `Run` no longer matches `RunAsync`.", ["default"] = false },
@@ -121,7 +130,7 @@ public partial class McpServer
                         ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20). Responses include `truncated`, `more_available`, and `next_offset` when more rows exist.", ["default"] = QueryCommandRunner.DefaultQueryLimit },
                         ["offset"] = new JsonObject { ["type"] = "integer", ["description"] = "Zero-based result offset for pagination; use `next_offset` from a truncated response.", ["default"] = 0, ["minimum"] = 0 },
                         ["path"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Prefer or restrict matches to paths containing this text. Accepts a single string or an array; multiple values are OR'd together." },
-                        ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
+                        ["excludePaths"] = StringOrArraySchema("Exclude any paths containing these texts"),
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },
                         ["includeGenerated"] = new JsonObject { ["type"] = "boolean", ["description"] = "Include files detected as generated code", ["default"] = false },
                         ["exactName"] = new JsonObject { ["type"] = "boolean", ["description"] = "Preferred explicit name for exact callee-name equality. Uses NFKC + Unicode CaseFold so `Run` no longer matches `RunAsync`.", ["default"] = false },
@@ -147,7 +156,7 @@ public partial class McpServer
                         ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20). Responses include `truncated`, `more_available`, and `next_offset` when more rows exist.", ["default"] = QueryCommandRunner.DefaultQueryLimit },
                         ["offset"] = new JsonObject { ["type"] = "integer", ["description"] = "Zero-based result offset for pagination; use `next_offset` from a truncated response.", ["default"] = 0, ["minimum"] = 0 },
                         ["path"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Prefer or restrict matches to paths containing this text. Accepts a single string or an array; multiple values are OR'd together." },
-                        ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
+                        ["excludePaths"] = StringOrArraySchema("Exclude any paths containing these texts"),
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },
                         ["includeGenerated"] = new JsonObject { ["type"] = "boolean", ["description"] = "Include files detected as generated code", ["default"] = false },
                         ["exactName"] = new JsonObject { ["type"] = "boolean", ["description"] = "Preferred explicit name for exact caller/container equality. Uses NFKC + Unicode CaseFold so `Run` no longer matches `RunAsync`.", ["default"] = false },
@@ -172,7 +181,7 @@ public partial class McpServer
                         ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language" },
                         ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20)", ["default"] = QueryCommandRunner.DefaultQueryLimit },
                         ["path"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Prefer or restrict matches to paths containing this text. Accepts a single string or an array; multiple values are OR'd together." },
-                        ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
+                        ["excludePaths"] = StringOrArraySchema("Exclude any paths containing these texts"),
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },
                         ["includeGenerated"] = new JsonObject { ["type"] = "boolean", ["description"] = "Include files detected as generated code", ["default"] = false },
                         ["since"] = new JsonObject { ["type"] = "string", ["description"] = "Filter to symbols in files modified since this ISO 8601 timestamp" },
@@ -193,7 +202,7 @@ public partial class McpServer
                         ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language" },
                         ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20)", ["default"] = QueryCommandRunner.DefaultQueryLimit },
                         ["path"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Additional path filter text. Accepts a single string or an array; multiple values are OR'd together." },
-                        ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
+                        ["excludePaths"] = StringOrArraySchema("Exclude any paths containing these texts"),
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },
                         ["includeGenerated"] = new JsonObject { ["type"] = "boolean", ["description"] = "Include files detected as generated code", ["default"] = false },
                         ["since"] = new JsonObject { ["type"] = "string", ["description"] = "Filter to files modified since this ISO 8601 timestamp" }
@@ -234,7 +243,7 @@ public partial class McpServer
                         ["path"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Required file/path scope. Accepts a single string or an array; multiple values are OR'd together." },
                         ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max matching occurrences to return (default: 20)", ["default"] = QueryCommandRunner.DefaultQueryLimit },
                         ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language" },
-                        ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
+                        ["excludePaths"] = StringOrArraySchema("Exclude any paths containing these texts"),
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },
                         ["includeGenerated"] = new JsonObject { ["type"] = "boolean", ["description"] = "Include files detected as generated code", ["default"] = false },
                         ["before"] = new JsonObject { ["type"] = "integer", ["description"] = "Context lines before the match (default: 0, clamped to 1000)", ["default"] = 0, ["minimum"] = 0 },
@@ -260,10 +269,10 @@ public partial class McpServer
                         ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max items per section (default: 10)", ["default"] = QueryCommandRunner.DefaultMapLimit },
                         ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language" },
                         ["path"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Prefer or restrict glob-style path patterns. `*` and `?` are wildcards. Accepts a single string or an array; multiple values are OR'd together." },
-                        ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude glob-style path patterns. `*` and `?` are wildcards." },
+                        ["excludePaths"] = StringOrArraySchema("Exclude glob-style path patterns. `*` and `?` are wildcards."),
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },
                         ["sections"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray { "tree", "languages", "hotspots", "metrics" } }, ["description"] = "Only include selected response sections. Omit for the full backward-compatible map." },
-                        ["depth"] = new JsonObject { ["type"] = "integer", ["description"] = "Maximum module/tree depth to include; 0 keeps only root-level modules.", ["minimum"] = 0 }
+                        ["depth"] = new JsonObject { ["type"] = "integer", ["description"] = $"Maximum module/tree depth to include; 0 keeps only root-level modules. Requests above {MaxMcpMapDepth} are clamped with an MCP warning.", ["minimum"] = 0, ["maximum"] = MaxMcpMapDepth }
                     }
                 },
                 ReadOnlyAnnotations()),
@@ -281,7 +290,7 @@ public partial class McpServer
                         ["includeBody"] = new JsonObject { ["type"] = "boolean", ["description"] = "Include body content in definitions when available", ["default"] = false },
                         ["maxLineWidth"] = new JsonObject { ["type"] = "integer", ["description"] = "Clamp bundled reference context lines so single-line files stay bounded (default: 512; 0 disables clamping)", ["default"] = LineWidthFormatter.DefaultMaxLineWidth, ["minimum"] = 0, ["maximum"] = LineWidthFormatter.MaxAllowedLineWidth },
                         ["path"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Prefer or restrict paths containing this text. Accepts a single string or an array; multiple values are OR'd together." },
-                        ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
+                        ["excludePaths"] = StringOrArraySchema("Exclude any paths containing these texts"),
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },
                         ["includeGenerated"] = new JsonObject { ["type"] = "boolean", ["description"] = "Include files detected as generated code", ["default"] = false },
                         ["exactName"] = new JsonObject { ["type"] = "boolean", ["description"] = "Preferred explicit name for exact bundle symbol-name equality. Propagates through definitions, references, callers, and callees so `Run` no longer pulls in `RunAsync` / `RunImpact`.", ["default"] = false },
@@ -304,7 +313,7 @@ public partial class McpServer
                         ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max total callers or heuristic file-level dependency hints to return (default: 50). Check `truncated` when the limit is reached; `truncated_reason` distinguishes `user_limit` (raise `limit` to get more) from `safety_cap` (pathological graph, raising `limit` will not help).", ["default"] = QueryCommandRunner.DefaultImpactLimit },
                         ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language" },
                         ["path"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Prefer or restrict paths containing this text. Accepts a single string or an array; multiple values are OR'd together." },
-                        ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
+                        ["excludePaths"] = StringOrArraySchema("Exclude any paths containing these texts"),
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },
                         ["includeGenerated"] = new JsonObject { ["type"] = "boolean", ["description"] = "Include files detected as generated code", ["default"] = false },
                         ["withPaths"] = new JsonObject { ["type"] = "boolean", ["description"] = "When true, each caller carries a `paths` array of shortest call chains [resolvedRoot, intermediate..., callerName]; diamond convergence surfaces every shortest route (per-row cap; `pathsTruncated` flag indicates overflow).", ["default"] = false },
@@ -346,7 +355,7 @@ public partial class McpServer
                         ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max edges (default: 50)", ["default"] = QueryCommandRunner.DefaultImpactLimit },
                         ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language" },
                         ["path"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Restrict source files to glob-style path patterns. `*` and `?` are wildcards. Accepts a single string or an array; multiple values are OR'd together." },
-                        ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude glob-style path patterns. `*` and `?` are wildcards." },
+                        ["excludePaths"] = StringOrArraySchema("Exclude glob-style path patterns. `*` and `?` are wildcards."),
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude test files", ["default"] = false },
                         ["reverse"] = new JsonObject { ["type"] = "boolean", ["description"] = "Reverse lookup: show files that depend ON the matched path", ["default"] = false },
                         ["format"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray { "edgelist", "json-graph" }, ["description"] = "Structured response format. `edgelist` preserves the existing edges array; `json-graph` returns nodes and edges.", ["default"] = "edgelist" },
@@ -373,7 +382,7 @@ public partial class McpServer
                     {
                         ["kind"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by issue kind (replacement_char, bom, null_byte, mixed_line_endings, mixed_line_endings_three_way, cr_only_line_endings, utf16_bom, non_utf8_likely, line_too_long)" },
                         ["path"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Filter to paths containing this text. Accepts a single string or an array; multiple values are OR'd together." },
-                        ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
+                        ["excludePaths"] = StringOrArraySchema("Exclude any paths containing these texts"),
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false }
                     }
                 },
@@ -398,18 +407,24 @@ public partial class McpServer
                         ["queries"] = new JsonObject
                         {
                             ["type"] = "array",
-                            ["description"] = "Array of {tool, arguments} objects. Only read-only tools are allowed (not index or backfill_fold).",
+                            ["description"] = $"Array of {{tool, arguments}} objects. Only read-only tools are allowed (not index or backfill_fold). Hard cap: {MaxBatchQuerySize} slots.",
+                            ["minItems"] = 1,
+                            ["maxItems"] = MaxBatchQuerySize,
                             ["items"] = new JsonObject
                             {
                                 ["type"] = "object",
                                 ["properties"] = new JsonObject
                                 {
+                                    ["id"] = new JsonObject { ["type"] = "string", ["description"] = "Optional client-supplied slot identifier echoed as slot_id." },
+                                    ["slotId"] = new JsonObject { ["type"] = "string", ["description"] = "Optional client-supplied slot identifier echoed as slot_id." },
                                     ["tool"] = new JsonObject { ["type"] = "string", ["description"] = "Tool name (e.g. search, definition, symbols)" },
                                     ["arguments"] = new JsonObject { ["type"] = "object", ["description"] = "Tool arguments" }
                                 },
                                 ["required"] = new JsonArray { "tool" }
                             }
-                        }
+                        },
+                        ["maxResponseBytes"] = new JsonObject { ["type"] = "integer", ["description"] = "Optional per-call response byte budget for this batch_query response. Values above the server cap are clamped and reported in argument_adjustments.", ["minimum"] = 1, ["maximum"] = MaxBatchQueryResponseByteLimit },
+                        ["estimateOnly"] = new JsonObject { ["type"] = "boolean", ["description"] = "Return budget and slot estimate metadata without executing the slots.", ["default"] = false }
                     },
                     ["required"] = new JsonArray { "queries" }
                 },
@@ -458,7 +473,7 @@ public partial class McpServer
                         ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20)", ["default"] = QueryCommandRunner.DefaultQueryLimit },
                         ["groupBy"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray("symbol", "file", "statement"), ["description"] = "Grouping unit. Defaults to symbol for non-SQL scopes and statement for SQL scopes." },
                         ["path"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Restrict to glob-style path patterns. `*` and `?` are wildcards. Accepts a single string or an array; multiple values are OR'd together." },
-                        ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude glob-style path patterns. `*` and `?` are wildcards." },
+                        ["excludePaths"] = StringOrArraySchema("Exclude glob-style path patterns. `*` and `?` are wildcards."),
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude test files (default: false)", ["default"] = false }
                     }
                 },
@@ -484,7 +499,7 @@ public partial class McpServer
                         ["bucket"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray("likely_unused_private", "maybe_unused_nonpublic", "public_or_exported_no_refs", "reflection_or_config_suspect"), ["description"] = "Return only one unused-symbol bucket." },
                         ["minConfidence"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray("medium", "low"), ["description"] = "Return symbols at or above this confidence threshold." },
                         ["path"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Restrict to paths containing this text. Accepts a single string or an array; multiple values are OR'd together." },
-                        ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude paths containing any of these texts" },
+                        ["excludePaths"] = StringOrArraySchema("Exclude paths containing any of these texts"),
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude test files (default: false)", ["default"] = false }
                     }
                 },
@@ -543,6 +558,16 @@ public partial class McpServer
         var result = new JsonObject { ["tools"] = filtered };
         return CreateSuccessResponse(id, result);
     }
+
+    private static JsonObject StringOrArraySchema(string description) => new()
+    {
+        ["oneOf"] = new JsonArray
+        {
+            new JsonObject { ["type"] = "string" },
+            new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } },
+        },
+        ["description"] = description,
+    };
 
     private static void AddProjectScopeProperties(JsonArray tools)
     {
@@ -607,7 +632,11 @@ public partial class McpServer
                 continue;
 
             foreach (var (name, schema) in properties)
+            {
                 ApplyCommonSchemaConstraint(toolName, name, schema);
+                if (schema is JsonObject obj)
+                    ApplyCommonSchemaMetadata(toolName, name, obj);
+            }
         }
     }
 
@@ -714,6 +743,45 @@ public partial class McpServer
                 obj.TryAdd("maxLength", 64);
                 break;
         }
+    }
+
+    private static void ApplyCommonSchemaMetadata(string toolName, string name, JsonObject obj)
+    {
+        if (TryGetExpectedJsonType(toolName, name, out var expected))
+            obj["x-expectedType"] = expected;
+
+        switch (toolName, name)
+        {
+            case ("definition", "lsp_compatible"):
+            case ("references", "lsp_compatible"):
+                obj["x-aliases"] = new JsonArray { "lspCompatible" };
+                break;
+            case ("definition", "lspCompatible"):
+            case ("references", "lspCompatible"):
+                obj["x-aliasOf"] = "lsp_compatible";
+                break;
+            case ("search", "exact"):
+                MarkDeprecatedAlias(obj, "exactSubstring", "Use `exactSubstring` for search exact substring matching.");
+                break;
+            case ("definition", "exact"):
+            case ("references", "exact"):
+            case ("callers", "exact"):
+            case ("callees", "exact"):
+            case ("symbols", "exact"):
+            case ("analyze_symbol", "exact"):
+                MarkDeprecatedAlias(obj, "exactName", "Use `exactName` for exact symbol-name matching.");
+                break;
+            case ("impact_analysis", "maxDepth"):
+                MarkDeprecatedAlias(obj, "maxHops", "Use `maxHops`; `maxDepth` is retained for compatibility.");
+                break;
+        }
+    }
+
+    private static void MarkDeprecatedAlias(JsonObject obj, string aliasOf, string reason)
+    {
+        obj["x-aliasOf"] = aliasOf;
+        obj["deprecated"] = true;
+        obj["x-deprecationReason"] = reason;
     }
 
     private static void AppendConstraintDescription(JsonObject obj, string sentence)

@@ -27,6 +27,7 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
         test-framework: [net8.0, net9.0]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -77,9 +78,10 @@ jobs:
       # Get-MpPreference -notcontains check matches the stored form exactly.
       # Every Add-MpPreference call uses -ErrorAction Stop, and a final
       # Get-MpPreference verification throws if any exclusion did not register
-      # so the step fails loudly instead of degrading silently. The list of
-      # effective exclusions is also echoed to the log so future investigations
-      # of Windows lane variance can see exactly which paths were covered.
+      # so the step fails loudly instead of degrading silently. A reason-coded
+      # audit table of effective exclusions is emitted to both the log and job
+      # summary so future investigations can see exactly which paths were
+      # covered and why each path was required.
       # テストスイートが大量に作る一時ファイル（temp project / SQLite DB /
       # .cdidx / 合成ソース）を Windows Defender が都度スキャンする影響で
       # Windows lane だけ極端に遅くなる（issue #394）。build/test 前に
@@ -95,42 +97,93 @@ jobs:
       # Get-MpPreference -notcontains の照合を保存形式と完全一致させる。
       # 各呼び出しを -ErrorAction Stop で明示失敗させ、最後に Get-MpPreference
       # で登録を検証し、silent degradation を起こさないようにする。最終的に
-      # 適用された除外パス一覧はログにも出力し、今後 Windows lane のばらつき
-      # を調査するときにどのパスが対象になったかを追えるようにする。
+      # 適用された除外パスは理由付きの audit table としてログと job summary に
+      # 出力し、どのパスをなぜ対象にしたかを追えるようにする。
       - name: Exclude workspace and temp paths from Windows Defender (Windows only)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $candidates = @(
-            "${{ github.workspace }}",
-            $env:RUNNER_TEMP,
-            $env:TEMP,
-            $env:TMP,
-            [System.IO.Path]::GetTempPath(),
-            $env:NUGET_PACKAGES,
-            (Join-Path $env:USERPROFILE ".nuget\packages"),
-            (Join-Path $env:LOCALAPPDATA "NuGet\packages")
+            [pscustomobject]@{
+              Path = "${{ github.workspace }}"
+              Reason = "Repository checkout containing build outputs and temp-heavy test fixtures."
+            },
+            [pscustomobject]@{
+              Path = $env:RUNNER_TEMP
+              Reason = "GitHub-hosted runner temp root used by actions and pinned TMP/TEMP."
+            },
+            [pscustomobject]@{
+              Path = $env:TEMP
+              Reason = "Effective TEMP path used by PowerShell and child processes."
+            },
+            [pscustomobject]@{
+              Path = $env:TMP
+              Reason = "Effective TMP path preferred by .NET Path.GetTempPath()."
+            },
+            [pscustomobject]@{
+              Path = [System.IO.Path]::GetTempPath()
+              Reason = "Runtime-observed .NET temp path, which can differ from environment variables."
+            },
+            [pscustomobject]@{
+              Path = $env:NUGET_PACKAGES
+              Reason = "Explicit NuGet global package cache when configured."
+            },
+            [pscustomobject]@{
+              Path = (Join-Path $env:USERPROFILE ".nuget\packages")
+              Reason = "Default user NuGet global package cache touched by restore/build."
+            },
+            [pscustomobject]@{
+              Path = (Join-Path $env:LOCALAPPDATA "NuGet\packages")
+              Reason = "Windows local NuGet package cache fallback touched by restore/build."
+            }
           )
 
-          $paths = $candidates |
-            Where-Object { $_ } |
-            ForEach-Object { $_.TrimEnd('\','/') } |
-            Where-Object { $_ } |
-            Select-Object -Unique
+          $exclusions = $candidates |
+            Where-Object { $_.Path } |
+            ForEach-Object {
+              $path = $_.Path.TrimEnd('\','/')
+              if ($path) {
+                [pscustomobject]@{
+                  Path = $path
+                  Reason = $_.Reason
+                }
+              }
+            } |
+            Group-Object -Property Path |
+            ForEach-Object {
+              [pscustomobject]@{
+                Path = $_.Name
+                Reason = (($_.Group | ForEach-Object { $_.Reason }) | Select-Object -Unique) -join " "
+              }
+            } |
+            Sort-Object -Property Path
 
-          Write-Host "Windows Defender exclusion candidates:"
-          foreach ($path in $paths) {
-            Write-Host "  $path"
+          Write-Host "Windows Defender exclusion audit:"
+          foreach ($entry in $exclusions) {
+            Write-Host ("  {0} -- {1}" -f $entry.Path, $entry.Reason)
           }
 
-          foreach ($path in $paths) {
-            Add-MpPreference -ExclusionPath $path -ErrorAction Stop
+          if ($env:GITHUB_STEP_SUMMARY) {
+            "### Windows Defender exclusion audit" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+            "" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+            "| Path | Reason |" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+            "| --- | --- |" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+            foreach ($entry in $exclusions) {
+              $safePath = $entry.Path.Replace("|", "\|")
+              $safeReason = $entry.Reason.Replace("|", "\|")
+              ('| `{0}` | {1} |' -f $safePath, $safeReason) |
+                Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+            }
+          }
+
+          foreach ($entry in $exclusions) {
+            Add-MpPreference -ExclusionPath $entry.Path -ErrorAction Stop
           }
 
           $prefs = Get-MpPreference
-          foreach ($path in $paths) {
-            if ($prefs.ExclusionPath -notcontains $path) {
-              throw "Windows Defender exclusion was not applied: $path"
+          foreach ($entry in $exclusions) {
+            if ($prefs.ExclusionPath -notcontains $entry.Path) {
+              throw "Windows Defender exclusion was not applied: $($entry.Path)"
             }
           }
 
@@ -148,8 +201,6 @@ jobs:
             ~/.nuget/packages
             ~\AppData\Local\NuGet\packages
           key: ${{ runner.os }}-nuget-${{ hashFiles('**/packages.lock.json', '**/*.csproj') }}
-          restore-keys: |
-            ${{ runner.os }}-nuget-
 
       # --locked-mode requires every resolved package to match the committed
       # packages.lock.json so an unexpected transitive bump (including silent
@@ -258,9 +309,19 @@ jobs:
             TestResults/**/*.trx
             TestResults/**/*.txt
             TestResults/**/*.xml
+            TestResults/**/*Sequence*.xml
+
+      - name: Upload diagnostic dumps
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        continue-on-error: true
+        with:
+          name: DiagnosticDumps-${{ matrix.os }}-${{ matrix.test-framework }}
+          if-no-files-found: ignore
+          overwrite: true
+          path: |
             TestResults/**/*.dmp
             TestResults/**/*.dump
-            TestResults/**/*Sequence*.xml
             TestResults/**/*.hangdump
 
       - name: Upload coverage reports

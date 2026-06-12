@@ -48,6 +48,7 @@ public partial class QueryCommandRunnerTests
             "--exclude-path", "tests/**",
             "--exclude-path", "docs/**",
             "--exclude-tests",
+            "--audit-scope", "all",
             "--start", "12",
             "--end", "18",
             "--before", "2",
@@ -75,6 +76,8 @@ public partial class QueryCommandRunnerTests
         Assert.Equal(new[] { "src/**" }, options.PathPatterns);
         Assert.Equal(["tests/**", "docs/**"], options.ExcludePaths);
         Assert.True(options.ExcludeTests);
+        Assert.Equal("all", options.AuditScope);
+        Assert.True(options.AuditScopeExplicit);
         Assert.Equal(12, options.StartLine);
         Assert.Equal(18, options.EndLine);
         Assert.Equal(2, options.ContextBefore);
@@ -331,6 +334,44 @@ public partial class QueryCommandRunnerTests
         {
             Environment.CurrentDirectory = originalCurrentDirectory;
             TestProjectHelper.DeleteDirectory(otherRoot);
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ParseArgs_ProjectFilterFallbackReportsEffectiveRoot_Issue3461()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_solution_filter_fallback");
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_solution_filter_fallback_{Guid.NewGuid():N}.db");
+        var originalCurrentDirectory = Environment.CurrentDirectory;
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src", "App"));
+            File.WriteAllText(Path.Combine(projectRoot, "CodeIndex.sln"), """
+            Microsoft Visual Studio Solution File, Format Version 12.00
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "App", "src\App\App.csproj", "{11111111-1111-1111-1111-111111111111}"
+            EndProject
+            """);
+            File.WriteAllText(Path.Combine(projectRoot, "src", "App", "App.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+
+            Environment.CurrentDirectory = projectRoot;
+            var expectedProjectRoot = Path.GetFullPath(Environment.CurrentDirectory);
+            var options = QueryCommandRunner.ParseArgs(
+                ["Auth", "--db", dbPath, "--project", "App"],
+                jsonDefault: false,
+                allowNamedQuery: true);
+
+            Assert.Equal("Auth", options.Query);
+            Assert.Equal(["App"], options.ProjectFilters);
+            Assert.Equal(["src/App/*"], options.PathPatterns);
+            Assert.Equal(expectedProjectRoot, options.ProjectFilterRoot);
+            Assert.Equal(QueryCommandRunner.ProjectFilterRootFallbackReasonCurrentDirectory, options.ProjectFilterRootFallbackReason);
+            Assert.Null(options.ParseError);
+        }
+        finally
+        {
+            Environment.CurrentDirectory = originalCurrentDirectory;
+            TestProjectHelper.DeleteFile(dbPath);
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
@@ -646,6 +687,54 @@ public partial class QueryCommandRunnerTests
         }
     }
 
+    [Fact]
+    public void RunVacuum_DryRunJsonReportsMaintenanceEstimate_Issue3564()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_vacuum_dry_run");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using (var db = new DbContext(dbPath))
+            {
+                using var command = db.Connection.CreateCommand();
+                command.CommandText = @"
+                    CREATE TABLE vacuum_payload (id INTEGER PRIMARY KEY, payload BLOB);
+                    WITH RECURSIVE n(value) AS (
+                        SELECT 1
+                        UNION ALL
+                        SELECT value + 1 FROM n WHERE value < 128
+                    )
+                    INSERT INTO vacuum_payload (payload)
+                    SELECT randomblob(4096) FROM n;
+                    DELETE FROM vacuum_payload;";
+                command.ExecuteNonQuery();
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunVacuum(
+                ["--db", dbPath, "--dry-run", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            Assert.Equal("dry_run", root.GetProperty("status").GetString());
+            Assert.True(root.GetProperty("dry_run").GetBoolean());
+            Assert.True(root.GetProperty("estimated_pages_reclaimable").GetInt64() > 0);
+            Assert.True(root.GetProperty("estimated_bytes_reclaimable").GetInt64() > 0);
+            Assert.Equal(0, root.GetProperty("pages_reclaimed").GetInt64());
+            Assert.Equal(root.GetProperty("page_count_before").GetInt64(), root.GetProperty("page_count_after").GetInt64());
+            Assert.Equal("incremental", root.GetProperty("auto_vacuum_mode_after_name").GetString());
+            var guidance = root.GetProperty("maintenance_guidance");
+            Assert.Equal("vacuum_recommended", guidance.GetProperty("freelist_state").GetString());
+            Assert.Equal("cdidx vacuum --db <db>", guidance.GetProperty("recommended_command").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
 
 
 
@@ -752,6 +841,32 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunBatch_InvalidJsonDoesNotEchoParserMessage_Issue3425()
+    {
+        const string secret = "SECRET_BATCH_JSON_3425";
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_batch_invalid_json");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var input = "[\"status\", " + secret + "\n";
+
+            var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
+                input,
+                () => QueryCommandRunner.RunBatch(["--db", dbPath], _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains("invalid_batch_json: JsonException", stderr, StringComparison.Ordinal);
+            Assert.DoesNotContain(secret, stderr, StringComparison.Ordinal);
+            Assert.DoesNotContain("not valid JSON", stderr, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunBatch_ArgumentCountExceedsLimit_ReturnsUsageError_Issue2891()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_batch_too_many_args");
@@ -845,7 +960,7 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
             Assert.Equal(string.Empty, stdout);
-            Assert.Contains("is not valid JSON", stderr);
+            Assert.Contains("invalid_batch_json: JsonException", stderr);
         }
         finally
         {
@@ -1938,7 +2053,7 @@ public partial class QueryCommandRunnerTests
                 .Select(lang => lang.GetProperty("lang").GetString())
                 .ToList();
 
-            Assert.Equal(["csharp"], names);
+            Assert.Equal(["csharp", "markdown"], names);
         }
         finally
         {
@@ -1947,9 +2062,9 @@ public partial class QueryCommandRunnerTests
     }
 
     [Theory]
-    [InlineData("graph")]
-    [InlineData("references")]
-    public void RunLanguages_JsonCapabilityGraphFiltersGraphSupport(string capability)
+    [InlineData("graph", "graph_queries")]
+    [InlineData("references", "reference_extraction")]
+    public void RunLanguages_JsonCapabilityFiltersPositiveSupport(string capability, string propertyName)
     {
         var (exitCode, stdout, stderr) = CaptureConsole(() =>
             QueryCommandRunner.RunLanguages(["--json", "--capability", capability], _jsonOptions));
@@ -1962,7 +2077,7 @@ public partial class QueryCommandRunnerTests
 
         Assert.NotEmpty(languages);
         Assert.Contains(languages, lang => lang.GetProperty("lang").GetString() == "csharp");
-        Assert.All(languages, lang => Assert.True(lang.GetProperty("graph_queries").GetBoolean()));
+        Assert.All(languages, lang => Assert.True(lang.GetProperty(propertyName).GetBoolean()));
     }
 
     [Fact]
@@ -1979,8 +2094,53 @@ public partial class QueryCommandRunnerTests
 
         Assert.NotEmpty(languages);
         Assert.Contains(languages, lang => lang.GetProperty("lang").GetString() == "html");
-        Assert.DoesNotContain(languages, lang => lang.GetProperty("lang").GetString() == "msbuild");
+        Assert.Contains(languages, lang => lang.GetProperty("lang").GetString() == "msbuild");
         Assert.All(languages, lang => Assert.True(lang.GetProperty("symbol_extraction").GetBoolean()));
+    }
+
+    [Theory]
+    [InlineData("missing-symbols", "symbol_extraction")]
+    [InlineData("missing-references", "reference_extraction")]
+    [InlineData("missing-graph", "graph_queries")]
+    public void RunLanguages_JsonCapabilityMissingFiltersCapabilityGaps(string capability, string propertyName)
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() =>
+            QueryCommandRunner.RunLanguages(["--json", "--capability", capability], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+
+        using var document = ParseJsonOutput(stdout);
+        var languages = document.RootElement.GetProperty("languages").EnumerateArray().ToList();
+
+        Assert.NotEmpty(languages);
+        Assert.All(languages, lang =>
+        {
+            Assert.False(lang.GetProperty(propertyName).GetBoolean());
+            Assert.Contains(capability, lang.GetProperty("capability_gaps").EnumerateArray().Select(gap => gap.GetString()));
+        });
+    }
+
+    [Fact]
+    public void RunLanguages_JsonCapabilitySearchOnlyFiltersAllExtractionGaps()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() =>
+            QueryCommandRunner.RunLanguages(["--json", "--capability", "search-only"], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+
+        using var document = ParseJsonOutput(stdout);
+        var languages = document.RootElement.GetProperty("languages").EnumerateArray().ToList();
+
+        Assert.NotEmpty(languages);
+        Assert.Contains(languages, lang => lang.GetProperty("lang").GetString() == "cython");
+        Assert.All(languages, lang =>
+        {
+            Assert.False(lang.GetProperty("symbol_extraction").GetBoolean());
+            Assert.False(lang.GetProperty("reference_extraction").GetBoolean());
+            Assert.False(lang.GetProperty("graph_queries").GetBoolean());
+        });
     }
 
     [Fact]
@@ -1991,7 +2151,8 @@ public partial class QueryCommandRunnerTests
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
         Assert.Contains("unsupported --capability value 'lint'", stderr);
-        Assert.Contains("graph, symbols, or references", stderr);
+        Assert.Contains("missing-references", stderr);
+        Assert.Contains("search-only", stderr);
     }
 
     [Fact]
@@ -2033,11 +2194,11 @@ public partial class QueryCommandRunnerTests
     public void RunLanguages_JsonListsHtmlWithSymbolExtractionAndAllExtensions()
     {
         // Pin the #215 surface: `cdidx languages --json` must report html with
-        // symbol_extraction=true and list all four extensions (.html, .htm, .xhtml, .shtml)
-        // so AI tools can discover HTML symbol support without indexing first.
-        // #215 の表面契約を pin: `cdidx languages --json` は html を symbol_extraction=true で
-        // 返し、`.html` / `.htm` / `.xhtml` / `.shtml` の 4 拡張子を列挙する必要がある。
-        // AI ツールがインデックス前でも HTML のシンボル対応を検出できるようにするため。
+        // symbol_extraction/reference_extraction=true and list all four extensions
+        // (.html, .htm, .xhtml, .shtml) so AI tools can discover HTML support without indexing first.
+        // #215 の表面契約を pin: `cdidx languages --json` は html を symbol_extraction /
+        // reference_extraction=true で返し、`.html` / `.htm` / `.xhtml` / `.shtml` の 4 拡張子を
+        // 列挙する必要がある。AI ツールがインデックス前でも HTML 対応を検出できるようにするため。
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages(["--json"], _jsonOptions));
 
         Assert.Equal(CommandExitCodes.Success, exitCode);
@@ -2048,6 +2209,7 @@ public partial class QueryCommandRunnerTests
         var html = languages.EnumerateArray().First(lang => lang.GetProperty("lang").GetString() == "html");
 
         Assert.True(html.GetProperty("symbol_extraction").GetBoolean());
+        Assert.True(html.GetProperty("reference_extraction").GetBoolean());
         var extensions = html.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()).ToList();
         Assert.Contains(".html", extensions);
         Assert.Contains(".htm", extensions);
@@ -2068,6 +2230,7 @@ public partial class QueryCommandRunnerTests
         var assembly = languages.EnumerateArray().First(lang => lang.GetProperty("lang").GetString() == "assembly");
 
         Assert.True(assembly.GetProperty("symbol_extraction").GetBoolean());
+        Assert.True(assembly.GetProperty("reference_extraction").GetBoolean());
         Assert.True(assembly.GetProperty("graph_queries").GetBoolean());
 
         var extensions = assembly.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()).ToList();
@@ -2122,14 +2285,18 @@ public partial class QueryCommandRunnerTests
         var languages = document.RootElement.GetProperty("languages").EnumerateArray()
             .ToDictionary(entry => entry.GetProperty("lang").GetString()!, entry => entry);
 
-        foreach (var searchOnly in new[] { "cython", "sass", "stylus", "msbuild" })
+        foreach (var searchOnly in new[] { "cython", "sass", "stylus" })
         {
             Assert.True(languages.ContainsKey(searchOnly), $"expected '{searchOnly}' to be listed");
             var entry = languages[searchOnly];
             Assert.False(entry.GetProperty("symbol_extraction").GetBoolean(),
                 $"{searchOnly} must advertise symbol_extraction=false");
+            Assert.False(entry.GetProperty("reference_extraction").GetBoolean(),
+                $"{searchOnly} must advertise reference_extraction=false");
             Assert.False(entry.GetProperty("graph_queries").GetBoolean(),
                 $"{searchOnly} must advertise graph_queries=false");
+            Assert.Contains("missing-symbols", entry.GetProperty("capability_gaps").EnumerateArray().Select(gap => gap.GetString()));
+            Assert.Contains("missing-references", entry.GetProperty("capability_gaps").EnumerateArray().Select(gap => gap.GetString()));
         }
 
         foreach (var searchOnly in new[] { "crystal", "clojure", "d", "erlang", "julia", "nim", "ocaml", "solidity", "tcl" })
@@ -2138,6 +2305,8 @@ public partial class QueryCommandRunnerTests
             var entry = languages[searchOnly];
             Assert.False(entry.GetProperty("symbol_extraction").GetBoolean(),
                 $"{searchOnly} must advertise symbol_extraction=false");
+            Assert.False(entry.GetProperty("reference_extraction").GetBoolean(),
+                $"{searchOnly} must advertise reference_extraction=false");
             Assert.False(entry.GetProperty("graph_queries").GetBoolean(),
                 $"{searchOnly} must advertise graph_queries=false");
         }
@@ -2145,12 +2314,42 @@ public partial class QueryCommandRunnerTests
         var yamlAliases = languages["yaml"].GetProperty("aliases").EnumerateArray()
             .Select(alias => alias.GetString()).ToList();
         Assert.Contains("yml", yamlAliases);
+        Assert.True(languages["yaml"].GetProperty("symbol_extraction").GetBoolean(),
+            "yaml must advertise symbol_extraction=true");
+        Assert.True(languages["json"].GetProperty("symbol_extraction").GetBoolean(),
+            "json must advertise symbol_extraction=true");
 
         Assert.True(languages.ContainsKey("perl"), "expected 'perl' to be listed");
         Assert.True(languages["perl"].GetProperty("symbol_extraction").GetBoolean(),
             "perl must advertise symbol_extraction=true");
+        Assert.True(languages["perl"].GetProperty("reference_extraction").GetBoolean(),
+            "perl must advertise reference_extraction=true");
         Assert.True(languages["perl"].GetProperty("graph_queries").GetBoolean(),
             "perl must advertise graph_queries=true");
+
+        foreach (var buildAutomation in new[] { "cmake", "justfile", "msbuild" })
+        {
+            Assert.True(languages.ContainsKey(buildAutomation), $"expected '{buildAutomation}' to be listed");
+            Assert.True(languages[buildAutomation].GetProperty("symbol_extraction").GetBoolean(),
+                $"{buildAutomation} must advertise symbol_extraction=true");
+            Assert.True(languages[buildAutomation].GetProperty("reference_extraction").GetBoolean(),
+                $"{buildAutomation} must advertise reference_extraction=true");
+            Assert.True(languages[buildAutomation].GetProperty("graph_queries").GetBoolean(),
+                $"{buildAutomation} must advertise graph_queries=true");
+            Assert.Empty(languages[buildAutomation].GetProperty("capability_gaps").EnumerateArray());
+        }
+
+        foreach (var markupSchema in new[] { "graphql", "html", "markdown" })
+        {
+            Assert.True(languages.ContainsKey(markupSchema), $"expected '{markupSchema}' to be listed");
+            Assert.True(languages[markupSchema].GetProperty("symbol_extraction").GetBoolean(),
+                $"{markupSchema} must advertise symbol_extraction=true");
+            Assert.True(languages[markupSchema].GetProperty("reference_extraction").GetBoolean(),
+                $"{markupSchema} must advertise reference_extraction=true");
+            Assert.True(languages[markupSchema].GetProperty("graph_queries").GetBoolean(),
+                $"{markupSchema} must advertise graph_queries=true");
+            Assert.Empty(languages[markupSchema].GetProperty("capability_gaps").EnumerateArray());
+        }
 
         // Cython owns .pyx / .pxd exclusively; python keeps .py / .pyi / .pyw and Bazel filenames.
         // Cython は .pyx / .pxd を専有し、python は .py / .pyi / .pyw と Bazel ファイル名を維持。
@@ -2198,11 +2397,10 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void RunLanguages_HumanOutput_WideExtensionListSpillsOntoContinuationLine()
     {
-        // The human-readable table must not let long extension lists (dockerfile / makefile /
-        // python / ruby / xml / msbuild) swallow the Symbols / Graph columns. Instead, spill onto a
-        // continuation line so the row is still readable.
-        // 人間向けテーブルは、長い拡張子リスト（dockerfile / makefile / python / ruby / xml / msbuild）が
-        // Symbols / Graph 列を食い潰さないようにし、継続行へ退避させて可読性を保つこと。
+        // The human-readable table must not let long extension/file-name lists swallow the
+        // Symbols / Graph columns. Instead, spill onto a continuation line so the row is readable.
+        // 人間向けテーブルは、長い拡張子・ファイル名リストが Symbols / Graph 列を食い潰さないようにし、
+        // 継続行へ退避させて可読性を保つこと。
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages([], _jsonOptions));
 
         Assert.Equal(CommandExitCodes.Success, exitCode);
@@ -2213,7 +2411,7 @@ public partial class QueryCommandRunnerTests
         // Rows with long extension / alias lists must spill onto a continuation line so the
         // Symbols / Graph columns stay readable.
         // 拡張子や alias が長い行は継続行に退避し、Symbols / Graph 列の可読性を保つ。
-        var wideLangs = new[] { "csharp", "dockerfile", "makefile", "python", "ruby", "msbuild" };
+        var wideLangs = new[] { "csharp", "dependency_lock", "dependency_manifest", "dockerfile", "makefile", "python", "ruby", "msbuild" };
         foreach (var wide in wideLangs)
         {
             var headerIndex = Array.FindIndex(lines, line => line.StartsWith($"{wide} ", StringComparison.Ordinal));
@@ -2223,6 +2421,8 @@ public partial class QueryCommandRunnerTests
             // ヘッダ行には言語名・シンボル・グラフのみが含まれ、拡張子文字列は含まれない。
             Assert.DoesNotContain("Dockerfile", header);
             Assert.DoesNotContain("Makefile", header);
+            Assert.DoesNotContain("package-lock.json", header);
+            Assert.DoesNotContain("pyproject.toml", header);
             Assert.DoesNotContain("WORKSPACE", header);
             Assert.DoesNotContain("Gemfile", header);
             Assert.DoesNotContain(".csproj", header);
@@ -3972,6 +4172,13 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(25, json.GetProperty("count").GetInt32());
+            Assert.False(json.GetProperty("degraded").GetBoolean());
+            Assert.True(json.GetProperty("authoritative_count").GetBoolean());
+            Assert.True(json.GetProperty("freshness_available").GetBoolean());
+            Assert.True(json.GetProperty("indexed_file_count").GetInt32() > 0);
+            var queryContext = json.GetProperty("query_context");
+            Assert.True(queryContext.GetProperty("count").GetBoolean());
+            Assert.Equal(useExplicitLimit ? 5 : 20, queryContext.GetProperty("limit").GetInt32());
 
             switch (command)
             {
@@ -3982,12 +4189,15 @@ public partial class QueryCommandRunnerTests
                 case "callers":
                 case "callees":
                     Assert.Equal(25, json.GetProperty("files").GetInt32());
+                    Assert.Equal(25, json.GetProperty("file_count").GetInt32());
                     break;
                 case "find":
                     Assert.Equal(1, json.GetProperty("files").GetInt32());
                     Assert.Equal(1, json.GetProperty("file_count").GetInt32());
                     break;
                 case "files":
+                    Assert.Equal(25, json.GetProperty("files").GetInt32());
+                    Assert.Equal(25, json.GetProperty("file_count").GetInt32());
                     break;
                 default:
                     throw new ArgumentOutOfRangeException(nameof(command), command, null);
