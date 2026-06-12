@@ -2905,6 +2905,10 @@ TypeScript 抽出は、type-only 構文から `type_reference` edge を dependen
 
 FTS5は**仮想テーブル**で動作します。通常のSQLiteテーブルと同じように見え、`SELECT`やJOINが可能ですが、テキスト検索に最適化された特殊な形式でデータを格納します。
 
+検索結果の順序は、同じ入力と同じインデックスに対して決定的でなければなりません。ranking の `ORDER BY` 句は、ユーザーに見える関連度キーの後に安定して永続化されたキーを置いて終えるべきです。これにより FTS rank、file timestamp、path が同点になっても SQLite 実装依存の row order に落ちません。このため chunk search の `ORDER BY` は最後を `f.path, c.id ASC` で締めています（#1731）。
+
+Chunk search の ranking は、裸の BM25 tie に落ちる前に symbol 構造を使います。exact / prefix の symbol-name boost は、query に一致する symbol 定義と重なる chunk を、同じ file 内の別 chunk から区別し、それでも足りない場合は file-level の symbol presence に fallback します。text relevance が同点の場合、重なる symbol name/signature に query hit がある chunk、高価値な symbol kind（class/interface/struct/enum、次に function/method/property）、浅い symbol scope が、comment-only match や深い nest の match より前に並びます。これにより、scope root や definition に近い結果を冗長な inner mention や非構造的 mention より前に保ちつつ、最後は決定的な fallback ordering を維持します。
+
 ### 転置インデックスとは？
 
 転置インデックスは、各単語（トークン）からそれを含むドキュメント（行）のリストへのマッピングです。教科書の巻末索引のようなものです。
@@ -3303,6 +3307,7 @@ Unlist しても exact version restore は不可能になりません。これ�
 | [`src/CodeIndex/Cli/GitHubIssueReporter.cs`](src/CodeIndex/Cli/GitHubIssueReporter.cs) | GitHub Issues APIクライアント（ベストエフォート） |
 | [`src/CodeIndex/Mcp/McpToolHandlers.cs`](src/CodeIndex/Mcp/McpToolHandlers.cs) | `ExecuteSuggestImprovement` ハンドラ |
 | [`src/CodeIndex/Mcp/McpToolDefinitions.cs`](src/CodeIndex/Mcp/McpToolDefinitions.cs) | ツールスキーマ定義 |
+| [`src/CodeIndex/Cli/SuggestionsCommandRunner.cs`](src/CodeIndex/Cli/SuggestionsCommandRunner.cs) | ローカル提案の一覧、export、issue draft 生成、open issue duplicate preflight |
 
 ### 送信されるデータ（GitHubトークン設定時）
 
@@ -3310,6 +3315,7 @@ Unlist しても exact version restore は不可能になりません。これ�
 - 言語名（例: `typescript`）
 - 説明テキスト（自然言語、SourceCodeDetectorにより検証済み）
 - コンテキストテキスト（自然言語、SourceCodeDetectorにより検証済み）
+- 呼び出し元が渡した任意の repository-relative evidence path。これは path 文字列だけで、payload 用にファイル内容を読むことはありません。
 - cdidx バージョン文字列
 - attribution メタデータ: `created_by_agent`、`session_id`、`client_version`、`mcp_client_name`、`mcp_client_version`、および任意の `tool_invocation_context`
 - SHA256 提案ハッシュ（重複排除用）
@@ -3322,17 +3328,19 @@ Unlist しても exact version restore は不可能になりません。これ�
 
 ### ローカルライフサイクルフィールド
 
-ローカルの提案レコードは、送信済みかどうかの二値フラグではなく `status` ライフサイクルフィールドを使う。新規レコードは `draft` で始まり、GitHub への送信が成功すると `submitted_pending_triage` へ移行し、判明している範囲で `upstream_url`、`upstream_issue_number`、`last_synced_at` を記録する。GitHub の rate-limit 応答では `next_retry_at` も記録し、未送信の重複提案はその時刻を過ぎるまで再送しない。残りの追加状態は後続の sync / listing フロー向けに予約されている: `open_in_upstream`、`resolved_in_upstream`、`wont_fix`、`duplicate`、`superseded`。`submitted_to_github` / `github_issue_url` を含む古いレコードは、読み取り時に新しいライフサイクルフィールドへ正規化される。
+ローカルの提案レコードは、送信済みかどうかの二値フラグではなく `status` ライフサイクルフィールドを使う。新規レコードは `draft` で始まり、GitHub への送信が成功すると `submitted_pending_triage` へ移行し、判明している範囲で `upstream_url`、`upstream_issue_number`、`last_synced_at` を記録する。GitHub 送信を試みるたびに `last_submit_attempt` を stamp し、`submit_attempt_count` を増やし、失敗時は `last_submit_error` を記録します。成功時は最後の error を clear します。GitHub の rate-limit 応答では `next_retry_at` も記録し、未送信の重複提案はその時刻を過ぎるまで再送しない。残りの追加状態は後続の sync / listing フロー向けに予約されている: `open_in_upstream`、`resolved_in_upstream`、`wont_fix`、`duplicate`、`superseded`。`submitted_to_github` / `github_issue_url` を含む古いレコードは、読み取り時に新しいライフサイクルフィールドへ正規化される。
 
 ### GitHub 再試行の冪等性
 
-upstream Issue を作成する前に、`GitHubIssueReporter` は同じ SHA256 提案ハッシュを持つ Issue が既に存在するか確認する。まず GitHub Search で Issue 本文内のハッシュを検索し、その後 backstop として `ai-suggestion` Issue を直接一覧取得して各本文内のハッシュを照合する。この fallback により GitHub Search の indexing 遅延を回避できるため、作成レスポンスが失われた直後の再試行でも、作成済み Issue を検出して重複 POST を防げる。lookup 失敗時の扱いは引き続きベストエフォートであり、GitHub 側の障害などで両方の確認に失敗した場合は、正規の初回送信をブロックせず通常の作成経路へ進む。
+`SuggestionStore.TryAddAndSubmit` は、ローカル read/write と送信予約を suggestion-store file lock の下で行いますが、GitHub callback は lock を解放してから呼び出します。予約時に `last_submit_attempt`、`submit_attempt_count`、短い `next_retry_at` guard を stamp するため、最初の remote call が進行中に別 writer が同じ duplicate を送信することはありません。callback の結果は、remote call 完了後に短時間だけ lock を取り直して永続化されます。
+
+upstream Issue を作成する前に、`GitHubIssueReporter` は同じ SHA256 提案ハッシュを持つ Issue が既に存在するか確認する。まず GitHub Search で Issue 本文内のハッシュを検索し、その後 fallback として、cdidx が付与する既存 repository label（通常提案は `enhancement`、crash/error report は `bug`）付きの Issue を一覧し、各本文内のハッシュを照合する。この fallback により GitHub Search の indexing 遅延を回避できるため、作成レスポンスが失われた直後の再試行でも、作成済み Issue を検出して重複 POST を防げる。lookup 失敗時の扱いは引き続きベストエフォートであり、GitHub 側の障害などで両方の確認に失敗した場合は、正規の初回送信をブロックせず通常の作成経路へ進む。
 
 共有 GitHub HTTP クライアントは既定で 10 秒 timeout と platform default proxy（.NET の既定 proxy 処理を通じた `HTTPS_PROXY`、`HTTP_PROXY`、`ALL_PROXY`、`NO_PROXY`）を使う。`CDIDX_GITHUB_SUBMIT_TIMEOUT_SECONDS` で最大 300 秒まで設定でき、0 以下、数値以外、または上限を超える値は 10 秒の既定値へ戻る。作成失敗の診断には proxy 環境変数の確認ヒントを含める。`429` 応答と `x-ratelimit-remaining: 0` 付きの `403` 応答は rate limit として扱い、`Retry-After`、`x-ratelimit-reset`、1 分の fallback retry window の順で再試行時刻を決める。
 
 ### ペイロードに設計上含まれないもの
 
-- ユーザーのプロジェクトからのファイルパス
+- ユーザーのプロジェクトからのソースファイル内容
 - インデックス済み SQLite データベースからのあらゆるデータ
 - `.cdidx/codeindex.db` からのあらゆるデータ
 - OS やシステム環境の情報
@@ -3372,6 +3380,7 @@ USER_GUIDEの[終了コード](USER_GUIDE.md#終了コード)セクションを�
 
 - **ORMなし** — `Microsoft.Data.Sqlite`でパラメータ化クエリを直接使用。依存関係を最小限に、制御を明確に。
 - **バッチコミット** — 書き込み性能のため1トランザクション500レコード。fsyncオーバーヘッドを削減。
+- **部分的なバッチ失敗** — `DbWriter` は通常の chunk / symbol batch では高速な multi-row `INSERT` 経路を保ちます。SQLite が batch を拒否した場合、その batch を rollback し、各 row を per-row `SAVEPOINT` の下で再試行し、有効な row だけを commit し、失敗 row だけを skip して `BatchRowsSkipped` を増やし、row identifier と SQLite error を含む warning を出します。これにより、抽出された 1 行の破損で大きな indexing batch 全体が捨てられることを防ぎます（#1754）。
 - **WALモード + busy_timeout** — Write-Ahead Loggingで読み書き同時アクセスとクラッシュ安全性を確保。5秒のbusy_timeoutで即座のSQLITE_BUSYエラーを回避。
 - **複数 SELECT をまたぐ reader の snapshot 隔離** — 1 回の呼び出しで複数 SQL を発行する read エントリポイント（`DbReader.GetStatus`、`DbReader.AnalyzeSymbol`（CLI `inspect` / MCP `analyze_symbol`）、`RepoMapBuilder.Build`（CLI `map` / MCP `repo_map`））は、本体を 1 つの `BEGIN DEFERRED` transaction で囲み、すべての sub-query が同じ WAL snapshot を参照するようにする。これが無いと、2 つの `COUNT(*)` の間に writer が commit した結果として並行 reader が `files=836, refs=0` のような不整合状態を観測しうる（issue #180 で露見）。`DEFERRED` は最初の SELECT で `SHARED` lock を取るだけで writer を阻害せず、末尾で明示 Commit して `SHARED` lock を早期解放する。独自に `SqliteDataReader` を開く sub-query は内側ブロックに閉じ込めて `Commit()` より前に handle を解放すること — `SqliteTransaction.Commit()` は同じ connection 上で開いている reader があると失敗する。新しい多段 read エントリポイントは同じパターンに従うこと。単一 SQL のクエリは SQLite の auto-commit が文単位の snapshot を与えるため不要。
 - **デフォルトはリテラル安全検索** — 検索は既定でトークンごとに引用してFTS構文エラーを避ける一方、`search "\"new Regex\""` のようなダブルクォート範囲は独立トークン一致に広げず、単一の FTS5 phrase token として扱う。生のFTS5構文は `--fts` またはMCPの `rawQuery` で明示 opt-in。prefix 拡張も opt-in：トークン末尾に `*` を付ける（`search auth*`）とそのトークンだけが FTS5 prefix phrase に昇格し、`--prefix` フラグ（MCP の `prefix`）はクエリの全トークンを昇格させる。opt-in がなければ `search 計算` は indexed token `計算` のみにマッチし `計算する` には広がらない（issue #1519）— unicode61 は連続 CJK コードポイントを 1 トークンとして扱うため、広く拾いたい場合は `--prefix` か末尾 `*` を明示する。
@@ -3392,6 +3401,7 @@ USER_GUIDEの[終了コード](USER_GUIDE.md#終了コード)セクションを�
 - **言語考慮の参照抽出** — `references`、`callers`、`callees` は、正規表現ベースの call/reference 抽出が意味を持つ言語だけに対してインデックス化された参照テーブルで支える。未対応言語では、低信頼な疑似グラフ結果を返す代わりにテキスト検索へ戻る前提で設計する。**nested generic 呼び出し**: `new Dictionary<string, List<int>>()` のような C#/Java のコンストラクタ呼び出しと、`Helper.DoWork<List<int>>()` のような C# generic method call は、平坦な regex fast-path で `>>` を釣り合わせられなくても depth-aware fallback scanner で拾い直し、外側 target を参照テーブルへ残す。**コンストラクタ連鎖呼び出し**: C# の `: this(...)` / `: base(...)` イニシャライザと、Java のコンストラクタ本体冒頭文 `this(...)` / `super(...)` は、汎用 call regex とは別に検出し、呼び先が実際のコンストラクタとなるように書き換える（`this` は外側の class/record、`base` / `super` は外側クラスのシグネチャから解析した基底型）。C# のクロス行イニシャライザは外側クラスではなく、そのコンストラクタに紐付ける。基底型の解析は generic 引数、record のプライマリコンストラクタ引数、`where` 制約、`global::` やドット付きの namespace 修飾を剥がす。Java の `super.method()` は通常のメソッド呼び出しのまま扱う。**型位置の依存エッジ**: C#/Java の継承リスト、宣言型、generic 制約、`throws`、`is` / `as` / `instanceof`、および実際の C# XML doc `///` `cref` は `type_reference` 行として索引し、既定の `callers` / `callees` が見せる動的 call graph を汚さずに、`references` / `impact` から compile-time rename 依存を辿れるようにする。**SQL qualified-name alignment**: SQL の graph/dependency reader は、各 reference 行の source-line context、記録済み call 列位置、enclosing container から SQL 参照名を復元して定義と照合するため、qualified な `references` / `callers` / `impact` query は exact / non-exact を問わず sibling schema へ widen しない。source 側が genuinely unqualified な場合にだけ bare leaf fallback を許可するので、qualified call を含む `deps` / `unused` / `hotspots` も schema 単位で整合し、`EXEC dbo.fn_Target; EXEC sales.fn_Target;` のような同一行 multi-call も二重計上しない。列位置が記録されている row は、その列に qualified token が見つからなければ whole-line の別 qualified token へ昇格させないため、行末コメント・文字列リテラル・後続の別 call が先頭の unqualified edge を横取りすることもない。qualified な `callees` query でも caller query 自体が unqualified なとき以外は leaf fallback を無効化したため、`callees sales.Caller` が `dbo.Caller` へ広がらない。SQL extractor は qualified-name の `.` 前後空白も許容し、definition 系 reader は quoted qualified SQL name (`[dbo].[fn_X]` → `dbo.fn_X`) を正規化してから照合する。さらに exact SQL 定義照合は segment 数を保持し、SQL の exact graph leaf fallback は Unicode folded exact path を維持する。SQL CTE 本体内の source 行は raw `cte_body_reference` kind を使うため、`references --kind cte_body_reference` で anchor/recursive member 内部を outer query の table reference と区別できる。そのため、quoted single identifier の衝突や Unicode exact lookup の ASCII-only `NOCASE` 退行も防ぐ。
   exact な SQL の graph/dependency reader は解決済み segment 数も保持するため、`"sales.fn_Target"` のようなドット入り quoted single identifier が、本物の qualified name `sales.fn_Target` と exact `references` / `callers` / `impact` や集計系の `deps` / `unused` / `hotspots` で衝突しない。
 - **言語考慮の参照抽出** — `references`、`callers`、`callees` は、正規表現ベースの call/reference 抽出が意味を持つ言語だけに対してインデックス化された参照テーブルで支える。未対応言語では、低信頼な疑似グラフ結果を返す代わりにテキスト検索へ戻る前提で設計する。**nested generic 呼び出し**: `new Dictionary<string, List<int>>()` のような C#/Java のコンストラクタ呼び出しと、`Helper.DoWork<List<int>>()` のような C# generic method call は、平坦な regex fast-path で `>>` を釣り合わせられなくても depth-aware fallback scanner で拾い直し、外側 target を参照テーブルへ残す。**JS/TS の no-paren constructor**: JavaScript / TypeScript の zero-argument constructor call で `()` を合法的に省略できる `new Foo;`、`new Date;`、`new Demo.Provider;`、`new Box<number>;` も、専用の言語別経路で `instantiate` edge として出す。行末 `new Foo` に対する次行 `.bar()` / `[0]` continuation は suppress し、phantom な単独 instantiation にしない。**コンストラクタ連鎖呼び出し**: C# の `: this(...)` / `: base(...)` イニシャライザと、Java のコンストラクタ本体冒頭文 `this(...)` / `super(...)` は、汎用 call regex とは別に検出し、呼び先が実際のコンストラクタとなるように書き換える（`this` は外側の class/record、`base` / `super` は外側クラスのシグネチャから解析した基底型）。C# のクロス行イニシャライザは外側クラスではなく、そのコンストラクタに紐付ける。基底型の解析は generic 引数、record のプライマリコンストラクタ引数、`where` 制約、`global::` やドット付きの namespace 修飾を剥がす。Java の `super.method()` は通常のメソッド呼び出しのまま扱う。**型位置の依存エッジ**: C#/Java の継承リスト、宣言型、generic 制約、`throws`、`is` / `as` / `instanceof`、および C# XML doc の `cref` は `type_reference` 行として索引し、既定の `callers` / `callees` が見せる動的 call graph を汚さずに、`references` / `impact` から compile-time rename 依存を辿れるようにする。C# XML doc の `cref` 抽出は、実際に後続宣言へ結び付く XML-doc comment である `///` 行と delimited `/** ... */` block の両方を対象にしつつ、通常の `//` / `////` コメントや通常の block comment は phantom 依存として扱わない。また、同じ物理行でも closing `*/` より後ろに続く code / string の内容、doc comment と後続宣言の間へ割り込むトップレベル実行文、brace-free field/property initializer continuation、brace-free expression lambda、nested executable continuation、複数行 raw/verbatim string のうち行頭がたまたま `/**` で始まる内容は doc-comment slice の外として扱う。regex 自体は narrowed した doc-comment slice に対して走らせるが、`symbol_references.column` は元の物理ソース行位置に固定したまま保持する。C# の read path では、`using static` による constant-pattern suppress が `is` / `case` の前後の trivia を考慮してトークン単位で判定され、anchor が前行にある場合は anchor-aware な複数行コンテキストをインデックス済み行から再構成するため、`value is/*comment*/Red`、`value is\n    Red or Blue`、`value is\n    // comment\n    Red`、`case\n    // comment\n    Point:`、長い `case` / `or` 連鎖、`case\tRed:` のような形でも phantom `type_reference` を漏らさない。qualified constant/member pattern は exact-name read path でも qualifier 起点で suppress するため、`case Color.Red or Color.Blue:` に対して無関係な `class Red {}` が suppress を打ち消さない。extractor 側の pending type-pattern carry も trivia-only 区切り行、standalone な continuation-line `not`、複数行 `case` head / logical continuation をまたいで維持されるため、comment-only 行や `not` だけの継続行で後続の本物の type head を落とさない。`case > 0:` や `case not > 0:` のような非型 `case` ラベルではその pending carry を armed にしないため、次行の call/identifier token が `type_reference` に混入しない。同名型の rescue も `file` 可視性を尊重し、file-local な型は同じ物理ファイル内の参照だけを救済する。基底クラスから見える protected/public/internal nested type は、基底型参照を active な型 alias / namespace alias 経由まで正規化し、さらに alias 展開後に constructed generic な基底型を再 canonicalize したうえで derived class の pattern head を救済する一方、implemented interface は inherited nested-type rescue に参加しない。さらに same-file `using Namespace;`、project-wide `global using Namespace;`、型 alias も同じ rescue 集合に入る。一方で extractor は file-local な情報だけでは同一 namespace の別ファイルにある実型を判定できないため、`value is Red` のような曖昧な unqualified `using static` head は DB に残し、pure constant-only case の抑止は workspace-aware な read path 側で行う。**SQL qualified-name alignment**: SQL の graph/dependency reader は、各 reference 行の source-line context、記録済み call 列位置、enclosing container から SQL 参照名を復元して定義と照合するため、qualified な `references` / `callers` / `impact` query は exact / non-exact を問わず sibling schema へ widen しない。source 側が genuinely unqualified な場合にだけ bare leaf fallback を許可するので、qualified call を含む `deps` / `unused` / `hotspots` も schema 単位で整合し、`EXEC dbo.fn_Target; EXEC sales.fn_Target;` のような同一行 multi-call も二重計上しない。列位置が記録されている row は、その列に qualified token が見つからなければ whole-line の別 qualified token へ昇格させないため、行末コメント・文字列リテラル・後続の別 call が先頭の unqualified edge を横取りすることもない。qualified な `callees` query でも caller query 自体が unqualified なとき以外は leaf fallback を無効化したため、`callees sales.Caller` が `dbo.Caller` へ広がらない。SQL extractor は qualified-name の `.` 前後空白も許容し、definition 系 reader は quoted qualified SQL name (`[dbo].[fn_X]` → `dbo.fn_X`) を正規化してから照合する。さらに exact SQL 定義照合は segment 数を保持し、SQL の exact graph leaf fallback は Unicode folded exact path を維持する。SQL CTE 本体内の source 行は raw `cte_body_reference` kind を使うため、`references --kind cte_body_reference` で anchor/recursive member 内部を outer query の table reference と区別できる。そのため、quoted single identifier の衝突や Unicode exact lookup の ASCII-only `NOCASE` 退行も防ぐ。exact な SQL の graph/dependency reader は解決済み segment 数も保持するため、`"sales.fn_Target"` のようなドット入り quoted single identifier が、本物の qualified name `sales.fn_Target` と exact `references` / `callers` / `impact` や集計系の `deps` / `unused` / `hotspots` で衝突しない。
+- **推移的 impact analysis** — `impact` と MCP `impact_analysis` は、シンボルの推移的 caller chain を BFS で計算する。caller matching は substring expansion と大小文字差の脆さを避けるため `lower() = lower()` の大小文字非依存 exact match を使い、symbol 名は exact-case を優先して definition から事前解決し、read path は graph-supported language に限定して削除済み言語の stale edge を防ぐ。heuristic fallback が使う definition set も `--lang` / `--path` / `--exclude-path` / `--exclude-tests` と graph-supported language を尊重し、class-like definition だけを fallback 候補にするため、同名 namespace/import sibling は単一の class / struct / interface target を妨げず、純粋な non-callable `namespace` / `import` query は `non_callable_symbol_kind` guidance を返す。heuristic file-level hints は成功応答だが non-authoritative status を `impact_mode`、`heuristic`、`hint_count`、`truncated` で示し、caller rows は `result_kind: "graph"`、heuristic `file_impacts` rows は `result_kind: "file_heuristic"` を持つため、クライアントは list 位置や depth 値から推測せずに authoritative hop-depth graph 結果と境界 fallback hint を区別できる。`truncated` が `true` のときは JSON / MCP payload に `truncated_reason` も出し、`user_limit` は caller 指定の `--limit` 到達、`safety_cap` は内部の per-symbol BFS fetch-iteration cap 到達を意味する。`impact` / MCP `impact_analysis` は `termination_reason`（`completed`、`max_depth_reached`、`cycle_detected`、`row_limit_truncated`、`safety_cap`、`cancelled`）、`cycle_detected`、`cycles` も出すため、caller cycle と通常完了や limit/depth termination を区別できる（#1883）。`safety_cap` は `user_limit` より優先し、heuristic file-level hints path は caller の `--limit` だけで切り詰められるため `user_limit` のみを使う。`truncated` が `false` のとき `truncated_reason` は省略される。（#1533）`count` / `file_count` は返却された可視集合、`confirmed_count` / `confirmed_file_count` は heuristic-success payload の symbol-level caller totals を保持し、`impact --json --count` も full payload と同じ `*_count` field 名を使う。一般名の衝突を減らすため、type fallback では候補 member 名への参照に加え、同一ファイル内に source/target pair を anchor する証拠が必要になる。証拠は解決済み target 名への `call` / `instantiate` reference（この経路は call graph 自体が関係を pin するため metadata-attribute bypass より先に走り、緩い ambiguity guard に依存しない）、または signature / return type など indexed symbol metadata からの structured type evidence に限り、comment/string の raw text match は使わない。call/instantiate anchor は解決済み名を exact に照合し、suffix-strip alias は使わない。callable reference はすでに authoritative identifier を持つため、C# の `[Foo]` → `FooAttribute` alias をここへ適用すると無関係な `Foo()` method call が `impact FooAttribute` を偽 anchor できてしまうためである（#1881）。metadata bypass は attribute use site が正当に target 名を省略するため C# `Attribute` suffix alias を維持する。signature evidence path は Unicode-aware で、hint `reference_count` は実際に一致した reference row 数を表し、symbol list は deduplicate される。fallback ambiguity は同じファイル内であっても複数の class-like definition がある場合だけ扱い、`PurgeUnsupportedReferences` は CLI full scan、CLI update mode、MCP index のすべての indexing path で走る。
 - **構造化MCPレスポンス** — MCPツール呼び出しは `structuredContent` に型付きJSONを返し、`content` は互換性のため簡潔に保つ。
 - **MCP rate limiter bucket eviction** — `RateLimiter` は active な `(tool, caller)` token bucket だけを保持する。`CDIDX_MCP_RATE_LIMIT_BUCKET_IDLE_SECONDS` は既定 900 秒で、古い bucket は後続 acquisition 時に pruning されるため、共有または HTTP MCP デプロイが過去の caller ID をプロセス寿命いっぱい保持しない (#2824)。
 - **MCP envelope レスポンス上限** — `CDIDX_MCP_RESPONSE_MAX_BYTES` は既定 10 MiB、最大 64 MiB。invalid 値は既定値へ戻し、最大超過値は stderr 警告付きでクランプするため、operator が誤って JSON-RPC response guard を実質無効化できない。
@@ -3443,6 +3453,9 @@ USER_GUIDEの[終了コード](USER_GUIDE.md#終了コード)セクションを�
 
 - **クロスコンパイルの linux-arm64 にランタイムスモークテストがない** — `release.yml` は x64 ランナー上で `linux-arm64` をクロスコンパイルする（`dotnet publish -r linux-arm64 --self-contained`）。ランナーが ARM バイナリをネイティブ実行できないためテストはスキップされる。理想的には QEMU ベースのスモークテスト（`cdidx --version`）をリリース前に実行すべきだが、GitHub Actions の無料枠ランナーには QEMU も ARM ランナーも含まれない。QEMU セットアップステップの追加は可能だが、リリースごとに CI の複雑さと実行時間が増す。.NET のクロスコンパイルは公式サポート機能で広く使われているため、実際に壊れたアーティファクトが出るリスクは低い。将来 ARM 固有の不具合が報告された場合、`docker run --platform linux/arm64` と QEMU の組み合わせが最初の対策となる。
 - **CLI / MCP のみ — 公開ライブラリ API は提供しない (#1557)** — `cdidx` アセンブリは `OutputType=Exe` かつ `PackAsTool=true` で配布される .NET グローバルツールであり、library / SDK としての参照を意図していない。バージョニング契約の対象となるのは `cdidx` CLI（`--json` 出力を含む）と `cdidx mcp` の JSON-RPC サーバーだけである。アセンブリ上の `public` 型（例: `CodeIndex.Database.DbReader`、`CodeIndex.Models` / `CodeIndex.Database` 内の DTO）は CLI / MCP の構成と `CodeIndex.Tests` の `InternalsVisibleTo` 境界を満たすために露出しているにすぎず、deprecation cycle なしに変更・移動・`internal` 化されうる実装詳細である。embedder は、アセンブリではなく CLI / MCP / JSON 出力に依存することを想定している。詳細は [INTEGRATION_POLICY.md — API Surface and Library Use](INTEGRATION_POLICY.md#api-surface-and-library-use) を参照。将来、本物のライブラリ API が必要になった場合は、現アセンブリで偶然 `public` だった型に依存させるのではなく、独立したパッケージとして独自のインターフェイスとバージョニング契約を持たせて切り出す。
+- **Extractor plugins (#1937)** — `CodeIndex.Indexer.Extensibility.ISymbolExtractor` と `IReferenceExtractor` は、サポート対象となる唯一の assembly-extension surface です。`cdidx` は既定でユーザー所有の `~/.cdidx/plugins/` ディレクトリから trusted plugin DLL を検出します。workspace `.cdidx/plugins/` の DLL discovery は、process が `CDIDX_TRUST_WORKSPACE_PLUGINS=1`（`true`、`yes`、`on` も可）を設定しない限り fail-closed です。workspace DLL のロードは checkout が提供するコードを `cdidx` process 内で実行するためです。plugin assembly は `[assembly: CdidxPlugin(minApiVersion: 1, maxApiVersion: 1)]` を宣言し、どちらかまたは両方の interface を実装する public parameterless type を公開する必要があります。plugin が新しい拡張子を所有する場合は `FileExtensions` を設定し、`FileIndexer` がそのファイルを plugin language へ route できるようにします。plugin は `cdidx` process 内で実行され sandbox されないため、信頼できるローカル DLL だけをインストールしてください。この狭い契約により、チームは CodeIndex を fork せず DSL 固有の symbol/reference を追加できますが、一般的な library/SDK embedding API ではありません。
+
+  Plugin DLL discovery は、directory ごとに `ExtractorPluginRegistry.MaxPluginAssemblyCandidatesPerDirectory` 件、process 全体で `ExtractorPluginRegistry.MaxPluginAssemblyCandidatesTotal` 件までに制限されます。各 candidate は `ExtractorPluginRegistry.MaxPluginAssemblyBytes` bytes 以下でなければなりません。discovery の切り詰めや oversized skip は、`status --json` / MCP `status` の `extractors.diagnostics` に報告されます。
 
 ## reference_kind フィルタの対応表
 
@@ -3459,6 +3472,10 @@ USER_GUIDEの[終了コード](USER_GUIDE.md#終了コード)セクションを�
 
 実運用上の帰結: クラスのようなシンボルに対する `impact <ClassName>` は、member-level の caller が存在しない場合 heuristic file-dependency-hint fallback (metadata エッジを含む) を返し、一方の `callers <ClassName>` は call-graph 部分集合 (metadata 無し) を返す。両方とも個々の契約上は正しいが、件数は一致しない。差分を埋めるには `references <ClassName> --kind attribute`（または `annotation`）で、call-graph コマンドが意図的に落としている metadata エッジだけを別途確認する。
 
+`impact --json` と MCP `impact_analysis` は、0 件診断を structured routing field として返します。`zero_result_reason` は端末向けの短い理由のまま残し、`impact_failure_chain` は `definition_not_found`、`callable_filter_fails`、`multiple_definitions`、`multiple_definition_files`、`graph_unavailable`、`depth_requested_zero`、`no_callers` などの失敗前提や traversal 状態を順序付きで列挙します。`suggestion_type` は prose の `suggestion` を `resolution`、`traversal`、`precondition` に分類します。CLI `impact --strict` は chain に resolution / precondition failure が含まれる場合は `FeatureUnavailable` で終了しますが、真正な `no_callers` traversal 結果は成功として扱います。
+
+`definition --json` と MCP `definition` の結果は、既存の symbol metadata で同名定義を区別できる C# 定義に対して `disambiguator` を含む場合があります。現行値は method signature 用の `overload(...)`、`partial-class` / `partial-struct` / `partial-interface`、`extension-method-on(<receiver>)` です。overload や receiver metadata を持たない言語ではこの field を省略します。
+
 <a id="cloud-claude-code-bootstrapnet-sdk-なし"></a>
 
 ## Cloud AI コーディングハーネス bootstrap（Claude Code / Codex、.NET SDK なし）
@@ -3469,31 +3486,47 @@ USER_GUIDEの[終了コード](USER_GUIDE.md#終了コード)セクションを�
 
 bootstrap prompt では、maintainer が押さえるべき cloud 向け installer knob も明示している。`CDIDX_GITHUB_BASE_URL` と `CDIDX_GITHUB_API_BASE_URL` は、egress 制限付きセッションで release download host と latest-release API host を別々に差し替えるためのもの。組み込みの `--self-test-local-mirror` 経路は、非空の `CDIDX_INSTALL_DIR` を与えない限り実 `~/.local/bin` install を汚さないよう隔離されている。非空の `CDIDX_INSTALL_DIR` が *指定されている* ときも、self-test はリスクのある対象 — よく使われるシステムパス（`/usr/local/bin`、`/usr/bin`、`/opt/homebrew/bin`、`/opt/local/bin`）、`$HOME/.local/bin`、そして既に `cdidx` 実体が存在する任意のディレクトリ — への書き込みを拒否して abort する。mock payload は `--version` にしか応答しないため、実インストールが無言で機能不全になるのを防ぐためである。隔離された tempdir に戻すなら `CDIDX_INSTALL_DIR` を unset すればよく、どうしても現地で mock layout を確認したい場合は CLI フラグ `--self-test-allow-overwrite` を渡してガードを解除する。エスケープハッチは意図的に CLI 専用とし、呼び出し側の env に残った `SELF_TEST_ALLOW_OVERWRITE=1` は継承しない（古い env var による silent bypass を防ぐため）。self-test には引き続き `python3` と `127.0.0.1` への loopback listen 権限が必要で、sandbox によっては完全に禁止される。その場合、この self-test はより制約の弱い shell か、事前に用意した mirror に対して実行する必要がある。
 
+Codex cloud セッションには、もう 1 つ repository-local な制約があります。追跡対象の `.codex/hooks.json` Bash guard は、汎用ネットワーク download と汎用 global `cdidx` 使用をブロックします。そのため guard には、公式 installer と repo-local installer bootstrap だけに対する意図的に狭い例外があります。許可するのは、`curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/.../install.sh | bash` の exact な形と、installer がサポートする flag（`--doctor`、`--self-test-local-mirror`、`--self-test-allow-overwrite`、`--reinstall-real`）を伴う直接の repo-local `bash ./install.sh ...` 呼び出しです。さらに `CLOUD_BOOTSTRAP_PROMPT.md` に載せている、完全展開済み install path を表示する resolver command と、その path を直接使う固定 JSON-RPC `initialize` pipe の exact な形も許可します。一方で、任意の download-and-execute command、未知の installer flag、`install.sh` を shell-control wrapper で包む形、裸の `cdidx`、`~/.local/bin/cdidx`、`$HOME/.local/bin/cdidx`、その他の path-qualified global `cdidx` binary、`$CDIDX` / `${CDIDX}` variable call は引き続き拒否します。インストール後の Codex operator は、`$HOME/.local/bin/cdidx` を完全展開済み絶対パスへ解決し、その literal path を no-SDK の code-search command すべてに貼り付けて、`CLOUD_BOOTSTRAP_PROMPT.md` の tripwire guidance と揃えてください。この例外が解除するのは repository guard だけであり、`CONNECT tunnel failed, response 403` のような upstream proxy / egress policy deny は迂回できません。
+
 mock に頼らないリリース前検証として、`install.sh --reinstall-real <version>` は指定タグを隔離された `/tmp/cdidx-reinstall-real.XXXXXX` にダウンロード・インストールしたうえで、`cdidx --version` を走らせて報告されたバージョンが要求タグと一致することを検証し、さらに `/tmp/cdidx-reinstall-scratch.XXXXXX` に極小の Python プロジェクトを生成して `cdidx . --db <scratch>/.cdidx/codeindex.db` と `cdidx search greet --db <...>` を通し、出力中にスクラッチシンボルが現れることを確認する。出力は既定のユーザー経路を検証するために人間向けフォーマットを意図的に使う。現在の release バイナリは trim 済みだが、CLI JSON DTO は source-generated serializer でカバーされるため `--json` も動作する想定である。`JsonOutputFailure` 経路は serializer 登録を欠いた古いバイナリや custom binary 向けの fallback に限られる。これにより、新しいバイナリの上で実インデックス経路（シンボル抽出、ネイティブ SQLite ロード、FTS5 検索）まで実際に動くかを確認できる。`--self-test-local-mirror` のモックは `--version` しかスタブしないため、インデックスや検索経路の回帰はそちらでは素通りしてしまう。`--reinstall-real` は `CDIDX_INSTALL_DIR` を意図的に無視するので、検証モードで壊れたビルドが実インストールを上書きすることはない。temp インストールディレクトリとスクラッチディレクトリは、正常終了でも失敗でも `trap` によって確実に片付けられる。
 
 インストール前のネットワーク診断として、`install.sh --doctor [vX.Y.Z]` は有効な proxy 環境変数を表示したうえで（各値は `redact_proxy_userinfo` ヘルパーを通して `http://alice:hunter2@proxy:8080` のような URL userinfo を `http://<redacted>@proxy:8080` として出力するため、reachability 診断に必要な host/port は保ちつつ、共有 log / issue / サポート窓口に資格情報が流出しない）、指定バージョン（省略時は同梱 `version.json`）で installer が叩く 3 つの upstream URL — latest-release API endpoint、リリース tarball asset、`sha256sums.txt` — を probe する。各 probe は `curl -sSI` を使うので数 MB のリリース tarball を実ダウンロードしない。`CONNECT tunnel failed, response 403`（curl exit 56）を検出したら、既存の `is_proxy_tunnel_403` 経路と同じ定型ガイダンス（「拒否は TLS 前の upstream proxy / egress policy 側で起きている。経路差し替えだけでは解消しない。network 管理者に artifact 配信経路のいずれかを allow-list してもらうか、`CDIDX_GITHUB_BASE_URL` / `CDIDX_GITHUB_API_BASE_URL` を到達可能な内部 mirror へ向ける」）を再利用し、ユーザーに次の一手を 1 つに絞って提示する。doctor はインストールを一切行わず、`/tmp` の外に書き込まず、最初の失敗で短絡せずに全 probe を走らせる（1 つの network-policy deny が他を隠さない）ため、全 probe が 2xx/3xx を返したときだけ exit 0、それ以外は exit 1 を返す。
 
 "silent host" で端末 stderr が握りつぶされるケースに備えて、配布済み/
 常用実行では stderr と最小限のライフサイクル情報をユーザー単位の日次
-ログにも複写するようになっている。保存先は Windows では
-`CDIDX_GLOBAL_TOOL_LOG_DIR`、`XDG_STATE_HOME/cdidx/logs/`、
-`XDG_CACHE_HOME/cdidx/logs/`、`XDG_RUNTIME_DIR/cdidx/logs/` の順に
-見つかった場所を使い、その後に platform default として Windows では
-`%LOCALAPPDATA%\cdidx\logs\`、macOS では `~/Library/Logs/cdidx/`、
-Linux では `~/.local/state/cdidx/logs/` を使う。ファイル名はプロセス ID と
-開始時刻を含む `stderr-YYYYMMDD-p<PID>-HHMMSS.log`。
-`CDIDX_LOG_FORMAT=json` または `--log-format json` で 1 行 1 JSON object
-（`ts`、`level`、`msg`）の JSONL に切り替えられる。`CDIDX_LOG_RETAIN` /
-`--log-retain-count` は保持ファイル数、`CDIDX_LOG_MAX_SIZE_MB` /
-`--log-max-size-mb` または `CDIDX_GLOBAL_TOOL_LOG_MAX_BYTES` は日次ファイルの
-サイズローテーション上限を指定する。サイズ上限の既定は 50 MiB、保持世代の
-既定は新しい 30 ファイルまでで、サイズ上限は最大 1024 MiB / 1 GiB。
-通常の開発/テストサイクルで
-ワークツリー直下に永続ログが増えないよう、`src/CodeIndex/bin/...`
-と `tests/.../bin/...` からのリポジトリ内開発実行は既定で対象外として
-いる。完全に無効化したい場合は `CDIDX_DISABLE_PERSISTENT_LOG=1`、
-テストやパッケージングで保存先を切り替えたい場合は
-`CDIDX_GLOBAL_TOOL_LOG_DIR` を使う。
+ログにも複写するようになっている。保存先は `CDIDX_GLOBAL_TOOL_LOG_DIR`、
+`XDG_STATE_HOME/cdidx/logs/`、`XDG_CACHE_HOME/cdidx/logs/`、
+`XDG_RUNTIME_DIR/cdidx/logs/`、platform default の順に選ばれます。
+platform default は Windows では `%LOCALAPPDATA%\cdidx\logs\`、macOS では
+`~/Library/Logs/cdidx/`、Linux では `~/.local/state/cdidx/logs/` です。
+各 candidate は logger が採用する前に create/write/delete の往復で probe
+されるため、read-only な state/cache/runtime mount は最初の log write を
+失うのではなく次の candidate へ fall through します。ファイル名は
+`stderr-YYYYMMDD.log`、ファイル内 timestamp は invariant culture の
+ISO-8601 UTC（`yyyy-MM-ddTHH:mm:ss.fffZ`）で、logger は新しい 30 日次
+ファイルだけを保持します。`CDIDX_LOG_FORMAT` / `--log-format` は text と
+JSONL を切り替え、`CDIDX_LOG_RETAIN` / `--log-retain-count` は保持ファイル数、
+`CDIDX_LOG_MAX_SIZE_MB` / `--log-max-size-mb` または
+`CDIDX_GLOBAL_TOOL_LOG_MAX_BYTES` は size-rotation cap を設定します。
+サイズ上限の既定は 50 MiB、受け付ける値の上限は 1024 MiB / 1 GiB です。
+通常の開発/テストサイクルでワークツリー直下に永続ログが増えないよう、
+`src/CodeIndex/bin/...` と `tests/.../bin/...` からのリポジトリ内開発実行は
+既定で対象外です。完全に無効化したい場合は `CDIDX_DISABLE_PERSISTENT_LOG=1`
+を設定し、この toggle は `1`、`true`、`yes`、`on` を大小文字非依存で
+受け付けます。テストやパッケージングで保存先を切り替えたい場合は
+`CDIDX_GLOBAL_TOOL_LOG_DIR` を使います。
+local package smoke test や launcher diagnostics で executable path が
+development build に見える場合でも lifecycle logging を強制するには
+`CDIDX_FORCE_GLOBAL_TOOL_LOG=1` を設定します。両方が設定された場合でも
+`CDIDX_DISABLE_PERSISTENT_LOG` が優先されます。
+未処理例外は stderr を簡潔に保ちつつ、post-mortem diagnostics 用に完全な
+exception chain と stack trace を lifecycle log へ書きます。記録される
+command argument は既定で最小限 redaction されます。secret らしい
+`--flag=value` pair、secret らしい flag の直後の値、URI password、長い
+token 風の hex/base64 文字列は `<redacted>` に置換されます。
+`CDIDX_LOG_REDACT=none` は制御されたローカル debugging 用に raw argument を
+保持し、`CDIDX_LOG_REDACT=full` は path らしい argument も stable hash に
+置き換えます。
 
 ### 構成要素
 

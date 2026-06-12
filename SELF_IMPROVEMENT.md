@@ -371,7 +371,7 @@ Read `SELF_IMPROVEMENT.md`, inspect the current repo with cdidx itself, identify
 - 毎コミット後に、ローカルソースの最新状態から `cdidx` を再ビルドし、`dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll status --check --json` を実行する。`index_matches_workspace: true` でなければ、その新しいバイナリで `.cdidx/codeindex.db` を更新する。
 - 更新モードは「正しさを保てる範囲で最も軽いもの」を優先する。`--files` は把握している in-place 編集や新規追加だけに使い、通常のコミット後は rename/delete も拾える `--commits HEAD` を使う。ブランチ切り替え後は前後の ref が分かるなら `--changed-between <old-ref> <new-ref>` を使い、履歴を動かす操作や repo 全体で stale file を掃除したい場合だけ `cdidx . --json` の全 workspace scan へ上げる。`cdidx . --json` は強制 rebuild ではなく、`mode:"incremental"` と表示して unchanged file を skip する場合があるため、その後の `status --check --json` がまだ stale なら `dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --rebuild --yes --json` に上げる。
 - リポジトリのコードを変更した後は、古いグローバルインストール版ではなく **ローカルでビルドした最新版バイナリ** (`dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll`) を使う。**グローバル版には絶対に戻らないこと** — グローバル版は DB スキーマが古い、クエリ機能が欠けている、抽出ロジックが古くて誤った結果を返す、といった問題が起こりうる。このルールはリポジトリ追跡の `.claude/settings.json` で harness レベルでも強制されており、shell のコード検索・ファイル探索系コマンドを網羅的に deny している（`rg`、`grep`、`egrep`、`fgrep`、`zgrep`、`rgrep`、`ripgrep`、`ag`、`ack`、`ack-grep`、`git grep`、`find`、`locate`、`mlocate`、`mdfind`、`cdidx`）。代わりに組み込みの Grep / Glob ツールかローカルビルド版を使うこと。
-- リポジトリ追跡の `.claude/settings.json` と `.claude/hooks/bash-guard.py` はポリシーファイルとして扱う。通常の自己改善作業では編集せず、Claude Code のガード挙動自体を変えるタスクのときだけ触る。現在のガードは deny ベースで、日常的な `dotnet`、`git`、`gh`、`codex exec`、`/tmp` 作業、読み取り中心の shell 確認は止めにくくしつつ、危険な shell パターンと機微なローカル read path は止める設計になっている。
+- リポジトリ追跡の `.claude/settings.json`、`.claude/hooks/bash-guard.py`、`.codex/hooks.json`、`.codex/hooks/bash_guard.py` は tool-specific guard adapter として扱う。通常の自己改善作業では編集せず、agent guard 挙動自体を変えるタスクのときだけ触る。共通の Bash command policy は `.agent_harness/command_guard_core.py` に置かれているため、共通ポリシーを変える場合は shared core を更新し、tool 固有挙動が変わる場合だけ両 adapter を見直す。現在のガードは deny ベースで、日常的な `dotnet`、`git`、`gh`、`codex exec`、`/tmp` 作業、読み取り中心の shell 確認は止めにくくしつつ、危険な shell パターンと機微なローカル read path は止める設計になっている。
 - Claude Code のローカルプライバシー境界を尊重すること。ホーム配下の私物領域や資格情報系ファイルはポリシーで read deny されているため、自己改善タスクを進めやすくする目的でそれを緩めない。もし guard の変更自体が本当に必要なら、それを独立したタスクとして扱い、関連ドキュメントも同じコミットで更新する。
 - `git switch` の後は、切り替え前後の ref が分かる場合、**ローカルビルド版** で `dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --changed-between <old-ref> <new-ref> --json` を実行する。これにより、ブランチ間で変わったファイルだけを更新しつつ、git が返す rename/delete の旧 path も purge できる。ref が分からない場合や、`git reset`、`git rebase`、`git commit --amend`、`git merge` の後は、`dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll . --json` の full-workspace scan で現在の checkout に対する stale file を掃除する。その後も status check が stale なら、`cdidx . --json` を繰り返さず `dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --rebuild --yes --json` を実行する。
 - バグ調査、修正計画、変更検証のためにコード検索・ナビゲーションを行うときも、常に **ローカルビルド版** を使う。グローバルインストール版は使わない。これにより、このブランチの最新の抽出ルールと DB スキーマを反映した検索結果が得られる。
@@ -380,11 +380,13 @@ Read `SELF_IMPROVEMENT.md`, inspect the current repo with cdidx itself, identify
 - 人間向け CLI の長時間処理では、生存表示を維持すること。重い処理中も対話ターミナルには進捗かスピナーが見え続けるべきであり、警告表示や再描画のせいで古い `Indexing...` 行だけが残ったり、固まったように見える無音画面になったりしてはならない。
 - 変更が破壊的、移行負荷が高い、危険、またはユーザーに手間を強いる可能性があるなら、**実装前に必ず承認を取る**。
 - 言語差分を無視しない。すべての言語で同じ検索が意味を持つと仮定しない。
+- プラットフォーム差分を無視しない。Windows、macOS、Linux のパス、ファイルロック、プロセス起動、クリーンアップが同じだと仮定しない。
 - 次の改善が明確で非破壊なら、議論だけで止まらず実装を優先する。
 - **ドッグフーディング駆動の機能挿入** — ループ中に「cdidx にこの機能があれば、もっと速く正確に検索できるのに」と気付くことがある。その場合、非破壊な変更であれば現在の計画に組み入れてそのまま実装して構わない。破壊的変更のリスクがある場合は、メモしておき、現在のタスク完了後にユーザーに実装可否を打診すること。
 - ドキュメントとテストを挙動と同期させる。
 - テストコード、共有テストヘルパー、テスト実行フロー、またはテスト規約を変更した場合は、同じコミットで `TESTING_GUIDE.md` も更新する。
-- `git push` や `git tag` は、明示的に依頼されたときだけ行う。
+- workflow 変更やユーザーに見える変更では、`CHANGELOG.md` を直接編集せず、`changelog.d/unreleased/` 配下に英日併記 fragment を追加する。`CHANGELOG.md` の直接編集は release-preparation PR に限定する。
+- branch push や `git tag` は、明示的に依頼されたときだけ行う。
 
 ## 破壊的変更のゲート
 
@@ -432,6 +434,8 @@ dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll status --check --json
 ```
 
 終了コード `0` かつ `index_matches_workspace: true` なら、既存の `.cdidx/codeindex.db` をそのまま使って構いません。それ以外ならインデックスを更新してください。
+
+通常の反復中は差分更新を優先し、checkout を正しく表せる差分モードが無い場合だけ full scan を使います。
 
 状況に合う更新モードを1つ選んでください:
 
@@ -494,6 +498,7 @@ dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll search "AI" --path src/ --excl
 - 影響ファイルと必要テスト
 - どう検証するか
 - 言語ごとの差をどう扱うか
+- パス、プロセス、ファイルシステム意味論が関係する場合は、プラットフォームごとの差をどう扱うか
 
 ### 6. 安全ならすぐ実装する
 
@@ -516,6 +521,7 @@ dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll search "AI" --path src/ --excl
 - MCP を触ったなら MCP 挙動確認
 - ドキュメントの spot check
 - 言語差分があるなら、言語別の確認
+- ファイル、パス、プロセス、console I/O、SQLite cleanup に依存するなら、platform-sensitive な確認
 
 `dotnet test` が製品やテストコードの問題ではなく sandbox そのものに塞がれている場合に限り、`dangerouslyDisableSandbox: true` を `dotnet test` 専用の例外として使ってよい。これを `dotnet build`、`dotnet run`、`gh`、`git`、`codex exec`、Python 実行、一般的な shell 利便性に広げてはいけない。
 
@@ -533,7 +539,7 @@ dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll inspect ResolveGitCommonDir --
 コミット前に、明示的に次を確認します:
 1. Tests
 2. TESTING_GUIDE.md
-3. CHANGELOG.md — 新エントリは `[Unreleased]` のみに書く。既存のバージョン見出しには追加も変更もしない。完全なルールは `AGENT_GUIDE.md` と `.codex/workflows/precommit.md` 参照。
+3. CHANGELOG.md — 新エントリは通常、`changelog.d/unreleased/` の英日併記 fragment に書く。`CHANGELOG.md` を直接編集するのは release-preparation PR だけ。完全なルールは `AGENT_GUIDE.md` と `.codex/workflows/precommit.md` 参照。
 4. README.md
 5. README `# Code Search Rules` / `# コードベース検索ルール`
 6. DEVELOPER_GUIDE.md
@@ -554,10 +560,15 @@ dotnet build
 
 # 通常の post-commit 経路: 直前コミットの差分を反映
 # git diff が rename/delete も拾えるため、--files より安全
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --commits HEAD --json
+commit_id=$(git rev-parse HEAD)
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --commits "$commit_id" --json
 
-# git reset/rebase/amend/switch/merge の後や、
-# 直前コミット外の stale file が疑われる場合はフル更新
+# ブランチ切り替え後、前後の ref が分かる場合
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --changed-between <old-ref> <new-ref> --json
+
+# git reset/rebase/amend/merge の後、
+# ブランチ切り替え前後の ref が分からない場合、
+# または repo 全体の stale file purge が必要な場合はフル更新
 dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll . --json
 ```
 
