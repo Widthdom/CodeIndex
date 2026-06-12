@@ -915,7 +915,13 @@ jobs:
         run: |
           set -euo pipefail
           package_url="https://api.nuget.org/v3-flatcontainer/cdidx/${VERSION}/cdidx.${VERSION}.nupkg"
-          status="$(curl -sS --connect-timeout 10 --max-time 30 --retry 3 --retry-delay 2 --retry-all-errors -o /tmp/cdidx-nuget-head -w '%{http_code}' -I "$package_url")"
+          response_headers="$(mktemp "${RUNNER_TEMP:-/tmp}/cdidx-nuget-head.XXXXXX")"
+          cleanup() {
+            rm -f "$response_headers"
+          }
+          trap cleanup EXIT
+
+          status="$(curl -sS --connect-timeout 10 --max-time 30 --retry 3 --retry-delay 2 --retry-all-errors -o "$response_headers" -w '%{http_code}' -I "$package_url")"
           if [ "$status" = "200" ]; then
             echo "NuGet package cdidx ${VERSION} is already published; refusing to mask this as a duplicate." >&2
             exit 1
@@ -923,7 +929,7 @@ jobs:
 
           if [ "$status" != "404" ]; then
             echo "Could not verify NuGet package availability for cdidx ${VERSION}; HTTP ${status}." >&2
-            cat /tmp/cdidx-nuget-head >&2 || true
+            cat "$response_headers" >&2 || true
             exit 1
           fi
 
