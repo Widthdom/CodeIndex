@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
+using CodeIndex.Diagnostics;
 
 namespace CodeIndex.Cli;
 
@@ -123,7 +124,7 @@ internal static class GlobalToolLog
         sb.Append("] type=");
         sb.Append(ex.GetType().FullName);
         sb.Append(" message=");
-        sb.Append(QuoteLogValue(ex.Message));
+        sb.Append(QuoteLogValue(DiagnosticRedactor.ClassifyException(ex)));
         sb.AppendLine();
 
         if (includeStacks && !string.IsNullOrWhiteSpace(ex.StackTrace))
@@ -132,7 +133,7 @@ internal static class GlobalToolLog
             {
                 sb.Append(indent);
                 sb.Append("  stack: ");
-                sb.AppendLine(line.TrimEnd('\r'));
+                sb.AppendLine(DiagnosticRedactor.FormatExceptionStackLine(line.TrimEnd('\r')));
             }
         }
 
