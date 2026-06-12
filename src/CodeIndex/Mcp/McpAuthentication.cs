@@ -51,6 +51,23 @@ internal static class McpAuthenticationLimits
 
     internal static bool IsTokenOversized(string? token)
         => token is { Length: > MaxTokenCharacters };
+
+    internal static bool IsTokenShapeValid(ReadOnlySpan<char> token)
+    {
+        if (token.Length == 0 || token.Length > MaxTokenCharacters)
+            return false;
+
+        foreach (var ch in token)
+        {
+            if (char.IsWhiteSpace(ch) || char.IsControl(ch))
+                return false;
+        }
+
+        return true;
+    }
+
+    internal static string FormatTokenShapeError(string source)
+        => $"{source} must be 1 to {MaxTokenCharacters} characters and must not contain whitespace or control characters.";
 }
 
 /// <summary>
@@ -134,10 +151,8 @@ public sealed class TokenMcpAuthenticator : IMcpAuthenticator
 
     public TokenMcpAuthenticator(string expectedToken)
     {
-        if (string.IsNullOrEmpty(expectedToken))
-            throw new ArgumentException("Token must not be empty", nameof(expectedToken));
-        if (McpAuthenticationLimits.IsTokenOversized(expectedToken))
-            throw new ArgumentException($"Token must not exceed {McpAuthenticationLimits.MaxTokenCharacters} characters.", nameof(expectedToken));
+        if (!McpAuthenticationLimits.IsTokenShapeValid(expectedToken))
+            throw new ArgumentException(McpAuthenticationLimits.FormatTokenShapeError("Token"), nameof(expectedToken));
         _expectedTokenHash = SHA256.HashData(Encoding.UTF8.GetBytes(expectedToken));
     }
 
@@ -203,8 +218,10 @@ public static class McpAuthenticatorFactory
     public static IMcpAuthenticator FromEnvironment()
     {
         var token = Environment.GetEnvironmentVariable(AuthTokenEnvVar);
-        if (string.IsNullOrWhiteSpace(token))
+        if (string.IsNullOrEmpty(token))
             return LocalStdioAuthenticator.Instance;
+        if (!McpAuthenticationLimits.IsTokenShapeValid(token))
+            throw new FormatException(McpAuthenticationLimits.FormatTokenShapeError(AuthTokenEnvVar));
         return new TokenMcpAuthenticator(token);
     }
 }

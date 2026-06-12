@@ -196,6 +196,9 @@ public static partial class ReferenceExtractor
         var csharpInDelimitedDocComment = false;
         var jvmInDelimitedDocComment = false;
         var phpInDocblock = false;
+        var markupSchemaState = language is "graphql" or "html" or "markdown"
+            ? new MarkupSchemaReferenceExtractor.MarkupState()
+            : null;
         SymbolRecord? phpDocblockContainer = null;
         HashSet<string>? phpDocblockPropertyNames = null;
 
@@ -353,6 +356,40 @@ public static partial class ReferenceExtractor
                     ref phpDocblockPropertyNames);
             }
 
+            var context = originalLine.Trim();
+            if (language is "cmake" or "justfile" or "msbuild"
+                && context.Length > 0)
+            {
+                var buildAutomationContainer = containerResolver.Find(lineNumber);
+                BuildAutomationReferenceExtractor.EmitReferences(
+                    language,
+                    originalLine,
+                    context,
+                    lineNumber,
+                    references,
+                    seen,
+                    fileId,
+                    buildAutomationContainer);
+                continue;
+            }
+
+            if (language is "graphql" or "html" or "markdown"
+                && context.Length > 0)
+            {
+                var markupContainer = containerResolver.Find(lineNumber);
+                MarkupSchemaReferenceExtractor.EmitReferences(
+                    language,
+                    originalLine,
+                    context,
+                    lineNumber,
+                    references,
+                    seen,
+                    fileId,
+                    markupContainer,
+                    markupSchemaState);
+                continue;
+            }
+
             if (string.IsNullOrWhiteSpace(preparedLine))
             {
                 if (language == "csharp"
@@ -375,7 +412,6 @@ public static partial class ReferenceExtractor
                 continue;
             }
 
-            var context = originalLine.Trim();
             if (context.Length == 0)
                 continue;
 

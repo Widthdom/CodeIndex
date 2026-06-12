@@ -601,10 +601,70 @@ public class ReportCommandRunnerTests
             ]);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(Path.GetFullPath(output), json.GetProperty("output_path").GetString());
+            Assert.Equal(ReportCommandRunner.RedactedPlaceholder, json.GetProperty("output_path").GetString());
             Assert.True(json.GetProperty("files").GetInt32() >= 4);
             Assert.False(json.GetProperty("log_included").GetBoolean());
             Assert.False(json.GetProperty("db_included").GetBoolean());
+        }
+        finally
+        {
+            TryDeleteDirectory(workDir);
+        }
+    }
+
+    [Fact]
+    public void Run_JsonMode_RedactsLocalSummaryPaths_Issue3554()
+    {
+        var workDir = CreateWorkDir();
+        var dbPath = Path.Combine(workDir, "codeindex.db");
+        try
+        {
+            using (var db = new DbContext(dbPath))
+                db.InitializeSchema();
+            SqliteConnection.ClearAllPools();
+
+            var output = Path.Combine(workDir, "bundle.tgz");
+            var (exitCode, json) = RunAndCaptureJson([
+                "--output", output,
+                "--db", dbPath,
+                "--no-log",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(ReportCommandRunner.RedactedPlaceholder, json.GetProperty("output_path").GetString());
+            Assert.Equal(ReportCommandRunner.RedactedPlaceholder, json.GetProperty("db_path").GetString());
+            Assert.True(json.GetProperty("db_included").GetBoolean());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            TryDeleteDirectory(workDir);
+        }
+    }
+
+    [Fact]
+    public void Run_JsonMode_RedactsFailureExceptionMessage_Issue3554()
+    {
+        var workDir = CreateWorkDir();
+        try
+        {
+            var fileParent = Path.Combine(workDir, "not-a-directory");
+            File.WriteAllText(fileParent, "blocking file");
+            var output = Path.Combine(fileParent, "bundle.tgz");
+
+            var (exitCode, json) = RunAndCaptureJson([
+                "--output", output,
+                "--db", Path.Combine(workDir, "missing.db"),
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            var message = json.GetProperty("message").GetString();
+            Assert.Contains("failed to build report:", message);
+            Assert.Contains(ReportCommandRunner.RedactedPlaceholder, message);
+            Assert.DoesNotContain(workDir, message);
+            Assert.DoesNotContain(fileParent, message);
         }
         finally
         {
@@ -670,6 +730,96 @@ public class ReportCommandRunnerTests
 
         Assert.Contains("args=[redacted]", redacted);
         Assert.DoesNotContain("SELECT * FROM secret", redacted);
+    }
+
+    [Fact]
+    public void RedactSensitiveFields_RedactsJsonLifecycleMessage_Issue3554()
+    {
+        var redacted = ReportCommandRunner.RedactSensitiveFields(
+            "{\"ts\":\"2026-05-16T03:00:00.000Z\",\"level\":\"INFO\",\"msg\":\"cwd=/Users/example/private db=/Users/example/private/.cdidx/codeindex.db path=/Users/example/private/.cdidx/config.json args=query \\\"SELECT * FROM secret\\\"\"}");
+
+        using var document = JsonDocument.Parse(redacted);
+        var message = document.RootElement.GetProperty("msg").GetString();
+        Assert.Contains("cwd=[redacted]", message);
+        Assert.Contains("db=[redacted]", message);
+        Assert.Contains("path=[redacted]", message);
+        Assert.Contains("args=[redacted]", message);
+        Assert.DoesNotContain("/Users/example/private", redacted);
+        Assert.DoesNotContain("SELECT * FROM secret", redacted);
+    }
+
+    [Fact]
+    public void RedactLogLine_JsonIncludeArgsPreservesSafeArgsAndRedactsSecrets_Issue3554()
+    {
+        const string secret = "0123456789abcdef0123456789abcdef";
+        var redacted = ReportCommandRunner.RedactLogLine(
+            $"{{\"ts\":\"2026-05-16T03:00:00.000Z\",\"level\":\"INFO\",\"msg\":\"args=query --literal safe --token={secret} /Users/example/private status=ok\"}}",
+            includeArgs: true);
+
+        using var document = JsonDocument.Parse(redacted);
+        var message = document.RootElement.GetProperty("msg").GetString();
+        Assert.Contains("args=query --literal safe --token=[redacted] [redacted]", message);
+        Assert.Contains("status=ok", message);
+        Assert.DoesNotContain(secret, redacted);
+        Assert.DoesNotContain("/Users/example/private", redacted);
+        Assert.DoesNotContain("args=[redacted]", redacted);
+    }
+
+    [Fact]
+    public void RedactSensitiveFields_PreservesFieldsAfterRedactedValues_Issue3554()
+    {
+        var redacted = ReportCommandRunner.RedactSensitiveFields(
+            "2026-05-16T03:00:00Z [INFO] cwd=/private/foo status=ok token=0123456789abcdef0123456789abcdef elapsed_ms=4 path=/tmp/config.json");
+
+        Assert.Contains("cwd=[redacted]", redacted);
+        Assert.Contains("status=ok", redacted);
+        Assert.Contains("token=[redacted]", redacted);
+        Assert.Contains("elapsed_ms=4", redacted);
+        Assert.Contains("path=[redacted]", redacted);
+        Assert.DoesNotContain("/private/foo", redacted);
+        Assert.DoesNotContain("0123456789abcdef0123456789abcdef", redacted);
+        Assert.DoesNotContain("/tmp/config.json", redacted);
+    }
+
+    [Fact]
+    public void RedactLogLine_IncludeArgsPreservesSafeArgsAndRedactsSecrets_Issue3554()
+    {
+        const string secret = "0123456789abcdef0123456789abcdef";
+        var redacted = ReportCommandRunner.RedactLogLine(
+            $"2026-05-16T03:00:00Z [INFO] args=query --literal safe --token={secret} /Users/example/private status=ok",
+            includeArgs: true);
+
+        Assert.Contains("args=query --literal safe --token=[redacted] [redacted]", redacted);
+        Assert.Contains("status=ok", redacted);
+        Assert.DoesNotContain(secret, redacted);
+        Assert.DoesNotContain("/Users/example/private", redacted);
+    }
+
+    [Fact]
+    public void RedactSensitiveFields_RedactsNoKeyPathTokenAndUrlQuery_Issue3554()
+    {
+        const string secret = "0123456789abcdef0123456789abcdef";
+        var redacted = ReportCommandRunner.RedactSensitiveFields(
+            $"2026-05-16T03:00:00Z [ERROR] sample /Users/example/private {secret} https://example.test?query=user-content");
+
+        Assert.Contains("[redacted]", redacted);
+        Assert.Contains("https://example.test[redacted]", redacted);
+        Assert.DoesNotContain("/Users/example/private", redacted);
+        Assert.DoesNotContain(secret, redacted);
+        Assert.DoesNotContain("query=user-content", redacted);
+    }
+
+    [Fact]
+    public void RedactSensitiveFields_RedactsPrefixAndSuffixOutsideKeyValues_Issue3554()
+    {
+        var redacted = ReportCommandRunner.RedactSensitiveFields(
+            "2026-05-16T03:00:00Z [ERROR] prefix /Users/example/before cwd=/Users/example/private status=ok suffix /Users/example/after");
+
+        Assert.Contains("cwd=[redacted]", redacted);
+        Assert.Contains("status=ok", redacted);
+        Assert.DoesNotContain("/Users/example/before", redacted);
+        Assert.DoesNotContain("/Users/example/private", redacted);
+        Assert.DoesNotContain("/Users/example/after", redacted);
     }
 
     [Fact]

@@ -61,6 +61,29 @@ public class DataDirectorySecurityTests
     }
 
     [Fact]
+    public void CreateSensitiveTempDirectory_OnPosix_Forces0700Mode()
+    {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            return;
+
+        DirectoryInfo? tempDir = null;
+        try
+        {
+            tempDir = DataDirectorySecurity.CreateSensitiveTempDirectory("cdidx-sensitive-test-");
+
+            Assert.StartsWith("cdidx-sensitive-test-", tempDir.Name, StringComparison.Ordinal);
+            Assert.Equal(
+                DataDirectorySecurity.PrivateDirectoryMode,
+                File.GetUnixFileMode(tempDir.FullName) & DataDirectorySecurity.PermissionBits);
+        }
+        finally
+        {
+            if (tempDir != null && Directory.Exists(tempDir.FullName))
+                Directory.Delete(tempDir.FullName, recursive: true);
+        }
+    }
+
+    [Fact]
     public void WritePrivateText_OnPosix_Forces0600Mode()
     {
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))

@@ -154,6 +154,27 @@ public class DbDebugTests
     }
 
     [Fact]
+    public void FormatSqlForSlowQueryLog_RedactsLiteralsAndSensitiveText_Issue3416()
+    {
+        var path = "/Users/example/private/project/secret_module.cs";
+        var searchText = "literal user search text";
+        var secret = "0123456789abcdef0123456789abcdef";
+        var sql = $"SELECT * FROM chunks WHERE path = '{path}' AND content MATCH '{searchText}' AND api_token = '{secret}' AND rank > 42 AND payload = X'0123abcd'";
+
+        var formatted = DbDebug.FormatSqlForSlowQueryLog(sql);
+
+        Assert.Contains("path = '<redacted>'", formatted);
+        Assert.Contains("content MATCH '<redacted>'", formatted);
+        Assert.Contains("api_token = '<redacted>'", formatted);
+        Assert.Contains("rank > <number>", formatted);
+        Assert.Contains("payload = X'<redacted>'", formatted);
+        Assert.DoesNotContain(path, formatted);
+        Assert.DoesNotContain(searchText, formatted);
+        Assert.DoesNotContain(secret, formatted);
+        Assert.DoesNotContain("0123abcd", formatted);
+    }
+
+    [Fact]
     public void DumpToStderr_NoOp_WhenDisabled()
     {
         using var env = EnvironmentVariableScope.Capture("CDIDX_DEBUG");
@@ -221,6 +242,50 @@ public class DbDebugTests
             Assert.Contains("CDIDX_DEBUG value 'maybe' is not recognized", first);
             Assert.Contains("Falling back to off", first);
             Assert.Empty(second);
+        }
+        finally
+        {
+            DbDebug.ResetForTesting();
+        }
+    }
+
+    [Fact]
+    public void IsEnabled_InvalidDebugValue_RedactsSecretLookingValue_Issue3403()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_DEBUG");
+        const string secret = "0123456789abcdef0123456789abcdef";
+        env.Set("CDIDX_DEBUG", $"token={secret}");
+        try
+        {
+            DbDebug.ResetForTesting();
+            var output = CaptureStderr(() => Assert.False(DbDebug.IsEnabled));
+
+            Assert.Contains("CDIDX_DEBUG value 'token=<redacted>' is not recognized", output);
+            Assert.DoesNotContain(secret, output);
+        }
+        finally
+        {
+            DbDebug.ResetForTesting();
+        }
+    }
+
+    [Fact]
+    public void IsEnabled_InvalidDebugValue_RedactsPathAndUrlValue_Issue3403()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_DEBUG");
+        const string path = "/Users/example/private/project";
+        const string url = "https://example.test/private/project/config.json";
+        const string queryUrl = "https://example.test?query=user-content";
+        env.Set("CDIDX_DEBUG", $"path={path} url={url} query={queryUrl}");
+        try
+        {
+            DbDebug.ResetForTesting();
+            var output = CaptureStderr(() => Assert.False(DbDebug.IsEnabled));
+
+            Assert.Contains("CDIDX_DEBUG value 'path=<redacted> url=https://example.test<redacted> query=https://example.test<redacted>' is not recognized", output);
+            Assert.DoesNotContain(path, output);
+            Assert.DoesNotContain("/private/project/config.json", output);
+            Assert.DoesNotContain("query=user-content", output);
         }
         finally
         {

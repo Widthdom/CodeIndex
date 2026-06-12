@@ -3,6 +3,7 @@ using System.IO.Compression;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
+using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
 using Microsoft.Data.Sqlite;
 
@@ -66,14 +67,14 @@ public static class ReportCommandRunner
             WriteBundle(fullOutputPath, bundle);
 
             var summary = new ReportBundleSummary(
-                fullOutputPath,
+                options.Json ? RedactedPlaceholder : fullOutputPath,
                 resolvedVersion,
                 bundle.Files.Count,
                 bundle.SchemaTables.Count,
                 bundle.LogLinesIncluded,
                 bundle.LogIncluded,
                 bundle.DbIncluded,
-                bundle.DbPath);
+                options.Json ? RedactLocalJsonPath(bundle.DbPath) : bundle.DbPath);
 
             if (options.Json)
             {
@@ -83,12 +84,12 @@ public static class ReportCommandRunner
             else
             {
                 Console.WriteLine("Bug report bundle");
-                Console.WriteLine($"  output       : {summary.OutputPath}");
+                Console.WriteLine($"  output       : {fullOutputPath}");
                 Console.WriteLine($"  cdidx        : v{summary.Version}");
                 Console.WriteLine($"  files        : {summary.Files}");
                 Console.WriteLine($"  schema rows  : {summary.SchemaTables}");
                 Console.WriteLine($"  log lines    : {(summary.LogIncluded ? summary.LogLinesIncluded.ToString() : "skipped")}");
-                Console.WriteLine($"  schema source: {(summary.DbIncluded ? summary.DbPath : "(no DB found)")}");
+                Console.WriteLine($"  schema source: {(summary.DbIncluded ? bundle.DbPath : "(no DB found)")}");
                 Console.WriteLine();
                 Console.WriteLine("Attach the tarball to the GitHub issue. Path lists, query strings, and");
                 Console.WriteLine("`args=` log lines are redacted by default; rerun with `--include-args` to");
@@ -104,12 +105,20 @@ public static class ReportCommandRunner
             return WriteCommandError(
                 options.Json,
                 jsonOptions,
-                $"failed to build report: {ex.Message}",
+                $"failed to build report: {FormatReportExceptionMessage(ex)}",
                 CommandExitCodes.DatabaseError,
                 "Retry `cdidx report --output <path>`. If this persists, check that the output directory is writable.",
                 CommandErrorCodes.DbError);
         }
     }
+
+    private static string FormatReportExceptionMessage(Exception ex) =>
+        DiagnosticRedactor.BoundDiagnosticText(
+            DiagnosticRedactor.RedactSensitiveText(ex.Message, RedactedPlaceholder, redactPaths: true),
+            maxChars: 512);
+
+    private static string? RedactLocalJsonPath(string? path) =>
+        string.IsNullOrWhiteSpace(path) ? path : RedactedPlaceholder;
 
     internal static ReportBundle BuildBundle(ReportCommandOptions options, string version)
     {
@@ -314,7 +323,7 @@ public static class ReportCommandRunner
         sb.AppendLine();
         foreach (var line in collected)
         {
-            sb.AppendLine(includeArgs ? RedactPathFields(line) : RedactSensitiveFields(line));
+            sb.AppendLine(RedactLogLine(line, includeArgs));
         }
         linesIncluded = collected.Count;
         return sb.ToString();
@@ -393,27 +402,11 @@ public static class ReportCommandRunner
 
     internal static string RedactSensitiveFields(string line)
     {
-        var redacted = RedactKeyValue(line, "args=");
-        return RedactPathFields(redacted);
+        return RedactLogLine(line, includeArgs: false);
     }
 
-    private static string RedactPathFields(string line)
-    {
-        var redacted = RedactKeyValue(line, "cwd=");
-        redacted = RedactKeyValue(redacted, "process_path=");
-        redacted = RedactKeyValue(redacted, "base_dir=");
-        redacted = RedactKeyValue(redacted, "db=");
-        redacted = RedactKeyValue(redacted, "path=");
-        return redacted;
-    }
-
-    private static string RedactKeyValue(string line, string key)
-    {
-        var idx = line.IndexOf(key, StringComparison.Ordinal);
-        if (idx < 0)
-            return line;
-        return line[..(idx + key.Length)] + RedactedPlaceholder;
-    }
+    internal static string RedactLogLine(string line, bool includeArgs) =>
+        DiagnosticRedactor.RedactReportLogLine(line, includeArgs, RedactedPlaceholder);
 
     internal static void WriteBundle(string outputPath, ReportBundle bundle, Action? beforeWriteEntries = null)
     {

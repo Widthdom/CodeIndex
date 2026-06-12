@@ -20,7 +20,7 @@ RUN case "$TARGETARCH" in \
 
 FROM mcr.microsoft.com/dotnet/runtime-deps:8.0-alpine AS runtime
 
-RUN apk add --no-cache ca-certificates git
+RUN apk add --no-cache ca-certificates
 
 WORKDIR /repo
 COPY --from=build /out/ /usr/local/lib/cdidx/

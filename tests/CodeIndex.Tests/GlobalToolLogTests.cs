@@ -206,6 +206,37 @@ public class GlobalToolLogTests
     }
 
     [Fact]
+    public void FormatExceptionChain_ClassifiesExceptionMessagesWithoutRawDetails_Issue3371()
+    {
+        var exception = new IOException(
+            "failed to read /Users/widthdom/private/project/token.txt token=0123456789abcdef0123456789abcdef query=SELECT * FROM secret");
+
+        var formatted = GlobalToolLog.FormatExceptionChain(exception);
+
+        Assert.Contains("type=System.IO.IOException", formatted);
+        Assert.Contains("message=\"io_error\"", formatted);
+        Assert.DoesNotContain("/Users/widthdom/private", formatted);
+        Assert.DoesNotContain("0123456789abcdef0123456789abcdef", formatted);
+        Assert.DoesNotContain("SELECT * FROM secret", formatted);
+    }
+
+    [Fact]
+    public void FormatExceptionChain_ClassifiesInnerExceptionMessages_Issue3371()
+    {
+        var exception = new InvalidOperationException(
+            "outer raw path /tmp/private",
+            new UnauthorizedAccessException("denied /home/user/secret.txt password=hunter2"));
+
+        var formatted = GlobalToolLog.FormatExceptionChain(exception);
+
+        Assert.Contains("message=\"invalid_operation\"", formatted);
+        Assert.Contains("message=\"access_denied\"", formatted);
+        Assert.DoesNotContain("/tmp/private", formatted);
+        Assert.DoesNotContain("/home/user/secret.txt", formatted);
+        Assert.DoesNotContain("hunter2", formatted);
+    }
+
+    [Fact]
     public void LogOptionsFromEnvironment_AcceptsMaximumMbValue()
     {
         using var env = EnvironmentVariableScope.Capture(
@@ -285,6 +316,10 @@ public class GlobalToolLogTests
             var resolved = GlobalToolLog.ResolveLogDirectoryForStatus();
 
             Assert.Equal(Path.Combine(stateHome, "cdidx", "logs"), resolved);
+            if (!OperatingSystem.IsWindows())
+                Assert.Equal(
+                    DataDirectorySecurity.PrivateDirectoryMode,
+                    File.GetUnixFileMode(resolved) & PermissionBits);
         }
         finally
         {
