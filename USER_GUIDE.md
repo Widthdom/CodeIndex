@@ -31,7 +31,7 @@ cdidx mcp                        # Start MCP server for AI tools
 cdidx lsp --db .cdidx/codeindex.db  # Start read-only LSP server for editors
 ```
 
-78 languages supported. 24 registered MCP tools. Incremental updates. Zero config.
+80 languages supported. 24 registered MCP tools. Incremental updates. Zero config.
 
 | Topic | Link |
 |---|---|
@@ -280,7 +280,7 @@ sections below show examples and option details for the most common workflows.
 | Analysis | `impact` | Traverse transitive callers from a resolved symbol | `impact_analysis` |
 | Analysis | `unused` | Find symbols defined but not referenced, with confidence buckets | `unused_symbols` |
 | Analysis | `hotspots` | Rank high-impact symbols or statements by reference volume | `symbol_hotspots` |
-| Analysis | `validate` | Report encoding and line-ending issues in indexed files; U+FFFD rows include origin/severity metadata | `validate` |
+| Analysis | `validate` | Report encoding, line-ending, and file-content diagnostics in indexed files; U+FFFD rows include origin/severity metadata | `validate` |
 | Status | `status` | Show DB statistics, freshness, and readiness metadata | `status` |
 | Status | `languages` | List language extensions and symbol/graph capabilities; add `--indexed-only` and `--capability graph|symbols|references` for workspace audits | `languages` |
 | Diagnostics | `db --integrity-check` | Run SQLite `PRAGMA integrity_check` against the DB | -- |
@@ -437,7 +437,8 @@ cdidx validate --json --limit 50 --path legacy/
 
 `validate` reports indexed files that are likely to produce misleading snippets
 or symbol names: U+FFFD replacement characters, UTF-16 BOMs, null bytes, mixed or
-CR-only line endings, likely non-UTF-8 content, and Git LFS pointer placeholders.
+CR-only line endings, likely non-UTF-8 content, Git LFS pointer placeholders, and
+malformed or truncated Dockerfile JSON-form instruction payloads.
 For `replacement_char`, JSON and MCP responses include `origin` (`source_literal`
 or `decode_replacement`) and `severity` so agents can distinguish intentional
 U+FFFD literals from likely encoding damage.
@@ -771,7 +772,7 @@ Indexing scope and ignore handling:
 
 | Area | Behavior |
 |---|---|
-| Built-in skips | `node_modules`, `bin`, `obj`, lockfiles, and other built-in skip-list entries are always excluded. |
+| Built-in skips | Generated/vendor directories such as `node_modules`, `bin`, and `obj`, plus platform metadata files, are excluded. Dependency lockfiles are indexed as `dependency_lock` unless user ignore rules exclude them. |
 | User ignore files | User `.gitignore` plus optional `.cdidxignore` rules are honored across full scans, `--files`, and `--commits` updates. |
 | Workspace-scoped cdidx ignores | A project-root `.codeindex/.cdidxignore` is also loaded as a workspace-scoped ignore file, so multi-workspace manifests can keep local cdidx-only ignore rules out of the repository root. |
 | Encoding | Ignore files are read as UTF-8, so non-ASCII patterns behave the same across platforms. |
@@ -1647,7 +1648,7 @@ All indexed languages are searchable through FTS5. Rows with **Symbols = yes** a
 | Rust | `.rs` | yes |
 | Java | `.java` | yes |
 | Kotlin | `.kt`, `.kts` | yes |
-| Ruby | `.rb`, `.rake`, `.gemspec`, `.podspec`, `Gemfile`, `Rakefile`, `Podfile`, `Guardfile`, `Capfile`, `Vagrantfile` | yes |
+| Ruby | `.rb`, `.rake`, `.gemspec`, `.podspec`, `Rakefile`, `Guardfile`, `Capfile`, `Vagrantfile` | yes |
 | C | `.c`, `.h` | yes |
 | C++ | `.cpp`, `.cc`, `.cxx`, `.hh`, `.hpp`, `.hxx` | yes |
 | PHP | `.php` | yes |
@@ -1675,6 +1676,8 @@ All indexed languages are searchable through FTS5. Rows with **Symbols = yes** a
 | Protobuf | `.proto` | yes |
 | GraphQL | `.graphql`, `.gql` | yes |
 | Gradle | `.gradle` | yes |
+| Dependency manifest | `package.json`, `pyproject.toml`, `requirements.txt`, `Gemfile`, `Podfile`, `Cargo.toml`, `composer.json`, `go.mod`, `packages.config` | -- |
+| Dependency lockfile | `package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`, `pnpm-lock.yaml`, `Gemfile.lock`, `Cargo.lock`, `go.sum`, `uv.lock` | -- |
 | Makefile | `Makefile`, `GNUmakefile`, `Makefile.<suffix>`, `GNUmakefile.<suffix>`, `.mk` | yes |
 | Dockerfile | `Dockerfile`, `Containerfile`, `Dockerfile.<suffix>`, `Containerfile.<suffix>` | yes |
 | Assembly | `.s`, `.S`, `.asm`, `.nasm` | yes |
@@ -1726,6 +1729,7 @@ All indexed languages are searchable through FTS5. Rows with **Symbols = yes** a
 - React hooks: JavaScript/TypeScript functions whose names follow `use[A-Z]...` are indexed as `hook` symbols, and calls to `useFoo()` / built-in hooks such as `useState()` are recorded as `consumes_hook` references for hook-composition graph queries.
 - JavaScript/TypeScript imports: static imports, dynamic imports, CommonJS `require` / `require.resolve`, `import.meta.resolve`, `new URL(..., import.meta.url)`, `importScripts`, service-worker registrations, worklet loads, and worker constructors add `import` symbols when the specifier is static. `tsconfig.json` / `jsconfig.json` `compilerOptions.baseUrl` and `paths` aliases are resolved to indexed project paths when the target file exists.
 - Node module layouts: `.cjs` / `.mjs` are JavaScript; `.cts` / `.mts`, including `.d.cts` / `.d.mts`, are TypeScript.
+- Dependency manifests and lockfiles: use `--lang dependency_manifest` or `--lang dependency_lock` for dependency/security audits. These buckets are searchable text and do not claim symbol or graph extraction.
 - Extensionless scripts: files with recognized shebangs are indexed for shell (`sh`, `bash`, `zsh`, `fish`, `dash`, `ksh`, `ash`), Python, Ruby, Node.js, PHP, Lua, and PowerShell.
 
 ### Language extraction matrix
@@ -1746,6 +1750,7 @@ when to trust structured commands and when to fall back to `search`.
 | Shell / PowerShell / Batch / Makefile / Gradle | functions, labels, tasks, imports where applicable | command-style calls and control-flow targets | Runtime command construction is not resolved. |
 | SQL / Terraform / Dockerfile | statements/resources/stages/labels | table/resource/stage references, Dockerfile stage dependencies, Terraform dotted refs | SQL hotspot grouping defaults to statements; Dockerfile `COPY --from=<stage>` follows named stages. |
 | Markdown / HTML / CSS / GraphQL / Protobuf | headings, anchors, selectors, schema types/messages where supported | local anchors, CSS extends/variables, schema references where supported | Use `search` for prose and generated markup. |
+| Dependency manifests / lockfiles | none | none | Use `--lang dependency_manifest` or `--lang dependency_lock` for dependency/security audits. |
 | Other indexed text formats | file/chunk search only unless `languages` reports symbols | no graph unless `languages` reports support | `cdidx search "literal" --lang yaml` is the reliable fallback. |
 
 The graph commands surface `graph_supported` / `graph_support_reason` in JSON and
@@ -2153,7 +2158,7 @@ The MCP `tools/list` response includes an `examples` array for every registered 
 | `unused_symbols` | Find symbols defined but never referenced, with confidence buckets for dead-code triage |
 | `symbol_hotspots` | Find high-impact hotspots. `groupBy` supports `symbol`, `file`, and `statement`; SQL scopes default to statement grouping while non-SQL scopes default to symbol grouping. |
 | `batch_query` | Execute multiple queries in a single call (MCP only, max 10). The response includes a top-level `metadata` object with `submitted`, `executed`, `errors`, `total_elapsed_ms`, `success_count`, and `failure_count`; every entry in `results` carries `request_index`, optional client `slot_id`, `ok`, `elapsed_ms`, `summary`, and compact `args_summary` fields so callers can correlate partial failures and slow inner queries without relying on positional guesses. |
-| `validate` | Report encoding issues (U+FFFD with origin/severity, BOM, null bytes, mixed/CR-only line endings, UTF-16 BOM detection, likely non-UTF8 encodings) |
+| `validate` | Report encoding and file-content issues (U+FFFD with origin/severity, BOM, null bytes, mixed/CR-only line endings, UTF-16 BOM detection, likely non-UTF8 encodings, Dockerfile JSON-form diagnostics) |
 | `languages` | List all supported languages, file extensions, and capabilities |
 | `ping` | Lightweight connection check |
 | `index` | Index or re-index a project directory |
@@ -2634,7 +2639,7 @@ cdidx index . --quiet
 | Analysis | `impact` | 解決した symbol から transitive callers を探索 | `impact_analysis` |
 | Analysis | `unused` | 参照されていない可能性がある symbols を confidence bucket 付きで表示 | `unused_symbols` |
 | Analysis | `hotspots` | reference volume で high-impact symbols/statements を ranking | `symbol_hotspots` |
-| Analysis | `validate` | indexed files の encoding / line-ending 問題を報告。U+FFFD 行には origin/severity metadata が付く | `validate` |
+| Analysis | `validate` | indexed files の encoding / line-ending / file-content 診断を報告。U+FFFD 行には origin/severity metadata が付く | `validate` |
 | Status | `status` | DB stats、freshness、readiness metadata を表示 | `status` |
 | Status | `languages` | language extensions と symbol/graph capabilities を一覧 | `languages` |
 | Diagnostics | `db --integrity-check` | DB に対して SQLite `PRAGMA integrity_check` を実行 | -- |
@@ -2785,7 +2790,8 @@ cdidx validate --json --limit 50 --path legacy/
 
 `validate` は、snippet や symbol name を誤らせやすい indexed file を報告します。
 対象は U+FFFD replacement character、UTF-16 BOM、null byte、mixed / CR-only line
-ending、likely non-UTF-8 content、Git LFS pointer placeholder などです。
+ending、likely non-UTF-8 content、Git LFS pointer placeholder、Dockerfile の
+JSON-form instruction payload の parse / truncation 診断などです。
 `replacement_char` の JSON / MCP response には `origin` (`source_literal` /
 `decode_replacement`) と `severity` が入り、意図的な U+FFFD literal と
 エンコーディング破損の可能性を agent が区別できます。`--severity warning`
@@ -3193,7 +3199,7 @@ cdidx ./myproject --json
 | 項目 | 動作 |
 |---|---|
 | DB の既定配置 | `cdidx index` は DB を `<projectPath>/.cdidx/codeindex.db` に置きます。 |
-| 組み込み skip | `node_modules`、`bin`、`obj`、lockfile などの組み込み skip 対象は常に除外されます。 |
+| 組み込み skip | `node_modules`、`bin`、`obj` などの生成・vendor directory と platform metadata file は除外されます。dependency lockfile は、ユーザー ignore rule で除外しない限り `dependency_lock` として index されます。 |
 | ユーザー ignore | ユーザーの `.gitignore` と任意の `.cdidxignore` は、full scan、`--files`、`--commits` の更新経路すべてで尊重されます。 |
 | workspace scope の cdidx ignore | project root の `.codeindex/.cdidxignore` も workspace scope の ignore file として読み込むため、multi-workspace manifest 用の cdidx 専用 rule を repository root に置かずに管理できます。 |
 | encoding | ignore file は UTF-8 として読み込むため、非 ASCII pattern も platform 間で同じように動作します。 |
@@ -4007,7 +4013,7 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 | Rust | `.rs` | yes |
 | Java | `.java` | yes |
 | Kotlin | `.kt`, `.kts` | yes |
-| Ruby | `.rb`, `.rake`, `.gemspec`, `.podspec`, `Gemfile`, `Rakefile`, `Podfile`, `Guardfile`, `Capfile`, `Vagrantfile` | yes |
+| Ruby | `.rb`, `.rake`, `.gemspec`, `.podspec`, `Rakefile`, `Guardfile`, `Capfile`, `Vagrantfile` | yes |
 | C | `.c`, `.h` | yes |
 | C++ | `.cpp`, `.cc`, `.cxx`, `.hh`, `.hpp`, `.hxx` | yes |
 | PHP | `.php` | yes |
@@ -4035,6 +4041,8 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 | Protobuf | `.proto` | yes |
 | GraphQL | `.graphql`, `.gql` | yes |
 | Gradle | `.gradle` | yes |
+| Dependency manifest | `package.json`, `pyproject.toml`, `requirements.txt`, `Gemfile`, `Podfile`, `Cargo.toml`, `composer.json`, `go.mod`, `packages.config` | -- |
+| Dependency lockfile | `package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`, `pnpm-lock.yaml`, `Gemfile.lock`, `Cargo.lock`, `go.sum`, `uv.lock` | -- |
 | Makefile | `Makefile`, `GNUmakefile`, `Makefile.<suffix>`, `GNUmakefile.<suffix>`, `.mk` | yes |
 | Dockerfile | `Dockerfile`, `Containerfile`, `Dockerfile.<suffix>`, `Containerfile.<suffix>` | yes |
 | Assembly | `.s`, `.S`, `.asm`, `.nasm` | yes |
@@ -4086,6 +4094,7 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 - React hooks: JavaScript/TypeScript で `use[A-Z]...` の命名規則に従う関数は `hook` シンボルとして索引し、`useFoo()` や `useState()` などの hook 呼び出しは hook composition graph 用の `consumes_hook` 参照として記録します。
 - JavaScript/TypeScript import: static import、dynamic import、CommonJS `require` / `require.resolve`、`import.meta.resolve`、`new URL(..., import.meta.url)`、`importScripts`、Service Worker registration、worklet load、worker constructor は、specifier が静的なら `import` シンボルを追加します。`tsconfig.json` / `jsconfig.json` の `compilerOptions.baseUrl` と `paths` alias は、対象ファイルが存在する場合に indexed project path へ解決します。
 - Node モジュール構成: `.cjs` / `.mjs` は JavaScript、`.cts` / `.mts`（`.d.cts` / `.d.mts` を含む）は TypeScript として扱います。
+- Dependency manifest / lockfile: dependency / security audit では `--lang dependency_manifest` または `--lang dependency_lock` を使います。この bucket は検索可能な text として扱われ、symbol / graph 抽出は主張しません。
 - 拡張子なしスクリプト: 先頭行の shebang が shell (`sh`, `bash`, `zsh`, `fish`, `dash`, `ksh`, `ash`)、Python、Ruby、Node.js、PHP、Lua、PowerShell として認識できれば index 対象です。
 
 ### 言語別 extraction matrix
@@ -4105,6 +4114,7 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 | Shell / PowerShell / Batch / Makefile / Gradle | function、label、task、対応言語の import | command-style call と control-flow target | runtime で組み立てられる command は解決しません。 |
 | SQL / Terraform / Dockerfile | statement/resource/stage/label | table/resource/stage reference、Dockerfile stage dependency、Terraform dotted refs | SQL hotspot grouping は既定で statement、Dockerfile `COPY --from=<stage>` は named stage を追跡します。 |
 | Markdown / HTML / CSS / GraphQL / Protobuf | heading、anchor、selector、対応 schema type/message | local anchor、CSS extend/variable、対応 schema reference | prose や generated markup には `search` を使ってください。 |
+| Dependency manifest / lockfile | なし | なし | dependency / security audit には `--lang dependency_manifest` または `--lang dependency_lock` を使います。 |
 | その他の indexed text format | `languages` が symbol 対応を示す場合を除き file/chunk search のみ | `languages` が graph 対応を示す場合を除きなし | `cdidx search "literal" --lang yaml` が信頼できる fallback です。 |
 
 Language filter を指定した graph commands は、JSON / MCP 出力に
@@ -4504,7 +4514,7 @@ OpenAI Codex CLI (`codex.json` または `~/.codex/config.json`):
 | `unused_symbols` | 定義されているが参照されていないシンボルを bucket 付きで検索（デッドコード検出向け） |
 | `symbol_hotspots` | 影響の大きい hotspot を検索。`groupBy` は `symbol` / `file` / `statement` を指定でき、SQL scope は statement grouping、非 SQL scope は symbol grouping が既定。 |
 | `batch_query` | 複数クエリを1回で実行（MCP専用、最大10件）。レスポンスにはトップレベル `metadata`（`submitted` / `executed` / `errors` / `total_elapsed_ms` / `success_count` / `failure_count`）と各 `results` エントリの `request_index`、任意の client `slot_id`、`ok`、`elapsed_ms`、`summary`、`args_summary` が含まれ、位置だけに依存せず部分失敗や遅い内部クエリを把握できます。 |
-| `validate` | エンコーディング問題（origin/severity 付き U+FFFD、BOM、null バイト、改行混在 / CR-only 行末、UTF-16 BOM 検出、UTF-8 以外と推定されるエンコーディング）を報告 |
+| `validate` | エンコーディングと file-content の問題（origin/severity 付き U+FFFD、BOM、null バイト、改行混在 / CR-only 行末、UTF-16 BOM 検出、UTF-8 以外と推定されるエンコーディング、Dockerfile JSON-form 診断）を報告 |
 | `languages` | 対応言語一覧を拡張子・機能付きで表示。`--indexed-only` と `--capability graph|symbols|references` で現在の DB や機能別に絞り込み可能 |
 | `ping` | 軽量な接続確認 |
 | `index` | プロジェクトのインデックス作成・更新 |

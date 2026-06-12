@@ -4380,7 +4380,7 @@ public partial class McpServer
                 writer.InsertReferences(references);
                 // Keep MCP index parity with CLI index: persist file-level validation issues too.
                 // MCPインデックスもCLIインデックスと同等に、ファイル検証issueを保存する。
-                var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
+                var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang);
                 writer.InsertIssues(fileId, issues);
                 WriteProjectRootOnce();
                 writer.ClearBatchInProgress();
