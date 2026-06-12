@@ -472,7 +472,7 @@ public partial class McpServer : IDisposable
         if (transport is HttpMcpTransport httpTransport)
         {
             httpTransport.OutOfBandFrameHandler = ProcessFrame;
-            httpTransport.HealthJsonProvider = BuildHealthJson;
+            httpTransport.HealthJsonProvider = () => BuildHealthJson(httpTransport);
             httpTransport.KeepAliveInterval = _keepAliveInterval;
             httpTransport.KeepAliveFrameProvider = BuildKeepAliveNotificationJson;
         }
@@ -1395,8 +1395,8 @@ public partial class McpServer : IDisposable
         }).ConfigureAwait(false);
     }
 
-    private string BuildHealthJson()
-        => BuildHealthResult().ToJsonString(_jsonOptions);
+    private string BuildHealthJson(HttpMcpTransport? httpTransport = null)
+        => BuildHealthResult(httpTransport).ToJsonString(_jsonOptions);
 
     private string BuildKeepAliveNotificationJson()
     {
@@ -1431,7 +1431,7 @@ public partial class McpServer : IDisposable
         return TimeSpan.FromSeconds(seconds);
     }
 
-    private JsonObject BuildHealthResult()
+    private JsonObject BuildHealthResult(HttpMcpTransport? httpTransport = null)
     {
         var now = DateTimeOffset.UtcNow;
         var dbOpen = ProbeDbHealth(now, out var dbError);
@@ -1444,6 +1444,13 @@ public partial class McpServer : IDisposable
             ["last_db_check_at"] = _lastDbCheckAt?.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
             ["transport_ready"] = _running,
         };
+        if (httpTransport is not null)
+        {
+            result["http_event_stream_count"] = httpTransport.EventStreamCount;
+            result["http_event_stream_limit"] = httpTransport.MaxEventStreams;
+            result["http_max_concurrent_handlers"] = httpTransport.MaxConcurrentHandlers;
+            result["http_queued_request_count"] = httpTransport.QueuedRequestCount;
+        }
         if (!string.IsNullOrWhiteSpace(dbError))
             result["db_error"] = dbError;
         return result;

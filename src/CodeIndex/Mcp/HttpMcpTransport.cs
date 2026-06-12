@@ -16,14 +16,13 @@ namespace CodeIndex.Mcp;
 /// body and the matching JSON-RPC response is returned as the response body (or 204 No Content
 /// for notifications). The implementation is intentionally single-session — one in-flight request
 /// at a time — to mirror the existing stdio loop's request/response pairing and to keep the
-/// JSON-RPC ordering invariant the rest of the MCP server depends on. SSE / multi-client
-/// fan-out is left as a follow-up because the underlying handler today never emits unsolicited
-/// server→client messages.
+/// JSON-RPC ordering invariant the rest of the MCP server depends on. Server-initiated JSON-RPC
+/// notifications are exposed through `/events` as a bounded, multi-client SSE fan-out channel.
 /// HTTP MCP トランスポート (issue #1558)。HTTP POST 1 件が JSON-RPC リクエスト 1 件と対応し、
 /// 応答も同じ HTTP レスポンスのボディに乗せる（通知の場合は 204 No Content）。stdio ループと
 /// 同様にシングルセッションで「リクエスト 1 件 → レスポンス 1 件」の順序不変条件を維持する。
-/// SSE / マルチクライアント対応は将来作業として切り出す（現サーバーは自発的なサーバー→クライアント
-/// メッセージを発生させないため、最小単位として POST/response で十分）。
+/// サーバー起点の JSON-RPC 通知は `/events` で bounded な multi-client SSE fan-out channel
+/// として公開する。
 /// </summary>
 internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
 {
@@ -722,6 +721,8 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             context.Response.SendChunked = true;
             context.Response.AddHeader("Cache-Control", "no-cache");
             context.Response.AddHeader("Connection", "keep-alive");
+            context.Response.AddHeader("X-Accel-Buffering", "no");
+            context.Response.AddHeader("X-Cdidx-Mcp-Event-Stream-Id", streamId.ToString("N", CultureInfo.InvariantCulture));
             _eventStreams[streamId] = stream;
 
             var prelude = Encoding.UTF8.GetBytes(": cdidx mcp event stream ready\n\n");
