@@ -236,18 +236,24 @@ Do not add mutable static caches, shared `StringBuilder` instances, reused `Matc
 | Kind | Current producers / meaning | Graph behavior |
 |---|---|---|
 | `accessor` | Accessor declarations when extracted separately from their owning property | Search/filter symbol |
+| `add` | Dockerfile `ADD` destination paths | Dependency/file-flow search symbol |
 | `annotation` | Annotation declarations or annotation-like language constructs | Metadata/search symbol |
 | `async_function` | JavaScript/TypeScript async function declarations | Callable definition; participates in callers/callees through reference rows |
 | `async_generator` | JavaScript/TypeScript async generator declarations | Callable definition; participates in callers/callees through reference rows |
 | `attribute` | Razor attributes and metadata-like declarations | Context/search symbol; not a call edge by itself |
 | `associatedtype` | Swift associated type declarations | Type-like definition target |
+| `base_image` | Dockerfile `FROM` image names | Container image search symbol |
+| `build_arg` | Dockerfile `ARG` names | Variable/search symbol; participates in Dockerfile variable references |
 | `class` | Class declarations across object-oriented languages | Definition target and container |
 | `class_hook` | Python class hook methods such as dunder hooks reclassified from functions | Callable/search symbol |
 | `code` | Markdown fenced or structured code blocks | Search/outline symbol |
 | `constant` | Constant declarations where the language distinguishes them | Search/filter symbol |
+| `copy` | Dockerfile `COPY` destination paths | Dependency/file-flow search symbol |
 | `delegate` | C# / F# delegate declarations | Callable type definition and container-like target |
 | `enum` | Enum declarations | Definition target and container |
+| `environment` | Dockerfile `ENV` variable names | Variable/search symbol; participates in Dockerfile variable references |
 | `event` | Event declarations | Search/filter symbol |
+| `expose` | Dockerfile `EXPOSE` ports | Container runtime search symbol |
 | `field` | Field declarations where distinct from properties | Search/filter symbol |
 | `file_module` | File-scoped module/package declarations | Namespace-like context symbol |
 | `function` | Functions, methods, constructors, delegates, tasks, and callable bindings that do not have a narrower kind | Primary callable definition; participates in callers/callees through reference rows |
@@ -258,6 +264,7 @@ Do not add mutable static caches, shared `StringBuilder` instances, reused `Matc
 | `import` | Imports, using directives, aliases, and package includes | Search/filter symbol |
 | `interface` | Interface declarations | Definition target and container |
 | `lambda` | Named lambda/arrow bindings | Callable definition; participates in callers/callees through reference rows |
+| `label` | Dockerfile `LABEL` keys | Metadata/search symbol |
 | `layout` | Razor layout directives | Context/search symbol |
 | `method` | Languages or hooks that explicitly distinguish methods from functions | Callable definition; participates in callers/callees through reference rows |
 | `module` | Module declarations | Definition target and container |
@@ -273,8 +280,12 @@ Do not add mutable static caches, shared `StringBuilder` instances, reused `Matc
 | `reference` | Secondary extracted symbolic references, such as HTML classes, metadata keys, or GraphQL union variants | Search/filter symbol |
 | `rule` | CSS/SCSS rule container context used by nested references | Container context |
 | `route` | Razor route directives | Context/search symbol |
+| `run` | Dockerfile `RUN` command bodies | Container build-step search symbol |
 | `service` | Service declarations in IDL/protobuf-like languages | Definition target and container |
+| `shell` | Dockerfile `SHELL` executables | Container runtime search symbol |
 | `specialization` | C++ template specialization declarations | Definition target for specialized type/function forms |
+| `stage` | Dockerfile named build stages | Build-stage definition; participates in Dockerfile stage references |
+| `stopsignal` | Dockerfile `STOPSIGNAL` values | Container runtime search symbol |
 | `struct` | Struct declarations | Definition target and container |
 | `submodule` | Fortran submodule declarations | Namespace/module-like definition target |
 | `subroutine` | Fortran subroutine declarations | Callable definition |
@@ -283,8 +294,11 @@ Do not add mutable static caches, shared `StringBuilder` instances, reused `Matc
 | `type` | Type declarations where a narrower class/interface/struct/enum kind is not available | Definition target |
 | `typealias` | Type alias declarations | Definition target for alias names |
 | `union` | Union declarations | Definition target and container |
+| `user` | Dockerfile `USER` values | Container runtime search symbol |
 | `block data` | Fortran block data declarations | Definition target |
 | `variable` | Variable bindings | Search/filter symbol |
+| `volume` | Dockerfile `VOLUME` paths | Container storage search symbol |
+| `workdir` | Dockerfile `WORKDIR` paths | Container filesystem search symbol |
 
 `symbol_references.reference_kind` uses this separate reference taxonomy:
 
@@ -2389,18 +2403,24 @@ filter、downstream JSON consumer が同じ値を理解できるようにして�
 | Kind | 現在の producer / 意味 | Graph behavior |
 |---|---|---|
 | `accessor` | owning property から別 symbol として抽出される accessor declaration | Search/filter symbol |
+| `add` | Dockerfile `ADD` の destination path | dependency / file-flow search symbol |
 | `annotation` | annotation declaration または annotation-like な言語構文 | Metadata/search symbol |
 | `async_function` | JavaScript / TypeScript の async function declaration | Callable definition。reference row 経由で callers/callees に参加 |
 | `async_generator` | JavaScript / TypeScript の async generator declaration | Callable definition。reference row 経由で callers/callees に参加 |
 | `attribute` | Razor attribute と metadata-like declaration | Context/search symbol。単独では call edge ではない |
 | `associatedtype` | Swift associated type declaration | Type-like definition target |
+| `base_image` | Dockerfile `FROM` の image name | container image search symbol |
+| `build_arg` | Dockerfile `ARG` 名 | variable/search symbol。Dockerfile variable reference に参加 |
 | `class` | object-oriented language 全般の class declaration | Definition target and container |
 | `class_hook` | Python dunder hook など、function から再分類された class hook method | Callable/search symbol |
 | `code` | Markdown fenced code block または structured code block | Search/outline symbol |
 | `constant` | 言語が区別する constant declaration | Search/filter symbol |
+| `copy` | Dockerfile `COPY` の destination path | dependency / file-flow search symbol |
 | `delegate` | C# / F# delegate declaration | Callable type definition and container-like target |
 | `enum` | enum declaration | Definition target and container |
+| `environment` | Dockerfile `ENV` variable name | variable/search symbol。Dockerfile variable reference に参加 |
 | `event` | event declaration | Search/filter symbol |
+| `expose` | Dockerfile `EXPOSE` port | container runtime search symbol |
 | `field` | property と区別される field declaration | Search/filter symbol |
 | `file_module` | file-scoped module / package declaration | Namespace-like context symbol |
 | `function` | 関数、method、constructor、delegate、task、およびより狭い kind がない callable binding | Primary callable definition。reference row 経由で callers/callees に参加 |
@@ -2411,6 +2431,7 @@ filter、downstream JSON consumer が同じ値を理解できるようにして�
 | `import` | import、using directive、alias、package include | Search/filter symbol |
 | `interface` | interface declaration | Definition target and container |
 | `lambda` | named lambda / arrow binding | Callable definition。reference row 経由で callers/callees に参加 |
+| `label` | Dockerfile `LABEL` key | metadata/search symbol |
 | `layout` | Razor layout directive | Context/search symbol |
 | `method` | function と method を明示的に区別する言語または hook | Callable definition。reference row 経由で callers/callees に参加 |
 | `module` | module declaration | Definition target and container |
@@ -2426,8 +2447,12 @@ filter、downstream JSON consumer が同じ値を理解できるようにして�
 | `reference` | HTML class、metadata key、GraphQL union variant などの secondary extracted symbolic reference | Search/filter symbol |
 | `rule` | nested reference が使う CSS / SCSS rule container context | Container context |
 | `route` | Razor route directive | Context/search symbol |
+| `run` | Dockerfile `RUN` command body | container build-step search symbol |
 | `service` | IDL / protobuf-like language の service declaration | Definition target and container |
+| `shell` | Dockerfile `SHELL` executable | container runtime search symbol |
 | `specialization` | C++ template specialization declaration | specialized type / function form の definition target |
+| `stage` | Dockerfile named build stage | build-stage definition。Dockerfile stage reference に参加 |
+| `stopsignal` | Dockerfile `STOPSIGNAL` value | container runtime search symbol |
 | `struct` | struct declaration | Definition target and container |
 | `submodule` | Fortran submodule declaration | Namespace/module-like definition target |
 | `subroutine` | Fortran subroutine declaration | Callable definition |
@@ -2436,8 +2461,11 @@ filter、downstream JSON consumer が同じ値を理解できるようにして�
 | `type` | より狭い class / interface / struct / enum kind が使えない type declaration | Definition target |
 | `typealias` | type alias declaration | alias name の definition target |
 | `union` | union declaration | Definition target and container |
+| `user` | Dockerfile `USER` value | container runtime search symbol |
 | `block data` | Fortran block data declaration | Definition target |
 | `variable` | variable binding | Search/filter symbol |
+| `volume` | Dockerfile `VOLUME` path | container storage search symbol |
+| `workdir` | Dockerfile `WORKDIR` path | container filesystem search symbol |
 
 `symbol_references.reference_kind` は別の reference taxonomy を使います。
 
