@@ -456,9 +456,9 @@ public static class QueryCommandRunner
             subArgs = values.Skip(1).ToArray();
             return true;
         }
-        catch (JsonException ex)
+        catch (JsonException)
         {
-            Console.Error.WriteLine($"Error: batch line {lineNumber} is not valid JSON: {ex.Message}");
+            Console.Error.WriteLine($"Error [{CommandErrorCodes.UsageError}]: batch line {lineNumber} {SafeDiagnosticFormatter.FormatCategoryType("invalid_batch_json", nameof(JsonException))}.");
             return false;
         }
     }

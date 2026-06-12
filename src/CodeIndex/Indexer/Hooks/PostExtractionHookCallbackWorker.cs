@@ -80,7 +80,7 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
             {
                 KillWorker();
                 stopwatch.Stop();
-                return Failure($"failed to send worker request: {ex.Message}", stopwatch.ElapsedMilliseconds);
+                return Failure($"{SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", ex)} while sending hook callback request.", stopwatch.ElapsedMilliseconds);
             }
 
             if (!WaitForTask(sendTask, waitMilliseconds, out var sendException))
@@ -94,7 +94,7 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
             {
                 KillWorker();
                 stopwatch.Stop();
-                return Failure($"failed to send worker request: {sendException.Message}", stopwatch.ElapsedMilliseconds);
+                return Failure($"{SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", sendException)} while sending hook callback request.", stopwatch.ElapsedMilliseconds);
             }
 
             waitMilliseconds = GetRemainingWaitMilliseconds(stopwatch, callbackBudget);
@@ -109,7 +109,7 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
             {
                 KillWorker();
                 stopwatch.Stop();
-                return Failure($"failed to read worker response: {responseException.Message}", stopwatch.ElapsedMilliseconds);
+                return Failure($"{SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", responseException)} while reading hook callback response.", stopwatch.ElapsedMilliseconds);
             }
 
             if (CallbackBudgetExceeded(stopwatch, callbackBudget))
@@ -138,7 +138,7 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
             catch (JsonException ex)
             {
                 KillWorker();
-                return Failure($"worker returned invalid JSON: {ex.Message}", stopwatch.ElapsedMilliseconds);
+                return Failure($"{SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", ex)} while parsing hook callback response.", stopwatch.ElapsedMilliseconds);
             }
 
             if (response == null)
@@ -224,7 +224,7 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
         }
         catch (Exception ex)
         {
-            error = $"failed to start worker process: {ex.Message}";
+            error = SafeDiagnosticFormatter.FormatExceptionCategory("worker_start_failed", ex);
             next.Dispose();
             return false;
         }
@@ -313,11 +313,8 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
 
     private static string BuildWorkerExitError(Process? process, string stderr, string fallback)
     {
-        var exitCodeText = process == null
-            ? "unknown"
-            : process.ExitCode.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        var detail = !string.IsNullOrWhiteSpace(stderr) ? stderr.Trim() : fallback;
-        return $"worker exited with code {exitCodeText}: {detail}";
+        var exitCode = process == null ? (int?)null : process.ExitCode;
+        return SafeDiagnosticFormatter.FormatWorkerExit("worker_protocol_error", exitCode, fallback);
     }
 
     private static bool WaitForWorkerExit(Process process, int milliseconds)
@@ -444,16 +441,28 @@ internal static class PostExtractionHookCallbackWorker
             while ((requestJson = input.ReadLine()) != null)
             {
                 WorkerResponse response;
+                WorkerRequest request;
                 try
                 {
-                    var request = JsonSerializer.Deserialize<WorkerRequest>(requestJson, JsonOptions)
+                    request = JsonSerializer.Deserialize<WorkerRequest>(requestJson, JsonOptions)
                         ?? throw new InvalidOperationException("worker request was empty.");
+                }
+                catch (Exception ex)
+                {
+                    response = new WorkerResponse(null, null, null, SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", ex));
+                    output.WriteLine(JsonSerializer.Serialize(response, JsonOptions));
+                    output.Flush();
+                    continue;
+                }
+
+                try
+                {
                     hook ??= CreateHook(hookAssemblyPath, hookTypeName);
                     response = InvokeInsideWorker(hook, request);
                 }
                 catch (Exception ex)
                 {
-                    response = new WorkerResponse(null, null, null, ex.Message);
+                    response = new WorkerResponse(null, null, null, SafeDiagnosticFormatter.FormatExceptionCategory("worker_execution_failed", ex));
                 }
 
                 output.WriteLine(JsonSerializer.Serialize(response, JsonOptions));
@@ -464,7 +473,7 @@ internal static class PostExtractionHookCallbackWorker
         }
         catch (Exception ex)
         {
-            error.WriteLine(ex.Message);
+            error.WriteLine(SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", ex));
             return 1;
         }
     }
@@ -516,7 +525,11 @@ internal static class PostExtractionHookCallbackWorker
             Console.SetError(originalError);
         }
 
-        return new WorkerResponse(request.Symbols, request.References, callbackFailure?.Message, null);
+        return new WorkerResponse(
+            request.Symbols,
+            request.References,
+            callbackFailure is null ? null : SafeDiagnosticFormatter.FormatExceptionCategory("hook_callback_failed", callbackFailure),
+            null);
     }
 
     private static string ResolveDotnetHostPath()

@@ -309,6 +309,54 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void SymbolExtractionWorker_InvalidRequestJsonDoesNotEchoParserMessage_Issue3425()
+    {
+        const string secret = "SECRET_SYMBOL_WORKER_3425";
+        using var input = new StringReader("{\"Content\":\"" + secret + "\",\n");
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        var handled = SymbolExtractionWorker.TryRunCommand(
+            [SymbolExtractionWorker.CommandName],
+            input,
+            output,
+            error,
+            out var exitCode);
+
+        Assert.True(handled);
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, error.ToString());
+        using var document = JsonDocument.Parse(output.ToString());
+        var workerError = document.RootElement.GetProperty("WorkerError").GetString();
+        Assert.Equal("worker_protocol_error: JsonException", workerError);
+        Assert.DoesNotContain(secret, output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PostExtractionHookCallbackWorker_InvalidRequestJsonDoesNotEchoParserMessage_Issue3425()
+    {
+        const string secret = "SECRET_HOOK_WORKER_3425";
+        using var input = new StringReader("{\"Callback\":\"" + secret + "\",\n");
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        var handled = PostExtractionHookCallbackWorker.TryRunCommand(
+            [PostExtractionHookCallbackWorker.CommandName, "/tmp/demo-hook.dll", "Demo.Hook"],
+            input,
+            output,
+            error,
+            out var exitCode);
+
+        Assert.True(handled);
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, error.ToString());
+        using var document = JsonDocument.Parse(output.ToString());
+        var workerError = document.RootElement.GetProperty("WorkerError").GetString();
+        Assert.Equal("worker_protocol_error: JsonException", workerError);
+        Assert.DoesNotContain(secret, output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void SymbolExtractionWorker_StartInfo_UsesCurrentCdidxExecutableWhenAvailable()
     {
         var currentProcessPath = Path.Combine(Path.GetTempPath(), OperatingSystem.IsWindows() ? "cdidx.exe" : "cdidx");

@@ -62,7 +62,7 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
             {
                 KillWorker();
                 stopwatch.Stop();
-                return Failure($"failed to send symbol extraction request: {ex.Message}", stopwatch.ElapsedMilliseconds);
+                return Failure($"{SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", ex)} while sending symbol extraction request.", stopwatch.ElapsedMilliseconds);
             }
 
             if (!WaitForTask(sendTask, waitMilliseconds, cancellationToken, out var sendException))
@@ -76,7 +76,7 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
             {
                 KillWorker();
                 stopwatch.Stop();
-                return Failure($"failed to send symbol extraction request: {sendException.Message}", stopwatch.ElapsedMilliseconds);
+                return Failure($"{SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", sendException)} while sending symbol extraction request.", stopwatch.ElapsedMilliseconds);
             }
 
             waitMilliseconds = GetRemainingWaitMilliseconds(stopwatch, callbackBudget);
@@ -91,7 +91,7 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
             {
                 KillWorker();
                 stopwatch.Stop();
-                return Failure($"failed to read symbol extraction response: {responseException.Message}", stopwatch.ElapsedMilliseconds);
+                return Failure($"{SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", responseException)} while reading symbol extraction response.", stopwatch.ElapsedMilliseconds);
             }
 
             if (CallbackBudgetExceeded(stopwatch, callbackBudget))
@@ -120,7 +120,7 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
             catch (JsonException ex)
             {
                 KillWorker();
-                return Failure($"worker returned invalid JSON: {ex.Message}", stopwatch.ElapsedMilliseconds);
+                return Failure($"{SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", ex)} while parsing symbol extraction response.", stopwatch.ElapsedMilliseconds);
             }
 
             if (response == null)
@@ -203,7 +203,7 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
         }
         catch (Exception ex)
         {
-            error = $"failed to start symbol extraction worker process: {ex.Message}";
+            error = SafeDiagnosticFormatter.FormatExceptionCategory("worker_start_failed", ex);
             next.Dispose();
             return false;
         }
@@ -293,11 +293,8 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
 
     private static string BuildWorkerExitError(Process? process, string stderr, string fallback)
     {
-        var exitCodeText = process == null
-            ? "unknown"
-            : process.ExitCode.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        var detail = !string.IsNullOrWhiteSpace(stderr) ? stderr.Trim() : fallback;
-        return $"worker exited with code {exitCodeText}: {detail}";
+        var exitCode = process == null ? (int?)null : process.ExitCode;
+        return SafeDiagnosticFormatter.FormatWorkerExit("worker_protocol_error", exitCode, fallback);
     }
 
     private static bool WaitForWorkerExit(Process process, int milliseconds)
@@ -451,15 +448,27 @@ internal static class SymbolExtractionWorker
             while ((requestJson = input.ReadLine()) != null)
             {
                 WorkerResponse response;
+                WorkerRequest request;
                 try
                 {
-                    var request = JsonSerializer.Deserialize<WorkerRequest>(requestJson, JsonOptions)
+                    request = JsonSerializer.Deserialize<WorkerRequest>(requestJson, JsonOptions)
                         ?? throw new InvalidOperationException("worker request was empty.");
+                }
+                catch (Exception ex)
+                {
+                    response = new WorkerResponse(null, SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", ex), null);
+                    output.WriteLine(JsonSerializer.Serialize(response, JsonOptions));
+                    output.Flush();
+                    continue;
+                }
+
+                try
+                {
                     response = InvokeInsideWorker(request);
                 }
                 catch (Exception ex)
                 {
-                    response = new WorkerResponse(null, ex.Message, null);
+                    response = new WorkerResponse(null, SafeDiagnosticFormatter.FormatExceptionCategory("worker_execution_failed", ex), null);
                 }
 
                 output.WriteLine(JsonSerializer.Serialize(response, JsonOptions));
@@ -470,7 +479,7 @@ internal static class SymbolExtractionWorker
         }
         catch (Exception ex)
         {
-            error.WriteLine(ex.Message);
+            error.WriteLine(SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", ex));
             return 1;
         }
     }
@@ -498,7 +507,7 @@ internal static class SymbolExtractionWorker
         }
         catch (Exception ex)
         {
-            return new WorkerResponse(null, ex.Message, capturedError.GetCapturedText());
+            return new WorkerResponse(null, SafeDiagnosticFormatter.FormatExceptionCategory("worker_execution_failed", ex), capturedError.GetCapturedText());
         }
         finally
         {
