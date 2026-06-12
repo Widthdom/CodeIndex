@@ -15,6 +15,7 @@ namespace CodeIndex.Indexer;
 public static partial class SymbolExtractor
 {
     public const int DefaultContractVersion = 1;
+    public const int ExpandedLanguageContractVersion = 2;
     public const int CSharpContractVersion = 2;
     public const int DockerfileContractVersion = 2;
     private static readonly Regex GraphQLInputBlockRegex = new(
@@ -49,6 +50,7 @@ public static partial class SymbolExtractor
             null or "" => DefaultContractVersion,
             "csharp" => CSharpContractVersion,
             "dockerfile" => DockerfileContractVersion,
+            "cmake" or "graphql" or "html" or "json" or "justfile" or "markdown" or "msbuild" or "yaml" => ExpandedLanguageContractVersion,
             _ => DefaultContractVersion,
         };
     }
@@ -1831,6 +1833,20 @@ public static partial class SymbolExtractor
             new("property", new Regex(@"^(?<name>[\w.-]+)\s*(?::=|::=|=|\?=|\+=)", RegexOptions.Compiled), BodyStyle.None),  // Makefile variable assignments / Makefile変数代入
             new("function", new Regex(@"^(?<name>[\w.%-]+)\s*:(?!=|:=)", RegexOptions.Compiled), BodyStyle.None),  // Makefile targets / Makefileターゲット
         ],
+        ["cmake"] =
+        [
+            new("function", new Regex(@"^\s*(?:function|macro)\s*\(\s*(?<name>[A-Za-z_][\w.-]*)", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("function", new Regex(@"^\s*(?:add_executable|add_library|add_custom_target)\s*\(\s*(?<name>[A-Za-z_][\w.-]*)", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("property", new Regex(@"^\s*(?:set|option)\s*\(\s*(?<name>[A-Za-z_][\w.-]*)", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("import", new Regex(@"^\s*(?:include|find_package)\s*\(\s*(?<name>[A-Za-z_][\w.:+-]*)", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
+        ],
+        ["justfile"] =
+        [
+            new("import", new Regex(@"^\s*(?:import|mod)\s+[""'](?<name>[^""']+)[""']", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("property", new Regex(@"^(?<name>[A-Za-z_][\w.-]*)\s*(?::=|=|\+=)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("function", new Regex(@"^(?<name>[A-Za-z_][\w.-]*)(?:\s+[^:#\r\n]+)?\s*:(?![:=])", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+        ],
+        ["msbuild"] = [],
         ["dockerfile"] =
         [
             new("build_arg", new Regex(@"^\s*ARG\s+(?<name>[A-Za-z_][A-Za-z0-9_]*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
@@ -2125,7 +2141,7 @@ public static partial class SymbolExtractor
     /// </summary>
     public static IReadOnlyCollection<string> GetSupportedLanguages()
       => PatternCache.Keys
-          .Concat(new[] { "commonlisp", "racket", "vue", "svelte", "markdown", "razor", "blazor", "cshtml" })
+          .Concat(new[] { "commonlisp", "racket", "vue", "svelte", "markdown", "json", "yaml", "razor", "blazor", "cshtml" })
           .Concat(ExtractorPluginRegistry.SymbolLanguages)
           .Distinct(StringComparer.Ordinal)
           .ToArray();
@@ -2263,6 +2279,21 @@ public static partial class SymbolExtractor
         if (lang == "xml")
         {
             return ExtractXmlSymbols(fileId, content.Split('\n'));
+        }
+
+        if (lang == "json")
+        {
+            return ExtractJsonSymbols(fileId, content, content.Split('\n'));
+        }
+
+        if (lang == "yaml")
+        {
+            return ExtractYamlSymbols(fileId, content.Split('\n'));
+        }
+
+        if (lang == "msbuild")
+        {
+            return ExtractMsBuildSymbols(fileId, content, content.Split('\n'));
         }
 
         if (lang == "markdown")

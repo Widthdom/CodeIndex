@@ -129,6 +129,260 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CMake_BuildAutomationReferences()
+    {
+        const string content = """
+            find_package(fmt REQUIRED)
+            include(GNUInstallDirs)
+            add_library(core src/core.cpp)
+            add_executable(app src/main.cpp)
+            target_link_libraries(app PRIVATE core fmt::fmt)
+            add_dependencies(app generate_assets)
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cmake", content);
+        var references = ReferenceExtractor.Extract(1, "cmake", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.ReferenceKind == "import"
+            && reference.SymbolName == "fmt"
+            && reference.Line == 1);
+        Assert.Contains(references, reference =>
+            reference.ReferenceKind == "import"
+            && reference.SymbolName == "GNUInstallDirs"
+            && reference.Line == 2);
+        Assert.Contains(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.SymbolName == "core"
+            && reference.ContainerName == "app");
+        Assert.Contains(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.SymbolName == "generate_assets"
+            && reference.ContainerName == "app");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "PRIVATE");
+    }
+
+    [Fact]
+    public void Extract_Justfile_BuildAutomationReferences()
+    {
+        const string content = """
+            import "common.just"
+
+            build:
+                cargo build
+
+            test:
+                cargo test
+
+            deploy: build test # only dependencies before this comment count
+                ./deploy
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "justfile", content);
+        var references = ReferenceExtractor.Extract(1, "justfile", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.ReferenceKind == "import"
+            && reference.SymbolName == "common.just"
+            && reference.Line == 1);
+        Assert.Contains(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.SymbolName == "build"
+            && reference.ContainerName == "deploy");
+        Assert.Contains(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.SymbolName == "test"
+            && reference.ContainerName == "deploy");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "only");
+    }
+
+    [Fact]
+    public void Extract_MsBuild_BuildAutomationReferences()
+    {
+        const string content = """
+            <Project>
+              <Import Project="build/common.props" />
+              <ItemGroup>
+                <ProjectReference Include="src/App/App.csproj" />
+                <PackageReference Include="xunit" Version="2.9.3" />
+              </ItemGroup>
+              <Target Name="Generate" DependsOnTargets="Restore;Compile" BeforeTargets="Build">
+                <CallTarget Targets="Pack,Publish" />
+              </Target>
+            </Project>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "msbuild", content);
+        var references = ReferenceExtractor.Extract(1, "msbuild", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.ReferenceKind == "import"
+            && reference.SymbolName == "build/common.props");
+        Assert.Contains(references, reference =>
+            reference.ReferenceKind == "import"
+            && reference.SymbolName == "src/App/App.csproj");
+        Assert.Contains(references, reference =>
+            reference.ReferenceKind == "import"
+            && reference.SymbolName == "xunit");
+        Assert.Contains(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.SymbolName == "Restore"
+            && reference.ContainerName == "Generate");
+        Assert.Contains(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.SymbolName == "Compile"
+            && reference.ContainerName == "Generate");
+        Assert.Contains(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.SymbolName == "Build"
+            && reference.ContainerName == "Generate");
+        Assert.Contains(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.SymbolName == "Pack"
+            && reference.ContainerName == "Generate");
+        Assert.Contains(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.SymbolName == "Publish"
+            && reference.ContainerName == "Generate");
+    }
+
+    [Fact]
+    public void Extract_GraphQL_MarkupSchemaReferences()
+    {
+        const string content = """
+            directive @auth on FIELD_DEFINITION
+
+            interface Node {
+              id: ID!
+            }
+
+            type User implements Node {
+              bestFriend: User
+              avatar: Avatar
+            }
+
+            union SearchResult = User | Team
+
+            fragment UserCard on User {
+              ...AvatarFields
+              bestFriend { id }
+            }
+
+            query GetUser {
+              user @auth {
+                ...UserCard
+                ... on User { id }
+              }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "graphql", content);
+        var references = ReferenceExtractor.Extract(1, "graphql", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.ReferenceKind == "type_reference"
+            && reference.SymbolName == "Node"
+            && reference.ContainerName == "User");
+        Assert.Contains(references, reference =>
+            reference.ReferenceKind == "type_reference"
+            && reference.SymbolName == "Avatar"
+            && reference.ContainerName == "User");
+        Assert.Contains(references, reference =>
+            reference.ReferenceKind == "type_reference"
+            && reference.SymbolName == "Team"
+            && reference.ContainerName == "SearchResult");
+        Assert.Contains(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.SymbolName == "AvatarFields"
+            && reference.ContainerName == "UserCard");
+        Assert.Contains(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.SymbolName == "UserCard"
+            && reference.ContainerName == "GetUser");
+        Assert.Contains(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.SymbolName == "auth"
+            && reference.ContainerName == "GetUser");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "ID");
+    }
+
+    [Fact]
+    public void Extract_Html_MarkupReferences()
+    {
+        const string content = """
+            <link rel="stylesheet" href="/assets/app.css">
+            <script src="app.js"></script>
+            <img srcset="small.png 1x, large.png 2x" src="fallback.png">
+            <a href="#details" class="profile highlight">Details</a>
+            <user-card data-id="42"></user-card>
+            <!-- <img src="ignored.png"> -->
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+        var references = ReferenceExtractor.Extract(1, "html", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.ReferenceKind == "import"
+            && reference.SymbolName == "/assets/app.css");
+        Assert.Contains(references, reference =>
+            reference.ReferenceKind == "import"
+            && reference.SymbolName == "app.js");
+        Assert.Contains(references, reference =>
+            reference.ReferenceKind == "import"
+            && reference.SymbolName == "small.png");
+        Assert.Contains(references, reference =>
+            reference.ReferenceKind == "import"
+            && reference.SymbolName == "large.png");
+        Assert.Contains(references, reference =>
+            reference.ReferenceKind == "reference"
+            && reference.SymbolName == "details");
+        Assert.Contains(references, reference =>
+            reference.ReferenceKind == "reference"
+            && reference.SymbolName == "profile");
+        Assert.Contains(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.SymbolName == "user-card");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "ignored.png");
+    }
+
+    [Fact]
+    public void Extract_Markdown_MarkupReferences()
+    {
+        const string content = """
+            # Intro
+
+            See [Guide](docs/guide.md), [Details](#deep-details), and [API][api].
+
+            ```markdown
+            [Ignored](ignored.md)
+            ```
+
+            [api]: docs/api.md
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "markdown", content);
+        var references = ReferenceExtractor.Extract(1, "markdown", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.ReferenceKind == "import"
+            && reference.SymbolName == "docs/guide.md"
+            && reference.ContainerName == "Intro");
+        Assert.Contains(references, reference =>
+            reference.ReferenceKind == "reference"
+            && reference.SymbolName == "deep-details"
+            && reference.ContainerName == "Intro");
+        Assert.Contains(references, reference =>
+            reference.ReferenceKind == "reference"
+            && reference.SymbolName == "api"
+            && reference.ContainerName == "Intro");
+        Assert.Contains(references, reference =>
+            reference.ReferenceKind == "import"
+            && reference.SymbolName == "docs/api.md"
+            && reference.ContainerName == "Intro");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "ignored.md");
+    }
+
+    [Fact]
     public void Extract_Go_EmitsGoroutineAndChannelReferences()
     {
         const string content = """
@@ -4116,7 +4370,7 @@ public partial class ReferenceExtractorTests
     {
         const string content = "hello = world";
 
-        var references = ReferenceExtractor.Extract(1, "markdown", content, []);
+        var references = ReferenceExtractor.Extract(1, "toml", content, []);
 
         Assert.Empty(references);
     }

@@ -282,7 +282,7 @@ sections below show examples and option details for the most common workflows.
 | Analysis | `hotspots` | Rank high-impact symbols or statements by reference volume | `symbol_hotspots` |
 | Analysis | `validate` | Report encoding, line-ending, and file-content diagnostics in indexed files; U+FFFD rows include origin/severity metadata | `validate` |
 | Status | `status` | Show DB statistics, freshness, and readiness metadata | `status` |
-| Status | `languages` | List language extensions and symbol/graph capabilities; add `--indexed-only` and `--capability graph|symbols|references` for workspace audits | `languages` |
+| Status | `languages` | List language extensions and symbol/reference/graph capabilities; add `--indexed-only` and `--capability graph|references|symbols|missing-graph|missing-references|missing-symbols|search-only` for workspace audits | `languages` |
 | Diagnostics | `db --integrity-check` | Run SQLite `PRAGMA integrity_check` against the DB | -- |
 | Diagnostics | `report --output <path>` | Build a redacted bug-report bundle | -- |
 | Feedback | `suggestions` | List, inspect, and export local suggestion history | -- |
@@ -1690,7 +1690,7 @@ The database reflects the working tree at the time of the last index. After swit
 
 ## Supported languages
 
-All indexed languages are searchable through FTS5. Rows with **Symbols = yes** also support structured queries by function, class, import, or language-specific symbol name. Use `cdidx languages --indexed-only --json` to list only languages present in the current DB, and add `--capability graph|symbols|references` to narrow the table to languages that support a specific structured capability.
+All indexed languages are searchable through FTS5. Rows with **Symbols = yes** also support structured queries by function, class, import, or language-specific symbol name. Use `cdidx languages --indexed-only --json` to list only languages present in the current DB; JSON rows expose `symbol_extraction`, `reference_extraction`, `graph_queries`, and `capability_gaps`. Add `--capability graph|references|symbols|missing-graph|missing-references|missing-symbols|search-only` to narrow the table to languages that support a structured capability or still have a capability gap.
 
 | Language | Extensions | Symbols |
 |---|---|:---:|
@@ -1753,15 +1753,16 @@ All indexed languages are searchable through FTS5. Rows with **Symbols = yes** a
 | Perl test | `.t` | -- |
 | Zig | `.zig` | yes |
 | XAML | `.xaml`, `.axaml` | -- |
-| MSBuild | `.csproj`, `.fsproj`, `.vbproj`, `.props`, `.targets` | -- |
+| MSBuild | `.csproj`, `.fsproj`, `.vbproj`, `.props`, `.targets` | yes |
 | Shell | `.sh`, `.bash`, `.zsh`, `.fish` | partial |
 | PowerShell | `.ps1`, `.psm1`, `.psd1` | yes |
 | Batch | `.bat`, `.cmd` | yes |
-| CMake | `.cmake`, `CMakeLists.txt` | -- |
+| CMake | `.cmake`, `CMakeLists.txt` | yes |
+| Justfile | `Justfile` | yes |
 | SQL | `.sql`, `.pgsql`, `.tsql`, `.plsql`, `.pks`, `.pkb`, `.pls`, `.plb`, `.psql` | yes |
 | Markdown | `.md` | yes |
-| YAML | `.yaml`, `.yml` | -- |
-| JSON | `.json` | -- |
+| YAML | `.yaml`, `.yml` | yes |
+| JSON | `.json` | yes |
 | TOML | `.toml` | -- |
 | HTML | `.html`, `.htm`, `.xhtml`, `.shtml` | yes |
 | CSS | `.css`, `.scss`, `.less`, `.pcss` | yes |
@@ -1776,7 +1777,7 @@ All indexed languages are searchable through FTS5. Rows with **Symbols = yes** a
 - C/C++ headers: `.h` stays on the C path unless the file has clear C++ markers such as `namespace`, `template`, `using`, `class`, or `std::`; those headers are promoted to `cpp` at index time.
 - SQL: query-time `--lang tsql` is accepted as a SQL alias, and T-SQL aggregate, assembly, and XML schema collection declarations are searchable.
 - R: function assignments, S4/R6 class declarations, validity/generic/method declarations, inherit vectors, public/private/active methods, and `library` / `require` imports are indexed.
-- Markdown and CSS: Markdown heading and local-anchor symbols are indexed; CSS variables, placeholders, and `@extend` references are indexed.
+- Markdown, JSON/YAML, and CSS: Markdown heading and local-anchor symbols are indexed; JSON/YAML configuration keys are indexed as structural key paths; CSS variables, placeholders, and `@extend` references are indexed.
 - Dockerfile, Assembly, Common Lisp, and Racket: `ARG` build args, labels/PROC/MACRO blocks, package/module forms, definitions, classes/structs, requires, and provides are surfaced as symbols where applicable.
 - Shell, PowerShell, and Batch: command-style function calls, functions/filters, classes/enums, imports, labels, `goto` / `call` targets, and inline control-flow forms are indexed where the language supports them.
 - C# and Java: modern C# partial members remain visible to `symbols`, `definition`, and `outline`; Java sealed `permits` lists are recorded as `type_reference` graph edges.
@@ -1789,11 +1790,14 @@ All indexed languages are searchable through FTS5. Rows with **Symbols = yes** a
 
 ### Language extraction matrix
 
-Use `cdidx languages --json` as the live capability probe. Add `--indexed-only`
-when you only want languages present in the current DB, and add
-`--capability graph|symbols|references` when auditing a specific structured
-capability. This matrix explains the common extraction behavior so users know
-when to trust structured commands and when to fall back to `search`.
+Use `cdidx languages --json` as the live capability probe. JSON rows expose
+`symbol_extraction`, `reference_extraction`, `graph_queries`, and
+`capability_gaps`. Add `--indexed-only` when you only want languages present in
+the current DB, and add
+`--capability graph|references|symbols|missing-graph|missing-references|missing-symbols|search-only`
+when auditing a specific structured capability or capability gap. This matrix
+explains the common extraction behavior so users know when to trust structured
+commands and when to fall back to `search`.
 
 | Language family | Symbols | References / graph | Notes and example query |
 |---|---|---|---|
@@ -1802,9 +1806,9 @@ when to trust structured commands and when to fall back to `search`.
 | JavaScript / TypeScript / Vue / Svelte | functions, classes, exports, imports, variables | calls, constructors, static/dynamic imports, workers, service workers | Dynamic property calls and computed module specifiers are best-effort. `cdidx references render --lang typescript` |
 | Python / Ruby / PHP / Perl / R | functions, classes/modules, imports where supported | calls, constructors, decorators/annotations where supported | Dynamic dispatch and metaprogramming may require `search`. PHPDoc/static import patterns are indexed when statically visible. |
 | C / C++ / Objective-C / Swift / Rust / Go / Zig | functions, types, methods, imports/modules | calls, constructors, macro invocations where supported, type references | C++ templates/macros and Rust macro expansion are not evaluated; Rust macro invocations are still reference edges. |
-| Shell / PowerShell / Batch / Makefile / Gradle | functions, labels, tasks, imports where applicable | command-style calls and control-flow targets | Runtime command construction is not resolved. |
+| Shell / PowerShell / Batch / Makefile / CMake / Justfile / MSBuild / Gradle | functions, labels, targets, recipes, tasks, imports where applicable | command-style calls, target dependencies, and control-flow targets | Runtime command construction is not resolved. |
 | SQL / Terraform / Dockerfile | statements/resources/stages/labels | table/resource/stage references, Dockerfile stage dependencies, Terraform dotted refs | SQL hotspot grouping defaults to statements; Dockerfile `COPY --from=<stage>` follows named stages. |
-| Markdown / HTML / CSS / GraphQL / Protobuf | headings, anchors, selectors, schema types/messages where supported | local anchors, CSS extends/variables, schema references where supported | Use `search` for prose and generated markup. |
+| Markdown / HTML / CSS / GraphQL / Protobuf | headings, anchors, selectors, schema types/messages where supported | links/assets/components, local anchors, CSS extends/variables, schema references where supported | Use `search` for prose and generated markup. |
 | Dependency manifests / lockfiles | none | none | Use `--lang dependency_manifest` or `--lang dependency_lock` for dependency/security audits. |
 | Other indexed text formats | file/chunk search only unless `languages` reports symbols | no graph unless `languages` reports support | `cdidx search "literal" --lang yaml` is the reliable fallback. |
 
@@ -4172,15 +4176,16 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 | Perl test | `.t` | -- |
 | Zig | `.zig` | yes |
 | XAML | `.xaml`, `.axaml` | -- |
-| MSBuild | `.csproj`, `.fsproj`, `.vbproj`, `.props`, `.targets` | -- |
+| MSBuild | `.csproj`, `.fsproj`, `.vbproj`, `.props`, `.targets` | yes |
 | Shell | `.sh`, `.bash`, `.zsh`, `.fish` | partial |
 | PowerShell | `.ps1`, `.psm1`, `.psd1` | yes |
 | Batch | `.bat`, `.cmd` | yes |
-| CMake | `.cmake`, `CMakeLists.txt` | -- |
+| CMake | `.cmake`, `CMakeLists.txt` | yes |
+| Justfile | `Justfile` | yes |
 | SQL | `.sql`, `.pgsql`, `.tsql`, `.plsql`, `.pks`, `.pkb`, `.pls`, `.plb`, `.psql` | yes |
 | Markdown | `.md` | yes |
-| YAML | `.yaml`, `.yml` | -- |
-| JSON | `.json` | -- |
+| YAML | `.yaml`, `.yml` | yes |
+| JSON | `.json` | yes |
 | TOML | `.toml` | -- |
 | HTML | `.html`, `.htm`, `.xhtml`, `.shtml` | yes |
 | CSS | `.css`, `.scss`, `.less`, `.pcss` | yes |
@@ -4195,7 +4200,7 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 - C/C++ ヘッダー: `.h` は既定では C として扱います。`namespace`、`template`、`using`、`class`、`std::` などの明確な C++ マーカーがある場合だけ、index 時に `cpp` へ昇格します。
 - SQL: クエリ時の `--lang tsql` は SQL の別名です。T-SQL の aggregate、assembly、XML schema collection 宣言も検索対象です。
 - R: 関数代入、S4/R6 class 宣言、validity/generic/method 宣言、inherit vector、public/private/active method、`library` / `require` import を索引します。
-- Markdown と CSS: Markdown の heading / local anchor、CSS の variable、placeholder、`@extend` をシンボルとして扱います。
+- Markdown、JSON/YAML、CSS: Markdown の heading / local anchor、JSON/YAML の configuration key path、CSS の variable、placeholder、`@extend` をシンボルとして扱います。
 - Dockerfile、Assembly、Common Lisp、Racket: `ARG` build arg、label、PROC/MACRO、package/module form、definition、class/struct、require/provide を必要に応じて表面化します。
 - Shell、PowerShell、Batch: command-style function call、function/filter、class/enum、import、label、`goto` / `call` target、inline control-flow を言語仕様に合わせて索引します。
 - C# と Java: C# の近年の partial member は `symbols`、`definition`、`outline` から見えます。Java の sealed `permits` list は `type_reference` graph edge として記録します。
@@ -4208,9 +4213,10 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 
 ### 言語別 extraction matrix
 
-現在の capability は `cdidx languages --json` を live probe として確認してください。
-現在の DB に存在する言語だけを見たい場合は `--indexed-only`、特定の構造化 capability を監査する場合は
-`--capability graph|symbols|references` を追加します。この matrix は、構造化 command を信頼できる場面と
+現在の capability は `cdidx languages --json` を live probe として確認してください。JSON 行には
+`symbol_extraction`、`reference_extraction`、`graph_queries`、`capability_gaps` が含まれます。
+現在の DB に存在する言語だけを見たい場合は `--indexed-only`、特定の構造化 capability や capability gap を監査する場合は
+`--capability graph|references|symbols|missing-graph|missing-references|missing-symbols|search-only` を追加します。この matrix は、構造化 command を信頼できる場面と
 `search` に戻るべき場面を判断するための概要です。
 
 | 言語ファミリ | Symbols | References / graph | メモと例 |
@@ -4220,9 +4226,9 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 | JavaScript / TypeScript / Vue / Svelte | function、class、export、import、variable | call、constructor、static/dynamic import、worker、service worker | dynamic property call と computed module specifier は best-effort です。`cdidx references render --lang typescript` |
 | Python / Ruby / PHP / Perl / R | function、class/module、対応言語の import | call、constructor、対応言語の decorator/annotation | dynamic dispatch と metaprogramming は `search` が必要な場合があります。PHPDoc/static import pattern は静的に見える範囲で索引されます。 |
 | C / C++ / Objective-C / Swift / Rust / Go / Zig | function、type、method、import/module | call、constructor、対応言語の macro invocation、type reference | C++ template/macro と Rust macro expansion は評価しません。Rust macro invocation 自体は reference edge です。 |
-| Shell / PowerShell / Batch / Makefile / Gradle | function、label、task、対応言語の import | command-style call と control-flow target | runtime で組み立てられる command は解決しません。 |
+| Shell / PowerShell / Batch / Makefile / CMake / Justfile / MSBuild / Gradle | function、label、target、recipe、task、対応言語の import | command-style call、target dependency、control-flow target | runtime で組み立てられる command は解決しません。 |
 | SQL / Terraform / Dockerfile | statement/resource/stage/label | table/resource/stage reference、Dockerfile stage dependency、Terraform dotted refs | SQL hotspot grouping は既定で statement、Dockerfile `COPY --from=<stage>` は named stage を追跡します。 |
-| Markdown / HTML / CSS / GraphQL / Protobuf | heading、anchor、selector、対応 schema type/message | local anchor、CSS extend/variable、対応 schema reference | prose や generated markup には `search` を使ってください。 |
+| Markdown / HTML / CSS / GraphQL / Protobuf | heading、anchor、selector、対応 schema type/message | link/asset/component、local anchor、CSS extend/variable、対応 schema reference | prose や generated markup には `search` を使ってください。 |
 | Dependency manifest / lockfile | なし | なし | dependency / security audit には `--lang dependency_manifest` または `--lang dependency_lock` を使います。 |
 | その他の indexed text format | `languages` が symbol 対応を示す場合を除き file/chunk search のみ | `languages` が graph 対応を示す場合を除きなし | `cdidx search "literal" --lang yaml` が信頼できる fallback です。 |
 
@@ -4624,7 +4630,7 @@ OpenAI Codex CLI (`codex.json` または `~/.codex/config.json`):
 | `symbol_hotspots` | 影響の大きい hotspot を検索。`groupBy` は `symbol` / `file` / `statement` を指定でき、SQL scope は statement grouping、非 SQL scope は symbol grouping が既定。 |
 | `batch_query` | 複数クエリを1回で実行（MCP専用、最大10件）。レスポンスにはトップレベル `metadata`（`submitted` / `executed` / `errors` / `total_elapsed_ms` / `success_count` / `failure_count`）と各 `results` エントリの `request_index`、任意の client `slot_id`、`ok`、`elapsed_ms`、`summary`、`args_summary` が含まれ、位置だけに依存せず部分失敗や遅い内部クエリを把握できます。 |
 | `validate` | エンコーディングと file-content の問題（origin/severity 付き U+FFFD、BOM、null バイト、改行混在 / CR-only 行末、UTF-16 BOM 検出、UTF-8 以外と推定されるエンコーディング、Dockerfile JSON-form 診断）を報告 |
-| `languages` | 対応言語一覧を拡張子・機能付きで表示。`--indexed-only` と `--capability graph|symbols|references` で現在の DB や機能別に絞り込み可能 |
+| `languages` | 対応言語一覧を拡張子・機能付きで表示。`--indexed-only` と `--capability graph|references|symbols|missing-graph|missing-references|missing-symbols|search-only` で現在の DB、機能別、または capability gap 別に絞り込み可能 |
 | `ping` | 軽量な接続確認 |
 | `index` | プロジェクトのインデックス作成・更新 |
 | `backfill_fold` | 既存 DB の folded-name key をソース再解析なしで更新 |

@@ -147,6 +147,60 @@ public partial class SymbolExtractorTests
         }
     }
 
+    [Fact]
+    public void Extract_Json_IndexesConfigurationKeyPaths()
+    {
+        const string content = """
+            {
+              "scripts": {
+                "build": "dotnet build",
+                "test": "dotnet test"
+              },
+              "dependencies": {
+                "xunit": "2.9.3"
+              }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "json", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "namespace" && symbol.Name == "scripts" && symbol.Line == 2);
+        Assert.Contains(symbols, symbol => symbol.Kind == "property" && symbol.Name == "scripts.build" && symbol.ContainerName == "scripts");
+        Assert.Contains(symbols, symbol => symbol.Kind == "property" && symbol.Name == "scripts.test" && symbol.ContainerName == "scripts");
+        Assert.Contains(symbols, symbol => symbol.Kind == "property" && symbol.Name == "dependencies.xunit" && symbol.ContainerName == "dependencies");
+    }
+
+    [Fact]
+    public void Extract_Yaml_IndexesIndentedConfigurationKeyPaths()
+    {
+        const string content = """
+            name: ci
+            on:
+              push:
+                branches:
+                  - main
+            jobs:
+              build:
+                runs-on: ubuntu-latest
+                steps:
+                  - name: Restore
+                    uses: actions/setup-dotnet@v4
+                  - name: Test
+                    run: dotnet test
+            notes: |
+              jobs.fake:
+                run: ignored
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "yaml", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "property" && symbol.Name == "name" && symbol.Line == 1);
+        Assert.Contains(symbols, symbol => symbol.Kind == "namespace" && symbol.Name == "jobs.build" && symbol.ContainerName == "jobs");
+        Assert.Contains(symbols, symbol => symbol.Kind == "property" && symbol.Name == "jobs.build.runs-on");
+        Assert.Contains(symbols, symbol => symbol.Kind == "property" && symbol.Name == "jobs.build.steps.uses");
+        Assert.DoesNotContain(symbols, symbol => symbol.Name.Contains("jobs.fake", StringComparison.Ordinal));
+    }
+
 
 
 
@@ -242,6 +296,7 @@ public partial class SymbolExtractorTests
             ["assembly"] = "Start:\n    call Target\nTarget:\n    ret\n",
             ["batch"] = ":run\necho ok\n",
             ["c"] = "int answer(void) { return 42; }\n",
+            ["cmake"] = "add_library(core core.cpp)\noption(ENABLE_TESTS \"tests\" ON)\n",
             ["cobol"] = "       IDENTIFICATION DIVISION.\n       PROGRAM-ID. HELLO.\n",
             ["cpp"] = "namespace demo { int answer() { return 42; } }\n",
             ["csharp"] = "namespace Demo; public class Service { public int Run() => 1; }\n",
@@ -258,9 +313,11 @@ public partial class SymbolExtractorTests
             ["html"] = "<div id=\"app\"></div>\n<script>function run() { return 1; }</script>\n",
             ["java"] = "package demo; public class Service { int run() { return 1; } }\n",
             ["javascript"] = "export function run() { return 1; }\n",
+            ["justfile"] = "build:\n    echo build\n",
             ["kotlin"] = "package demo\nclass Service { fun run(): Int = 1 }\n",
             ["lua"] = "local function run()\n  return 1\nend\n",
             ["makefile"] = "build:\n\t@echo build\n",
+            ["msbuild"] = "<Project><Target Name=\"Build\" /></Project>\n",
             ["objc"] = "@interface Service\n- (void)run;\n@end\n",
             ["pascal"] = "unit Demo;\ninterface\nprocedure Run;\nimplementation\nprocedure Run; begin end;\nend.\n",
             ["perl"] = "package Demo;\nsub run { return 1; }\n",
@@ -15026,6 +15083,89 @@ public partial class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "OBJ");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "DEBUG");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "EXTRA");
+    }
+
+    [Fact]
+    public void Extract_CMake_DetectsTargetsOptionsAndPackages()
+    {
+        const string content = """
+            cmake_minimum_required(VERSION 3.25)
+            project(Demo)
+            option(ENABLE_TESTS "Enable tests" ON)
+            set(GENERATED_DIR ${CMAKE_BINARY_DIR}/generated)
+            find_package(fmt REQUIRED)
+            include(GNUInstallDirs)
+            add_library(core src/core.cpp)
+            add_executable(app src/main.cpp)
+            function(copy_assets target)
+            endfunction()
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cmake", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "ENABLE_TESTS");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "GENERATED_DIR");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "fmt");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "GNUInstallDirs");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "core");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "app");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "copy_assets");
+    }
+
+    [Fact]
+    public void Extract_Justfile_DetectsRecipesAssignmentsAndImports()
+    {
+        const string content = """
+            import "common.just"
+            mod "tools.just"
+            image := "demo"
+            flags += "--release"
+
+            build target="app":
+                cargo build
+
+            deploy: build test
+                ./deploy
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "justfile", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "common.just");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "tools.just");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "image");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "flags");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "build");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "deploy");
+    }
+
+    [Fact]
+    public void Extract_MsBuild_DetectsTargetsPropertiesAndItems()
+    {
+        const string content = """
+            <Project>
+              <Import Project="build/common.props" />
+              <PropertyGroup>
+                <TargetFramework>net8.0</TargetFramework>
+                <Nullable>enable</Nullable>
+              </PropertyGroup>
+              <ItemGroup>
+                <ProjectReference Include="src/App/App.csproj" />
+                <PackageReference Include="xunit" Version="2.9.3" />
+              </ItemGroup>
+              <Target Name="Generate" DependsOnTargets="Restore">
+                <Message Text="Generating" />
+              </Target>
+            </Project>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "msbuild", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "build/common.props");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "TargetFramework");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Nullable");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "src/App/App.csproj");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "xunit");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Generate" && s.StartLine == 11 && s.EndLine == 13);
     }
 
     [Fact]

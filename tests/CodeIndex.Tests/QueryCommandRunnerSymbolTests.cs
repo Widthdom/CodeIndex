@@ -768,6 +768,36 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSymbols_UnsupportedExtractorLanguageExplainsSearchOnlyFallback()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_unsupported_extractor");
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "settings.toml"), "enabled = true\n");
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json", "--quiet"],
+                _jsonOptions));
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["enabled", "--db", dbPath, "--lang", "toml"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains("symbol extraction is not available", stderr);
+            Assert.Contains("cdidx search <query> --lang toml", stderr);
+            Assert.Contains("missing-symbols", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunUnused_WithJsonIncludesConfidenceBuckets()
     {
         var (projectRoot, dbPath) = CreateUnusedFixtureDb();
@@ -1231,7 +1261,7 @@ public partial class QueryCommandRunnerTests
         try
         {
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
-                ["--db", dbPath, "--json", "--lang", "markdown"],
+                ["--db", dbPath, "--json", "--lang", "toml"],
                 _jsonOptions));
 
             using var document = ParseJsonOutput(stdout);

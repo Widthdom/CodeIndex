@@ -4123,14 +4123,14 @@ public partial class McpServer : IDisposable
             "excerpt" or "status" or "validate"
                 => $"Language support: Language-agnostic over indexed files and diagnostics for every detected language listed by `languages`: {DetectedLanguageList()}. This tool does not interpret a `lang` filter.",
             "languages"
-                => "Language support: This is the authoritative language catalog for MCP tools; it lists every detected language plus symbol_extraction and graph_queries capability flags.",
+                => "Language support: This is the authoritative language catalog for MCP tools; it lists every detected language plus symbol_extraction, reference_extraction, graph_queries, and capability_gaps fields.",
             "index"
                 => $"Language support: Indexes every detected language listed by `languages`: {DetectedLanguageList()}, then extracts symbols and graph references only where the catalog advertises those capabilities.",
             "batch_query"
                 => "Language support: Language behavior is inherited from each nested read-only tool; consult each returned payload and the `languages` tool for capabilities.",
             "backfill_fold" or "ping" or "suggest_improvement"
                 => "Language support: Language-independent tool; it does not interpret `lang` filters.",
-            _ => "Language support: See the `languages` tool for detected languages and per-language symbol_extraction / graph_queries capabilities.",
+            _ => "Language support: See the `languages` tool for detected languages and per-language symbol_extraction / reference_extraction / graph_queries capabilities.",
         };
 
         return $"{description} {clause}";

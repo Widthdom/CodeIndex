@@ -2050,7 +2050,7 @@ public partial class QueryCommandRunnerTests
                 .Select(lang => lang.GetProperty("lang").GetString())
                 .ToList();
 
-            Assert.Equal(["csharp"], names);
+            Assert.Equal(["csharp", "markdown"], names);
         }
         finally
         {
@@ -2059,9 +2059,9 @@ public partial class QueryCommandRunnerTests
     }
 
     [Theory]
-    [InlineData("graph")]
-    [InlineData("references")]
-    public void RunLanguages_JsonCapabilityGraphFiltersGraphSupport(string capability)
+    [InlineData("graph", "graph_queries")]
+    [InlineData("references", "reference_extraction")]
+    public void RunLanguages_JsonCapabilityFiltersPositiveSupport(string capability, string propertyName)
     {
         var (exitCode, stdout, stderr) = CaptureConsole(() =>
             QueryCommandRunner.RunLanguages(["--json", "--capability", capability], _jsonOptions));
@@ -2074,7 +2074,7 @@ public partial class QueryCommandRunnerTests
 
         Assert.NotEmpty(languages);
         Assert.Contains(languages, lang => lang.GetProperty("lang").GetString() == "csharp");
-        Assert.All(languages, lang => Assert.True(lang.GetProperty("graph_queries").GetBoolean()));
+        Assert.All(languages, lang => Assert.True(lang.GetProperty(propertyName).GetBoolean()));
     }
 
     [Fact]
@@ -2091,8 +2091,53 @@ public partial class QueryCommandRunnerTests
 
         Assert.NotEmpty(languages);
         Assert.Contains(languages, lang => lang.GetProperty("lang").GetString() == "html");
-        Assert.DoesNotContain(languages, lang => lang.GetProperty("lang").GetString() == "msbuild");
+        Assert.Contains(languages, lang => lang.GetProperty("lang").GetString() == "msbuild");
         Assert.All(languages, lang => Assert.True(lang.GetProperty("symbol_extraction").GetBoolean()));
+    }
+
+    [Theory]
+    [InlineData("missing-symbols", "symbol_extraction")]
+    [InlineData("missing-references", "reference_extraction")]
+    [InlineData("missing-graph", "graph_queries")]
+    public void RunLanguages_JsonCapabilityMissingFiltersCapabilityGaps(string capability, string propertyName)
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() =>
+            QueryCommandRunner.RunLanguages(["--json", "--capability", capability], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+
+        using var document = ParseJsonOutput(stdout);
+        var languages = document.RootElement.GetProperty("languages").EnumerateArray().ToList();
+
+        Assert.NotEmpty(languages);
+        Assert.All(languages, lang =>
+        {
+            Assert.False(lang.GetProperty(propertyName).GetBoolean());
+            Assert.Contains(capability, lang.GetProperty("capability_gaps").EnumerateArray().Select(gap => gap.GetString()));
+        });
+    }
+
+    [Fact]
+    public void RunLanguages_JsonCapabilitySearchOnlyFiltersAllExtractionGaps()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() =>
+            QueryCommandRunner.RunLanguages(["--json", "--capability", "search-only"], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+
+        using var document = ParseJsonOutput(stdout);
+        var languages = document.RootElement.GetProperty("languages").EnumerateArray().ToList();
+
+        Assert.NotEmpty(languages);
+        Assert.Contains(languages, lang => lang.GetProperty("lang").GetString() == "cython");
+        Assert.All(languages, lang =>
+        {
+            Assert.False(lang.GetProperty("symbol_extraction").GetBoolean());
+            Assert.False(lang.GetProperty("reference_extraction").GetBoolean());
+            Assert.False(lang.GetProperty("graph_queries").GetBoolean());
+        });
     }
 
     [Fact]
@@ -2103,7 +2148,8 @@ public partial class QueryCommandRunnerTests
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
         Assert.Contains("unsupported --capability value 'lint'", stderr);
-        Assert.Contains("graph, symbols, or references", stderr);
+        Assert.Contains("missing-references", stderr);
+        Assert.Contains("search-only", stderr);
     }
 
     [Fact]
@@ -2145,11 +2191,11 @@ public partial class QueryCommandRunnerTests
     public void RunLanguages_JsonListsHtmlWithSymbolExtractionAndAllExtensions()
     {
         // Pin the #215 surface: `cdidx languages --json` must report html with
-        // symbol_extraction=true and list all four extensions (.html, .htm, .xhtml, .shtml)
-        // so AI tools can discover HTML symbol support without indexing first.
-        // #215 の表面契約を pin: `cdidx languages --json` は html を symbol_extraction=true で
-        // 返し、`.html` / `.htm` / `.xhtml` / `.shtml` の 4 拡張子を列挙する必要がある。
-        // AI ツールがインデックス前でも HTML のシンボル対応を検出できるようにするため。
+        // symbol_extraction/reference_extraction=true and list all four extensions
+        // (.html, .htm, .xhtml, .shtml) so AI tools can discover HTML support without indexing first.
+        // #215 の表面契約を pin: `cdidx languages --json` は html を symbol_extraction /
+        // reference_extraction=true で返し、`.html` / `.htm` / `.xhtml` / `.shtml` の 4 拡張子を
+        // 列挙する必要がある。AI ツールがインデックス前でも HTML 対応を検出できるようにするため。
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages(["--json"], _jsonOptions));
 
         Assert.Equal(CommandExitCodes.Success, exitCode);
@@ -2160,6 +2206,7 @@ public partial class QueryCommandRunnerTests
         var html = languages.EnumerateArray().First(lang => lang.GetProperty("lang").GetString() == "html");
 
         Assert.True(html.GetProperty("symbol_extraction").GetBoolean());
+        Assert.True(html.GetProperty("reference_extraction").GetBoolean());
         var extensions = html.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()).ToList();
         Assert.Contains(".html", extensions);
         Assert.Contains(".htm", extensions);
@@ -2180,6 +2227,7 @@ public partial class QueryCommandRunnerTests
         var assembly = languages.EnumerateArray().First(lang => lang.GetProperty("lang").GetString() == "assembly");
 
         Assert.True(assembly.GetProperty("symbol_extraction").GetBoolean());
+        Assert.True(assembly.GetProperty("reference_extraction").GetBoolean());
         Assert.True(assembly.GetProperty("graph_queries").GetBoolean());
 
         var extensions = assembly.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()).ToList();
@@ -2234,14 +2282,18 @@ public partial class QueryCommandRunnerTests
         var languages = document.RootElement.GetProperty("languages").EnumerateArray()
             .ToDictionary(entry => entry.GetProperty("lang").GetString()!, entry => entry);
 
-        foreach (var searchOnly in new[] { "cython", "sass", "stylus", "msbuild" })
+        foreach (var searchOnly in new[] { "cython", "sass", "stylus" })
         {
             Assert.True(languages.ContainsKey(searchOnly), $"expected '{searchOnly}' to be listed");
             var entry = languages[searchOnly];
             Assert.False(entry.GetProperty("symbol_extraction").GetBoolean(),
                 $"{searchOnly} must advertise symbol_extraction=false");
+            Assert.False(entry.GetProperty("reference_extraction").GetBoolean(),
+                $"{searchOnly} must advertise reference_extraction=false");
             Assert.False(entry.GetProperty("graph_queries").GetBoolean(),
                 $"{searchOnly} must advertise graph_queries=false");
+            Assert.Contains("missing-symbols", entry.GetProperty("capability_gaps").EnumerateArray().Select(gap => gap.GetString()));
+            Assert.Contains("missing-references", entry.GetProperty("capability_gaps").EnumerateArray().Select(gap => gap.GetString()));
         }
 
         foreach (var searchOnly in new[] { "crystal", "clojure", "d", "erlang", "julia", "nim", "ocaml", "solidity", "tcl" })
@@ -2250,6 +2302,8 @@ public partial class QueryCommandRunnerTests
             var entry = languages[searchOnly];
             Assert.False(entry.GetProperty("symbol_extraction").GetBoolean(),
                 $"{searchOnly} must advertise symbol_extraction=false");
+            Assert.False(entry.GetProperty("reference_extraction").GetBoolean(),
+                $"{searchOnly} must advertise reference_extraction=false");
             Assert.False(entry.GetProperty("graph_queries").GetBoolean(),
                 $"{searchOnly} must advertise graph_queries=false");
         }
@@ -2257,12 +2311,42 @@ public partial class QueryCommandRunnerTests
         var yamlAliases = languages["yaml"].GetProperty("aliases").EnumerateArray()
             .Select(alias => alias.GetString()).ToList();
         Assert.Contains("yml", yamlAliases);
+        Assert.True(languages["yaml"].GetProperty("symbol_extraction").GetBoolean(),
+            "yaml must advertise symbol_extraction=true");
+        Assert.True(languages["json"].GetProperty("symbol_extraction").GetBoolean(),
+            "json must advertise symbol_extraction=true");
 
         Assert.True(languages.ContainsKey("perl"), "expected 'perl' to be listed");
         Assert.True(languages["perl"].GetProperty("symbol_extraction").GetBoolean(),
             "perl must advertise symbol_extraction=true");
+        Assert.True(languages["perl"].GetProperty("reference_extraction").GetBoolean(),
+            "perl must advertise reference_extraction=true");
         Assert.True(languages["perl"].GetProperty("graph_queries").GetBoolean(),
             "perl must advertise graph_queries=true");
+
+        foreach (var buildAutomation in new[] { "cmake", "justfile", "msbuild" })
+        {
+            Assert.True(languages.ContainsKey(buildAutomation), $"expected '{buildAutomation}' to be listed");
+            Assert.True(languages[buildAutomation].GetProperty("symbol_extraction").GetBoolean(),
+                $"{buildAutomation} must advertise symbol_extraction=true");
+            Assert.True(languages[buildAutomation].GetProperty("reference_extraction").GetBoolean(),
+                $"{buildAutomation} must advertise reference_extraction=true");
+            Assert.True(languages[buildAutomation].GetProperty("graph_queries").GetBoolean(),
+                $"{buildAutomation} must advertise graph_queries=true");
+            Assert.Empty(languages[buildAutomation].GetProperty("capability_gaps").EnumerateArray());
+        }
+
+        foreach (var markupSchema in new[] { "graphql", "html", "markdown" })
+        {
+            Assert.True(languages.ContainsKey(markupSchema), $"expected '{markupSchema}' to be listed");
+            Assert.True(languages[markupSchema].GetProperty("symbol_extraction").GetBoolean(),
+                $"{markupSchema} must advertise symbol_extraction=true");
+            Assert.True(languages[markupSchema].GetProperty("reference_extraction").GetBoolean(),
+                $"{markupSchema} must advertise reference_extraction=true");
+            Assert.True(languages[markupSchema].GetProperty("graph_queries").GetBoolean(),
+                $"{markupSchema} must advertise graph_queries=true");
+            Assert.Empty(languages[markupSchema].GetProperty("capability_gaps").EnumerateArray());
+        }
 
         // Cython owns .pyx / .pxd exclusively; python keeps .py / .pyi / .pyw and Bazel filenames.
         // Cython は .pyx / .pxd を専有し、python は .py / .pyi / .pyw と Bazel ファイル名を維持。
