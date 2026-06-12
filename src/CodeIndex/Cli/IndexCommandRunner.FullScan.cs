@@ -733,7 +733,7 @@ public static partial class IndexCommandRunner
         var activeJsonExtractionPhases = new ConcurrentDictionary<int, string>();
         CancellationTokenSource? jsonHeartbeatCts = null;
         Task? jsonHeartbeatTask = null;
-        using var postExtractionHooks = PostExtractionHookRunner.DiscoverDefault();
+        using var postExtractionHooks = PostExtractionHookRunner.DiscoverDefault(options.MaxFileSizeBytes);
         var extractionParallelism = Math.Max(1, options.Parallelism);
         var hasPostExtractionHooks = postExtractionHooks.Hooks.Count > 0;
         var parallelizeExtraction = (options.Rebuild || writer.GetCounts().files == 0 || headChangeDetected)
@@ -914,13 +914,13 @@ public static partial class IndexCommandRunner
 
             using var extractionResults = new BlockingCollection<FullScanFileWorkItem>(Math.Max(1, extractionParallelism * 4));
             using var extractionStallCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            using var mainSymbolExtractionWorker = new SymbolExtractionWorkerClient();
+            using var mainSymbolExtractionWorker = new SymbolExtractionWorkerClient(options.MaxFileSizeBytes);
             var extractionCancellationToken = extractionStallCts.Token;
             var nextFileIndex = -1;
             var workers = Enumerable.Range(0, extractionParallelism)
                 .Select(workerIndex => Task.Factory.StartNew(() =>
                 {
-                    using var workerSymbolExtractionWorker = new SymbolExtractionWorkerClient();
+                    using var workerSymbolExtractionWorker = new SymbolExtractionWorkerClient(options.MaxFileSizeBytes);
                     while (true)
                     {
                         extractionCancellationToken.ThrowIfCancellationRequested();

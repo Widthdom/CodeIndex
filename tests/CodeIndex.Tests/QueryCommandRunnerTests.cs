@@ -838,6 +838,32 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunBatch_InvalidJsonDoesNotEchoParserMessage_Issue3425()
+    {
+        const string secret = "SECRET_BATCH_JSON_3425";
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_batch_invalid_json");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var input = "[\"status\", " + secret + "\n";
+
+            var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
+                input,
+                () => QueryCommandRunner.RunBatch(["--db", dbPath], _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains("invalid_batch_json: JsonException", stderr, StringComparison.Ordinal);
+            Assert.DoesNotContain(secret, stderr, StringComparison.Ordinal);
+            Assert.DoesNotContain("not valid JSON", stderr, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunBatch_ArgumentCountExceedsLimit_ReturnsUsageError_Issue2891()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_batch_too_many_args");
@@ -931,7 +957,7 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
             Assert.Equal(string.Empty, stdout);
-            Assert.Contains("is not valid JSON", stderr);
+            Assert.Contains("invalid_batch_json: JsonException", stderr);
         }
         finally
         {

@@ -1374,6 +1374,12 @@ public partial class McpServer
         return false;
     }
 
+    private static string FormatLiteralSearchQueryLimitError()
+        => $"literal search query is too long; maximum is {DbReader.MaxLiteralSearchQueryLength} characters. Split generated input into smaller queries.";
+
+    private static string FormatSearchGuardCandidateLimitError(SearchGuardCandidateLimitException ex)
+        => $"guarded search is too broad: inspected the maximum {ex.CandidateLimit} candidate chunks before satisfying the requested page (limit {ex.RequestedLimit}, offset {ex.RequestedOffset}). Narrow the search with more specific query text, lang/path filters, or a smaller cursor offset.";
+
     private JsonNode ExecuteSearch(JsonNode? id, JsonNode? args)
     {
         var listRecipes = args?["listRecipes"]?.GetValue<bool>() ?? false;
@@ -1440,13 +1446,13 @@ public partial class McpServer
                 {
                     countResults = reader.Search(query, MaxLimit, lang, rawQuery, pathPatterns, excludePaths, excludeTests, deduplicate, since, exact, prefix, guardFilters: guardFilters, guardWindow: guardWindow);
                 }
-                catch (SearchQueryLimitException ex)
+                catch (SearchQueryLimitException)
                 {
-                    return CreateToolErrorResponse(id, ex.Message);
+                    return CreateToolErrorResponse(id, FormatLiteralSearchQueryLimitError());
                 }
                 catch (SearchGuardCandidateLimitException ex)
                 {
-                    return CreateToolErrorResponse(id, $"guarded search is too broad: {ex.Message} Narrow the search with more specific query text, lang/path filters, or a smaller cursor offset.");
+                    return CreateToolErrorResponse(id, FormatSearchGuardCandidateLimitError(ex));
                 }
                 var truncatedCount = countResults.Count >= MaxLimit;
                 var payload = BuildCountOnlyPayload(countResults.Count, truncatedCount ? null : countResults.Count, truncatedCount, countResults, result => result.Path);
@@ -1468,13 +1474,13 @@ public partial class McpServer
             {
                 results = reader.Search(query, FetchLimitForEnvelope(limit), lang, rawQuery, pathPatterns, excludePaths, excludeTests, deduplicate, since, exact, prefix, cursor: cursor, guardFilters: guardFilters, guardWindow: guardWindow);
             }
-            catch (SearchQueryLimitException ex)
+            catch (SearchQueryLimitException)
             {
-                return CreateToolErrorResponse(id, ex.Message);
+                return CreateToolErrorResponse(id, FormatLiteralSearchQueryLimitError());
             }
             catch (SearchGuardCandidateLimitException ex)
             {
-                return CreateToolErrorResponse(id, $"guarded search is too broad: {ex.Message} Narrow the search with more specific query text, lang/path filters, or a smaller cursor offset.");
+                return CreateToolErrorResponse(id, FormatSearchGuardCandidateLimitError(ex));
             }
             var ftsDiagnostics = DbReader.AnalyzeFtsQuery(query, rawQuery, prefix, lang);
             var truncated = TrimToRequestedLimit(results, limit);
@@ -2993,7 +2999,7 @@ public partial class McpServer
             }
             catch (Exception ex) when (regex && (ex is ArgumentException || ex is RegexMatchTimeoutException))
             {
-                return CreateToolErrorResponse(id, $"invalid regular expression: {ex.Message}");
+                return CreateToolErrorResponse(id, "invalid regular expression. Check regex syntax and retry.");
             }
             var structured = new JsonObject
             {
@@ -3410,7 +3416,7 @@ public partial class McpServer
                 // in stderr instead of the batch_query response.
                 DeferFrameLog(() =>
                 {
-                    WriteMcpLogLine(BuildToolErrorLog(toolName, ex.Message));
+                    WriteMcpLogLine(BuildToolErrorLog(toolName, ex));
                     Database.DbDebug.DumpToStderr(ex);
                 });
                 var classification = McpErrorEnvelope.ClassifyException(ex);
@@ -4410,7 +4416,7 @@ public partial class McpServer
             GitHelper.ResolveIgnoreCase(projectPath, requestToken),
             GitHelper.TryGetRepositoryRoot(projectPath, requestToken) ?? Path.GetFullPath(projectPath),
             maxFileBytes);
-        using var postExtractionHooks = PostExtractionHookRunner.DiscoverDefault();
+        using var postExtractionHooks = PostExtractionHookRunner.DiscoverDefault(maxFileBytes);
         var currentHotspotFamilyMarkerFingerprints = GetHotspotFamilyMarkerFingerprints(indexer, requestToken);
         var currentCSharpSymbolNameContractVersion = DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var csharpSymbolNameContractMatchesCurrent = priorCSharpSymbolNameContractVersion == currentCSharpSymbolNameContractVersion;
@@ -5022,7 +5028,7 @@ public partial class McpServer
         {
             DeferFrameLog(() =>
             {
-                WriteMcpLogLine(BuildToolErrorLog("backfill_fold", ex.Message));
+                WriteMcpLogLine(BuildToolErrorLog("backfill_fold", ex));
                 Database.DbDebug.DumpToStderr(ex);
             });
             var classification = McpErrorEnvelope.ClassifyException(ex);
@@ -5664,7 +5670,7 @@ public partial class McpServer
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            error = $"Cannot write to .cdidx directory {cdidxDir}; check directory ownership, permissions, and read-only mounts. {ex.Message}";
+            error = $"Cannot write to .cdidx directory {cdidxDir}; check directory ownership, permissions, and read-only mounts.";
             return false;
         }
         finally

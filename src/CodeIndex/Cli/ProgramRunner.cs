@@ -2415,7 +2415,18 @@ internal static class ProgramRunner
             // リクエストに header token と body token の両方を要求しない。ツール有効化ゲート
             // (#1561) は McpServer のコンストラクタ内部で `McpToolFilter.FromEnvironment()`
             // から自動取得される。
-            var authenticator = CreateMcpAuthenticatorForTransport(runOptions.Transport);
+            IMcpAuthenticator authenticator;
+            try
+            {
+                authenticator = CreateMcpAuthenticatorForTransport(runOptions.Transport);
+            }
+            catch (FormatException ex)
+            {
+                Console.Error.WriteLine($"Error: {ex.Message}");
+                PrintMcpUsage();
+                return CommandExitCodes.UsageError;
+            }
+
             using var server = new McpServer(runOptions.QueryOptions.DbPath, appVersion, runOptions.QueryOptions.DbPathExplicit, authenticator, auditLog);
             return RunMcpServer(server, runOptions.Transport, runOptions.ListenSpec);
         }
@@ -2588,15 +2599,23 @@ internal static class ProgramRunner
 
     internal static string? ResolveMcpHttpBearerTokenFromEnvironment()
     {
-        var httpToken = NormalizeMcpToken(Environment.GetEnvironmentVariable(McpHttpTokenEnvVar));
+        var httpToken = NormalizeMcpToken(Environment.GetEnvironmentVariable(McpHttpTokenEnvVar), McpHttpTokenEnvVar);
         if (httpToken is not null)
             return httpToken;
 
-        return NormalizeMcpToken(Environment.GetEnvironmentVariable(McpAuthenticatorFactory.AuthTokenEnvVar));
+        return NormalizeMcpToken(Environment.GetEnvironmentVariable(McpAuthenticatorFactory.AuthTokenEnvVar), McpAuthenticatorFactory.AuthTokenEnvVar);
     }
 
-    private static string? NormalizeMcpToken(string? token)
-        => string.IsNullOrWhiteSpace(token) ? null : token;
+    private static string? NormalizeMcpToken(string? token, string source)
+    {
+        if (string.IsNullOrEmpty(token))
+            return null;
+
+        if (!McpAuthenticationLimits.IsTokenShapeValid(token))
+            throw new FormatException(McpAuthenticationLimits.FormatTokenShapeError(source));
+
+        return token;
+    }
 
     private static int RunMcpHttp(McpServer server, string listenSpec)
     {
@@ -2625,7 +2644,17 @@ internal static class ProgramRunner
         // HTTP は保護され、クライアントに `Authorization` と `params.auth.token` の両方を
         // 要求しない (#3156)。どちらの token も未設定なら、loopback bind は stdio と同等の脅威
         // モデルとみなしてトークン要件を緩める。
-        var bearerToken = ResolveMcpHttpBearerTokenFromEnvironment();
+        string? bearerToken;
+        try
+        {
+            bearerToken = ResolveMcpHttpBearerTokenFromEnvironment();
+        }
+        catch (FormatException ex)
+        {
+            Console.Error.WriteLine($"Error: {ex.Message}");
+            PrintMcpUsage();
+            return CommandExitCodes.UsageError;
+        }
 
         if (!resolved.IsLoopback && bearerToken is null)
         {

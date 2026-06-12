@@ -128,8 +128,8 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             FullMode = BoundedChannelFullMode.Wait,
             AllowSynchronousContinuations = false,
         });
-        if (McpAuthenticationLimits.IsTokenOversized(bearerToken))
-            throw new ArgumentException($"Token must not exceed {McpAuthenticationLimits.MaxTokenCharacters.ToString(CultureInfo.InvariantCulture)} characters.", nameof(bearerToken));
+        if (bearerToken is { Length: > 0 } && !McpAuthenticationLimits.IsTokenShapeValid(bearerToken))
+            throw new ArgumentException(McpAuthenticationLimits.FormatTokenShapeError("Token"), nameof(bearerToken));
         _handlerSemaphore = new SemaphoreSlim(_maxConcurrentHandlers, _maxConcurrentHandlers);
         _listener = new HttpListener();
         _listener.Prefixes.Add(prefix);
@@ -618,7 +618,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         var header = context.Request.Headers["Authorization"];
         if (string.IsNullOrEmpty(header))
         {
-            request.AuthOutcome = "missing";
+            request.AuthOutcome = FormatAuthFailureOutcome("missing");
         }
         else if (TryExtractBearerToken(header, out var provided))
         {
@@ -628,11 +628,11 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
                 return true;
             }
 
-            request.AuthOutcome = "wrong-token";
+            request.AuthOutcome = FormatAuthFailureOutcome("wrong-token");
         }
         else
         {
-            request.AuthOutcome = "wrong-scheme";
+            request.AuthOutcome = FormatAuthFailureOutcome("wrong-scheme");
         }
 
         // RFC 7235 §4.1: 401 responses SHOULD carry a WWW-Authenticate challenge so
@@ -646,14 +646,17 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         return false;
     }
 
+    private static string FormatAuthFailureOutcome(string detailedOutcome)
+        => McpServer.IsUnsafeDebugEnabled() ? detailedOutcome : "unauthorized";
+
     private static bool TryExtractBearerToken(string header, out string? token)
     {
         token = null;
         if (header.Length < BearerPrefix.Length || !header.StartsWith(BearerPrefix, StringComparison.OrdinalIgnoreCase))
             return false;
 
-        var candidate = header.AsSpan(BearerPrefix.Length).Trim();
-        if (candidate.Length > McpAuthenticationLimits.MaxTokenCharacters)
+        var candidate = header.AsSpan(BearerPrefix.Length);
+        if (!McpAuthenticationLimits.IsTokenShapeValid(candidate))
             return true;
 
         token = candidate.ToString();

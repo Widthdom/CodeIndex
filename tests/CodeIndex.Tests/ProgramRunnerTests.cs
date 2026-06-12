@@ -58,11 +58,34 @@ public class ProgramRunnerTests
         env.Set(McpAuthenticatorFactory.AuthTokenEnvVar, "generic-secret");
         Assert.Equal("http-secret", ProgramRunner.ResolveMcpHttpBearerTokenFromEnvironment());
 
-        env.Set(ProgramRunner.McpHttpTokenEnvVar, "   ");
+        env.Set(ProgramRunner.McpHttpTokenEnvVar, string.Empty);
         Assert.Equal("generic-secret", ProgramRunner.ResolveMcpHttpBearerTokenFromEnvironment());
 
-        env.Set(McpAuthenticatorFactory.AuthTokenEnvVar, "\t");
+        env.Set(McpAuthenticatorFactory.AuthTokenEnvVar, string.Empty);
         Assert.Null(ProgramRunner.ResolveMcpHttpBearerTokenFromEnvironment());
+    }
+
+    [Theory]
+    [InlineData(" http-secret")]
+    [InlineData("http-secret ")]
+    [InlineData("http secret")]
+    [InlineData("http-secret\n")]
+    public void ResolveMcpHttpBearerTokenFromEnvironment_RejectsWhitespaceOrControlToken_Issue3505(string token)
+    {
+        using var env = EnvironmentVariableScope.Capture(
+            ProgramRunner.McpHttpTokenEnvVar,
+            McpAuthenticatorFactory.AuthTokenEnvVar);
+        env.Set(ProgramRunner.McpHttpTokenEnvVar, token);
+        env.Set(McpAuthenticatorFactory.AuthTokenEnvVar, "generic-secret");
+
+        var ex = Assert.Throws<FormatException>(ProgramRunner.ResolveMcpHttpBearerTokenFromEnvironment);
+        Assert.Contains(ProgramRunner.McpHttpTokenEnvVar, ex.Message, StringComparison.Ordinal);
+
+        env.Set(ProgramRunner.McpHttpTokenEnvVar, null);
+        env.Set(McpAuthenticatorFactory.AuthTokenEnvVar, token);
+
+        ex = Assert.Throws<FormatException>(ProgramRunner.ResolveMcpHttpBearerTokenFromEnvironment);
+        Assert.Contains(McpAuthenticatorFactory.AuthTokenEnvVar, ex.Message, StringComparison.Ordinal);
     }
 
     [Fact]

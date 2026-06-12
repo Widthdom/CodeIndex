@@ -554,6 +554,13 @@ public partial class McpServer : IDisposable
                     FlushDeferredFrameLogs();
                     break;
                 }
+                catch (BoundedLineLengthException ex)
+                {
+                    BeginDeferredFrameLogs();
+                    await WriteFrameSafelyAsync(transport, BuildOversizedLineErrorResponse(ex), loopToken).ConfigureAwait(false);
+                    FlushDeferredFrameLogs();
+                    break;
+                }
             }
         }
         finally
@@ -595,6 +602,22 @@ public partial class McpServer : IDisposable
                 {
                     BeginDeferredFrameLogs();
                     await WriteFrameSafelyAsync(transport, BuildInvalidUtf8ParseErrorResponse(ex), loopToken).ConfigureAwait(false);
+                    FlushDeferredFrameLogs();
+                }
+                finally
+                {
+                    writeGate.Release();
+                }
+                break;
+            }
+            catch (BoundedLineLengthException ex)
+            {
+                await Task.WhenAll(tasks).ConfigureAwait(false);
+                await writeGate.WaitAsync(loopToken).ConfigureAwait(false);
+                try
+                {
+                    BeginDeferredFrameLogs();
+                    await WriteFrameSafelyAsync(transport, BuildOversizedLineErrorResponse(ex), loopToken).ConfigureAwait(false);
                     FlushDeferredFrameLogs();
                 }
                 finally
@@ -873,6 +896,19 @@ public partial class McpServer : IDisposable
     internal static string BuildInvalidUtf8ErrorLog(string detail)
         => $"[cdidx-mcp] JSON parse error: invalid UTF-8 input ({detail}). Send one UTF-8 JSON-RPC object per line; reject or re-encode malformed bytes before retrying.";
 
+    private string BuildOversizedLineErrorResponse(BoundedLineLengthException ex)
+        => BuildOversizedLineErrorResponse(ex.CharactersRead, ex.Utf8BytesRead);
+
+    private string BuildOversizedLineErrorResponse(int charactersRead, int utf8BytesRead)
+    {
+        DeferFrameLog(BuildOversizedMessageLog(charactersRead, utf8BytesRead));
+        var errorResponse = CreateErrorResponse(hasId: true, id: null, code: -32700, message: "Message too large",
+            category: McpErrorEnvelope.CategoryMessageTooLarge,
+            suggestion: $"JSON-RPC frame exceeds the {MaxLineCharacterCount} character or {MaxLineByteLength} byte cap. Split the request into smaller calls or use `batch_query` with smaller slots.",
+            retrySafe: false);
+        return errorResponse.ToJsonString(_jsonOptions);
+    }
+
     /// <summary>
     /// Process one MCP JSON-RPC frame and return the wire-ready response string (or null when
     /// the request was a notification or otherwise yields no response). This is the
@@ -892,14 +928,7 @@ public partial class McpServer : IDisposable
         // メモリ枯渇を防ぐため巨大メッセージを拒否
         var byteLength = Encoding.UTF8.GetByteCount(line);
         if (line.Length > MaxLineCharacterCount || byteLength > MaxLineByteLength)
-        {
-            DeferFrameLog(BuildOversizedMessageLog(line.Length, byteLength));
-            var errorResponse = CreateErrorResponse(hasId: true, id: null, code: -32700, message: "Message too large",
-                category: McpErrorEnvelope.CategoryMessageTooLarge,
-                suggestion: $"JSON-RPC frame exceeds the {MaxLineCharacterCount} character or {MaxLineByteLength} byte cap. Split the request into smaller calls or use `batch_query` with smaller slots.",
-                retrySafe: false);
-            return errorResponse.ToJsonString(_jsonOptions);
-        }
+            return BuildOversizedLineErrorResponse(line.Length, byteLength);
 
         JsonNode? request = null;
         var responseHasId = true;
@@ -2732,7 +2761,7 @@ public partial class McpServer : IDisposable
             // パスや索引内容が漏れる（#1530）。
             DeferFrameLog(() =>
             {
-                WriteMcpLogLine(BuildToolErrorLog(toolName, ex.Message));
+                WriteMcpLogLine(BuildToolErrorLog(toolName, ex));
                 Database.DbDebug.DumpToStderr(ex);
             });
             metricsError = ex.GetType().Name;
@@ -3266,8 +3295,21 @@ public partial class McpServer : IDisposable
     internal static string BuildResponseWriteErrorLog(string detail) =>
         $"[cdidx-mcp] Error writing response: {detail}. The request was handled but the client connection may already be closed.";
 
-    internal static string BuildToolErrorLog(string toolName, string detail) =>
-        $"[cdidx-mcp] Tool error ({BoundToolNameForDisplay(toolName).Text}): {detail}. Fix the tool arguments, refresh the index if needed, then retry.";
+    internal static string BuildToolErrorLog(string toolName, Exception ex) =>
+        $"[cdidx-mcp] Tool error ({BoundToolNameForDisplay(toolName).Text}): {BuildSanitizedExceptionLogDetail(ex)}. Fix the tool arguments, refresh the index if needed, then retry.";
+
+    internal static string BuildSanitizedExceptionLogDetail(Exception ex)
+    {
+        var exceptionType = McpBoundedText.ForDisplay(ex.GetType().Name).Text;
+        if (ex is CodeIndexException codeIndexEx)
+        {
+            var code = McpBoundedText.ForDisplay(codeIndexEx.Code).Text;
+            var category = McpBoundedText.ForDisplay(codeIndexEx.Category).Text;
+            return $"{exceptionType} code={code} category={category}{BuildPathFragment(codeIndexEx)}{BuildHintFragment(codeIndexEx)}";
+        }
+
+        return exceptionType;
+    }
 
     internal static string BuildClientResponseTooLargeLog(string member, int bytesWritten) =>
         $"[cdidx-mcp] Client response {member} exceeded the server byte limit ({bytesWritten} > {MaxClientResponseJsonBytes}); rejecting without retaining the payload.";

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Reflection;
 using System.Runtime.Loader;
 using System.Runtime.Versioning;
@@ -27,14 +28,16 @@ internal sealed record PostExtractionHookCallbackResult(
 internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
 {
     private readonly PostExtractionHookInfo hook;
+    private readonly int maxProtocolLineBytes;
     private readonly object gate = new();
     private Process? process;
     private StringBuilder stderr = new();
     private bool disposed;
 
-    internal PostExtractionHookCallbackWorkerClient(PostExtractionHookInfo hook)
+    internal PostExtractionHookCallbackWorkerClient(PostExtractionHookInfo hook, int maxProtocolLineBytes = WorkerProtocolLineLimits.MaxLineUtf8Bytes)
     {
         this.hook = hook;
+        this.maxProtocolLineBytes = maxProtocolLineBytes;
     }
 
     internal PostExtractionHookCallbackResult Invoke(
@@ -73,14 +76,18 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
             Task sendTask;
             try
             {
-                responseTask = process!.StandardOutput.ReadLineAsync();
+                responseTask = BoundedLineReader.ReadLineAsync(
+                    process!.StandardOutput,
+                    maxProtocolLineBytes,
+                    maxProtocolLineBytes,
+                    CancellationToken.None);
                 sendTask = SendRequestAsync(process.StandardInput, requestJson);
             }
             catch (Exception ex)
             {
                 KillWorker();
                 stopwatch.Stop();
-                return Failure($"failed to send worker request: {ex.Message}", stopwatch.ElapsedMilliseconds);
+                return Failure($"{SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", ex)} while sending hook callback request.", stopwatch.ElapsedMilliseconds);
             }
 
             if (!WaitForTask(sendTask, waitMilliseconds, out var sendException))
@@ -94,7 +101,7 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
             {
                 KillWorker();
                 stopwatch.Stop();
-                return Failure($"failed to send worker request: {sendException.Message}", stopwatch.ElapsedMilliseconds);
+                return Failure($"{SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", sendException)} while sending hook callback request.", stopwatch.ElapsedMilliseconds);
             }
 
             waitMilliseconds = GetRemainingWaitMilliseconds(stopwatch, callbackBudget);
@@ -109,7 +116,7 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
             {
                 KillWorker();
                 stopwatch.Stop();
-                return Failure($"failed to read worker response: {responseException.Message}", stopwatch.ElapsedMilliseconds);
+                return Failure($"{SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", responseException)} while reading hook callback response.", stopwatch.ElapsedMilliseconds);
             }
 
             if (CallbackBudgetExceeded(stopwatch, callbackBudget))
@@ -138,7 +145,7 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
             catch (JsonException ex)
             {
                 KillWorker();
-                return Failure($"worker returned invalid JSON: {ex.Message}", stopwatch.ElapsedMilliseconds);
+                return Failure($"{SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", ex)} while parsing hook callback response.", stopwatch.ElapsedMilliseconds);
             }
 
             if (response == null)
@@ -198,7 +205,7 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
 
         ClearExitedWorker();
         stderr = new StringBuilder();
-        if (!PostExtractionHookCallbackWorker.TryCreateStartInfo(hook, out var startInfo, out error))
+        if (!PostExtractionHookCallbackWorker.TryCreateStartInfo(hook, maxProtocolLineBytes, out var startInfo, out error))
             return false;
 
         var next = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
@@ -224,7 +231,7 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
         }
         catch (Exception ex)
         {
-            error = $"failed to start worker process: {ex.Message}";
+            error = SafeDiagnosticFormatter.FormatExceptionCategory("worker_start_failed", ex);
             next.Dispose();
             return false;
         }
@@ -313,11 +320,8 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
 
     private static string BuildWorkerExitError(Process? process, string stderr, string fallback)
     {
-        var exitCodeText = process == null
-            ? "unknown"
-            : process.ExitCode.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        var detail = !string.IsNullOrWhiteSpace(stderr) ? stderr.Trim() : fallback;
-        return $"worker exited with code {exitCodeText}: {detail}";
+        var exitCode = process == null ? (int?)null : process.ExitCode;
+        return SafeDiagnosticFormatter.FormatWorkerExit("worker_protocol_error", exitCode, fallback);
     }
 
     private static bool WaitForWorkerExit(Process process, int milliseconds)
@@ -337,6 +341,7 @@ internal static class PostExtractionHookCallbackWorker
 {
     internal const string CommandName = "__cdidx-post-extraction-hook-callback";
     internal const int WorkerKillWaitMilliseconds = 5000;
+    private const string ProtocolMaxLineBytesOption = "--protocol-max-line-bytes";
     internal static readonly JsonSerializerOptions JsonOptions = PostExtractionHookCallbackWorkerJsonContext.Default.Options;
 
     internal static bool TryRunCommand(
@@ -344,7 +349,9 @@ internal static class PostExtractionHookCallbackWorker
         TextReader input,
         TextWriter output,
         TextWriter error,
-        out int exitCode)
+        out int exitCode,
+        int maxProtocolLineCharacters = WorkerProtocolLineLimits.MaxLineCharacters,
+        int maxProtocolLineUtf8Bytes = WorkerProtocolLineLimits.MaxLineUtf8Bytes)
     {
         if (args.Length == 0 || !StringComparer.Ordinal.Equals(args[0], CommandName))
         {
@@ -352,7 +359,7 @@ internal static class PostExtractionHookCallbackWorker
             return false;
         }
 
-        exitCode = RunCommand(args, input, output, error);
+        exitCode = RunCommand(args, input, output, error, maxProtocolLineCharacters, maxProtocolLineUtf8Bytes);
         return true;
     }
 
@@ -363,8 +370,22 @@ internal static class PostExtractionHookCallbackWorker
     {
         return TryCreateStartInfo(
             hook,
+            WorkerProtocolLineLimits.MaxLineUtf8Bytes,
+            out startInfo,
+            out error);
+    }
+
+    internal static bool TryCreateStartInfo(
+        PostExtractionHookInfo hook,
+        int maxProtocolLineBytes,
+        out ProcessStartInfo startInfo,
+        out string error)
+    {
+        return TryCreateStartInfo(
+            hook,
             Environment.ProcessPath,
             ResolveCurrentRunnerAssemblyPath(),
+            maxProtocolLineBytes,
             out startInfo,
             out error);
     }
@@ -376,6 +397,23 @@ internal static class PostExtractionHookCallbackWorker
         out ProcessStartInfo startInfo,
         out string error)
     {
+        return TryCreateStartInfo(
+            hook,
+            currentProcessPath,
+            runnerAssemblyPath,
+            WorkerProtocolLineLimits.MaxLineUtf8Bytes,
+            out startInfo,
+            out error);
+    }
+
+    internal static bool TryCreateStartInfo(
+        PostExtractionHookInfo hook,
+        string? currentProcessPath,
+        string? runnerAssemblyPath,
+        int maxProtocolLineBytes,
+        out ProcessStartInfo startInfo,
+        out string error)
+    {
         startInfo = CreateStartInfo();
         if (ShouldStartCurrentExecutable(currentProcessPath, runnerAssemblyPath))
         {
@@ -383,6 +421,7 @@ internal static class PostExtractionHookCallbackWorker
             startInfo.ArgumentList.Add(CommandName);
             startInfo.ArgumentList.Add(hook.AssemblyPath);
             startInfo.ArgumentList.Add(hook.TypeName);
+            AddProtocolLineLimitArguments(startInfo, maxProtocolLineBytes);
             error = string.Empty;
             return true;
         }
@@ -399,6 +438,7 @@ internal static class PostExtractionHookCallbackWorker
         startInfo.ArgumentList.Add(CommandName);
         startInfo.ArgumentList.Add(hook.AssemblyPath);
         startInfo.ArgumentList.Add(hook.TypeName);
+        AddProtocolLineLimitArguments(startInfo, maxProtocolLineBytes);
         ApplyCurrentRuntimeRollForward(startInfo);
 
         error = string.Empty;
@@ -427,33 +467,75 @@ internal static class PostExtractionHookCallbackWorker
         }
     }
 
-    private static int RunCommand(string[] args, TextReader input, TextWriter output, TextWriter error)
+    private static int RunCommand(
+        string[] args,
+        TextReader input,
+        TextWriter output,
+        TextWriter error,
+        int maxProtocolLineCharacters,
+        int maxProtocolLineUtf8Bytes)
     {
-        if (args.Length != 3)
+        if (!TryResolveProtocolLineLimit(
+                args,
+                maxProtocolLineCharacters,
+                maxProtocolLineUtf8Bytes,
+                out var resolvedProtocolLineCharacters,
+                out var resolvedProtocolLineUtf8Bytes,
+                out var protocolLimitError))
         {
-            error.WriteLine("post-extraction hook callback worker requires assembly path and type name.");
+            error.WriteLine(protocolLimitError);
             return 2;
         }
+
+        maxProtocolLineCharacters = resolvedProtocolLineCharacters;
+        maxProtocolLineUtf8Bytes = resolvedProtocolLineUtf8Bytes;
 
         var hookAssemblyPath = args[1];
         var hookTypeName = args[2];
         try
         {
             IPostExtractionHook? hook = null;
-            string? requestJson;
-            while ((requestJson = input.ReadLine()) != null)
+            while (true)
             {
                 WorkerResponse response;
+                WorkerRequest request;
+                string? requestJson;
                 try
                 {
-                    var request = JsonSerializer.Deserialize<WorkerRequest>(requestJson, JsonOptions)
+                    requestJson = BoundedLineReader.ReadLine(input, maxProtocolLineCharacters, maxProtocolLineUtf8Bytes);
+                }
+                catch (BoundedLineLengthException ex)
+                {
+                    response = new WorkerResponse(null, null, null, SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", ex));
+                    output.WriteLine(JsonSerializer.Serialize(response, JsonOptions));
+                    output.Flush();
+                    return 1;
+                }
+
+                if (requestJson is null)
+                    break;
+
+                try
+                {
+                    request = JsonSerializer.Deserialize<WorkerRequest>(requestJson, JsonOptions)
                         ?? throw new InvalidOperationException("worker request was empty.");
+                }
+                catch (Exception ex)
+                {
+                    response = new WorkerResponse(null, null, null, SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", ex));
+                    output.WriteLine(JsonSerializer.Serialize(response, JsonOptions));
+                    output.Flush();
+                    continue;
+                }
+
+                try
+                {
                     hook ??= CreateHook(hookAssemblyPath, hookTypeName);
                     response = InvokeInsideWorker(hook, request);
                 }
                 catch (Exception ex)
                 {
-                    response = new WorkerResponse(null, null, null, ex.Message);
+                    response = new WorkerResponse(null, null, null, SafeDiagnosticFormatter.FormatExceptionCategory("worker_execution_failed", ex));
                 }
 
                 output.WriteLine(JsonSerializer.Serialize(response, JsonOptions));
@@ -464,7 +546,7 @@ internal static class PostExtractionHookCallbackWorker
         }
         catch (Exception ex)
         {
-            error.WriteLine(ex.Message);
+            error.WriteLine(SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", ex));
             return 1;
         }
     }
@@ -516,7 +598,45 @@ internal static class PostExtractionHookCallbackWorker
             Console.SetError(originalError);
         }
 
-        return new WorkerResponse(request.Symbols, request.References, callbackFailure?.Message, null);
+        return new WorkerResponse(
+            request.Symbols,
+            request.References,
+            callbackFailure is null ? null : SafeDiagnosticFormatter.FormatExceptionCategory("hook_callback_failed", callbackFailure),
+            null);
+    }
+
+    private static void AddProtocolLineLimitArguments(ProcessStartInfo startInfo, int maxProtocolLineBytes)
+    {
+        startInfo.ArgumentList.Add(ProtocolMaxLineBytesOption);
+        startInfo.ArgumentList.Add(maxProtocolLineBytes.ToString(CultureInfo.InvariantCulture));
+    }
+
+    private static bool TryResolveProtocolLineLimit(
+        string[] args,
+        int fallbackMaxProtocolLineCharacters,
+        int fallbackMaxProtocolLineUtf8Bytes,
+        out int maxProtocolLineCharacters,
+        out int maxProtocolLineUtf8Bytes,
+        out string error)
+    {
+        maxProtocolLineCharacters = fallbackMaxProtocolLineCharacters;
+        maxProtocolLineUtf8Bytes = fallbackMaxProtocolLineUtf8Bytes;
+        error = string.Empty;
+        if (args.Length == 3)
+            return true;
+
+        if (args.Length == 5
+            && StringComparer.Ordinal.Equals(args[3], ProtocolMaxLineBytesOption)
+            && int.TryParse(args[4], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed)
+            && parsed > 0)
+        {
+            maxProtocolLineCharacters = parsed;
+            maxProtocolLineUtf8Bytes = parsed;
+            return true;
+        }
+
+        error = $"post-extraction hook callback worker requires assembly path, type name, and optional `{ProtocolMaxLineBytesOption} <bytes>`.";
+        return false;
     }
 
     private static string ResolveDotnetHostPath()

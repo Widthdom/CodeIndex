@@ -2197,8 +2197,8 @@ public class McpServerTests : IDisposable
     public void McpAuthenticatorFactory_NoEnv_ReturnsLocalStdio()
     {
         // FromEnvironment() must default to permissive stdio when the env var is unset or
-        // whitespace, so unconfigured installs preserve the historical behaviour.
-        // 環境変数が未設定 or 空白の場合は permissive stdio に fallback し、未設定インストールの
+        // empty, so unconfigured installs preserve the historical behaviour.
+        // 環境変数が未設定 or 空文字の場合は permissive stdio に fallback し、未設定インストールの
         // 従来動作を維持する。
         var previous = Environment.GetEnvironmentVariable(McpAuthenticatorFactory.AuthTokenEnvVar);
         try
@@ -2206,13 +2206,37 @@ public class McpServerTests : IDisposable
             Environment.SetEnvironmentVariable(McpAuthenticatorFactory.AuthTokenEnvVar, null);
             Assert.IsType<LocalStdioAuthenticator>(McpAuthenticatorFactory.FromEnvironment());
 
-            Environment.SetEnvironmentVariable(McpAuthenticatorFactory.AuthTokenEnvVar, "   ");
+            Environment.SetEnvironmentVariable(McpAuthenticatorFactory.AuthTokenEnvVar, string.Empty);
             Assert.IsType<LocalStdioAuthenticator>(McpAuthenticatorFactory.FromEnvironment());
         }
         finally
         {
             Environment.SetEnvironmentVariable(McpAuthenticatorFactory.AuthTokenEnvVar, previous);
         }
+    }
+
+    [Fact]
+    public void McpAuthenticatorFactory_WhitespaceTokenIsRejected_Issue3505()
+    {
+        var previous = Environment.GetEnvironmentVariable(McpAuthenticatorFactory.AuthTokenEnvVar);
+        try
+        {
+            Environment.SetEnvironmentVariable(McpAuthenticatorFactory.AuthTokenEnvVar, " token");
+
+            var ex = Assert.Throws<FormatException>(McpAuthenticatorFactory.FromEnvironment);
+            Assert.Contains(McpAuthenticatorFactory.AuthTokenEnvVar, ex.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(McpAuthenticatorFactory.AuthTokenEnvVar, previous);
+        }
+    }
+
+    [Fact]
+    public void TokenAuthenticator_ConfiguredWhitespaceTokenIsRejected_Issue3505()
+    {
+        var ex = Assert.Throws<ArgumentException>(() => new TokenMcpAuthenticator("token "));
+        Assert.Contains("whitespace", ex.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -2434,9 +2458,9 @@ public class McpServerTests : IDisposable
     [Fact]
     public void BuildToolErrorLog_IsActionable()
     {
-        var message = McpServer.BuildToolErrorLog("search", "bad db");
+        var message = McpServer.BuildToolErrorLog("search", new InvalidOperationException("bad db"));
 
-        Assert.Contains("Tool error (search): bad db", message);
+        Assert.Contains("Tool error (search): InvalidOperationException", message);
         Assert.Contains("Fix the tool arguments", message);
         Assert.Contains("refresh the index if needed", message);
         Assert.Contains("retry", message);
@@ -3147,6 +3171,55 @@ public class McpServerTests : IDisposable
         await using var transport = new StdioMcpTransport(input, output, bufferSize: 1024);
 
         await Assert.ThrowsAsync<DecoderFallbackException>(() => transport.ReadFrameAsync(CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task StdioTransport_ReadFrameAsync_RejectsOversizedLineWhileReading_Issue3506()
+    {
+        await using var input = new MemoryStream(Encoding.UTF8.GetBytes("abcdef\n"));
+        await using var output = new MemoryStream();
+        await using var transport = new StdioMcpTransport(
+            input,
+            output,
+            bufferSize: 2,
+            maxLineCharacters: 5,
+            maxLineUtf8Bytes: 100);
+
+        var ex = await Assert.ThrowsAsync<BoundedLineLengthException>(() => transport.ReadFrameAsync(CancellationToken.None));
+
+        Assert.Equal(6, ex.CharactersRead);
+        Assert.Equal(5, ex.MaxCharacters);
+    }
+
+    [Fact]
+    public async Task RunAsync_StdioOversizedFrame_ReturnsMessageTooLarge_Issue3506()
+    {
+        await using var input = new MemoryStream(Encoding.UTF8.GetBytes("abcdef\n"));
+        await using var output = new MemoryStream();
+        await using var transport = new StdioMcpTransport(
+            input,
+            output,
+            bufferSize: 2,
+            maxLineCharacters: 5,
+            maxLineUtf8Bytes: 100);
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
+        using var error = new StringWriter();
+        var previousError = Console.Error;
+        Console.SetError(error);
+        try
+        {
+            await server.RunAsync(transport, CancellationToken.None);
+        }
+        finally
+        {
+            Console.SetError(previousError);
+        }
+
+        var raw = Encoding.UTF8.GetString(output.ToArray());
+        using var response = JsonDocument.Parse(raw);
+        Assert.Equal(-32700, response.RootElement.GetProperty("error").GetProperty("code").GetInt32());
+        Assert.Equal("message_too_large", response.RootElement.GetProperty("error").GetProperty("data").GetProperty("category").GetString());
+        Assert.Contains("Message too large", error.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -9042,6 +9115,34 @@ public class McpServerTests : IDisposable
             Environment.SetEnvironmentVariable(McpServer.DebugEnvironmentVariable, previous);
             DeleteFileRobust(corruptDbPath);
         }
+    }
+
+    [Fact]
+    public void BuildToolErrorLog_SuppressesRawExceptionMessage_Issue3370()
+    {
+        const string secret = "SECRET_TOOL_LOG_3370";
+
+        var log = McpServer.BuildToolErrorLog("search", new InvalidOperationException($"near '{secret}': syntax error"));
+
+        Assert.Contains("InvalidOperationException", log, StringComparison.Ordinal);
+        Assert.DoesNotContain(secret, log, StringComparison.Ordinal);
+        Assert.DoesNotContain("syntax error", log, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ToolsCall_FindInFileInvalidRegex_DoesNotEchoRegexExceptionMessage_Issue3370()
+    {
+        const string secret = "SECRET_REGEX_3370";
+        var request = JsonNode.Parse(
+            "{\"jsonrpc\":\"2.0\",\"id\":3370,\"method\":\"tools/call\",\"params\":{\"name\":\"find_in_file\",\"arguments\":{\"path\":\"src/app.cs\",\"query\":\"(?<"
+            + secret
+            + "\",\"regex\":true}}}")!;
+
+        var response = _server.HandleMessage(request)!;
+
+        var error = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Equal("invalid regular expression. Check regex syntax and retry.", error);
+        Assert.DoesNotContain(secret, error, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -173,20 +173,20 @@ public class HttpMcpTransportTests : IDisposable
         Assert.Equal(3, snapshot.Length);
 
         // Request logging can be observed from independently handled HTTP requests in any order.
-        var missingPost = Assert.Single(snapshot, record =>
-            record.AuthOutcome == "missing" &&
+        var unauthorizedPost = Assert.Single(snapshot, record =>
+            record.AuthOutcome == "unauthorized" &&
             record.StatusCode == (int)HttpStatusCode.Unauthorized &&
             record.Method == "POST");
-        Assert.Equal("/", missingPost.Path);
-        Assert.Null(missingPost.RequestId);
-        Assert.True(missingPost.DurationMs >= 0);
-        Assert.False(string.IsNullOrWhiteSpace(missingPost.CorrelationId));
-        Assert.False(string.IsNullOrWhiteSpace(missingPost.RemotePeer));
+        Assert.Equal("/", unauthorizedPost.Path);
+        Assert.Null(unauthorizedPost.RequestId);
+        Assert.True(unauthorizedPost.DurationMs >= 0);
+        Assert.False(string.IsNullOrWhiteSpace(unauthorizedPost.CorrelationId));
+        Assert.False(string.IsNullOrWhiteSpace(unauthorizedPost.RemotePeer));
 
-        var missingGet = Assert.Single(snapshot, record =>
-            record.AuthOutcome == "missing" &&
+        var unauthorizedGet = Assert.Single(snapshot, record =>
+            record.AuthOutcome == "unauthorized" &&
             record.Method == "GET");
-        Assert.Equal((int)HttpStatusCode.Unauthorized, missingGet.StatusCode);
+        Assert.Equal((int)HttpStatusCode.Unauthorized, unauthorizedGet.StatusCode);
 
         var okPost = Assert.Single(snapshot, record =>
             record.AuthOutcome == "ok" &&
@@ -915,6 +915,23 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
+    public async Task HttpTransport_BearerToken_RejectsWhitespacePaddedHeader_Issue3505()
+    {
+        const string token = "s3cret-token";
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: token);
+
+        using var client = new HttpClient();
+        using var request = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
+        {
+            Content = new StringContent("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", Encoding.UTF8, "application/json"),
+        };
+        request.Headers.TryAddWithoutValidation("Authorization", "Bearer  " + token);
+        using var response = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
     public async Task HttpTransport_BearerToken_RejectsOversizedHeaderBeforeHashing()
     {
         var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
@@ -928,6 +945,28 @@ public class HttpMcpTransportTests : IDisposable
         request.Headers.TryAddWithoutValidation(
             "Authorization",
             "Bearer " + new string('x', McpAuthenticationLimits.MaxTokenCharacters + 1));
+
+        using var response = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        var record = Assert.Single(await WaitForRequestLogRecordsAsync(records, 1));
+        Assert.Equal("unauthorized", record.AuthOutcome);
+    }
+
+    [Fact]
+    public async Task HttpTransport_RequestLogger_DetailedAuthOutcomeRequiresUnsafeDebug_Issue3469()
+    {
+        using var env = EnvironmentVariableScope.Capture(McpServer.DebugEnvironmentVariable);
+        env.Set(McpServer.DebugEnvironmentVariable, "unsafe");
+        var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: "token", requestLogger: records.Enqueue);
+
+        using var client = new HttpClient();
+        using var request = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
+        {
+            Content = new StringContent("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", Encoding.UTF8, "application/json"),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "wrong-token");
 
         using var response = await client.SendAsync(request);
 
