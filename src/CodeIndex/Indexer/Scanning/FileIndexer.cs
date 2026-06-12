@@ -2913,7 +2913,7 @@ public class FileIndexer
     {
         if (!Directory.Exists(LongPath.EnsureWindowsPrefix(dir)))
         {
-            reason = "directory does not exist";
+            reason = "directory-missing";
             return false;
         }
 
@@ -2926,12 +2926,12 @@ public class FileIndexer
         }
         catch (UnauthorizedAccessException)
         {
-            reason = "access denied";
+            reason = "access-denied";
             return false;
         }
-        catch (IOException ex)
+        catch (IOException)
         {
-            reason = ex.Message;
+            reason = "io-error";
             return false;
         }
     }

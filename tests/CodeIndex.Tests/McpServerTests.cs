@@ -6988,6 +6988,53 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_InvalidResponseByteLimit_RedactsSecretLookingEnvValue_Issue3403()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_MCP_RESPONSE_MAX_BYTES");
+        const string secret = "0123456789abcdef0123456789abcdef";
+        env.Set("CDIDX_MCP_RESPONSE_MAX_BYTES", $"token={secret}");
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status"}}""")!;
+
+        var stderr = ConsoleCapture.CaptureError(() => _server.HandleMessage(request));
+
+        Assert.Contains("CDIDX_MCP_RESPONSE_MAX_BYTES='token=<redacted>'", stderr);
+        Assert.DoesNotContain(secret, stderr);
+    }
+
+    [Fact]
+    public void ToolsCall_InvalidResponseByteLimit_RedactsPathAndUrlEnvValue_Issue3403()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_MCP_RESPONSE_MAX_BYTES");
+        const string path = "/Users/example/private/project";
+        const string url = "https://example.test/private/project/config.json";
+        const string queryUrl = "https://example.test?query=user-content";
+        env.Set("CDIDX_MCP_RESPONSE_MAX_BYTES", $"path={path} url={url} query={queryUrl}");
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status"}}""")!;
+
+        var stderr = ConsoleCapture.CaptureError(() => _server.HandleMessage(request));
+
+        Assert.Contains("CDIDX_MCP_RESPONSE_MAX_BYTES='path=<redacted> url=https://example.test<redacted> query=https://example.test<redacted>'", stderr);
+        Assert.DoesNotContain(path, stderr);
+        Assert.DoesNotContain("/private/project/config.json", stderr);
+        Assert.DoesNotContain("query=user-content", stderr);
+    }
+
+    [Fact]
+    public void Constructor_InvalidKeepAliveInterval_RedactsSecretLookingEnvValue_Issue3403()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_MCP_KEEP_ALIVE_INTERVAL_S");
+        var secret = "github_pat_" + "a".PadLeft(82, 'a');
+        env.Set("CDIDX_MCP_KEEP_ALIVE_INTERVAL_S", $"Bearer {secret}");
+
+        var stderr = ConsoleCapture.CaptureError(() => _ = new McpServer(_dbPath, ConsoleUi.LoadVersion()));
+
+        Assert.Contains("CDIDX_MCP_KEEP_ALIVE_INTERVAL_S='Bearer <redacted>'", stderr);
+        Assert.DoesNotContain(secret, stderr);
+    }
+
+    [Fact]
     public void ResponseLimitSerializer_StopsBeforeFullStringMaterialization_Issue2860()
     {
         var payload = new JsonObject

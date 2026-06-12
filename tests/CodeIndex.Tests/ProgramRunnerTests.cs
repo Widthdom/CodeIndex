@@ -1892,8 +1892,10 @@ exit 0
             var logPath = Directory.GetFiles(logDir, "stderr-*.log", SearchOption.TopDirectoryOnly).Single();
             var log = File.ReadAllText(logPath);
             Assert.Contains("unhandled_exception", log);
-            Assert.Contains("exception[0] type=System.ApplicationException message=\"outer wrapper\"", log);
-            Assert.Contains("inner_exception[1] type=System.InvalidOperationException message=\"root cause\"", log);
+            Assert.Contains("exception[0] type=System.ApplicationException message=\"exception_message_redacted\"", log);
+            Assert.Contains("inner_exception[1] type=System.InvalidOperationException message=\"invalid_operation\"", log);
+            Assert.DoesNotContain("outer wrapper", log);
+            Assert.DoesNotContain("root cause", log);
         }
         finally
         {

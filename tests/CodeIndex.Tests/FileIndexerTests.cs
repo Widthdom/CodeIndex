@@ -2437,7 +2437,7 @@ public class FileIndexerTests
             Assert.Empty(result.Files);
             Assert.Contains(result.Errors, error =>
                 error.Path == ".."
-                && error.Message.StartsWith("Could not read ancestor ignore directory:", StringComparison.Ordinal));
+                && error.Message == "Could not read ancestor ignore directory: access-denied.");
             Assert.True(result.HadErrors);
         }
         finally
