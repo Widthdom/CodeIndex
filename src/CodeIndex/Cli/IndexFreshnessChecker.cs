@@ -1,4 +1,5 @@
 using CodeIndex.Database;
+using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
 
 namespace CodeIndex.Cli;
@@ -6,6 +7,8 @@ namespace CodeIndex.Cli;
 internal static class IndexFreshnessChecker
 {
     private const int SampleLimit = 20;
+    private const int MaxScanErrorPathChars = 180;
+    internal const int MaxScanErrorSampleChars = 240;
 
     internal static IndexFreshnessCheckResult Check(DbReader reader, string? projectRoot)
     {
@@ -55,7 +58,7 @@ internal static class IndexFreshnessChecker
                 continue;
 
             result.ScanErrorCount++;
-            AddSample(result.ScanErrors, $"{error.Path}: {error.Message}");
+            AddSample(result.ScanErrors, FormatScanSample(error.Path, error.Message));
         }
 
         using var indexedEnumerator = reader.EnumerateIndexedFileSnapshots().GetEnumerator();
@@ -107,7 +110,7 @@ internal static class IndexFreshnessChecker
             {
                 var relativePath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, absolutePath));
                 result.ScanErrorCount++;
-                AddSample(result.ScanErrors, $"{relativePath}: {ex.Message}");
+                AddSample(result.ScanErrors, FormatScanFailureSample(relativePath, ex));
             }
         }
 
@@ -191,4 +194,24 @@ internal static class IndexFreshnessChecker
         if (samples.Count < SampleLimit)
             samples.Add(value);
     }
+
+    internal static string FormatScanFailureSample(string relativePath, Exception ex) =>
+        FormatScanSample(relativePath, ClassifyScanFailure(ex));
+
+    private static string FormatScanSample(string relativePath, string message)
+    {
+        var path = DiagnosticRedactor.BoundDiagnosticText(
+            FileIndexer.NormalizePathSeparators(relativePath),
+            MaxScanErrorPathChars);
+        return DiagnosticRedactor.BoundDiagnosticText($"{path}: {message}", MaxScanErrorSampleChars);
+    }
+
+    private static string ClassifyScanFailure(Exception ex) =>
+        ex switch
+        {
+            UnauthorizedAccessException => "access-denied",
+            IOException => "io-error",
+            InvalidOperationException => "probe-failed",
+            _ => "probe-failed",
+        };
 }

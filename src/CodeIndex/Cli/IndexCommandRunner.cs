@@ -138,6 +138,16 @@ public static partial class IndexCommandRunner
         }
         catch (OperationCanceledException) when (indexCancellation.IsCancellationRequested)
         {
+            TryStampLastFailedIndexRun(
+                resolvedDbPath,
+                status: "partial",
+                mode,
+                runStartedAtUtc,
+                stopwatch.ElapsedMilliseconds,
+                filesProcessed: 0,
+                filesTotal: null,
+                CommandErrorCodes.Interrupted,
+                reason: "cancelled");
             return WriteInterruptedResult(options.Json, jsonOptions, filesProcessed: 0, filesTotal: null);
         }
 
@@ -268,18 +278,58 @@ public static partial class IndexCommandRunner
         }
         catch (IndexInterruptedException ex)
         {
+            TryStampLastFailedIndexRun(
+                resolvedDbPath,
+                status: "partial",
+                mode,
+                runStartedAtUtc,
+                stopwatch.ElapsedMilliseconds,
+                ex.FilesProcessed,
+                ex.FilesTotal,
+                CommandErrorCodes.Interrupted,
+                reason: "interrupted");
             return WriteInterruptedResult(options.Json, jsonOptions, ex.FilesProcessed, ex.FilesTotal);
         }
         catch (OperationCanceledException) when (indexCancellation.IsCancellationRequested)
         {
+            TryStampLastFailedIndexRun(
+                resolvedDbPath,
+                status: "partial",
+                mode,
+                runStartedAtUtc,
+                stopwatch.ElapsedMilliseconds,
+                filesProcessed: 0,
+                filesTotal: null,
+                CommandErrorCodes.Interrupted,
+                reason: "cancelled");
             return WriteInterruptedResult(options.Json, jsonOptions, filesProcessed: 0, filesTotal: null);
         }
         catch (IndexExtractionStalledException ex)
         {
+            TryStampLastFailedIndexRun(
+                resolvedDbPath,
+                status: "failed",
+                mode,
+                runStartedAtUtc,
+                stopwatch.ElapsedMilliseconds,
+                ex.FilesProcessed,
+                ex.FilesTotal,
+                CommandErrorCodes.IndexExtractionStalled,
+                reason: "extraction_stalled");
             return WriteExtractionStalledResult(options.Json, jsonOptions, ex);
         }
         catch (Exception ex) when (IsDatabaseFilesystemError(ex))
         {
+            TryStampLastFailedIndexRun(
+                resolvedDbPath,
+                status: "failed",
+                mode,
+                runStartedAtUtc,
+                stopwatch.ElapsedMilliseconds,
+                filesProcessed: null,
+                filesTotal: null,
+                CommandErrorCodes.DbError,
+                reason: "database_filesystem_error");
             return WriteDatabaseFilesystemError(options.Json, jsonOptions, resolvedDbPath, ex);
         }
 
@@ -376,6 +426,44 @@ public static partial class IndexCommandRunner
         writer.SetMeta(DbContext.LastIndexRunPeakMemoryMbMetaKey, memoryTimeline == null
             ? null
             : (memoryTimeline.PeakWorkingSetBytes / (1024 * 1024)).ToString(System.Globalization.CultureInfo.InvariantCulture));
+        writer.ClearLastFailedIndexRunMetadata();
+    }
+
+    private static void TryStampLastFailedIndexRun(
+        string dbPath,
+        string status,
+        string mode,
+        DateTime startedAtUtc,
+        long durationMs,
+        long? filesProcessed,
+        long? filesTotal,
+        string errorCode,
+        string reason)
+    {
+        if (string.IsNullOrWhiteSpace(dbPath)
+            || dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase)
+            || !File.Exists(dbPath))
+        {
+            return;
+        }
+
+        try
+        {
+            using var db = new DbContext(dbPath);
+            db.InitializeSchema();
+            var writer = new DbWriter(db);
+            writer.SetMeta(DbContext.LastFailedIndexRunStatusMetaKey, status);
+            writer.SetMeta(DbContext.LastFailedIndexRunModeMetaKey, mode);
+            writer.SetMeta(DbContext.LastFailedIndexRunStartedAtMetaKey, startedAtUtc.ToString("o", System.Globalization.CultureInfo.InvariantCulture));
+            writer.SetMeta(DbContext.LastFailedIndexRunDurationMsMetaKey, durationMs.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            writer.SetMeta(DbContext.LastFailedIndexRunFilesProcessedMetaKey, filesProcessed?.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            writer.SetMeta(DbContext.LastFailedIndexRunFilesTotalMetaKey, filesTotal?.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            writer.SetMeta(DbContext.LastFailedIndexRunErrorCodeMetaKey, errorCode);
+            writer.SetMeta(DbContext.LastFailedIndexRunReasonMetaKey, reason);
+        }
+        catch (Exception ex) when (ex is CodeIndexException or IOException or UnauthorizedAccessException or NotSupportedException or SqliteException)
+        {
+        }
     }
 
     private static long SumReadableFileBytes(IEnumerable<string> paths)

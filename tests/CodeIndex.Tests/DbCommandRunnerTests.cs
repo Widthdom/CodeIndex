@@ -265,11 +265,41 @@ public class DbCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.True(json.GetProperty("ok").GetBoolean());
+            Assert.Equal("ok", json.GetProperty("severity").GetString());
+            Assert.Equal("integrity_ok", json.GetProperty("diagnostic_code").GetString());
             Assert.Equal(0, json.GetProperty("issues").GetArrayLength());
             Assert.Equal(Path.GetFullPath(dbPath), json.GetProperty("db_path").GetString());
         }
         finally
         {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void Run_IntegrityCheck_JsonReportsStableErrorSeverity()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_integrity_error_json_{Guid.NewGuid():N}.db");
+        DbCommandRunner.IntegrityCheckRowsForTesting = () => ["simulated corruption"];
+        try
+        {
+            using (var db = new DbContext(dbPath))
+                db.InitializeSchema();
+            SqliteConnection.ClearAllPools();
+
+            var (exitCode, json) = RunAndCaptureJson(["--integrity-check", "--db", dbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.False(json.GetProperty("ok").GetBoolean());
+            Assert.Equal("error", json.GetProperty("severity").GetString());
+            Assert.Equal("integrity_failed", json.GetProperty("diagnostic_code").GetString());
+            Assert.Equal("simulated corruption", json.GetProperty("issues")[0].GetString());
+        }
+        finally
+        {
+            DbCommandRunner.IntegrityCheckRowsForTesting = null;
             SqliteConnection.ClearAllPools();
             if (File.Exists(dbPath))
                 File.Delete(dbPath);
@@ -291,9 +321,44 @@ public class DbCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(Path.GetFullPath(dbPath), json.GetProperty("db_path").GetString());
             Assert.True(json.TryGetProperty("user_version", out _));
+            Assert.Equal("ok", json.GetProperty("severity").GetString());
+            Assert.Equal("schema_ok", json.GetProperty("diagnostic_code").GetString());
+            Assert.True(json.GetProperty("object_type_counts").GetProperty("table").GetInt32() > 0);
+            Assert.Equal(0, json.GetProperty("object_type_omitted_counts").GetProperty("table").GetInt32());
             Assert.Contains(json.GetProperty("entries").EnumerateArray(), entry =>
                 entry.GetProperty("type").GetString() == "table" &&
                 entry.GetProperty("name").GetString() == "files");
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void Run_Schema_JsonReportsObjectTypeOmissionsWhenEntryLimitTruncates()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_schema_truncated_{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
+            {
+                connection.Open();
+                for (var i = 0; i < DbCommandRunner.SchemaEntryLimit + 5; i++)
+                    Execute(connection, $"CREATE TABLE t_{i:D3}(id INTEGER PRIMARY KEY);");
+            }
+            SqliteConnection.ClearAllPools();
+
+            var (exitCode, json) = RunAndCaptureJson(["schema", "--db", dbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("warn", json.GetProperty("severity").GetString());
+            Assert.Equal("schema_truncated", json.GetProperty("diagnostic_code").GetString());
+            Assert.True(json.GetProperty("entries_truncated").GetBoolean());
+            Assert.Equal(DbCommandRunner.SchemaEntryLimit + 5, json.GetProperty("object_type_counts").GetProperty("table").GetInt32());
+            Assert.Equal(5, json.GetProperty("object_type_omitted_counts").GetProperty("table").GetInt32());
         }
         finally
         {
@@ -330,6 +395,35 @@ public class DbCommandRunnerTests
             var (secondExit, secondJson) = RunAndCaptureJson(["prune", "--dry-run", "--db", dbPath, "--json"]);
             Assert.Equal(CommandExitCodes.Success, secondExit);
             Assert.Equal(0, secondJson.GetProperty("total").GetInt32());
+        }
+        finally
+        {
+            DbContext.WalCheckpointTruncateExecutedForTesting = null;
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void Run_PruneApply_JsonReportsWalCheckpointWarning_Issue3514()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_prune_wal_warning_{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var db = new DbContext(dbPath))
+                db.InitializeSchema();
+            SeedOrphans(dbPath);
+            SqliteConnection.ClearAllPools();
+            DbContext.WalCheckpointTruncateExecutedForTesting = _ => throw new IOException("simulated wal cleanup failure");
+
+            var (exitCode, json) = RunAndCaptureJson(["prune", "--apply", "--db", dbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            var warnings = json.GetProperty("warnings");
+            var warning = Assert.Single(warnings.EnumerateArray());
+            Assert.Equal("wal_checkpoint_truncate_failed", warning.GetProperty("code").GetString());
+            Assert.Contains("WAL checkpoint truncation failed", warning.GetProperty("message").GetString());
         }
         finally
         {
@@ -477,6 +571,40 @@ public class DbCommandRunnerTests
     }
 
     [Fact]
+    public void TryDeleteTemporaryDirectory_RejectsTargetOutsideSafeRoot_Issue3379()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_cleanup_safe_root_{Guid.NewGuid():N}");
+        var safeRoot = Path.Combine(root, "safe");
+        var outsideRoot = Path.Combine(root, "outside");
+        var outsideTarget = Path.Combine(outsideRoot, ".tmp-malformed");
+        try
+        {
+            Directory.CreateDirectory(safeRoot);
+            Directory.CreateDirectory(outsideTarget);
+            File.WriteAllText(Path.Combine(outsideTarget, "sentinel.txt"), "keep");
+
+            var (_, _, stderr) = ConsoleCapture.Capture(() =>
+            {
+                DbCommandRunner.TryDeleteTemporaryDirectory(
+                    outsideTarget,
+                    "test temporary directory",
+                    safeRoot,
+                    ".tmp-");
+                return 0;
+            });
+
+            Assert.True(Directory.Exists(outsideTarget));
+            Assert.Contains("skipped deleting test temporary directory", stderr);
+            Assert.Contains("outside the expected cleanup root", stderr);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Run_CheckpointsList_JsonIncludesCreatedCheckpoint()
     {
         var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_list_{Guid.NewGuid():N}");
@@ -609,6 +737,81 @@ public class DbCommandRunnerTests
         finally
         {
             DbCommandRunner.RestoreFailureAfterBackupForTesting = null;
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Run_RestoreRollbackFailurePreservesPrimaryFailure_Issue3514()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_rollback_fail_{Guid.NewGuid():N}");
+        var dbPath = Path.Combine(root, "codeindex.db");
+        Directory.CreateDirectory(root);
+        try
+        {
+            using (var db = new DbContext(dbPath))
+                db.InitializeSchema();
+            SqliteConnection.ClearAllPools();
+
+            var (checkpointExit, _, _) = RunAndCaptureStreams(["checkpoint", "saved", "--db", dbPath]);
+            Assert.Equal(CommandExitCodes.Success, checkpointExit);
+
+            File.WriteAllText(dbPath, "changed");
+            DbCommandRunner.RestoreFailureAfterBackupForTesting = () =>
+            {
+                Directory.CreateDirectory(dbPath);
+                throw new IOException("primary restore failure");
+            };
+
+            var (restoreExit, _, stderr) = RunAndCaptureStreams(["restore", "saved", "--db", dbPath]);
+
+            Assert.Equal(CommandExitCodes.DatabaseError, restoreExit);
+            Assert.Contains("primary restore failure", stderr);
+            Assert.Contains("failed to roll back database restore", stderr);
+        }
+        finally
+        {
+            DbCommandRunner.RestoreFailureAfterBackupForTesting = null;
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Run_RestoreRejectsSymlinkedCheckpointPayload_Issue3514()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_symlink_{Guid.NewGuid():N}");
+        var dbPath = Path.Combine(root, "codeindex.db");
+        Directory.CreateDirectory(root);
+        try
+        {
+            using (var db = new DbContext(dbPath))
+                db.InitializeSchema();
+            SqliteConnection.ClearAllPools();
+            var originalBytes = File.ReadAllBytes(dbPath);
+            var (checkpointExit, _, _) = RunAndCaptureStreams(["checkpoint", "saved", "--db", dbPath]);
+            Assert.Equal(CommandExitCodes.Success, checkpointExit);
+
+            var checkpointDbPath = Path.Combine(dbPath + ".checkpoints", "saved", "codeindex.db");
+            File.Delete(checkpointDbPath);
+            var targetPath = Path.Combine(root, "payload-target.db");
+            File.WriteAllText(targetPath, "not the checkpoint");
+            File.CreateSymbolicLink(checkpointDbPath, targetPath);
+
+            var (restoreExit, _, stderr) = RunAndCaptureStreams(["restore", "saved", "--db", dbPath]);
+
+            Assert.Equal(CommandExitCodes.DatabaseError, restoreExit);
+            Assert.Contains("not a regular file", stderr);
+            Assert.Equal(originalBytes, File.ReadAllBytes(dbPath));
+        }
+        finally
+        {
             SqliteConnection.ClearAllPools();
             if (Directory.Exists(root))
                 Directory.Delete(root, recursive: true);

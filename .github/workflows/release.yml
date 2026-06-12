@@ -17,13 +17,59 @@ on:
         type: boolean
 
 permissions:
-  contents: write
-  id-token: write
-  attestations: write
+  contents: read
+
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref }}
+  cancel-in-progress: false
 
 jobs:
+  preflight:
+    name: Validate release tag
+    if: github.repository == 'Widthdom/CodeIndex'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+      ref: ${{ steps.release.outputs.ref }}
+    steps:
+      - name: Validate release tag
+        id: release
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG_NAME: ${{ inputs.tag_name }}
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            tag="$INPUT_TAG_NAME"
+          else
+            if [ "$REF_TYPE" != "tag" ]; then
+              echo "Release workflow must run from a tag ref, got ${REF_TYPE}:${REF_NAME}." >&2
+              exit 1
+            fi
+            tag="$REF_NAME"
+          fi
+
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Release tag must be a v-prefixed SemVer version, got: ${tag}" >&2
+            exit 1
+          fi
+
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+          echo "ref=refs/tags/${tag}" >> "$GITHUB_OUTPUT"
+
   release:
     if: github.repository == 'Widthdom/CodeIndex'
+    needs: preflight
+    timeout-minutes: 90
+    permissions:
+      contents: read
     strategy:
       matrix:
         # Keep this matrix in sync with docs/platform-support.md and install.sh
@@ -52,7 +98,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
-          ref: ${{ inputs.tag_name || github.ref }}
+          ref: ${{ needs.preflight.outputs.ref }}
 
       # The release workflow runs the same Windows test suite, so it needs the
       # same temp-root pinning as .github/workflows/dotnet.yml: even after the
@@ -101,9 +147,10 @@ jobs:
       # Get-MpPreference -notcontains check matches the stored form exactly.
       # Every Add-MpPreference call uses -ErrorAction Stop, and a final
       # Get-MpPreference verification throws if any exclusion did not register
-      # so the step fails loudly instead of degrading silently. The list of
-      # effective exclusions is also echoed to the log so future investigations
-      # of Windows lane variance can see exactly which paths were covered.
+      # so the step fails loudly instead of degrading silently. A reason-coded
+      # audit table of effective exclusions is emitted to both the log and job
+      # summary so future investigations can see exactly which paths were
+      # covered and why each path was required.
       # release workflow の Windows lane でも、テストスイートが大量に作る
       # 一時ファイル（temp project / SQLite DB / .cdidx / 合成ソース）を
       # Windows Defender が都度スキャンする影響は同じく支配的になる。
@@ -120,42 +167,93 @@ jobs:
       # Get-MpPreference -notcontains の照合を保存形式と完全一致させる。
       # 各呼び出しを -ErrorAction Stop で明示失敗させ、最後に Get-MpPreference
       # で登録を検証し、silent degradation を起こさないようにする。最終的に
-      # 適用された除外パス一覧はログにも出力し、今後 Windows lane のばらつき
-      # を調査するときにどのパスが対象になったかを追えるようにする。
+      # 適用された除外パスは理由付きの audit table としてログと job summary に
+      # 出力し、どのパスをなぜ対象にしたかを追えるようにする。
       - name: Exclude workspace and temp paths from Windows Defender (Windows only)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $candidates = @(
-            "${{ github.workspace }}",
-            $env:RUNNER_TEMP,
-            $env:TEMP,
-            $env:TMP,
-            [System.IO.Path]::GetTempPath(),
-            $env:NUGET_PACKAGES,
-            (Join-Path $env:USERPROFILE ".nuget\packages"),
-            (Join-Path $env:LOCALAPPDATA "NuGet\packages")
+            [pscustomobject]@{
+              Path = "${{ github.workspace }}"
+              Reason = "Repository checkout containing build outputs and temp-heavy test fixtures."
+            },
+            [pscustomobject]@{
+              Path = $env:RUNNER_TEMP
+              Reason = "GitHub-hosted runner temp root used by actions and pinned TMP/TEMP."
+            },
+            [pscustomobject]@{
+              Path = $env:TEMP
+              Reason = "Effective TEMP path used by PowerShell and child processes."
+            },
+            [pscustomobject]@{
+              Path = $env:TMP
+              Reason = "Effective TMP path preferred by .NET Path.GetTempPath()."
+            },
+            [pscustomobject]@{
+              Path = [System.IO.Path]::GetTempPath()
+              Reason = "Runtime-observed .NET temp path, which can differ from environment variables."
+            },
+            [pscustomobject]@{
+              Path = $env:NUGET_PACKAGES
+              Reason = "Explicit NuGet global package cache when configured."
+            },
+            [pscustomobject]@{
+              Path = (Join-Path $env:USERPROFILE ".nuget\packages")
+              Reason = "Default user NuGet global package cache touched by restore/build."
+            },
+            [pscustomobject]@{
+              Path = (Join-Path $env:LOCALAPPDATA "NuGet\packages")
+              Reason = "Windows local NuGet package cache fallback touched by restore/build."
+            }
           )
 
-          $paths = $candidates |
-            Where-Object { $_ } |
-            ForEach-Object { $_.TrimEnd('\','/') } |
-            Where-Object { $_ } |
-            Select-Object -Unique
+          $exclusions = $candidates |
+            Where-Object { $_.Path } |
+            ForEach-Object {
+              $path = $_.Path.TrimEnd('\','/')
+              if ($path) {
+                [pscustomobject]@{
+                  Path = $path
+                  Reason = $_.Reason
+                }
+              }
+            } |
+            Group-Object -Property Path |
+            ForEach-Object {
+              [pscustomobject]@{
+                Path = $_.Name
+                Reason = (($_.Group | ForEach-Object { $_.Reason }) | Select-Object -Unique) -join " "
+              }
+            } |
+            Sort-Object -Property Path
 
-          Write-Host "Windows Defender exclusion candidates:"
-          foreach ($path in $paths) {
-            Write-Host "  $path"
+          Write-Host "Windows Defender exclusion audit:"
+          foreach ($entry in $exclusions) {
+            Write-Host ("  {0} -- {1}" -f $entry.Path, $entry.Reason)
           }
 
-          foreach ($path in $paths) {
-            Add-MpPreference -ExclusionPath $path -ErrorAction Stop
+          if ($env:GITHUB_STEP_SUMMARY) {
+            "### Windows Defender exclusion audit" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+            "" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+            "| Path | Reason |" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+            "| --- | --- |" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+            foreach ($entry in $exclusions) {
+              $safePath = $entry.Path.Replace("|", "\|")
+              $safeReason = $entry.Reason.Replace("|", "\|")
+              ('| `{0}` | {1} |' -f $safePath, $safeReason) |
+                Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+            }
+          }
+
+          foreach ($entry in $exclusions) {
+            Add-MpPreference -ExclusionPath $entry.Path -ErrorAction Stop
           }
 
           $prefs = Get-MpPreference
-          foreach ($path in $paths) {
-            if ($prefs.ExclusionPath -notcontains $path) {
-              throw "Windows Defender exclusion was not applied: $path"
+          foreach ($entry in $exclusions) {
+            if ($prefs.ExclusionPath -notcontains $entry.Path) {
+              throw "Windows Defender exclusion was not applied: $($entry.Path)"
             }
           }
 
@@ -171,8 +269,6 @@ jobs:
             ~/.nuget/packages
             ~\AppData\Local\NuGet\packages
           key: ${{ runner.os }}-nuget-${{ hashFiles('**/packages.lock.json', '**/*.csproj') }}
-          restore-keys: |
-            ${{ runner.os }}-nuget-
 
       # --locked-mode requires every resolved package to match the committed
       # packages.lock.json so an unexpected transitive bump (including silent
@@ -424,13 +520,18 @@ jobs:
   create-release:
     if: github.repository == 'Widthdom/CodeIndex'
     runs-on: ubuntu-latest
-    needs: release
+    needs: [preflight, release]
+    timeout-minutes: 45
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     environment: release-production
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ inputs.tag_name || github.ref }}
+          ref: ${{ needs.preflight.outputs.ref }}
 
       - name: Download all artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -504,7 +605,7 @@ jobs:
           test -s release-files/sha256sums.txt.asc
 
       - name: Attest release artifacts
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
         with:
           subject-path: |
             release-files/*.tar.gz
@@ -538,7 +639,7 @@ jobs:
         if: ${{ !inputs.allow_generated_notes }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
+          TAG_NAME: ${{ needs.preflight.outputs.tag }}
         run: |
           set -euo pipefail
           version="${TAG_NAME#v}"
@@ -566,7 +667,7 @@ jobs:
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
+          TAG_NAME: ${{ needs.preflight.outputs.tag }}
           USE_GENERATED_NOTES: ${{ inputs.allow_generated_notes || false }}
         run: |
           set -euo pipefail
@@ -602,7 +703,7 @@ jobs:
       - name: Wait for release assets to be downloadable
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
+          TAG_NAME: ${{ needs.preflight.outputs.tag }}
           # install.sh downloads BOTH the linux-x64 tarball and sha256sums.txt,
           # and the CDN can propagate each release asset independently. Polling
           # only the tarball let the verify step run while sha256sums.txt was
@@ -684,7 +785,7 @@ jobs:
             deadline=$((SECONDS + wait_seconds))
             attempt=1
             while :; do
-              code="$(curl -fsSL --range 0-0 -o /dev/null -w '%{http_code}' "$url" || true)"
+              code="$(curl -fsSL --connect-timeout 10 --max-time 60 --retry 5 --retry-delay 5 --retry-all-errors --range 0-0 -o /dev/null -w '%{http_code}' "$url" || true)"
               if [ "$code" = "200" ] || [ "$code" = "206" ]; then
                 echo "Asset ${asset} reachable after $attempt attempt(s)."
                 reachable=1
@@ -707,7 +808,7 @@ jobs:
 
       - name: Verify install.sh against the published release
         env:
-          TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
+          TAG_NAME: ${{ needs.preflight.outputs.tag }}
         run: |
           set -euo pipefail
           export CDIDX_INSTALL_DIR="$(mktemp -d)/bin"
@@ -770,13 +871,18 @@ jobs:
   publish-nuget:
     if: github.repository == 'Widthdom/CodeIndex'
     runs-on: ubuntu-latest
-    needs: release
+    needs: [preflight, release]
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     environment: nuget-production
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ inputs.tag_name || github.ref }}
+          ref: ${{ needs.preflight.outputs.ref }}
 
       - name: Set up .NET
         uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0
@@ -787,7 +893,7 @@ jobs:
         id: version
         run: |
           set -euo pipefail
-          TAG="${{ inputs.tag_name || github.ref_name }}"
+          TAG="${{ needs.preflight.outputs.tag }}"
           if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
             echo "Release tag must be a v-prefixed SemVer version, got: ${TAG}" >&2
             exit 1
@@ -809,7 +915,13 @@ jobs:
         run: |
           set -euo pipefail
           package_url="https://api.nuget.org/v3-flatcontainer/cdidx/${VERSION}/cdidx.${VERSION}.nupkg"
-          status="$(curl -sS -o /tmp/cdidx-nuget-head -w '%{http_code}' -I "$package_url")"
+          response_headers="$(mktemp "${RUNNER_TEMP:-/tmp}/cdidx-nuget-head.XXXXXX")"
+          cleanup() {
+            rm -f "$response_headers"
+          }
+          trap cleanup EXIT
+
+          status="$(curl -sS --connect-timeout 10 --max-time 30 --retry 3 --retry-delay 2 --retry-all-errors -o "$response_headers" -w '%{http_code}' -I "$package_url")"
           if [ "$status" = "200" ]; then
             echo "NuGet package cdidx ${VERSION} is already published; refusing to mask this as a duplicate." >&2
             exit 1
@@ -817,7 +929,7 @@ jobs:
 
           if [ "$status" != "404" ]; then
             echo "Could not verify NuGet package availability for cdidx ${VERSION}; HTTP ${status}." >&2
-            cat /tmp/cdidx-nuget-head >&2 || true
+            cat "$response_headers" >&2 || true
             exit 1
           fi
 
@@ -886,35 +998,51 @@ jobs:
             exit 1
           fi
 
+      - name: Attest NuGet package artifacts
+        uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
+        with:
+          subject-path: |
+            nupkg/*.nupkg
+            nupkg/*.snupkg
+
+      - name: NuGet trusted publishing login
+        id: nuget-login
+        uses: NuGet/login@ebc737b6fc418a6ca0073cf116ec8dc156d8b81e # v1
+        with:
+          user: Widthdom
+
       - name: Publish to NuGet
         run: |
           set -euo pipefail
           dotnet nuget push nupkg/*.nupkg \
-            --api-key ${{ secrets.NUGET_API_KEY }} \
-            --source https://api.nuget.org/v3/index.json \
+            --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" \
+            --source https://www.nuget.org/api/v2/package \
             --no-symbols
           dotnet nuget push nupkg/*.snupkg \
-            --api-key ${{ secrets.NUGET_API_KEY }} \
-            --source https://api.nuget.org/v3/index.json
+            --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" \
+            --source https://www.nuget.org/api/v2/package
 
   publish-container:
     if: github.repository == 'Widthdom/CodeIndex'
     runs-on: ubuntu-latest
-    needs: create-release
+    needs: [preflight, create-release]
+    timeout-minutes: 90
     permissions:
       contents: read
+      id-token: write
+      attestations: write
       packages: write
     steps:
       - name: Checkout release tag
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ inputs.tag_name || github.ref }}
+          ref: ${{ needs.preflight.outputs.ref }}
 
       - name: Extract version from tag
         id: version
         run: |
           set -euo pipefail
-          TAG="${{ inputs.tag_name || github.ref_name }}"
+          TAG="${{ needs.preflight.outputs.tag }}"
           if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
             echo "Release tag must be a v-prefixed SemVer version, got: ${TAG}" >&2
             exit 1
@@ -938,40 +1066,45 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push container image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
+          provenance: mode=max
+          sbom: true
           tags: ${{ steps.image-tags.outputs.tags }}
 
   publish-homebrew:
     if: github.repository == 'Widthdom/CodeIndex'
     runs-on: ubuntu-latest
-    needs: create-release
+    needs: [preflight, create-release]
+    timeout-minutes: 30
+    permissions:
+      contents: read
     environment: homebrew-production
     steps:
       - name: Checkout release tag
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
-          ref: ${{ inputs.tag_name || github.ref }}
+          ref: ${{ needs.preflight.outputs.ref }}
 
       - name: Extract release tag
         id: release
         run: |
           set -euo pipefail
-          TAG="${{ inputs.tag_name || github.ref_name }}"
+          TAG="${{ needs.preflight.outputs.tag }}"
           if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
             echo "Release tag must be a v-prefixed SemVer version, got: ${TAG}" >&2
             exit 1
@@ -979,6 +1112,11 @@ jobs:
 
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Download release artifacts for checksum calculation
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: homebrew-artifacts
 
       - name: Bump Homebrew formula
         env:
@@ -994,20 +1132,32 @@ jobs:
           VERSION="${TAG_NAME#v}"
           REPO_URL="https://github.com/${GITHUB_REPOSITORY}"
           RELEASE_URL="${REPO_URL}/releases/download/${TAG_NAME}"
-          CHECKSUMS_URL="${RELEASE_URL}/sha256sums.txt"
-          checksums="$(mktemp)"
-          curl -fsSL "$CHECKSUMS_URL" -o "$checksums"
+          artifact_root="homebrew-artifacts"
+          tap_dir=""
+          cleanup() {
+            if [ -n "$tap_dir" ]; then
+              rm -rf "$tap_dir"
+            fi
+          }
+          trap cleanup EXIT
 
-          sha_for() {
-            awk -v name="$1" '$2 == name { print $1; found=1 } END { exit found ? 0 : 1 }' "$checksums"
+          sha_for_artifact() {
+            asset="$1"
+            path="$(find "$artifact_root" -type f -name "$asset" -print -quit)"
+            if [ -z "$path" ]; then
+              echo "Release artifact ${asset} was not found under ${artifact_root}." >&2
+              exit 1
+            fi
+            sha256sum "$path" | awk '{ print $1 }'
           }
 
-          linux_x64_sha="$(sha_for CodeIndex-linux-x64.tar.gz)"
-          linux_arm64_sha="$(sha_for CodeIndex-linux-arm64.tar.gz)"
-          osx_arm64_sha="$(sha_for CodeIndex-osx-arm64.tar.gz)"
+          linux_x64_sha="$(sha_for_artifact CodeIndex-linux-x64.tar.gz)"
+          linux_arm64_sha="$(sha_for_artifact CodeIndex-linux-arm64.tar.gz)"
+          osx_arm64_sha="$(sha_for_artifact CodeIndex-osx-arm64.tar.gz)"
 
           tap_dir="$(mktemp -d)"
-          git clone "https://x-access-token:${TAP_TOKEN}@github.com/Widthdom/homebrew-tap.git" "$tap_dir"
+          credential_helper='!f() { echo username=x-access-token; echo "password=${TAP_TOKEN}"; }; f'
+          git -c credential.helper="$credential_helper" clone "https://github.com/Widthdom/homebrew-tap.git" "$tap_dir"
           mkdir -p "$tap_dir/Formula"
 
           cat > "$tap_dir/Formula/codeindex.rb" <<EOF
@@ -1063,4 +1213,4 @@ jobs:
           fi
 
           git -C "$tap_dir" commit -m "Update codeindex to ${TAG_NAME}"
-          git -C "$tap_dir" push origin HEAD:main
+          git -C "$tap_dir" -c credential.helper="$credential_helper" push origin HEAD:main

@@ -9,6 +9,57 @@ namespace CodeIndex.Tests;
 public partial class QueryCommandRunnerTests
 {
     [Fact]
+    public void RunSymbols_FormatCount_ActsLikeCountJson_Issue3446()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_format_count");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/App.cs",
+                "csharp",
+                """
+                namespace Demo;
+
+                public class App
+                {
+                    public void Run() { }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["App", "--db", dbPath, "--format", "count"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(json.GetProperty("count").GetInt32() > 0);
+            Assert.Equal(1, json.GetProperty("files").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbols_FormatCompact_ReturnsTargetedHint_Issue3446()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+            ["--format", "compact"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("--format compact is not supported by symbols.", stderr);
+        Assert.Contains("Usage: cdidx symbols", stderr);
+        Assert.Contains("--format json", stderr);
+    }
+
+    [Fact]
     public void RunDefinition_JsonBodyIncludesTruncationMetadata_Issue3131()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_definition_body_truncated_issue3131");
@@ -32,9 +83,70 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.True(json.GetProperty("body_content_truncated").GetBoolean());
+            Assert.Equal(2, json.GetProperty("body_requested_start_line").GetInt32());
+            Assert.True(json.GetProperty("body_requested_end_line").GetInt32() > json.GetProperty("body_effective_end_line").GetInt32());
+            Assert.Equal(2, json.GetProperty("body_effective_start_line").GetInt32());
+            var bodyReasons = json.GetProperty("body_content_truncation_reasons")
+                .EnumerateArray()
+                .Select(reason => reason.GetString())
+                .ToArray();
+            Assert.Contains("body_line_cap", bodyReasons);
+            var recovery = json.GetProperty("body_content_recovery");
+            Assert.Equal(json.GetProperty("body_effective_end_line").GetInt32() + 1, recovery.GetProperty("start_line").GetInt32());
+            var recoveryCommand = recovery.GetProperty("command").GetString();
+            Assert.Contains("cdidx excerpt src/long_body.py", recoveryCommand);
+            Assert.Contains("--db", recoveryCommand);
+            Assert.Contains(dbPath, recoveryCommand);
+            Assert.Contains("--max-line-width 0 --json", recoveryCommand);
             Assert.False(json.TryGetProperty("complexity", out _));
             Assert.True(CountLines(json.GetProperty("body_content").GetString()!) <= DbReader.DefinitionBodyMaxLines);
             Assert.DoesNotContain("value_23", json.GetProperty("body_content").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunDefinition_JsonBodyReportsByteCapRecovery_Issue3562()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_definition_body_byte_recovery_3562");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var longLiteral = new string('a', DbReader.DefinitionBodyMaxBytes + 1024);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/huge_body.py",
+                "python",
+                $"def huge_body():\n    value = \"{longLiteral}\"\n    return value\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                ["huge_body", "--db", dbPath, "--json", "--body", "--lang", "python", "--exact-name"],
+                _jsonOptions));
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(json.GetProperty("body_content_truncated").GetBoolean());
+            var bodyReasons = json.GetProperty("body_content_truncation_reasons")
+                .EnumerateArray()
+                .Select(reason => reason.GetString())
+                .ToArray();
+            Assert.Contains("body_byte_cap", bodyReasons);
+            Assert.Equal(2, json.GetProperty("body_effective_start_line").GetInt32());
+            Assert.Equal(3, json.GetProperty("body_effective_end_line").GetInt32());
+            var recovery = json.GetProperty("body_content_recovery");
+            Assert.Equal(2, recovery.GetProperty("start_line").GetInt32());
+            Assert.Equal(3, recovery.GetProperty("end_line").GetInt32());
+            var recoveryCommand = recovery.GetProperty("command").GetString();
+            Assert.Contains("cdidx excerpt src/huge_body.py", recoveryCommand);
+            Assert.Contains("--db", recoveryCommand);
+            Assert.Contains(dbPath, recoveryCommand);
+            Assert.Contains("--start 2 --end 3 --max-line-width 0 --json", recoveryCommand);
+            Assert.False(json.TryGetProperty("complexity", out _));
         }
         finally
         {
@@ -656,6 +768,36 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSymbols_UnsupportedExtractorLanguageExplainsSearchOnlyFallback()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_unsupported_extractor");
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "settings.toml"), "enabled = true\n");
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json", "--quiet"],
+                _jsonOptions));
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["enabled", "--db", dbPath, "--lang", "toml"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains("symbol extraction is not available", stderr);
+            Assert.Contains("cdidx search <query> --lang toml", stderr);
+            Assert.Contains("missing-symbols", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunUnused_WithJsonIncludesConfidenceBuckets()
     {
         var (projectRoot, dbPath) = CreateUnusedFixtureDb();
@@ -1119,7 +1261,7 @@ public partial class QueryCommandRunnerTests
         try
         {
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
-                ["--db", dbPath, "--json", "--lang", "markdown"],
+                ["--db", dbPath, "--json", "--lang", "toml"],
                 _jsonOptions));
 
             using var document = ParseJsonOutput(stdout);

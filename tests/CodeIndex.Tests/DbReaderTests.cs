@@ -13571,9 +13571,9 @@ public class DbReaderTests : IDisposable
     [Fact]
     public void AnalyzeSymbol_UnsupportedLanguage_ReportsGraphSupportMetadata()
     {
-        var analysis = _reader.AnalyzeSymbol("Heading", limit: 5, lang: "markdown");
+        var analysis = _reader.AnalyzeSymbol("Heading", limit: 5, lang: "toml");
 
-        Assert.Equal("markdown", analysis.GraphLanguage);
+        Assert.Equal("toml", analysis.GraphLanguage);
         Assert.False(analysis.GraphSupported);
         Assert.Contains("not indexed", analysis.GraphSupportReason);
         Assert.Empty(analysis.Definitions);

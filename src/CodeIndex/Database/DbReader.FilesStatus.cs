@@ -8,10 +8,10 @@ namespace CodeIndex.Database;
 
 public partial class DbReader
 {
-    public List<FileFindResult> FindInFiles(string query, int limit, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, int before = 0, int after = 0, bool exact = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, int? focusLine = null, int? focusColumn = null, bool regex = false)
+    public FindResults FindInFiles(string query, int limit, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, int before = 0, int after = 0, bool exact = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, int? focusLine = null, int? focusColumn = null, bool regex = false, int? maxCandidateFiles = null, int? maxLinesScanned = null)
     {
-        if (string.IsNullOrWhiteSpace(query) || limit <= 0 || pathPatterns == null || pathPatterns.Count == 0)
-            return [];
+        if (string.IsNullOrWhiteSpace(query) || limit <= 0)
+            return new FindResults([], new FindScanSummary(0, 0, 0));
 
         before = Math.Max(0, before);
         after = Math.Max(0, after);
@@ -32,17 +32,29 @@ public partial class DbReader
             fileCmd.Parameters.AddWithValue("@lang", lang);
         AddPathFilterParameters(fileCmd, pathPatterns, excludePathPatterns);
 
+        var candidateFiles = CountFindCandidateFiles(lang, pathPatterns, excludePathPatterns, excludeTests);
+        var filesScanned = 0;
+        var linesScanned = 0;
+        var truncated = false;
+        string? truncationReason = null;
         var results = new List<FileFindResult>();
         using var fileReader = fileCmd.ExecuteTrackedReader();
         while (fileReader.TrackedRead())
         {
             if (results.Count >= limit)
                 break;
+            if (maxCandidateFiles.HasValue && filesScanned >= maxCandidateFiles.Value)
+            {
+                truncated = true;
+                truncationReason ??= "candidate_file_limit";
+                break;
+            }
 
             var fileId = fileReader.GetInt64(0);
             var path = fileReader.GetString(1);
             var fileLang = GetNullableString(fileReader, 2);
             var totalLines = fileReader.GetInt32(3);
+            filesScanned++;
             if (totalLines <= 0)
                 continue;
 
@@ -51,11 +63,20 @@ public partial class DbReader
             var snippetWindow = new Queue<IndexedLine>();
             var snippetLinesByNumber = new Dictionary<int, string>();
             var acceptedMatches = results.Count;
+            var stopScanning = false;
 
             foreach (var indexedLine in EnumerateIndexedFileLines(fileId))
             {
                 if (indexedLine.Number > totalLines)
                     break;
+                if (maxLinesScanned.HasValue && linesScanned >= maxLinesScanned.Value)
+                {
+                    truncated = true;
+                    truncationReason ??= "line_scan_limit";
+                    stopScanning = true;
+                    break;
+                }
+                linesScanned++;
 
                 AddLineToFindWindow(indexedLine, snippetWindow, snippetLinesByNumber);
 
@@ -105,16 +126,27 @@ public partial class DbReader
                 results,
                 maxLineWidth,
                 int.MaxValue);
+            if (stopScanning)
+                break;
         }
 
-        return results;
+        var capReached = truncated;
+        return new FindResults(
+            results,
+            new FindScanSummary(
+                candidateFiles,
+                filesScanned,
+                linesScanned,
+                truncated,
+                capReached,
+                TimedOut: false,
+                truncationReason,
+                maxCandidateFiles,
+                maxLinesScanned));
     }
 
     public int CountFindCandidateFiles(string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
     {
-        if (pathPatterns == null || pathPatterns.Count == 0)
-            return 0;
-
         using var fileCmd = _conn.CreateCommand();
         var sql = "SELECT COUNT(*) FROM files f WHERE 1=1";
         if (lang != null)
@@ -128,10 +160,10 @@ public partial class DbReader
         return Convert.ToInt32(fileCmd.ExecuteScalar(), CultureInfo.InvariantCulture);
     }
 
-    public QueryCountResult CountFindInFiles(string query, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, int? focusLine = null, int? focusColumn = null, bool regex = false)
+    public FindCountResult CountFindInFiles(string query, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, int? focusLine = null, int? focusColumn = null, bool regex = false, int? maxCandidateFiles = null, int? maxLinesScanned = null)
     {
-        if (string.IsNullOrWhiteSpace(query) || pathPatterns == null || pathPatterns.Count == 0)
-            return new QueryCountResult(0, 0);
+        if (string.IsNullOrWhiteSpace(query))
+            return new FindCountResult(0, 0, new FindScanSummary(0, 0, 0));
 
         var comparison = exact ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
         var regexMatcher = regex
@@ -148,23 +180,45 @@ public partial class DbReader
             fileCmd.Parameters.AddWithValue("@lang", lang);
         AddPathFilterParameters(fileCmd, pathPatterns, excludePathPatterns);
 
+        var candidateFiles = CountFindCandidateFiles(lang, pathPatterns, excludePathPatterns, excludeTests);
+        var filesScanned = 0;
+        var linesScanned = 0;
+        var truncated = false;
+        string? truncationReason = null;
         var count = 0;
         var fileCount = 0;
         using var fileReader = fileCmd.ExecuteTrackedReader();
         while (fileReader.TrackedRead())
         {
+            if (maxCandidateFiles.HasValue && filesScanned >= maxCandidateFiles.Value)
+            {
+                truncated = true;
+                truncationReason ??= "candidate_file_limit";
+                break;
+            }
+
             var fileId = fileReader.GetInt64(0);
             var fileLang = GetNullableString(fileReader, 2);
             var totalLines = fileReader.GetInt32(3);
+            filesScanned++;
             if (totalLines <= 0)
                 continue;
 
             var searchQuery = exact && !regex ? ExactSourceSearchNormalizer.Normalize(query, fileLang) : query;
             var fileMatches = 0;
+            var stopScanning = false;
             foreach (var indexedLine in EnumerateIndexedFileLines(fileId))
             {
                 if (indexedLine.Number > totalLines)
                     break;
+                if (maxLinesScanned.HasValue && linesScanned >= maxLinesScanned.Value)
+                {
+                    truncated = true;
+                    truncationReason ??= "line_scan_limit";
+                    stopScanning = true;
+                    break;
+                }
+                linesScanned++;
 
                 if (focusLine.HasValue && indexedLine.Number != focusLine.Value)
                     continue;
@@ -187,9 +241,24 @@ public partial class DbReader
                 count += fileMatches;
                 fileCount++;
             }
+            if (stopScanning)
+                break;
         }
 
-        return new QueryCountResult(count, fileCount);
+        var capReached = truncated;
+        return new FindCountResult(
+            count,
+            fileCount,
+            new FindScanSummary(
+                candidateFiles,
+                filesScanned,
+                linesScanned,
+                truncated,
+                capReached,
+                TimedOut: false,
+                truncationReason,
+                maxCandidateFiles,
+                maxLinesScanned));
     }
 
     private readonly record struct IndexedLine(int Number, string Text);
@@ -307,12 +376,13 @@ public partial class DbReader
                 continue;
 
             var snippetLines = snippetLineNumbers.Select(line => snippetLinesByNumber[line]).ToList();
-            var clampedSnippet = LineWidthFormatter.ClampLines(
+            var (snippet, truncationContext) = ClampFindSnippetLines(
                 snippetLines,
                 maxLineWidth,
                 focusLineIndex: snippetLineNumbers.IndexOf(pending.LineNumber),
                 focusColumn: pending.Column + 1,
                 focusLength: pending.Length);
+            var matchLine = snippetLinesByNumber[pending.LineNumber];
 
             results.Add(new FileFindResult
             {
@@ -320,12 +390,48 @@ public partial class DbReader
                 Lang = fileLang,
                 Line = pending.LineNumber,
                 Column = pending.Column + 1,
+                Length = pending.Length,
+                OriginalLineLength = matchLine.Length,
                 StartLine = snippetLineNumbers[0],
                 EndLine = snippetLineNumbers[^1],
-                Snippet = clampedSnippet.Text,
-                SnippetTruncated = clampedSnippet.Truncated,
+                Snippet = snippet,
+                SnippetTruncated = truncationContext.LineCount > 0,
+                SnippetTruncationContext = truncationContext,
             });
         }
+    }
+
+    private static (string Text, FileFindSnippetTruncationContext Context) ClampFindSnippetLines(
+        IReadOnlyList<string> lines,
+        int maxLineWidth,
+        int focusLineIndex,
+        int focusColumn,
+        int focusLength)
+    {
+        if (lines.Count == 0)
+            return (string.Empty, new FileFindSnippetTruncationContext());
+
+        var output = new string[lines.Count];
+        var truncatedCharCounts = new List<int>();
+        for (var i = 0; i < lines.Count; i++)
+        {
+            var clamped = i == focusLineIndex
+                ? LineWidthFormatter.ClampLine(lines[i], maxLineWidth, focusColumn, focusLength)
+                : LineWidthFormatter.ClampLine(lines[i], maxLineWidth);
+            output[i] = clamped.Text;
+            if (clamped.Truncated)
+                truncatedCharCounts.Add(clamped.TruncatedCharCount);
+        }
+
+        return (
+            string.Join('\n', output),
+            new FileFindSnippetTruncationContext
+            {
+                LineCount = truncatedCharCounts.Count,
+                CharCounts = truncatedCharCounts,
+                TotalChars = truncatedCharCounts.Sum(),
+                Reason = truncatedCharCounts.Count > 0 ? "line_width" : null,
+            });
     }
 
     private static void PruneFindWindow(
@@ -470,8 +576,16 @@ public partial class DbReader
             Lang = lang,
             StartLine = selectedLines[0],
             EndLine = selectedLines[^1],
+            RequestedStartLine = requestedStart,
+            RequestedEndLine = requestedEndCeiling,
+            EffectiveStartLine = selectedLines[0],
+            EffectiveEndLine = selectedLines[^1],
             Content = clampedContent.Text,
             ContentTruncated = clampedContent.Truncated,
+            ContentTruncationReasons = clampedContent.Truncated ? ["line_width_cap"] : [],
+            ContentRecovery = clampedContent.Truncated
+                ? FileExcerptResult.CreateRecoveryHint(path, selectedLines[0], selectedLines[^1])
+                : null,
         };
     }
 
@@ -656,11 +770,21 @@ public partial class DbReader
         var unknownExtensionFiles = ParseMetaStringList(TryGetMetaStringInternal(DbContext.UnknownExtensionFilePathsMetaKey));
         var unknownExtensionFilesTruncated = ParseMetaBool(TryGetMetaStringInternal(DbContext.UnknownExtensionFilesTruncatedMetaKey));
         var unknownExtensionFilePathLimit = ParseMetaLong(TryGetMetaStringInternal(DbContext.UnknownExtensionFilePathLimitMetaKey));
+        var unknownExtensionExtensionCounts = UnknownExtensionClassifier.DeserializeCounts(TryGetMetaStringInternal(DbContext.UnknownExtensionExtensionCountsMetaKey));
+        var unknownExtensionCategoryCounts = UnknownExtensionClassifier.DeserializeCounts(TryGetMetaStringInternal(DbContext.UnknownExtensionCategoryCountsMetaKey));
+        var unknownExtensionGroups = UnknownExtensionClassifier.DeserializeGroups(TryGetMetaStringInternal(DbContext.UnknownExtensionGroupsMetaKey));
         if (unknownExtensionFiles != null)
         {
             unknownExtensionFilesTruncated ??= unknownExtensionFileCount.HasValue
                 && unknownExtensionFileCount.Value > unknownExtensionFiles.Count;
             unknownExtensionFilePathLimit ??= unknownExtensionFiles.Count;
+            if (unknownExtensionExtensionCounts == null || unknownExtensionCategoryCounts == null || unknownExtensionGroups == null)
+            {
+                var fallbackClassification = UnknownExtensionClassifier.Classify(unknownExtensionFiles);
+                unknownExtensionExtensionCounts ??= fallbackClassification.ExtensionCounts;
+                unknownExtensionCategoryCounts ??= fallbackClassification.CategoryCounts;
+                unknownExtensionGroups ??= fallbackClassification.Groups;
+            }
         }
         // #1546: workspace case-sensitivity stamp. Read inside the SHARED snapshot for
         // consistency with the other freshness signals; missing on legacy DBs.
@@ -669,11 +793,19 @@ public partial class DbReader
         var dbPragmaSettings = GetDbPragmaSettings();
         var dbSizeBytes = TryGetDatabaseFileSize();
         var walSizeBytes = TryGetWalFileSize();
+        var maintenanceGuidance = MaintenanceGuidanceBuilder.Build(new MaintenanceMetrics(
+            dbPragmaSettings.PageCount,
+            dbPragmaSettings.FreelistCount,
+            dbPragmaSettings.PageSize,
+            walSizeBytes,
+            dbSizeBytes,
+            dbPragmaSettings.AutoVacuum));
         var lastIndexRun = GetLastIndexRun();
         var batchInProgress = string.Equals(
             TryGetMetaStringInternal(DbContext.BatchInProgressMetaKey),
             "true",
             StringComparison.OrdinalIgnoreCase);
+        var lastFailedOrPartialIndexRun = GetLastFailedOrPartialIndexRun(batchInProgress);
 
         var result = new StatusResult
         {
@@ -685,6 +817,9 @@ public partial class DbReader
             UnknownExtensionFiles = unknownExtensionFiles,
             UnknownExtensionFilesTruncated = unknownExtensionFilesTruncated,
             UnknownExtensionFilePathLimit = unknownExtensionFilePathLimit,
+            UnknownExtensionExtensionCounts = unknownExtensionExtensionCounts,
+            UnknownExtensionCategoryCounts = unknownExtensionCategoryCounts,
+            UnknownExtensionGroups = unknownExtensionGroups,
             IndexedAt = freshness.IndexedAt,
             LastWorkspaceFreshenedAt = lastIndexRun?.StartedAt ?? indexedHeadTimestamp,
             LatestModified = freshness.LatestModified,
@@ -712,10 +847,12 @@ public partial class DbReader
             IndexNewerThanReaderReason = _indexNewerThanReaderReason,
             PathCaseSensitive = pathCaseSensitive,
             DbPragmaSettings = dbPragmaSettings,
+            MaintenanceGuidance = maintenanceGuidance,
             DbSizeBytes = dbSizeBytes,
             WalSizeBytes = walSizeBytes,
             Process = StatusProcessMetrics.Capture(),
             LastIndexRun = lastIndexRun,
+            LastFailedOrPartialIndexRun = lastFailedOrPartialIndexRun,
             ReadOnlyFallback = _readOnlyFallback,
             WalCheckpointAttempted = _walCheckpointAttempted,
             WalCheckpointSucceeded = _walCheckpointSucceeded,
@@ -751,6 +888,7 @@ public partial class DbReader
         PageCount = ExecuteNullableLong("PRAGMA page_count"),
         FreelistCount = ExecuteNullableLong("PRAGMA freelist_count"),
         PageSize = ExecuteNullableLong("PRAGMA page_size"),
+        AutoVacuum = ExecuteNullableLong("PRAGMA auto_vacuum"),
     };
 
     private long? TryGetDatabaseFileSize()
@@ -817,6 +955,41 @@ public partial class DbReader
             RowsUpserted = rowsUpserted,
             RowsDeleted = rowsDeleted,
             PeakMemoryMb = peakMemoryMb,
+        };
+    }
+
+    private StatusFailedOrPartialIndexRun? GetLastFailedOrPartialIndexRun(bool batchInProgress)
+    {
+        var status = TryGetMetaStringInternal(DbContext.LastFailedIndexRunStatusMetaKey);
+        var mode = TryGetMetaStringInternal(DbContext.LastFailedIndexRunModeMetaKey);
+        var startedAt = ParseMetaDateTime(TryGetMetaStringInternal(DbContext.LastFailedIndexRunStartedAtMetaKey));
+        var durationMs = ParseMetaLong(TryGetMetaStringInternal(DbContext.LastFailedIndexRunDurationMsMetaKey));
+        var filesProcessed = ParseMetaLong(TryGetMetaStringInternal(DbContext.LastFailedIndexRunFilesProcessedMetaKey));
+        var filesTotal = ParseMetaLong(TryGetMetaStringInternal(DbContext.LastFailedIndexRunFilesTotalMetaKey));
+        var errorCode = TryGetMetaStringInternal(DbContext.LastFailedIndexRunErrorCodeMetaKey);
+        var reason = TryGetMetaStringInternal(DbContext.LastFailedIndexRunReasonMetaKey);
+        if (status == null && mode == null && startedAt == null && durationMs == null && filesProcessed == null
+            && filesTotal == null && errorCode == null && reason == null)
+        {
+            return batchInProgress
+                ? new StatusFailedOrPartialIndexRun
+                {
+                    Status = "partial",
+                    Reason = "batch_in_progress",
+                }
+                : null;
+        }
+
+        return new StatusFailedOrPartialIndexRun
+        {
+            Status = status,
+            Mode = mode,
+            StartedAt = startedAt,
+            DurationMs = durationMs,
+            FilesProcessed = filesProcessed,
+            FilesTotal = filesTotal,
+            ErrorCode = errorCode,
+            Reason = reason,
         };
     }
 

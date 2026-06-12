@@ -34,6 +34,12 @@ internal static class DataDirectorySecurity
         return directory;
     }
 
+    public static DirectoryInfo CreateSensitiveTempDirectory(string prefix)
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"{prefix}{Guid.NewGuid():N}");
+        return CreateSensitiveDirectory(path);
+    }
+
     public static void ApplyPrivateMode(string path)
     {
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))

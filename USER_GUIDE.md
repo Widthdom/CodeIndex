@@ -31,7 +31,7 @@ cdidx mcp                        # Start MCP server for AI tools
 cdidx lsp --db .cdidx/codeindex.db  # Start read-only LSP server for editors
 ```
 
-78 languages supported. 24 registered MCP tools. Incremental updates. Zero config.
+80 languages supported. 24 registered MCP tools. Incremental updates. Zero config.
 
 | Topic | Link |
 |---|---|
@@ -280,9 +280,9 @@ sections below show examples and option details for the most common workflows.
 | Analysis | `impact` | Traverse transitive callers from a resolved symbol | `impact_analysis` |
 | Analysis | `unused` | Find symbols defined but not referenced, with confidence buckets | `unused_symbols` |
 | Analysis | `hotspots` | Rank high-impact symbols or statements by reference volume | `symbol_hotspots` |
-| Analysis | `validate` | Report encoding and line-ending issues in indexed files; U+FFFD rows include origin/severity metadata | `validate` |
+| Analysis | `validate` | Report encoding, line-ending, and file-content diagnostics in indexed files; U+FFFD rows include origin/severity metadata | `validate` |
 | Status | `status` | Show DB statistics, freshness, and readiness metadata | `status` |
-| Status | `languages` | List language extensions and symbol/graph capabilities; add `--indexed-only` and `--capability graph|symbols|references` for workspace audits | `languages` |
+| Status | `languages` | List language extensions and symbol/reference/graph capabilities; add `--indexed-only` and `--capability graph|references|symbols|missing-graph|missing-references|missing-symbols|search-only` for workspace audits | `languages` |
 | Diagnostics | `db --integrity-check` | Run SQLite `PRAGMA integrity_check` against the DB | -- |
 | Diagnostics | `report --output <path>` | Build a redacted bug-report bundle | -- |
 | Feedback | `suggestions` | List, inspect, and export local suggestion history | -- |
@@ -305,6 +305,11 @@ can use `jq -s '.'` or pass `--json=array` to `search` to emit the result set as
 one JSON array. Add `--pretty` with `--json` to indent single-document JSON
 responses; for `search`, use `--json=array --pretty` when the result set itself
 should be indented because default `search --json` stays newline-delimited.
+`search --named-query <name>=<query>` can be repeated to run an ad hoc grouped
+batch with the same filters and snippet bounds. Named batches emit one grouped
+JSON document, and `--format compact` keeps the per-result
+`CompactSearchResult` snippet/highlight context instead of reducing rows to
+file/line pairs.
 For AI-oriented bounded payloads, `map`, `inspect`, and `outline` accept
 `--compact`. It implies JSON output, caps list sections to 5 items by default
 (or the explicit `--limit` / `--top` value), and adds `compact`,
@@ -312,7 +317,21 @@ For AI-oriented bounded payloads, `map`, `inspect`, and `outline` accept
 For narrower `inspect` evidence, `--fields <csv>` implies JSON and selects
 top-level groups such as `definitions`, `file`, `graph`, `references`,
 `callers`, and `callees`; `--body-only` is shorthand for `--body --fields
-definitions`.
+definitions`. When a definition body is longer than the returned slice,
+`body_content_next_start_line` points to the next source line to pass with
+`--body-start`; use `--body-lines` to choose the page size. If a single long
+source line hits the body byte cap, continuation still advances to the following
+source line because body paging is line-based. `inspect --json` also includes
+`body_mode` metadata so clients can see whether body content was requested,
+whether it is present, and which follow-up flags to use.
+Count-only JSON (`--count --json` or `--format count` where supported) is a
+single object with `count`, applied `query_context`, freshness metadata
+(`indexed_file_count`, `indexed_at`, `freshness_available`), and trust flags
+`degraded` / `authoritative_count`. Commands that count matched files also
+include `files`; the older `file_count` field remains as a compatibility alias
+with the same value and is not scheduled for removal before the next major
+release. New consumers should read `files` and treat `authoritative_count=false`
+as a signal to inspect the accompanying readiness or graph/exact trust fields.
 
 ```bash
 cdidx search authenticate --json          # ndjson stream, one result per line
@@ -320,12 +339,8 @@ cdidx search authenticate --json=array    # single JSON array
 cdidx inspect QueryCommandRunner --json --pretty
 cdidx map --compact                       # capped JSON with truncation metadata
 cdidx inspect Compute --body-only         # definitions with body_content only
+cdidx inspect Compute --body --body-start 40 --body-lines 40
 ```
-
-For `cdidx find --count --json`, `files` is the canonical matched-file count.
-The older `file_count` field remains as a deprecated compatibility alias with
-the same value and is not scheduled for removal before the next major release;
-new consumers should read `files`.
 
 ## Editor and index portability
 
@@ -427,7 +442,8 @@ cdidx validate --json --limit 50 --path legacy/
 
 `validate` reports indexed files that are likely to produce misleading snippets
 or symbol names: U+FFFD replacement characters, UTF-16 BOMs, null bytes, mixed or
-CR-only line endings, likely non-UTF-8 content, and Git LFS pointer placeholders.
+CR-only line endings, likely non-UTF-8 content, Git LFS pointer placeholders, and
+malformed or truncated Dockerfile JSON-form instruction payloads.
 For `replacement_char`, JSON and MCP responses include `origin` (`source_literal`
 or `decode_replacement`) and `severity` so agents can distinguish intentional
 U+FFFD literals from likely encoding damage.
@@ -569,6 +585,22 @@ automatically when the `gh` command is available and the public GitHub release
 host is used. Set `CDIDX_REQUIRE_ATTESTATION=1` to make the installer fail
 closed when provenance verification cannot be completed.
 
+Installer verification policy is explicit:
+
+- `CDIDX_VERIFY_POLICY=compat` is the default. The installer always enforces
+  archive checksums, runs GitHub attestation and GPG checksum-signature checks
+  when the required tools/configuration are available, and warns before
+  continuing when an optional second-channel check cannot run.
+- `CDIDX_VERIFY_POLICY=strict` or `--verify-policy strict` makes public GitHub
+  attestation and GPG checksum-signature verification fail closed. Strict mode
+  also requires signer fingerprint pinning through
+  `CDIDX_RELEASE_GPG_FINGERPRINT`.
+- `CDIDX_REQUIRE_ATTESTATION=1` and `CDIDX_STRICT_VERIFY=1` remain available as
+  narrower compatibility knobs when only one second-channel check should be
+  required. Until an official default release-signing fingerprint is bundled,
+  strict GPG verification requires operators to distribute the trusted
+  fingerprint through `CDIDX_RELEASE_GPG_FINGERPRINT`.
+
 ### Option A: One-liner install (no .NET required)
 
 Works in containers, CI, and any Linux/macOS environment — no .NET SDK needed.
@@ -640,6 +672,31 @@ bash ./install.sh --self-test-local-mirror
 
 If the default local self-test port is busy, set
 `CDIDX_LOCAL_MIRROR_PORT=18766`.
+
+#### Upgrade an install.sh installation
+
+`cdidx upgrade` checks GitHub releases and reruns the verified installer for
+the selected release. It defaults to the stable/latest release channel.
+
+```bash
+cdidx upgrade
+cdidx upgrade --check-only --json
+cdidx upgrade --prerelease
+cdidx upgrade --channel prerelease
+cdidx upgrade --version v1.29.0-rc.1
+```
+
+Use `--channel stable` (or `--channel latest`) to stay on stable releases,
+`--prerelease` / `--channel prerelease` to dogfood the newest prerelease, and
+`--version <tag>` to install a specific release tag. JSON output includes
+`selected_version`, `selected_channel`, `selection_source`, and
+`include_prerelease` so automation can record why a release was selected.
+
+On Windows, `cdidx upgrade` selects the same release but does not replace the
+running binary in place. It prints a NuGet handoff command such as
+`dotnet tool update -g cdidx --version <version>` plus the matching release
+page and `CodeIndex-win-*.zip` asset URL; JSON output carries those values in
+`handoff_command`, `handoff_url`, `handoff_asset`, and `handoff_asset_url`.
 
 ### Option B: NuGet Global Tool
 
@@ -761,7 +818,7 @@ Indexing scope and ignore handling:
 
 | Area | Behavior |
 |---|---|
-| Built-in skips | `node_modules`, `bin`, `obj`, lockfiles, and other built-in skip-list entries are always excluded. |
+| Built-in skips | Generated/vendor directories such as `node_modules`, `bin`, and `obj`, plus platform metadata files, are excluded. Dependency lockfiles are indexed as `dependency_lock` unless user ignore rules exclude them. |
 | User ignore files | User `.gitignore` plus optional `.cdidxignore` rules are honored across full scans, `--files`, and `--commits` updates. |
 | Workspace-scoped cdidx ignores | A project-root `.codeindex/.cdidxignore` is also loaded as a workspace-scoped ignore file, so multi-workspace manifests can keep local cdidx-only ignore rules out of the repository root. |
 | Encoding | Ignore files are read as UTF-8, so non-ASCII patterns behave the same across platforms. |
@@ -858,6 +915,9 @@ This opens the database read-only, runs SQLite's `PRAGMA integrity_check`, and p
 cdidx search "authenticate"                             # full-text search
 cdidx search "handleRequest" --lang go                  # filter by language
 cdidx search "TODO" --limit 50                          # more results
+cdidx search "TODO" --exclude-comments                  # suppress comment-only matches
+cdidx search "Password" --exclude-strings               # suppress string, regex, and help-text matches
+cdidx search "DangerousApi" --exclude-fixtures           # suppress fixture-only matches in tests
 cdidx search "auth*"                                    # trailing * on one token opts that token into FTS5 prefix matching
 cdidx search "計算" --prefix                            # widen every token to a prefix phrase (CJK runs are one unicode61 token; opt in to reach `計算する`)
 cdidx search "content:auth*" --fts                      # raw FTS5 syntax; `content:` is the only valid column qualifier, and NEAR distance is capped at 100
@@ -867,7 +927,16 @@ cdidx search "File.ReadAllText" --exact-substring --reject-before "Length" --gua
 cdidx search "FileMode.Create" --exact-substring --require-after "File.Move" --guard-window 12  # require a nearby follow-up action
 cdidx search --list-recipes                             # show reusable audit recipes
 cdidx search --recipe risky-code --json                 # run a curated audit query set and return grouped JSON
+cdidx search --recipe risky-code/raw-diagnostic-echo --json  # run one child query from a recipe
+cdidx search --recipe risky-code --include-query raw-diagnostic-echo --exclude-query cancellation-gap --json
+cdidx search --recipe risky-code/raw-diagnostic-echo --format compact --limit 20  # summary-first compact JSON with next_cursor
+cdidx search --recipe risky-code/raw-diagnostic-echo --format compact --cursor <next_cursor>
+cdidx search --named-query pack="dotnet pack" --named-query push="nuget push" --format compact  # named ad hoc batch with compact snippets
+cdidx search "catch (Exception" --group-by file --count --json    # rank broad audit hits by file
+cdidx search "JsonDocument.Parse" --group-by symbol --count --json # rank broad audit hits by enclosing symbol
 cdidx search --recipe risky-code --format issue-drafts --open-issues open-issues.json  # issue draft JSON with duplicate preflight
+cdidx search --recipe risky-code --format issue-drafts --open-issues github --repo Widthdom/CodeIndex  # preflight against live open GitHub issues
+cdidx search "Thread.Yield" --format issue-drafts --issue-title "Thread.Yield audit" --issue-label audit  # ad hoc issue draft JSON
 cdidx search "--open-reports" --path README.md --count  # quoted literal that starts with --
 cdidx search --query "--path" --path README.md          # search for an option-looking literal
 ```
@@ -883,7 +952,10 @@ Guard-aware search filters primary `search` matches by nearby literal guards:
 `--require-before` / `--require-after` keep matches only when the guard query
 appears in the selected line window, while `--reject-before` / `--reject-after`
 drop matches when the guard query appears. JSON search results include
-`guard_evidence` for required guards that matched.
+`guard_evidence` for matched guards and `guard_checks` for each guard evaluated
+on a returned match. Guard evidence includes the guard name, pattern,
+before/after relationship, 1-based span, origin category, and source line.
+Each `guard_checks[]` entry includes a compact pass/fail summary.
 Guarded searches inspect a bounded candidate set before pagination; if a guarded
 query is too broad to satisfy the requested page within that budget, CLI and MCP
 return a validation error. Narrow with more specific query text, `--lang`,
@@ -903,6 +975,12 @@ Recipe runs support text output, `--json` / `--format json`, and
 `--format issue-drafts`; `--list-recipes` supports text or JSON. Other search
 export formats and `--json=array` are rejected for recipe modes because recipe
 output is grouped by query or list metadata.
+The MCP `search` tool exposes the same recipe surface with
+`{"listRecipes":true}` for discovery and `{"recipe":"risky-code"}` for
+execution. Set `CDIDX_SEARCH_RECIPE_PATHS` to one or more JSON files separated
+by the platform path separator to add configured recipe sources; each file may
+be a recipe array or `{ "recipes": [...] }`, and invalid sources are reported as
+bounded `recipe_source_diagnostics`.
 For triage automation, `--format issue-drafts` emits draft issue objects with
 titles, labels, evidence paths, Markdown bodies, and duplicate-preflight
 metadata. `--open-issues <path>` accepts an open-issue JSON list such as
@@ -1013,7 +1091,9 @@ When `definition --body` is combined with `--json`, `body_content` is capped to 
 
 `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, and `find` also share repeatable `--path <glob>` glob-style path filters (multiple values are OR'd together), repeatable `--exclude-path <glob>`, and `--exclude-tests`. Use `*` and `?` to match path segments, and plain text still behaves like a substring filter when you do not include wildcards. Search results prefer source files over tests and docs, and `search` boosts files whose symbol names or paths match the query exactly.
 
-`search --json` and MCP `search` return compact match-centered snippets instead of whole chunks. Each result includes `chunk_start_line`, `chunk_end_line`, `snippet_start_line`, `snippet_end_line`, `snippet`, `match_lines`, `highlights`, `context_before`, `context_after`, `truncated_line_count`, `dropped_match_line_count`, and `truncation_context`, plus optional `enclosing_symbol_name`, `enclosing_symbol_kind`, `enclosing_symbol_start_line`, `enclosing_symbol_end_line`, and `enclosing_container_name` when the match line is inside an indexed symbol. Use `--snippet-lines <n>` to shrink or widen the excerpt window (default: 8, max: 20), and `--max-line-width <n>` to clamp each line around the strongest match when a minified / transpiled file would otherwise return a single huge line (default: 512, max: 4096; `0` disables clamping). `--snippet-focus <leftmost|quality|proximity>` controls that long-line focus; `quality` is the default, `leftmost` keeps the legacy earliest-match behavior, and `proximity` favors dense multi-token clusters. Clamped lines are marked with `...(+N)...` in the snippet and expose `highlights[].truncated` / `highlights[].original_line_length` in JSON / MCP output.
+`search --json`, `search --format compact`, named search batches, and MCP `search` return compact match-centered snippets instead of whole chunks. Each result includes `chunk_start_line`, `chunk_end_line`, `snippet_start_line`, `snippet_end_line`, `snippet`, `match_lines`, `highlights`, `context_before`, `context_after`, `truncated_line_count`, `dropped_match_line_count`, and `truncation_context`, plus optional `enclosing_symbol_name`, `enclosing_symbol_kind`, `enclosing_symbol_start_line`, `enclosing_symbol_end_line`, and `enclosing_container_name` when the match line is inside an indexed symbol. Use `--snippet-lines <n>` to shrink or widen the excerpt window (default: 8, max: 20), and `--max-line-width <n>` to clamp each line around the strongest match when a minified / transpiled file would otherwise return a single huge line (default: 512, max: 4096; `0` disables clamping). `--snippet-focus <leftmost|quality|proximity>` controls that long-line focus; `quality` is the default, `leftmost` keeps the legacy earliest-match behavior, and `proximity` favors dense multi-token clusters. Clamped lines are marked with `...(+N)...` in the snippet and expose `highlights[].truncated` / `highlights[].original_line_length` in JSON / MCP output.
+Search JSON also exposes `match_origins` and `match_facets` so tools can distinguish matches in code, comments, string literals, regex literals, and CLI help text. Each highlight includes its own `match_origins`; `--exclude-comments` and `--exclude-strings` use those facets to hide comment-only or string-like matches.
+The same facets expose `test_file`, `test_symbol`, and `test_fixture` booleans at result, highlight, and match-facet levels. `test_fixture` marks string-like matches inside likely test files or indexed test methods, and `--exclude-fixtures` hides fixture-only matches while keeping real code matches.
 
 ### Resolve a definition
 
@@ -1071,9 +1151,11 @@ cdidx excerpt src/CodeIndex/Cli/GitHelper.cs --start 19 --end 28 --before 3 --af
 ```bash
 cdidx find "graph table" --path src/CodeIndex/Cli/QueryCommandRunner.cs
 cdidx find "Graph Table" --path src/CodeIndex/Cli/QueryCommandRunner.cs --exact --before 1 --after 1 --json
+cdidx find "guard" --all --count --json
 ```
 
 `find` fills the gap between repo-wide `search` and line-number-based `excerpt`: when you already know the target file, it returns matching line numbers, columns, and short surrounding context from the indexed file without falling back to raw-text tools. The query text is capped at 1,000 characters, matching `search`.
+Use `--path <glob>` for a bounded file set, or pass `--all` to opt in to a repo-wide indexed-file scan with safety caps. `--all` and `--path` are mutually exclusive. Count JSON includes scan summary fields such as `candidate_files`, `files_scanned`, `lines_scanned`, `scan_truncated`, `scan_cap_reached`, `candidate_file_limit`, and `line_scan_limit`; human count output writes the scan summary to stderr.
 
 ### List files
 
@@ -1219,6 +1301,8 @@ same source location.
 | `--compact` | `map`, `inspect`, `outline` | Emit AI-oriented compact JSON with capped list sections and `truncation.sections.*` metadata. The default cap is 5 unless `--limit` / `--top` is supplied. |
 | `--fields <csv>` | `inspect` | Select top-level inspect JSON groups: `file`, `workspace`, `graph`, `definitions`, `body`, `nearby_symbols`, `references`, `callers`, `callees`, or `all`. `body` includes definition bodies and maps to `definitions`. |
 | `--body-only` | `inspect` | Shorthand for `--body --fields definitions`, useful when large audits need implementation text without graph context. |
+| `--body-start <line>` | `inspect` | Start the returned definition body slice at a 1-based source line inside the symbol body. Pair with `body_content_next_start_line` from JSON to page a long body. |
+| `--body-lines <n>` | `inspect` | Return at most this many definition body lines for `--body`, `--body-only`, or `--fields body`; maximum 1000. |
 | `--status <all\|submitted\|unsubmitted>` | `suggestions` | Filter local suggestion history by GitHub submission state. |
 | `--language <lang>` / `--lang <lang>` | `suggestions` | Filter local suggestion history by recorded target language. |
 | `--category <category>` | `suggestions` | Filter local suggestion history by suggestion category. |
@@ -1226,7 +1310,8 @@ same source location.
 | `--limit <n>` | `suggestions list`, `suggestions export` | Cap emitted suggestion records after filters and newest-first ordering. |
 | `--offset <n>` | `suggestions list`, `suggestions export` | Skip filtered suggestion records after newest-first ordering before emitting results. |
 | `--format <json\|markdown\|issue-drafts>` | `suggestions export` | Choose export format. JSON is the default, markdown is intended for human triage, and issue-drafts emits issue-ready draft objects. |
-| `--open-issues <path>` | `suggestions export --format issue-drafts` | Preflight drafts against an open-issues JSON file such as `gh issue list --state open --json number,title,labels,url`. Inputs are capped at 8 MiB, 32 JSON nesting levels, 1000 issue entries, 32 labels per issue, and bounded title/URL/label strings. |
+| `--open-issues <path\|github\|github:owner/name>` / `--repo <owner/name>` | `search --format issue-drafts`, `suggestions export --format issue-drafts` | Preflight drafts against an open-issues JSON file such as `gh issue list --state open --json number,title,labels,url`; both commands can also fetch live open GitHub issues with `--open-issues github --repo owner/name` or `--open-issues github:owner/name`. Inputs are capped at 8 MiB, 32 JSON nesting levels, 1000 issue entries, 32 labels per issue, and bounded title/URL/label strings. |
+| `--issue-title <title>` / `--issue-label <label>` | `search --format issue-drafts` | Set the title for an ad hoc search draft and add label hints. `--issue-label` can be repeated or comma-separated. |
 | `--check` | `status` | Verify that `.cdidx/codeindex.db` exactly matches the current indexable workspace by comparing DB file paths/checksums against a fresh filesystem scan. Matching indexes exit `0`; stale indexes exit `5`. |
 | `--dry-run` | `index` | Scan files and report what would change without writing to the database |
 | `--limit <n>` | Query result commands except `suggestions` | Max results (default: 20, max: 10000; `map` uses it per section) |
@@ -1235,12 +1320,16 @@ same source location.
 | `--exclude-visibility <v[,v]>` | `definition`, `symbols`, `unused`, `hotspots` | Exclude symbols with the requested visibility values. Accepts the same comma-separated values and alias expansion as `--visibility`. |
 | `--path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `validate` | Restrict results to glob-style path patterns. `*` and `?` are wildcards. Repeatable; multiple values are OR'd together |
 | `--query <query>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `inspect`, `impact` | Pass a query literal explicitly, useful when the query starts with `-`. Query commands except `find` also accept `-- <query>` as a one-token query escape while continuing to parse later options. |
-| `--recipe <name>` | `search` | Run a reusable audit recipe such as `risky-code`. Recipe runs default to `--audit-scope source`, applying the recipe's production-code path and exclusion metadata before normal search filters and snippet controls; text, `--json` / `--format json`, and `--format issue-drafts` are supported. |
+| `--recipe <name>` | `search` | Run a reusable audit recipe such as `risky-code`. Use `recipe/query` form, such as `risky-code/raw-diagnostic-echo`, to run one child query directly. Recipe runs default to `--audit-scope source`, applying the recipe's production-code path and exclusion metadata before normal search filters and snippet controls; `--limit` / `--top` is per child query. Text, `--json` / `--format json`, `--format compact`, and `--format issue-drafts` are supported, and issue drafts include a replay command. |
+| `--include-query <name>` / `--exclude-query <name>` | `search --recipe <name>` | Include or exclude child recipe queries by name. Repeatable and comma-separated; names are listed by `cdidx search --list-recipes`. |
+| `--cursor <cursor>` | `search --recipe <name/query>` | Fetch the next page for one selected recipe child query. Use the `next_cursor` returned by recipe JSON or compact output. |
 | `--audit-scope <source\|all>` | `search --recipe <name>` | Choose recipe path scope. `source` is the default and suppresses tests, docs, changelog text, and recipe definitions using recipe metadata; `all` intentionally searches every indexed path unless other filters exclude it. JSON recipe output reports the effective scope, path filters, and exclusions. |
-| `--list-recipes` | `search` | List available search audit recipes with query text, recommended labels, exact-match mode, and false-positive guidance. |
-| `--open-issues <path>` | `search --recipe <name> --format issue-drafts` | Preflight generated issue drafts against an open-issues JSON file such as `gh issue list --state open --json number,title,labels,url`. |
+| `--list-recipes` | `search` | List available search audit recipes with query text, recommended labels, exact-match mode, false-positive guidance, supported formats, filter support, and limit semantics. |
 | `--exclude-path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | Exclude glob-style path patterns. `*` and `?` are wildcards (repeatable) |
 | `--exclude-tests` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | Exclude likely test files and prefer production code |
+| `--exclude-comments` | `search` | Exclude matches whose only retained origin is a comment |
+| `--exclude-strings` | `search` | Exclude matches whose only retained origin is a string literal, regex literal, or CLI help text |
+| `--exclude-fixtures` | `search` | Exclude matches whose only retained facet is a test fixture string |
 | `--include-generated` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `deps`, `impact`, `unused`, `hotspots` | Include files detected as generated code; generated files are excluded from query results by default |
 | `--workspace-db <path>` | `deps` | Add another CodeIndex database to the file-dependency query. Repeat it for up to 7 distinct additional DBs (8 total including `--db`); JSON edges include `source_db` and `target_db` so same relative paths can be disambiguated. |
 | `--snippet-lines <n>` | `search`, `references`, `callers`, `callees`, `impact` | Search snippet length or graph `--body` excerpt length (default: 8, max: 20) |
@@ -1536,7 +1625,7 @@ Run `cdidx status --log-path` to print the active log directory without opening 
 
 You can check a `.cdidx/config.json` or `.cdidxrc.json` file into a repository to set per-project defaults instead of relying on shell-profile or CI env vars (#1571). On startup `cdidx` walks upward from the current working directory looking for the first project config file, validates its schema, and materializes recognized keys as process environment variables — so every existing env-var consumer picks them up without further changes.
 
-Precedence is **CLI flag > environment variable > config file > built-in default**. A config-file value is applied only when the matching env var is not already set in the process, so a value the user already exported in the shell or CI always wins. Config JSON is bounded to 64 KiB and a conservative nesting depth before schema validation. A malformed file (invalid JSON, unknown key, wrong type, or excessive nesting) is a hard error: cdidx exits `1` with the file path and the offending field; set `CDIDX_DISABLE_CONFIG_FILE=1` to bypass the file entirely.
+Precedence is **CLI flag > environment variable > config file > built-in default**. A config-file value is applied only when the matching env var is not already set in the process, so a value the user already exported in the shell or CI always wins. Config JSON is bounded to 64 KiB and a conservative nesting depth before schema validation. A malformed file (invalid JSON, unknown key, wrong type, or excessive nesting) is a hard error: cdidx exits `1` with the file path and all detected offending fields; set `CDIDX_DISABLE_CONFIG_FILE=1` to bypass the file entirely.
 
 Secrets are intentionally **not** loadable from the file: `CDIDX_GITHUB_TOKEN`, `CDIDX_MCP_AUTH_TOKEN`, and `CDIDX_MCP_HTTP_TOKEN` are env-only so tokens never get checked into version control.
 
@@ -1563,14 +1652,15 @@ Supported schema (top-level keys are snake_case; nested indexing kind keys keep 
       "deny":  ["index", "backfill_fold"]              // → CDIDX_MCP_TOOLS_DENY
     },
     "rate_limit": {
-      "rps":   5,  // → CDIDX_MCP_RATE_LIMIT_RPS
-      "burst": 10  // → CDIDX_MCP_RATE_LIMIT_BURST
+      "rps": 5,                       // → CDIDX_MCP_RATE_LIMIT_RPS
+      "burst": 10,                    // → CDIDX_MCP_RATE_LIMIT_BURST
+      "bucket_idle_seconds": 900      // → CDIDX_MCP_RATE_LIMIT_BUCKET_IDLE_SECONDS
     }
   }
 }
 ```
 
-JSON5-style line comments (`//`) and trailing commas are accepted so the file stays human-editable. The optional `$schema` key is ignored at runtime; it is honored only so editors that recognize JSON Schema references can offer completion. Setting `disable_persistent_log` to `false` is a no-op (absence already means "logging enabled") — only `true` exports `CDIDX_DISABLE_PERSISTENT_LOG=1`. Config-sourced `metrics_path` and `global_tool_log_dir` values are resolved from the config workspace root and must stay inside that workspace; use the CLI flag or a real environment variable when you intentionally need an outside destination. `stale_after` uses the same compact duration format as `status --check --stale-after`: `30m`, `2h`, or `7d`, up to `30d`. `suggestion_dedup_threshold` sets the MCP suggestion fuzzy-deduplication cutoff as a number from `0` to `1`; the built-in default is `0.85`, and `cdidx mcp --suggestion-dedup-threshold <0..1>` overrides it for one MCP session. `suggestion_max_age_days` and `suggestion_max_count` bound the live `.cdidx/suggestions-*.json` store; pruned records are appended to `.cdidx/suggestions-*.archive.jsonl`, whose active file is capped at 8 MiB and rotates up to three retained generations (`.1` through `.3`). Defaults are 365 days and 5000 records, and config-file values may not exceed 3650 days or 100000 records. Matching environment variables above those caps fall back to the defaults. String-array settings such as `indexing.includeKinds`, `indexing.excludeKinds`, `mcp.tools.allow`, and `mcp.tools.deny` are capped at 128 entries and 256 characters per item before they are joined into environment variables. `indexing.includeKinds` and `indexing.excludeKinds` set the default symbol-kind filter for `cdidx index`; CLI flags `--include-symbol-kind <kind>[,<kind>]` and `--exclude-symbol-kind <kind>[,<kind>]` override those env-backed defaults for a single run.
+JSON5-style line comments (`//`) and trailing commas are accepted so the file stays human-editable. The optional `$schema` key is ignored at runtime; it is honored only so editors that recognize JSON Schema references can offer completion. Setting `disable_persistent_log` to `false` is a no-op (absence already means "logging enabled") — only `true` exports `CDIDX_DISABLE_PERSISTENT_LOG=1`. Config-sourced `metrics_path` and `global_tool_log_dir` values are resolved from the config workspace root and must stay inside that workspace; use the CLI flag or a real environment variable when you intentionally need an outside destination. `stale_after` uses the same compact duration format as `status --check --stale-after`: `30m`, `2h`, or `7d`, up to `30d`. `suggestion_dedup_threshold` sets the MCP suggestion fuzzy-deduplication cutoff as a number from `0` to `1`; the built-in default is `0.85`, and `cdidx mcp --suggestion-dedup-threshold <0..1>` overrides it for one MCP session. `suggestion_max_age_days` and `suggestion_max_count` bound the live `.cdidx/suggestions-*.json` store; pruned records are appended to `.cdidx/suggestions-*.archive.jsonl`, whose active file is capped at 8 MiB and rotates up to three retained generations (`.1` through `.3`). Defaults are 365 days and 5000 records, and config-file values may not exceed 3650 days or 100000 records. Matching environment variables above those caps fall back to the defaults. `mcp.rate_limit.bucket_idle_seconds` sets the same idle bucket TTL as `CDIDX_MCP_RATE_LIMIT_BUCKET_IDLE_SECONDS`; invalid runtime values fall back to the default with a warning. String-array settings such as `indexing.includeKinds`, `indexing.excludeKinds`, `mcp.tools.allow`, and `mcp.tools.deny` are capped at 128 entries and 256 characters per item before they are joined into environment variables. `indexing.includeKinds` and `indexing.excludeKinds` set the default symbol-kind filter for `cdidx index`; CLI flags `--include-symbol-kind <kind>[,<kind>]` and `--exclude-symbol-kind <kind>[,<kind>]` override those env-backed defaults for a single run.
 
 ## How it works
 
@@ -1609,7 +1699,7 @@ The database reflects the working tree at the time of the last index. After swit
 
 ## Supported languages
 
-All indexed languages are searchable through FTS5. Rows with **Symbols = yes** also support structured queries by function, class, import, or language-specific symbol name. Use `cdidx languages --indexed-only --json` to list only languages present in the current DB, and add `--capability graph|symbols|references` to narrow the table to languages that support a specific structured capability.
+All indexed languages are searchable through FTS5. Rows with **Symbols = yes** also support structured queries by function, class, import, or language-specific symbol name. Use `cdidx languages --indexed-only --json` to list only languages present in the current DB; JSON rows expose `symbol_extraction`, `reference_extraction`, `graph_queries`, and `capability_gaps`. Add `--capability graph|references|symbols|missing-graph|missing-references|missing-symbols|search-only` to narrow the table to languages that support a structured capability or still have a capability gap.
 
 | Language | Extensions | Symbols |
 |---|---|:---:|
@@ -1622,7 +1712,7 @@ All indexed languages are searchable through FTS5. Rows with **Symbols = yes** a
 | Rust | `.rs` | yes |
 | Java | `.java` | yes |
 | Kotlin | `.kt`, `.kts` | yes |
-| Ruby | `.rb`, `.rake`, `.gemspec`, `.podspec`, `Gemfile`, `Rakefile`, `Podfile`, `Guardfile`, `Capfile`, `Vagrantfile` | yes |
+| Ruby | `.rb`, `.rake`, `.gemspec`, `.podspec`, `Rakefile`, `Guardfile`, `Capfile`, `Vagrantfile` | yes |
 | C | `.c`, `.h` | yes |
 | C++ | `.cpp`, `.cc`, `.cxx`, `.hh`, `.hpp`, `.hxx` | yes |
 | PHP | `.php` | yes |
@@ -1650,6 +1740,8 @@ All indexed languages are searchable through FTS5. Rows with **Symbols = yes** a
 | Protobuf | `.proto` | yes |
 | GraphQL | `.graphql`, `.gql` | yes |
 | Gradle | `.gradle` | yes |
+| Dependency manifest | `package.json`, `pyproject.toml`, `requirements.txt`, `Gemfile`, `Podfile`, `Cargo.toml`, `composer.json`, `go.mod`, `packages.config` | -- |
+| Dependency lockfile | `package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`, `pnpm-lock.yaml`, `Gemfile.lock`, `Cargo.lock`, `go.sum`, `uv.lock` | -- |
 | Makefile | `Makefile`, `GNUmakefile`, `Makefile.<suffix>`, `GNUmakefile.<suffix>`, `.mk` | yes |
 | Dockerfile | `Dockerfile`, `Containerfile`, `Dockerfile.<suffix>`, `Containerfile.<suffix>` | yes |
 | Assembly | `.s`, `.S`, `.asm`, `.nasm` | yes |
@@ -1670,15 +1762,16 @@ All indexed languages are searchable through FTS5. Rows with **Symbols = yes** a
 | Perl test | `.t` | -- |
 | Zig | `.zig` | yes |
 | XAML | `.xaml`, `.axaml` | -- |
-| MSBuild | `.csproj`, `.fsproj`, `.vbproj`, `.props`, `.targets` | -- |
+| MSBuild | `.csproj`, `.fsproj`, `.vbproj`, `.props`, `.targets` | yes |
 | Shell | `.sh`, `.bash`, `.zsh`, `.fish` | partial |
 | PowerShell | `.ps1`, `.psm1`, `.psd1` | yes |
 | Batch | `.bat`, `.cmd` | yes |
-| CMake | `.cmake`, `CMakeLists.txt` | -- |
+| CMake | `.cmake`, `CMakeLists.txt` | yes |
+| Justfile | `Justfile` | yes |
 | SQL | `.sql`, `.pgsql`, `.tsql`, `.plsql`, `.pks`, `.pkb`, `.pls`, `.plb`, `.psql` | yes |
 | Markdown | `.md` | yes |
-| YAML | `.yaml`, `.yml` | -- |
-| JSON | `.json` | -- |
+| YAML | `.yaml`, `.yml` | yes |
+| JSON | `.json` | yes |
 | TOML | `.toml` | -- |
 | HTML | `.html`, `.htm`, `.xhtml`, `.shtml` | yes |
 | CSS | `.css`, `.scss`, `.less`, `.pcss` | yes |
@@ -1693,7 +1786,7 @@ All indexed languages are searchable through FTS5. Rows with **Symbols = yes** a
 - C/C++ headers: `.h` stays on the C path unless the file has clear C++ markers such as `namespace`, `template`, `using`, `class`, or `std::`; those headers are promoted to `cpp` at index time.
 - SQL: query-time `--lang tsql` is accepted as a SQL alias, and T-SQL aggregate, assembly, and XML schema collection declarations are searchable.
 - R: function assignments, S4/R6 class declarations, validity/generic/method declarations, inherit vectors, public/private/active methods, and `library` / `require` imports are indexed.
-- Markdown and CSS: Markdown heading and local-anchor symbols are indexed; CSS variables, placeholders, and `@extend` references are indexed.
+- Markdown, JSON/YAML, and CSS: Markdown heading and local-anchor symbols are indexed; JSON/YAML configuration keys are indexed as structural key paths; CSS variables, placeholders, and `@extend` references are indexed.
 - Dockerfile, Assembly, Common Lisp, and Racket: `ARG` build args, labels/PROC/MACRO blocks, package/module forms, definitions, classes/structs, requires, and provides are surfaced as symbols where applicable.
 - Shell, PowerShell, and Batch: command-style function calls, functions/filters, classes/enums, imports, labels, `goto` / `call` targets, and inline control-flow forms are indexed where the language supports them.
 - C# and Java: modern C# partial members remain visible to `symbols`, `definition`, and `outline`; Java sealed `permits` lists are recorded as `type_reference` graph edges.
@@ -1701,15 +1794,19 @@ All indexed languages are searchable through FTS5. Rows with **Symbols = yes** a
 - React hooks: JavaScript/TypeScript functions whose names follow `use[A-Z]...` are indexed as `hook` symbols, and calls to `useFoo()` / built-in hooks such as `useState()` are recorded as `consumes_hook` references for hook-composition graph queries.
 - JavaScript/TypeScript imports: static imports, dynamic imports, CommonJS `require` / `require.resolve`, `import.meta.resolve`, `new URL(..., import.meta.url)`, `importScripts`, service-worker registrations, worklet loads, and worker constructors add `import` symbols when the specifier is static. `tsconfig.json` / `jsconfig.json` `compilerOptions.baseUrl` and `paths` aliases are resolved to indexed project paths when the target file exists.
 - Node module layouts: `.cjs` / `.mjs` are JavaScript; `.cts` / `.mts`, including `.d.cts` / `.d.mts`, are TypeScript.
+- Dependency manifests and lockfiles: use `--lang dependency_manifest` or `--lang dependency_lock` for dependency/security audits. These buckets are searchable text and do not claim symbol or graph extraction.
 - Extensionless scripts: files with recognized shebangs are indexed for shell (`sh`, `bash`, `zsh`, `fish`, `dash`, `ksh`, `ash`), Python, Ruby, Node.js, PHP, Lua, and PowerShell.
 
 ### Language extraction matrix
 
-Use `cdidx languages --json` as the live capability probe. Add `--indexed-only`
-when you only want languages present in the current DB, and add
-`--capability graph|symbols|references` when auditing a specific structured
-capability. This matrix explains the common extraction behavior so users know
-when to trust structured commands and when to fall back to `search`.
+Use `cdidx languages --json` as the live capability probe. JSON rows expose
+`symbol_extraction`, `reference_extraction`, `graph_queries`, and
+`capability_gaps`. Add `--indexed-only` when you only want languages present in
+the current DB, and add
+`--capability graph|references|symbols|missing-graph|missing-references|missing-symbols|search-only`
+when auditing a specific structured capability or capability gap. This matrix
+explains the common extraction behavior so users know when to trust structured
+commands and when to fall back to `search`.
 
 | Language family | Symbols | References / graph | Notes and example query |
 |---|---|---|---|
@@ -1718,9 +1815,10 @@ when to trust structured commands and when to fall back to `search`.
 | JavaScript / TypeScript / Vue / Svelte | functions, classes, exports, imports, variables | calls, constructors, static/dynamic imports, workers, service workers | Dynamic property calls and computed module specifiers are best-effort. `cdidx references render --lang typescript` |
 | Python / Ruby / PHP / Perl / R | functions, classes/modules, imports where supported | calls, constructors, decorators/annotations where supported | Dynamic dispatch and metaprogramming may require `search`. PHPDoc/static import patterns are indexed when statically visible. |
 | C / C++ / Objective-C / Swift / Rust / Go / Zig | functions, types, methods, imports/modules | calls, constructors, macro invocations where supported, type references | C++ templates/macros and Rust macro expansion are not evaluated; Rust macro invocations are still reference edges. |
-| Shell / PowerShell / Batch / Makefile / Gradle | functions, labels, tasks, imports where applicable | command-style calls and control-flow targets | Runtime command construction is not resolved. |
+| Shell / PowerShell / Batch / Makefile / CMake / Justfile / MSBuild / Gradle | functions, labels, targets, recipes, tasks, imports where applicable | command-style calls, target dependencies, and control-flow targets | Runtime command construction is not resolved. |
 | SQL / Terraform / Dockerfile | statements/resources/stages/labels | table/resource/stage references, Dockerfile stage dependencies, Terraform dotted refs | SQL hotspot grouping defaults to statements; Dockerfile `COPY --from=<stage>` follows named stages. |
-| Markdown / HTML / CSS / GraphQL / Protobuf | headings, anchors, selectors, schema types/messages where supported | local anchors, CSS extends/variables, schema references where supported | Use `search` for prose and generated markup. |
+| Markdown / HTML / CSS / GraphQL / Protobuf | headings, anchors, selectors, schema types/messages where supported | links/assets/components, local anchors, CSS extends/variables, schema references where supported | Use `search` for prose and generated markup. |
+| Dependency manifests / lockfiles | none | none | Use `--lang dependency_manifest` or `--lang dependency_lock` for dependency/security audits. |
 | Other indexed text formats | file/chunk search only unless `languages` reports symbols | no graph unless `languages` reports support | `cdidx search "literal" --lang yaml` is the reliable fallback. |
 
 The graph commands surface `graph_supported` / `graph_support_reason` in JSON and
@@ -1765,6 +1863,7 @@ CLI JSON and MCP compatibility:
 | CLI metadata | CLI commands keep CLI-oriented metadata such as `api_version` and command result fields. |
 | MCP metadata | MCP tools return JSON-RPC tool results with camelCase field names and may include MCP-specific metadata. |
 | Grouped graph rows | Graph tools that group reference rows (`callers`, `callees`, and bundled `analyze_symbol` caller/callee rows) expose a backward-compatible scalar summary kind plus a sorted kind array and mixed-kind flag. CLI JSON uses `reference_kind` / `reference_kinds` / `has_mixed_reference_kinds`, while MCP uses `referenceKind` / `referenceKinds` / `hasMixedReferenceKinds`. |
+| Project filters | When `--project` / MCP `project` expansion cannot resolve the indexed project root and uses the process current directory, structured payloads expose `project_filter_root` and `project_filter_root_fallback_reason`. |
 | Consumer guidance | Consumers that need every underlying kind should read the array for the surface they call and ignore unknown future fields. See [INTEGRATION_POLICY.md](INTEGRATION_POLICY.md#cli-json-and-mcp-response-compatibility) for the CLI/MCP compatibility table. |
 | Slow search profiling | Add `--profile` to read commands to append one JSON object after the normal results. It contains `profile.phases` (`name`, `elapsed_ms`, `rows_scanned`), `profile.query_plan` (`EXPLAIN QUERY PLAN` rows), and `profile.queries` (SQL text). With `--slow-query-ms <n>`, profiled SQL at or above the threshold is written to the persistent tool log. |
 
@@ -1978,25 +2077,46 @@ cdidx includes a built-in **MCP (Model Context Protocol) server**. MCP is a stan
 `cdidx lsp --db .cdidx/codeindex.db` starts a read-only Language Server Protocol
 server over stdio. It reuses the existing CodeIndex database and exposes
 `initialize`, `workspace/symbol`, `textDocument/documentSymbol`,
-`textDocument/definition`, and `textDocument/references` for editors that can
-launch an arbitrary LSP command but do not speak MCP.
+`textDocument/definition`, `textDocument/declaration`,
+`textDocument/typeDefinition`, `textDocument/implementation`, and
+`textDocument/references` for editors that can launch an arbitrary LSP command
+but do not speak MCP.
 Incoming `textDocument.uri` values must be strings, must be absolute `file:`
 URIs, and are rejected before URI parsing when they exceed 4096 characters,
 matching the MCP resource URI limit and keeping error responses bounded. LSP
 frame parsing also rejects more than 64 header lines, more than 65536 aggregate
 header bytes, any one header line above 8192 bytes, duplicate `Content-Length`
 headers, or a body above 8388608 bytes before reading the message body.
+The stdio loop observes the CLI cancellation token while reading headers and
+message bodies, so Ctrl-C / host cancellation can interrupt pending frame reads
+instead of waiting for another complete request.
 Unknown-method diagnostics echo at most 240 method-name characters with `...`
 when the method name is longer. Request IDs must be bounded JSON-RPC scalar
 values: strings are capped at 256
 characters, integer IDs must fit in `Int64`, and non-scalar IDs are rejected as
 invalid requests before response IDs are cloned. `workspace/symbol` query
 strings are capped at 1000 characters before symbol search runs.
-`textDocument/documentSymbol` returns at most 1000 indexed symbols, truncates
-each `detail` string to 512 characters with `...`, and stops adding symbols
-before the result array exceeds 524288 JSON bytes.
+`workspace/symbol` accepts optional numeric `limit` / `maxResults` parameters
+and clamps them to 1000 results. `textDocument/documentSymbol` returns
+hierarchical `DocumentSymbol` children when container metadata is available,
+returns at most 1000 indexed symbols, truncates each `detail` string to 512
+characters with `...`, and trims the tree before the result array exceeds
+524288 JSON bytes.
 Position-based `definition` and `references` lookups read at most 16384
 characters from the target source line before returning an empty result.
+`textDocument/references` honors `context.includeDeclaration`; when true, the
+definition locations are prepended to the reference result without duplicating
+identical locations. `declaration`, `typeDefinition`, and `implementation`
+requests reuse the same indexed definition lookup and return the same location
+shape as `definition`.
+Tracked `workspaceFolders` are used when resolving position-based requests for
+indexed absolute paths, including folders added or removed through
+`workspace/didChangeWorkspaceFolders`; relative indexed paths remain anchored to
+the database project root.
+When a position lookup returns an empty result because the request cannot be
+resolved safely, the `CodeIndex` `ActivitySource` emits an `lsp.lookup_failed`
+event with a safe `lsp.lookup.failure_reason` code such as `outside_project`,
+`file_not_indexed`, `position_file_too_large`, or `no_token_at_position`.
 When exact indexed path resolution misses, LSP document path fallback inspects
 at most 32 basename candidates before treating the document as unresolved.
 
@@ -2105,8 +2225,8 @@ The MCP `tools/list` response includes an `examples` array for every registered 
 | `impact_analysis` | Compute transitive callers of a symbol (inclusive `maxHops`: `maxHops: N` returns callers at hop 1..N — a chain A→B→C→D queried against D with `maxHops: 2` yields C at hop 1 and B at hop 2). The deprecated `maxDepth` alias is still accepted during the compatibility period and surfaces a warning. The symbol-level BFS walks only call-graph kinds (`call`, `instantiate`, `subscribe`) and excludes metadata-only edges (`attribute`, `annotation`, `type_reference`) so metadata cycles do not inflate caller counts. Use `maxHops: 0` to resolve the symbol only, or rely on single-type fallback to heuristic file-level dependency hints and partial-definition hints; those file hints may include metadata edges. Pass `withPaths: true` to also receive a `paths` array per caller (shortest chains `[resolvedRoot, intermediate..., callerName]`; diamond convergence surfaces every route, capped per row with a `paths_truncated` overflow flag). |
 | `unused_symbols` | Find symbols defined but never referenced, with confidence buckets for dead-code triage |
 | `symbol_hotspots` | Find high-impact hotspots. `groupBy` supports `symbol`, `file`, and `statement`; SQL scopes default to statement grouping while non-SQL scopes default to symbol grouping. |
-| `batch_query` | Execute multiple queries in a single call (MCP only, max 10). The response includes a top-level `metadata` object with `submitted`, `executed`, `errors`, `total_elapsed_ms`, `success_count`, and `failure_count`; every entry in `results` carries `request_index`, `ok`, `elapsed_ms`, and compact `args_summary` fields so callers can correlate partial failures and slow inner queries without relying on positional guesses. |
-| `validate` | Report encoding issues (U+FFFD with origin/severity, BOM, null bytes, mixed/CR-only line endings, UTF-16 BOM detection, likely non-UTF8 encodings) |
+| `batch_query` | Execute multiple queries in a single call (MCP only, max 10). The response includes a top-level `metadata` object with `submitted`, `executed`, `errors`, `total_elapsed_ms`, `success_count`, and `failure_count`; every entry in `results` carries `request_index`, optional client `slot_id`, `ok`, `elapsed_ms`, `summary`, and compact `args_summary` fields so callers can correlate partial failures and slow inner queries without relying on positional guesses. |
+| `validate` | Report encoding and file-content issues (U+FFFD with origin/severity, BOM, null bytes, mixed/CR-only line endings, UTF-16 BOM detection, likely non-UTF8 encodings, Dockerfile JSON-form diagnostics) |
 | `languages` | List all supported languages, file extensions, and capabilities |
 | `ping` | Lightweight connection check |
 | `index` | Index or re-index a project directory |
@@ -2130,6 +2250,12 @@ This recomputes persisted `name_folded` / `*_folded` columns from existing DB ro
 Graph-oriented MCP tools such as `references`, `callers`, and `callees` also return `graph_language`, `graph_supported`, and `graph_support_reason` when a language filter is provided, so clients can distinguish unsupported languages from genuine zero-hit queries.
 
 All MCP tools include `annotations` (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) so AI clients can auto-approve safe read-only queries without prompting the user.
+
+`tools/list` also advertises argument compatibility metadata. Common path filters such as `excludePaths` accept either a scalar string or a string array, matching `path`; schemas expose `x-expectedType`, aliases through `x-aliases` / `x-aliasOf`, and deprecated aliases through `deprecated` plus `x-deprecationReason`. Validation errors echo `expected` and, where relevant, `alias_of` / `deprecated` so clients can recover without parsing prose. `definition` and `references` accept both `lsp_compatible` and the JSON-style `lspCompatible` alias.
+
+When an MCP tool clamps or ignores a supported argument, successful responses include human-readable `warnings` and machine-readable `argument_adjustments`. Each adjustment records `argument`, `action` (`clamped` or `ignored`), `requested`, `effective`, and cap fields when applicable, so clients can tell when `limit`, `offset`, `snippetLines`, `map.depth`, or `impact_analysis.maxHops` returned a narrower result than requested.
+
+`batch_query` advertises its slot cap as `queries.maxItems` in `tools/list`, and `status` exposes clear `mcp.limits.batch_query_max_queries`, `batch_query_response_bytes`, and `batch_query_max_response_bytes` fields distinct from JSON-RPC batch limits. Clients can pass `estimateOnly: true` to get `slot_estimates` and byte-budget metadata without executing slots, pass `maxResponseBytes` to request a lower per-call response budget, and add per-slot `id` or `slotId` values that are echoed as `slot_id`. When the aggregate response is truncated, `truncated_queries` preserves slot ids and `split_hint` returns `next_request_index`, `suggested_query_count`, and an opaque `resume_cursor` so clients can split the remaining original query array deterministically.
 
 #### MCP error responses
 
@@ -2166,13 +2292,13 @@ For HTTP, `CDIDX_MCP_HTTP_TOKEN` is the preferred bearer secret. If it is
 unset, HTTP falls back to `CDIDX_MCP_AUTH_TOKEN` as the bearer secret, and
 clients still authenticate with `Authorization: Bearer <token>`.
 
-Each HTTP `POST /` carries one JSON-RPC frame in the request body, the matching response is returned in the same HTTP body (`200 OK`, `application/json`), and notifications return `204 No Content`. `GET /events` opens a `text/event-stream` channel for server-to-client frames; the server emits no unsolicited JSON-RPC frames unless keep-alive notifications are opted in with `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S`. Accepted keep-alive values are finite seconds from `1` to `300`; invalid or out-of-range values leave keep-alive disabled with a `stderr` warning. The stream is independent and does not block normal POST requests. Non-POST verbs on `/` return `405 Method Not Allowed` with `Allow: POST`. Request bodies are capped at 1,000,000 bytes by default and oversized requests return `413 Payload Too Large`; the pending POST queue and accepted handler tasks are capped at 64 by default, and concurrent `/events` streams are capped at 16. Full queues, handler pools, or stream slots return `429 Too Many Requests` with `Retry-After: 1`. Tune those positive-integer limits with `CDIDX_MCP_HTTP_MAX_REQUEST_BYTES`, `CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH`, `CDIDX_MCP_HTTP_MAX_CONCURRENT_HANDLERS`, and `CDIDX_MCP_HTTP_MAX_EVENT_STREAMS`; accepted ranges are `1..16777216` bytes and `1..1024` for each count limit. Invalid non-positive or non-numeric values fall back to the defaults, while values above those maximums are rejected before the listener starts. Idle event streams receive minimal SSE comment heartbeats so disconnected clients release their stream slots. When the persistent lifecycle log is enabled, HTTP mode also writes one `mcp_http_request` record per request with method, path, status, duration, auth outcome, remote peer, correlation id, and JSON-RPC request id when available. Method, path, remote peer, and request id fields are capped at 256 characters with a `...<truncated>` marker. Request and response bodies are not logged.
+Each HTTP `POST /` carries one JSON-RPC frame in the request body, the matching response is returned in the same HTTP body (`200 OK`, `application/json`), and notifications return `204 No Content`. `GET /events` opens a `text/event-stream` channel for server-to-client frames; multiple concurrent clients can hold `/events`, and server notifications are broadcast to every connected stream. Event responses include `X-Accel-Buffering: no` and a per-stream `X-Cdidx-Mcp-Event-Stream-Id`. The server emits no unsolicited JSON-RPC frames unless keep-alive notifications are opted in with `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S`. Accepted keep-alive values are finite seconds from `1` to `300`; invalid or out-of-range values leave keep-alive disabled with a `stderr` warning. The stream is independent and does not block normal POST requests. Non-POST verbs on `/` return `405 Method Not Allowed` with `Allow: POST`. Request bodies are capped at 1,000,000 bytes by default and oversized requests return `413 Payload Too Large`; the pending POST queue and accepted handler tasks are capped at 64 by default, and concurrent `/events` streams are capped at 16. Full queues, handler pools, or stream slots return `429 Too Many Requests` with `Retry-After: 1`. Tune those positive-integer limits with `CDIDX_MCP_HTTP_MAX_REQUEST_BYTES`, `CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH`, `CDIDX_MCP_HTTP_MAX_CONCURRENT_HANDLERS`, and `CDIDX_MCP_HTTP_MAX_EVENT_STREAMS`; accepted ranges are `1..16777216` bytes and `1..1024` for each count limit. Invalid non-positive or non-numeric values fall back to the defaults, while values above those maximums are rejected before the listener starts. `/healthz` includes `http_event_stream_count`, `http_event_stream_limit`, `http_max_concurrent_handlers`, and `http_queued_request_count` for transport diagnostics. Idle event streams receive minimal SSE comment heartbeats so disconnected clients release their stream slots. When the persistent lifecycle log is enabled, HTTP mode also writes one `mcp_http_request` record per request with method, path, status, duration, auth outcome, remote peer, correlation id, and JSON-RPC request id when available. Method, path, remote peer, and request id fields are capped at 256 characters with a `...<truncated>` marker. Request and response bodies are not logged.
 
 Security defaults:
 
 - The listener binds to a loopback address (`127.0.0.1`) by default, and the wildcard hosts `+` / `*` are rejected outright.
 - Binding to a non-loopback host (e.g. `0.0.0.0:9000`) is refused unless you set `CDIDX_MCP_HTTP_TOKEN` or `CDIDX_MCP_AUTH_TOKEN` to a shared secret. `CDIDX_MCP_HTTP_TOKEN` wins when both are set. When an HTTP bearer secret is configured, every request must carry `Authorization: Bearer <token>` or the listener returns `401 Unauthorized` with `WWW-Authenticate: Bearer realm="cdidx-mcp"`; HTTP clients do not also need `params.auth.token`.
-- The configured token's SHA-256 digest is precomputed at start-up; per-request authentication only hashes the supplied input and compares against the stored digest in constant time, so neither the configured token's length nor its bytes leak through timing. Configured and supplied tokens longer than 4096 characters are rejected before hashing.
+- The configured token's SHA-256 digest is precomputed at start-up; per-request authentication only hashes the supplied input and compares against the stored digest in constant time, so neither the configured token's length nor its bytes leak through timing. Leaving the token variable unset, or setting it to the empty string, disables the token gate. Any configured token must be 1-4096 characters and must not contain whitespace or control characters. Supplied HTTP bearer values use the exact bytes after `Bearer ` and are not trimmed before comparison; oversized, whitespace-containing, or control-character-bearing values are rejected before hashing.
 
 The stdio transport stays byte-for-byte unchanged, so existing client configs keep working without modification.
 
@@ -2180,9 +2306,9 @@ The stdio transport stays byte-for-byte unchanged, so existing client configs ke
 
 `CDIDX_MCP_HTTP_TOKEN` above guards the HTTP transport at the `Authorization: Bearer ...` header. If it is unset, HTTP uses `CDIDX_MCP_AUTH_TOKEN` as the bearer secret instead. For stdio, `CDIDX_MCP_AUTH_TOKEN` enables the JSON-RPC-level auth gate (#1559).
 
-The default `cdidx mcp` server is **permissive** — the OS-enforced stdio process boundary already gates access, and every existing client setup above (Claude Code, Cursor, Windsurf, Copilot, Codex) keeps working unchanged. When `CDIDX_MCP_AUTH_TOKEN` is unset (or whitespace-only), the server accepts every request and tags it with the shared `stdio` / `local` caller identity.
+The default `cdidx mcp` server is **permissive** — the OS-enforced stdio process boundary already gates access, and every existing client setup above (Claude Code, Cursor, Windsurf, Copilot, Codex) keeps working unchanged. When `CDIDX_MCP_AUTH_TOKEN` is unset or set to the empty string, the server accepts every request and tags it with the shared `stdio` / `local` caller identity. A whitespace-only value is invalid rather than permissive.
 
-If you expose stdio `cdidx mcp` over a less-trusted channel (a forwarded socket, a sandbox bridge, a shared CI runner), set `CDIDX_MCP_AUTH_TOKEN` to a non-whitespace secret. The stdio server then requires every responded JSON-RPC request (`initialize`, `tools/list`, `tools/call`, `ping`) to include the same token at `params.auth.token`. HTTP uses the same variable only as a bearer-secret fallback when `CDIDX_MCP_HTTP_TOKEN` is unset, so HTTP clients send `Authorization: Bearer <token>` instead of duplicating the token in the JSON-RPC body. The expected token is stored as a SHA-256 digest and the presented token is hashed to the same length before `CryptographicOperations.FixedTimeEquals`, so missing / wrong-length / wrong-value guesses share one constant-time path and neither token length nor bytes leak through timing. Mismatches return a uniform JSON-RPC `-32001 "Unauthorized"` — the wire body never distinguishes "missing token" from "wrong token", so the response cannot be used as a token-existence oracle (#1530). The detailed failure reason is written to `cdidx mcp` stderr for local diagnostics, with `method` sanitized to strip control characters so a malicious request body cannot forge log lines. Notifications (`notifications/initialized`, `notifications/cancelled`) skip the gate because they have no `id` and cannot signal an error code.
+If you expose stdio `cdidx mcp` over a less-trusted channel (a forwarded socket, a sandbox bridge, a shared CI runner), set `CDIDX_MCP_AUTH_TOKEN` to a 1-4096 character secret with no whitespace or control characters. The stdio server then requires every responded JSON-RPC request (`initialize`, `tools/list`, `tools/call`, `ping`) to include the same token at `params.auth.token`. HTTP uses the same variable only as a bearer-secret fallback when `CDIDX_MCP_HTTP_TOKEN` is unset, so HTTP clients send `Authorization: Bearer <token>` instead of duplicating the token in the JSON-RPC body. HTTP bearer values are compared exactly and are not trimmed before hashing. The expected token is stored as a SHA-256 digest and the presented token is hashed to the same length before `CryptographicOperations.FixedTimeEquals`, so missing / wrong-length / wrong-value guesses share one constant-time path and neither token length nor bytes leak through timing. Mismatches return a uniform JSON-RPC `-32001 "Unauthorized"` — the wire body never distinguishes "missing token" from "wrong token", so the response cannot be used as a token-existence oracle (#1530). The detailed failure reason is written to `cdidx mcp` stderr for local diagnostics, with `method` sanitized to strip control characters so a malicious request body cannot forge log lines. Notifications (`notifications/initialized`, `notifications/cancelled`) skip the gate because they have no `id` and cannot signal an error code.
 
 This remains useful for custom stdio MCP clients you control. Stdio clients that do not inject `params.auth.token` will be rejected once the variable is set, so leave it unset unless you actively want to enforce body-token authentication; HTTP clients should prefer the bearer-header contract above.
 
@@ -2195,9 +2321,11 @@ For read-only deployments or sessions that only need a narrow tool surface, two 
 
 When both are set, the allowlist wins. `tools/list` only advertises enabled tools, and the `initialize` instructions string no longer recommends tools the gate disabled. A top-level `tools/call` on a disabled known tool returns the structured JSON-RPC error `-32601 Tool not enabled: <name>`. `batch_query` continues to succeed at the envelope, but each disabled-tool slot carries a `code: -32601` field alongside the `error` string so clients can branch on the code instead of substring-matching prose. Unknown names (typos) still surface as `-32602 Unknown tool`, so operator-disabled tools are distinguishable from missing tools. Names are compared case-insensitively. The default is **all tools enabled**, so existing deployments are unaffected unless an operator sets one of these variables.
 
+Filter parsing also warns on `stderr` when an allow/deny variable is empty, contains empty CSV entries, or names unknown tools. Unknown names in `CDIDX_MCP_TOOLS_DENY` are ignored after the warning. `CDIDX_MCP_TOOLS_ALLOW` fails closed when it is explicitly set but contains no known tool names, so a typo-only allowlist exposes no tools instead of accidentally falling back to the default surface. Oversized filter values remain rejected with a warning.
+
 #### MCP roots and sampling
 
-`cdidx mcp` advertises roots and sampling support during `initialize`. When the client supports roots, `index` refreshes `roots/list` and rejects paths outside the granted client roots. `suggest_improvement` uses `sampling/createMessage` to extract an optional one-line title and tag list before storing the raw suggestion. Sampling prompts are byte-bounded, long fields are clamped to one-line summaries, and `toolInvocationContext` is summarized without sending its raw content to the sampling client. Set `CDIDX_MCP_SAMPLING=0` (or `false` / `off`) to disable server-to-client sampling requests.
+`cdidx mcp` advertises roots and sampling support during `initialize`. When the client supports roots, `index` refreshes `roots/list` and rejects paths outside the granted client roots. `suggest_improvement` only calls `sampling/createMessage` when the client advertises sampling and `CDIDX_MCP_SAMPLING` is explicitly opted in with `1`, `true`, `yes`, or `on`; unset, opt-out, and unrecognized values fail closed and return a bounded `sampling_diagnostic` in the tool result. When enabled, sampling extracts an optional one-line title and tag list before storing the raw suggestion. Sampling prompts are byte-bounded, long fields are clamped to one-line summaries, and `toolInvocationContext` is summarized without sending its raw content to the sampling client.
 
 ### Why cdidx over grep/ripgrep for AI workflows?
 
@@ -2579,7 +2707,7 @@ cdidx index . --quiet
 | Analysis | `impact` | 解決した symbol から transitive callers を探索 | `impact_analysis` |
 | Analysis | `unused` | 参照されていない可能性がある symbols を confidence bucket 付きで表示 | `unused_symbols` |
 | Analysis | `hotspots` | reference volume で high-impact symbols/statements を ranking | `symbol_hotspots` |
-| Analysis | `validate` | indexed files の encoding / line-ending 問題を報告。U+FFFD 行には origin/severity metadata が付く | `validate` |
+| Analysis | `validate` | indexed files の encoding / line-ending / file-content 診断を報告。U+FFFD 行には origin/severity metadata が付く | `validate` |
 | Status | `status` | DB stats、freshness、readiness metadata を表示 | `status` |
 | Status | `languages` | language extensions と symbol/graph capabilities を一覧 | `languages` |
 | Diagnostics | `db --integrity-check` | DB に対して SQLite `PRAGMA integrity_check` を実行 | -- |
@@ -2605,6 +2733,10 @@ newline-delimited JSON (ndjson) として出力し、最後に `{"done":true,...
 単一 document の JSON 応答をインデント付きで出力します。`search` の result set を
 整形したい場合は、既定の `search --json` が newline-delimited のまま保たれるため
 `--json=array --pretty` を使います。
+`search --named-query <name>=<query>` は繰り返し指定でき、同じ filter と snippet 上限で
+ad hoc な grouped batch を実行します。名前付き batch は 1 つの grouped JSON document を
+出力し、`--format compact` でも各 result の `CompactSearchResult` snippet / highlight
+context を維持し、file/line だけの行には縮約しません。
 AI 向けに上限付き payload が必要な場合、`map`、`inspect`、`outline` は
 `--compact` に対応しています。これは JSON 出力を暗黙に有効化し、list section を
 既定 5 件（明示した `--limit` / `--top` があればその値）に cap し、
@@ -2612,7 +2744,19 @@ AI 向けに上限付き payload が必要な場合、`map`、`inspect`、`outli
 `inspect` の証跡をさらに絞りたい場合、`--fields <csv>` は JSON 出力を暗黙に有効化し、
 `definitions`、`file`、`graph`、`references`、`callers`、`callees` などの
 top-level group を選択します。`--body-only` は `--body --fields definitions` の
-shorthand です。
+shorthand です。definition body が返却 slice より長い場合は
+`body_content_next_start_line` が次に `--body-start` へ渡す source line を示します。
+`--body-lines` で page size を指定できます。`inspect --json` には `body_mode`
+metadata も含まれるため、body content が要求済みか、存在するか、次に使う flag が何かを
+client 側で判断できます。
+count-only JSON（対応 command の `--count --json` または `--format count`）は、
+`count`、適用済み `query_context`、freshness metadata（`indexed_file_count`、
+`indexed_at`、`freshness_available`）、trust flag の `degraded` /
+`authoritative_count` を持つ単一 object です。matched file を数える command は
+`files` も含みます。古い `file_count` field は同じ値の互換 alias として残っており、
+少なくとも次の major release までは削除予定はありません。新しい consumer は
+`files` を読み、`authoritative_count=false` の場合は同じ payload の readiness または
+graph/exact trust field を確認してください。
 
 ```bash
 cdidx search authenticate --json          # ndjson stream、1 行 1 result
@@ -2620,6 +2764,7 @@ cdidx search authenticate --json=array    # 単一 JSON array
 cdidx inspect QueryCommandRunner --json --pretty
 cdidx map --compact                       # truncation metadata 付きの cap 済み JSON
 cdidx inspect Compute --body-only         # body_content 付き definitions のみ
+cdidx inspect Compute --body --body-start 40 --body-lines 40
 ```
 
 ## Editor / index portability
@@ -2717,7 +2862,8 @@ cdidx validate --json --limit 50 --path legacy/
 
 `validate` は、snippet や symbol name を誤らせやすい indexed file を報告します。
 対象は U+FFFD replacement character、UTF-16 BOM、null byte、mixed / CR-only line
-ending、likely non-UTF-8 content、Git LFS pointer placeholder などです。
+ending、likely non-UTF-8 content、Git LFS pointer placeholder、Dockerfile の
+JSON-form instruction payload の parse / truncation 診断などです。
 `replacement_char` の JSON / MCP response には `origin` (`source_literal` /
 `decode_replacement`) と `severity` が入り、意図的な U+FFFD literal と
 エンコーディング破損の可能性を agent が区別できます。`--severity warning`
@@ -2854,6 +3000,22 @@ installer はこの provenance verification を自動実行します。
 `CDIDX_REQUIRE_ATTESTATION=1` を設定すると、provenance verification を完了
 できない場合に installer は fail closed します。
 
+installer の verification policy は明示的です:
+
+- 既定は `CDIDX_VERIFY_POLICY=compat` です。installer は archive checksum を常に
+  検証し、必要な tool/configuration がある場合は GitHub attestation と GPG
+  checksum-signature verification を実行します。任意の second-channel check を
+  実行できない場合は警告して続行します。
+- `CDIDX_VERIFY_POLICY=strict` または `--verify-policy strict` は、public GitHub
+  attestation と GPG checksum-signature verification を fail closed にします。
+  strict mode では `CDIDX_RELEASE_GPG_FINGERPRINT` による signer fingerprint
+  pinning も必須です。
+- `CDIDX_REQUIRE_ATTESTATION=1` と `CDIDX_STRICT_VERIFY=1` は、片方の
+  second-channel check だけを必須化したい場合の互換 knob として残っています。
+  公式の default release-signing fingerprint が bundled されるまでは、strict GPG
+  verification を使う operator が信頼する fingerprint を
+  `CDIDX_RELEASE_GPG_FINGERPRINT` 経由で配布してください。
+
 GitHub attestation は、その artifact が repository workflow identity により
 生成されたことを検証します。
 
@@ -2928,6 +3090,32 @@ bash ./install.sh --self-test-local-mirror
 
 既定の local self-test port が埋まっている場合は
 `CDIDX_LOCAL_MIRROR_PORT=18766` を設定してください。
+
+#### install.sh で入れた cdidx のアップグレード
+
+`cdidx upgrade` は GitHub releases を確認し、選択した release に対して検証済み
+installer を再実行します。既定では stable/latest release channel を使います。
+
+```bash
+cdidx upgrade
+cdidx upgrade --check-only --json
+cdidx upgrade --prerelease
+cdidx upgrade --channel prerelease
+cdidx upgrade --version v1.29.0-rc.1
+```
+
+stable release に留まる場合は `--channel stable`（または `--channel latest`）、
+最新 prerelease を試す場合は `--prerelease` / `--channel prerelease`、特定
+release tag を入れる場合は `--version <tag>` を使います。JSON 出力には
+`selected_version`、`selected_channel`、`selection_source`、
+`include_prerelease` が含まれるため、automation 側で選択理由を記録できます。
+
+Windows では `cdidx upgrade` は同じ release を選択しますが、実行中 binary を
+その場では置き換えません。代わりに
+`dotnet tool update -g cdidx --version <version>` 形式の NuGet handoff command
+と、対応する release page / `CodeIndex-win-*.zip` asset URL を表示します。JSON 出力では
+`handoff_command`、`handoff_url`、`handoff_asset`、`handoff_asset_url` に
+同じ値が入ります。
 
 ### 方法B: NuGet グローバルツール
 
@@ -3125,7 +3313,7 @@ cdidx ./myproject --json
 | 項目 | 動作 |
 |---|---|
 | DB の既定配置 | `cdidx index` は DB を `<projectPath>/.cdidx/codeindex.db` に置きます。 |
-| 組み込み skip | `node_modules`、`bin`、`obj`、lockfile などの組み込み skip 対象は常に除外されます。 |
+| 組み込み skip | `node_modules`、`bin`、`obj` などの生成・vendor directory と platform metadata file は除外されます。dependency lockfile は、ユーザー ignore rule で除外しない限り `dependency_lock` として index されます。 |
 | ユーザー ignore | ユーザーの `.gitignore` と任意の `.cdidxignore` は、full scan、`--files`、`--commits` の更新経路すべてで尊重されます。 |
 | workspace scope の cdidx ignore | project root の `.codeindex/.cdidxignore` も workspace scope の ignore file として読み込むため、multi-workspace manifest 用の cdidx 専用 rule を repository root に置かずに管理できます。 |
 | encoding | ignore file は UTF-8 として読み込むため、非 ASCII pattern も platform 間で同じように動作します。 |
@@ -3157,12 +3345,26 @@ cdidx db --integrity-check --json                       # 機械可読な結果
 
 DB を read-only で開いて SQLite の `PRAGMA integrity_check` を実行し、`ok` か、検出された破損行の一覧を出力します。終了コードは安定しており、`0` = 健全、`2` (NotFound) = ファイル無し、`3` (DatabaseError) = 破損検出です。SQLite には汎用的な修復プリミティブが無いため、チェックが失敗した場合は `cdidx index <projectPath> --rebuild` で再構築するのが推奨復旧手段です。
 
+`--json` の診断出力は自動化向けに安定した `severity` と `diagnostic_code` を含みます。`db --integrity-check --json` は `integrity_ok` / `integrity_failed` を返し、`db schema --json` は `schema_ok` / `schema_truncated` に加えて `object_type_counts` と `object_type_omitted_counts` で SQLite の table / index / trigger / view 件数と省略数を返します。
+
+DB / WAL の肥大や空き page を確認したい場合は `status --json` の `maintenance_guidance` を見ます。既定では WAL が 64 MiB 以上で `checkpoint_recommended`、`freelist_count / page_count` が 0.20 以上で `vacuum_recommended` になり、`recommended_command` と `post_maintenance_follow_up` が返ります。しきい値は `CDIDX_MAINTENANCE_WAL_WARN_BYTES` と `CDIDX_MAINTENANCE_FREELIST_WARN_RATIO` で調整できます。
+
+`status --check --json` は failed check ごとに `repair_commands` を返します。各 entry は `name`、`args`、`reason`、`safety_notes` を持つため、自動化は `recommended_action` の文章を分解せずに修復コマンドを組み立てられます。前回の index が中断・失敗した情報が DB に残っている場合は、`last_failed_or_partial_index_run` に bounded metadata だけを返し、例外本文や file path は含めません。
+
+```bash
+cdidx vacuum --dry-run --json   # 回収見積もりと maintenance guidance だけを確認
+cdidx vacuum --json             # incremental vacuum / 初回変換を実行
+```
+
 ### コード検索
 
 ```bash
 cdidx search "authenticate"                             # 全文検索
 cdidx search "handleRequest" --lang go                  # 言語でフィルタ
 cdidx search "TODO" --limit 50                          # 結果数を増やす
+cdidx search "TODO" --exclude-comments                  # コメントだけの一致を除外
+cdidx search "Password" --exclude-strings               # 文字列・正規表現・ヘルプ文言の一致を除外
+cdidx search "DangerousApi" --exclude-fixtures           # テスト内 fixture だけの一致を除外
 cdidx search "auth*"                                    # 末尾の * はそのトークンだけを FTS5 prefix phrase にする shorthand
 cdidx search "計算" --prefix                            # クエリ全体を prefix phrase 化（CJK は unicode61 が連続コードポイントを 1 トークン扱いするため、`計算する` に届かせるには opt-in）
 cdidx search "content:auth*" --fts                      # 生のFTS5構文。列修飾子は `content:` だけが有効で、NEAR distance は 100 まで
@@ -3172,7 +3374,16 @@ cdidx search "File.ReadAllText" --exact-substring --reject-before "Length" --gua
 cdidx search "FileMode.Create" --exact-substring --require-after "File.Move" --guard-window 12  # 近傍の後続処理を要求
 cdidx search --list-recipes                             # 再利用可能な audit recipe を表示
 cdidx search --recipe risky-code --json                 # curated audit query set を実行し、grouped JSON を返す
+cdidx search --recipe risky-code/raw-diagnostic-echo --json  # recipe 内の child query を1つだけ実行
+cdidx search --recipe risky-code --include-query raw-diagnostic-echo --exclude-query cancellation-gap --json
+cdidx search --recipe risky-code/raw-diagnostic-echo --format compact --limit 20  # summary-first compact JSON と next_cursor
+cdidx search --recipe risky-code/raw-diagnostic-echo --format compact --cursor <next_cursor>
+cdidx search --named-query pack="dotnet pack" --named-query push="nuget push" --format compact  # 名前付き ad hoc batch と compact snippet
+cdidx search "catch (Exception" --group-by file --count --json    # 広い audit hit を file 別にランク付け
+cdidx search "JsonDocument.Parse" --group-by symbol --count --json # 広い audit hit を enclosing symbol 別にランク付け
 cdidx search --recipe risky-code --format issue-drafts --open-issues open-issues.json  # duplicate preflight 付き issue draft JSON
+cdidx search --recipe risky-code --format issue-drafts --open-issues github --repo Widthdom/CodeIndex  # GitHub の live open issue と照合
+cdidx search "Thread.Yield" --format issue-drafts --issue-title "Thread.Yield audit" --issue-label audit  # ad hoc issue draft JSON
 cdidx search "--open-reports" --path README.md --count  # `--` で始まる引用済みリテラル
 cdidx search --query "--path" --path README.md          # オプションに見えるリテラルを検索
 ```
@@ -3187,7 +3398,9 @@ literal-safe な `search` query は 1000 文字、128 whitespace term までで�
 guard-aware search は primary の `search` 一致を近傍の literal guard で絞り込みます:
 `--require-before` / `--require-after` は指定行窓内に guard query がある場合だけ残し、
 `--reject-before` / `--reject-after` は guard query がある一致を落とします。JSON の検索結果には
-一致した required guard の `guard_evidence` が含まれます。
+一致した guard の `guard_evidence` と、返却された一致に対して評価した各 guard の
+`guard_checks` が含まれます。guard evidence には guard 名、pattern、before/after の関係、
+1-based span、origin category、ソース行、簡潔な pass/fail summary が入ります。
 guard filter を使う検索は pagination 前に上限付きの候補集合だけを調べます。その budget 内で
 要求ページを満たせないほど query が広い場合、CLI/MCP は validation error を返します。
 query text、`--lang`、`--path`、`--exclude-tests` で絞り込むか、MCP cursor の offset を小さくしてください。
@@ -3205,6 +3418,11 @@ recipe run が対応する形式は text output、`--json` / `--format json`、
 `--format issue-drafts` です。`--list-recipes` は text または JSON に対応します。
 その他の search export format と `--json=array` は、recipe output が query または
 list metadata ごとに grouped されるため usage error で拒否します。
+MCP `search` tool では `{"listRecipes":true}` で recipe を発見し、
+`{"recipe":"risky-code"}` で実行できます。`CDIDX_SEARCH_RECIPE_PATHS` に
+platform path separator 区切りの JSON file を指定すると、設定済み recipe source を
+追加できます。各 file は recipe array または `{ "recipes": [...] }` を受け付け、
+不正な source は bounded な `recipe_source_diagnostics` として報告されます。
 triage automation では `--format issue-drafts` を使うと、title、label、evidence path、
 Markdown body、duplicate-preflight metadata を持つ issue draft object を出力します。
 `--open-issues <path>` は `gh issue list --state open --json number,title,labels,url`
@@ -3311,7 +3529,9 @@ function   CreateUser                               src/Services/UserService.cs:
 
 `search`、`definition`、`references`、`callers`、`callees`、`symbols`、`files` は共通で繰り返し指定できる `--path <glob>` の glob 形式パスフィルタ（複数値は OR で結合）、繰り返し指定できる `--exclude-path <glob>`、`--exclude-tests` に対応しています。`*` と `?` でパスパターンを指定でき、ワイルドカードを含めない場合は従来どおり部分文字列として扱われます。検索結果は tests や docs より source を優先し、`search` はシンボル名やパスがクエリと正確に一致するファイルを上に出します。
 
-`search --json` と MCP の `search` は、チャンク全文ではなく一致中心の軽量スニペットを返します。各結果には `chunk_start_line`、`chunk_end_line`、`snippet_start_line`、`snippet_end_line`、`snippet`、`match_lines`、`highlights`、`context_before`、`context_after`、`truncated_line_count`、`dropped_match_line_count`、`truncation_context` が含まれ、マッチ行がインデックス済みシンボル範囲内にある場合は `enclosing_symbol_name`、`enclosing_symbol_kind`、`enclosing_symbol_start_line`、`enclosing_symbol_end_line`、`enclosing_container_name` も含まれます。抜粋の長さは `--snippet-lines <n>` で調整でき（デフォルト: 8、最大: 20）、minified / transpiled で 1 行が極端に長いファイルでは `--max-line-width <n>` を使って各行を最も強い一致周辺へクランプできます（`0` でクランプ解除、デフォルト: 512、最大: 4096）。長い行の焦点は `--snippet-focus <leftmost|quality|proximity>` で制御でき、`quality` がデフォルト、`leftmost` は従来の最左一致、`proximity` は近接した複数トークンを優先します。クランプされた行はスニペット内に `...(+N)...` マーカーが入り、JSON / MCP 出力では `highlights[].truncated` / `highlights[].original_line_length` でも検出できます。
+`search --json`、`search --format compact`、名前付き search batch、MCP の `search` は、チャンク全文ではなく一致中心の軽量スニペットを返します。各結果には `chunk_start_line`、`chunk_end_line`、`snippet_start_line`、`snippet_end_line`、`snippet`、`match_lines`、`highlights`、`context_before`、`context_after`、`truncated_line_count`、`dropped_match_line_count`、`truncation_context` が含まれ、マッチ行がインデックス済みシンボル範囲内にある場合は `enclosing_symbol_name`、`enclosing_symbol_kind`、`enclosing_symbol_start_line`、`enclosing_symbol_end_line`、`enclosing_container_name` も含まれます。抜粋の長さは `--snippet-lines <n>` で調整でき（デフォルト: 8、最大: 20）、minified / transpiled で 1 行が極端に長いファイルでは `--max-line-width <n>` を使って各行を最も強い一致周辺へクランプできます（`0` でクランプ解除、デフォルト: 512、最大: 4096）。長い行の焦点は `--snippet-focus <leftmost|quality|proximity>` で制御でき、`quality` がデフォルト、`leftmost` は従来の最左一致、`proximity` は近接した複数トークンを優先します。クランプされた行はスニペット内に `...(+N)...` マーカーが入り、JSON / MCP 出力では `highlights[].truncated` / `highlights[].original_line_length` でも検出できます。
+検索 JSON には `match_origins` と `match_facets` も含まれ、コード、コメント、文字列リテラル、正規表現リテラル、CLI ヘルプ文言のどこで一致したかをツール側で区別できます。各 highlight にも個別の `match_origins` が付き、`--exclude-comments` と `--exclude-strings` はこの facet を使ってコメントのみ、または文字列系のみの一致を隠します。
+同じ facet は result、highlight、match-facet の各レベルで `test_file`、`test_symbol`、`test_fixture` boolean も返します。`test_fixture` はテストらしいファイルまたはインデックス済み test method 内の文字列系一致を示し、`--exclude-fixtures` は実コードの一致を残したまま fixture だけの一致を隠します。
 
 ### 定義を引く
 
@@ -3369,9 +3589,11 @@ cdidx excerpt src/CodeIndex/Cli/GitHelper.cs --start 19 --end 28 --before 3 --af
 ```bash
 cdidx find "graph table" --path src/CodeIndex/Cli/QueryCommandRunner.cs
 cdidx find "Graph Table" --path src/CodeIndex/Cli/QueryCommandRunner.cs --exact --before 1 --after 1 --json
+cdidx find "guard" --all --count --json
 ```
 
 `find` は、リポジトリ全体を対象にする `search` と、行番号が必要な `excerpt` の間を埋めるコマンドです。対象ファイルが既に分かっているときに、raw text ツールへ戻らずに、インデックス済みファイルから一致行番号・列番号・短い前後文脈を返します。query text は `search` と同じく 1,000 文字までです。
+対象を絞る場合は `--path <glob>` を使い、repo-wide の index 済みファイル走査が必要な場合だけ `--all` を明示します。`--all` と `--path` は併用できません。count JSON には `candidate_files`、`files_scanned`、`lines_scanned`、`scan_truncated`、`scan_cap_reached`、`candidate_file_limit`、`line_scan_limit` などの scan summary field が入り、human count output では同じ scan summary が stderr に出ます。
 
 ### ファイル一覧
 
@@ -3518,6 +3740,8 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--compact` | `map`、`inspect`、`outline` | list section を cap した AI 向け compact JSON を出力し、`truncation.sections.*` metadata を含める。既定 cap は 5 件で、`--limit` / `--top` 指定時はその値を使う。 |
 | `--fields <csv>` | `inspect` | inspect JSON の top-level group を選択。`file`、`workspace`、`graph`、`definitions`、`body`、`nearby_symbols`、`references`、`callers`、`callees`、`all` を指定できる。`body` は definition body を含め、`definitions` に対応する。 |
 | `--body-only` | `inspect` | `--body --fields definitions` の shorthand。大規模 audit で graph context なしに実装本文だけが必要な場合に使う。 |
+| `--body-start <line>` | `inspect` | symbol body 内の 1-based source line から definition body slice を返す。長い body の page 送りでは JSON の `body_content_next_start_line` を次の値として渡す。 |
+| `--body-lines <n>` | `inspect` | `--body`、`--body-only`、`--fields body` で返す definition body 行数の上限。最大 1000。 |
 | `--status <all\|submitted\|unsubmitted>` | `suggestions` | ローカル提案履歴を GitHub 送信状態で絞り込みます。 |
 | `--language <lang>` / `--lang <lang>` | `suggestions` | ローカル提案履歴を記録済み対象言語で絞り込みます。 |
 | `--category <category>` | `suggestions` | ローカル提案履歴を提案カテゴリで絞り込みます。 |
@@ -3525,7 +3749,8 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--limit <n>` | `suggestions list`, `suggestions export` | filter と新しい順の並び替え後に出力する提案レコード数を制限します。 |
 | `--offset <n>` | `suggestions list`, `suggestions export` | filter と新しい順の並び替え後、出力前に指定件数の提案レコードをスキップします。 |
 | `--format <json\|markdown\|issue-drafts>` | `suggestions export` | エクスポート形式を選びます。既定は JSON、markdown は人間の triage 共有向け、issue-drafts は Issue 作成用の draft object を出力します。 |
-| `--open-issues <path>` | `suggestions export --format issue-drafts` | `gh issue list --state open --json number,title,labels,url` などの open issue JSON と照合して draft を事前重複確認します。入力は 8 MiB、JSON ネスト 32 段、issue entry 1000 件、issue ごとの label 32 件、title / URL / label 文字列長の上限に制限されます。 |
+| `--open-issues <path\|github\|github:owner/name>` / `--repo <owner/name>` | `search --format issue-drafts`, `suggestions export --format issue-drafts` | `gh issue list --state open --json number,title,labels,url` などの open issue JSON と照合して draft を事前重複確認します。どちらのコマンドも `--open-issues github --repo owner/name` または `--open-issues github:owner/name` で GitHub の live open issue も取得できます。入力は 8 MiB、JSON ネスト 32 段、issue entry 1000 件、issue ごとの label 32 件、title / URL / label 文字列長の上限に制限されます。 |
+| `--issue-title <title>` / `--issue-label <label>` | `search --format issue-drafts` | ad hoc search draft の title を指定し、label hint を追加します。`--issue-label` は繰り返し指定またはカンマ区切りに対応します。 |
 | `--check` | `status` | DB のファイル path/checksum と現在の index 対象 workspace を比較し、`.cdidx/codeindex.db` が完全一致するか確認。完全一致なら終了コード `0`、stale なら `5` |
 | `--dry-run` | `index` | DB に書き込まず、どの変更が発生するかだけを走査して報告 |
 | `--limit <n>` | `suggestions` 以外のクエリ結果コマンド | 最大結果数（デフォルト: 20、最大: 10000。`map` では各セクションごとの件数） |
@@ -3533,12 +3758,16 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--exclude-visibility <v[,v]>` | `definition`, `symbols`, `unused`, `hotspots` | 指定した可視性のシンボルを除外する。値と alias 展開は `--visibility` と同じ |
 | `--path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `validate` | glob 形式のパスパターンで結果を絞る。`*` と `?` がワイルドカード。繰り返し指定可（複数値は OR で結合） |
 | `--query <query>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `inspect`, `impact` | クエリを明示的なリテラルとして渡す。クエリが `-` で始まる場合に有用。`find` 以外のクエリ系コマンドでは `-- <query>` も1トークンのクエリエスケープとして受け付け、その後のオプション解析を続ける。 |
-| `--recipe <name>` | `search` | `risky-code` などの再利用可能な audit recipe を実行する。Recipe 実行は既定で `--audit-scope source` になり、recipe の本番コード向け path / exclusion metadata を適用したうえで、通常の search filter と snippet control を各 query に適用する。text、`--json` / `--format json`、`--format issue-drafts` に対応する。 |
+| `--recipe <name>` | `search` | `risky-code` などの再利用可能な audit recipe を実行する。`risky-code/raw-diagnostic-echo` のような `recipe/query` 形式で child query を1つだけ直接実行できる。Recipe 実行は既定で `--audit-scope source` になり、recipe の本番コード向け path / exclusion metadata を適用したうえで、通常の search filter と snippet control を選択された各 query に適用する。`--limit` / `--top` は child query ごとの上限になる。text、`--json` / `--format json`、`--format compact`、`--format issue-drafts` に対応し、issue draft には再実行コマンドを含める。 |
+| `--include-query <name>` / `--exclude-query <name>` | `search --recipe <name>` | recipe 内の child query を名前で含める、または除外する。繰り返し指定とカンマ区切りに対応し、名前は `cdidx search --list-recipes` で確認できる。 |
+| `--cursor <cursor>` | `search --recipe <name/query>` | 選択した recipe child query の次ページを取得する。recipe JSON または compact output が返す `next_cursor` を指定する。 |
 | `--audit-scope <source\|all>` | `search --recipe <name>` | recipe の path scope を選ぶ。既定の `source` は recipe metadata により tests、docs、changelog text、recipe 定義を抑制する。`all` は他の filter で除外しない限り、すべての indexed path を意図的に検索する。Recipe の JSON 出力には有効な scope、path filter、exclusion が含まれる。 |
-| `--list-recipes` | `search` | 利用可能な search audit recipe を query text、推奨 label、exact-match mode、false-positive guidance 付きで一覧表示する。 |
-| `--open-issues <path>` | `search --recipe <name> --format issue-drafts` | `gh issue list --state open --json number,title,labels,url` のような open issue JSON file と照合し、生成した issue draft を事前重複確認する。 |
+| `--list-recipes` | `search` | 利用可能な search audit recipe を query text、推奨 label、exact-match mode、false-positive guidance、対応 format、filter support、limit semantics 付きで一覧表示する。 |
 | `--exclude-path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | glob 形式のパスパターンを除外する。`*` と `?` がワイルドカード。繰り返し指定可 |
 | `--exclude-tests` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | テストらしいパスを除外し、本番コードを優先 |
+| `--exclude-comments` | `search` | 保持される一致 origin がコメントだけの検索結果を除外する |
+| `--exclude-strings` | `search` | 保持される一致 origin が文字列リテラル、正規表現リテラル、CLI ヘルプ文言だけの検索結果を除外する |
+| `--exclude-fixtures` | `search` | 保持される facet がテスト fixture 文字列だけの検索結果を除外する |
 | `--include-generated` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `deps`, `impact`, `unused`, `hotspots` | 生成コードとして検出されたファイルを含める。生成ファイルは既定でクエリ結果から除外される |
 | `--snippet-lines <n>` | `search`, `references`, `callers`, `callees`, `impact` | search スニペット、または graph `--body` 抜粋の行数（デフォルト: 8、最大: 20） |
 | `--snippet-focus <leftmost\|quality\|proximity>` | `search` | 長い検索結果行をクランプするときの焦点選択。`quality`（デフォルト）は全文一致や強いトークンを優先し、`proximity` は近接した複数トークンを優先し、`leftmost` は従来の最左一致を使う。 |
@@ -3832,7 +4061,7 @@ MCP のレスポンスサイズ上限は、環境変数 override で guard が�
 
 シェルプロファイルや CI の環境変数に頼らず、プロジェクトごとの既定値を `.cdidx/config.json` または `.cdidxrc.json` ファイルとしてリポジトリにチェックインできます (#1571)。`cdidx` は起動時にカレントディレクトリから上方向に最初のプロジェクト設定ファイルを探索し、スキーマを検証してから既知のキーをプロセス環境変数として注入します。これにより、既存の環境変数コンシューマはコード変更なしに同じ値を受け取れます。
 
-優先順位は **CLI フラグ > 環境変数 > 設定ファイル > 組み込み既定値** です。設定ファイル由来の値は、対応する環境変数がプロセスで未設定の場合にのみ適用されるため、シェルや CI で既に export されている値が常に優先されます。設定 JSON はスキーマ検証前に 64 KiB と保守的なネスト深度の上限で検査されます。不正なファイル（無効な JSON、未知のキー、型違い、過度なネスト）は hard error として扱われ、cdidx はファイルパスと該当フィールドを示して終了コード `1` で終了します。完全にバイパスしたい場合は `CDIDX_DISABLE_CONFIG_FILE=1` を設定してください。
+優先順位は **CLI フラグ > 環境変数 > 設定ファイル > 組み込み既定値** です。設定ファイル由来の値は、対応する環境変数がプロセスで未設定の場合にのみ適用されるため、シェルや CI で既に export されている値が常に優先されます。設定 JSON はスキーマ検証前に 64 KiB と保守的なネスト深度の上限で検査されます。不正なファイル（無効な JSON、未知のキー、型違い、過度なネスト）は hard error として扱われ、cdidx はファイルパスと検出できた該当フィールドすべてを示して終了コード `1` で終了します。完全にバイパスしたい場合は `CDIDX_DISABLE_CONFIG_FILE=1` を設定してください。
 
 シークレットは意図的に**ファイルから読み込めません**。`CDIDX_GITHUB_TOKEN` / `CDIDX_MCP_AUTH_TOKEN` / `CDIDX_MCP_HTTP_TOKEN` は環境変数専用としており、トークンがバージョン管理に混入するのを防ぎます。
 
@@ -3859,14 +4088,15 @@ MCP のレスポンスサイズ上限は、環境変数 override で guard が�
       "deny":  ["index", "backfill_fold"]              // → CDIDX_MCP_TOOLS_DENY
     },
     "rate_limit": {
-      "rps":   5,  // → CDIDX_MCP_RATE_LIMIT_RPS
-      "burst": 10  // → CDIDX_MCP_RATE_LIMIT_BURST
+      "rps": 5,                       // → CDIDX_MCP_RATE_LIMIT_RPS
+      "burst": 10,                    // → CDIDX_MCP_RATE_LIMIT_BURST
+      "bucket_idle_seconds": 900      // → CDIDX_MCP_RATE_LIMIT_BUCKET_IDLE_SECONDS
     }
   }
 }
 ```
 
-人手で編集しやすいよう JSON5 形式の行コメント（`//`）と末尾カンマを許容します。任意の `$schema` キーはランタイムでは無視され、JSON Schema 参照をサポートするエディタが補完を提供するためだけに認識されます。`disable_persistent_log` を `false` に設定しても何も起きません（不在のままで "ログ有効" が既定）— `true` の場合のみ `CDIDX_DISABLE_PERSISTENT_LOG=1` を export します。config 由来の `metrics_path` と `global_tool_log_dir` は設定ファイルの workspace root から解決され、その workspace 内に収まる必要があります。意図的に外部の出力先を使う場合は CLI フラグまたは実際の環境変数を使ってください。`stale_after` は `status --check --stale-after` と同じ compact duration 形式（`30m` / `2h` / `7d`、最大 `30d`）です。`suggestion_dedup_threshold` は MCP suggestion の fuzzy deduplication しきい値を `0` から `1` の数値で設定します。組み込み既定値は `0.85` で、`cdidx mcp --suggestion-dedup-threshold <0..1>` は 1 回の MCP session だけこの値を上書きします。`suggestion_max_age_days` と `suggestion_max_count` は live の `.cdidx/suggestions-*.json` store の上限を設定し、prune された record は `.cdidx/suggestions-*.archive.jsonl` に追記されます。この active archive は 8 MiB で上限管理され、最大 3 世代（`.1` から `.3`）までローテーションされます。既定値は 365 日と 5000 件で、config-file 値は 3650 日または 100000 件を超えられません。同じ環境変数がこの上限を超えた場合は既定値へ戻ります。`indexing.includeKinds`、`indexing.excludeKinds`、`mcp.tools.allow`、`mcp.tools.deny` のような string array 設定は、環境変数へ join される前に 128 件、1 要素 256 文字までに制限されます。`indexing.includeKinds` と `indexing.excludeKinds` は `cdidx index` の symbol-kind filter 既定値を設定し、CLI フラグ `--include-symbol-kind <kind>[,<kind>]` / `--exclude-symbol-kind <kind>[,<kind>]` はその env 経由の既定値を 1 回の実行だけ上書きします。
+人手で編集しやすいよう JSON5 形式の行コメント（`//`）と末尾カンマを許容します。任意の `$schema` キーはランタイムでは無視され、JSON Schema 参照をサポートするエディタが補完を提供するためだけに認識されます。`disable_persistent_log` を `false` に設定しても何も起きません（不在のままで "ログ有効" が既定）— `true` の場合のみ `CDIDX_DISABLE_PERSISTENT_LOG=1` を export します。config 由来の `metrics_path` と `global_tool_log_dir` は設定ファイルの workspace root から解決され、その workspace 内に収まる必要があります。意図的に外部の出力先を使う場合は CLI フラグまたは実際の環境変数を使ってください。`stale_after` は `status --check --stale-after` と同じ compact duration 形式（`30m` / `2h` / `7d`、最大 `30d`）です。`suggestion_dedup_threshold` は MCP suggestion の fuzzy deduplication しきい値を `0` から `1` の数値で設定します。組み込み既定値は `0.85` で、`cdidx mcp --suggestion-dedup-threshold <0..1>` は 1 回の MCP session だけこの値を上書きします。`suggestion_max_age_days` と `suggestion_max_count` は live の `.cdidx/suggestions-*.json` store の上限を設定し、prune された record は `.cdidx/suggestions-*.archive.jsonl` に追記されます。この active archive は 8 MiB で上限管理され、最大 3 世代（`.1` から `.3`）までローテーションされます。既定値は 365 日と 5000 件で、config-file 値は 3650 日または 100000 件を超えられません。同じ環境変数がこの上限を超えた場合は既定値へ戻ります。`mcp.rate_limit.bucket_idle_seconds` は `CDIDX_MCP_RATE_LIMIT_BUCKET_IDLE_SECONDS` と同じ idle bucket TTL を設定します。不正な runtime 値は警告付きで既定値へ戻ります。`indexing.includeKinds`、`indexing.excludeKinds`、`mcp.tools.allow`、`mcp.tools.deny` のような string array 設定は、環境変数へ join される前に 128 件、1 要素 256 文字までに制限されます。`indexing.includeKinds` と `indexing.excludeKinds` は `cdidx index` の symbol-kind filter 既定値を設定し、CLI フラグ `--include-symbol-kind <kind>[,<kind>]` / `--exclude-symbol-kind <kind>[,<kind>]` はその env 経由の既定値を 1 回の実行だけ上書きします。
 
 ## 動作の仕組み
 
@@ -3914,7 +4144,7 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 | Rust | `.rs` | yes |
 | Java | `.java` | yes |
 | Kotlin | `.kt`, `.kts` | yes |
-| Ruby | `.rb`, `.rake`, `.gemspec`, `.podspec`, `Gemfile`, `Rakefile`, `Podfile`, `Guardfile`, `Capfile`, `Vagrantfile` | yes |
+| Ruby | `.rb`, `.rake`, `.gemspec`, `.podspec`, `Rakefile`, `Guardfile`, `Capfile`, `Vagrantfile` | yes |
 | C | `.c`, `.h` | yes |
 | C++ | `.cpp`, `.cc`, `.cxx`, `.hh`, `.hpp`, `.hxx` | yes |
 | PHP | `.php` | yes |
@@ -3942,6 +4172,8 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 | Protobuf | `.proto` | yes |
 | GraphQL | `.graphql`, `.gql` | yes |
 | Gradle | `.gradle` | yes |
+| Dependency manifest | `package.json`, `pyproject.toml`, `requirements.txt`, `Gemfile`, `Podfile`, `Cargo.toml`, `composer.json`, `go.mod`, `packages.config` | -- |
+| Dependency lockfile | `package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`, `pnpm-lock.yaml`, `Gemfile.lock`, `Cargo.lock`, `go.sum`, `uv.lock` | -- |
 | Makefile | `Makefile`, `GNUmakefile`, `Makefile.<suffix>`, `GNUmakefile.<suffix>`, `.mk` | yes |
 | Dockerfile | `Dockerfile`, `Containerfile`, `Dockerfile.<suffix>`, `Containerfile.<suffix>` | yes |
 | Assembly | `.s`, `.S`, `.asm`, `.nasm` | yes |
@@ -3962,15 +4194,16 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 | Perl test | `.t` | -- |
 | Zig | `.zig` | yes |
 | XAML | `.xaml`, `.axaml` | -- |
-| MSBuild | `.csproj`, `.fsproj`, `.vbproj`, `.props`, `.targets` | -- |
+| MSBuild | `.csproj`, `.fsproj`, `.vbproj`, `.props`, `.targets` | yes |
 | Shell | `.sh`, `.bash`, `.zsh`, `.fish` | partial |
 | PowerShell | `.ps1`, `.psm1`, `.psd1` | yes |
 | Batch | `.bat`, `.cmd` | yes |
-| CMake | `.cmake`, `CMakeLists.txt` | -- |
+| CMake | `.cmake`, `CMakeLists.txt` | yes |
+| Justfile | `Justfile` | yes |
 | SQL | `.sql`, `.pgsql`, `.tsql`, `.plsql`, `.pks`, `.pkb`, `.pls`, `.plb`, `.psql` | yes |
 | Markdown | `.md` | yes |
-| YAML | `.yaml`, `.yml` | -- |
-| JSON | `.json` | -- |
+| YAML | `.yaml`, `.yml` | yes |
+| JSON | `.json` | yes |
 | TOML | `.toml` | -- |
 | HTML | `.html`, `.htm`, `.xhtml`, `.shtml` | yes |
 | CSS | `.css`, `.scss`, `.less`, `.pcss` | yes |
@@ -3985,7 +4218,7 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 - C/C++ ヘッダー: `.h` は既定では C として扱います。`namespace`、`template`、`using`、`class`、`std::` などの明確な C++ マーカーがある場合だけ、index 時に `cpp` へ昇格します。
 - SQL: クエリ時の `--lang tsql` は SQL の別名です。T-SQL の aggregate、assembly、XML schema collection 宣言も検索対象です。
 - R: 関数代入、S4/R6 class 宣言、validity/generic/method 宣言、inherit vector、public/private/active method、`library` / `require` import を索引します。
-- Markdown と CSS: Markdown の heading / local anchor、CSS の variable、placeholder、`@extend` をシンボルとして扱います。
+- Markdown、JSON/YAML、CSS: Markdown の heading / local anchor、JSON/YAML の configuration key path、CSS の variable、placeholder、`@extend` をシンボルとして扱います。
 - Dockerfile、Assembly、Common Lisp、Racket: `ARG` build arg、label、PROC/MACRO、package/module form、definition、class/struct、require/provide を必要に応じて表面化します。
 - Shell、PowerShell、Batch: command-style function call、function/filter、class/enum、import、label、`goto` / `call` target、inline control-flow を言語仕様に合わせて索引します。
 - C# と Java: C# の近年の partial member は `symbols`、`definition`、`outline` から見えます。Java の sealed `permits` list は `type_reference` graph edge として記録します。
@@ -3993,13 +4226,15 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 - React hooks: JavaScript/TypeScript で `use[A-Z]...` の命名規則に従う関数は `hook` シンボルとして索引し、`useFoo()` や `useState()` などの hook 呼び出しは hook composition graph 用の `consumes_hook` 参照として記録します。
 - JavaScript/TypeScript import: static import、dynamic import、CommonJS `require` / `require.resolve`、`import.meta.resolve`、`new URL(..., import.meta.url)`、`importScripts`、Service Worker registration、worklet load、worker constructor は、specifier が静的なら `import` シンボルを追加します。`tsconfig.json` / `jsconfig.json` の `compilerOptions.baseUrl` と `paths` alias は、対象ファイルが存在する場合に indexed project path へ解決します。
 - Node モジュール構成: `.cjs` / `.mjs` は JavaScript、`.cts` / `.mts`（`.d.cts` / `.d.mts` を含む）は TypeScript として扱います。
+- Dependency manifest / lockfile: dependency / security audit では `--lang dependency_manifest` または `--lang dependency_lock` を使います。この bucket は検索可能な text として扱われ、symbol / graph 抽出は主張しません。
 - 拡張子なしスクリプト: 先頭行の shebang が shell (`sh`, `bash`, `zsh`, `fish`, `dash`, `ksh`, `ash`)、Python、Ruby、Node.js、PHP、Lua、PowerShell として認識できれば index 対象です。
 
 ### 言語別 extraction matrix
 
-現在の capability は `cdidx languages --json` を live probe として確認してください。
-現在の DB に存在する言語だけを見たい場合は `--indexed-only`、特定の構造化 capability を監査する場合は
-`--capability graph|symbols|references` を追加します。この matrix は、構造化 command を信頼できる場面と
+現在の capability は `cdidx languages --json` を live probe として確認してください。JSON 行には
+`symbol_extraction`、`reference_extraction`、`graph_queries`、`capability_gaps` が含まれます。
+現在の DB に存在する言語だけを見たい場合は `--indexed-only`、特定の構造化 capability や capability gap を監査する場合は
+`--capability graph|references|symbols|missing-graph|missing-references|missing-symbols|search-only` を追加します。この matrix は、構造化 command を信頼できる場面と
 `search` に戻るべき場面を判断するための概要です。
 
 | 言語ファミリ | Symbols | References / graph | メモと例 |
@@ -4009,9 +4244,10 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 | JavaScript / TypeScript / Vue / Svelte | function、class、export、import、variable | call、constructor、static/dynamic import、worker、service worker | dynamic property call と computed module specifier は best-effort です。`cdidx references render --lang typescript` |
 | Python / Ruby / PHP / Perl / R | function、class/module、対応言語の import | call、constructor、対応言語の decorator/annotation | dynamic dispatch と metaprogramming は `search` が必要な場合があります。PHPDoc/static import pattern は静的に見える範囲で索引されます。 |
 | C / C++ / Objective-C / Swift / Rust / Go / Zig | function、type、method、import/module | call、constructor、対応言語の macro invocation、type reference | C++ template/macro と Rust macro expansion は評価しません。Rust macro invocation 自体は reference edge です。 |
-| Shell / PowerShell / Batch / Makefile / Gradle | function、label、task、対応言語の import | command-style call と control-flow target | runtime で組み立てられる command は解決しません。 |
+| Shell / PowerShell / Batch / Makefile / CMake / Justfile / MSBuild / Gradle | function、label、target、recipe、task、対応言語の import | command-style call、target dependency、control-flow target | runtime で組み立てられる command は解決しません。 |
 | SQL / Terraform / Dockerfile | statement/resource/stage/label | table/resource/stage reference、Dockerfile stage dependency、Terraform dotted refs | SQL hotspot grouping は既定で statement、Dockerfile `COPY --from=<stage>` は named stage を追跡します。 |
-| Markdown / HTML / CSS / GraphQL / Protobuf | heading、anchor、selector、対応 schema type/message | local anchor、CSS extend/variable、対応 schema reference | prose や generated markup には `search` を使ってください。 |
+| Markdown / HTML / CSS / GraphQL / Protobuf | heading、anchor、selector、対応 schema type/message | link/asset/component、local anchor、CSS extend/variable、対応 schema reference | prose や generated markup には `search` を使ってください。 |
+| Dependency manifest / lockfile | なし | なし | dependency / security audit には `--lang dependency_manifest` または `--lang dependency_lock` を使います。 |
 | その他の indexed text format | `languages` が symbol 対応を示す場合を除き file/chunk search のみ | `languages` が graph 対応を示す場合を除きなし | `cdidx search "literal" --lang yaml` が信頼できる fallback です。 |
 
 Language filter を指定した graph commands は、JSON / MCP 出力に
@@ -4272,23 +4508,38 @@ cdidxには**MCP（Model Context Protocol）サーバー**が組み込まれて�
 サーバーを stdio で起動します。既存の CodeIndex database を再利用し、
 任意の LSP command を起動できるが MCP には対応していない editor 向けに
 `initialize`、`workspace/symbol`、`textDocument/documentSymbol`、
-`textDocument/definition`、`textDocument/references` を公開します。
+`textDocument/definition`、`textDocument/declaration`、
+`textDocument/typeDefinition`、`textDocument/implementation`、
+`textDocument/references` を公開します。
 受信した `textDocument.uri` は string かつ absolute `file:` URI である必要があり、
 4096 文字を超える場合は URI parse の前に拒否されます。これは MCP resource URI の上限と
 揃えており、エラー応答が過大にならないようにします。
 LSP frame parsing は、message body を読む前に 64 行を超える header、合計 65536 bytes を
 超える header、8192 bytes を超える単一 header 行、重複した `Content-Length` header、
 8388608 bytes を超える body を拒否します。
+stdio loop は header / message body 読み取り中も CLI cancellation token を監視するため、
+Ctrl-C や host cancellation が次の完全な request を待たずに pending frame read を中断できます。
 method-not-found diagnostic で echo する method name は最大 240 文字に制限され、
 長い場合は `...` を付けて切り詰めます。
 request ID は bounded な JSON-RPC scalar value に限定され、string は 256 文字まで、
 integer ID は `Int64` に収まるものだけを受理し、non-scalar ID は response ID を複製する前に
 invalid request として拒否します。
 `workspace/symbol` の query string は symbol search を実行する前に 1000 文字で上限をかけます。
-`textDocument/documentSymbol` は最大 1000 件の indexed symbol を返し、各 `detail` string を
-`...` 付きの 512 文字に切り詰め、result array が 524288 JSON bytes を超える前に symbol 追加を止めます。
+`workspace/symbol` は任意の numeric `limit` / `maxResults` parameter を受け取り、1000 件までに
+clamp します。`textDocument/documentSymbol` は container metadata がある場合に階層化された
+`DocumentSymbol` children を返し、最大 1000 件の indexed symbol を返し、各 `detail` string を
+`...` 付きの 512 文字に切り詰め、result tree が 524288 JSON bytes を超える前に trim します。
 position-based な `definition` / `references` lookup は、対象 source line を最大 16384 文字まで読み、
 超過時は空の result を返します。
+`textDocument/references` は `context.includeDeclaration` を尊重し、true の場合は definition location を
+重複なしで reference result の先頭に追加します。`declaration`、`typeDefinition`、`implementation`
+request は同じ indexed definition lookup を再利用し、`definition` と同じ location shape を返します。
+追跡中の `workspaceFolders` は indexed absolute path に対する position-based request の解決に使われ、
+`workspace/didChangeWorkspaceFolders` で追加・削除された folder も反映されます。relative indexed path は
+database project root に紐づいたままです。
+position lookup が安全に解決できず空の result を返す場合、`CodeIndex` `ActivitySource` は
+`outside_project`、`file_not_indexed`、`position_file_too_large`、`no_token_at_position`
+などの安全な `lsp.lookup.failure_reason` code を持つ `lsp.lookup_failed` event を出します。
 exact indexed path resolution が失敗した場合、LSP document path fallback は最大 32 件の
 basename candidate だけを確認し、見つからなければ unresolved document として扱います。
 
@@ -4395,9 +4646,9 @@ OpenAI Codex CLI (`codex.json` または `~/.codex/config.json`):
 | `impact_analysis` | シンボルの推移的 caller を算出（`maxHops` は inclusive で、`maxHops: N` 指定時は hop 1〜N の caller を返す。例: A→B→C→D のチェーンで D を `maxHops: 2` 検索すると C(hop=1) と B(hop=2) が返る）。非推奨 alias の `maxDepth` は互換期間中も受け付け、使用時は warning を返す。symbol-level BFS は call graph 種別（`call`、`instantiate`、`subscribe`）のみを辿り、metadata-only edge（`attribute`、`annotation`、`type_reference`）を除外するため、metadata cycle で caller 件数が膨らまない。`maxHops: 0` で symbol 解決のみを行い、単一定義の型は heuristic な file-level dependency hint にフォールバックし、複数定義時はヒントも返す。この file hint は metadata edge を含み得る。`withPaths: true` を渡すと、各 caller に最短経路 `[resolvedRoot, 中間..., callerName]` の `paths` 配列が付き、ダイヤモンド収束時もすべての経路を返す（1 行あたりの保持上限を超えると `paths_truncated` で通知） |
 | `unused_symbols` | 定義されているが参照されていないシンボルを bucket 付きで検索（デッドコード検出向け） |
 | `symbol_hotspots` | 影響の大きい hotspot を検索。`groupBy` は `symbol` / `file` / `statement` を指定でき、SQL scope は statement grouping、非 SQL scope は symbol grouping が既定。 |
-| `batch_query` | 複数クエリを1回で実行（MCP専用、最大10件）。レスポンスにはトップレベル `metadata`（`submitted` / `executed` / `errors` / `total_elapsed_ms` / `success_count` / `failure_count`）と各 `results` エントリの `request_index` / `ok` / `elapsed_ms` / `args_summary` が含まれ、位置だけに依存せず部分失敗や遅い内部クエリを把握できます。 |
-| `validate` | エンコーディング問題（origin/severity 付き U+FFFD、BOM、null バイト、改行混在 / CR-only 行末、UTF-16 BOM 検出、UTF-8 以外と推定されるエンコーディング）を報告 |
-| `languages` | 対応言語一覧を拡張子・機能付きで表示。`--indexed-only` と `--capability graph|symbols|references` で現在の DB や機能別に絞り込み可能 |
+| `batch_query` | 複数クエリを1回で実行（MCP専用、最大10件）。レスポンスにはトップレベル `metadata`（`submitted` / `executed` / `errors` / `total_elapsed_ms` / `success_count` / `failure_count`）と各 `results` エントリの `request_index`、任意の client `slot_id`、`ok`、`elapsed_ms`、`summary`、`args_summary` が含まれ、位置だけに依存せず部分失敗や遅い内部クエリを把握できます。 |
+| `validate` | エンコーディングと file-content の問題（origin/severity 付き U+FFFD、BOM、null バイト、改行混在 / CR-only 行末、UTF-16 BOM 検出、UTF-8 以外と推定されるエンコーディング、Dockerfile JSON-form 診断）を報告 |
+| `languages` | 対応言語一覧を拡張子・機能付きで表示。`--indexed-only` と `--capability graph|references|symbols|missing-graph|missing-references|missing-symbols|search-only` で現在の DB、機能別、または capability gap 別に絞り込み可能 |
 | `ping` | 軽量な接続確認 |
 | `index` | プロジェクトのインデックス作成・更新 |
 | `backfill_fold` | 既存 DB の folded-name key をソース再解析なしで更新 |
@@ -4420,6 +4671,12 @@ cdidx backfill-fold
 `references`、`callers`、`callees` などの graph 系 MCP ツールも、言語フィルタが指定されている場合は `graph_language`、`graph_supported`、`graph_support_reason` を返し、未対応言語と単なる 0 件ヒットを区別できるようにしています。
 
 全 MCP ツールは `annotations`（`readOnlyHint`、`destructiveHint`、`idempotentHint`、`openWorldHint`）を含み、AIクライアントがユーザーへの確認なしに安全な読み取り専用クエリを自動承認できるようにしています。
+
+`tools/list` は引数互換メタデータも公開します。`excludePaths` などの共通 path filter は `path` と同じくスカラー文字列または文字列配列を受け付け、schema には `x-expectedType`、`x-aliases` / `x-aliasOf` による alias、`deprecated` と `x-deprecationReason` による非推奨 alias 情報が含まれます。検証エラーも `expected` と、該当する場合は `alias_of` / `deprecated` を返すため、クライアントは説明文を parse せず復旧できます。`definition` と `references` は `lsp_compatible` と JSON 風 alias の `lspCompatible` の両方を受け付けます。
+
+MCP ツールが対応済み引数をクランプまたは無視した場合、成功レスポンスには人間向けの `warnings` と機械処理向けの `argument_adjustments` が含まれます。各 adjustment は `argument`、`action`（`clamped` または `ignored`）、`requested`、`effective`、必要に応じて cap 情報を持つため、`limit`、`offset`、`snippetLines`、`map.depth`、`impact_analysis.maxHops` が要求より狭い結果に調整されたかをクライアント側で判定できます。
+
+`batch_query` は `tools/list` の `queries.maxItems` で slot 上限を広告し、`status` には JSON-RPC batch 上限と区別できる `mcp.limits.batch_query_max_queries`、`batch_query_response_bytes`、`batch_query_max_response_bytes` を返します。クライアントは `estimateOnly: true` で slot を実行せず `slot_estimates` と byte budget metadata を取得でき、`maxResponseBytes` で呼び出し単位の低い response budget を要求できます。各 slot の `id` または `slotId` は `slot_id` として echo されます。aggregate response が切り詰められた場合、`truncated_queries` は slot id を保持し、`split_hint` が `next_request_index`、`suggested_query_count`、opaque な `resume_cursor` を返すため、残りの元 query 配列を deterministic に分割して再実行できます。
 
 #### MCP エラー応答
 
@@ -4456,7 +4713,7 @@ HTTP では `CDIDX_MCP_HTTP_TOKEN` が優先の bearer secret です。未設定
 `CDIDX_MCP_AUTH_TOKEN` を bearer secret として fallback し、クライアントは引き続き
 `Authorization: Bearer <token>` で認証します。
 
-HTTP の `POST /` 1 件が JSON-RPC フレーム 1 件に対応し、応答は同じ HTTP レスポンスのボディに `200 OK` / `application/json` で返ります。通知は `204 No Content` です。`GET /events` はサーバー→クライアントフレーム用の `text/event-stream` channel を開きます。server-initiated JSON-RPC frame は `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S` で keep-alive notification を opt-in した場合だけ送信されます。受理される値は有限な `1`〜`300` 秒で、不正値や範囲外の値では `stderr` に警告を出して keep-alive を無効のままにします。この stream は独立しており通常の POST リクエストを塞ぎません。`/` への POST 以外は `405 Method Not Allowed`（`Allow: POST` 付き）です。リクエスト本文は既定で 1,000,000 bytes までに制限され、超過時は `413 Payload Too Large` を返します。保留中 POST queue と受理済み handler task は既定で 64 件まで、同時 `/events` stream は既定で 16 件までに制限されます。queue、handler pool、stream slot が満杯の場合は `Retry-After: 1` 付きの `429 Too Many Requests` を返します。正の整数の `CDIDX_MCP_HTTP_MAX_REQUEST_BYTES`、`CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH`、`CDIDX_MCP_HTTP_MAX_CONCURRENT_HANDLERS`、`CDIDX_MCP_HTTP_MAX_EVENT_STREAMS` で調整でき、受理範囲は本文が `1..16777216` bytes、各件数 limit が `1..1024` 件です。正でない値や数値でない値は既定にフォールバックし、最大値を超える値は listener 起動前に拒否されます。idle event stream には最小限の SSE comment heartbeat を送り、切断済み client の stream slot を解放します。永続 lifecycle log が有効な場合、HTTP mode はリクエストごとに `mcp_http_request` レコードも出力し、method、path、status、duration、auth outcome、remote peer、correlation id、利用可能な JSON-RPC request id を記録します。method、path、remote peer、request id は 256 文字を上限に `...<truncated>` marker 付きで切り詰めます。リクエスト/レスポンス本文は記録しません。
+HTTP の `POST /` 1 件が JSON-RPC フレーム 1 件に対応し、応答は同じ HTTP レスポンスのボディに `200 OK` / `application/json` で返ります。通知は `204 No Content` です。`GET /events` はサーバー→クライアントフレーム用の `text/event-stream` channel を開きます。複数 client が同時に `/events` を保持でき、server notification は接続中の全 stream に broadcast されます。event response には `X-Accel-Buffering: no` と stream ごとの `X-Cdidx-Mcp-Event-Stream-Id` が付きます。server-initiated JSON-RPC frame は `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S` で keep-alive notification を opt-in した場合だけ送信されます。受理される値は有限な `1`〜`300` 秒で、不正値や範囲外の値では `stderr` に警告を出して keep-alive を無効のままにします。この stream は独立しており通常の POST リクエストを塞ぎません。`/` への POST 以外は `405 Method Not Allowed`（`Allow: POST` 付き）です。リクエスト本文は既定で 1,000,000 bytes までに制限され、超過時は `413 Payload Too Large` を返します。保留中 POST queue と受理済み handler task は既定で 64 件まで、同時 `/events` stream は既定で 16 件までに制限されます。queue、handler pool、stream slot が満杯の場合は `Retry-After: 1` 付きの `429 Too Many Requests` を返します。正の整数の `CDIDX_MCP_HTTP_MAX_REQUEST_BYTES`、`CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH`、`CDIDX_MCP_HTTP_MAX_CONCURRENT_HANDLERS`、`CDIDX_MCP_HTTP_MAX_EVENT_STREAMS` で調整でき、受理範囲は本文が `1..16777216` bytes、各件数 limit が `1..1024` 件です。正でない値や数値でない値は既定にフォールバックし、最大値を超える値は listener 起動前に拒否されます。`/healthz` は transport diagnostic として `http_event_stream_count`、`http_event_stream_limit`、`http_max_concurrent_handlers`、`http_queued_request_count` を含みます。idle event stream には最小限の SSE comment heartbeat を送り、切断済み client の stream slot を解放します。永続 lifecycle log が有効な場合、HTTP mode はリクエストごとに `mcp_http_request` レコードも出力し、method、path、status、duration、auth outcome、remote peer、correlation id、利用可能な JSON-RPC request id を記録します。method、path、remote peer、request id は 256 文字を上限に `...<truncated>` marker 付きで切り詰めます。リクエスト/レスポンス本文は記録しません。
 
 セキュリティ既定:
 
@@ -4485,9 +4742,11 @@ stdio の `cdidx mcp` を信頼度の低いチャネル（転送ソケット、�
 
 両方指定された場合は allowlist が優先されます。`tools/list` は有効ツールのみ広告し、`initialize` の instructions 文字列も無効化されたツールを推奨しなくなります。トップレベル `tools/call` で無効化された既知ツールを呼び出した場合は、構造化された JSON-RPC エラー `-32601 Tool not enabled: <name>` を返します。`batch_query` 自体は引き続きエンベロープとして成功しますが、無効化ツールの各 slot に `code: -32601` フィールドが `error` 文字列と並んで載るため、クライアントは prose の部分一致ではなく code で分岐できます。typo などサーバーに元から無い名前は引き続き `-32602 Unknown tool` を返すため、オペレータによる無効化と typo を区別できます。比較は大小文字無視。既定は **全ツール有効** なので、オペレータがこれらの変数を設定しない限り既存デプロイへの影響はありません。
 
+filter 解析では、allow / deny 変数が空、CSV 内に空 entry がある、または未知の tool 名を含む場合に `stderr` へ警告します。`CDIDX_MCP_TOOLS_DENY` の未知名は警告後に無視されます。`CDIDX_MCP_TOOLS_ALLOW` は明示的に設定されているのに既知 tool 名が 0 件の場合 fail closed となり、typo だけの allowlist が既定の全公開 surface に戻ることを防ぎます。過大な filter 値は従来通り warning 付きで拒否されます。
+
 #### MCP roots と sampling
 
-`cdidx mcp` は `initialize` で roots と sampling support を広告します。クライアントが roots をサポートする場合、`index` は `roots/list` を更新し、許可された client root の外にある path を拒否します。`suggest_improvement` は raw suggestion を保存する前に `sampling/createMessage` で任意の 1 行タイトルとタグ一覧を抽出します。sampling prompt は byte 上限内に収められ、長い field は 1 行 summary に切り詰められ、`toolInvocationContext` は raw 内容を sampling client に送らず summary 化されます。server-to-client sampling request を無効化するには `CDIDX_MCP_SAMPLING=0`（または `false` / `off`）を設定してください。
+`cdidx mcp` は `initialize` で roots と sampling support を広告します。クライアントが roots をサポートする場合、`index` は `roots/list` を更新し、許可された client root の外にある path を拒否します。`suggest_improvement` は、クライアントが sampling を広告し、かつ `CDIDX_MCP_SAMPLING` が `1`、`true`、`yes`、`on` のいずれかで明示 opt-in された場合だけ `sampling/createMessage` を呼びます。未設定、opt-out、不明な値は fail closed になり、tool result に bounded な `sampling_diagnostic` を返します。有効な場合は raw suggestion を保存する前に任意の 1 行タイトルとタグ一覧を抽出します。sampling prompt は byte 上限内に収められ、長い field は 1 行 summary に切り詰められ、`toolInvocationContext` は raw 内容を sampling client に送らず summary 化されます。
 
 ### AIワークフローで grep/ripgrep より cdidx が優れる理由
 

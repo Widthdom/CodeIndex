@@ -54,8 +54,8 @@ public sealed class PostExtractionHookRunner : IDisposable
         this.callbackBudget = callbackBudget;
     }
 
-    public static PostExtractionHookRunner DiscoverDefault()
-        => Discover(GetDefaultHooksDirectory());
+    public static PostExtractionHookRunner DiscoverDefault(long? maxFileSizeBytes = null)
+        => Discover(GetDefaultHooksDirectory(), maxFileSizeBytes);
 
     public static PostExtractionHookDiscoverySnapshot DiscoverDefaultMetadata()
         => DiscoverMetadata(GetDefaultHooksDirectory());
@@ -81,10 +81,11 @@ public sealed class PostExtractionHookRunner : IDisposable
         return new PostExtractionHookDiscoverySnapshot(hooks, runner.Diagnostics, runner.CallbackBudget);
     }
 
-    public static PostExtractionHookRunner Discover(string? hooksDirectory)
+    public static PostExtractionHookRunner Discover(string? hooksDirectory, long? maxFileSizeBytes = null)
     {
         var loaded = new List<LoadedPostExtractionHook>();
         var runner = new PostExtractionHookRunner(loaded, ResolveCallbackBudget());
+        var maxProtocolLineBytes = WorkerProtocolLineLimits.ResolveForSourceFileBytes(maxFileSizeBytes);
 
         if (string.IsNullOrWhiteSpace(hooksDirectory) || !Directory.Exists(hooksDirectory))
             return runner;
@@ -135,7 +136,7 @@ public sealed class PostExtractionHookRunner : IDisposable
                     loaded.Add(new LoadedPostExtractionHook(
                         info,
                         AssemblyLoadContext.GetLoadContext(type.Assembly),
-                        new PostExtractionHookCallbackWorkerClient(info)));
+                        new PostExtractionHookCallbackWorkerClient(info, maxProtocolLineBytes)));
                 }
                 catch (Exception)
                 {
