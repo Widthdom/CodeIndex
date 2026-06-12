@@ -542,6 +542,40 @@ public class DbCommandRunnerTests
     }
 
     [Fact]
+    public void TryDeleteTemporaryDirectory_RejectsTargetOutsideSafeRoot_Issue3379()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_cleanup_safe_root_{Guid.NewGuid():N}");
+        var safeRoot = Path.Combine(root, "safe");
+        var outsideRoot = Path.Combine(root, "outside");
+        var outsideTarget = Path.Combine(outsideRoot, ".tmp-malformed");
+        try
+        {
+            Directory.CreateDirectory(safeRoot);
+            Directory.CreateDirectory(outsideTarget);
+            File.WriteAllText(Path.Combine(outsideTarget, "sentinel.txt"), "keep");
+
+            var (_, _, stderr) = ConsoleCapture.Capture(() =>
+            {
+                DbCommandRunner.TryDeleteTemporaryDirectory(
+                    outsideTarget,
+                    "test temporary directory",
+                    safeRoot,
+                    ".tmp-");
+                return 0;
+            });
+
+            Assert.True(Directory.Exists(outsideTarget));
+            Assert.Contains("skipped deleting test temporary directory", stderr);
+            Assert.Contains("outside the expected cleanup root", stderr);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Run_CheckpointsList_JsonIncludesCreatedCheckpoint()
     {
         var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_list_{Guid.NewGuid():N}");

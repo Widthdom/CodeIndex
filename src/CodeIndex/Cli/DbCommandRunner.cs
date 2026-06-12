@@ -735,7 +735,11 @@ public static class DbCommandRunner
         }
         catch
         {
-            TryDeleteTemporaryDirectory(tempPath, "checkpoint temporary directory");
+            TryDeleteTemporaryDirectory(
+                tempPath,
+                "checkpoint temporary directory",
+                root,
+                ".tmp-");
             throw;
         }
 
@@ -856,7 +860,11 @@ public static class DbCommandRunner
         }
         finally
         {
-            TryDeleteTemporaryDirectory(restoreTempPath, "restore temporary directory");
+            TryDeleteTemporaryDirectory(
+                restoreTempPath,
+                "restore temporary directory",
+                Path.GetDirectoryName(fullDbPath) ?? Path.GetPathRoot(fullDbPath) ?? Path.GetFullPath("."),
+                Path.GetFileName(fullDbPath) + ".restore-tmp-");
         }
 
         return backupPath;
@@ -934,22 +942,72 @@ public static class DbCommandRunner
             File.Delete(LongPath.EnsureWindowsPrefix(path));
     }
 
-    private static void TryDeleteTemporaryDirectory(string path, string cleanupDescription)
+    internal static void TryDeleteTemporaryDirectory(string path, string cleanupDescription, string safeRoot, string expectedNamePrefix)
     {
         try
         {
-            if (!Directory.Exists(path))
+            if (!TryValidateTemporaryDirectoryCleanupTarget(path, safeRoot, expectedNamePrefix, out var fullPath, out var validationFailure))
+            {
+                Console.Error.WriteLine($"Warning: skipped deleting {cleanupDescription} {ConsoleUi.FormatBoundedValue(path)} ({validationFailure}).");
+                return;
+            }
+
+            if (!Directory.Exists(LongPath.EnsureWindowsPrefix(fullPath)))
                 return;
 
             if (DeleteTemporaryDirectoryForTesting != null)
-                DeleteTemporaryDirectoryForTesting(path);
+                DeleteTemporaryDirectoryForTesting(fullPath);
             else
-                Directory.Delete(path, recursive: true);
+                Directory.Delete(LongPath.EnsureWindowsPrefix(fullPath), recursive: true);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or PathTooLongException)
         {
             Console.Error.WriteLine($"Warning: failed to delete {cleanupDescription} {ConsoleUi.FormatBoundedValue(path)} ({CommandErrorWriter.FormatSanitizedException(ex)}).");
         }
+    }
+
+    private static bool TryValidateTemporaryDirectoryCleanupTarget(
+        string path,
+        string safeRoot,
+        string expectedNamePrefix,
+        out string fullPath,
+        out string failureReason)
+    {
+        fullPath = string.Empty;
+        failureReason = string.Empty;
+        try
+        {
+            fullPath = NormalizeBoundaryPath(Path.GetFullPath(path));
+            var normalizedRoot = NormalizeBoundaryPath(Path.GetFullPath(safeRoot));
+            if (string.Equals(fullPath, normalizedRoot, PathCasing.ComparisonFor(normalizedRoot))
+                || !PathCasing.IsPathEqualOrParent(normalizedRoot, fullPath))
+            {
+                failureReason = "target is outside the expected cleanup root";
+                return false;
+            }
+
+            if (!Path.GetFileName(fullPath).StartsWith(expectedNamePrefix, StringComparison.Ordinal))
+            {
+                failureReason = "target name does not match the expected temporary-directory prefix";
+                return false;
+            }
+
+            return true;
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException or UnauthorizedAccessException or PathTooLongException)
+        {
+            failureReason = "target path is invalid";
+            return false;
+        }
+    }
+
+    private static string NormalizeBoundaryPath(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        var root = Path.GetPathRoot(fullPath);
+        if (!string.IsNullOrEmpty(root) && string.Equals(fullPath, root, StringComparison.Ordinal))
+            return fullPath;
+        return fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
     }
 
     internal static DbCommandOptions ParseArgs(string[] args)
