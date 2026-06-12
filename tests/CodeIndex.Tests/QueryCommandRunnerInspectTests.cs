@@ -185,7 +185,8 @@ public partial class QueryCommandRunnerTests
             Assert.Contains("cdidx excerpt src/huge_body.py", recoveryCommand);
             Assert.Contains("--db", recoveryCommand);
             Assert.Contains("file:", recoveryCommand);
-            Assert.Contains(dbPath, recoveryCommand);
+            var expectedReadOnlyUri = DbContext.ToReadOnlyUri(dbPath);
+            Assert.Contains(expectedReadOnlyUri, recoveryCommand);
             Assert.Contains("immutable=1", recoveryCommand);
             Assert.Contains("mode=ro", recoveryCommand);
             Assert.Contains("--start 2 --end 3 --max-line-width 0 --json", recoveryCommand);
