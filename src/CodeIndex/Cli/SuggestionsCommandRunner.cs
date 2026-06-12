@@ -28,8 +28,8 @@ internal static class SuggestionsCommandRunner
         var options = Parse(args[1..]);
         if (options.Error != null)
         {
-            Console.Error.WriteLine(options.Error);
-            Console.Error.WriteLine(Usage);
+            CommandErrorWriter.WriteStderr(options.Error);
+            CommandErrorWriter.WriteStderr(Usage);
             return CommandExitCodes.UsageError;
         }
         if (options.OpenIssuesPath != null && (verb != "export" || options.ExportFormat != "issue-drafts"))
@@ -72,7 +72,7 @@ internal static class SuggestionsCommandRunner
 
         if (records.Count == 0)
         {
-            Console.Error.WriteLine("No suggestions found.");
+            CommandErrorWriter.WriteStderr("No suggestions found.");
             return CommandExitCodes.NotFound;
         }
 
@@ -533,8 +533,8 @@ internal static class SuggestionsCommandRunner
 
     private static int WriteUsageError(string message)
     {
-        Console.Error.WriteLine($"Error: {message}");
-        Console.Error.WriteLine(Usage);
+        CommandErrorWriter.WriteStderr($"Error: {message}");
+        CommandErrorWriter.WriteStderr(Usage);
         return CommandExitCodes.UsageError;
     }
 

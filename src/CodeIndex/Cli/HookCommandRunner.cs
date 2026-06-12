@@ -259,15 +259,15 @@ fi
         }
         else if (exitCode == CommandExitCodes.Success)
         {
-            Console.WriteLine(message);
+            CommandErrorWriter.WriteStdout(message);
             if (hookPath != null)
-                Console.WriteLine($"Hook: {hookPath}");
+                CommandErrorWriter.WriteStdout($"Hook: {hookPath}");
             if (chainedHookPath != null)
-                Console.WriteLine($"Chained hook: {chainedHookPath}");
+                CommandErrorWriter.WriteStdout($"Chained hook: {chainedHookPath}");
         }
         else
         {
-            Console.Error.WriteLine($"Error: {message}");
+            CommandErrorWriter.WriteStderr($"Error: {message}");
         }
 
         return exitCode;

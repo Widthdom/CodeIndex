@@ -114,7 +114,7 @@ public static partial class IndexCommandRunner
         if (!options.Json || options.Quiet)
             return;
 
-        Console.Error.WriteLine($"cdidx: {message}");
+        CommandErrorWriter.WriteStderr($"cdidx: {message}");
     }
 
     private static (CancellationTokenSource Cts, Task Task)? StartIndexJsonPhaseHeartbeat(

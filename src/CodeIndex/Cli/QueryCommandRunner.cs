@@ -187,6 +187,7 @@ public static class QueryCommandRunner
         "--stale-after",
         "--explain",
         "--rank-by",
+        "--sort",
         "--slow-query-ms",
         "--format",
         "--min-entrypoint-confidence",
@@ -289,6 +290,7 @@ public static class QueryCommandRunner
         "--silent",
         "--by-bucket",
         "--all",
+        "--summary-only",
         "--cycles",
         "--group-by-name",
         "--with-paths",
@@ -3572,7 +3574,7 @@ public static class QueryCommandRunner
                 return CommandExitCodes.Success;
             }
 
-            var results = reader.SearchSymbols(symbolQueries, options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters);
+            var results = reader.SearchSymbols(symbolQueries, options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters, sortMode: options.SymbolSortMode);
             var hasExactPredicate = exact && symbolQueries is { Count: > 0 };
             var exactSignal = reader.GetSymbolsExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since);
             var multiNameExactHint = symbolQueries != null && symbolQueries.Count > 1;
@@ -3620,13 +3622,32 @@ public static class QueryCommandRunner
                     var lineRange = r.EndLine > r.StartLine
                         ? $"{r.StartLine}-{r.EndLine}"
                         : r.StartLine.ToString();
-                    Console.WriteLine($"{ConsoleUi.ColorizeKind(r.Kind, 10)} {r.Name,-40} {r.Path}:{lineRange}");
+                    Console.WriteLine($"{ConsoleUi.ColorizeKind(r.Kind, 10)} {r.Name,-40} {r.Path}:{lineRange}{FormatSymbolRankSuffix(r)}");
                 }
                 var symFileCount = results.Select(r => r.Path).Distinct().Count();
-                Console.Error.WriteLine($"({results.Count} symbols in {symFileCount} files)");
+                var sortSummary = options.SymbolSortMode == SymbolSortMode.Name ? string.Empty : $"; sort={options.SymbolSortMode.ToString().ToLowerInvariant()}";
+                Console.Error.WriteLine($"({results.Count} symbols in {symFileCount} files{sortSummary})");
             }
             return CommandExitCodes.Success;
         });
+    }
+
+    private static string FormatSymbolRankSuffix(SymbolResult result)
+    {
+        if (result.SortMode == null)
+            return string.Empty;
+
+        var parts = new List<string>();
+        if (result.ReferenceCount.HasValue)
+            parts.Add($"refs={result.ReferenceCount.Value}");
+        if (result.HotspotScore.HasValue)
+            parts.Add($"hotspot={result.HotspotScore.Value.ToString("0.###", CultureInfo.InvariantCulture)}");
+        if (result.SizeLines.HasValue)
+            parts.Add($"size={result.SizeLines.Value}");
+        if (result.ComplexityScore.HasValue)
+            parts.Add($"complexity={result.ComplexityScore.Value.ToString("0.###", CultureInfo.InvariantCulture)}");
+
+        return parts.Count == 0 ? string.Empty : $" [{string.Join(", ", parts)}]";
     }
 
     public static int RunFiles(string[] cmdArgs, JsonSerializerOptions jsonOptions)
@@ -4279,6 +4300,12 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteUnexpectedPositionals("map", options))
             return CommandExitCodes.UsageError;
+        if (options.MapSummaryOnly && options.MapSections != null)
+            return CommandErrorWriter.Write(
+                "--summary-only cannot be combined with --sections.",
+                CommandExitCodes.UsageError,
+                "choose --summary-only for aggregate fields only, or --sections <tree,languages,hotspots,metrics> for selected detail sections.",
+                ConsoleUi.GetUsageLine("map"));
 
         return WithDb(options, jsonOptions, reader =>
         {
@@ -4358,7 +4385,7 @@ public static class QueryCommandRunner
     }
 
     private static bool MapSectionEnabled(QueryCommandOptions options, string section)
-        => options.MapSections == null || options.MapSections.Contains(section, StringComparer.Ordinal);
+        => !options.MapSummaryOnly && (options.MapSections == null || options.MapSections.Contains(section, StringComparer.Ordinal));
 
     private static void ApplyRepoMapDepth(RepoMapResult map, int depth)
     {
@@ -4373,6 +4400,14 @@ public static class QueryCommandRunner
     private static JsonObject BuildRepoMapJsonPayload(RepoMapResult map, QueryCommandOptions options, JsonSerializerOptions jsonOptions, JsonObject? compactTruncation = null)
     {
         var payload = JsonSerializer.SerializeToNode(map, CliJsonSerializerContextFactory.Create(jsonOptions).RepoMapResult)!.AsObject();
+        if (options.MapSummaryOnly)
+        {
+            KeepRepoMapJsonProperties(payload, RepoMapSummaryJsonProperties);
+            payload["summary_only"] = true;
+            payload["sections"] = new JsonArray();
+            return payload;
+        }
+
         if (options.MapSections == null)
         {
             if (options.ContextAfterExplicit)
@@ -4382,24 +4417,7 @@ public static class QueryCommandRunner
             return payload;
         }
 
-        var keep = new HashSet<string>(StringComparer.Ordinal)
-        {
-            "api_version",
-            "fileCount",
-            "totalLines",
-            "totalSymbols",
-            "totalReferences",
-            "indexedAt",
-            "latestModified",
-            "workspaceIndexedAt",
-            "workspaceLatestModified",
-            "projectRoot",
-            "gitHead",
-            "gitIsDirty",
-            "indexed_head_commit",
-            "worktree_head_changed",
-            "graphTableAvailable",
-        };
+        var keep = new HashSet<string>(RepoMapSummaryJsonProperties, StringComparer.Ordinal);
         if (MapSectionEnabled(options, "languages"))
             keep.Add("languages");
         if (MapSectionEnabled(options, "tree"))
@@ -4414,14 +4432,38 @@ public static class QueryCommandRunner
         if (MapSectionEnabled(options, "metrics"))
             keep.Add("largestFiles");
 
-        foreach (var propertyName in payload.Select(property => property.Key).Where(key => !keep.Contains(key)).ToList())
-            payload.Remove(propertyName);
+        KeepRepoMapJsonProperties(payload, keep);
         payload["sections"] = new JsonArray(options.MapSections.Select(section => JsonValue.Create(section)).ToArray<JsonNode?>());
         if (options.ContextAfterExplicit)
             payload["depth"] = options.ContextAfter;
         if (options.Compact && compactTruncation != null)
             AddCompactJsonFields(payload, GetCompactSectionLimit(options), compactTruncation);
         return payload;
+    }
+
+    private static readonly HashSet<string> RepoMapSummaryJsonProperties = new(StringComparer.Ordinal)
+    {
+        "api_version",
+        "file_count",
+        "total_lines",
+        "total_symbols",
+        "total_references",
+        "indexed_at",
+        "latest_modified",
+        "workspace_indexed_at",
+        "workspace_latest_modified",
+        "project_root",
+        "git_head",
+        "git_is_dirty",
+        "indexed_head_commit",
+        "worktree_head_changed",
+        "graph_table_available",
+    };
+
+    private static void KeepRepoMapJsonProperties(JsonObject payload, IReadOnlySet<string> keep)
+    {
+        foreach (var propertyName in payload.Select(property => property.Key).Where(key => !keep.Contains(key)).ToList())
+            payload.Remove(propertyName);
     }
 
     private static int GetCompactSectionLimit(QueryCommandOptions options)
@@ -6719,6 +6761,12 @@ public static class QueryCommandRunner
                     };
                     AddHotspotFamilyJsonFields(payload, fileHotspotSignal);
                     AddSqlGraphContractJsonFields(payload, effectiveSqlGraphSignal);
+                    payload["query_context"] = BuildQueryContextJson(options, jsonOptions);
+                    if (options.Compact)
+                    {
+                        payload["compact"] = true;
+                        payload["omitted_sections"] = new JsonArray();
+                    }
                     Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
                 else
@@ -6944,6 +6992,12 @@ public static class QueryCommandRunner
                         ["degraded"] = !reader._hasReferencesTable
                     };
                     AddSqlGraphContractJsonFields(payload, effectiveSqlGraphSignal);
+                    payload["query_context"] = BuildQueryContextJson(options, jsonOptions);
+                    if (options.Compact)
+                    {
+                        payload["compact"] = true;
+                        payload["omitted_sections"] = new JsonArray();
+                    }
                     Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
                 else
@@ -6999,7 +7053,7 @@ public static class QueryCommandRunner
 
             if (options.Json)
             {
-                Console.WriteLine(BuildUnusedJsonPayload(results, graphSupported, graphSupportReason, sqlGraphSignal, reader._hasReferencesTable, jsonOptions, byBucket: byBucket));
+                Console.WriteLine(BuildUnusedJsonPayload(results, graphSupported, graphSupportReason, sqlGraphSignal, reader._hasReferencesTable, jsonOptions, options, byBucket: byBucket));
             }
             else
             {
@@ -7116,8 +7170,16 @@ public static class QueryCommandRunner
             ["returned_bucket_counts"] = JsonSerializer.SerializeToNode(BuildUnusedBucketCounts(resultList), CliJsonSerializerContextFactory.Create(jsonOptions).DictionaryStringInt32),
             ["summary"] = BuildUnusedSummaryJson(resultList, jsonOptions),
             ["bucket_taxonomy"] = BuildUnusedBucketTaxonomyJson(),
-            ["symbols"] = JsonSerializer.SerializeToNode(resultList, CliJsonSerializerContextFactory.Create(jsonOptions).ListUnusedSymbolResult)
         };
+        if (queryOptions?.Compact == true)
+        {
+            payload["compact"] = true;
+            payload["omitted_sections"] = new JsonArray(JsonValue.Create("symbols"));
+        }
+        else
+        {
+            payload["symbols"] = JsonSerializer.SerializeToNode(resultList, CliJsonSerializerContextFactory.Create(jsonOptions).ListUnusedSymbolResult);
+        }
         if (byBucket)
             payload["by_bucket"] = BuildUnusedResultsByBucketJson(resultList, jsonOptions);
 
@@ -7543,9 +7605,11 @@ public static class QueryCommandRunner
         bool maxLineWidthExplicit = false;
         bool strict = false;
         var rankMode = ReferenceRankMode.Weighted;
+        var symbolSortMode = SymbolSortMode.Name;
         var extraNames = new List<string>();
         bool impactDeprecatedDepthUsed = false;
         List<string>? mapSections = null;
+        bool mapSummaryOnly = false;
         bool dependencyCycles = false;
         string? recipeName = null;
         var includeRecipeQueries = new List<string>();
@@ -8097,6 +8161,18 @@ public static class QueryCommandRunner
                     else
                         AddParseError(rankByError!);
                     break;
+                case "--sort":
+                    if (TryReadStringOptionValue(args, ref i, "--sort", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var sortValue, out var sortError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--sort", sortValue!);
+                        if (TryParseSymbolSortMode(sortValue!, out var parsedSortMode))
+                            symbolSortMode = parsedSortMode;
+                        else
+                            AddParseError($"Error: --sort must be one of hotspot, references, size, complexity, path; got '{sortValue}'.");
+                    }
+                    else
+                        AddParseError(sortError!);
+                    break;
                 case "--sections":
                     if (TryReadStringOptionValue(args, ref i, "--sections", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var sectionsValue, out var sectionsError))
                     {
@@ -8105,6 +8181,9 @@ public static class QueryCommandRunner
                     }
                     else
                         AddParseError(sectionsError!);
+                    break;
+                case "--summary-only":
+                    mapSummaryOnly = true;
                     break;
                 case "--fields":
                     if (TryReadStringOptionValue(args, ref i, "--fields", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var fieldsValue, out var fieldsError))
@@ -8663,8 +8742,10 @@ public static class QueryCommandRunner
             StatusLogPath = statusLogPath,
             StatusConfig = statusConfig,
             RankMode = rankMode,
+            SymbolSortMode = symbolSortMode,
             ExtraNames = extraNames,
             MapSections = mapSections,
+            MapSummaryOnly = mapSummaryOnly,
             DependencyCycles = dependencyCycles,
             RecipeName = recipeName,
             IncludeRecipeQueries = includeRecipeQueries,
@@ -9007,6 +9088,36 @@ public static class QueryCommandRunner
                 return true;
             default:
                 rankMode = ReferenceRankMode.Weighted;
+                return false;
+        }
+    }
+
+    internal static bool TryParseSymbolSortMode(string value, out SymbolSortMode sortMode)
+    {
+        switch (value.Trim().ToLowerInvariant())
+        {
+            case "name":
+                sortMode = SymbolSortMode.Name;
+                return true;
+            case "hotspot":
+                sortMode = SymbolSortMode.Hotspot;
+                return true;
+            case "references":
+            case "reference":
+            case "refs":
+                sortMode = SymbolSortMode.References;
+                return true;
+            case "size":
+                sortMode = SymbolSortMode.Size;
+                return true;
+            case "complexity":
+                sortMode = SymbolSortMode.Complexity;
+                return true;
+            case "path":
+                sortMode = SymbolSortMode.Path;
+                return true;
+            default:
+                sortMode = SymbolSortMode.Name;
                 return false;
         }
     }
@@ -10245,6 +10356,8 @@ public static class QueryCommandRunner
             query["min_confidence"] = options.MinUnusedConfidence;
         if (options.RankMode != ReferenceRankMode.Weighted)
             query["rank_by"] = FormatReferenceRankMode(options.RankMode);
+        if (options.SymbolSortMode != SymbolSortMode.Name)
+            query["sort"] = options.SymbolSortMode.ToString().ToLowerInvariant();
         if (options.ExcludeTests)
             query["exclude_tests"] = true;
         if (options.ExcludeComments)
@@ -12083,8 +12196,10 @@ public sealed class QueryCommandOptions
     public bool StatusLogPath { get; init; }
     public bool StatusConfig { get; init; }
     public ReferenceRankMode RankMode { get; init; } = ReferenceRankMode.Weighted;
+    public SymbolSortMode SymbolSortMode { get; init; } = SymbolSortMode.Name;
     public List<string> ExtraNames { get; init; } = [];
     public List<string>? MapSections { get; init; }
+    public bool MapSummaryOnly { get; init; }
     public bool DependencyCycles { get; init; }
     public string? RecipeName { get; init; }
     public List<string> IncludeRecipeQueries { get; init; } = [];

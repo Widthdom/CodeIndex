@@ -151,6 +151,16 @@ public enum ReferenceRankMode
     Kind,
 }
 
+public enum SymbolSortMode
+{
+    Name,
+    Hotspot,
+    References,
+    Size,
+    Complexity,
+    Path,
+}
+
 public class SymbolResult
 {
     [JsonPropertyName("api_version")]
@@ -175,6 +185,16 @@ public class SymbolResult
     public string? ContainerName { get; set; }
     public string? Visibility { get; set; }
     public string? ReturnType { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? SortMode { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? ReferenceCount { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public double? HotspotScore { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? SizeLines { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public double? ComplexityScore { get; set; }
 }
 
 public class UnusedSymbolResult : SymbolResult

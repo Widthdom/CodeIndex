@@ -462,6 +462,7 @@ cdidx unused --lang csharp --exclude-tests
 cdidx unused --kind function --path src/ --limit 50
 cdidx unused --bucket likely_unused_private --min-confidence medium
 cdidx unused --json --count
+cdidx unused --compact --bucket likely_unused_private --min-confidence medium
 cdidx unused --json --by-bucket
 ```
 
@@ -472,6 +473,11 @@ and `bucket_taxonomy` for the `likely_unused_private`,
 `reflection_or_config_suspect` buckets; `--by-bucket` also groups returned
 symbols under those bucket keys. Use `--bucket <name>` to return only one
 bucket, and `--min-confidence <medium|low>` to omit lower-confidence classes.
+JSON output includes `query_context` so applied bucket and confidence filters
+are visible to downstream audit tooling. Use `--compact` for audit summaries
+that keep counts, confidence buckets, taxonomy, and filter context without
+returning the full `symbols` array; add `--by-bucket` only when grouped symbol
+arrays are explicitly needed.
 Public APIs, framework entrypoints, generated hooks, reflection, and
 configuration-based usage can be false positives. C#
 `nameof(...)`, `typeof(...)`, and direct reflection member-name literals such as
@@ -1066,9 +1072,15 @@ cdidx symbols --kind class                           # all classes
 cdidx symbols --kind function --lang python
 cdidx symbols --visibility public,internal           # public/internal symbols
 cdidx symbols --exclude-visibility private           # hide private symbols
+cdidx symbols --kind function --sort hotspot --json  # hotspot-ranked audit stream
+cdidx symbols --kind function --sort size --json     # largest definitions first
 ```
 
 Use `--exact-name` when you already have a precise candidate list (e.g. names returned from an earlier `search` / `inspect` / `map` call). Names are compared case-insensitively for equality instead of substring, so `Run` will not also pull in `RunAsync`, `RunImpact`, etc. `--exact-name` composes with `--name`, positional names, and all existing filters. The older `--exact` spelling still works on these commands for backward compatibility, but `--exact-name` avoids the semantic clash with `search`. For C#, pass the canonical extracted symbol name: operators are stored as `operator +` / `operator checked +`, conversion operators as `explicit operator Money` / `implicit operator decimal`, and indexers as `Item`. If your DB was created before the canonical C# operator/indexer rename landed, a normal `cdidx index .` rewrites unchanged C# rows once to upgrade them; `--rebuild` is not required for that change. `status --json` also exposes `csharp_symbol_name_ready` so you can verify that the canonical C# rename has been applied to the current DB. The fold is NFKC + Unicode CaseFold: common non-ASCII pairs such as `Ä` / `ä`, fullwidth `Ｒｕｎ` / `Run`, ligatures, sharp-S (`Straße` / `STRASSE`), and Greek final sigma (`Σ` / `ς` / `σ`) now collapse correctly. Unicode CaseFold remains locale-invariant, so Turkish dotted `İ` still folds to `i\u0307` rather than plain `i`. DBs with stale fold metadata fall back to ASCII `COLLATE NOCASE` until the DB contains only current folded keys. Prefer `cdidx backfill-fold` to refresh stored folded keys without reparsing. A plain `cdidx index .` is also enough if the scan rewrites or purges every stale row; otherwise use `cdidx index . --rebuild`. Use `status --json` → `fold_ready` to detect which path is active.
+
+For audit passes, add `--sort hotspot|references|size|complexity|path`.
+`--json` rows include `sort_mode`, `reference_count`, `hotspot_score`,
+`size_lines`, and `complexity_score` whenever an audit sort is active.
 
 Output:
 
@@ -1237,9 +1249,11 @@ Without `--check`, the `status` summary freshness indicator is based on stored `
 ```bash
 cdidx map --path src/ --exclude-tests
 cdidx map --path src/ --exclude-tests --json
+cdidx map --summary-only --json
+cdidx map --sections hotspots,metrics --json
 ```
 
-`map` is the fastest way to orient both a human and an AI agent before deeper queries. Use it to get languages, modules, hot files, and likely entrypoints, then narrow with `inspect`, `search`, or `definition`. For the full freshness and metadata contract of `status --json`, `map --json`, `inspect --json`, and MCP `analyze_symbol`, see [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md).
+`map` is the fastest way to orient both a human and an AI agent before deeper queries. Use it to get languages, modules, hot files, and likely entrypoints, then narrow with `inspect`, `search`, or `definition`. Use `--summary-only` when only aggregate counts and freshness metadata are needed, or `--sections <tree,languages,hotspots,metrics>` to request only selected detail sections. For the full freshness and metadata contract of `status --json`, `map --json`, `inspect --json`, and MCP `analyze_symbol`, see [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md).
 
 ### Build a bug-report bundle
 
@@ -2885,6 +2899,7 @@ cdidx unused --lang csharp --exclude-tests
 cdidx unused --kind function --path src/ --limit 50
 cdidx unused --bucket likely_unused_private --min-confidence medium
 cdidx unused --json --count
+cdidx unused --compact --bucket likely_unused_private --min-confidence medium
 cdidx unused --json --by-bucket
 ```
 
@@ -2894,7 +2909,7 @@ cdidx unused --json --by-bucket
 `summary.by_bucket`、`summary.by_confidence`、`bucket_taxonomy` が含まれます。
 `--by-bucket` は返却された symbols も bucket key ごとに grouped します。
 `--bucket <name>` で単一 bucket だけを返し、`--min-confidence <medium|low>` で
-より低い confidence class を除外できます。Public API、framework entrypoint、generated hook、reflection、config 経由の使用は false positive
+より低い confidence class を除外できます。JSON 出力には `query_context` も含まれるため、audit tooling は適用された bucket と confidence filter を直接確認できます。count、confidence bucket、taxonomy、filter context だけが必要な場合は `--compact` を使い、grouped symbol arrays が明示的に必要な場合だけ `--by-bucket` を追加してください。Public API、framework entrypoint、generated hook、reflection、config 経由の使用は false positive
 になりえます。C# の `nameof(...)`、`typeof(...)`、`GetMethod("Foo")` のような
 直接的な reflection member-name literal は indexed されますが、動的に組み立てられる
 名前は手動確認が必要です。
@@ -3509,9 +3524,15 @@ cdidx symbols --kind class                           # すべてのクラス
 cdidx symbols --kind function --lang python
 cdidx symbols --visibility public,internal           # public/internal シンボル
 cdidx symbols --exclude-visibility private           # private シンボルを除外
+cdidx symbols --kind function --sort hotspot --json  # hotspot ranking の audit stream
+cdidx symbols --kind function --sort size --json     # 大きい definition から表示
 ```
 
 `--exact-name` は、すでに解決済みの候補リスト（例: `search` / `inspect` / `map` の結果）を渡して正確にその行だけ取り返したいときに使う。部分一致ではなく大文字小文字を無視した完全一致で比較するため、`Run` を指定しても `RunAsync`、`RunImpact` 等には広がらない。`--exact-name` は `--name`、positional 名、他の全フィルタと組み合わせ可能。従来の `--exact` も後方互換で引き続き使えるが、`search` と意味がぶつからない `--exact-name` を推奨する。C# では抽出済みの canonical symbol name を渡す必要があり、演算子は `operator +` / `operator checked +`、変換演算子は `explicit operator Money` / `implicit operator decimal`、インデクサは `Item` で引く。canonical な C# operator/indexer 名へ変わる前に作った DB でも、通常の `cdidx index .` を 1 回流せば unchanged な C# 行を自動で再抽出して更新するため、この変更だけのために `--rebuild` は不要。upgrade 済みかどうかは `status --json` の `csharp_symbol_name_ready` で判定できる。fold は NFKC 正規化 + Unicode CaseFold で、`Ä` / `ä`、全角 `Ｒｕｎ` / `Run`、合字、sharp-S（`Straße` / `STRASSE`）、Greek final sigma（`Σ` / `ς` / `σ`）などの非 ASCII 差分も正しく一致する。Unicode CaseFold は locale-invariant のため、トルコ語の dotted `İ` は依然 plain `i` ではなく `i\u0307` に fold される。stale な fold metadata を含む DB は、DB 内が current folded key のみになるまで ASCII `COLLATE NOCASE` に黙ってフォールバックする。stored folded key を再解析なしで更新したいなら `cdidx backfill-fold` を優先し、scan が stale row をすべて rewrite / purge できるなら通常の `cdidx index .` でも復帰できる。stale row が残る場合だけ `cdidx index . --rebuild` が必要。`status --json` の `fold_ready` で現在の経路を判定可能。
+
+audit では `--sort hotspot|references|size|complexity|path` を追加できます。
+audit sort が有効な `--json` row には `sort_mode`、`reference_count`、
+`hotspot_score`、`size_lines`、`complexity_score` が含まれます。
 
 出力:
 
@@ -3682,9 +3703,11 @@ AI agent の作業開始時はこれを先に実行し、`.cdidx/codeindex.db` �
 ```bash
 cdidx map --path src/ --exclude-tests
 cdidx map --path src/ --exclude-tests --json
+cdidx map --summary-only --json
+cdidx map --sections hotspots,metrics --json
 ```
 
-`map` は、人と AI のどちらにも最短で全体像を渡すための入口です。言語、モジュール、ホットなファイル、推定エントリポイントを把握したら、`inspect`、`search`、`definition` に進んでください。`status --json`、`map --json`、`inspect --json`、MCP `analyze_symbol` の詳細なメタデータ契約は [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md#開発者ガイド) にまとめています。
+`map` は、人と AI のどちらにも最短で全体像を渡すための入口です。言語、モジュール、ホットなファイル、推定エントリポイントを把握したら、`inspect`、`search`、`definition` に進んでください。集計値と freshness メタデータだけが必要な場合は `--summary-only`、必要な詳細セクションだけを取りたい場合は `--sections <tree,languages,hotspots,metrics>` を使えます。`status --json`、`map --json`、`inspect --json`、MCP `analyze_symbol` の詳細なメタデータ契約は [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md#開発者ガイド) にまとめています。
 
 ### バグ報告用バンドルを作る
 

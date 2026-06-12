@@ -125,6 +125,7 @@ internal static class CliFlagSchema
     ];
     private static readonly string[] RawKindsCommands = ["callers", "callees"];
     private static readonly string[] RankByCommands = ["callers", "callees"];
+    private static readonly string[] SymbolSortCommands = ["symbols"];
     private static readonly string[] ByBucketCommands = ["unused"];
     private static readonly string[] UnusedFilterCommands = ["unused"];
     private static readonly string[] AllResultCommands = ["goto", "find"];
@@ -133,6 +134,7 @@ internal static class CliFlagSchema
     private static readonly string[] ByteFormatCommands = ["files", "map"];
     private static readonly string[] EntrypointConfidenceCommands = ["map"];
     private static readonly string[] MapSectionCommands = ["map"];
+    private static readonly string[] SummaryOnlyCommands = ["map"];
     private static readonly string[] DependencyCycleCommands = ["deps"];
     private static readonly string[] LanguagesFilterCommands = ["languages"];
 
@@ -195,7 +197,7 @@ internal static class CliFlagSchema
         "validate", "deps", "impact", "unused", "hotspots", "suggestions", "languages", "db", "report", "upgrade",
     ];
 
-    private static readonly string[] CompactJsonCommands = ["map", "inspect", "outline"];
+    private static readonly string[] CompactJsonCommands = ["map", "inspect", "outline", "unused"];
 
     private static readonly string[] FormatCommands =
     [
@@ -264,6 +266,7 @@ internal static class CliFlagSchema
             new() { Name = "--min-confidence", ValuePlaceholder = "<medium|low>", Description = "Unused: return symbols at or above this confidence", Commands = Set(UnusedFilterCommands) },
             new() { Name = "--all", Description = "goto: return all matching LSP locations; find: search all indexed files instead of requiring --path", Commands = Set(AllResultCommands) },
             new() { Name = "--rank-by", ValuePlaceholder = "<weighted|count|kind>", Description = "Rank callers/callees by weighted structural score, raw count, or kind bucket", Commands = Set(RankByCommands) },
+            new() { Name = "--sort", ValuePlaceholder = "<hotspot|references|size|complexity|path>", Description = "Symbols: order audit output by a ranking signal", Commands = Set(SymbolSortCommands) },
             new() { Name = "--raw-kinds", Description = "Show raw reference kinds instead of logical graph kinds", Commands = Set(RawKindsCommands) },
             new() { Name = "--count", Description = "Count only", Commands = Set(CountCommands) },
             new() { Name = "--strict-not-found", Description = "Return exit code 2 when a valid query has zero rows", Commands = Set(StrictNotFoundCommands) },
@@ -272,6 +275,7 @@ internal static class CliFlagSchema
             new() { Name = "--bytes", Description = "Files: sort by size and show raw byte counts in human output; map: show raw byte counts", Commands = Set(ByteFormatCommands) },
             new() { Name = "--min-entrypoint-confidence", ValuePlaceholder = "<0.0..1.0>", Description = "Map: omit entrypoint candidates below this confidence", Commands = Set(EntrypointConfidenceCommands) },
             new() { Name = "--sections", ValuePlaceholder = "<tree,languages,hotspots,metrics>", Description = "Map: comma-separated response sections to include", Commands = Set(MapSectionCommands) },
+            new() { Name = "--summary-only", Description = "Map/Diff: return only aggregate summary fields", Commands = Set(SummaryOnlyCommands) },
             new() { Name = "--cycles", Description = "Deps: return dependency cycles instead of edge rows", Commands = Set(DependencyCycleCommands) },
             new() { Name = "--indexed-only", Description = "Languages: list only languages present in the current index", Commands = Set(LanguagesFilterCommands) },
             new() { Name = "--capability", ValuePlaceholder = "<graph|references|symbols|missing-graph|missing-references|missing-symbols|search-only>", Description = "Languages: filter by language capability or capability gap", Commands = Set(LanguagesFilterCommands) },
