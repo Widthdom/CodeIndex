@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using System.Security.Cryptography;
 using System.Text.Json;
 using CodeIndex.Cli;
 
@@ -7,6 +8,74 @@ namespace CodeIndex.Tests;
 [Collection("SQLite pool sensitive")]
 public class ExportImportCommandRunnerTests
 {
+    [Fact]
+    public void RunImport_JsonParseErrorIncludesPhaseAndCode_Issue3548()
+    {
+        var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
+
+        var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
+            ExportImportCommandRunner.RunImport(["--json", "--unknown"], jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        AssertExportImportError(stdout, "import", "parse_args", "import_unknown_option");
+    }
+
+    [Fact]
+    public void RunImport_JsonManifestErrorIncludesPhaseAndCode_Issue3548()
+    {
+        var workDir = Path.Combine(Path.GetTempPath(), $"cdidx_manifest_json_error_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(workDir);
+        try
+        {
+            var archivePath = CreateArchiveWithManifest(workDir, "{");
+            var dbPath = Path.Combine(workDir, "codeindex.db");
+            var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
+
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
+                ExportImportCommandRunner.RunImport([archivePath, "--db", dbPath, "--json"], jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            AssertExportImportError(stdout, "import", "manifest", "import_manifest_invalid");
+            Assert.False(File.Exists(dbPath));
+        }
+        finally
+        {
+            Directory.Delete(workDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void RunImport_JsonSqliteValidationErrorIncludesPhaseAndCode_Issue3548()
+    {
+        var workDir = Path.Combine(Path.GetTempPath(), $"cdidx_import_sqlite_json_error_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(workDir);
+        try
+        {
+            var databaseBytes = new byte[] { 1, 2, 3, 4 };
+            var sha256 = Convert.ToHexString(SHA256.HashData(databaseBytes)).ToLowerInvariant();
+            var manifest = $$"""
+                {"format_version":"1","cdidx_version":"test","user_version":0,"database_sha256":"{{sha256}}"}
+                """;
+            var archivePath = CreateArchiveWithManifestAndDatabase(workDir, manifest, databaseBytes);
+            var dbPath = Path.Combine(workDir, "codeindex.db");
+            var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
+
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
+                ExportImportCommandRunner.RunImport([archivePath, "--db", dbPath, "--json"], jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            AssertExportImportError(stdout, "import", "sqlite_validate", "import_manifest_mismatch");
+            Assert.False(File.Exists(dbPath));
+        }
+        finally
+        {
+            Directory.Delete(workDir, recursive: true);
+        }
+    }
+
     [Fact]
     public void RunImport_RejectsOversizedManifestBeforeDatabaseEntry()
     {
@@ -589,5 +658,19 @@ public class ExportImportCommandRunnerTests
             stream.Write(databaseBytes, 0, databaseBytes.Length);
 
         return archivePath;
+    }
+
+    private static void AssertExportImportError(string stdout, string command, string phase, string errorCode)
+    {
+        using var document = JsonDocument.Parse(stdout);
+        var root = document.RootElement;
+        Assert.Equal("1", root.GetProperty("api_version").GetString());
+        Assert.Equal("error", root.GetProperty("status").GetString());
+        Assert.Equal(command, root.GetProperty("command").GetString());
+        Assert.Equal(phase, root.GetProperty("phase").GetString());
+        Assert.Equal(errorCode, root.GetProperty("error_code").GetString());
+        Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("message").GetString()));
+        Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("hint").GetString()));
+        Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("usage").GetString()));
     }
 }
