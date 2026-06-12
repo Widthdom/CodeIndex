@@ -11,6 +11,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.30.1] - 2026-06-13
+
+#### Fixed
+
+- **Release publishing now validates the NuGet trusted-publishing policy creator before login** — the NuGet job reads `NUGET_TRUSTED_PUBLISHING_USER` before calling `NuGet/login`, and `Microsoft.NET.ILLink.Tasks` stays on the .NET 8 package line so container publish does not load a .NET 10 analyzer under the .NET 8 SDK.
+
 ### [1.30.0] - 2026-06-13
 
 #### Added
@@ -3762,6 +3768,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.30.1] - 2026-06-13
+
+#### 修正
+
+- **release publish が NuGet trusted publishing policy の作成者を login 前に検証するようになりました** — NuGet job は `NuGet/login` を呼ぶ前に `NUGET_TRUSTED_PUBLISHING_USER` を読み、container publish が .NET 8 SDK 上で .NET 10 analyzer を読み込まないよう `Microsoft.NET.ILLink.Tasks` を .NET 8 系に留めます。
+
 ### [1.30.0] - 2026-06-13
 
 #### 追加
@@ -7502,7 +7514,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.30.0...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.30.1...HEAD
+[1.30.1]: https://github.com/Widthdom/CodeIndex/compare/v1.30.0...v1.30.1
 [1.30.0]: https://github.com/Widthdom/CodeIndex/compare/v1.29.1...v1.30.0
 [1.29.1]: https://github.com/Widthdom/CodeIndex/compare/v1.29.0...v1.29.1
 [1.29.0]: https://github.com/Widthdom/CodeIndex/compare/v1.28.5...v1.29.0
