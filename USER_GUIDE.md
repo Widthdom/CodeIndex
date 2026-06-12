@@ -580,6 +580,22 @@ automatically when the `gh` command is available and the public GitHub release
 host is used. Set `CDIDX_REQUIRE_ATTESTATION=1` to make the installer fail
 closed when provenance verification cannot be completed.
 
+Installer verification policy is explicit:
+
+- `CDIDX_VERIFY_POLICY=compat` is the default. The installer always enforces
+  archive checksums, runs GitHub attestation and GPG checksum-signature checks
+  when the required tools/configuration are available, and warns before
+  continuing when an optional second-channel check cannot run.
+- `CDIDX_VERIFY_POLICY=strict` or `--verify-policy strict` makes public GitHub
+  attestation and GPG checksum-signature verification fail closed. Strict mode
+  also requires signer fingerprint pinning through
+  `CDIDX_RELEASE_GPG_FINGERPRINT`.
+- `CDIDX_REQUIRE_ATTESTATION=1` and `CDIDX_STRICT_VERIFY=1` remain available as
+  narrower compatibility knobs when only one second-channel check should be
+  required. Until an official default release-signing fingerprint is bundled,
+  strict GPG verification requires operators to distribute the trusted
+  fingerprint through `CDIDX_RELEASE_GPG_FINGERPRINT`.
+
 ### Option A: One-liner install (no .NET required)
 
 Works in containers, CI, and any Linux/macOS environment — no .NET SDK needed.
@@ -2933,6 +2949,22 @@ gh attestation verify CodeIndex-linux-x64.tar.gz -R Widthdom/CodeIndex
 installer はこの provenance verification を自動実行します。
 `CDIDX_REQUIRE_ATTESTATION=1` を設定すると、provenance verification を完了
 できない場合に installer は fail closed します。
+
+installer の verification policy は明示的です:
+
+- 既定は `CDIDX_VERIFY_POLICY=compat` です。installer は archive checksum を常に
+  検証し、必要な tool/configuration がある場合は GitHub attestation と GPG
+  checksum-signature verification を実行します。任意の second-channel check を
+  実行できない場合は警告して続行します。
+- `CDIDX_VERIFY_POLICY=strict` または `--verify-policy strict` は、public GitHub
+  attestation と GPG checksum-signature verification を fail closed にします。
+  strict mode では `CDIDX_RELEASE_GPG_FINGERPRINT` による signer fingerprint
+  pinning も必須です。
+- `CDIDX_REQUIRE_ATTESTATION=1` と `CDIDX_STRICT_VERIFY=1` は、片方の
+  second-channel check だけを必須化したい場合の互換 knob として残っています。
+  公式の default release-signing fingerprint が bundled されるまでは、strict GPG
+  verification を使う operator が信頼する fingerprint を
+  `CDIDX_RELEASE_GPG_FINGERPRINT` 経由で配布してください。
 
 GitHub attestation は、その artifact が repository workflow identity により
 生成されたことを検証します。

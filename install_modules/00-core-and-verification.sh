@@ -10,6 +10,7 @@
 #   bash ./install.sh --reinstall-real vX.Y.Z
 #   bash ./install.sh --doctor [vX.Y.Z]
 #   bash ./install.sh --uninstall [--purge-cache]
+#   bash ./install.sh --verify-policy strict vX.Y.Z
 #   HTTPS_PROXY=http://proxy.example:8080 bash ./install.sh --doctor
 #   CDIDX_GITHUB_BASE_URL=https://github.example.internal \
 #     CDIDX_GITHUB_API_BASE_URL=https://github.example.internal/api/v3 \
@@ -18,6 +19,7 @@
 # Optional env vars / 任意環境変数:
 #   CDIDX_GITHUB_BASE_URL       Release download base URL override
 #   CDIDX_GITHUB_API_BASE_URL   API base URL override for latest-release lookup
+#   CDIDX_VERIFY_POLICY=compat|strict Verification policy (default: compat)
 #   CDIDX_REQUIRE_ATTESTATION=1 Require GitHub provenance verification via gh
 #   CDIDX_STRICT_VERIFY=1       Require GPG checksum-manifest signature verification
 #   CDIDX_RELEASE_GPG_FINGERPRINT Expected checksum signer fingerprint
@@ -82,9 +84,11 @@ GITHUB_BASE_URL="${CDIDX_GITHUB_BASE_URL:-https://github.com}"
 GITHUB_API_BASE_URL="${CDIDX_GITHUB_API_BASE_URL:-https://api.github.com}"
 CURL_STDERR_SAMPLE_BYTES=8192
 LATEST_RELEASE_RESPONSE_MAX_BYTES=65536
+VERIFY_POLICY="${CDIDX_VERIFY_POLICY:-compat}"
 REQUIRE_ATTESTATION="${CDIDX_REQUIRE_ATTESTATION:-0}"
 STRICT_VERIFY="${CDIDX_STRICT_VERIFY:-0}"
-RELEASE_GPG_FINGERPRINT="${CDIDX_RELEASE_GPG_FINGERPRINT:-}"
+DEFAULT_RELEASE_GPG_FINGERPRINT=""
+RELEASE_GPG_FINGERPRINT="${CDIDX_RELEASE_GPG_FINGERPRINT:-$DEFAULT_RELEASE_GPG_FINGERPRINT}"
 # Normalize optional base URL overrides by removing a trailing slash.
 # 末尾スラッシュ付きでも URL 連結が壊れないようにする。
 GITHUB_BASE_URL="${GITHUB_BASE_URL%/}"
@@ -195,6 +199,21 @@ has_cmd() {
     command -v "$1" > /dev/null 2>&1
 }
 
+apply_verification_policy() {
+    case "$VERIFY_POLICY" in
+        ""|compat)
+            VERIFY_POLICY="compat"
+            ;;
+        strict)
+            REQUIRE_ATTESTATION=1
+            STRICT_VERIFY=1
+            ;;
+        *)
+            error "CDIDX_VERIFY_POLICY must be 'compat' or 'strict' (got '${VERIFY_POLICY}')."
+            ;;
+    esac
+}
+
 release_attestation_supported() {
     if [ "${CDIDX_INSTALL_SH_LIB_ONLY:-0}" = "1" ] && [ "${CDIDX_TEST_ENABLE_ATTESTATION:-0}" != "1" ]; then
         return 1
@@ -209,16 +228,16 @@ verify_release_attestation() {
 
     if ! release_attestation_supported; then
         if [ "$REQUIRE_ATTESTATION" = "1" ]; then
-            error "GitHub provenance attestation verification is required, but the release host is not github.com. Unset CDIDX_REQUIRE_ATTESTATION or install from the public GitHub release."
+            error "GitHub provenance attestation verification is required, but the release host is not github.com. Set CDIDX_VERIFY_POLICY=compat or unset CDIDX_REQUIRE_ATTESTATION, or install from the public GitHub release."
         fi
         return 0
     fi
 
     if ! has_cmd gh; then
         if [ "$REQUIRE_ATTESTATION" = "1" ]; then
-            error "GitHub provenance attestation verification is required, but the 'gh' command was not found. Install GitHub CLI or unset CDIDX_REQUIRE_ATTESTATION."
+            error "GitHub provenance attestation verification is required, but the 'gh' command was not found. Install GitHub CLI, set CDIDX_VERIFY_POLICY=compat, or unset CDIDX_REQUIRE_ATTESTATION."
         fi
-        warn "Skipping GitHub provenance attestation for ${artifact_name}: 'gh' command not found. Set CDIDX_REQUIRE_ATTESTATION=1 to require this verification."
+        warn "Skipping GitHub provenance attestation for ${artifact_name}: 'gh' command not found. Set CDIDX_VERIFY_POLICY=strict or CDIDX_REQUIRE_ATTESTATION=1 to require this verification."
         return 0
     fi
 
@@ -231,7 +250,7 @@ verify_release_attestation() {
         error "GitHub provenance attestation verification failed for ${artifact_name}."
     fi
 
-    warn "GitHub provenance attestation verification failed for ${artifact_name}; continuing with checksum verification. Set CDIDX_REQUIRE_ATTESTATION=1 to fail closed."
+    warn "GitHub provenance attestation verification failed for ${artifact_name}; continuing with checksum verification. Set CDIDX_VERIFY_POLICY=strict or CDIDX_REQUIRE_ATTESTATION=1 to fail closed."
 }
 
 checksum_signature_supported() {
@@ -256,9 +275,9 @@ verify_checksum_signature() {
 
     if ! has_cmd gpg; then
         if [ "$STRICT_VERIFY" = "1" ]; then
-            error "GPG signature verification is required, but the 'gpg' command was not found. Install GnuPG or unset CDIDX_STRICT_VERIFY."
+            error "GPG signature verification is required, but the 'gpg' command was not found. Install GnuPG, set CDIDX_VERIFY_POLICY=compat, or unset CDIDX_STRICT_VERIFY."
         fi
-        warn "Skipping GPG signature verification for sha256sums.txt: 'gpg' command not found. Set CDIDX_STRICT_VERIFY=1 to require this verification."
+        warn "Skipping GPG signature verification for sha256sums.txt: 'gpg' command not found. Set CDIDX_VERIFY_POLICY=strict or CDIDX_STRICT_VERIFY=1 to require this verification."
         return 0
     fi
 
@@ -269,7 +288,7 @@ verify_checksum_signature() {
         if [ "$STRICT_VERIFY" = "1" ]; then
             error "GPG signature verification failed for sha256sums.txt."
         fi
-        warn "GPG signature verification failed for sha256sums.txt; continuing with checksum verification. Set CDIDX_STRICT_VERIFY=1 to fail closed."
+        warn "GPG signature verification failed for sha256sums.txt; continuing with checksum verification. Set CDIDX_VERIFY_POLICY=strict or CDIDX_STRICT_VERIFY=1 to fail closed."
         return 0
     fi
 
@@ -285,9 +304,9 @@ verify_checksum_signature() {
 
     if [ -z "$RELEASE_GPG_FINGERPRINT" ]; then
         if [ "$STRICT_VERIFY" = "1" ]; then
-            error "GPG signature verification is strict, but CDIDX_RELEASE_GPG_FINGERPRINT is not set."
+            error "GPG signature verification is strict, but no expected release signer fingerprint is configured. Set CDIDX_RELEASE_GPG_FINGERPRINT to the trusted release signing key fingerprint, or set CDIDX_VERIFY_POLICY=compat."
         fi
-        warn "GPG signature verification succeeded for sha256sums.txt, but no expected release signing fingerprint is configured. Set CDIDX_RELEASE_GPG_FINGERPRINT to pin the signer."
+        warn "GPG signature verification succeeded for sha256sums.txt, but no expected release signing fingerprint is configured. Set CDIDX_RELEASE_GPG_FINGERPRINT to pin the signer, or set CDIDX_VERIFY_POLICY=strict to require it."
         return 0
     fi
 

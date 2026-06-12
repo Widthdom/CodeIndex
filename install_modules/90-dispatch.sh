@@ -33,11 +33,32 @@ main() {
     echo ""
 }
 
-if [ "${CDIDX_INSTALL_SH_LIB_ONLY:-0}" != "1" ]; then
-    while [ "${1:-}" = "--strict-verify" ]; do
-        STRICT_VERIFY=1
-        shift
+if [ "${CDIDX_INSTALL_SH_LIB_ONLY:-0}" = "1" ]; then
+    apply_verification_policy
+else
+    while [ $# -gt 0 ]; do
+        case "${1:-}" in
+            --strict-verify)
+                STRICT_VERIFY=1
+                shift
+                ;;
+            --verify-policy)
+                if [ $# -lt 2 ]; then
+                    error "--verify-policy requires a value: compat or strict."
+                fi
+                VERIFY_POLICY="$2"
+                shift 2
+                ;;
+            --verify-policy=*)
+                VERIFY_POLICY="${1#--verify-policy=}"
+                shift
+                ;;
+            *)
+                break
+                ;;
+        esac
     done
+    apply_verification_policy
 
     case "${1:-}" in
         --self-test-local-mirror)

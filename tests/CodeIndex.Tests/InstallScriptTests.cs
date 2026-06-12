@@ -2711,6 +2711,80 @@ public sealed class InstallScriptTests : IDisposable
     }
 
     [Fact]
+    public void VerificationPolicy_StrictEnablesAttestationAndStrictGpg()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            """
+            printf 'policy=%s attestation=%s strict=%s\n' "$VERIFY_POLICY" "$REQUIRE_ATTESTATION" "$STRICT_VERIFY"
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_VERIFY_POLICY"] = "strict",
+            });
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Contains("policy=strict attestation=1 strict=1", stdout);
+    }
+
+    [Fact]
+    public void VerificationPolicy_InvalidValue_FailsDuringSource()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            """
+            echo "UNREACHABLE"
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_VERIFY_POLICY"] = "locked",
+            },
+            enforceStrictMode: false);
+
+        Assert.Equal(1, exitCode);
+        Assert.DoesNotContain("UNREACHABLE", stdout);
+        Assert.Contains("CDIDX_VERIFY_POLICY must be 'compat' or 'strict'", stderr);
+    }
+
+    [Fact]
+    public void VerifyChecksumSignature_StrictPolicyWithoutFingerprint_FailsClosed()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var checksumsPath = Path.Combine(_tempRoot, "strict-policy.sha256sums.txt");
+        var signaturePath = checksumsPath + ".asc";
+        File.WriteAllText(checksumsPath, "checksum");
+        File.WriteAllText(signaturePath, "signature");
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            gpg() {
+                printf '[GNUPG:] VALIDSIG AABBCCDDEEFF00112233445566778899AABBCCDD 2026-01-01 0 4 0 1 10 00 AABBCCDDEEFF00112233445566778899AABBCCDD\n'
+                return 0
+            }
+
+            verify_checksum_signature "{{checksumsPath}}" "{{signaturePath}}"
+            echo "UNREACHABLE"
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_VERIFY_POLICY"] = "strict",
+            },
+            enforceStrictMode: false);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("Verifying checksum signature", stdout);
+        Assert.DoesNotContain("UNREACHABLE", stdout);
+        Assert.Contains("no expected release signer fingerprint is configured", stderr);
+    }
+
+    [Fact]
     public void VerifyChecksumSignature_FingerprintMismatch_Fails()
     {
         if (OperatingSystem.IsWindows())
@@ -5607,6 +5681,37 @@ public sealed class InstallScriptTests : IDisposable
         {
             TestProjectHelper.DeleteDirectory(shimDir);
         }
+    }
+
+    [Fact]
+    public void VerificationPolicy_DispatcherRejectsInvalidCliValue()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var psi = new ProcessStartInfo
+        {
+            FileName = "bash",
+            WorkingDirectory = GetRepositoryRoot(),
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        psi.ArgumentList.Add(GetInstallScriptPath());
+        psi.ArgumentList.Add("--verify-policy");
+        psi.ArgumentList.Add("locked");
+        psi.ArgumentList.Add("--doctor");
+
+        using var process = Process.Start(psi)
+            ?? throw new InvalidOperationException("Failed to start install.sh / install.sh 起動失敗");
+        var stdOut = process.StandardOutput.ReadToEnd();
+        var stdErr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+
+        Assert.Equal(1, process.ExitCode);
+        Assert.Equal(string.Empty, stdOut);
+        Assert.Contains("CDIDX_VERIFY_POLICY must be 'compat' or 'strict'", stdErr);
     }
 
     private static readonly string[] InstallModuleFiles =
