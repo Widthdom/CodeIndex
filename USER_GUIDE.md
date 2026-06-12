@@ -31,7 +31,7 @@ cdidx mcp                        # Start MCP server for AI tools
 cdidx lsp --db .cdidx/codeindex.db  # Start read-only LSP server for editors
 ```
 
-78 languages supported. 24 registered MCP tools. Incremental updates. Zero config.
+80 languages supported. 24 registered MCP tools. Incremental updates. Zero config.
 
 | Topic | Link |
 |---|---|
@@ -769,7 +769,7 @@ Indexing scope and ignore handling:
 
 | Area | Behavior |
 |---|---|
-| Built-in skips | `node_modules`, `bin`, `obj`, lockfiles, and other built-in skip-list entries are always excluded. |
+| Built-in skips | Generated/vendor directories such as `node_modules`, `bin`, and `obj`, plus platform metadata files, are excluded. Dependency lockfiles are indexed as `dependency_lock` unless user ignore rules exclude them. |
 | User ignore files | User `.gitignore` plus optional `.cdidxignore` rules are honored across full scans, `--files`, and `--commits` updates. |
 | Workspace-scoped cdidx ignores | A project-root `.codeindex/.cdidxignore` is also loaded as a workspace-scoped ignore file, so multi-workspace manifests can keep local cdidx-only ignore rules out of the repository root. |
 | Encoding | Ignore files are read as UTF-8, so non-ASCII patterns behave the same across platforms. |
@@ -1643,7 +1643,7 @@ All indexed languages are searchable through FTS5. Rows with **Symbols = yes** a
 | Rust | `.rs` | yes |
 | Java | `.java` | yes |
 | Kotlin | `.kt`, `.kts` | yes |
-| Ruby | `.rb`, `.rake`, `.gemspec`, `.podspec`, `Gemfile`, `Rakefile`, `Podfile`, `Guardfile`, `Capfile`, `Vagrantfile` | yes |
+| Ruby | `.rb`, `.rake`, `.gemspec`, `.podspec`, `Rakefile`, `Guardfile`, `Capfile`, `Vagrantfile` | yes |
 | C | `.c`, `.h` | yes |
 | C++ | `.cpp`, `.cc`, `.cxx`, `.hh`, `.hpp`, `.hxx` | yes |
 | PHP | `.php` | yes |
@@ -1671,6 +1671,8 @@ All indexed languages are searchable through FTS5. Rows with **Symbols = yes** a
 | Protobuf | `.proto` | yes |
 | GraphQL | `.graphql`, `.gql` | yes |
 | Gradle | `.gradle` | yes |
+| Dependency manifest | `package.json`, `pyproject.toml`, `requirements.txt`, `Gemfile`, `Podfile`, `Cargo.toml`, `composer.json`, `go.mod`, `packages.config` | -- |
+| Dependency lockfile | `package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`, `pnpm-lock.yaml`, `Gemfile.lock`, `Cargo.lock`, `go.sum`, `uv.lock` | -- |
 | Makefile | `Makefile`, `GNUmakefile`, `Makefile.<suffix>`, `GNUmakefile.<suffix>`, `.mk` | yes |
 | Dockerfile | `Dockerfile`, `Containerfile`, `Dockerfile.<suffix>`, `Containerfile.<suffix>` | yes |
 | Assembly | `.s`, `.S`, `.asm`, `.nasm` | yes |
@@ -1722,6 +1724,7 @@ All indexed languages are searchable through FTS5. Rows with **Symbols = yes** a
 - React hooks: JavaScript/TypeScript functions whose names follow `use[A-Z]...` are indexed as `hook` symbols, and calls to `useFoo()` / built-in hooks such as `useState()` are recorded as `consumes_hook` references for hook-composition graph queries.
 - JavaScript/TypeScript imports: static imports, dynamic imports, CommonJS `require` / `require.resolve`, `import.meta.resolve`, `new URL(..., import.meta.url)`, `importScripts`, service-worker registrations, worklet loads, and worker constructors add `import` symbols when the specifier is static. `tsconfig.json` / `jsconfig.json` `compilerOptions.baseUrl` and `paths` aliases are resolved to indexed project paths when the target file exists.
 - Node module layouts: `.cjs` / `.mjs` are JavaScript; `.cts` / `.mts`, including `.d.cts` / `.d.mts`, are TypeScript.
+- Dependency manifests and lockfiles: use `--lang dependency_manifest` or `--lang dependency_lock` for dependency/security audits. These buckets are searchable text and do not claim symbol or graph extraction.
 - Extensionless scripts: files with recognized shebangs are indexed for shell (`sh`, `bash`, `zsh`, `fish`, `dash`, `ksh`, `ash`), Python, Ruby, Node.js, PHP, Lua, and PowerShell.
 
 ### Language extraction matrix
@@ -1742,6 +1745,7 @@ when to trust structured commands and when to fall back to `search`.
 | Shell / PowerShell / Batch / Makefile / Gradle | functions, labels, tasks, imports where applicable | command-style calls and control-flow targets | Runtime command construction is not resolved. |
 | SQL / Terraform / Dockerfile | statements/resources/stages/labels | table/resource/stage references, Dockerfile stage dependencies, Terraform dotted refs | SQL hotspot grouping defaults to statements; Dockerfile `COPY --from=<stage>` follows named stages. |
 | Markdown / HTML / CSS / GraphQL / Protobuf | headings, anchors, selectors, schema types/messages where supported | local anchors, CSS extends/variables, schema references where supported | Use `search` for prose and generated markup. |
+| Dependency manifests / lockfiles | none | none | Use `--lang dependency_manifest` or `--lang dependency_lock` for dependency/security audits. |
 | Other indexed text formats | file/chunk search only unless `languages` reports symbols | no graph unless `languages` reports support | `cdidx search "literal" --lang yaml` is the reliable fallback. |
 
 The graph commands surface `graph_supported` / `graph_support_reason` in JSON and
@@ -3182,7 +3186,7 @@ cdidx ./myproject --json
 | 項目 | 動作 |
 |---|---|
 | DB の既定配置 | `cdidx index` は DB を `<projectPath>/.cdidx/codeindex.db` に置きます。 |
-| 組み込み skip | `node_modules`、`bin`、`obj`、lockfile などの組み込み skip 対象は常に除外されます。 |
+| 組み込み skip | `node_modules`、`bin`、`obj` などの生成・vendor directory と platform metadata file は除外されます。dependency lockfile は、ユーザー ignore rule で除外しない限り `dependency_lock` として index されます。 |
 | ユーザー ignore | ユーザーの `.gitignore` と任意の `.cdidxignore` は、full scan、`--files`、`--commits` の更新経路すべてで尊重されます。 |
 | workspace scope の cdidx ignore | project root の `.codeindex/.cdidxignore` も workspace scope の ignore file として読み込むため、multi-workspace manifest 用の cdidx 専用 rule を repository root に置かずに管理できます。 |
 | encoding | ignore file は UTF-8 として読み込むため、非 ASCII pattern も platform 間で同じように動作します。 |
@@ -3994,7 +3998,7 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 | Rust | `.rs` | yes |
 | Java | `.java` | yes |
 | Kotlin | `.kt`, `.kts` | yes |
-| Ruby | `.rb`, `.rake`, `.gemspec`, `.podspec`, `Gemfile`, `Rakefile`, `Podfile`, `Guardfile`, `Capfile`, `Vagrantfile` | yes |
+| Ruby | `.rb`, `.rake`, `.gemspec`, `.podspec`, `Rakefile`, `Guardfile`, `Capfile`, `Vagrantfile` | yes |
 | C | `.c`, `.h` | yes |
 | C++ | `.cpp`, `.cc`, `.cxx`, `.hh`, `.hpp`, `.hxx` | yes |
 | PHP | `.php` | yes |
@@ -4022,6 +4026,8 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 | Protobuf | `.proto` | yes |
 | GraphQL | `.graphql`, `.gql` | yes |
 | Gradle | `.gradle` | yes |
+| Dependency manifest | `package.json`, `pyproject.toml`, `requirements.txt`, `Gemfile`, `Podfile`, `Cargo.toml`, `composer.json`, `go.mod`, `packages.config` | -- |
+| Dependency lockfile | `package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`, `pnpm-lock.yaml`, `Gemfile.lock`, `Cargo.lock`, `go.sum`, `uv.lock` | -- |
 | Makefile | `Makefile`, `GNUmakefile`, `Makefile.<suffix>`, `GNUmakefile.<suffix>`, `.mk` | yes |
 | Dockerfile | `Dockerfile`, `Containerfile`, `Dockerfile.<suffix>`, `Containerfile.<suffix>` | yes |
 | Assembly | `.s`, `.S`, `.asm`, `.nasm` | yes |
@@ -4073,6 +4079,7 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 - React hooks: JavaScript/TypeScript で `use[A-Z]...` の命名規則に従う関数は `hook` シンボルとして索引し、`useFoo()` や `useState()` などの hook 呼び出しは hook composition graph 用の `consumes_hook` 参照として記録します。
 - JavaScript/TypeScript import: static import、dynamic import、CommonJS `require` / `require.resolve`、`import.meta.resolve`、`new URL(..., import.meta.url)`、`importScripts`、Service Worker registration、worklet load、worker constructor は、specifier が静的なら `import` シンボルを追加します。`tsconfig.json` / `jsconfig.json` の `compilerOptions.baseUrl` と `paths` alias は、対象ファイルが存在する場合に indexed project path へ解決します。
 - Node モジュール構成: `.cjs` / `.mjs` は JavaScript、`.cts` / `.mts`（`.d.cts` / `.d.mts` を含む）は TypeScript として扱います。
+- Dependency manifest / lockfile: dependency / security audit では `--lang dependency_manifest` または `--lang dependency_lock` を使います。この bucket は検索可能な text として扱われ、symbol / graph 抽出は主張しません。
 - 拡張子なしスクリプト: 先頭行の shebang が shell (`sh`, `bash`, `zsh`, `fish`, `dash`, `ksh`, `ash`)、Python、Ruby、Node.js、PHP、Lua、PowerShell として認識できれば index 対象です。
 
 ### 言語別 extraction matrix
@@ -4092,6 +4099,7 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 | Shell / PowerShell / Batch / Makefile / Gradle | function、label、task、対応言語の import | command-style call と control-flow target | runtime で組み立てられる command は解決しません。 |
 | SQL / Terraform / Dockerfile | statement/resource/stage/label | table/resource/stage reference、Dockerfile stage dependency、Terraform dotted refs | SQL hotspot grouping は既定で statement、Dockerfile `COPY --from=<stage>` は named stage を追跡します。 |
 | Markdown / HTML / CSS / GraphQL / Protobuf | heading、anchor、selector、対応 schema type/message | local anchor、CSS extend/variable、対応 schema reference | prose や generated markup には `search` を使ってください。 |
+| Dependency manifest / lockfile | なし | なし | dependency / security audit には `--lang dependency_manifest` または `--lang dependency_lock` を使います。 |
 | その他の indexed text format | `languages` が symbol 対応を示す場合を除き file/chunk search のみ | `languages` が graph 対応を示す場合を除きなし | `cdidx search "literal" --lang yaml` が信頼できる fallback です。 |
 
 Language filter を指定した graph commands は、JSON / MCP 出力に

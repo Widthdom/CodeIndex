@@ -367,9 +367,9 @@ public class FileIndexerTests
     [InlineData("CMakeLists.txt", "cmake")]
     [InlineData("Vagrantfile", "ruby")]
     // Issue #189: additional filename maps / 追加ファイル名マッピング
-    [InlineData("Gemfile", "ruby")]
+    [InlineData("Gemfile", "dependency_manifest")]
     [InlineData("Rakefile", "ruby")]
-    [InlineData("Podfile", "ruby")]
+    [InlineData("Podfile", "dependency_manifest")]
     [InlineData("Guardfile", "ruby")]
     [InlineData("Capfile", "ruby")]
     [InlineData("NAMESPACE", "r")]
@@ -381,10 +381,31 @@ public class FileIndexerTests
     [InlineData("BUILD.bazel", "python")]
     [InlineData("WORKSPACE", "python")]
     [InlineData("WORKSPACE.bazel", "python")]
-    [InlineData("pyproject.toml", "python")]
-    [InlineData("requirements.txt", "python")]
-    [InlineData("go.mod", "go")]
-    [InlineData("go.work", "go")]
+    [InlineData("package.json", "dependency_manifest")]
+    [InlineData("pyproject.toml", "dependency_manifest")]
+    [InlineData("requirements.txt", "dependency_manifest")]
+    [InlineData("Pipfile", "dependency_manifest")]
+    [InlineData("poetry.toml", "dependency_manifest")]
+    [InlineData("Cargo.toml", "dependency_manifest")]
+    [InlineData("composer.json", "dependency_manifest")]
+    [InlineData("go.mod", "dependency_manifest")]
+    [InlineData("go.work", "dependency_manifest")]
+    [InlineData("packages.config", "dependency_manifest")]
+    [InlineData("Directory.Packages.props", "dependency_manifest")]
+    [InlineData("package-lock.json", "dependency_lock")]
+    [InlineData("npm-shrinkwrap.json", "dependency_lock")]
+    [InlineData("yarn.lock", "dependency_lock")]
+    [InlineData("pnpm-lock.yaml", "dependency_lock")]
+    [InlineData("bun.lock", "dependency_lock")]
+    [InlineData("bun.lockb", "dependency_lock")]
+    [InlineData("Gemfile.lock", "dependency_lock")]
+    [InlineData("Cargo.lock", "dependency_lock")]
+    [InlineData("composer.lock", "dependency_lock")]
+    [InlineData("poetry.lock", "dependency_lock")]
+    [InlineData("Pipfile.lock", "dependency_lock")]
+    [InlineData("go.sum", "dependency_lock")]
+    [InlineData("uv.lock", "dependency_lock")]
+    [InlineData("packages.lock.json", "dependency_lock")]
     // Issue #189: additional extensions / 追加拡張子
     [InlineData("types.pyi", "python")]
     [InlineData("windowed.pyw", "python")]
@@ -1086,14 +1107,17 @@ public class FileIndexerTests
     }
 
     [Fact]
-    public void ScanFiles_IndexesPythonProjectManifests()
+    public void ScanFiles_IndexesDependencyManifests()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
         try
         {
             Directory.CreateDirectory(tempDir);
+            File.WriteAllText(Path.Combine(tempDir, "package.json"), "{\"dependencies\":{}}\n");
             File.WriteAllText(Path.Combine(tempDir, "pyproject.toml"), "[project]\nname = 'sample'\n");
             File.WriteAllText(Path.Combine(tempDir, "requirements.txt"), "pytest\n");
+            File.WriteAllText(Path.Combine(tempDir, "Cargo.toml"), "[package]\nname = 'sample'\n");
+            File.WriteAllText(Path.Combine(tempDir, "composer.json"), "{}\n");
             File.WriteAllText(Path.Combine(tempDir, "unknown.txt"), "ignored\n");
 
             var files = new FileIndexer(tempDir).ScanFiles()
@@ -1101,7 +1125,7 @@ public class FileIndexerTests
                 .OrderBy(path => path, StringComparer.Ordinal)
                 .ToList();
 
-            Assert.Equal(["pyproject.toml", "requirements.txt"], files);
+            Assert.Equal(["Cargo.toml", "composer.json", "package.json", "pyproject.toml", "requirements.txt"], files);
         }
         finally
         {
@@ -1126,14 +1150,26 @@ public class FileIndexerTests
         Assert.Equal("dockerfile", map["Containerfile"]);
         Assert.Equal("makefile", map["Makefile"]);
         Assert.Equal("makefile", map["GNUmakefile"]);
-        Assert.Equal("ruby", map["Gemfile"]);
+        Assert.Equal("dependency_manifest", map["Gemfile"]);
         Assert.Equal("ruby", map["Rakefile"]);
+        Assert.Equal("dependency_manifest", map["Podfile"]);
         Assert.Equal("r", map["NAMESPACE"]);
         Assert.Equal("r", map[".Rprofile"]);
         Assert.Equal("r", map["Rprofile.site"]);
         Assert.Equal("python", map["BUILD.bazel"]);
-        Assert.Equal("python", map["pyproject.toml"]);
-        Assert.Equal("python", map["requirements.txt"]);
+        Assert.Equal("dependency_manifest", map["package.json"]);
+        Assert.Equal("dependency_manifest", map["pyproject.toml"]);
+        Assert.Equal("dependency_manifest", map["requirements.txt"]);
+        Assert.Equal("dependency_manifest", map["Cargo.toml"]);
+        Assert.Equal("dependency_manifest", map["go.mod"]);
+        Assert.Equal("dependency_manifest", map["Directory.Packages.props"]);
+        Assert.Equal("dependency_lock", map["package-lock.json"]);
+        Assert.Equal("dependency_lock", map["npm-shrinkwrap.json"]);
+        Assert.Equal("dependency_lock", map["pnpm-lock.yaml"]);
+        Assert.Equal("dependency_lock", map["Gemfile.lock"]);
+        Assert.Equal("dependency_lock", map["go.sum"]);
+        Assert.Equal("dependency_lock", map["uv.lock"]);
+        Assert.Equal("dependency_lock", map["packages.lock.json"]);
         Assert.Equal("assembly", map[".s"]);
         Assert.Equal("assembly", map[".S"]);
 
@@ -1471,17 +1507,59 @@ public class FileIndexerTests
         {
             Directory.CreateDirectory(tempDir);
             File.WriteAllText(Path.Combine(tempDir, "app.js"), "console.log('hello')");
-            File.WriteAllText(Path.Combine(tempDir, "package-lock.json"), "{}");
-            File.WriteAllText(Path.Combine(tempDir, "Cargo.lock"), "# lock");
-            File.WriteAllText(Path.Combine(tempDir, "Gemfile.lock"), "GEM");
+            File.WriteAllText(Path.Combine(tempDir, ".DS_Store"), "metadata");
+            File.WriteAllText(Path.Combine(tempDir, "Thumbs.db"), "metadata");
 
             var indexer = new FileIndexer(tempDir);
             var files = indexer.ScanFiles();
 
-            // Only app.js should be found, not package-lock.json
-            // app.jsのみ検出され、package-lock.jsonは除外される
+            // Only app.js should be found, not platform metadata files.
+            // app.jsのみ検出され、platform metadata fileは除外される。
             Assert.Single(files);
             Assert.Contains("app.js", files[0]);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_IndexesDependencyLockfiles()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(Path.Combine(tempDir, "package-lock.json"), "{}");
+            File.WriteAllText(Path.Combine(tempDir, "npm-shrinkwrap.json"), "{}");
+            File.WriteAllText(Path.Combine(tempDir, "yarn.lock"), "# yarn");
+            File.WriteAllText(Path.Combine(tempDir, "pnpm-lock.yaml"), "lockfileVersion: 9\n");
+            File.WriteAllText(Path.Combine(tempDir, "Gemfile.lock"), "GEM");
+            File.WriteAllText(Path.Combine(tempDir, "Cargo.lock"), "# lock");
+            File.WriteAllText(Path.Combine(tempDir, "go.sum"), "module v1.0.0 h1:hash\n");
+            File.WriteAllText(Path.Combine(tempDir, "Pipfile.lock"), "{}");
+            File.WriteAllText(Path.Combine(tempDir, "uv.lock"), "version = 1\n");
+
+            var files = new FileIndexer(tempDir).ScanFiles()
+                .Select(path => Path.GetFileName(path))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal(
+                [
+                    "Cargo.lock",
+                    "Gemfile.lock",
+                    "Pipfile.lock",
+                    "go.sum",
+                    "npm-shrinkwrap.json",
+                    "package-lock.json",
+                    "pnpm-lock.yaml",
+                    "uv.lock",
+                    "yarn.lock",
+                ],
+                files);
+            Assert.All(files, file => Assert.Equal("dependency_lock", FileIndexer.DetectLanguage(file)));
         }
         finally
         {

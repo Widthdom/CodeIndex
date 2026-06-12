@@ -335,9 +335,9 @@ public class FileIndexer
         ["Justfile"] = "justfile",     // Just command runner / Just コマンドランナー
         ["CMakeLists.txt"] = "cmake",
         ["Vagrantfile"] = "ruby",         // Vagrant uses Ruby DSL / Vagrant は Ruby DSL
-        ["Gemfile"] = "ruby",         // Bundler dependency manifest / Bundler 依存マニフェスト
+        ["Gemfile"] = "dependency_manifest", // Bundler dependency manifest / Bundler 依存マニフェスト
         ["Rakefile"] = "ruby",         // Rake task runner / Rake タスクランナー
-        ["Podfile"] = "ruby",         // CocoaPods dependency manifest / CocoaPods 依存マニフェスト
+        ["Podfile"] = "dependency_manifest", // CocoaPods dependency manifest / CocoaPods 依存マニフェスト
         ["Guardfile"] = "ruby",         // Guard file-watcher / Guard ファイルウォッチャー
         ["Capfile"] = "ruby",         // Capistrano deployment / Capistrano デプロイ
         ["NAMESPACE"] = "r",            // R package namespace directives / R パッケージ namespace ディレクティブ
@@ -347,10 +347,31 @@ public class FileIndexer
         ["BUILD.bazel"] = "python",
         ["WORKSPACE"] = "python",       // Bazel workspace / Bazel ワークスペース
         ["WORKSPACE.bazel"] = "python",
-        ["pyproject.toml"] = "python",      // Python project manifest / Python プロジェクトマニフェスト
-        ["requirements.txt"] = "python",    // Python dependencies manifest / Python 依存関係マニフェスト
-        ["go.mod"] = "go",           // Go module manifest / Go モジュールマニフェスト
-        ["go.work"] = "go",           // Go workspace manifest / Go ワークスペースマニフェスト
+        ["package.json"] = "dependency_manifest", // npm package manifest / npm パッケージマニフェスト
+        ["pyproject.toml"] = "dependency_manifest", // Python project manifest / Python プロジェクトマニフェスト
+        ["requirements.txt"] = "dependency_manifest", // Python dependencies manifest / Python 依存関係マニフェスト
+        ["Pipfile"] = "dependency_manifest", // Pipenv manifest / Pipenv マニフェスト
+        ["poetry.toml"] = "dependency_manifest", // Poetry configuration manifest / Poetry 設定マニフェスト
+        ["Cargo.toml"] = "dependency_manifest", // Cargo package manifest / Cargo パッケージマニフェスト
+        ["composer.json"] = "dependency_manifest", // Composer package manifest / Composer パッケージマニフェスト
+        ["go.mod"] = "dependency_manifest", // Go module manifest / Go モジュールマニフェスト
+        ["go.work"] = "dependency_manifest", // Go workspace manifest / Go ワークスペースマニフェスト
+        ["packages.config"] = "dependency_manifest", // NuGet packages.config manifest / NuGet packages.config マニフェスト
+        ["Directory.Packages.props"] = "dependency_manifest", // NuGet central package manifest / NuGet central package マニフェスト
+        ["package-lock.json"] = "dependency_lock", // npm lockfile / npm lockfile
+        ["npm-shrinkwrap.json"] = "dependency_lock", // npm shrinkwrap lockfile / npm shrinkwrap lockfile
+        ["yarn.lock"] = "dependency_lock", // Yarn lockfile / Yarn lockfile
+        ["pnpm-lock.yaml"] = "dependency_lock", // pnpm lockfile / pnpm lockfile
+        ["bun.lock"] = "dependency_lock", // Bun text lockfile / Bun text lockfile
+        ["bun.lockb"] = "dependency_lock", // Bun binary lockfile / Bun binary lockfile
+        ["Gemfile.lock"] = "dependency_lock", // Bundler lockfile / Bundler lockfile
+        ["Cargo.lock"] = "dependency_lock", // Cargo lockfile / Cargo lockfile
+        ["composer.lock"] = "dependency_lock", // Composer lockfile / Composer lockfile
+        ["poetry.lock"] = "dependency_lock", // Poetry lockfile / Poetry lockfile
+        ["Pipfile.lock"] = "dependency_lock", // Pipenv lockfile / Pipenv lockfile
+        ["go.sum"] = "dependency_lock", // Go module checksum lockfile / Go module checksum lockfile
+        ["uv.lock"] = "dependency_lock", // uv lockfile / uv lockfile
+        ["packages.lock.json"] = "dependency_lock", // NuGet lockfile / NuGet lockfile
         [".editorconfig"] = "editorconfig",
         [".gitignore"] = "gitignore",
         [".dockerignore"] = "dockerignore",
@@ -396,8 +417,6 @@ public class FileIndexer
     private static readonly HashSet<string> SkipFiles = new(StringComparer.OrdinalIgnoreCase)
     {
         ".DS_Store", "Thumbs.db",
-        "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
-        "Gemfile.lock", "Cargo.lock", "composer.lock", "poetry.lock", "bun.lockb",
     };
 
     // macOS AppleDouble resource-fork prefix. Files written by HFS+/SMB-style metadata carriers
@@ -1166,9 +1185,9 @@ public class FileIndexer
     internal static LanguageDetectionResult TryDetectLanguage(string filePath, string? content = null)
     {
         // Exact filename matching beats extension lookup so manifest-style filenames like
-        // `pyproject.toml` can map to a project language instead of the generic file type.
+        // `pyproject.toml` can map to a dependency category instead of the generic file type.
         // `pyproject.toml` のようなマニフェスト系ファイル名が、汎用拡張子ではなく
-        // プロジェクト言語に紐づくよう、完全一致ファイル名を拡張子より先に判定する。
+        // dependency category に紐づくよう、完全一致ファイル名を拡張子より先に判定する。
         var fileName = Path.GetFileName(filePath);
         if (FileNameMap.TryGetValue(fileName, out var nameLang))
             return new LanguageDetectionResult(FileProbeStatus.Supported, nameLang);
