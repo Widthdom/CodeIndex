@@ -216,6 +216,33 @@ public class McpServerTests : IDisposable
         return counts;
     }
 
+    private static void DeleteSqliteDatabaseFiles(string dbPath)
+    {
+        DeleteFileWithRetry(dbPath);
+        DeleteFileWithRetry(dbPath + "-wal");
+        DeleteFileWithRetry(dbPath + "-shm");
+    }
+
+    private static void DeleteFileWithRetry(string path)
+    {
+        const int maxAttempts = 5;
+
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            try
+            {
+                SqliteConnection.ClearAllPools();
+                if (File.Exists(path))
+                    File.Delete(path);
+                return;
+            }
+            catch (Exception ex) when (attempt < maxAttempts && ex is IOException or UnauthorizedAccessException)
+            {
+                Thread.Sleep(50 * attempt);
+            }
+        }
+    }
+
     private void MarkFoldReady()
     {
         var writer = new DbWriter(_db.Connection);
@@ -9997,8 +10024,7 @@ public class McpServerTests : IDisposable
         finally
         {
             TestProjectHelper.DeleteDirectory(fixtureDir);
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteSqliteDatabaseFiles(dbPath);
         }
     }
 
@@ -10028,8 +10054,7 @@ public class McpServerTests : IDisposable
         finally
         {
             TestProjectHelper.DeleteDirectory(fixtureDir);
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteSqliteDatabaseFiles(dbPath);
         }
     }
 
@@ -10060,8 +10085,7 @@ public class McpServerTests : IDisposable
         finally
         {
             TestProjectHelper.DeleteDirectory(fixtureDir);
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteSqliteDatabaseFiles(dbPath);
         }
     }
 
@@ -10106,8 +10130,7 @@ public class McpServerTests : IDisposable
         {
             McpServer.McpIndexFileCommittedForTesting = null;
             TestProjectHelper.DeleteDirectory(fixtureDir);
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteSqliteDatabaseFiles(dbPath);
         }
     }
 
