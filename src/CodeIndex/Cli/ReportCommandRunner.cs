@@ -514,18 +514,7 @@ public static class ReportCommandRunner
 
     private static int WriteCommandError(bool json, JsonSerializerOptions jsonOptions, string message, int exitCode, string? hint = null, string? errorCode = null)
     {
-        if (json)
-            Console.WriteLine(JsonSerializer.Serialize(
-                new CommandErrorJsonResult("error", message, hint, errorCode),
-                CliJsonSerializerContextFactory.Create(jsonOptions).CommandErrorJsonResult));
-        else
-        {
-            var prefix = errorCode is null ? "Error" : $"Error [{errorCode}]";
-            Console.Error.WriteLine($"{prefix}: {message}");
-            if (hint != null)
-                Console.Error.WriteLine($"Hint: {hint}");
-        }
-        return exitCode;
+        return CommandErrorWriter.WriteJsonOrHuman(json, jsonOptions, message, exitCode, hint, errorCode: errorCode);
     }
 }
 

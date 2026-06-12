@@ -154,8 +154,8 @@ public static class DbCommandRunner
                     foreach (var line in issues)
                         Console.WriteLine($"    - {line}");
                     Console.WriteLine();
-                    Console.Error.WriteLine($"Error [{CommandErrorCodes.DbIntegrityFailed}]: SQLite reported integrity_check failures.");
-                    Console.Error.WriteLine("Hint: rebuild with `cdidx index <projectPath> --rebuild` to discard the corrupted DB and start fresh.");
+                    CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbIntegrityFailed}]: SQLite reported integrity_check failures.");
+                    CommandErrorWriter.WriteStderr("Hint: rebuild with `cdidx index <projectPath> --rebuild` to discard the corrupted DB and start fresh.");
                 }
             }
 
@@ -948,7 +948,7 @@ public static class DbCommandRunner
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or PathTooLongException)
         {
-            Console.Error.WriteLine($"Warning: failed to delete {cleanupDescription} {ConsoleUi.FormatBoundedValue(path)} ({CommandErrorWriter.FormatSanitizedException(ex)}).");
+            CommandErrorWriter.WriteWarning($"failed to delete {cleanupDescription} {ConsoleUi.FormatBoundedValue(path)} ({CommandErrorWriter.FormatSanitizedException(ex)}).");
         }
     }
 
@@ -1048,18 +1048,7 @@ public static class DbCommandRunner
 
     private static int WriteCommandError(bool json, JsonSerializerOptions jsonOptions, string message, int exitCode, string? hint = null, string? errorCode = null)
     {
-        if (json)
-            Console.WriteLine(JsonSerializer.Serialize(
-                new CommandErrorJsonResult("error", message, hint, errorCode),
-                CliJsonSerializerContextFactory.Create(jsonOptions).CommandErrorJsonResult));
-        else
-        {
-            var prefix = errorCode is null ? "Error" : $"Error [{errorCode}]";
-            Console.Error.WriteLine($"{prefix}: {message}");
-            if (hint != null)
-                Console.Error.WriteLine($"Hint: {hint}");
-        }
-        return exitCode;
+        return CommandErrorWriter.WriteJsonOrHuman(json, jsonOptions, message, exitCode, hint, errorCode: errorCode);
     }
 }
 

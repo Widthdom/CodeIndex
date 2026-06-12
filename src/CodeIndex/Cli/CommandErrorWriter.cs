@@ -7,13 +7,22 @@ internal static class CommandErrorWriter
     internal const string DefaultHint = "Run '<cmd> --help' for usage information.";
     private const int SanitizedExceptionTypeNameLimit = 120;
 
+    internal static void WriteStdout(string message = "")
+        => Console.WriteLine(message);
+
+    internal static void WriteStderr(string message = "")
+        => Console.Error.WriteLine(message);
+
+    internal static void WriteWarning(string message)
+        => WriteStderr($"Warning: {message}");
+
     internal static void Write(string message, string? hint = null, string? usage = null, string? errorCode = null)
     {
         var prefix = errorCode is null ? "Error" : $"Error [{errorCode}]";
-        Console.Error.WriteLine($"{prefix}: {message}");
-        Console.Error.WriteLine($"Hint: {hint ?? DefaultHint}");
+        WriteStderr($"{prefix}: {message}");
+        WriteStderr($"Hint: {hint ?? DefaultHint}");
         if (usage != null)
-            Console.Error.WriteLine($"Usage: {usage}");
+            WriteStderr($"Usage: {usage}");
     }
 
     internal static int Write(
@@ -38,7 +47,7 @@ internal static class CommandErrorWriter
     {
         if (json)
         {
-            Console.WriteLine(JsonSerializer.Serialize(
+            WriteStdout(JsonSerializer.Serialize(
                 new CommandErrorJsonResult("error", message, hint, errorCode),
                 CliJsonSerializerContextFactory.Create(jsonOptions).CommandErrorJsonResult));
             return exitCode;
