@@ -54,6 +54,71 @@ public sealed class InstallScriptTests : IDisposable
     }
 
     [Fact]
+    public void UninstallPurgeCache_RemovesOnlyValidatedCacheDirectory_Issue3499()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var installDir = Path.Combine(_tempRoot, "uninstall_purge_bin");
+        var cacheRoot = Path.Combine(_tempRoot, "xdg_cache");
+        var cdidxCache = Path.Combine(cacheRoot, "cdidx");
+        var siblingCache = Path.Combine(cacheRoot, "other");
+        Directory.CreateDirectory(installDir);
+        Directory.CreateDirectory(cdidxCache);
+        Directory.CreateDirectory(siblingCache);
+        File.WriteAllText(Path.Combine(installDir, "cdidx"), "#!/usr/bin/env bash\n");
+        File.WriteAllText(Path.Combine(cdidxCache, "update-check.json"), "{}");
+        File.WriteAllText(Path.Combine(siblingCache, "keep.txt"), "keep");
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            """
+            PURGE_CACHE_ON_UNINSTALL=1
+            uninstall_cdidx
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+                ["XDG_CACHE_HOME"] = cacheRoot + "/",
+            });
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Contains("Removed", stdout);
+        Assert.False(Directory.Exists(cdidxCache));
+        Assert.True(File.Exists(Path.Combine(siblingCache, "keep.txt")));
+    }
+
+    [Fact]
+    public void UninstallPurgeCache_RejectsUnsafeCacheRootBeforeRemovingInstall_Issue3499()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var installDir = Path.Combine(_tempRoot, "uninstall_bad_cache_root_bin");
+        Directory.CreateDirectory(installDir);
+        var binaryPath = Path.Combine(installDir, "cdidx");
+        File.WriteAllText(binaryPath, "#!/usr/bin/env bash\n");
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            """
+            PURGE_CACHE_ON_UNINSTALL=1
+            uninstall_cdidx
+            echo "UNREACHABLE"
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+                ["XDG_CACHE_HOME"] = "/",
+            },
+            enforceStrictMode: false);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.DoesNotContain("UNREACHABLE", stdout);
+        Assert.Contains("Refusing to purge cdidx cache from unsafe cache root", stderr);
+        Assert.True(File.Exists(binaryPath));
+    }
+
+    [Fact]
     public void DownloadAndInstall_SecuresStageDirectoryAfterMktemp()
     {
         var script = File.ReadAllText(Path.Combine(GetRepositoryRoot(), "install.sh"));

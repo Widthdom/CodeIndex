@@ -587,6 +587,79 @@ is_self_test_install_dir_risky() {
     return 1
 }
 
+normalize_existing_or_parent_directory() {
+    local path="$1"
+    local parent
+    local base
+    local normalized_parent
+
+    while [ "${#path}" -gt 1 ]; do
+        case "$path" in
+            */) path="${path%/}" ;;
+            *) break ;;
+        esac
+    done
+
+    if [ -d "$path" ]; then
+        (CDPATH= cd -P -- "$path" && pwd)
+        return
+    fi
+
+    parent="$(dirname -- "$path")"
+    base="$(basename -- "$path")"
+    if [ ! -d "$parent" ]; then
+        report_error "Cache root parent does not exist: ${parent}"
+        return 1
+    fi
+
+    normalized_parent="$(CDPATH= cd -P -- "$parent" && pwd)" || return 1
+    if [ "$normalized_parent" = "/" ]; then
+        printf '/%s\n' "$base"
+    else
+        printf '%s/%s\n' "$normalized_parent" "$base"
+    fi
+}
+
+resolve_purge_cache_dir() {
+    local cache_root
+    local normalized_root
+
+    if [ -n "${XDG_CACHE_HOME:-}" ]; then
+        cache_root="$XDG_CACHE_HOME"
+    else
+        if [ -z "${HOME:-}" ] || [ "$HOME" = "/" ]; then
+            report_error "Cannot safely derive cdidx cache directory: HOME is empty or root."
+            return 1
+        fi
+        cache_root="${HOME}/.cache"
+    fi
+
+    case "$cache_root" in
+        ""|"/"|".")
+            report_error "Refusing to purge cdidx cache from unsafe cache root: ${cache_root:-<empty>}"
+            return 1
+            ;;
+        /*) ;;
+        *)
+            report_error "Refusing to purge cdidx cache from non-absolute cache root: ${cache_root}"
+            return 1
+            ;;
+    esac
+
+    if ! normalized_root="$(normalize_existing_or_parent_directory "$cache_root")"; then
+        return 1
+    fi
+
+    case "$normalized_root" in
+        ""|"/")
+            report_error "Refusing to purge cdidx cache from unsafe normalized cache root: ${normalized_root:-<empty>}"
+            return 1
+            ;;
+    esac
+
+    printf '%s/cdidx\n' "$normalized_root"
+}
+
 release_download_base_url() {
     printf '%s/%s/releases/download/%s' "$GITHUB_BASE_URL" "$REPO" "$VERSION"
 }
@@ -1449,6 +1522,13 @@ uninstall_cdidx() {
 
     local removed=0
     local path
+    local cache_dir=""
+    if [ "$PURGE_CACHE_ON_UNINSTALL" = "1" ]; then
+        if ! cache_dir="$(resolve_purge_cache_dir)"; then
+            return 1
+        fi
+    fi
+
     for path in \
         "${INSTALL_DIR}/${BINARY_NAME}" \
         "${INSTALL_DIR}/version.json" \
@@ -1473,7 +1553,6 @@ uninstall_cdidx() {
     fi
 
     if [ "$PURGE_CACHE_ON_UNINSTALL" = "1" ]; then
-        local cache_dir="${XDG_CACHE_HOME:-${HOME}/.cache}/cdidx"
         if [ -d "$cache_dir" ]; then
             rm -rf "$cache_dir"
             info "Removed ${cache_dir}"
