@@ -1633,6 +1633,8 @@ public partial class McpServer
                 var compactResults = SearchSnippetFormatter
                     .ToCompactResults(results, queryContext, snippetLines, exact, maxLineWidth, exposeLiteralHighlights: exact)
                     .ToList();
+                foreach (var compact in compactResults)
+                    SearchSnippetFormatter.ApplyOutputMetadata(compact, snippetLines, maxLineWidth, exact, rawFts: false);
                 total += compactResults.Count;
                 queryResults.Add(new JsonObject
                 {

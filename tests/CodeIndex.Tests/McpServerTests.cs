@@ -4532,6 +4532,55 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_SearchRecipe_AppliesResultOutputMetadata_Issue3558()
+    {
+        InsertIndexedFile(
+            "src/todo.cs",
+            "csharp",
+            """
+            // TODO: inspect generated SQL.
+            public class TodoFixture { }
+            """);
+        var recipePath = Path.Combine(_projectRoot, "search-recipes-metadata.json");
+        File.WriteAllText(recipePath, """
+            {
+              "recipes": [
+                {
+                  "name": "local-audit",
+                  "description": "Local audit recipe",
+                  "queries": [
+                    {
+                      "name": "todo-comments",
+                      "query": "TODO",
+                      "description": "Find local TODO markers",
+                      "recommendedLabels": ["audit"],
+                      "falsePositiveGuidance": "Ignore deliberate test fixtures.",
+                      "exactSubstring": true
+                    }
+                  ]
+                }
+              ]
+            }
+            """);
+        using var env = EnvironmentVariableScope.Capture("CDIDX_SEARCH_RECIPE_PATHS");
+        env.Set("CDIDX_SEARCH_RECIPE_PATHS", recipePath);
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"recipe":"local-audit","snippetLines":3,"maxLineWidth":96}}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Null(response["error"]);
+        var structured = response["result"]!["structuredContent"]!;
+        var query = structured["queries"]![0]!;
+        var result = query["results"]![0]!;
+        Assert.Equal(3, result["snippetLines"]!.GetValue<int>());
+        Assert.Equal(96, result["maxLineWidth"]!.GetValue<int>());
+        Assert.True(result["exact"]!.GetValue<bool>());
+        Assert.False(result["rawFts"]!.GetValue<bool>());
+        Assert.True(result["literalHighlightsAvailable"]!.GetValue<bool>());
+        Assert.Null(result["literalHighlightWarning"]);
+    }
+
+    [Fact]
     public void ToolsCall_Search_AcceptsScalarExcludePaths_Issue3538()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"App","excludePaths":"src/app.cs"}}}""")!;
