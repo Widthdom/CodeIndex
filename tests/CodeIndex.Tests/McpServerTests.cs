@@ -176,6 +176,46 @@ public class McpServerTests : IDisposable
         writer.InsertReferences(ReferenceExtractor.Extract(fileId, lang, normalized, symbols));
     }
 
+    private static JsonNode CallIndex(McpServer server, string path, Action<JsonObject>? configure = null)
+    {
+        var arguments = new JsonObject
+        {
+            ["path"] = path,
+        };
+        configure?.Invoke(arguments);
+
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "index",
+                ["arguments"] = arguments,
+            },
+        };
+
+        return server.HandleMessage(request)!;
+    }
+
+    private static Dictionary<string, int> ReadSymbolKindCounts(string dbPath)
+    {
+        var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+        var connectionString = new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+        }.ToString();
+        using var connection = new SqliteConnection(connectionString);
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT kind, COUNT(*) FROM symbols GROUP BY kind";
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+            counts[reader.GetString(0)] = reader.GetInt32(1);
+        return counts;
+    }
+
     private void MarkFoldReady()
     {
         var writer = new DbWriter(_db.Connection);
@@ -9956,6 +9996,115 @@ public class McpServerTests : IDisposable
         }
         finally
         {
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_ReprocessesUnchangedFilesWhenMaxSymbolsPerFileChanges_Issue3543()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_max_symbols_reuse_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(fixtureDir);
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_index_max_symbols_reuse_{Guid.NewGuid():N}.db");
+        try
+        {
+            File.WriteAllText(Path.Combine(fixtureDir, "app.py"), "class App:\n    def one(self):\n        return 1\n    def two(self):\n        return 2\n");
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+
+            var firstResponse = CallIndex(server, fixtureDir);
+
+            Assert.False(firstResponse["result"]?["isError"]?.GetValue<bool>() ?? false);
+            Assert.True(ReadSymbolKindCounts(dbPath).Values.Sum() > 1);
+
+            var secondResponse = CallIndex(server, fixtureDir, args => args["maxSymbolsPerFile"] = 1);
+
+            Assert.False(secondResponse["result"]?["isError"]?.GetValue<bool>() ?? false);
+            var structured = secondResponse["result"]!["structuredContent"]!;
+            Assert.Equal(0, structured["summary"]!["symbols"]!.GetValue<long>());
+            Assert.Empty(ReadSymbolKindCounts(dbPath));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_ReprocessesUnchangedFilesWhenSymbolKindFilterChanges_Issue3543()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_symbol_filter_reuse_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(fixtureDir);
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_index_symbol_filter_reuse_{Guid.NewGuid():N}.db");
+        try
+        {
+            File.WriteAllText(Path.Combine(fixtureDir, "app.py"), "class App:\n    def run(self):\n        return 1\n");
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+
+            var firstResponse = CallIndex(server, fixtureDir);
+
+            Assert.False(firstResponse["result"]?["isError"]?.GetValue<bool>() ?? false);
+            var firstCounts = ReadSymbolKindCounts(dbPath);
+            Assert.True(firstCounts.GetValueOrDefault("function") > 0);
+
+            var secondResponse = CallIndex(server, fixtureDir, args => args["excludeSymbolKind"] = "function");
+
+            Assert.False(secondResponse["result"]?["isError"]?.GetValue<bool>() ?? false);
+            var secondCounts = ReadSymbolKindCounts(dbPath);
+            Assert.True(secondCounts.GetValueOrDefault("class") > 0);
+            Assert.False(secondCounts.ContainsKey("function"));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_ReprocessesAfterPartialSymbolKindFilterChange_Issue3543()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_symbol_filter_partial_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(fixtureDir);
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_index_symbol_filter_partial_{Guid.NewGuid():N}.db");
+        try
+        {
+            File.WriteAllText(Path.Combine(fixtureDir, "app.py"), "class App:\n    def run(self):\n        return 1\n");
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+
+            var firstResponse = CallIndex(server, fixtureDir);
+
+            Assert.False(firstResponse["result"]?["isError"]?.GetValue<bool>() ?? false);
+            Assert.True(ReadSymbolKindCounts(dbPath).GetValueOrDefault("function") > 0);
+
+            var throwOnce = true;
+            McpServer.McpIndexFileCommittedForTesting = _ =>
+            {
+                if (!throwOnce)
+                    return;
+                throwOnce = false;
+                throw new InvalidOperationException("forced partial MCP index failure");
+            };
+
+            var partialResponse = CallIndex(server, fixtureDir, args => args["excludeSymbolKind"] = "function");
+
+            var partialStructured = partialResponse["result"]!["structuredContent"]!;
+            Assert.True(partialStructured["summary"]!["errors"]!.GetValue<int>() > 0);
+            Assert.False(ReadSymbolKindCounts(dbPath).ContainsKey("function"));
+
+            McpServer.McpIndexFileCommittedForTesting = null;
+            var finalResponse = CallIndex(server, fixtureDir);
+
+            Assert.False(finalResponse["result"]?["isError"]?.GetValue<bool>() ?? false);
+            Assert.True(ReadSymbolKindCounts(dbPath).GetValueOrDefault("function") > 0);
+        }
+        finally
+        {
+            McpServer.McpIndexFileCommittedForTesting = null;
             TestProjectHelper.DeleteDirectory(fixtureDir);
             if (File.Exists(dbPath))
                 File.Delete(dbPath);

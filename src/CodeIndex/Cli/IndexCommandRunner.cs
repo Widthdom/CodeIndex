@@ -24,7 +24,7 @@ public static partial class IndexCommandRunner
     internal const int MaxCommitRefCount = 64;
     internal const int MaxCommitRefLength = 256;
     internal const int MaxGitExcludeBytes = 256 * 1024;
-    private const string SymbolKindFilterMetaKey = "index_symbol_kind_filter";
+    internal const string SymbolKindFilterMetaKey = "index_symbol_kind_filter";
     private const int ScanCheckpointVersion = 1;
     private const string ScanCheckpointFileName = "scan-checkpoint.json";
     private static readonly TimeSpan IndexExtractionStallTimeout = TimeSpan.FromMinutes(5);

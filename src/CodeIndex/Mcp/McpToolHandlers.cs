@@ -45,6 +45,7 @@ public partial class McpServer
         "followSymlinks",
     };
     internal const int MaxMcpIndexFailureMessageLength = 512;
+    internal static Action<string>? McpIndexFileCommittedForTesting { get; set; }
     private QueryCommandRunner.ProjectFilterRootResolution? _projectFilterRootResolutionForCurrentToolCall;
 
     // --- Tool implementations / ツール実装 ---
@@ -5341,6 +5342,7 @@ public partial class McpServer
         var priorHotspotFamilyVersions = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyVersionMetaKey);
         var priorHotspotFamilyMarkerFingerprints = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyMarkerFingerprintMetaKey);
         var priorIndexedProjectRoot = db.GetMetaString(DbContext.IndexedProjectRootMetaKey);
+        var priorSymbolKindFilterSignature = db.GetMetaString(IndexCommandRunner.SymbolKindFilterMetaKey);
         var requestToken = _currentRequestToken.Value;
         requestToken.ThrowIfCancellationRequested();
         // Capture git HEAD so subsequent queries can detect a worktree branch / HEAD switch
@@ -5388,6 +5390,11 @@ public partial class McpServer
             priorHotspotFamilyVersions,
             priorHotspotFamilyMarkerFingerprints,
             currentHotspotFamilyMarkerFingerprints);
+        var symbolKindFilterMatchesPrior = string.Equals(
+            priorSymbolKindFilterSignature,
+            symbolKindFilter.Signature,
+            StringComparison.Ordinal);
+        var symbolKindFilterMetaMarkedIncomplete = symbolKindFilterMatchesPrior;
         var normalizedProjectPath = Path.GetFullPath(projectPath);
         var normalizedPriorIndexedProjectRoot = string.IsNullOrWhiteSpace(priorIndexedProjectRoot)
             ? null
@@ -5409,6 +5416,14 @@ public partial class McpServer
                 writer.SetMeta(DbContext.IndexedProjectRootMetaKey, normalizedProjectPath);
                 projectRootWritten = true;
             }
+        }
+
+        void MarkSymbolKindFilterMetaIncompleteOnce()
+        {
+            if (symbolKindFilterMetaMarkedIncomplete)
+                return;
+            writer.SetMeta(IndexCommandRunner.SymbolKindFilterMetaKey, null);
+            symbolKindFilterMetaMarkedIncomplete = true;
         }
 
         static long SumReadableFileBytes(IEnumerable<string> paths)
@@ -5479,11 +5494,20 @@ public partial class McpServer
                     record.Checksum,
                     size: record.Size,
                     language: record.Lang,
-                    allowReuse: record.Lang is not ("javascript" or "typescript")
+                    allowReuse: symbolKindFilterMatchesPrior
+                        && record.Lang is not ("javascript" or "typescript")
                         && (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
                         && (record.Lang != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
                         && (record.Lang != "sql" || sqlGraphContractMatchesCurrent)
                         && AllowReuseWithCurrentHotspotFamilyTrust(record.Lang, hotspotFamilyTrustMatchesCurrent));
+                if (existingId != null)
+                {
+                    if (writer.CountSymbolsForFile(existingId.Value) > maxSymbolsPerFile
+                        || writer.HasIssueForFile(existingId.Value, "symbol_count_exceeded"))
+                    {
+                        existingId = null;
+                    }
+                }
                 if (existingId != null)
                 {
                     skipped++;
@@ -5495,6 +5519,7 @@ public partial class McpServer
 
                 writer.MarkBatchInProgress();
                 fileBatchMarked = true;
+                MarkSymbolKindFilterMetaIncompleteOnce();
                 using var txn = writer.BeginTransaction();
                 var fileId = writer.UpsertFile(record);
                 var chunks = ChunkSplitter.Split(fileId, content);
@@ -5532,6 +5557,7 @@ public partial class McpServer
                 WriteProjectRootOnce();
                 writer.ClearBatchInProgress();
                 txn.Commit();
+                McpIndexFileCommittedForTesting?.Invoke(record.Path);
             }
             catch (FileIndexer.BinaryFileSkippedException)
             {
@@ -5669,6 +5695,7 @@ public partial class McpServer
             }
 
             writer.WriteCdidxWriterVersion(_version);
+            writer.SetMeta(IndexCommandRunner.SymbolKindFilterMetaKey, symbolKindFilter.Signature);
 
             // Successful no-op MCP full scans should repair explicit-DB roots only after
             // readiness is stamped, preserving the failure-path safety contract.
