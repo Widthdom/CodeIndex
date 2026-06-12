@@ -22,8 +22,48 @@ permissions:
   attestations: write
 
 jobs:
+  preflight:
+    name: Validate release tag
+    if: github.repository == 'Widthdom/CodeIndex'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+      ref: ${{ steps.release.outputs.ref }}
+    steps:
+      - name: Validate release tag
+        id: release
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG_NAME: ${{ inputs.tag_name }}
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            tag="$INPUT_TAG_NAME"
+          else
+            if [ "$REF_TYPE" != "tag" ]; then
+              echo "Release workflow must run from a tag ref, got ${REF_TYPE}:${REF_NAME}." >&2
+              exit 1
+            fi
+            tag="$REF_NAME"
+          fi
+
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Release tag must be a v-prefixed SemVer version, got: ${tag}" >&2
+            exit 1
+          fi
+
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+          echo "ref=refs/tags/${tag}" >> "$GITHUB_OUTPUT"
+
   release:
     if: github.repository == 'Widthdom/CodeIndex'
+    needs: preflight
     strategy:
       matrix:
         # Keep this matrix in sync with docs/platform-support.md and install.sh
@@ -52,7 +92,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
-          ref: ${{ inputs.tag_name || github.ref }}
+          ref: ${{ needs.preflight.outputs.ref }}
 
       # The release workflow runs the same Windows test suite, so it needs the
       # same temp-root pinning as .github/workflows/dotnet.yml: even after the
@@ -474,13 +514,13 @@ jobs:
   create-release:
     if: github.repository == 'Widthdom/CodeIndex'
     runs-on: ubuntu-latest
-    needs: release
+    needs: [preflight, release]
     environment: release-production
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ inputs.tag_name || github.ref }}
+          ref: ${{ needs.preflight.outputs.ref }}
 
       - name: Download all artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -588,7 +628,7 @@ jobs:
         if: ${{ !inputs.allow_generated_notes }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
+          TAG_NAME: ${{ needs.preflight.outputs.tag }}
         run: |
           set -euo pipefail
           version="${TAG_NAME#v}"
@@ -616,7 +656,7 @@ jobs:
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
+          TAG_NAME: ${{ needs.preflight.outputs.tag }}
           USE_GENERATED_NOTES: ${{ inputs.allow_generated_notes || false }}
         run: |
           set -euo pipefail
@@ -652,7 +692,7 @@ jobs:
       - name: Wait for release assets to be downloadable
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
+          TAG_NAME: ${{ needs.preflight.outputs.tag }}
           # install.sh downloads BOTH the linux-x64 tarball and sha256sums.txt,
           # and the CDN can propagate each release asset independently. Polling
           # only the tarball let the verify step run while sha256sums.txt was
@@ -757,7 +797,7 @@ jobs:
 
       - name: Verify install.sh against the published release
         env:
-          TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
+          TAG_NAME: ${{ needs.preflight.outputs.tag }}
         run: |
           set -euo pipefail
           export CDIDX_INSTALL_DIR="$(mktemp -d)/bin"
@@ -820,13 +860,13 @@ jobs:
   publish-nuget:
     if: github.repository == 'Widthdom/CodeIndex'
     runs-on: ubuntu-latest
-    needs: release
+    needs: [preflight, release]
     environment: nuget-production
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ inputs.tag_name || github.ref }}
+          ref: ${{ needs.preflight.outputs.ref }}
 
       - name: Set up .NET
         uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0
@@ -837,7 +877,7 @@ jobs:
         id: version
         run: |
           set -euo pipefail
-          TAG="${{ inputs.tag_name || github.ref_name }}"
+          TAG="${{ needs.preflight.outputs.tag }}"
           if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
             echo "Release tag must be a v-prefixed SemVer version, got: ${TAG}" >&2
             exit 1
@@ -950,7 +990,7 @@ jobs:
   publish-container:
     if: github.repository == 'Widthdom/CodeIndex'
     runs-on: ubuntu-latest
-    needs: create-release
+    needs: [preflight, create-release]
     permissions:
       contents: read
       id-token: write
@@ -960,13 +1000,13 @@ jobs:
       - name: Checkout release tag
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ inputs.tag_name || github.ref }}
+          ref: ${{ needs.preflight.outputs.ref }}
 
       - name: Extract version from tag
         id: version
         run: |
           set -euo pipefail
-          TAG="${{ inputs.tag_name || github.ref_name }}"
+          TAG="${{ needs.preflight.outputs.tag }}"
           if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
             echo "Release tag must be a v-prefixed SemVer version, got: ${TAG}" >&2
             exit 1
@@ -1012,20 +1052,20 @@ jobs:
   publish-homebrew:
     if: github.repository == 'Widthdom/CodeIndex'
     runs-on: ubuntu-latest
-    needs: create-release
+    needs: [preflight, create-release]
     environment: homebrew-production
     steps:
       - name: Checkout release tag
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          ref: ${{ inputs.tag_name || github.ref }}
+          ref: ${{ needs.preflight.outputs.ref }}
 
       - name: Extract release tag
         id: release
         run: |
           set -euo pipefail
-          TAG="${{ inputs.tag_name || github.ref_name }}"
+          TAG="${{ needs.preflight.outputs.tag }}"
           if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
             echo "Release tag must be a v-prefixed SemVer version, got: ${TAG}" >&2
             exit 1
