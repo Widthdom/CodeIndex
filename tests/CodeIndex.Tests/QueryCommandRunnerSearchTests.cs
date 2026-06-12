@@ -1697,6 +1697,47 @@ jobs:
     }
 
     [Fact]
+    public void RunSearch_ProjectFilterFallbackJsonIncludesStructuredDiagnostic_Issue3461()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_project_fallback_json");
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_search_project_fallback_{Guid.NewGuid():N}.db");
+        var originalCurrentDirectory = Environment.CurrentDirectory;
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src", "App"));
+            File.WriteAllText(Path.Combine(projectRoot, "CodeIndex.sln"), """
+            Microsoft Visual Studio Solution File, Format Version 12.00
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "App", "src\App\App.csproj", "{11111111-1111-1111-1111-111111111111}"
+            EndProject
+            """);
+            File.WriteAllText(Path.Combine(projectRoot, "src", "App", "App.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/App/ServiceA.cs", "csharp", "public class ServiceA { }\n");
+
+            Environment.CurrentDirectory = projectRoot;
+            var expectedProjectRoot = Path.GetFullPath(Environment.CurrentDirectory);
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["missing-token", "--db", dbPath, "--project", "App", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var queryContext = document.RootElement.GetProperty("query_context");
+
+            Assert.Equal("App", queryContext.GetProperty("project")[0].GetString());
+            Assert.Equal("src/App/*", queryContext.GetProperty("path")[0].GetString());
+            Assert.Equal(expectedProjectRoot, queryContext.GetProperty("project_filter_root").GetString());
+            Assert.Equal(QueryCommandRunner.ProjectFilterRootFallbackReasonCurrentDirectory, queryContext.GetProperty("project_filter_root_fallback_reason").GetString());
+        }
+        finally
+        {
+            Environment.CurrentDirectory = originalCurrentDirectory;
+            TestProjectHelper.DeleteFile(dbPath);
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_AllowsPathValueThatLooksLikePreviewOption()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_preview_like_path_value");
