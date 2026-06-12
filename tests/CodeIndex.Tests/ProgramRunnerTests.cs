@@ -1195,6 +1195,39 @@ exit 0
     }
 
     [Fact]
+    public void UpdateChecker_Check_WritesCacheWithPrivateModes_Issue3411()
+    {
+        using var env = EnvironmentVariableScope.Capture(UpdateChecker.DisableEnvVar);
+        env.Set(UpdateChecker.DisableEnvVar, null);
+        var cacheRoot = Path.Combine(Path.GetTempPath(), $"cdidx_update_cache_private_{Guid.NewGuid():N}");
+        var cachePath = Path.Combine(cacheRoot, "cdidx", "update-check.json");
+        try
+        {
+            var result = UpdateChecker.Check(
+                "1.0.0",
+                cachePath,
+                DateTimeOffset.UtcNow,
+                _ => Task.FromResult<string?>("v9.9.9"));
+
+            Assert.True(result.UpdateAvailable);
+            Assert.True(File.Exists(cachePath));
+            if (!OperatingSystem.IsWindows())
+            {
+                Assert.Equal(
+                    DataDirectorySecurity.PrivateDirectoryMode,
+                    File.GetUnixFileMode(Path.GetDirectoryName(cachePath)!) & DataDirectorySecurity.PermissionBits);
+                Assert.Equal(
+                    DataDirectorySecurity.PrivateFileMode,
+                    File.GetUnixFileMode(cachePath) & DataDirectorySecurity.PermissionBits);
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(cacheRoot);
+        }
+    }
+
+    [Fact]
     public async Task DownloadReleaseChecksumManifestAsync_RejectsOverLimitResponse()
     {
         using var client = new HttpClient(new StaticResponseHandler(new ByteArrayContent(new byte[(int)ProgramRunner.MaxReleaseChecksumBytes + 1])))

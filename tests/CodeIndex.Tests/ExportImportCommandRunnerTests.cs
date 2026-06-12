@@ -281,8 +281,8 @@ public class ExportImportCommandRunnerTests
             var outputPath = Path.Combine(projectRoot, "codeindex.cdidx.zip");
             ExportImportCommandRunner.DeleteFileForTesting = path =>
             {
-                if (Path.GetFileName(path).StartsWith("codeindex-export-", StringComparison.Ordinal)
-                    && path.EndsWith(".db", StringComparison.Ordinal))
+                if (Path.GetFileName(path) == "codeindex.db"
+                    && Path.GetFileName(Path.GetDirectoryName(path)!).StartsWith("codeindex-export-", StringComparison.Ordinal))
                 {
                     cleanupPath = path;
                     throw new IOException("simulated export temp cleanup failure");
@@ -301,12 +301,18 @@ public class ExportImportCommandRunnerTests
             Assert.Contains("IOException", stderr);
             Assert.NotNull(cleanupPath);
             Assert.True(File.Exists(cleanupPath));
+            if (!OperatingSystem.IsWindows())
+            {
+                Assert.Equal(
+                    DataDirectorySecurity.PrivateDirectoryMode,
+                    File.GetUnixFileMode(Path.GetDirectoryName(cleanupPath)!) & DataDirectorySecurity.PermissionBits);
+            }
         }
         finally
         {
             ExportImportCommandRunner.DeleteFileForTesting = null;
             if (cleanupPath != null && File.Exists(cleanupPath))
-                File.Delete(cleanupPath);
+                TestProjectHelper.DeleteDirectory(Path.GetDirectoryName(cleanupPath)!);
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }

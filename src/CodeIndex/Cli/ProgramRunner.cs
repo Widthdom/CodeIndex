@@ -3127,9 +3127,12 @@ internal static class ProgramRunner
             return CommandExitCodes.UsageError;
         }
 
-        var scriptPath = Path.Combine(Path.GetTempPath(), $"cdidx-install-{Guid.NewGuid():N}.sh");
+        string? scriptDirectory = null;
+        string? scriptPath = null;
         try
         {
+            scriptDirectory = DataDirectorySecurity.CreateSensitiveTempDirectory("cdidx-install-").FullName;
+            scriptPath = Path.Combine(scriptDirectory, "install.sh");
             using (var client = UpgradeHttpClientFactory())
             {
                 var checksumManifest = DownloadReleaseChecksumManifestAsync(
@@ -3190,7 +3193,10 @@ internal static class ProgramRunner
         }
         finally
         {
-            try { File.Delete(scriptPath); } catch { }
+            if (scriptPath != null)
+                try { File.Delete(scriptPath); } catch { }
+            if (scriptDirectory != null)
+                try { Directory.Delete(scriptDirectory, recursive: true); } catch { }
         }
     }
 

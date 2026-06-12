@@ -337,7 +337,7 @@ internal static class GlobalToolLog
     {
         try
         {
-            Directory.CreateDirectory(directory);
+            DataDirectorySecurity.CreateSensitiveDirectory(directory);
             var probePath = Path.Combine(directory, $".cdidx-write-probe-{Guid.NewGuid():N}.tmp");
             File.WriteAllText(probePath, string.Empty, Encoding.UTF8);
             File.Delete(probePath);

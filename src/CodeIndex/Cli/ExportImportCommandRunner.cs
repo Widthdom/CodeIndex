@@ -238,10 +238,13 @@ internal static class ExportImportCommandRunner
             return WriteExportError(wantsJson, jsonOptions, PhaseParseArgs, "export_archive_overlaps_database", "export archive path must not be the source database or a SQLite sidecar.", "choose a separate archive path, for example `codeindex.cdidx.zip`.", "cdidx export <archive> [--db <path>] [--json]");
         }
 
-        var snapshotPath = Path.Combine(Path.GetTempPath(), $"codeindex-export-{Guid.NewGuid():N}.db");
+        string? snapshotDirectory = null;
+        string? snapshotPath = null;
         var phase = PhaseWriteArchive;
         try
         {
+            snapshotDirectory = DataDirectorySecurity.CreateSensitiveTempDirectory("codeindex-export-").FullName;
+            snapshotPath = Path.Combine(snapshotDirectory, "codeindex.db");
             var outputDirectory = Path.GetDirectoryName(fullOutputPath);
             if (!string.IsNullOrWhiteSpace(outputDirectory))
                 Directory.CreateDirectory(outputDirectory);
@@ -272,8 +275,13 @@ internal static class ExportImportCommandRunner
         }
         finally
         {
-            TryDeleteFile(snapshotPath, "export temporary database");
-            DeleteSqliteSidecars(snapshotPath, "export temporary database sidecar");
+            if (snapshotPath != null)
+            {
+                TryDeleteFile(snapshotPath, "export temporary database");
+                DeleteSqliteSidecars(snapshotPath, "export temporary database sidecar");
+            }
+            if (snapshotDirectory != null)
+                TryDeleteDirectoryIfEmpty(snapshotDirectory, "export temporary directory");
         }
     }
 
@@ -853,6 +861,22 @@ internal static class ExportImportCommandRunner
                 DeleteFileForTesting(path);
             else
                 File.Delete(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            if (!string.IsNullOrWhiteSpace(cleanupDescription))
+                Console.Error.WriteLine($"Warning: failed to delete {cleanupDescription} {ConsoleUi.FormatBoundedValue(path)} ({CommandErrorWriter.FormatSanitizedException(ex)}).");
+        }
+    }
+
+    private static void TryDeleteDirectoryIfEmpty(string path, string? cleanupDescription = null)
+    {
+        try
+        {
+            if (!Directory.Exists(path) || Directory.EnumerateFileSystemEntries(path).Any())
+                return;
+
+            Directory.Delete(path);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or PathTooLongException)
         {
