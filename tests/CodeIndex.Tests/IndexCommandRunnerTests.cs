@@ -7922,13 +7922,13 @@ public class IndexCommandRunnerTests
         var projectRoot = CreateTempProject();
         try
         {
-            var sourcePath = Path.Combine(projectRoot, "package.json");
+            var sourcePath = Path.Combine(projectRoot, "settings.json");
             File.WriteAllText(
                 sourcePath,
                 """
                 {
-                  "scripts": {
-                    "build": "dotnet build"
+                  "features": {
+                    "preview": true
                   }
                 }
                 """);
@@ -7942,8 +7942,8 @@ public class IndexCommandRunnerTests
                 conn.Open();
                 using var cmd = conn.CreateCommand();
                 cmd.CommandText = """
-                    DELETE FROM symbols WHERE file_id = (SELECT id FROM files WHERE path = 'package.json');
-                    DELETE FROM symbol_references WHERE file_id = (SELECT id FROM files WHERE path = 'package.json');
+                    DELETE FROM symbols WHERE file_id = (SELECT id FROM files WHERE path = 'settings.json');
+                    DELETE FROM symbol_references WHERE file_id = (SELECT id FROM files WHERE path = 'settings.json');
                     INSERT OR REPLACE INTO codeindex_meta(key, value) VALUES('symbol_extractor_version_json', '1');
                     """;
                 cmd.ExecuteNonQuery();
@@ -7964,8 +7964,8 @@ public class IndexCommandRunnerTests
                 SELECT COUNT(*)
                 FROM symbols s
                 JOIN files f ON f.id = s.file_id
-                WHERE f.path = 'package.json'
-                  AND s.name = 'scripts.build'
+                WHERE f.path = 'settings.json'
+                  AND s.name = 'features.preview'
                 """;
             Assert.Equal(1L, (long)symbolCmd.ExecuteScalar()!);
         }
