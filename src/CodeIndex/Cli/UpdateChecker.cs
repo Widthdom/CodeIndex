@@ -182,11 +182,14 @@ internal static class UpdateChecker
     {
         var xdgCacheHome = Environment.GetEnvironmentVariable("XDG_CACHE_HOME");
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         var root = !string.IsNullOrWhiteSpace(xdgCacheHome)
             ? Path.Combine(xdgCacheHome, "cdidx")
             : !string.IsNullOrWhiteSpace(home)
                 ? Path.Combine(home, ".cache", "cdidx")
-                : Path.Combine(Path.GetTempPath(), "cdidx");
+                : !string.IsNullOrWhiteSpace(localAppData)
+                    ? Path.Combine(localAppData, "cdidx")
+                    : Path.Combine(Path.GetTempPath(), "cdidx", "cache");
         return Path.Combine(root, "update-check.json");
     }
 
@@ -232,14 +235,14 @@ internal static class UpdateChecker
         {
             var directory = Path.GetDirectoryName(cachePath);
             if (!string.IsNullOrWhiteSpace(directory))
-                Directory.CreateDirectory(directory);
+                DataDirectorySecurity.CreateSensitiveDirectory(directory);
 
             var payload = new
             {
                 checked_at = cache.CheckedAt.UtcDateTime.ToString("O", CultureInfo.InvariantCulture),
                 latest_tag = cache.LatestTag,
             };
-            AtomicFileWriter.WriteJson(cachePath, payload);
+            AtomicFileWriter.WriteJson(cachePath, payload, applyFileMode: DataDirectorySecurity.ApplyPrivateFileMode);
         }
         catch
         {

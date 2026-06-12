@@ -3127,9 +3127,12 @@ internal static class ProgramRunner
             return CommandExitCodes.UsageError;
         }
 
-        var scriptPath = Path.Combine(Path.GetTempPath(), $"cdidx-install-{Guid.NewGuid():N}.sh");
+        string? scriptDirectory = null;
+        string? scriptPath = null;
         try
         {
+            scriptDirectory = DataDirectorySecurity.CreateSensitiveTempDirectory("cdidx-install-").FullName;
+            scriptPath = Path.Combine(scriptDirectory, "install.sh");
             using (var client = UpgradeHttpClientFactory())
             {
                 var checksumManifest = DownloadReleaseChecksumManifestAsync(
@@ -3190,7 +3193,10 @@ internal static class ProgramRunner
         }
         finally
         {
-            try { File.Delete(scriptPath); } catch { }
+            if (scriptPath != null)
+                try { File.Delete(scriptPath); } catch { }
+            if (scriptDirectory != null)
+                try { Directory.Delete(scriptDirectory, recursive: true); } catch { }
         }
     }
 
@@ -3198,13 +3204,27 @@ internal static class ProgramRunner
     {
         var startInfo = new ProcessStartInfo
         {
-            FileName = "bash",
+            FileName = ResolveTrustedBashPath(),
             UseShellExecute = false,
         };
         startInfo.ArgumentList.Add(scriptPath);
         startInfo.ArgumentList.Add(releaseTag);
         startInfo.Environment["CDIDX_INSTALL_DIR"] = installDir;
         return startInfo;
+    }
+
+    internal static string ResolveTrustedBashPath()
+    {
+        if (OperatingSystem.IsWindows())
+            throw new PlatformNotSupportedException("The install.sh upgrade path requires a POSIX bash executable.");
+
+        foreach (var candidate in new[] { "/bin/bash", "/usr/bin/bash" })
+        {
+            if (File.Exists(candidate))
+                return candidate;
+        }
+
+        throw new FileNotFoundException("Could not find a trusted absolute bash path for running install.sh.");
     }
 
     internal static int RunInstallerProcess(
