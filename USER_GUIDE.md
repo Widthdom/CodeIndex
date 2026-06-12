@@ -453,6 +453,7 @@ cdidx unused --lang csharp --exclude-tests
 cdidx unused --kind function --path src/ --limit 50
 cdidx unused --bucket likely_unused_private --min-confidence medium
 cdidx unused --json --count
+cdidx unused --compact --bucket likely_unused_private --min-confidence medium
 cdidx unused --json --by-bucket
 ```
 
@@ -463,6 +464,11 @@ and `bucket_taxonomy` for the `likely_unused_private`,
 `reflection_or_config_suspect` buckets; `--by-bucket` also groups returned
 symbols under those bucket keys. Use `--bucket <name>` to return only one
 bucket, and `--min-confidence <medium|low>` to omit lower-confidence classes.
+JSON output includes `query_context` so applied bucket and confidence filters
+are visible to downstream audit tooling. Use `--compact` for audit summaries
+that keep counts, confidence buckets, taxonomy, and filter context without
+returning the full `symbols` array; add `--by-bucket` only when grouped symbol
+arrays are explicitly needed.
 Public APIs, framework entrypoints, generated hooks, reflection, and
 configuration-based usage can be false positives. C#
 `nameof(...)`, `typeof(...)`, and direct reflection member-name literals such as
@@ -2791,6 +2797,7 @@ cdidx unused --lang csharp --exclude-tests
 cdidx unused --kind function --path src/ --limit 50
 cdidx unused --bucket likely_unused_private --min-confidence medium
 cdidx unused --json --count
+cdidx unused --compact --bucket likely_unused_private --min-confidence medium
 cdidx unused --json --by-bucket
 ```
 
@@ -2800,7 +2807,7 @@ cdidx unused --json --by-bucket
 `summary.by_bucket`、`summary.by_confidence`、`bucket_taxonomy` が含まれます。
 `--by-bucket` は返却された symbols も bucket key ごとに grouped します。
 `--bucket <name>` で単一 bucket だけを返し、`--min-confidence <medium|low>` で
-より低い confidence class を除外できます。Public API、framework entrypoint、generated hook、reflection、config 経由の使用は false positive
+より低い confidence class を除外できます。JSON 出力には `query_context` も含まれるため、audit tooling は適用された bucket と confidence filter を直接確認できます。count、confidence bucket、taxonomy、filter context だけが必要な場合は `--compact` を使い、grouped symbol arrays が明示的に必要な場合だけ `--by-bucket` を追加してください。Public API、framework entrypoint、generated hook、reflection、config 経由の使用は false positive
 になりえます。C# の `nameof(...)`、`typeof(...)`、`GetMethod("Foo")` のような
 直接的な reflection member-name literal は indexed されますが、動的に組み立てられる
 名前は手動確認が必要です。

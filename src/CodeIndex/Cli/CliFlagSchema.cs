@@ -196,7 +196,7 @@ internal static class CliFlagSchema
         "validate", "deps", "impact", "unused", "hotspots", "suggestions", "languages", "db", "report",
     ];
 
-    private static readonly string[] CompactJsonCommands = ["map", "inspect", "outline"];
+    private static readonly string[] CompactJsonCommands = ["map", "inspect", "outline", "unused"];
 
     private static readonly string[] FormatCommands =
     [

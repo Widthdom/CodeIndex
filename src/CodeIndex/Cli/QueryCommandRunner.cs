@@ -5673,6 +5673,12 @@ public static class QueryCommandRunner
                     };
                     AddHotspotFamilyJsonFields(payload, fileHotspotSignal);
                     AddSqlGraphContractJsonFields(payload, effectiveSqlGraphSignal);
+                    payload["query_context"] = BuildQueryContextJson(options, jsonOptions);
+                    if (options.Compact)
+                    {
+                        payload["compact"] = true;
+                        payload["omitted_sections"] = new JsonArray();
+                    }
                     Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
                 else
@@ -5898,6 +5904,12 @@ public static class QueryCommandRunner
                         ["degraded"] = !reader._hasReferencesTable
                     };
                     AddSqlGraphContractJsonFields(payload, effectiveSqlGraphSignal);
+                    payload["query_context"] = BuildQueryContextJson(options, jsonOptions);
+                    if (options.Compact)
+                    {
+                        payload["compact"] = true;
+                        payload["omitted_sections"] = new JsonArray();
+                    }
                     Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
                 else
@@ -5953,7 +5965,7 @@ public static class QueryCommandRunner
 
             if (options.Json)
             {
-                Console.WriteLine(BuildUnusedJsonPayload(results, graphSupported, graphSupportReason, sqlGraphSignal, reader._hasReferencesTable, jsonOptions, byBucket: byBucket));
+                Console.WriteLine(BuildUnusedJsonPayload(results, graphSupported, graphSupportReason, sqlGraphSignal, reader._hasReferencesTable, jsonOptions, options, byBucket: byBucket));
             }
             else
             {
@@ -6070,8 +6082,16 @@ public static class QueryCommandRunner
             ["returned_bucket_counts"] = JsonSerializer.SerializeToNode(BuildUnusedBucketCounts(resultList), CliJsonSerializerContextFactory.Create(jsonOptions).DictionaryStringInt32),
             ["summary"] = BuildUnusedSummaryJson(resultList, jsonOptions),
             ["bucket_taxonomy"] = BuildUnusedBucketTaxonomyJson(),
-            ["symbols"] = JsonSerializer.SerializeToNode(resultList, CliJsonSerializerContextFactory.Create(jsonOptions).ListUnusedSymbolResult)
         };
+        if (queryOptions?.Compact == true)
+        {
+            payload["compact"] = true;
+            payload["omitted_sections"] = new JsonArray(JsonValue.Create("symbols"));
+        }
+        else
+        {
+            payload["symbols"] = JsonSerializer.SerializeToNode(resultList, CliJsonSerializerContextFactory.Create(jsonOptions).ListUnusedSymbolResult);
+        }
         if (byBucket)
             payload["by_bucket"] = BuildUnusedResultsByBucketJson(resultList, jsonOptions);
 

@@ -726,6 +726,38 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunUnused_CompactJsonOmitsSymbolBodiesAndShowsFilters_Issue3395()
+    {
+        var (projectRoot, dbPath) = CreateUnusedFixtureDb();
+        try
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--compact", "--lang", "csharp", "--bucket", "likely_unused_private", "--min-confidence", "medium"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var query = json.GetProperty("query_context");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(json.GetProperty("compact").GetBoolean());
+            Assert.False(json.TryGetProperty("symbols", out _));
+            Assert.Contains(json.GetProperty("omitted_sections").EnumerateArray(), section => section.GetString() == "symbols");
+            Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("likely_unused_private").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("by_confidence").GetProperty("medium").GetInt32());
+            Assert.Equal("medium", json.GetProperty("bucket_taxonomy").GetProperty("likely_unused_private").GetProperty("confidence").GetString());
+            Assert.Equal("csharp", query.GetProperty("lang").GetString());
+            Assert.Equal("likely_unused_private", query.GetProperty("bucket").GetString());
+            Assert.Equal("medium", query.GetProperty("min_confidence").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunUnused_WithJsonBucketFilterReturnsOnlyRequestedBucket()
     {
         var (projectRoot, dbPath) = CreateUnusedFixtureDb();
@@ -786,16 +818,19 @@ public partial class QueryCommandRunnerTests
         try
         {
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
-                ["--db", dbPath, "--json", "--lang", "csharp", "--bucket", "public_or_exported_no_refs", "--count"],
+                ["--db", dbPath, "--json", "--lang", "csharp", "--bucket", "public_or_exported_no_refs", "--min-confidence", "low", "--count"],
                 _jsonOptions));
 
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
+            var query = json.GetProperty("query_context");
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(6, json.GetProperty("count").GetInt32());
             Assert.Equal(1, json.GetProperty("files").GetInt32());
+            Assert.Equal("public_or_exported_no_refs", query.GetProperty("bucket").GetString());
+            Assert.Equal("low", query.GetProperty("min_confidence").GetString());
         }
         finally
         {
