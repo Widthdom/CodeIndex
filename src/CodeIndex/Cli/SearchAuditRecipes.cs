@@ -16,6 +16,7 @@ internal static class SearchAuditRecipes
     private const int MaxExternalFalsePositiveGuidanceLength = 512;
     private const int MaxExternalLabelCount = 16;
     private const int MaxExternalLabelLength = 64;
+    private const int MaxRecipeDiagnosticCount = 64;
     private const int MaxRecipeDiagnosticLength = 512;
 
     private static readonly List<SearchAuditRecipe> BuiltInRecipes =
@@ -312,6 +313,13 @@ internal static class SearchAuditRecipes
 
     private static void AddDiagnostic(List<string> diagnostics, string message)
     {
+        if (diagnostics.Count >= MaxRecipeDiagnosticCount)
+        {
+            if (diagnostics.Count == MaxRecipeDiagnosticCount)
+                diagnostics.Add($"recipe source diagnostics were truncated after {MaxRecipeDiagnosticCount} entries.");
+            return;
+        }
+
         if (message.Length > MaxRecipeDiagnosticLength)
             message = message[..MaxRecipeDiagnosticLength].TrimEnd() + " ... [truncated]";
         diagnostics.Add(message);

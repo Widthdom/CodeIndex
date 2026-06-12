@@ -4509,6 +4509,29 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_Search_ListRecipesBoundsConfiguredSourceDiagnostics_Issue3545()
+    {
+        var recipePaths = new List<string>();
+        for (var i = 0; i < 8; i++)
+        {
+            var recipePath = Path.Combine(_projectRoot, $"invalid-search-recipes-{i}.json");
+            File.WriteAllText(recipePath, "[" + string.Join(",", Enumerable.Repeat("42", 40)) + "]");
+            recipePaths.Add(recipePath);
+        }
+
+        using var env = EnvironmentVariableScope.Capture("CDIDX_SEARCH_RECIPE_PATHS");
+        env.Set("CDIDX_SEARCH_RECIPE_PATHS", string.Join(Path.PathSeparator, recipePaths));
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"listRecipes":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Null(response["error"]);
+        var structured = response["result"]!["structuredContent"]!;
+        var diagnostics = structured["recipe_source_diagnostics"]!.AsArray();
+        Assert.True(diagnostics.Count <= 65);
+        Assert.Contains(diagnostics, diagnostic => diagnostic!.GetValue<string>().Contains("truncated after 64 entries", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void ToolsCall_Search_AcceptsScalarExcludePaths_Issue3538()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"App","excludePaths":"src/app.cs"}}}""")!;
