@@ -1,5 +1,6 @@
 using System.IO.Compression;
 using System.Text;
+using System.Text.Json;
 
 namespace CodeIndex.PackageNormalize;
 
@@ -7,21 +8,180 @@ public static class PackageNormalizeCli
 {
     public static int Run(string[] args)
     {
-        if (args.Length == 0 || args.Any(arg => arg is "-h" or "--help"))
+        if (args.Any(arg => arg is "-h" or "--help"))
         {
-            Console.Error.WriteLine("Usage: dotnet run --project tools/CodeIndex.PackageNormalize -- <package.nupkg|package.snupkg> [...]");
-            return args.Length == 0 ? 1 : 0;
+            WriteUsage();
+            return 0;
         }
 
-        foreach (var packagePath in args)
+        if (!PackageNormalizeOptions.TryParse(args, out var options, out var parseError))
         {
-            PackageCorePropertiesNormalizer.NormalizePackage(packagePath);
-            Console.WriteLine($"Normalized {packagePath}");
+            Console.Error.WriteLine($"Error: {parseError}");
+            WriteUsage();
+            return 1;
         }
 
-        return 0;
+        var results = new List<PackageNormalizePackageResult>();
+        var summary = new PackageNormalizeSummary();
+
+        foreach (var packagePath in options.PackagePaths)
+        {
+            summary.Inspected++;
+            try
+            {
+                if (options.DryRun)
+                {
+                    var inspection = PackageCorePropertiesNormalizer.InspectPackage(packagePath);
+                    if (inspection.NeedsNormalization)
+                    {
+                        summary.Skipped++;
+                        results.Add(new PackageNormalizePackageResult(packagePath, "would_normalize", null));
+                        if (!options.Json)
+                            Console.WriteLine($"Would normalize {packagePath}");
+                    }
+                    else
+                    {
+                        summary.Unchanged++;
+                        results.Add(new PackageNormalizePackageResult(packagePath, "unchanged", null));
+                        if (!options.Json)
+                            Console.WriteLine($"Unchanged {packagePath}");
+                    }
+                }
+                else
+                {
+                    PackageCorePropertiesNormalizer.NormalizePackage(packagePath);
+                    summary.Normalized++;
+                    results.Add(new PackageNormalizePackageResult(packagePath, "normalized", null));
+                    if (!options.Json)
+                        Console.WriteLine($"Normalized {packagePath}");
+                }
+            }
+            catch (Exception ex)
+            {
+                summary.Failed++;
+                results.Add(new PackageNormalizePackageResult(packagePath, "failed", ex.Message));
+                if (!options.Json)
+                    Console.Error.WriteLine($"Failed {packagePath}: {ex.Message}");
+
+                if (!options.ContinueOnError)
+                    break;
+            }
+        }
+
+        if (options.Json)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(
+                new PackageNormalizeJsonResult(
+                    options.DryRun,
+                    options.ContinueOnError,
+                    summary.Inspected,
+                    summary.Normalized,
+                    summary.Unchanged,
+                    summary.Failed,
+                    summary.Skipped,
+                    results),
+                PackageNormalizeJsonContext.Default.PackageNormalizeJsonResult));
+        }
+        else if (options.Summary)
+        {
+            Console.WriteLine(
+                $"Summary: inspected={summary.Inspected} normalized={summary.Normalized} unchanged={summary.Unchanged} failed={summary.Failed} skipped={summary.Skipped}");
+        }
+
+        return summary.Failed == 0 ? 0 : 1;
+    }
+
+    private static void WriteUsage()
+    {
+        Console.Error.WriteLine("Usage: dotnet run --project tools/CodeIndex.PackageNormalize -- [--dry-run|--check] [--summary] [--json] [--continue-on-error] <package.nupkg|package.snupkg> [...]");
     }
 }
+
+internal sealed class PackageNormalizeOptions
+{
+    private PackageNormalizeOptions(bool dryRun, bool summary, bool json, bool continueOnError, IReadOnlyList<string> packagePaths)
+    {
+        DryRun = dryRun;
+        Summary = summary;
+        Json = json;
+        ContinueOnError = continueOnError;
+        PackagePaths = packagePaths;
+    }
+
+    internal bool DryRun { get; }
+    internal bool Summary { get; }
+    internal bool Json { get; }
+    internal bool ContinueOnError { get; }
+    internal IReadOnlyList<string> PackagePaths { get; }
+
+    internal static bool TryParse(string[] args, out PackageNormalizeOptions options, out string error)
+    {
+        var dryRun = false;
+        var summary = false;
+        var json = false;
+        var continueOnError = false;
+        var packagePaths = new List<string>();
+
+        foreach (var arg in args)
+        {
+            switch (arg)
+            {
+                case "--dry-run":
+                case "--check":
+                    dryRun = true;
+                    break;
+                case "--summary":
+                    summary = true;
+                    break;
+                case "--json":
+                    json = true;
+                    break;
+                case "--continue-on-error":
+                    continueOnError = true;
+                    break;
+                default:
+                    if (arg.Length > 0 && arg[0] == '-')
+                    {
+                        options = null!;
+                        error = $"unknown option: {arg}";
+                        return false;
+                    }
+
+                    packagePaths.Add(arg);
+                    break;
+            }
+        }
+
+        if (packagePaths.Count == 0)
+        {
+            options = null!;
+            error = "at least one package path is required.";
+            return false;
+        }
+
+        options = new PackageNormalizeOptions(dryRun, summary, json, continueOnError, packagePaths);
+        error = string.Empty;
+        return true;
+    }
+}
+
+internal sealed record PackageNormalizePackageResult(
+    [property: System.Text.Json.Serialization.JsonPropertyName("path")] string Path,
+    [property: System.Text.Json.Serialization.JsonPropertyName("status")] string Status,
+    [property: System.Text.Json.Serialization.JsonPropertyName("error")] string? Error);
+
+internal sealed record PackageNormalizeJsonResult(
+    [property: System.Text.Json.Serialization.JsonPropertyName("dry_run")] bool DryRun,
+    [property: System.Text.Json.Serialization.JsonPropertyName("continue_on_error")] bool ContinueOnError,
+    [property: System.Text.Json.Serialization.JsonPropertyName("inspected")] int Inspected,
+    [property: System.Text.Json.Serialization.JsonPropertyName("normalized")] int Normalized,
+    [property: System.Text.Json.Serialization.JsonPropertyName("unchanged")] int Unchanged,
+    [property: System.Text.Json.Serialization.JsonPropertyName("failed")] int Failed,
+    [property: System.Text.Json.Serialization.JsonPropertyName("skipped")] int Skipped,
+    [property: System.Text.Json.Serialization.JsonPropertyName("packages")] IReadOnlyList<PackageNormalizePackageResult> Packages);
+
+[System.Text.Json.Serialization.JsonSerializable(typeof(PackageNormalizeJsonResult))]
+internal sealed partial class PackageNormalizeJsonContext : System.Text.Json.Serialization.JsonSerializerContext;
 
 public static class PackageCorePropertiesNormalizer
 {
@@ -96,6 +256,27 @@ public static class PackageCorePropertiesNormalizer
             if (!completed)
                 TryDeleteFile(tempPath);
         }
+    }
+
+    internal static PackageNormalizeInspection InspectPackage(string packagePath)
+    {
+        return InspectPackage(packagePath, PackageNormalizeLimits.Default);
+    }
+
+    internal static PackageNormalizeInspection InspectPackage(string packagePath, PackageNormalizeLimits limits)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(packagePath);
+        limits.Validate();
+
+        var fullPath = Path.GetFullPath(packagePath);
+        using var sourceStream = File.Open(fullPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        using var sourceArchive = new ZipArchive(sourceStream, ZipArchiveMode.Read, leaveOpen: false);
+        var originalCorePropertiesPath = ValidateSourceArchive(sourceArchive, packagePath, limits);
+        ValidateEntryNamesBeforeRewrite(sourceArchive, originalCorePropertiesPath);
+        var needsNormalization = originalCorePropertiesPath != CanonicalCorePropertiesPath
+            || XmlReferencesNeedRewrite(sourceArchive, originalCorePropertiesPath, limits);
+
+        return new PackageNormalizeInspection(fullPath, needsNormalization, originalCorePropertiesPath);
     }
 
     private static string ValidateSourceArchive(ZipArchive sourceArchive, string packagePath, PackageNormalizeLimits limits)
@@ -377,6 +558,27 @@ public static class PackageCorePropertiesNormalizer
             || entryName.EndsWith(".rels", StringComparison.Ordinal);
     }
 
+    private static bool XmlReferencesNeedRewrite(
+        ZipArchive sourceArchive,
+        string originalCorePropertiesPath,
+        PackageNormalizeLimits limits)
+    {
+        var readBudget = new PackageNormalizeReadBudget(limits);
+        foreach (var sourceEntry in sourceArchive.Entries)
+        {
+            if (!NeedsXmlReferenceRewrite(sourceEntry.FullName))
+                continue;
+
+            using var rawSourceEntryStream = sourceEntry.Open();
+            using var sourceEntryStream = new BudgetedEntryReadStream(rawSourceEntryStream, sourceEntry, readBudget);
+            var content = ReadXmlEntryText(sourceEntry, sourceEntryStream, limits);
+            if (RewriteCorePropertiesReferences(content, originalCorePropertiesPath) != content)
+                return true;
+        }
+
+        return false;
+    }
+
     private static string RewriteCorePropertiesReferences(string content, string originalCorePropertiesPath)
     {
         var canonical = CanonicalCorePropertiesPath;
@@ -384,6 +586,20 @@ public static class PackageCorePropertiesNormalizer
             .Replace(originalCorePropertiesPath, canonical, StringComparison.Ordinal)
             .Replace("/" + originalCorePropertiesPath, "/" + canonical, StringComparison.Ordinal);
     }
+}
+
+internal readonly record struct PackageNormalizeInspection(
+    string PackagePath,
+    bool NeedsNormalization,
+    string OriginalCorePropertiesPath);
+
+internal sealed class PackageNormalizeSummary
+{
+    internal int Inspected { get; set; }
+    internal int Normalized { get; set; }
+    internal int Unchanged { get; set; }
+    internal int Failed { get; set; }
+    internal int Skipped { get; set; }
 }
 
 internal readonly record struct PackageNormalizeLimits(

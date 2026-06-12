@@ -19,20 +19,6 @@ public class McpToolContractTests
         ("suggest_improvement", "evidence_paths"),
     ];
 
-    private static readonly HashSet<string> SpecializedArrayValidatedArguments = new(StringComparer.Ordinal)
-    {
-        "excludePaths",
-        "names",
-        "sections",
-    };
-
-    private static readonly HashSet<string> SpecializedStringOrArrayValidatedArguments = new(StringComparer.Ordinal)
-    {
-        "commits",
-        "changedBetween",
-        "files",
-    };
-
     [Fact]
     public void ToolsList_AdvertisedInputPropertiesMatchArgumentAllowlist_Issue3199()
     {
@@ -78,30 +64,6 @@ public class McpToolContractTests
                 if (schemaType == null)
                 {
                     failures.Add($"{toolName}.{argumentName}: unsupported schema shape");
-                    continue;
-                }
-
-                if (SpecializedArrayValidatedArguments.Contains(argumentName))
-                {
-                    if (schemaType != "array")
-                    {
-                        failures.Add(
-                            $"{toolName}.{argumentName}: schema={schemaType}; "
-                            + "specialized_list_validator=array");
-                    }
-
-                    continue;
-                }
-
-                if (SpecializedStringOrArrayValidatedArguments.Contains(argumentName))
-                {
-                    if (schemaType != "string_or_array")
-                    {
-                        failures.Add(
-                            $"{toolName}.{argumentName}: schema={schemaType}; "
-                            + "specialized_list_validator=string_or_array");
-                    }
-
                     continue;
                 }
 
@@ -167,13 +129,45 @@ public class McpToolContractTests
         Assert.True(mapProperties.ContainsKey("sections"));
         Assert.Contains("sections", allowed);
         Assert.Equal("array", ExpectedTypeFromSchema(mapProperties["sections"]));
-        Assert.Contains("sections", SpecializedArrayValidatedArguments);
-        Assert.Equal((false, string.Empty), TryGetExpectedJsonType("map", "sections"));
+        Assert.Equal("array", mapProperties["sections"]["x-expectedType"]!.GetValue<string>());
+        Assert.Equal((true, "array"), TryGetExpectedJsonType("map", "sections"));
 
         Assert.True(mapProperties.ContainsKey("depth"));
         Assert.Contains("depth", allowed);
         Assert.Equal("integer", ExpectedTypeFromSchema(mapProperties["depth"]));
         Assert.Equal((true, "integer"), TryGetExpectedJsonType("map", "depth"));
+    }
+
+    [Fact]
+    public void ToolsList_CommonListAndAliasMetadata_AreAdvertised_Issue3538()
+    {
+        var advertisedSchemas = GetAdvertisedToolSchemas();
+
+        foreach (var toolName in new[] { "search", "definition", "references", "callers", "callees", "symbols", "files", "map", "analyze_symbol", "deps", "impact_analysis", "validate", "unused_symbols", "symbol_hotspots" })
+        {
+            var excludePaths = advertisedSchemas[toolName]["excludePaths"];
+            Assert.Equal("string_or_array", ExpectedTypeFromSchema(excludePaths));
+            Assert.Equal("string_or_array", excludePaths["x-expectedType"]!.GetValue<string>());
+            Assert.Equal((true, "string_or_array"), TryGetExpectedJsonType(toolName, "excludePaths"));
+        }
+
+        var symbols = advertisedSchemas["symbols"];
+        Assert.Equal("array", ExpectedTypeFromSchema(symbols["names"]));
+        Assert.Equal("array", symbols["names"]["x-expectedType"]!.GetValue<string>());
+        Assert.Equal((true, "array"), TryGetExpectedJsonType("symbols", "names"));
+
+        var references = advertisedSchemas["references"];
+        Assert.Equal("boolean", ExpectedTypeFromSchema(references["lspCompatible"]));
+        Assert.Equal("boolean", references["lspCompatible"]["x-expectedType"]!.GetValue<string>());
+        Assert.Equal("lsp_compatible", references["lspCompatible"]["x-aliasOf"]!.GetValue<string>());
+        Assert.Contains("lspCompatible", references["lsp_compatible"]["x-aliases"]!.AsArray().Select(alias => alias!.GetValue<string>()));
+
+        Assert.True(references["exact"]["deprecated"]!.GetValue<bool>());
+        Assert.Equal("exactName", references["exact"]["x-aliasOf"]!.GetValue<string>());
+
+        var impact = advertisedSchemas["impact_analysis"];
+        Assert.True(impact["maxDepth"]["deprecated"]!.GetValue<bool>());
+        Assert.Equal("maxHops", impact["maxDepth"]["x-aliasOf"]!.GetValue<string>());
     }
 
     [Fact]

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Runtime.Versioning;
@@ -309,6 +310,102 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void SymbolExtractionWorker_InvalidRequestJsonDoesNotEchoParserMessage_Issue3425()
+    {
+        const string secret = "SECRET_SYMBOL_WORKER_3425";
+        using var input = new StringReader("{\"Content\":\"" + secret + "\",\n");
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        var handled = SymbolExtractionWorker.TryRunCommand(
+            [SymbolExtractionWorker.CommandName],
+            input,
+            output,
+            error,
+            out var exitCode);
+
+        Assert.True(handled);
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, error.ToString());
+        using var document = JsonDocument.Parse(output.ToString());
+        var workerError = document.RootElement.GetProperty("WorkerError").GetString();
+        Assert.Equal("worker_protocol_error: JsonException", workerError);
+        Assert.DoesNotContain(secret, output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SymbolExtractionWorker_OversizedRequestLineReturnsProtocolError_Issue3506()
+    {
+        using var input = new StringReader("abcdef\n");
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        var handled = SymbolExtractionWorker.TryRunCommand(
+            [SymbolExtractionWorker.CommandName],
+            input,
+            output,
+            error,
+            out var exitCode,
+            maxProtocolLineCharacters: 5,
+            maxProtocolLineUtf8Bytes: 100);
+
+        Assert.True(handled);
+        Assert.Equal(1, exitCode);
+        Assert.Equal(string.Empty, error.ToString());
+        using var document = JsonDocument.Parse(output.ToString());
+        var workerError = document.RootElement.GetProperty("WorkerError").GetString();
+        Assert.Equal("worker_protocol_error: BoundedLineLengthException", workerError);
+    }
+
+    [Fact]
+    public void PostExtractionHookCallbackWorker_InvalidRequestJsonDoesNotEchoParserMessage_Issue3425()
+    {
+        const string secret = "SECRET_HOOK_WORKER_3425";
+        using var input = new StringReader("{\"Callback\":\"" + secret + "\",\n");
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        var handled = PostExtractionHookCallbackWorker.TryRunCommand(
+            [PostExtractionHookCallbackWorker.CommandName, "/tmp/demo-hook.dll", "Demo.Hook"],
+            input,
+            output,
+            error,
+            out var exitCode);
+
+        Assert.True(handled);
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, error.ToString());
+        using var document = JsonDocument.Parse(output.ToString());
+        var workerError = document.RootElement.GetProperty("WorkerError").GetString();
+        Assert.Equal("worker_protocol_error: JsonException", workerError);
+        Assert.DoesNotContain(secret, output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PostExtractionHookCallbackWorker_OversizedRequestLineReturnsProtocolError_Issue3506()
+    {
+        using var input = new StringReader("abcdef\n");
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        var handled = PostExtractionHookCallbackWorker.TryRunCommand(
+            [PostExtractionHookCallbackWorker.CommandName, "/tmp/demo-hook.dll", "Demo.Hook"],
+            input,
+            output,
+            error,
+            out var exitCode,
+            maxProtocolLineCharacters: 5,
+            maxProtocolLineUtf8Bytes: 100);
+
+        Assert.True(handled);
+        Assert.Equal(1, exitCode);
+        Assert.Equal(string.Empty, error.ToString());
+        using var document = JsonDocument.Parse(output.ToString());
+        var workerError = document.RootElement.GetProperty("WorkerError").GetString();
+        Assert.Equal("worker_protocol_error: BoundedLineLengthException", workerError);
+    }
+
+    [Fact]
     public void SymbolExtractionWorker_StartInfo_UsesCurrentCdidxExecutableWhenAvailable()
     {
         var currentProcessPath = Path.Combine(Path.GetTempPath(), OperatingSystem.IsWindows() ? "cdidx.exe" : "cdidx");
@@ -321,7 +418,13 @@ public class IndexCommandRunnerTests
 
         Assert.True(created, error);
         Assert.Equal(currentProcessPath, startInfo.FileName);
-        Assert.Equal([SymbolExtractionWorker.CommandName], startInfo.ArgumentList);
+        Assert.Equal(
+            [
+                SymbolExtractionWorker.CommandName,
+                "--protocol-max-line-bytes",
+                WorkerProtocolLineLimits.MaxLineUtf8Bytes.ToString(CultureInfo.InvariantCulture),
+            ],
+            startInfo.ArgumentList);
         Assert.True(startInfo.RedirectStandardInput);
         Assert.True(startInfo.RedirectStandardOutput);
         Assert.True(startInfo.RedirectStandardError);
@@ -341,7 +444,39 @@ public class IndexCommandRunnerTests
 
         Assert.True(created, error);
         Assert.NotEqual(currentProcessPath, startInfo.FileName);
-        Assert.Equal([runnerAssemblyPath, SymbolExtractionWorker.CommandName], startInfo.ArgumentList);
+        Assert.Equal(
+            [
+                runnerAssemblyPath,
+                SymbolExtractionWorker.CommandName,
+                "--protocol-max-line-bytes",
+                WorkerProtocolLineLimits.MaxLineUtf8Bytes.ToString(CultureInfo.InvariantCulture),
+            ],
+            startInfo.ArgumentList);
+    }
+
+    [Fact]
+    public void SymbolExtractionWorker_StartInfo_RaisesProtocolLimitForLargeFileCap_Issue3506()
+    {
+        const long maxFileSizeBytes = 50L * 1024L * 1024L;
+        var protocolLimit = WorkerProtocolLineLimits.ResolveForSourceFileBytes(maxFileSizeBytes);
+        var currentProcessPath = Path.Combine(Path.GetTempPath(), OperatingSystem.IsWindows() ? "cdidx.exe" : "cdidx");
+
+        var created = SymbolExtractionWorker.TryCreateStartInfo(
+            currentProcessPath,
+            runnerAssemblyPath: string.Empty,
+            protocolLimit,
+            out var startInfo,
+            out var error);
+
+        Assert.True(created, error);
+        Assert.True(protocolLimit > WorkerProtocolLineLimits.MaxLineUtf8Bytes);
+        Assert.Equal(
+            [
+                SymbolExtractionWorker.CommandName,
+                "--protocol-max-line-bytes",
+                protocolLimit.ToString(CultureInfo.InvariantCulture),
+            ],
+            startInfo.ArgumentList);
     }
 
     [Fact]
@@ -362,7 +497,15 @@ public class IndexCommandRunnerTests
 
         Assert.True(created, error);
         Assert.Equal(currentProcessPath, startInfo.FileName);
-        Assert.Equal([PostExtractionHookCallbackWorker.CommandName, hook.AssemblyPath, hook.TypeName], startInfo.ArgumentList);
+        Assert.Equal(
+            [
+                PostExtractionHookCallbackWorker.CommandName,
+                hook.AssemblyPath,
+                hook.TypeName,
+                "--protocol-max-line-bytes",
+                WorkerProtocolLineLimits.MaxLineUtf8Bytes.ToString(CultureInfo.InvariantCulture),
+            ],
+            startInfo.ArgumentList);
         Assert.True(startInfo.RedirectStandardInput);
         Assert.True(startInfo.RedirectStandardOutput);
         Assert.True(startInfo.RedirectStandardError);
@@ -387,7 +530,48 @@ public class IndexCommandRunnerTests
 
         Assert.True(created, error);
         Assert.NotEqual(currentProcessPath, startInfo.FileName);
-        Assert.Equal([runnerAssemblyPath, PostExtractionHookCallbackWorker.CommandName, hook.AssemblyPath, hook.TypeName], startInfo.ArgumentList);
+        Assert.Equal(
+            [
+                runnerAssemblyPath,
+                PostExtractionHookCallbackWorker.CommandName,
+                hook.AssemblyPath,
+                hook.TypeName,
+                "--protocol-max-line-bytes",
+                WorkerProtocolLineLimits.MaxLineUtf8Bytes.ToString(CultureInfo.InvariantCulture),
+            ],
+            startInfo.ArgumentList);
+    }
+
+    [Fact]
+    public void PostExtractionHookCallbackWorker_StartInfo_RaisesProtocolLimitForLargeFileCap_Issue3506()
+    {
+        const long maxFileSizeBytes = 50L * 1024L * 1024L;
+        var protocolLimit = WorkerProtocolLineLimits.ResolveForSourceFileBytes(maxFileSizeBytes);
+        var hook = new PostExtractionHookInfo(
+            "demo",
+            Path.Combine(Path.GetTempPath(), "demo-hook.dll"),
+            "Demo.Hook");
+        var currentProcessPath = Path.Combine(Path.GetTempPath(), OperatingSystem.IsWindows() ? "cdidx.exe" : "cdidx");
+
+        var created = PostExtractionHookCallbackWorker.TryCreateStartInfo(
+            hook,
+            currentProcessPath,
+            runnerAssemblyPath: string.Empty,
+            protocolLimit,
+            out var startInfo,
+            out var error);
+
+        Assert.True(created, error);
+        Assert.True(protocolLimit > WorkerProtocolLineLimits.MaxLineUtf8Bytes);
+        Assert.Equal(
+            [
+                PostExtractionHookCallbackWorker.CommandName,
+                hook.AssemblyPath,
+                hook.TypeName,
+                "--protocol-max-line-bytes",
+                protocolLimit.ToString(CultureInfo.InvariantCulture),
+            ],
+            startInfo.ArgumentList);
     }
 
     [SkipOnMacOsArm64Fact]
@@ -2630,6 +2814,19 @@ public class IndexCommandRunnerTests
                 .Select(path => path.GetString())
                 .ToArray();
             Assert.Equal(["data.unmapped", "notes.mystery"], paths);
+            var extensionCounts = statusJson.GetProperty("unknown_extension_extension_counts");
+            Assert.Equal(1, extensionCounts.GetProperty(".mystery").GetInt64());
+            Assert.Equal(1, extensionCounts.GetProperty(".unmapped").GetInt64());
+            var categoryCounts = statusJson.GetProperty("unknown_extension_category_counts");
+            Assert.Equal(2, categoryCounts.GetProperty("language_support_candidate").GetInt64());
+            var groups = statusJson.GetProperty("unknown_extension_groups").EnumerateArray().ToArray();
+            Assert.Equal(2, groups.Length);
+            Assert.All(groups, group =>
+            {
+                Assert.Equal("language_support_candidate", group.GetProperty("category").GetString());
+                Assert.Equal("language_support", group.GetProperty("recommended_action").GetString());
+                Assert.Equal(1, group.GetProperty("count").GetInt64());
+            });
         }
         finally
         {
@@ -2987,8 +3184,8 @@ public class IndexCommandRunnerTests
                 var writer = new DbWriter(db.Connection);
                 var fileId = writer.UpsertFile(new FileRecord
                 {
-                    Path = "docs/readme.md",
-                    Lang = "markdown",
+                    Path = "docs/readme.toml",
+                    Lang = "toml",
                     Size = 12,
                     Lines = 1,
                     Modified = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
@@ -3233,8 +3430,8 @@ public class IndexCommandRunnerTests
                 var writer = new DbWriter(db.Connection);
                 var fileId = writer.UpsertFile(new FileRecord
                 {
-                    Path = "docs/readme.md",
-                    Lang = "markdown",
+                    Path = "docs/readme.toml",
+                    Lang = "toml",
                     Size = 12,
                     Lines = 1,
                     Modified = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
@@ -7720,6 +7917,65 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FilesUpdate_ReindexesUnchangedJsonFileWhenExpandedLanguageExtractorVersionChanged()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "settings.json");
+            File.WriteAllText(
+                sourcePath,
+                """
+                {
+                  "features": {
+                    "preview": true
+                  }
+                }
+                """);
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var conn = OpenNonPoolingConnection(dbPath))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = """
+                    DELETE FROM symbols WHERE file_id = (SELECT id FROM files WHERE path = 'settings.json');
+                    DELETE FROM symbol_references WHERE file_id = (SELECT id FROM files WHERE path = 'settings.json');
+                    INSERT OR REPLACE INTO codeindex_meta(key, value) VALUES('symbol_extractor_version_json', '1');
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", sourcePath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("skipped").GetInt32());
+
+            using var verify = OpenNonPoolingConnection(dbPath);
+            verify.Open();
+
+            using var symbolCmd = verify.CreateCommand();
+            symbolCmd.CommandText = """
+                SELECT COUNT(*)
+                FROM symbols s
+                JOIN files f ON f.id = s.file_id
+                WHERE f.path = 'settings.json'
+                  AND s.name = 'features.preview'
+                """;
+            Assert.Equal(1L, (long)symbolCmd.ExecuteScalar()!);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_FullScan_RestampsExtractorVersionWhenOnlyStaleLanguageWasReindexed()
     {
         var projectRoot = CreateTempProject();
@@ -8305,6 +8561,226 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_DryRun_WithFiles_ReportsProjectedUpdatesDeletesAndUnknowns()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "changed.cs"), "public class Changed { }\n");
+            File.WriteAllText(Path.Combine(projectRoot, "deleted.cs"), "public class Deleted { }\n");
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            Assert.Equal(2, CountRows(dbPath, "files"));
+
+            File.AppendAllText(Path.Combine(projectRoot, "changed.cs"), "public class ChangedAgain { }\n");
+            File.Delete(Path.Combine(projectRoot, "deleted.cs"));
+            File.WriteAllText(Path.Combine(projectRoot, "notes.unknownext"), "plain text\n");
+
+            var (exitCode, json) = RunAndCaptureJson([
+                projectRoot,
+                "--files",
+                "changed.cs",
+                "deleted.cs",
+                "notes.unknownext",
+                "--dry-run",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("dry_run", json.GetProperty("status").GetString());
+            Assert.True(json.GetProperty("estimates").GetBoolean());
+            Assert.Equal(1, json.GetProperty("files_total").GetInt32());
+            Assert.Equal(1, json.GetProperty("projected_file_updates").GetInt32());
+            Assert.Equal(1, json.GetProperty("projected_file_deletes").GetInt32());
+            Assert.Equal(0, json.GetProperty("projected_file_purges").GetInt32());
+            Assert.Equal(1, json.GetProperty("unknown_extension_total").GetInt32());
+            Assert.Equal(0, json.GetProperty("unsupported_total").GetInt32());
+            var mutations = json.GetProperty("estimated_table_mutations");
+            Assert.True(mutations.GetProperty("files").GetInt64() >= 2);
+            Assert.True(mutations.GetProperty("chunks").GetInt64() > 0);
+            Assert.True(mutations.GetProperty("symbols").GetInt64() > 0);
+            Assert.True(mutations.TryGetProperty("file_issues", out _));
+            Assert.Equal(2, CountRows(dbPath, "files"));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_WithFiles_NormalizesUnicodeDbPathForEstimates()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var nfdFileName = "cafe\u0301.py";
+            File.WriteAllText(Path.Combine(projectRoot, nfdFileName), "print('hello')\n");
+
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--files", nfdFileName, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            Assert.Equal(1, CountRows(dbPath, "files"));
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", nfdFileName, "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("dry_run", json.GetProperty("status").GetString());
+            Assert.Equal(1, json.GetProperty("files_total").GetInt32());
+            Assert.Equal(1, json.GetProperty("projected_file_updates").GetInt32());
+            Assert.Equal(0, json.GetProperty("projected_file_deletes").GetInt32());
+            Assert.Equal(0, json.GetProperty("projected_file_purges").GetInt32());
+            Assert.True(json.GetProperty("estimated_table_mutations").GetProperty("chunks").GetInt64() > 0);
+            Assert.Equal(1, CountRows(dbPath, "files"));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_WithFiles_ReportsChecksumRenamePurgeWithoutWriting()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var oldPath = Path.Combine(projectRoot, "old.py");
+            var newPath = Path.Combine(projectRoot, "new.py");
+            File.WriteAllText(oldPath, "print('hello')\n");
+
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--files", "old.py", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            Assert.Equal(1, CountRows(dbPath, "files"));
+
+            File.Move(oldPath, newPath);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "new.py", "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("dry_run", json.GetProperty("status").GetString());
+            Assert.Equal(1, json.GetProperty("files_total").GetInt32());
+            Assert.Equal(1, json.GetProperty("projected_file_updates").GetInt32());
+            Assert.Equal(0, json.GetProperty("projected_file_deletes").GetInt32());
+            Assert.Equal(1, json.GetProperty("projected_file_purges").GetInt32());
+            Assert.True(json.GetProperty("estimated_table_mutations").GetProperty("files").GetInt64() >= 2);
+            Assert.Equal(1, CountRows(dbPath, "files"));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_WithFiles_ReportsSupportedExtensionRenamePurgeWithoutWriting()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var oldPath = Path.Combine(projectRoot, "foo.py");
+            var newPath = Path.Combine(projectRoot, "foo.md");
+            File.WriteAllText(oldPath, "print('hello')\n");
+
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--files", "foo.py", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            Assert.Equal(1, CountRows(dbPath, "files"));
+
+            File.Move(oldPath, newPath);
+            File.AppendAllText(newPath, "# Updated during rename\n");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "foo.md", "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("dry_run", json.GetProperty("status").GetString());
+            Assert.Equal(1, json.GetProperty("files_total").GetInt32());
+            Assert.Equal(1, json.GetProperty("projected_file_updates").GetInt32());
+            Assert.Equal(0, json.GetProperty("projected_file_deletes").GetInt32());
+            Assert.Equal(1, json.GetProperty("projected_file_purges").GetInt32());
+            Assert.True(json.GetProperty("estimated_table_mutations").GetProperty("files").GetInt64() >= 2);
+            Assert.Equal(1, CountRows(dbPath, "files"));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_WithFiles_ReportsUnsupportedExtensionRenamePurgeWithoutWriting()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var oldPath = Path.Combine(projectRoot, "foo.py");
+            var newPath = Path.Combine(projectRoot, "foo.bin");
+            File.WriteAllText(oldPath, "print('hello')\n");
+
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--files", "foo.py", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            Assert.Equal(1, CountRows(dbPath, "files"));
+
+            File.Move(oldPath, newPath);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "foo.bin", "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("dry_run", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("files_total").GetInt32());
+            Assert.Equal(0, json.GetProperty("projected_file_deletes").GetInt32());
+            Assert.Equal(1, json.GetProperty("projected_file_purges").GetInt32());
+            Assert.True(json.GetProperty("estimated_table_mutations").GetProperty("files").GetInt64() >= 1);
+            Assert.Equal(1, CountRows(dbPath, "files"));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_FullScan_ReportsProjectedPurgesWithoutWriting()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "kept.cs"), "public class Kept { }\n");
+            File.WriteAllText(Path.Combine(projectRoot, "removed.cs"), "public class Removed { }\n");
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            File.Delete(Path.Combine(projectRoot, "removed.cs"));
+            File.WriteAllText(Path.Combine(projectRoot, "notes.unknownext"), "plain text\n");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("dry_run", json.GetProperty("status").GetString());
+            Assert.Equal(1, json.GetProperty("files_total").GetInt32());
+            Assert.Equal(0, json.GetProperty("projected_file_deletes").GetInt32());
+            Assert.Equal(1, json.GetProperty("projected_file_purges").GetInt32());
+            Assert.Equal(1, json.GetProperty("unknown_extension_total").GetInt32());
+            Assert.True(json.TryGetProperty("unsupported_total", out _));
+            Assert.True(json.GetProperty("estimated_table_mutations").GetProperty("files").GetInt64() >= 2);
+            Assert.Equal(2, CountRows(dbPath, "files"));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_DryRun_FullScan_ReportsUnreadableDirectory()
     {
         if (OperatingSystem.IsWindows())
@@ -8330,6 +8806,44 @@ public class IndexCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, humanExitCode);
             Assert.Contains("secret", stderr);
             Assert.Contains("Could not scan directory due to permissions.", stderr);
+        }
+        finally
+        {
+            if (Directory.Exists(secretDir))
+                SetUnixPermissions(secretDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_FullScan_DoesNotProjectUnreadableSubtreePurge()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        var secretDir = Path.Combine(projectRoot, "secret");
+        try
+        {
+            Directory.CreateDirectory(secretDir);
+            File.WriteAllText(Path.Combine(secretDir, "a.cs"), "public class A { }\n");
+            File.WriteAllText(Path.Combine(projectRoot, "stale.cs"), "public class Stale { }\n");
+
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            Assert.Equal(2, CountRows(dbPath, "files"));
+
+            File.Delete(Path.Combine(projectRoot, "stale.cs"));
+            SetUnixPermissions(secretDir, UnixFileMode.None);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("dry_run", json.GetProperty("status").GetString());
+            Assert.Equal(1, json.GetProperty("projected_file_purges").GetInt32());
+            Assert.Equal(2, CountRows(dbPath, "files"));
         }
         finally
         {

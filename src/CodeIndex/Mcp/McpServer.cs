@@ -9,6 +9,7 @@ using System.Text.Json.Nodes;
 using System.Text.Json.Serialization.Metadata;
 using CodeIndex.Cli;
 using CodeIndex.Database;
+using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
 
 namespace CodeIndex.Mcp;
@@ -174,6 +175,7 @@ public partial class McpServer : IDisposable
     internal const int MaxConfiguredResponseBytes = 64 * 1024 * 1024;
     internal const int MaxClientResponseJsonBytes = 1 * 1024 * 1024;
     internal const int MaxMcpPaginationOffset = 10_000;
+    internal const int MaxMcpMapDepth = 32;
     internal const double MinKeepAliveIntervalSeconds = 1.0;
     internal const double MaxKeepAliveIntervalSeconds = 300.0;
     private const string MaxResponseBytesEnvVar = "CDIDX_MCP_RESPONSE_MAX_BYTES";
@@ -471,7 +473,7 @@ public partial class McpServer : IDisposable
         if (transport is HttpMcpTransport httpTransport)
         {
             httpTransport.OutOfBandFrameHandler = ProcessFrame;
-            httpTransport.HealthJsonProvider = BuildHealthJson;
+            httpTransport.HealthJsonProvider = () => BuildHealthJson(httpTransport);
             httpTransport.KeepAliveInterval = _keepAliveInterval;
             httpTransport.KeepAliveFrameProvider = BuildKeepAliveNotificationJson;
         }
@@ -553,6 +555,13 @@ public partial class McpServer : IDisposable
                     FlushDeferredFrameLogs();
                     break;
                 }
+                catch (BoundedLineLengthException ex)
+                {
+                    BeginDeferredFrameLogs();
+                    await WriteFrameSafelyAsync(transport, BuildOversizedLineErrorResponse(ex), loopToken).ConfigureAwait(false);
+                    FlushDeferredFrameLogs();
+                    break;
+                }
             }
         }
         finally
@@ -594,6 +603,22 @@ public partial class McpServer : IDisposable
                 {
                     BeginDeferredFrameLogs();
                     await WriteFrameSafelyAsync(transport, BuildInvalidUtf8ParseErrorResponse(ex), loopToken).ConfigureAwait(false);
+                    FlushDeferredFrameLogs();
+                }
+                finally
+                {
+                    writeGate.Release();
+                }
+                break;
+            }
+            catch (BoundedLineLengthException ex)
+            {
+                await Task.WhenAll(tasks).ConfigureAwait(false);
+                await writeGate.WaitAsync(loopToken).ConfigureAwait(false);
+                try
+                {
+                    BeginDeferredFrameLogs();
+                    await WriteFrameSafelyAsync(transport, BuildOversizedLineErrorResponse(ex), loopToken).ConfigureAwait(false);
                     FlushDeferredFrameLogs();
                 }
                 finally
@@ -872,6 +897,19 @@ public partial class McpServer : IDisposable
     internal static string BuildInvalidUtf8ErrorLog(string detail)
         => $"[cdidx-mcp] JSON parse error: invalid UTF-8 input ({detail}). Send one UTF-8 JSON-RPC object per line; reject or re-encode malformed bytes before retrying.";
 
+    private string BuildOversizedLineErrorResponse(BoundedLineLengthException ex)
+        => BuildOversizedLineErrorResponse(ex.CharactersRead, ex.Utf8BytesRead);
+
+    private string BuildOversizedLineErrorResponse(int charactersRead, int utf8BytesRead)
+    {
+        DeferFrameLog(BuildOversizedMessageLog(charactersRead, utf8BytesRead));
+        var errorResponse = CreateErrorResponse(hasId: true, id: null, code: -32700, message: "Message too large",
+            category: McpErrorEnvelope.CategoryMessageTooLarge,
+            suggestion: $"JSON-RPC frame exceeds the {MaxLineCharacterCount} character or {MaxLineByteLength} byte cap. Split the request into smaller calls or use `batch_query` with smaller slots.",
+            retrySafe: false);
+        return errorResponse.ToJsonString(_jsonOptions);
+    }
+
     /// <summary>
     /// Process one MCP JSON-RPC frame and return the wire-ready response string (or null when
     /// the request was a notification or otherwise yields no response). This is the
@@ -891,14 +929,7 @@ public partial class McpServer : IDisposable
         // メモリ枯渇を防ぐため巨大メッセージを拒否
         var byteLength = Encoding.UTF8.GetByteCount(line);
         if (line.Length > MaxLineCharacterCount || byteLength > MaxLineByteLength)
-        {
-            DeferFrameLog(BuildOversizedMessageLog(line.Length, byteLength));
-            var errorResponse = CreateErrorResponse(hasId: true, id: null, code: -32700, message: "Message too large",
-                category: McpErrorEnvelope.CategoryMessageTooLarge,
-                suggestion: $"JSON-RPC frame exceeds the {MaxLineCharacterCount} character or {MaxLineByteLength} byte cap. Split the request into smaller calls or use `batch_query` with smaller slots.",
-                retrySafe: false);
-            return errorResponse.ToJsonString(_jsonOptions);
-        }
+            return BuildOversizedLineErrorResponse(line.Length, byteLength);
 
         JsonNode? request = null;
         var responseHasId = true;
@@ -1394,8 +1425,8 @@ public partial class McpServer : IDisposable
         }).ConfigureAwait(false);
     }
 
-    private string BuildHealthJson()
-        => BuildHealthResult().ToJsonString(_jsonOptions);
+    private string BuildHealthJson(HttpMcpTransport? httpTransport = null)
+        => BuildHealthResult(httpTransport).ToJsonString(_jsonOptions);
 
     private string BuildKeepAliveNotificationJson()
     {
@@ -1423,14 +1454,15 @@ public partial class McpServer : IDisposable
             || seconds < MinKeepAliveIntervalSeconds
             || seconds > MaxKeepAliveIntervalSeconds)
         {
+            var displayValue = DiagnosticRedactor.FormatEnvironmentValue(KeepAliveIntervalEnvironmentVariable, raw);
             Console.Error.WriteLine(
-                $"[cdidx-mcp] Ignoring invalid {KeepAliveIntervalEnvironmentVariable}='{ConsoleUi.FormatBoundedValue(raw)}'. Expected a finite value between {MinKeepAliveIntervalSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} and {MaxKeepAliveIntervalSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} seconds. Keep-alive notifications stay disabled.");
+                $"[cdidx-mcp] Ignoring invalid {KeepAliveIntervalEnvironmentVariable}='{displayValue}'. Expected a finite value between {MinKeepAliveIntervalSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} and {MaxKeepAliveIntervalSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} seconds. Keep-alive notifications stay disabled.");
             return null;
         }
         return TimeSpan.FromSeconds(seconds);
     }
 
-    private JsonObject BuildHealthResult()
+    private JsonObject BuildHealthResult(HttpMcpTransport? httpTransport = null)
     {
         var now = DateTimeOffset.UtcNow;
         var dbOpen = ProbeDbHealth(now, out var dbError);
@@ -1443,6 +1475,13 @@ public partial class McpServer : IDisposable
             ["last_db_check_at"] = _lastDbCheckAt?.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
             ["transport_ready"] = _running,
         };
+        if (httpTransport is not null)
+        {
+            result["http_event_stream_count"] = httpTransport.EventStreamCount;
+            result["http_event_stream_limit"] = httpTransport.MaxEventStreams;
+            result["http_max_concurrent_handlers"] = httpTransport.MaxConcurrentHandlers;
+            result["http_queued_request_count"] = httpTransport.QueuedRequestCount;
+        }
         if (!string.IsNullOrWhiteSpace(dbError))
             result["db_error"] = dbError;
         return result;
@@ -2724,7 +2763,7 @@ public partial class McpServer : IDisposable
             // パスや索引内容が漏れる（#1530）。
             DeferFrameLog(() =>
             {
-                WriteMcpLogLine(BuildToolErrorLog(toolName, ex.Message));
+                WriteMcpLogLine(BuildToolErrorLog(toolName, ex));
                 Database.DbDebug.DumpToStderr(ex);
             });
             metricsError = ex.GetType().Name;
@@ -3258,8 +3297,21 @@ public partial class McpServer : IDisposable
     internal static string BuildResponseWriteErrorLog(string detail) =>
         $"[cdidx-mcp] Error writing response: {detail}. The request was handled but the client connection may already be closed.";
 
-    internal static string BuildToolErrorLog(string toolName, string detail) =>
-        $"[cdidx-mcp] Tool error ({BoundToolNameForDisplay(toolName).Text}): {detail}. Fix the tool arguments, refresh the index if needed, then retry.";
+    internal static string BuildToolErrorLog(string toolName, Exception ex) =>
+        $"[cdidx-mcp] Tool error ({BoundToolNameForDisplay(toolName).Text}): {BuildSanitizedExceptionLogDetail(ex)}. Fix the tool arguments, refresh the index if needed, then retry.";
+
+    internal static string BuildSanitizedExceptionLogDetail(Exception ex)
+    {
+        var exceptionType = McpBoundedText.ForDisplay(ex.GetType().Name).Text;
+        if (ex is CodeIndexException codeIndexEx)
+        {
+            var code = McpBoundedText.ForDisplay(codeIndexEx.Code).Text;
+            var category = McpBoundedText.ForDisplay(codeIndexEx.Category).Text;
+            return $"{exceptionType} code={code} category={category}{BuildPathFragment(codeIndexEx)}{BuildHintFragment(codeIndexEx)}";
+        }
+
+        return exceptionType;
+    }
 
     internal static string BuildClientResponseTooLargeLog(string member, int bytesWritten) =>
         $"[cdidx-mcp] Client response {member} exceeded the server byte limit ({bytesWritten} > {MaxClientResponseJsonBytes}); rejecting without retaining the payload.";
@@ -3737,8 +3789,20 @@ public partial class McpServer : IDisposable
                 }
             }
         };
-        if (structuredContent != null)
+        if (structuredContent is JsonObject structuredObject)
+        {
+            AddProjectFilterRootDiagnostics(structuredObject);
             result["structuredContent"] = structuredContent;
+        }
+        else if (structuredContent != null)
+        {
+            ClearProjectFilterRootDiagnostics();
+            result["structuredContent"] = structuredContent;
+        }
+        else
+        {
+            ClearProjectFilterRootDiagnostics();
+        }
         var response = CreateSuccessResponse(true, id, result);
         var responseLimit = GetMaxResponseBytes();
         if (TryMeasureJsonUtf8BytesWithinLimit(response, _jsonOptions, responseLimit, out var responseBytes))
@@ -3881,13 +3945,15 @@ public partial class McpServer : IDisposable
         if (!int.TryParse(raw, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var limit)
             || limit <= 0)
         {
-            Console.Error.WriteLine($"[cdidx-mcp] Ignoring invalid {envVar}='{raw}'. Expected a positive integer for {description}. Using default {defaultValue.ToString(System.Globalization.CultureInfo.InvariantCulture)}.");
+            var displayValue = DiagnosticRedactor.FormatEnvironmentValue(envVar, raw);
+            Console.Error.WriteLine($"[cdidx-mcp] Ignoring invalid {envVar}='{displayValue}'. Expected a positive integer for {description}. Using default {defaultValue.ToString(System.Globalization.CultureInfo.InvariantCulture)}.");
             return defaultValue;
         }
 
         if (limit > maximumValue)
         {
-            Console.Error.WriteLine($"[cdidx-mcp] Clamping {envVar}='{raw}' to maximum {maximumValue.ToString(System.Globalization.CultureInfo.InvariantCulture)} for {description}.");
+            var displayValue = DiagnosticRedactor.FormatEnvironmentValue(envVar, raw);
+            Console.Error.WriteLine($"[cdidx-mcp] Clamping {envVar}='{displayValue}' to maximum {maximumValue.ToString(System.Globalization.CultureInfo.InvariantCulture)} for {description}.");
             return maximumValue;
         }
 
@@ -3904,7 +3970,7 @@ public partial class McpServer : IDisposable
     /// <c>data.similar_values</c> 配列を添えるので、MCP クライアントは
     /// 人間向けメッセージを解析せずに代替候補を提示できる (#1582)。
     /// </summary>
-    private static JsonObject CreateToolErrorResponse(JsonNode? id, string message,
+    private JsonObject CreateToolErrorResponse(JsonNode? id, string message,
         string category, string suggestion, bool retrySafe, JsonObject? extraData = null,
         IReadOnlyList<string>? similarValues = null)
         => CreateToolErrorResponse(id is not null, id, message, category, suggestion, retrySafe, extraData, similarValues);
@@ -3920,7 +3986,7 @@ public partial class McpServer : IDisposable
     // / retry_safe=false とする。任意の `similarValues` は未知 enum 値に対する構造化された
     // did-you-mean 候補 (#1582)。より具体的なカテゴリを持てる呼び出し元は明示オーバーロード
     // を使う。
-    private static JsonObject CreateToolErrorResponse(JsonNode? id, string message,
+    private JsonObject CreateToolErrorResponse(JsonNode? id, string message,
         IReadOnlyList<string>? similarValues = null)
         => CreateToolErrorResponse(id, message,
             category: McpErrorEnvelope.CategoryInvalidArgument,
@@ -3935,10 +4001,11 @@ public partial class McpServer : IDisposable
     // #1581: ツール結果エラーにも JSON-RPC エラーと同じ `category` / `suggestion` / `retry_safe`
     // を `result.structuredContent` に載せる。既存の `content[0].text` + `isError` だけを読む
     // クライアントは互換のまま、新規クライアントは `structuredContent` でカテゴリ分岐できる。
-    private static JsonObject CreateToolErrorResponse(bool hasId, JsonNode? id, string message,
+    private JsonObject CreateToolErrorResponse(bool hasId, JsonNode? id, string message,
         string category, string suggestion, bool retrySafe, JsonObject? extraData = null,
         IReadOnlyList<string>? similarValues = null)
     {
+        ClearProjectFilterRootDiagnostics();
         var result = new JsonObject
         {
             ["content"] = new JsonArray
@@ -4056,14 +4123,14 @@ public partial class McpServer : IDisposable
             "excerpt" or "status" or "validate"
                 => $"Language support: Language-agnostic over indexed files and diagnostics for every detected language listed by `languages`: {DetectedLanguageList()}. This tool does not interpret a `lang` filter.",
             "languages"
-                => "Language support: This is the authoritative language catalog for MCP tools; it lists every detected language plus symbol_extraction and graph_queries capability flags.",
+                => "Language support: This is the authoritative language catalog for MCP tools; it lists every detected language plus symbol_extraction, reference_extraction, graph_queries, and capability_gaps fields.",
             "index"
                 => $"Language support: Indexes every detected language listed by `languages`: {DetectedLanguageList()}, then extracts symbols and graph references only where the catalog advertises those capabilities.",
             "batch_query"
                 => "Language support: Language behavior is inherited from each nested read-only tool; consult each returned payload and the `languages` tool for capabilities.",
             "backfill_fold" or "ping" or "suggest_improvement"
                 => "Language support: Language-independent tool; it does not interpret `lang` filters.",
-            _ => "Language support: See the `languages` tool for detected languages and per-language symbol_extraction / graph_queries capabilities.",
+            _ => "Language support: See the `languages` tool for detected languages and per-language symbol_extraction / reference_extraction / graph_queries capabilities.",
         };
 
         return $"{description} {clause}";
