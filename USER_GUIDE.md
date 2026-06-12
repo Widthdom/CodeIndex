@@ -282,7 +282,7 @@ sections below show examples and option details for the most common workflows.
 | Analysis | `hotspots` | Rank high-impact symbols or statements by reference volume | `symbol_hotspots` |
 | Analysis | `validate` | Report encoding and line-ending issues in indexed files; U+FFFD rows include origin/severity metadata | `validate` |
 | Status | `status` | Show DB statistics, freshness, and readiness metadata | `status` |
-| Status | `languages` | List language extensions and symbol/graph capabilities; add `--indexed-only` and `--capability graph|symbols|references` for workspace audits | `languages` |
+| Status | `languages` | List language extensions and symbol/reference/graph capabilities; add `--indexed-only` and `--capability graph|references|symbols|missing-graph|missing-references|missing-symbols|search-only` for workspace audits | `languages` |
 | Diagnostics | `db --integrity-check` | Run SQLite `PRAGMA integrity_check` against the DB | -- |
 | Diagnostics | `report --output <path>` | Build a redacted bug-report bundle | -- |
 | Feedback | `suggestions` | List, inspect, and export local suggestion history | -- |
@@ -1629,7 +1629,7 @@ The database reflects the working tree at the time of the last index. After swit
 
 ## Supported languages
 
-All indexed languages are searchable through FTS5. Rows with **Symbols = yes** also support structured queries by function, class, import, or language-specific symbol name. Use `cdidx languages --indexed-only --json` to list only languages present in the current DB, and add `--capability graph|symbols|references` to narrow the table to languages that support a specific structured capability.
+All indexed languages are searchable through FTS5. Rows with **Symbols = yes** also support structured queries by function, class, import, or language-specific symbol name. Use `cdidx languages --indexed-only --json` to list only languages present in the current DB; JSON rows expose `symbol_extraction`, `reference_extraction`, `graph_queries`, and `capability_gaps`. Add `--capability graph|references|symbols|missing-graph|missing-references|missing-symbols|search-only` to narrow the table to languages that support a structured capability or still have a capability gap.
 
 | Language | Extensions | Symbols |
 |---|---|:---:|
@@ -1725,11 +1725,14 @@ All indexed languages are searchable through FTS5. Rows with **Symbols = yes** a
 
 ### Language extraction matrix
 
-Use `cdidx languages --json` as the live capability probe. Add `--indexed-only`
-when you only want languages present in the current DB, and add
-`--capability graph|symbols|references` when auditing a specific structured
-capability. This matrix explains the common extraction behavior so users know
-when to trust structured commands and when to fall back to `search`.
+Use `cdidx languages --json` as the live capability probe. JSON rows expose
+`symbol_extraction`, `reference_extraction`, `graph_queries`, and
+`capability_gaps`. Add `--indexed-only` when you only want languages present in
+the current DB, and add
+`--capability graph|references|symbols|missing-graph|missing-references|missing-symbols|search-only`
+when auditing a specific structured capability or capability gap. This matrix
+explains the common extraction behavior so users know when to trust structured
+commands and when to fall back to `search`.
 
 | Language family | Symbols | References / graph | Notes and example query |
 |---|---|---|---|
@@ -4075,9 +4078,10 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 
 ### 言語別 extraction matrix
 
-現在の capability は `cdidx languages --json` を live probe として確認してください。
-現在の DB に存在する言語だけを見たい場合は `--indexed-only`、特定の構造化 capability を監査する場合は
-`--capability graph|symbols|references` を追加します。この matrix は、構造化 command を信頼できる場面と
+現在の capability は `cdidx languages --json` を live probe として確認してください。JSON 行には
+`symbol_extraction`、`reference_extraction`、`graph_queries`、`capability_gaps` が含まれます。
+現在の DB に存在する言語だけを見たい場合は `--indexed-only`、特定の構造化 capability や capability gap を監査する場合は
+`--capability graph|references|symbols|missing-graph|missing-references|missing-symbols|search-only` を追加します。この matrix は、構造化 command を信頼できる場面と
 `search` に戻るべき場面を判断するための概要です。
 
 | 言語ファミリ | Symbols | References / graph | メモと例 |
@@ -4490,7 +4494,7 @@ OpenAI Codex CLI (`codex.json` または `~/.codex/config.json`):
 | `symbol_hotspots` | 影響の大きい hotspot を検索。`groupBy` は `symbol` / `file` / `statement` を指定でき、SQL scope は statement grouping、非 SQL scope は symbol grouping が既定。 |
 | `batch_query` | 複数クエリを1回で実行（MCP専用、最大10件）。レスポンスにはトップレベル `metadata`（`submitted` / `executed` / `errors` / `total_elapsed_ms` / `success_count` / `failure_count`）と各 `results` エントリの `request_index`、任意の client `slot_id`、`ok`、`elapsed_ms`、`summary`、`args_summary` が含まれ、位置だけに依存せず部分失敗や遅い内部クエリを把握できます。 |
 | `validate` | エンコーディング問題（origin/severity 付き U+FFFD、BOM、null バイト、改行混在 / CR-only 行末、UTF-16 BOM 検出、UTF-8 以外と推定されるエンコーディング）を報告 |
-| `languages` | 対応言語一覧を拡張子・機能付きで表示。`--indexed-only` と `--capability graph|symbols|references` で現在の DB や機能別に絞り込み可能 |
+| `languages` | 対応言語一覧を拡張子・機能付きで表示。`--indexed-only` と `--capability graph|references|symbols|missing-graph|missing-references|missing-symbols|search-only` で現在の DB、機能別、または capability gap 別に絞り込み可能 |
 | `ping` | 軽量な接続確認 |
 | `index` | プロジェクトのインデックス作成・更新 |
 | `backfill_fold` | 既存 DB の folded-name key をソース再解析なしで更新 |

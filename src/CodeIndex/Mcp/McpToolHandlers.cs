@@ -4059,15 +4059,23 @@ public partial class McpServer
     {
         var langExtensions = FileIndexer.GetLanguageExtensions();
         var symbolLangs = SymbolExtractor.GetSupportedLanguages();
-        var graphLangs = ReferenceExtractor.GetSupportedLanguages();
+        var referenceLangs = ReferenceExtractor.GetSupportedLanguages();
 
         // Build consolidated language info / 統合言語情報を構築
-        var allLangs = new Dictionary<string, (List<string> Extensions, List<string> Aliases, bool Symbols, bool Graph)>(StringComparer.Ordinal);
+        var allLangs = new Dictionary<string, (List<string> Extensions, List<string> Aliases, bool Symbols, bool References, bool Graph, List<string> CapabilityGaps)>(StringComparer.Ordinal);
         foreach (var (ext, lang) in langExtensions)
         {
             if (!allLangs.TryGetValue(lang, out var info))
             {
-                info = (new List<string>(), QueryCommandRunner.GetLanguageAliases(lang).ToList(), symbolLangs.Contains(lang), graphLangs.Contains(lang));
+                var hasSymbols = symbolLangs.Contains(lang);
+                var hasReferences = referenceLangs.Contains(lang);
+                info = (
+                    new List<string>(),
+                    QueryCommandRunner.GetLanguageAliases(lang).ToList(),
+                    hasSymbols,
+                    hasReferences,
+                    hasReferences,
+                    BuildLanguageCapabilityGaps(hasSymbols, hasReferences, hasReferences));
                 allLangs[lang] = info;
             }
             info.Extensions.Add(ext);
@@ -4087,13 +4095,27 @@ public partial class McpServer
                 ["extensions"] = extArray,
                 ["aliases"] = new JsonArray(info.Aliases.OrderBy(alias => alias).Select(alias => JsonValue.Create(alias)).ToArray()),
                 ["symbol_extraction"] = info.Symbols,
+                ["reference_extraction"] = info.References,
                 ["graph_queries"] = info.Graph,
+                ["capability_gaps"] = new JsonArray(info.CapabilityGaps.Select(gap => JsonValue.Create(gap)).ToArray()),
             });
         }
 
         var payload = new JsonObject { ["languages"] = languagesArray };
-        var summary = $"{sorted.Count} languages supported. {symbolLangs.Count} with symbol extraction, {graphLangs.Count} with call-graph queries.";
+        var summary = $"{sorted.Count} languages supported. {symbolLangs.Count} with symbol extraction, {referenceLangs.Count} with reference extraction, {referenceLangs.Count} with call-graph queries.";
         return CreateToolResult(id, summary, payload);
+    }
+
+    private static List<string> BuildLanguageCapabilityGaps(bool symbols, bool references, bool graph)
+    {
+        var gaps = new List<string>();
+        if (!symbols)
+            gaps.Add("missing-symbols");
+        if (!references)
+            gaps.Add("missing-references");
+        if (!graph)
+            gaps.Add("missing-graph");
+        return gaps;
     }
 
     private JsonNode ExecuteIndex(JsonNode? id, JsonNode? args, JsonNode? progressToken = null)

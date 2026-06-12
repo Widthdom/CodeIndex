@@ -39,6 +39,10 @@ public static class QueryCommandRunner
     private const string LanguageCapabilityGraph = "graph";
     private const string LanguageCapabilityReferences = "references";
     private const string LanguageCapabilitySymbols = "symbols";
+    private const string LanguageCapabilityMissingGraph = "missing-graph";
+    private const string LanguageCapabilityMissingReferences = "missing-references";
+    private const string LanguageCapabilityMissingSymbols = "missing-symbols";
+    private const string LanguageCapabilitySearchOnly = "search-only";
     internal static readonly TimeSpan DefaultStaleAfter = TimeSpan.FromHours(24);
     internal static readonly TimeSpan MaxStaleAfter = TimeSpan.FromDays(30);
     internal const string MaxStaleAfterDisplay = "30d";
@@ -6239,15 +6243,23 @@ public static class QueryCommandRunner
         var symbolLangs = SymbolExtractor.GetSupportedLanguages();
         var graphLangs = ReferenceExtractor.GetSupportedLanguages();
 
-        // Build a consolidated view: language -> (extensions, hasSymbols, hasGraph)
-        // 統合ビュー: 言語 -> (拡張子, シンボル対応, グラフ対応)
+        // Build a consolidated view: language -> capability flags and gaps.
+        // 統合ビュー: 言語 -> capability flag と gap。
         var allLangs = new Dictionary<string, LanguageSupportInfo>(StringComparer.Ordinal);
 
         foreach (var (ext, lang) in langExtensions)
         {
             if (!allLangs.TryGetValue(lang, out var info))
             {
-                info = new LanguageSupportInfo([], GetLanguageAliases(lang).ToList(), symbolLangs.Contains(lang), graphLangs.Contains(lang));
+                var hasSymbols = symbolLangs.Contains(lang);
+                var hasReferences = graphLangs.Contains(lang);
+                info = new LanguageSupportInfo(
+                    [],
+                    GetLanguageAliases(lang).ToList(),
+                    hasSymbols,
+                    hasReferences,
+                    hasReferences,
+                    BuildLanguageCapabilityGaps(hasSymbols, hasReferences, hasReferences));
                 allLangs[lang] = info;
             }
             info.Extensions.Add(ext);
@@ -6281,7 +6293,9 @@ public static class QueryCommandRunner
                     kv.Value.Extensions.OrderBy(e => e).ToList(),
                     kv.Value.Aliases.OrderBy(a => a).ToList(),
                     kv.Value.Symbols,
-                    kv.Value.Graph)).ToList();
+                    kv.Value.References,
+                    kv.Value.Graph,
+                    kv.Value.CapabilityGaps)).ToList();
                 Console.WriteLine(JsonSerializer.Serialize(new LanguagesJsonResult(entries), CliJsonSerializerContextFactory.Create(jsonOptions).LanguagesJsonResult));
             }
             else
@@ -6292,25 +6306,28 @@ public static class QueryCommandRunner
                 // Symbols / Graph 列が拡張子文字列に埋もれないようにする。
                 const int ExtensionColumnWidth = 36;
                 const int AliasColumnWidth = 12;
-                Console.WriteLine($"{"Language",-14} {"Extensions",-36} {"Aliases",-12} {"Symbols",-9} {"Graph",-7}");
-                Console.WriteLine(new string('-', 79));
+                Console.WriteLine($"{"Language",-14} {"Extensions",-36} {"Aliases",-12} {"Symbols",-9} {"Refs",-5} {"Graph",-7}");
+                Console.WriteLine(new string('-', 85));
                 foreach (var (lang, info) in filtered)
                 {
                     var exts = string.Join(" ", info.Extensions.OrderBy(e => e));
                     var aliases = string.Join(" ", info.Aliases.OrderBy(a => a));
                     var aliasCell = string.IsNullOrWhiteSpace(aliases) ? "-" : aliases;
                     var sym = info.Symbols ? "yes" : "-";
+                    var refs = info.References ? "yes" : "-";
                     var graph = info.Graph ? "yes" : "-";
                     if (exts.Length <= ExtensionColumnWidth && aliases.Length <= AliasColumnWidth)
                     {
-                        Console.WriteLine($"{lang,-14} {exts,-36} {aliasCell,-12} {sym,-9} {graph,-7}");
+                        Console.WriteLine($"{lang,-14} {exts,-36} {aliasCell,-12} {sym,-9} {refs,-5} {graph,-7}");
                     }
                     else
                     {
-                        Console.WriteLine($"{lang,-14} {"",-36} {"",-12} {sym,-9} {graph,-7}");
+                        Console.WriteLine($"{lang,-14} {"",-36} {"",-12} {sym,-9} {refs,-5} {graph,-7}");
                         Console.WriteLine($"  Extensions: {exts}");
                         if (!string.IsNullOrWhiteSpace(aliases))
                             Console.WriteLine($"  Aliases: {aliases}");
+                        if (info.CapabilityGaps.Count > 0)
+                            Console.WriteLine($"  Gaps: {string.Join(", ", info.CapabilityGaps)}");
                     }
                 }
                 Console.Error.WriteLine($"\n({filtered.Count} languages)");
@@ -6320,20 +6337,44 @@ public static class QueryCommandRunner
         }
     }
 
-    private sealed record LanguageSupportInfo(List<string> Extensions, List<string> Aliases, bool Symbols, bool Graph);
+    private sealed record LanguageSupportInfo(List<string> Extensions, List<string> Aliases, bool Symbols, bool References, bool Graph, List<string> CapabilityGaps);
 
     private static bool LanguageMatchesCapability(LanguageSupportInfo language, string capability)
         => capability switch
         {
             LanguageCapabilitySymbols => language.Symbols,
-            LanguageCapabilityGraph or LanguageCapabilityReferences => language.Graph,
+            LanguageCapabilityReferences => language.References,
+            LanguageCapabilityGraph => language.Graph,
+            LanguageCapabilityMissingSymbols => !language.Symbols,
+            LanguageCapabilityMissingReferences => !language.References,
+            LanguageCapabilityMissingGraph => !language.Graph,
+            LanguageCapabilitySearchOnly => !language.Symbols && !language.References && !language.Graph,
             _ => false,
         };
 
     private static bool TryNormalizeLanguageCapability(string value, out string capability)
     {
         capability = value.Trim().ToLowerInvariant();
-        return capability is LanguageCapabilityGraph or LanguageCapabilityReferences or LanguageCapabilitySymbols;
+        return capability is
+            LanguageCapabilityGraph or
+            LanguageCapabilityReferences or
+            LanguageCapabilitySymbols or
+            LanguageCapabilityMissingGraph or
+            LanguageCapabilityMissingReferences or
+            LanguageCapabilityMissingSymbols or
+            LanguageCapabilitySearchOnly;
+    }
+
+    private static List<string> BuildLanguageCapabilityGaps(bool symbols, bool references, bool graph)
+    {
+        var gaps = new List<string>();
+        if (!symbols)
+            gaps.Add("missing-symbols");
+        if (!references)
+            gaps.Add("missing-references");
+        if (!graph)
+            gaps.Add("missing-graph");
+        return gaps;
     }
 
     public static QueryCommandOptions ParseArgs(
@@ -6614,7 +6655,7 @@ public static class QueryCommandRunner
                     }
                     else
                     {
-                        AddParseError($"Error: unsupported --capability value '{ConsoleUi.FormatBoundedValue(capabilityValue)}'. Use graph, symbols, or references.");
+                        AddParseError($"Error: unsupported --capability value '{ConsoleUi.FormatBoundedValue(capabilityValue)}'. Use graph, references, symbols, missing-graph, missing-references, missing-symbols, or search-only.");
                     }
                     break;
                 case "--format":

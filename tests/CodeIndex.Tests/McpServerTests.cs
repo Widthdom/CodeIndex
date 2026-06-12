@@ -9153,6 +9153,7 @@ public class McpServerTests : IDisposable
         // Verify a known language has the right capabilities / 既知の言語の機能を検証
         var csharp = languages.First(l => l!["lang"]!.GetValue<string>() == "csharp")!;
         Assert.True(csharp["symbol_extraction"]!.GetValue<bool>());
+        Assert.True(csharp["reference_extraction"]!.GetValue<bool>());
         Assert.True(csharp["graph_queries"]!.GetValue<bool>());
         Assert.Contains(".cs", csharp["extensions"]!.AsArray().Select(e => e!.GetValue<string>()));
 
@@ -9166,6 +9167,7 @@ public class McpServerTests : IDisposable
 
         var assembly = languages.First(l => l!["lang"]!.GetValue<string>() == "assembly")!;
         Assert.True(assembly["symbol_extraction"]!.GetValue<bool>());
+        Assert.True(assembly["reference_extraction"]!.GetValue<bool>());
         Assert.True(assembly["graph_queries"]!.GetValue<bool>());
         Assert.Contains(".asm", assembly["extensions"]!.AsArray().Select(e => e!.GetValue<string>()));
         Assert.Contains(".S", assembly["extensions"]!.AsArray().Select(e => e!.GetValue<string>()));
@@ -9174,10 +9176,13 @@ public class McpServerTests : IDisposable
         // Verify a detection-only language / 検出のみの言語を検証
         var markdown = languages.First(l => l!["lang"]!.GetValue<string>() == "markdown")!;
         Assert.True(markdown["symbol_extraction"]!.GetValue<bool>());
+        Assert.False(markdown["reference_extraction"]!.GetValue<bool>());
         Assert.False(markdown["graph_queries"]!.GetValue<bool>());
+        Assert.Contains("missing-references", markdown["capability_gaps"]!.AsArray().Select(e => e!.GetValue<string>()));
 
         var yaml = languages.First(l => l!["lang"]!.GetValue<string>() == "yaml")!;
         Assert.Contains("yml", yaml["aliases"]!.AsArray().Select(e => e!.GetValue<string>()));
+        Assert.Contains("missing-symbols", yaml["capability_gaps"]!.AsArray().Select(e => e!.GetValue<string>()));
 
         // Pin #215: HTML must report symbol_extraction=true and list all four
         // extensions so AI tools discover HTML support via the MCP languages tool.
@@ -9185,6 +9190,7 @@ public class McpServerTests : IDisposable
         // の 4 拡張子を MCP languages ツールから返すこと。
         var html = languages.First(l => l!["lang"]!.GetValue<string>() == "html")!;
         Assert.True(html["symbol_extraction"]!.GetValue<bool>());
+        Assert.False(html["reference_extraction"]!.GetValue<bool>());
         var htmlExtensions = html["extensions"]!.AsArray().Select(e => e!.GetValue<string>()).ToList();
         Assert.Contains(".html", htmlExtensions);
         Assert.Contains(".htm", htmlExtensions);

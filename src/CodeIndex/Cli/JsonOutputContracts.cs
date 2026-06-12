@@ -192,7 +192,9 @@ internal sealed record LanguageEntryJsonResult(
     [property: JsonPropertyName("extensions")] List<string> Extensions,
     [property: JsonPropertyName("aliases")] List<string> Aliases,
     [property: JsonPropertyName("symbol_extraction")] bool SymbolExtraction,
-    [property: JsonPropertyName("graph_queries")] bool GraphQueries);
+    [property: JsonPropertyName("reference_extraction")] bool ReferenceExtraction,
+    [property: JsonPropertyName("graph_queries")] bool GraphQueries,
+    [property: JsonPropertyName("capability_gaps")] List<string> CapabilityGaps);
 
 internal sealed record LanguagesJsonResult(
     [property: JsonPropertyName("languages")] List<LanguageEntryJsonResult> Languages);
