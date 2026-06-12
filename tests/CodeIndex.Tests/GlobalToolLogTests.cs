@@ -285,6 +285,10 @@ public class GlobalToolLogTests
             var resolved = GlobalToolLog.ResolveLogDirectoryForStatus();
 
             Assert.Equal(Path.Combine(stateHome, "cdidx", "logs"), resolved);
+            if (!OperatingSystem.IsWindows())
+                Assert.Equal(
+                    DataDirectorySecurity.PrivateDirectoryMode,
+                    File.GetUnixFileMode(resolved) & PermissionBits);
         }
         finally
         {

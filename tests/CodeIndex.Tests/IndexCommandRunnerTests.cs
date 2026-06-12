@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Runtime.Versioning;
@@ -309,6 +310,102 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void SymbolExtractionWorker_InvalidRequestJsonDoesNotEchoParserMessage_Issue3425()
+    {
+        const string secret = "SECRET_SYMBOL_WORKER_3425";
+        using var input = new StringReader("{\"Content\":\"" + secret + "\",\n");
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        var handled = SymbolExtractionWorker.TryRunCommand(
+            [SymbolExtractionWorker.CommandName],
+            input,
+            output,
+            error,
+            out var exitCode);
+
+        Assert.True(handled);
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, error.ToString());
+        using var document = JsonDocument.Parse(output.ToString());
+        var workerError = document.RootElement.GetProperty("WorkerError").GetString();
+        Assert.Equal("worker_protocol_error: JsonException", workerError);
+        Assert.DoesNotContain(secret, output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SymbolExtractionWorker_OversizedRequestLineReturnsProtocolError_Issue3506()
+    {
+        using var input = new StringReader("abcdef\n");
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        var handled = SymbolExtractionWorker.TryRunCommand(
+            [SymbolExtractionWorker.CommandName],
+            input,
+            output,
+            error,
+            out var exitCode,
+            maxProtocolLineCharacters: 5,
+            maxProtocolLineUtf8Bytes: 100);
+
+        Assert.True(handled);
+        Assert.Equal(1, exitCode);
+        Assert.Equal(string.Empty, error.ToString());
+        using var document = JsonDocument.Parse(output.ToString());
+        var workerError = document.RootElement.GetProperty("WorkerError").GetString();
+        Assert.Equal("worker_protocol_error: BoundedLineLengthException", workerError);
+    }
+
+    [Fact]
+    public void PostExtractionHookCallbackWorker_InvalidRequestJsonDoesNotEchoParserMessage_Issue3425()
+    {
+        const string secret = "SECRET_HOOK_WORKER_3425";
+        using var input = new StringReader("{\"Callback\":\"" + secret + "\",\n");
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        var handled = PostExtractionHookCallbackWorker.TryRunCommand(
+            [PostExtractionHookCallbackWorker.CommandName, "/tmp/demo-hook.dll", "Demo.Hook"],
+            input,
+            output,
+            error,
+            out var exitCode);
+
+        Assert.True(handled);
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, error.ToString());
+        using var document = JsonDocument.Parse(output.ToString());
+        var workerError = document.RootElement.GetProperty("WorkerError").GetString();
+        Assert.Equal("worker_protocol_error: JsonException", workerError);
+        Assert.DoesNotContain(secret, output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PostExtractionHookCallbackWorker_OversizedRequestLineReturnsProtocolError_Issue3506()
+    {
+        using var input = new StringReader("abcdef\n");
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        var handled = PostExtractionHookCallbackWorker.TryRunCommand(
+            [PostExtractionHookCallbackWorker.CommandName, "/tmp/demo-hook.dll", "Demo.Hook"],
+            input,
+            output,
+            error,
+            out var exitCode,
+            maxProtocolLineCharacters: 5,
+            maxProtocolLineUtf8Bytes: 100);
+
+        Assert.True(handled);
+        Assert.Equal(1, exitCode);
+        Assert.Equal(string.Empty, error.ToString());
+        using var document = JsonDocument.Parse(output.ToString());
+        var workerError = document.RootElement.GetProperty("WorkerError").GetString();
+        Assert.Equal("worker_protocol_error: BoundedLineLengthException", workerError);
+    }
+
+    [Fact]
     public void SymbolExtractionWorker_StartInfo_UsesCurrentCdidxExecutableWhenAvailable()
     {
         var currentProcessPath = Path.Combine(Path.GetTempPath(), OperatingSystem.IsWindows() ? "cdidx.exe" : "cdidx");
@@ -321,7 +418,13 @@ public class IndexCommandRunnerTests
 
         Assert.True(created, error);
         Assert.Equal(currentProcessPath, startInfo.FileName);
-        Assert.Equal([SymbolExtractionWorker.CommandName], startInfo.ArgumentList);
+        Assert.Equal(
+            [
+                SymbolExtractionWorker.CommandName,
+                "--protocol-max-line-bytes",
+                WorkerProtocolLineLimits.MaxLineUtf8Bytes.ToString(CultureInfo.InvariantCulture),
+            ],
+            startInfo.ArgumentList);
         Assert.True(startInfo.RedirectStandardInput);
         Assert.True(startInfo.RedirectStandardOutput);
         Assert.True(startInfo.RedirectStandardError);
@@ -341,7 +444,39 @@ public class IndexCommandRunnerTests
 
         Assert.True(created, error);
         Assert.NotEqual(currentProcessPath, startInfo.FileName);
-        Assert.Equal([runnerAssemblyPath, SymbolExtractionWorker.CommandName], startInfo.ArgumentList);
+        Assert.Equal(
+            [
+                runnerAssemblyPath,
+                SymbolExtractionWorker.CommandName,
+                "--protocol-max-line-bytes",
+                WorkerProtocolLineLimits.MaxLineUtf8Bytes.ToString(CultureInfo.InvariantCulture),
+            ],
+            startInfo.ArgumentList);
+    }
+
+    [Fact]
+    public void SymbolExtractionWorker_StartInfo_RaisesProtocolLimitForLargeFileCap_Issue3506()
+    {
+        const long maxFileSizeBytes = 50L * 1024L * 1024L;
+        var protocolLimit = WorkerProtocolLineLimits.ResolveForSourceFileBytes(maxFileSizeBytes);
+        var currentProcessPath = Path.Combine(Path.GetTempPath(), OperatingSystem.IsWindows() ? "cdidx.exe" : "cdidx");
+
+        var created = SymbolExtractionWorker.TryCreateStartInfo(
+            currentProcessPath,
+            runnerAssemblyPath: string.Empty,
+            protocolLimit,
+            out var startInfo,
+            out var error);
+
+        Assert.True(created, error);
+        Assert.True(protocolLimit > WorkerProtocolLineLimits.MaxLineUtf8Bytes);
+        Assert.Equal(
+            [
+                SymbolExtractionWorker.CommandName,
+                "--protocol-max-line-bytes",
+                protocolLimit.ToString(CultureInfo.InvariantCulture),
+            ],
+            startInfo.ArgumentList);
     }
 
     [Fact]
@@ -362,7 +497,15 @@ public class IndexCommandRunnerTests
 
         Assert.True(created, error);
         Assert.Equal(currentProcessPath, startInfo.FileName);
-        Assert.Equal([PostExtractionHookCallbackWorker.CommandName, hook.AssemblyPath, hook.TypeName], startInfo.ArgumentList);
+        Assert.Equal(
+            [
+                PostExtractionHookCallbackWorker.CommandName,
+                hook.AssemblyPath,
+                hook.TypeName,
+                "--protocol-max-line-bytes",
+                WorkerProtocolLineLimits.MaxLineUtf8Bytes.ToString(CultureInfo.InvariantCulture),
+            ],
+            startInfo.ArgumentList);
         Assert.True(startInfo.RedirectStandardInput);
         Assert.True(startInfo.RedirectStandardOutput);
         Assert.True(startInfo.RedirectStandardError);
@@ -387,7 +530,48 @@ public class IndexCommandRunnerTests
 
         Assert.True(created, error);
         Assert.NotEqual(currentProcessPath, startInfo.FileName);
-        Assert.Equal([runnerAssemblyPath, PostExtractionHookCallbackWorker.CommandName, hook.AssemblyPath, hook.TypeName], startInfo.ArgumentList);
+        Assert.Equal(
+            [
+                runnerAssemblyPath,
+                PostExtractionHookCallbackWorker.CommandName,
+                hook.AssemblyPath,
+                hook.TypeName,
+                "--protocol-max-line-bytes",
+                WorkerProtocolLineLimits.MaxLineUtf8Bytes.ToString(CultureInfo.InvariantCulture),
+            ],
+            startInfo.ArgumentList);
+    }
+
+    [Fact]
+    public void PostExtractionHookCallbackWorker_StartInfo_RaisesProtocolLimitForLargeFileCap_Issue3506()
+    {
+        const long maxFileSizeBytes = 50L * 1024L * 1024L;
+        var protocolLimit = WorkerProtocolLineLimits.ResolveForSourceFileBytes(maxFileSizeBytes);
+        var hook = new PostExtractionHookInfo(
+            "demo",
+            Path.Combine(Path.GetTempPath(), "demo-hook.dll"),
+            "Demo.Hook");
+        var currentProcessPath = Path.Combine(Path.GetTempPath(), OperatingSystem.IsWindows() ? "cdidx.exe" : "cdidx");
+
+        var created = PostExtractionHookCallbackWorker.TryCreateStartInfo(
+            hook,
+            currentProcessPath,
+            runnerAssemblyPath: string.Empty,
+            protocolLimit,
+            out var startInfo,
+            out var error);
+
+        Assert.True(created, error);
+        Assert.True(protocolLimit > WorkerProtocolLineLimits.MaxLineUtf8Bytes);
+        Assert.Equal(
+            [
+                PostExtractionHookCallbackWorker.CommandName,
+                hook.AssemblyPath,
+                hook.TypeName,
+                "--protocol-max-line-bytes",
+                protocolLimit.ToString(CultureInfo.InvariantCulture),
+            ],
+            startInfo.ArgumentList);
     }
 
     [SkipOnMacOsArm64Fact]

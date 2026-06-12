@@ -406,6 +406,35 @@ public class DbCommandRunnerTests
     }
 
     [Fact]
+    public void Run_PruneApply_JsonReportsWalCheckpointWarning_Issue3514()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_prune_wal_warning_{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var db = new DbContext(dbPath))
+                db.InitializeSchema();
+            SeedOrphans(dbPath);
+            SqliteConnection.ClearAllPools();
+            DbContext.WalCheckpointTruncateExecutedForTesting = _ => throw new IOException("simulated wal cleanup failure");
+
+            var (exitCode, json) = RunAndCaptureJson(["prune", "--apply", "--db", dbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            var warnings = json.GetProperty("warnings");
+            var warning = Assert.Single(warnings.EnumerateArray());
+            Assert.Equal("wal_checkpoint_truncate_failed", warning.GetProperty("code").GetString());
+            Assert.Contains("WAL checkpoint truncation failed", warning.GetProperty("message").GetString());
+        }
+        finally
+        {
+            DbContext.WalCheckpointTruncateExecutedForTesting = null;
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
     public void Run_CheckpointAndRestore_RestoresDatabaseBytes()
     {
         var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_{Guid.NewGuid():N}");
@@ -536,6 +565,40 @@ public class DbCommandRunnerTests
         {
             DbCommandRunner.DeleteTemporaryDirectoryForTesting = null;
             SqliteConnection.ClearAllPools();
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void TryDeleteTemporaryDirectory_RejectsTargetOutsideSafeRoot_Issue3379()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_cleanup_safe_root_{Guid.NewGuid():N}");
+        var safeRoot = Path.Combine(root, "safe");
+        var outsideRoot = Path.Combine(root, "outside");
+        var outsideTarget = Path.Combine(outsideRoot, ".tmp-malformed");
+        try
+        {
+            Directory.CreateDirectory(safeRoot);
+            Directory.CreateDirectory(outsideTarget);
+            File.WriteAllText(Path.Combine(outsideTarget, "sentinel.txt"), "keep");
+
+            var (_, _, stderr) = ConsoleCapture.Capture(() =>
+            {
+                DbCommandRunner.TryDeleteTemporaryDirectory(
+                    outsideTarget,
+                    "test temporary directory",
+                    safeRoot,
+                    ".tmp-");
+                return 0;
+            });
+
+            Assert.True(Directory.Exists(outsideTarget));
+            Assert.Contains("skipped deleting test temporary directory", stderr);
+            Assert.Contains("outside the expected cleanup root", stderr);
+        }
+        finally
+        {
             if (Directory.Exists(root))
                 Directory.Delete(root, recursive: true);
         }
@@ -674,6 +737,81 @@ public class DbCommandRunnerTests
         finally
         {
             DbCommandRunner.RestoreFailureAfterBackupForTesting = null;
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Run_RestoreRollbackFailurePreservesPrimaryFailure_Issue3514()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_rollback_fail_{Guid.NewGuid():N}");
+        var dbPath = Path.Combine(root, "codeindex.db");
+        Directory.CreateDirectory(root);
+        try
+        {
+            using (var db = new DbContext(dbPath))
+                db.InitializeSchema();
+            SqliteConnection.ClearAllPools();
+
+            var (checkpointExit, _, _) = RunAndCaptureStreams(["checkpoint", "saved", "--db", dbPath]);
+            Assert.Equal(CommandExitCodes.Success, checkpointExit);
+
+            File.WriteAllText(dbPath, "changed");
+            DbCommandRunner.RestoreFailureAfterBackupForTesting = () =>
+            {
+                Directory.CreateDirectory(dbPath);
+                throw new IOException("primary restore failure");
+            };
+
+            var (restoreExit, _, stderr) = RunAndCaptureStreams(["restore", "saved", "--db", dbPath]);
+
+            Assert.Equal(CommandExitCodes.DatabaseError, restoreExit);
+            Assert.Contains("primary restore failure", stderr);
+            Assert.Contains("failed to roll back database restore", stderr);
+        }
+        finally
+        {
+            DbCommandRunner.RestoreFailureAfterBackupForTesting = null;
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Run_RestoreRejectsSymlinkedCheckpointPayload_Issue3514()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_symlink_{Guid.NewGuid():N}");
+        var dbPath = Path.Combine(root, "codeindex.db");
+        Directory.CreateDirectory(root);
+        try
+        {
+            using (var db = new DbContext(dbPath))
+                db.InitializeSchema();
+            SqliteConnection.ClearAllPools();
+            var originalBytes = File.ReadAllBytes(dbPath);
+            var (checkpointExit, _, _) = RunAndCaptureStreams(["checkpoint", "saved", "--db", dbPath]);
+            Assert.Equal(CommandExitCodes.Success, checkpointExit);
+
+            var checkpointDbPath = Path.Combine(dbPath + ".checkpoints", "saved", "codeindex.db");
+            File.Delete(checkpointDbPath);
+            var targetPath = Path.Combine(root, "payload-target.db");
+            File.WriteAllText(targetPath, "not the checkpoint");
+            File.CreateSymbolicLink(checkpointDbPath, targetPath);
+
+            var (restoreExit, _, stderr) = RunAndCaptureStreams(["restore", "saved", "--db", dbPath]);
+
+            Assert.Equal(CommandExitCodes.DatabaseError, restoreExit);
+            Assert.Contains("not a regular file", stderr);
+            Assert.Equal(originalBytes, File.ReadAllBytes(dbPath));
+        }
+        finally
+        {
             SqliteConnection.ClearAllPools();
             if (Directory.Exists(root))
                 Directory.Delete(root, recursive: true);

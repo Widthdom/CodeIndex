@@ -17,6 +17,7 @@ public static partial class SymbolExtractor
     public const int DefaultContractVersion = 1;
     public const int ExpandedLanguageContractVersion = 2;
     public const int CSharpContractVersion = 2;
+    public const int DockerfileContractVersion = 2;
     private static readonly Regex GraphQLInputBlockRegex = new(
         @"^\s*(?:extend\s+)?input\s+(?<name>\w+)[^{]*\{(?<body>.*?)^\s*\}",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.Multiline | RegexOptions.Singleline);
@@ -48,6 +49,7 @@ public static partial class SymbolExtractor
         {
             null or "" => DefaultContractVersion,
             "csharp" => CSharpContractVersion,
+            "dockerfile" => DockerfileContractVersion,
             "cmake" or "graphql" or "html" or "json" or "justfile" or "markdown" or "msbuild" or "yaml" => ExpandedLanguageContractVersion,
             _ => DefaultContractVersion,
         };
@@ -1847,16 +1849,17 @@ public static partial class SymbolExtractor
         ["msbuild"] = [],
         ["dockerfile"] =
         [
-            new("property", new Regex(@"^\s*(?:ARG|ENV)\s+(?<name>[A-Za-z_][A-Za-z0-9_]*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("property", new Regex(@"^\s*LABEL\s+(?<name>[A-Za-z0-9_.-]+)\s*=", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("property", new Regex(@"^\s*LABEL\s+(?<name>[A-Za-z0-9_.-]+)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("property", new Regex(@"^\s*EXPOSE\s+(?<name>\d+(?:/(?:tcp|udp))?)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("property", new Regex(@"^\s*USER\s+(?<name>[A-Za-z0-9_][A-Za-z0-9_.-]*(?::[A-Za-z0-9_][A-Za-z0-9_.-]*)?)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("property", new Regex(@"^\s*WORKDIR\s+(?<name>\S+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("property", new Regex(@"^\s*VOLUME\s+(?<name>(?!\[)\S+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("property", new Regex(@"^\s*STOPSIGNAL\s+(?<name>\S+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("function", new Regex(@"^\s*FROM\s+(?:--platform=\S+\s+)?\S+\s+(?:AS|as)\s+(?<name>[A-Za-z0-9_.-]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),  // Named stage / 名前付きステージ
-            new("class",    new Regex(@"^\s*FROM\s+(?:--platform=\S+\s+)?(?<name>\S+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),  // Base image / ベースイメージ
+            new("build_arg", new Regex(@"^\s*ARG\s+(?<name>[A-Za-z_][A-Za-z0-9_]*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("environment", new Regex(@"^\s*ENV\s+(?<name>[A-Za-z_][A-Za-z0-9_]*)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("label", new Regex(@"^\s*LABEL\s+(?<name>[A-Za-z0-9_.-]+)\s*=", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("label", new Regex(@"^\s*LABEL\s+(?<name>[A-Za-z0-9_.-]+)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("expose", new Regex(@"^\s*EXPOSE\s+(?<name>\d+(?:/(?:tcp|udp))?)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("user", new Regex(@"^\s*USER\s+(?<name>[A-Za-z0-9_][A-Za-z0-9_.-]*(?::[A-Za-z0-9_][A-Za-z0-9_.-]*)?)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("workdir", new Regex(@"^\s*WORKDIR\s+(?<name>\S+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("volume", new Regex(@"^\s*VOLUME\s+(?<name>(?!\[)\S+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("stopsignal", new Regex(@"^\s*STOPSIGNAL\s+(?<name>\S+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("stage", new Regex(@"^\s*FROM\s+(?:--platform=\S+\s+)?\S+\s+(?:AS|as)\s+(?<name>[A-Za-z0-9_.-]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),  // Named stage / 名前付きステージ
+            new("base_image", new Regex(@"^\s*FROM\s+(?:--platform=\S+\s+)?(?<name>\S+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),  // Base image / ベースイメージ
         ],
         ["protobuf"] =
         [
@@ -2419,6 +2422,7 @@ public static partial class SymbolExtractor
                 AddDockerfileShellSymbol(fileId, line, i + 1, symbols);
                 AddDockerfileCopyDestinationSymbol(fileId, line, i + 1, symbols);
                 AddDockerfileAddDestinationSymbol(fileId, line, i + 1, symbols);
+                AddDockerfileRunSymbol(fileId, line, i + 1, symbols);
             }
 
             var structuralLine = structuralLines[i];

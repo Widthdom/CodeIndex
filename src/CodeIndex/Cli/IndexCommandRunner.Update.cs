@@ -129,7 +129,7 @@ public static partial class IndexCommandRunner
         var ftsMutated = false;
         var purgedRefs = 0;
         var supportedGraphLanguages = ReferenceExtractor.GetSupportedLanguages();
-        using var postExtractionHooks = PostExtractionHookRunner.DiscoverDefault();
+        using var postExtractionHooks = PostExtractionHookRunner.DiscoverDefault(options.MaxFileSizeBytes);
         var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var currentFoldFingerprint = NameFold.Fingerprint();
         var currentCSharpSymbolNameContractVersion = DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -318,7 +318,7 @@ public static partial class IndexCommandRunner
             () => currentUpdatePath == null
                 ? $"{updated + removed + skipped:N0}/{targetPaths.Count:N0} files processed"
                 : $"{updated + removed + skipped:N0}/{targetPaths.Count:N0} files processed, current {currentUpdatePath}");
-        using var symbolExtractionWorker = new SymbolExtractionWorkerClient();
+        using var symbolExtractionWorker = new SymbolExtractionWorkerClient(options.MaxFileSizeBytes);
         try
         {
             foreach (var relPath in targetPaths)
@@ -719,7 +719,7 @@ public static partial class IndexCommandRunner
                     writer.InsertReferences(references);
                     // Validate content for encoding issues / エンコーディング問題を検証
                     currentUpdatePath = FormatIndexPhasePath(relPath, "validating");
-                    var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
+                    var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang);
                     writer.InsertIssues(fileId, issues);
                     currentUpdatePath = FormatIndexPhasePath(relPath, "committing");
                     writer.ClearBatchInProgress();

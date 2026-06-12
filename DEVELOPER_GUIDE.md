@@ -94,6 +94,22 @@ or publishing NuGet artifacts:
 dotnet run --project tools/CodeIndex.PackageNormalize -- nupkg/*.nupkg nupkg/*.snupkg
 ```
 
+For release diagnostics, inspect without rewriting and request a bounded
+summary across all candidate packages:
+
+```bash
+dotnet run --project tools/CodeIndex.PackageNormalize -- --dry-run --summary nupkg/*.nupkg nupkg/*.snupkg
+dotnet run --project tools/CodeIndex.PackageNormalize -- --dry-run --json --continue-on-error nupkg/*.nupkg nupkg/*.snupkg
+```
+
+`install.sh` is generated from focused fragments under `install_modules/`.
+After editing installer, doctor, self-test, reinstall, uninstall, or dispatch
+logic, regenerate the checked-in one-file installer before testing:
+
+```bash
+bash tools/build-install-sh.sh
+```
+
 | Normalizer rule | Detail |
 |---|---|
 | Reproducible OPC metadata (#2756) | NuGet's OPC package writer generates a random `package/services/metadata/core-properties/*.psmdcp` part name on each pack run. The normalizer rewrites that part to `package/services/metadata/core-properties/core-properties.psmdcp`, updates the matching content-type and relationship references, and gives ZIP entries stable timestamps. This is the package reproducibility boundary for `.nupkg` and `.snupkg` archives. |
@@ -236,18 +252,24 @@ Do not add mutable static caches, shared `StringBuilder` instances, reused `Matc
 | Kind | Current producers / meaning | Graph behavior |
 |---|---|---|
 | `accessor` | Accessor declarations when extracted separately from their owning property | Search/filter symbol |
+| `add` | Dockerfile `ADD` destination paths | Dependency/file-flow search symbol |
 | `annotation` | Annotation declarations or annotation-like language constructs | Metadata/search symbol |
 | `async_function` | JavaScript/TypeScript async function declarations | Callable definition; participates in callers/callees through reference rows |
 | `async_generator` | JavaScript/TypeScript async generator declarations | Callable definition; participates in callers/callees through reference rows |
 | `attribute` | Razor attributes and metadata-like declarations | Context/search symbol; not a call edge by itself |
 | `associatedtype` | Swift associated type declarations | Type-like definition target |
+| `base_image` | Dockerfile `FROM` image names | Container image search symbol |
+| `build_arg` | Dockerfile `ARG` names | Variable/search symbol; participates in Dockerfile variable references |
 | `class` | Class declarations across object-oriented languages | Definition target and container |
 | `class_hook` | Python class hook methods such as dunder hooks reclassified from functions | Callable/search symbol |
 | `code` | Markdown fenced or structured code blocks | Search/outline symbol |
 | `constant` | Constant declarations where the language distinguishes them | Search/filter symbol |
+| `copy` | Dockerfile `COPY` destination paths | Dependency/file-flow search symbol |
 | `delegate` | C# / F# delegate declarations | Callable type definition and container-like target |
 | `enum` | Enum declarations | Definition target and container |
+| `environment` | Dockerfile `ENV` variable names | Variable/search symbol; participates in Dockerfile variable references |
 | `event` | Event declarations | Search/filter symbol |
+| `expose` | Dockerfile `EXPOSE` ports | Container runtime search symbol |
 | `field` | Field declarations where distinct from properties | Search/filter symbol |
 | `file_module` | File-scoped module/package declarations | Namespace-like context symbol |
 | `function` | Functions, methods, constructors, delegates, tasks, and callable bindings that do not have a narrower kind | Primary callable definition; participates in callers/callees through reference rows |
@@ -258,6 +280,7 @@ Do not add mutable static caches, shared `StringBuilder` instances, reused `Matc
 | `import` | Imports, using directives, aliases, and package includes | Search/filter symbol |
 | `interface` | Interface declarations | Definition target and container |
 | `lambda` | Named lambda/arrow bindings | Callable definition; participates in callers/callees through reference rows |
+| `label` | Dockerfile `LABEL` keys | Metadata/search symbol |
 | `layout` | Razor layout directives | Context/search symbol |
 | `method` | Languages or hooks that explicitly distinguish methods from functions | Callable definition; participates in callers/callees through reference rows |
 | `module` | Module declarations | Definition target and container |
@@ -273,8 +296,12 @@ Do not add mutable static caches, shared `StringBuilder` instances, reused `Matc
 | `reference` | Secondary extracted symbolic references, such as HTML classes, metadata keys, or GraphQL union variants | Search/filter symbol |
 | `rule` | CSS/SCSS rule container context used by nested references | Container context |
 | `route` | Razor route directives | Context/search symbol |
+| `run` | Dockerfile `RUN` command bodies | Container build-step search symbol |
 | `service` | Service declarations in IDL/protobuf-like languages | Definition target and container |
+| `shell` | Dockerfile `SHELL` executables | Container runtime search symbol |
 | `specialization` | C++ template specialization declarations | Definition target for specialized type/function forms |
+| `stage` | Dockerfile named build stages | Build-stage definition; participates in Dockerfile stage references |
+| `stopsignal` | Dockerfile `STOPSIGNAL` values | Container runtime search symbol |
 | `struct` | Struct declarations | Definition target and container |
 | `submodule` | Fortran submodule declarations | Namespace/module-like definition target |
 | `subroutine` | Fortran subroutine declarations | Callable definition |
@@ -283,8 +310,11 @@ Do not add mutable static caches, shared `StringBuilder` instances, reused `Matc
 | `type` | Type declarations where a narrower class/interface/struct/enum kind is not available | Definition target |
 | `typealias` | Type alias declarations | Definition target for alias names |
 | `union` | Union declarations | Definition target and container |
+| `user` | Dockerfile `USER` values | Container runtime search symbol |
 | `block data` | Fortran block data declarations | Definition target |
 | `variable` | Variable bindings | Search/filter symbol |
+| `volume` | Dockerfile `VOLUME` paths | Container storage search symbol |
+| `workdir` | Dockerfile `WORKDIR` paths | Container filesystem search symbol |
 
 `symbol_references.reference_kind` uses this separate reference taxonomy:
 
@@ -338,9 +368,13 @@ On startup, `cdidx` walks up from the current directory looking for `.cdidx-vers
 `cdidx upgrade --json` has a stdout contract suitable for automation. Check-only
 and no-update results use the update-check fields
 (`current_version`, `latest_version`, `update_available`, `from_cache`,
-`error`). When an update is installed, installer stdout/stderr is captured so
-stdout remains one JSON document, with `install_attempted`, `install_exit_code`,
-and `install_succeeded` added to the update-check fields.
+`error`) plus release-selection fields (`selected_version`,
+`selected_channel`, `selection_source`, `include_prerelease`). When an update is
+installed, installer stdout/stderr is captured so stdout remains one JSON
+document, with `install_attempted`, `install_exit_code`, and
+`install_succeeded` added to the update-check fields. Windows handoff responses
+also include `handoff_command`, `handoff_url`, `handoff_asset`, and
+`handoff_asset_url`.
 
 ### Degradation reason codes
 
@@ -955,10 +989,12 @@ For the AI agent search-rule template, see [AI Integration](USER_GUIDE.md#ai-int
 |---|---|
 | Human-readable default | Query commands (`search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `excerpt`, `map`, `inspect`, `suggestions`) default to **human-readable output**. |
 | `--json` | Emits JSON lines output, one JSON object per line, designed for easy parsing by AI agents. |
+| `--count --json` envelope | Count-only JSON for `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, and `impact` is a single automation-oriented object. It always includes `count`, applied `query_context`, freshness metadata (`indexed_file_count`, `indexed_at`, `freshness_available`), and trust flags `degraded` / `authoritative_count`; commands with matched-file totals also include `files` and compatibility alias `file_count`. `authoritative_count=false` means a readiness or graph/exact trust signal made the count non-authoritative, while the freshness fields describe the indexed snapshot used for the count. |
 | `search --json` sentinel | Appends a final `{"done":true,"count":N,"interrupted":false}` sentinel after result rows, including zero-result responses, so stream consumers can distinguish a clean end from a truncated/interrupted stream. |
 | `--json-envelope` commands | Applies to `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `excerpt`, `map`, `inspect`, `outline`, `status`, `validate`, `languages`, `impact`, `deps`, `unused`, and `hotspots`. |
 | `--json-envelope` shape | Wraps the per-line `--json` stream into a single `{"metadata": {...}, "results": [...]}` document. `metadata` carries `api_version`, `command`, `cdidx_version`, `elapsed_ms`, `db_path`, `result_count`, `exit_code`, and, when applicable, `query_normalized` and `indexed_at_head_sha`. |
 | Envelope migration | `--json-envelope` implies `--json`, so callers do not need to pass both. The default output remains the legacy NDJSON / array form for one release; the envelope will become the default in the next major release, when the flat form becomes opt-in via `--json-flat`. |
+| `find --all` scan summary | `find` requires either repeatable `--path <glob>` filters or explicit `--all`. `--all` scans indexed files repo-wide with safety caps and cannot be combined with `--path`. JSON count output includes `candidate_files`, `files_scanned`, `lines_scanned`, `scan_truncated`, `scan_cap_reached`, optional `scan_truncation_reason`, and the active `candidate_file_limit` / `line_scan_limit`; human count output writes the same scan summary to stderr. |
 
 #### JSON output API version contract
 
@@ -1002,11 +1038,13 @@ Exact-match flag compatibility is documented in [USER_GUIDE.md](USER_GUIDE.md#fl
 
 `search`, `definition`, `references`, `callers`, `callees`, `symbols`, and `files` also share path-aware narrowing via `--path`, repeatable `--exclude-path`, and `--exclude-tests`. The read layer ranks source files ahead of tests and docs, and `search` further boosts exact symbol-name and path matches so AI clients are more likely to land on implementation files first.
 
-`search --json` and MCP `search` project full chunks into compact match-centered snippets with `chunk_start_line`, `chunk_end_line`, `snippet_start_line`, `snippet_end_line`, `snippet`, `match_lines`, `highlights`, `context_before`, `context_after`, `truncated_line_count`, `dropped_match_line_count`, and `truncation_context`. `--snippet-lines` caps the snippet length up front (default: 8, max: 20), and `--max-line-width` (CLI) / `maxLineWidth` (MCP) clamps each individual snippet line around the first match token via the shared `LineWidthFormatter.ClampLine` contract used by `find` / `references` / `excerpt` / `inspect` (default: 512, max: 4096) so a single match inside a minified / transpiled / generated single-line file no longer returns hundreds of KB per hit. Clamped lines surface `...(+N)...` markers inside the snippet and expose `truncation_context.char_counts`, `truncation_context.total_chars`, `highlights[].truncated`, `highlights[].original_line_length`, and `highlights[].truncated_char_counts` so AI clients can detect clamping and quantify omitted characters. `highlights[].terms` remains a distinct term list for compatibility; `highlights[].term_occurrences` records every matched occurrence with `term`, 1-based `line`, 1-based `column`, and `length`. Exact substring search also adds `highlights[].literal_terms` and `highlights[].literal_term_occurrences` (camelCase in MCP) so clients can render only the requested literal phrase while preserving the broader diagnostic token list. Non-exact punctuation-heavy code-phrase searches add `exact_substring_hint` to CLI JSON compact results and `recovery_hint` to MCP `search` responses so clients can retry with exact substring semantics when FTS tokenization is likely to hide punctuation. `dropped_match_line_count` reports match lines omitted because they fell outside the selected snippet window.
+`search --json` and MCP `search` project full chunks into compact match-centered snippets with `chunk_start_line`, `chunk_end_line`, `snippet_start_line`, `snippet_end_line`, `snippet`, `match_lines`, `highlights`, `context_before`, `context_after`, `truncated_line_count`, `dropped_match_line_count`, and `truncation_context`. Compact CLI rows and MCP search results also echo effective output options with `snippet_lines` / `snippetLines`, `max_line_width` / `maxLineWidth`, `exact`, `raw_fts` / `rawFts`, `literal_highlights_available` / `literalHighlightsAvailable`, and optional `literal_highlight_warning` / `literalHighlightWarning`. `--snippet-lines` caps the snippet length up front (default: 8, max: 20), and `--max-line-width` (CLI) / `maxLineWidth` (MCP) clamps each individual snippet line around the first match token via the shared `LineWidthFormatter.ClampLine` contract used by `find` / `references` / `excerpt` / `inspect` (default: 512, max: 4096) so a single match inside a minified / transpiled / generated single-line file no longer returns hundreds of KB per hit. Clamped lines surface `...(+N)...` markers inside the snippet and expose `truncation_context.char_counts`, `truncation_context.total_chars`, `highlights[].truncated`, `highlights[].original_line_length`, and `highlights[].truncated_char_counts` so AI clients can detect clamping and quantify omitted characters. `highlights[].terms` remains a distinct term list for compatibility; `highlights[].term_occurrences` records every matched occurrence with `term`, 1-based `line`, 1-based `column`, `length`, plus `visible`, `visible_column`, and `visible_length` for the portion still present in the returned snippet text after line clamping. Exact substring search also adds `highlights[].literal_terms` and `highlights[].literal_term_occurrences` (camelCase in MCP) so clients can render only the requested literal phrase while preserving the broader diagnostic token list; raw FTS rows set `literal_highlight_warning` / `literalHighlightWarning` to `literal_highlights_unavailable_raw_fts` because FTS syntax can no longer be mapped to one literal phrase. Non-exact punctuation-heavy code-phrase searches add `exact_substring_hint` to CLI JSON compact results and `recovery_hint` to MCP `search` responses so clients can retry with exact substring semantics when FTS tokenization is likely to hide punctuation. `focus_mode`, `focus_line`, `focus_column`, and `focus_reason` describe the match window selected for the snippet, while `dropped_match_line_count` and optional `next_match` report match lines omitted because they fell outside that selected snippet window.
 
 When the match line falls inside an indexed symbol range, `search --json` and MCP `search` also include optional `enclosing_symbol_name`, `enclosing_symbol_kind`, `enclosing_symbol_start_line`, `enclosing_symbol_end_line`, and `enclosing_container_name`.
 
-`excerpt --json` includes `semantic_tokens`, a lightweight range list with 1-based start/end positions, token `type`, and `modifiers`, so IDE and LLM clients can render or post-process excerpt spans without reparsing the raw `content` string.
+`find --json` remains line-delimited for repeated matches and adds bounded match-span/truncation metadata to each row: `length` reports the 1-based `column` span length, `original_line_length` reports the source line length before any line-width clamp, and `snippet_truncation_context.line_count` / `char_counts` / `total_chars` / optional `reason` describe snippet clamping. `reason` is `line_width` when `--max-line-width` elides one or more snippet lines.
+
+`excerpt --json` includes `semantic_tokens`, a lightweight range list with 1-based start/end positions, token `type`, and `modifiers`, so IDE and LLM clients can render or post-process excerpt spans without reparsing the raw `content` string. Excerpt rows also expose `requested_start_line`, `requested_end_line`, `effective_start_line`, `effective_end_line`, `content_truncation_reasons`, and optional `content_recovery` so clients can tell when `--max-line-width` caused `line_width_cap` and replay `cdidx excerpt ... --max-line-width 0 --json` for the omitted text. Body-bearing JSON rows use matching `body_requested_*`, `body_effective_*`, `body_content_truncation_reasons`, and `body_content_recovery` fields; body reasons include `body_line_cap` for snippet/body line caps and `body_byte_cap` for definition body byte caps.
 
 `inspect` and MCP `analyze_symbol` bundle the primary definition, nearby symbols from the same file, references, callers, callees, file metadata, workspace freshness/git metadata, and graph-support metadata into one response. When those bundled graph sections actually depend on SQL-backed reads, the payload also mirrors `sql_graph_contract_ready` / `sql_graph_contract_degraded_reason` (plus the existing camelCase aliases on MCP responses); mixed-language bundles that only return C# / JS / etc. graph rows omit the SQL trust signal entirely. This is intended for symbol-oriented AI workflows that would otherwise need several back-to-back calls. Call graph sections remain language-aware: for unsupported languages, clients can now distinguish "unsupported" from "no hits" via `graphSupported` / `graphSupportReason`, and should prefer `search` instead of assuming graph data will exist.
 
@@ -1767,11 +1805,14 @@ Piping `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}` into
   caller as `stdio` / `local`). Setting `CDIDX_MCP_AUTH_TOKEN` swaps in
   `TokenMcpAuthenticator` for stdio, which requires every responded request
   to carry a matching `params.auth.token` and compares it in constant time
-  via `CryptographicOperations.FixedTimeEquals`. HTTP does not also use this
-  body-token gate: `ProgramRunner` resolves a bearer secret for the HTTP
-  transport from `CDIDX_MCP_HTTP_TOKEN`, falling back to `CDIDX_MCP_AUTH_TOKEN`
-  when the HTTP-specific variable is unset, and then relies on the
-  `Authorization: Bearer ...` transport check (#3156). For the JSON-RPC
+  via `CryptographicOperations.FixedTimeEquals`. Unset or empty configured
+  tokens keep the stdio gate disabled, while configured tokens must be 1-4096
+  characters and cannot contain whitespace or control characters (#3505).
+  HTTP does not also use this body-token gate: `ProgramRunner` resolves a
+  bearer secret for the HTTP transport from `CDIDX_MCP_HTTP_TOKEN`, falling
+  back to `CDIDX_MCP_AUTH_TOKEN` when the HTTP-specific variable is unset,
+  and then relies on the `Authorization: Bearer ...` transport check (#3156).
+  For the JSON-RPC
   body-token gate, failures uniformly return JSON-RPC `-32001 "Unauthorized"`
   (per #1530 sanitization — the
   wire never distinguishes missing-from-wrong), and `BuildAuthFailureLog`
@@ -1866,8 +1907,12 @@ return `-32600`.
   HTTP falls back to `CDIDX_MCP_AUTH_TOKEN` as the bearer secret; when both
   are set, `CDIDX_MCP_HTTP_TOKEN` wins. HTTP clients never need to also send
   `params.auth.token`. The CLI refuses to bind to a non-loopback host without
-  either token to keep the MCP catalog off the LAN by default. Configured and
-  supplied tokens over 4096 characters are rejected before hashing.
+  either token to keep the MCP catalog off the LAN by default. Unset or empty
+  configured bearer tokens disable the HTTP token gate where allowed by the
+  listen host policy, while configured tokens must be 1-4096 characters and
+  cannot contain whitespace or control characters (#3505). Supplied HTTP
+  bearer values are compared exactly after the `Bearer ` prefix: they are not
+  trimmed, and invalid-shape or oversized values are rejected before hashing.
 - Optional request-loop logging: `ProgramRunner` connects `HttpMcpTransport`
   to `GlobalToolLog`, so persistent logging records one `mcp_http_request`
   line per HTTP request when the lifecycle log is enabled. The record includes
@@ -2205,6 +2250,22 @@ package normalization を実行します:
 dotnet run --project tools/CodeIndex.PackageNormalize -- nupkg/*.nupkg nupkg/*.snupkg
 ```
 
+release diagnostics では、書き換えずに検査し、candidate package 全体の bounded
+summary を取得できます:
+
+```bash
+dotnet run --project tools/CodeIndex.PackageNormalize -- --dry-run --summary nupkg/*.nupkg nupkg/*.snupkg
+dotnet run --project tools/CodeIndex.PackageNormalize -- --dry-run --json --continue-on-error nupkg/*.nupkg nupkg/*.snupkg
+```
+
+`install.sh` は `install_modules/` 配下の focused fragment から生成されます。
+installer、doctor、self-test、reinstall、uninstall、dispatch logic を変更した場合は、
+テスト前に checked-in の単一ファイル installer を再生成してください:
+
+```bash
+bash tools/build-install-sh.sh
+```
+
 | normalizer rule | 詳細 |
 |---|---|
 | 再現可能な OPC metadata (#2756) | NuGet の OPC package writer は `package/services/metadata/core-properties/*.psmdcp` part 名を pack ごとにランダム生成します。normalizer はその part を `package/services/metadata/core-properties/core-properties.psmdcp` に書き換え、対応する content-type / relationship 参照も更新し、ZIP entry timestamp を固定します。これが `.nupkg` / `.snupkg` archive の package 再現性境界です。 |
@@ -2389,18 +2450,24 @@ filter、downstream JSON consumer が同じ値を理解できるようにして�
 | Kind | 現在の producer / 意味 | Graph behavior |
 |---|---|---|
 | `accessor` | owning property から別 symbol として抽出される accessor declaration | Search/filter symbol |
+| `add` | Dockerfile `ADD` の destination path | dependency / file-flow search symbol |
 | `annotation` | annotation declaration または annotation-like な言語構文 | Metadata/search symbol |
 | `async_function` | JavaScript / TypeScript の async function declaration | Callable definition。reference row 経由で callers/callees に参加 |
 | `async_generator` | JavaScript / TypeScript の async generator declaration | Callable definition。reference row 経由で callers/callees に参加 |
 | `attribute` | Razor attribute と metadata-like declaration | Context/search symbol。単独では call edge ではない |
 | `associatedtype` | Swift associated type declaration | Type-like definition target |
+| `base_image` | Dockerfile `FROM` の image name | container image search symbol |
+| `build_arg` | Dockerfile `ARG` 名 | variable/search symbol。Dockerfile variable reference に参加 |
 | `class` | object-oriented language 全般の class declaration | Definition target and container |
 | `class_hook` | Python dunder hook など、function から再分類された class hook method | Callable/search symbol |
 | `code` | Markdown fenced code block または structured code block | Search/outline symbol |
 | `constant` | 言語が区別する constant declaration | Search/filter symbol |
+| `copy` | Dockerfile `COPY` の destination path | dependency / file-flow search symbol |
 | `delegate` | C# / F# delegate declaration | Callable type definition and container-like target |
 | `enum` | enum declaration | Definition target and container |
+| `environment` | Dockerfile `ENV` variable name | variable/search symbol。Dockerfile variable reference に参加 |
 | `event` | event declaration | Search/filter symbol |
+| `expose` | Dockerfile `EXPOSE` port | container runtime search symbol |
 | `field` | property と区別される field declaration | Search/filter symbol |
 | `file_module` | file-scoped module / package declaration | Namespace-like context symbol |
 | `function` | 関数、method、constructor、delegate、task、およびより狭い kind がない callable binding | Primary callable definition。reference row 経由で callers/callees に参加 |
@@ -2411,6 +2478,7 @@ filter、downstream JSON consumer が同じ値を理解できるようにして�
 | `import` | import、using directive、alias、package include | Search/filter symbol |
 | `interface` | interface declaration | Definition target and container |
 | `lambda` | named lambda / arrow binding | Callable definition。reference row 経由で callers/callees に参加 |
+| `label` | Dockerfile `LABEL` key | metadata/search symbol |
 | `layout` | Razor layout directive | Context/search symbol |
 | `method` | function と method を明示的に区別する言語または hook | Callable definition。reference row 経由で callers/callees に参加 |
 | `module` | module declaration | Definition target and container |
@@ -2426,8 +2494,12 @@ filter、downstream JSON consumer が同じ値を理解できるようにして�
 | `reference` | HTML class、metadata key、GraphQL union variant などの secondary extracted symbolic reference | Search/filter symbol |
 | `rule` | nested reference が使う CSS / SCSS rule container context | Container context |
 | `route` | Razor route directive | Context/search symbol |
+| `run` | Dockerfile `RUN` command body | container build-step search symbol |
 | `service` | IDL / protobuf-like language の service declaration | Definition target and container |
+| `shell` | Dockerfile `SHELL` executable | container runtime search symbol |
 | `specialization` | C++ template specialization declaration | specialized type / function form の definition target |
+| `stage` | Dockerfile named build stage | build-stage definition。Dockerfile stage reference に参加 |
+| `stopsignal` | Dockerfile `STOPSIGNAL` value | container runtime search symbol |
 | `struct` | struct declaration | Definition target and container |
 | `submodule` | Fortran submodule declaration | Namespace/module-like definition target |
 | `subroutine` | Fortran subroutine declaration | Callable definition |
@@ -2436,8 +2508,11 @@ filter、downstream JSON consumer が同じ値を理解できるようにして�
 | `type` | より狭い class / interface / struct / enum kind が使えない type declaration | Definition target |
 | `typealias` | type alias declaration | alias name の definition target |
 | `union` | union declaration | Definition target and container |
+| `user` | Dockerfile `USER` value | container runtime search symbol |
 | `block data` | Fortran block data declaration | Definition target |
 | `variable` | variable binding | Search/filter symbol |
+| `volume` | Dockerfile `VOLUME` path | container storage search symbol |
+| `workdir` | Dockerfile `WORKDIR` path | container filesystem search symbol |
 
 `symbol_references.reference_kind` は別の reference taxonomy を使います。
 
@@ -2501,10 +2576,13 @@ latest release の installer を実行します。
 
 `cdidx upgrade --json` は automation 向けの stdout contract を持ちます。check-only と
 no-update の結果は update-check fields (`current_version`, `latest_version`,
-`update_available`, `from_cache`, `error`) を使います。update を install する場合、
-installer stdout/stderr は capture されるため stdout は 1 個の JSON document のままになり、
-update-check fields に `install_attempted`、`install_exit_code`、`install_succeeded` が
-追加されます。
+`update_available`, `from_cache`, `error`) に release-selection fields
+(`selected_version`, `selected_channel`, `selection_source`, `include_prerelease`)
+を加えたものを使います。update を install する場合、installer stdout/stderr は
+capture されるため stdout は 1 個の JSON document のままになり、update-check fields に
+`install_attempted`、`install_exit_code`、`install_succeeded` が追加されます。Windows
+handoff response には `handoff_command`、`handoff_url`、`handoff_asset`、
+`handoff_asset_url` も含まれます。
 
 ### 劣化理由コード
 
@@ -3095,10 +3173,12 @@ AI エージェント向け検索ルールのテンプレートについては�
 |---|---|
 | human-readable default | query command（`search`、`definition`、`references`、`callers`、`callees`、`symbols`、`files`、`excerpt`、`map`、`inspect`、`suggestions`）は既定で**人間向け出力**です。 |
 | `--json` | JSON lines output（1 行 1 JSON object）に切り替えます。AI agent が容易に parse できるよう設計されています。 |
+| `--count --json` envelope | `search`、`definition`、`references`、`callers`、`callees`、`symbols`、`files`、`find`、`impact` の count-only JSON は単一の自動化向け object です。常に `count`、適用済み `query_context`、freshness metadata（`indexed_file_count`、`indexed_at`、`freshness_available`）、trust flag の `degraded` / `authoritative_count` を含みます。matched-file total を持つ command は `files` と互換 alias の `file_count` も含みます。`authoritative_count=false` は readiness または graph/exact trust signal により count が authoritative ではないことを示し、freshness field は count に使った index snapshot を説明します。 |
 | `search --json` sentinel | result row の後に、0 件応答も含めて最後の `{"done":true,"count":N,"interrupted":false}` sentinel を追加します。stream consumer は clean end と truncated / interrupted stream を区別できます。 |
 | `--json-envelope` 対象 command | `search`、`definition`、`references`、`callers`、`callees`、`symbols`、`files`、`find`、`excerpt`、`map`、`inspect`、`outline`、`status`、`validate`、`languages`、`impact`、`deps`、`unused`、`hotspots`。 |
 | `--json-envelope` shape | per-line `--json` stream を単一の `{"metadata": {...}, "results": [...]}` document に包みます。`metadata` は `api_version`、`command`、`cdidx_version`、`elapsed_ms`、`db_path`、`result_count`、`exit_code`、該当時は `query_normalized` と `indexed_at_head_sha` を持ちます。 |
 | envelope migration | `--json-envelope` は `--json` を imply するため、caller は両方を指定する必要がありません。既定 output は 1 release の間 legacy NDJSON / array form のままです。次の major release では envelope が既定になり、flat form は `--json-flat` による opt-in になります。 |
+| `find --all` scan summary | `find` は repeatable な `--path <glob>` か明示的な `--all` のどちらかを要求します。`--all` は safety cap 付きで index 済みファイルを repo-wide に走査し、`--path` とは併用できません。JSON count output は `candidate_files`、`files_scanned`、`lines_scanned`、`scan_truncated`、`scan_cap_reached`、任意の `scan_truncation_reason`、有効な `candidate_file_limit` / `line_scan_limit` を含みます。human count output は同じ scan summary を stderr に出します。 |
 
 #### JSON 出力 API バージョン契約
 
@@ -3144,11 +3224,13 @@ exact-match flag の互換性は [USER_GUIDE.md](USER_GUIDE.md#フラグ互換�
 
 literal-safe な `search` query は reader 層で FTS5 sanitization 前に 1000 文字、128 whitespace term へ制限します。CLI、MCP、直接 reader caller の failure mode を揃えるため、この guard は `DbReader` に置きます。raw `--fts` query は別途 raw FTS complexity limit を使います。
 
-`search --json` と MCP の `search` は、フルチャンクを `chunk_start_line`、`chunk_end_line`、`snippet_start_line`、`snippet_end_line`、`snippet`、`match_lines`、`highlights`、`context_before`、`context_after`、`truncated_line_count`、`dropped_match_line_count`、`truncation_context` を持つ軽量スニペットへ投影します。`--snippet-lines` で抜粋長を先に制限でき（デフォルト: 8、最大: 20）、`--max-line-width`（CLI）/ `maxLineWidth`（MCP）は `find` / `references` / `excerpt` / `inspect` と同じ共有 `LineWidthFormatter.ClampLine` 契約（デフォルト: 512、最大: 4096、`0` で切り詰め解除）で各スニペット行を最初のマッチトークン周辺にクランプするため、minified / transpiled / 生成された 1 行ファイル内の 1 ヒットで数百 KB を返さなくなります。クランプされた行はスニペットに `...(+N)...` マーカーが入り、`truncation_context.char_counts`、`truncation_context.total_chars`、`highlights[].truncated`、`highlights[].original_line_length`、`highlights[].truncated_char_counts` で AI クライアントがクランプの有無と省略文字数を検出できます。`highlights[].terms` は互換性のため distinct な term list のまま残し、`highlights[].term_occurrences` は一致ごとの `term`、1-based の `line` / `column`、`length` を記録します。exact substring search では `highlights[].literal_terms` と `highlights[].literal_term_occurrences`（MCP では camelCase）も追加され、広めの診断 token list を残したまま、要求された literal phrase だけを render できます。exact ではない記号の多い code phrase 検索では、FTS tokenization が記号を失いやすい場合に exact substring semantics で再検索できるよう、CLI JSON compact result に `exact_substring_hint`、MCP `search` に `recovery_hint` を追加します。`dropped_match_line_count` は選択された snippet window 外に落ちた一致行数を示します。
+`search --json` と MCP の `search` は、フルチャンクを `chunk_start_line`、`chunk_end_line`、`snippet_start_line`、`snippet_end_line`、`snippet`、`match_lines`、`highlights`、`context_before`、`context_after`、`truncated_line_count`、`dropped_match_line_count`、`truncation_context` を持つ軽量スニペットへ投影します。compact CLI row と MCP search result は有効な出力オプションも `snippet_lines` / `snippetLines`、`max_line_width` / `maxLineWidth`、`exact`、`raw_fts` / `rawFts`、`literal_highlights_available` / `literalHighlightsAvailable`、任意の `literal_highlight_warning` / `literalHighlightWarning` として返します。`--snippet-lines` で抜粋長を先に制限でき（デフォルト: 8、最大: 20）、`--max-line-width`（CLI）/ `maxLineWidth`（MCP）は `find` / `references` / `excerpt` / `inspect` と同じ共有 `LineWidthFormatter.ClampLine` 契約（デフォルト: 512、最大: 4096、`0` で切り詰め解除）で各スニペット行を最初のマッチトークン周辺にクランプするため、minified / transpiled / 生成された 1 行ファイル内の 1 ヒットで数百 KB を返さなくなります。クランプされた行はスニペットに `...(+N)...` マーカーが入り、`truncation_context.char_counts`、`truncation_context.total_chars`、`highlights[].truncated`、`highlights[].original_line_length`、`highlights[].truncated_char_counts` で AI クライアントがクランプの有無と省略文字数を検出できます。`highlights[].terms` は互換性のため distinct な term list のまま残し、`highlights[].term_occurrences` は一致ごとの `term`、1-based の `line` / `column`、`length` に加えて、行クランプ後に返却 snippet text 内へ残っている部分を示す `visible`、`visible_column`、`visible_length` を記録します。exact substring search では `highlights[].literal_terms` と `highlights[].literal_term_occurrences`（MCP では camelCase）も追加され、広めの診断 token list を残したまま、要求された literal phrase だけを render できます。raw FTS row は FTS 構文を単一の literal phrase へ対応付けられないため、`literal_highlight_warning` / `literalHighlightWarning` に `literal_highlights_unavailable_raw_fts` を設定します。exact ではない記号の多い code phrase 検索では、FTS tokenization が記号を失いやすい場合に exact substring semantics で再検索できるよう、CLI JSON compact result に `exact_substring_hint`、MCP `search` に `recovery_hint` を追加します。`focus_mode`、`focus_line`、`focus_column`、`focus_reason` は snippet に選ばれた match window を説明し、`dropped_match_line_count` と任意の `next_match` は選択された snippet window 外に落ちた一致行を示します。
 
 マッチ行がインデックス済みシンボル範囲内にある場合、`search --json` と MCP の `search` は任意フィールドの `enclosing_symbol_name`、`enclosing_symbol_kind`、`enclosing_symbol_start_line`、`enclosing_symbol_end_line`、`enclosing_container_name` も返します。
 
-`excerpt --json` は 1-based の開始/終了位置、token `type`、`modifiers` を持つ軽量 range list の `semantic_tokens` を返すため、IDE や LLM クライアントは生の `content` 文字列を再パースせずに抜粋範囲を描画・後処理できます。
+`find --json` は繰り返し一致でも line-delimited のまま維持し、各 row に bounded な match span / truncation metadata を追加します。`length` は 1-based の `column` から始まる一致長、`original_line_length` は行幅クランプ前のソース行長、`snippet_truncation_context.line_count` / `char_counts` / `total_chars` / 任意の `reason` は snippet クランプを表します。`--max-line-width` によって snippet 行が省略された場合、`reason` は `line_width` になります。
+
+`excerpt --json` は 1-based の開始/終了位置、token `type`、`modifiers` を持つ軽量 range list の `semantic_tokens` を返すため、IDE や LLM クライアントは生の `content` 文字列を再パースせずに抜粋範囲を描画・後処理できます。excerpt row は `requested_start_line`、`requested_end_line`、`effective_start_line`、`effective_end_line`、`content_truncation_reasons`、任意の `content_recovery` も返すため、`--max-line-width` による `line_width_cap` を検出し、省略部分を `cdidx excerpt ... --max-line-width 0 --json` で再取得できます。body を持つ JSON row も対応する `body_requested_*`、`body_effective_*`、`body_content_truncation_reasons`、`body_content_recovery` を返します。body reason には snippet/body 行数上限の `body_line_cap` と definition body byte 上限の `body_byte_cap` があります。
 
 `inspect` と MCP の `analyze_symbol` は、主定義、同一ファイル内の近傍シンボル、参照、caller、callee、ファイルメタデータ、さらにワークスペース鮮度/git メタデータと graph 対応メタデータを1レスポンスにまとめます。bundle 内の graph 節が実際に SQL ベースの read に依存する場合だけ、`sql_graph_contract_ready` / `sql_graph_contract_degraded_reason`（MCP では既存の camelCase alias も）も返します。mixed-language bundle で C# / JS などの graph row しか返っていない場合は SQL trust signal を出さないため、無関係なクエリが stale SQL state に引きずられません。複数の連続クエリを避けたい AI ワークフロー向けです。call graph 系の節は言語差分を考慮しており、未対応言語では `graphSupported` / `graphSupportReason` によって「未対応」と「ヒットなし」を区別できます。その場合は `search` を優先して使う前提です。
 
@@ -3642,7 +3724,7 @@ sequenceDiagram
 - `initialize` レスポンスは `protocolVersion`、`capabilities`、`serverInfo.name`、`serverInfo.version`（`ConsoleUi.LoadVersion()` — `version.json` が源）、および AI クライアントにツール選択を案内する長い `instructions` 文字列を返す。レスポンスを書き終えた後、サーバーはセッションごとに 1 回だけ互換性用の `notifications/initialized` ready signal を送るため、サーバー側の ready signal を待つクライアントも optimistic polling なしで進める（#1780）。MCP は `notifications/initialized` を client-to-server 通知としても定義しており、cdidx はその方向も no-op として受理する。非 HTTP transport では、この互換性 signal が唯一の server-origin emission です。HTTP session は `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S` を設定した場合、opt-in の keep-alive notification も `/events` で受け取れる。HTTP transport では out-of-band 通知は接続済みの `/events` SSE stream にだけ配送され、POST のみのクライアントは initialize response だけを受け取り、別通知 frame は受け取らない。
 - advertised capability には `tools`、`resources`、`prompts`、`logging` が含まれる。`logging` は MCP `notifications/message` を示し、`logging/setLevel` は `debug`、`info`、`notice`、`warning`、`error`、`critical`、`alert`、`emergency` を受け付ける。
 - `protocolVersion` は**ハードコードではなく交渉**で決まる（#1554）。サーバーは `McpServer.SupportedProtocolVersions`（新しい順: `2025-03-26`, `2024-11-05`）を保持し、`initialize` パラメータからクライアント要求バージョンを読み取って、対応集合にあればそれを返し（合意）、未指定／非文字列なら既定の最新バージョンに fallback し、対応外なら `error.data` に `requestedVersion` と `supportedVersions` を入れた JSON-RPC `-32602` で拒否する。これにより将来 MCP 仕様が改訂されても、wire format が黙ってずれるのではなく actionable な handshake 失敗として表面化する。配列を新バージョンで更新する際は `ProtocolVersion` を先頭エントリと揃えて意図的に bump する。
-- **認証ミドルウェア**（#1559）。`McpServer` はパース済み JSON-RPC リクエストごとに、メソッド抽出 *後*・dispatch *前* で `IMcpAuthenticator` を呼ぶ。既定の `LocalStdioAuthenticator` は permissive で（従来の stdio 動作を維持し、呼び出し元を `stdio` / `local` でタグ付けする）、stdio では `CDIDX_MCP_AUTH_TOKEN` を設定すると `TokenMcpAuthenticator` に切り替わる。`TokenMcpAuthenticator` は応答が必要な全リクエストに対し、`params.auth.token` が一致することを要求し、比較は `CryptographicOperations.FixedTimeEquals` による定数時間比較で行う。HTTP はこの body token ゲートを重ねず、`ProgramRunner` が `CDIDX_MCP_HTTP_TOKEN` を優先し、未設定なら `CDIDX_MCP_AUTH_TOKEN` を fallback として bearer secret に解決して、`Authorization: Bearer ...` の transport check に一本化する（#3156）。JSON-RPC body token ゲートの失敗は統一された JSON-RPC `-32001 "Unauthorized"` を返し（#1530 の sanitization 方針に従い、ワイヤでは未提示と不一致を区別しない）、`BuildAuthFailureLog` が詳細を stderr に書き出す。通知（`notifications/initialized`、`notifications/cancelled`）は応答もエラーコードも持たないため、ゲート *より前* で short-circuit する。このミドルウェアが将来 transport の差し替え seam になる — ネットワーク listener は別の `IMcpAuthenticator` を提供しつつ、`McpCallerIdentity`（`Source` + `Subject`）の形を保ち、監査ログ（#1562）から再利用できる。
+- **認証ミドルウェア**（#1559）。`McpServer` はパース済み JSON-RPC リクエストごとに、メソッド抽出 *後*・dispatch *前* で `IMcpAuthenticator` を呼ぶ。既定の `LocalStdioAuthenticator` は permissive で（従来の stdio 動作を維持し、呼び出し元を `stdio` / `local` でタグ付けする）、stdio では `CDIDX_MCP_AUTH_TOKEN` を設定すると `TokenMcpAuthenticator` に切り替わる。未設定または空文字の token だけが permissive で、空白のみ・空白文字入り・制御文字入り・4096 文字超の token は設定値として拒否する。`TokenMcpAuthenticator` は応答が必要な全リクエストに対し、`params.auth.token` が一致することを要求し、比較は `CryptographicOperations.FixedTimeEquals` による定数時間比較で行う。HTTP はこの body token ゲートを重ねず、`ProgramRunner` が `CDIDX_MCP_HTTP_TOKEN` を優先し、未設定なら `CDIDX_MCP_AUTH_TOKEN` を fallback として bearer secret に解決して、`Authorization: Bearer ...` の transport check に一本化する（#3156）。HTTP bearer 値は `Bearer ` の後ろを trim せず完全一致で扱い、空白文字・制御文字・4096 文字超は hash 前に拒否する。JSON-RPC body token ゲートの失敗は統一された JSON-RPC `-32001 "Unauthorized"` を返し（#1530 の sanitization 方針に従い、ワイヤでは未提示と不一致を区別しない）、`BuildAuthFailureLog` が詳細を stderr に書き出す。通知（`notifications/initialized`、`notifications/cancelled`）は応答もエラーコードも持たないため、ゲート *より前* で short-circuit する。このミドルウェアが将来 transport の差し替え seam になる — ネットワーク listener は別の `IMcpAuthenticator` を提供しつつ、`McpCallerIdentity`（`Source` + `Subject`）の形を保ち、監査ログ（#1562）から再利用できる。
 
 MCP は独立したシリアライズ戦略（オブジェクトを JSON などの転送形式に変換する方式のこと。CLI の `--json` 側は .NET 標準の `JsonSerializer` に任せる方式、MCP 側は `JsonObject` を手で組み立てる方式と、別の手段を採っている）を採るため、「そもそもバイナリは走るのか?」を確かめる最も頑健なスモークテスト（デプロイや起動直後に行う、基本動作だけを短時間で確認する簡易テストのこと。詳細な正しさではなく「煙が出ていないか＝致命的に壊れていないか」を見るためこの名で呼ばれる）となる — .NET ホスト、`Program.Main`、CLI ルーティング、`ConsoleUi.LoadVersion()` に負荷をかけるが、SQLite には触れない（`search` など MCP の*ツール呼び出し*は SQLite に触れるが、`initialize` 単独では触れない）。
 
@@ -3662,7 +3744,7 @@ MCP は独立したシリアライズ戦略（オブジェクトを JSON など�
 - HTTP POST 1 件 = JSON-RPC フレーム 1 件で、対応する応答は HTTP レスポンスのボディ（`200 OK` / `application/json; charset=utf-8`）に乗る。通知は `204 No Content`。`GET /events` は将来のサーバー→クライアント frame 用に独立した `text/event-stream` subscription を開く。サーバーは `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S` で keep-alive notification が opt-in された場合を除き、自発的な frame を送信しない。長寿命の event stream は通常の POST リクエストを塞がない。`/` への POST 以外は `405 Method Not Allowed`。空 / 空白のみのボディは stdio の空行と同じ扱いで `204 No Content` を返し、ループは殺さない — クライアントの誤動作で junk フレームに引っかからないため。リクエスト本文は `CDIDX_MCP_HTTP_MAX_REQUEST_BYTES`（既定: 1,000,000 bytes、最大: 16,777,216 bytes）で制限し、超過時は全量を buffer する前に `413 Payload Too Large` を返す。保留中 request queue は `CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH`（既定: 64、最大: 1,024）、受理済み context handler task は `CDIDX_MCP_HTTP_MAX_CONCURRENT_HANDLERS`（既定: 64、最大: 1,024）、同時 `/events` stream は `CDIDX_MCP_HTTP_MAX_EVENT_STREAMS`（既定: 16、最大: 1,024）で制限し、満杯時は無制限に work を保持せず `Retry-After: 1` 付きの `429 Too Many Requests` を返す。正でない値や数値でない環境変数値は既定にフォールバックし、最大値を超える値は listener 起動前に拒否する。
 - SSE stream lifetime は active stream registry と上限付き active-stream counter だけで表現する。idle stream には最小限の SSE comment heartbeat を送り、切断済み client を検出して stream slot を解放する。その registry entry が削除された後に完了済み stream task を保持しない。
 - `ResolveListenSpec("host:port")` は prefix を事前に解決するため、CLI が stderr に `Listening on http://...` を出せる。ポート `0` は一時 `TcpListener` を probe して空きポートを取得する。probe から `HttpListener.Start()` までの TOCTOU window は、本トランスポートが local-only / single-tenant 想定であるため許容する。ワイルドカードホスト `+` / `*` はパース時点で拒否する。
-- 任意の共有秘密による認証: `CDIDX_MCP_HTTP_TOKEN` が設定されていれば、listener はすべてのリクエストに `Authorization: Bearer <token>` を要求し、定数時間で比較する。`CDIDX_MCP_HTTP_TOKEN` が未設定なら HTTP は `CDIDX_MCP_AUTH_TOKEN` を bearer secret として fallback し、両方が設定されている場合は `CDIDX_MCP_HTTP_TOKEN` を優先する。HTTP クライアントが `params.auth.token` も送る必要はない。どちらのトークンも未指定で非 loopback ホストへ bind しようとした場合、CLI は MCP カタログを LAN に漏らさないよう既定で拒否する。設定 token と受信 token は 4096 文字を超える場合、hash 前に拒否する。
+- 任意の共有秘密による認証: `CDIDX_MCP_HTTP_TOKEN` が設定されていれば、listener はすべてのリクエストに `Authorization: Bearer <token>` を要求し、定数時間で比較する。`CDIDX_MCP_HTTP_TOKEN` が未設定なら HTTP は `CDIDX_MCP_AUTH_TOKEN` を bearer secret として fallback し、両方が設定されている場合は `CDIDX_MCP_HTTP_TOKEN` を優先する。HTTP クライアントが `params.auth.token` も送る必要はない。どちらのトークンも未指定または空文字で非 loopback ホストへ bind しようとした場合、CLI は MCP カタログを LAN に漏らさないよう既定で拒否する。設定 token は 1-4096 文字で、空白文字・制御文字を含んではならない。受信 bearer token も trim せず完全一致で扱い、空白文字・制御文字・4096 文字超は hash 前に拒否する。
 - 任意のリクエストループログ: `ProgramRunner` は `HttpMcpTransport` を `GlobalToolLog` に接続するため、lifecycle log が有効な場合は HTTP リクエストごとに `mcp_http_request` 行を 1 件記録する。記録内容は method、path、status、duration、auth outcome、remote peer、correlation id、利用可能な JSON-RPC request id で、caller-controlled な method、path、remote peer、request id は 256 文字を上限に `...<truncated>` marker 付きで切り詰める。リクエスト/レスポンス本文は含めない。
 - キャンセルは `_listener.Stop()` に接続するため、シャットダウン時に `GetContextAsync()` が unblock する。`HttpListenerException` / `ObjectDisposedException` は EOS と同じ扱いで MCP ループを stdin クローズと同じ経路で終了させる。
 

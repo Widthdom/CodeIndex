@@ -678,6 +678,12 @@ internal sealed class LspServer : IDisposable
             while (true)
             {
                 var next = reader.Read();
+                if (stream.Position > MaxPositionDocumentBytes)
+                {
+                    failureReason = FailurePositionFileTooLarge;
+                    return false;
+                }
+
                 if (next < 0)
                 {
                     if (currentLine == targetLine && currentLineLength <= MaxPositionLineChars && builder != null)
@@ -694,7 +700,14 @@ internal sealed class LspServer : IDisposable
                 if (c == '\r' || c == '\n')
                 {
                     if (c == '\r' && reader.Peek() == '\n')
+                    {
                         reader.Read();
+                        if (stream.Position > MaxPositionDocumentBytes)
+                        {
+                            failureReason = FailurePositionFileTooLarge;
+                            return false;
+                        }
+                    }
 
                     if (currentLine == targetLine)
                     {
@@ -769,6 +782,9 @@ internal sealed class LspServer : IDisposable
 
         if (string.Equals(indexedPath, documentPath, StringComparison.Ordinal))
             return true;
+
+        if (_projectRoot == null && workspaceRoot == null)
+            return false;
 
         var normalizedDocument = documentPath.Replace('\\', '/');
         return normalizedDocument.EndsWith("/" + normalizedIndexed, StringComparison.Ordinal);
@@ -899,7 +915,15 @@ internal sealed class LspServer : IDisposable
         relativePath = null;
         try
         {
-            var relative = Path.GetRelativePath(Path.GetFullPath(root), resolvedPath);
+            var normalizedRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
+            var normalizedPath = Path.GetFullPath(resolvedPath);
+            if (PathCasing.PathsEqual(normalizedRoot, normalizedPath)
+                || !PathCasing.IsPathEqualOrParent(normalizedRoot, normalizedPath))
+            {
+                return false;
+            }
+
+            var relative = Path.GetRelativePath(normalizedRoot, normalizedPath);
             if (relative == "."
                 || relative == ".."
                 || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal)

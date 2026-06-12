@@ -733,7 +733,7 @@ public static partial class IndexCommandRunner
         var activeJsonExtractionPhases = new ConcurrentDictionary<int, string>();
         CancellationTokenSource? jsonHeartbeatCts = null;
         Task? jsonHeartbeatTask = null;
-        using var postExtractionHooks = PostExtractionHookRunner.DiscoverDefault();
+        using var postExtractionHooks = PostExtractionHookRunner.DiscoverDefault(options.MaxFileSizeBytes);
         var extractionParallelism = Math.Max(1, options.Parallelism);
         var hasPostExtractionHooks = postExtractionHooks.Hooks.Count > 0;
         var parallelizeExtraction = (options.Rebuild || writer.GetCounts().files == 0 || headChangeDetected)
@@ -914,13 +914,13 @@ public static partial class IndexCommandRunner
 
             using var extractionResults = new BlockingCollection<FullScanFileWorkItem>(Math.Max(1, extractionParallelism * 4));
             using var extractionStallCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            using var mainSymbolExtractionWorker = new SymbolExtractionWorkerClient();
+            using var mainSymbolExtractionWorker = new SymbolExtractionWorkerClient(options.MaxFileSizeBytes);
             var extractionCancellationToken = extractionStallCts.Token;
             var nextFileIndex = -1;
             var workers = Enumerable.Range(0, extractionParallelism)
                 .Select(workerIndex => Task.Factory.StartNew(() =>
                 {
-                    using var workerSymbolExtractionWorker = new SymbolExtractionWorkerClient();
+                    using var workerSymbolExtractionWorker = new SymbolExtractionWorkerClient(options.MaxFileSizeBytes);
                     while (true)
                     {
                         extractionCancellationToken.ThrowIfCancellationRequested();
@@ -971,7 +971,7 @@ public static partial class IndexCommandRunner
                                     record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
                                     extractionCancellationToken);
                                 activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "validating");
-                                issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
+                                issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang);
                             }
                             extractionResults.Add(
                                 FullScanFileWorkItem.Success(filePath, record, content, rawBytes, warning, chunks, symbols, references, issues),
@@ -1237,7 +1237,7 @@ public static partial class IndexCommandRunner
                     postExtractionHooks.OnReferencesExtracted(fileContext, AsMutableList(references));
                     writer.InsertReferences(references);
                     currentJsonIndexFile = FormatIndexPhasePath(record.Path, "validating");
-                    var issues = item.Issues ?? FileIndexer.ValidateContent(record.Path, item.RawBytes!, item.Content!);
+                    var issues = item.Issues ?? FileIndexer.ValidateContent(record.Path, item.RawBytes!, item.Content!, record.Lang);
                     writer.InsertIssues(fileId, issues);
                     currentJsonIndexFile = FormatIndexPhasePath(record.Path, "committing");
                     WriteProjectRootOnce();

@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Net;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -57,11 +58,34 @@ public class ProgramRunnerTests
         env.Set(McpAuthenticatorFactory.AuthTokenEnvVar, "generic-secret");
         Assert.Equal("http-secret", ProgramRunner.ResolveMcpHttpBearerTokenFromEnvironment());
 
-        env.Set(ProgramRunner.McpHttpTokenEnvVar, "   ");
+        env.Set(ProgramRunner.McpHttpTokenEnvVar, string.Empty);
         Assert.Equal("generic-secret", ProgramRunner.ResolveMcpHttpBearerTokenFromEnvironment());
 
-        env.Set(McpAuthenticatorFactory.AuthTokenEnvVar, "\t");
+        env.Set(McpAuthenticatorFactory.AuthTokenEnvVar, string.Empty);
         Assert.Null(ProgramRunner.ResolveMcpHttpBearerTokenFromEnvironment());
+    }
+
+    [Theory]
+    [InlineData(" http-secret")]
+    [InlineData("http-secret ")]
+    [InlineData("http secret")]
+    [InlineData("http-secret\n")]
+    public void ResolveMcpHttpBearerTokenFromEnvironment_RejectsWhitespaceOrControlToken_Issue3505(string token)
+    {
+        using var env = EnvironmentVariableScope.Capture(
+            ProgramRunner.McpHttpTokenEnvVar,
+            McpAuthenticatorFactory.AuthTokenEnvVar);
+        env.Set(ProgramRunner.McpHttpTokenEnvVar, token);
+        env.Set(McpAuthenticatorFactory.AuthTokenEnvVar, "generic-secret");
+
+        var ex = Assert.Throws<FormatException>(ProgramRunner.ResolveMcpHttpBearerTokenFromEnvironment);
+        Assert.Contains(ProgramRunner.McpHttpTokenEnvVar, ex.Message, StringComparison.Ordinal);
+
+        env.Set(ProgramRunner.McpHttpTokenEnvVar, null);
+        env.Set(McpAuthenticatorFactory.AuthTokenEnvVar, token);
+
+        ex = Assert.Throws<FormatException>(ProgramRunner.ResolveMcpHttpBearerTokenFromEnvironment);
+        Assert.Contains(McpAuthenticatorFactory.AuthTokenEnvVar, ex.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -972,12 +996,17 @@ public class ProgramRunnerTests
     [Fact]
     public void CreateInstallerProcessStartInfo_UsesArgumentList()
     {
+        if (OperatingSystem.IsWindows())
+            return;
+
         var startInfo = ProgramRunner.CreateInstallerProcessStartInfo(
             "/tmp/install script's path.sh",
             "v1.27.0",
             "/opt/cdidx install");
 
-        Assert.Equal("bash", startInfo.FileName);
+        Assert.True(Path.IsPathFullyQualified(startInfo.FileName));
+        Assert.Equal("bash", Path.GetFileName(startInfo.FileName));
+        Assert.NotEqual("bash", startInfo.FileName);
         Assert.False(startInfo.UseShellExecute);
         Assert.Equal(string.Empty, startInfo.Arguments);
         Assert.Equal(["/tmp/install script's path.sh", "v1.27.0"], startInfo.ArgumentList.ToArray());
@@ -1190,6 +1219,117 @@ exit 0
     }
 
     [Fact]
+    public void UpdateChecker_Check_WritesCacheWithPrivateModes_Issue3411()
+    {
+        using var env = EnvironmentVariableScope.Capture(UpdateChecker.DisableEnvVar);
+        env.Set(UpdateChecker.DisableEnvVar, null);
+        var cacheRoot = Path.Combine(Path.GetTempPath(), $"cdidx_update_cache_private_{Guid.NewGuid():N}");
+        var cachePath = Path.Combine(cacheRoot, "cdidx", "update-check.json");
+        try
+        {
+            var result = UpdateChecker.Check(
+                "1.0.0",
+                cachePath,
+                DateTimeOffset.UtcNow,
+                _ => Task.FromResult<string?>("v9.9.9"));
+
+            Assert.True(result.UpdateAvailable);
+            Assert.True(File.Exists(cachePath));
+            if (!OperatingSystem.IsWindows())
+            {
+                Assert.Equal(
+                    DataDirectorySecurity.PrivateDirectoryMode,
+                    File.GetUnixFileMode(Path.GetDirectoryName(cachePath)!) & DataDirectorySecurity.PermissionBits);
+                Assert.Equal(
+                    DataDirectorySecurity.PrivateFileMode,
+                    File.GetUnixFileMode(cachePath) & DataDirectorySecurity.PermissionBits);
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(cacheRoot);
+        }
+    }
+
+    [Fact]
+    public void RunUpgrade_CheckOnlyJsonExplicitVersion_ReportsSelection()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["upgrade", "--check-only", "--json", "--version", "2.0.0-rc.1"],
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Empty(stderr);
+            using var doc = JsonDocument.Parse(stdout);
+            var root = doc.RootElement;
+            Assert.Equal("v2.0.0-rc.1", root.GetProperty("latest_version").GetString());
+            Assert.Equal("v2.0.0-rc.1", root.GetProperty("selected_version").GetString());
+            Assert.Equal("prerelease", root.GetProperty("selected_channel").GetString());
+            Assert.Equal("explicit_version", root.GetProperty("selection_source").GetString());
+            Assert.True(root.GetProperty("include_prerelease").GetBoolean());
+            Assert.False(root.GetProperty("install_attempted").GetBoolean());
+        }
+    }
+
+    [Fact]
+    public void RunUpgrade_CheckOnlyJsonPrerelease_ReportsSelection()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var previousFactory = ProgramRunner.UpgradeHttpClientFactory;
+            ProgramRunner.UpgradeHttpClientFactory = () => new HttpClient(
+                new StaticResponseHandler(new ByteArrayContent(Encoding.UTF8.GetBytes("""
+                    [
+                      { "tag_name": "v9.9.9", "draft": false, "prerelease": false },
+                      { "tag_name": "v9.9.9-rc.2", "draft": true, "prerelease": true },
+                      { "tag_name": "v9.9.9-rc.1", "draft": false, "prerelease": true }
+                    ]
+                    """))))
+            {
+                Timeout = Timeout.InfiniteTimeSpan,
+            };
+
+            try
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                    ["upgrade", "--check-only", "--json", "--prerelease"],
+                    appVersion: "1.10.0"));
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Empty(stderr);
+                using var doc = JsonDocument.Parse(stdout);
+                var root = doc.RootElement;
+                Assert.Equal("v9.9.9-rc.1", root.GetProperty("latest_version").GetString());
+                Assert.Equal("v9.9.9-rc.1", root.GetProperty("selected_version").GetString());
+                Assert.Equal("prerelease", root.GetProperty("selected_channel").GetString());
+                Assert.Equal("prerelease", root.GetProperty("selection_source").GetString());
+                Assert.True(root.GetProperty("include_prerelease").GetBoolean());
+            }
+            finally
+            {
+                ProgramRunner.UpgradeHttpClientFactory = previousFactory;
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData(Architecture.X64, "CodeIndex-win-x64.zip")]
+    [InlineData(Architecture.Arm64, "CodeIndex-win-arm64.zip")]
+    public void CreateWindowsUpgradeHandoff_UsesNuGetVersionAndMatchingAsset(Architecture architecture, string expectedAsset)
+    {
+        var handoff = ProgramRunner.CreateWindowsUpgradeHandoff("v2.0.0-rc.1", architecture);
+
+        Assert.Equal("dotnet tool update -g cdidx --version 2.0.0-rc.1", handoff.Command);
+        Assert.Equal("https://github.com/Widthdom/CodeIndex/releases/tag/v2.0.0-rc.1", handoff.Url);
+        Assert.Equal(expectedAsset, handoff.Asset);
+        Assert.Equal(
+            $"https://github.com/Widthdom/CodeIndex/releases/download/v2.0.0-rc.1/{expectedAsset}",
+            handoff.AssetUrl);
+    }
+
+    [Fact]
     public async Task DownloadReleaseChecksumManifestAsync_RejectsOverLimitResponse()
     {
         using var client = new HttpClient(new StaticResponseHandler(new ByteArrayContent(new byte[(int)ProgramRunner.MaxReleaseChecksumBytes + 1])))
@@ -1236,6 +1376,22 @@ exit 0
 
         await Assert.ThrowsAnyAsync<JsonException>(() =>
             UpdateChecker.ReadLatestReleaseTagAsync(content, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task UpdateChecker_ReadLatestPrereleaseTagAsync_SkipsDraftsAndStableReleases()
+    {
+        using var content = new ByteArrayContent(Encoding.UTF8.GetBytes("""
+            [
+              { "tag_name": "v3.0.0", "draft": false, "prerelease": false },
+              { "tag_name": "v3.1.0-rc.2", "draft": true, "prerelease": true },
+              { "tag_name": "v3.1.0-rc.1", "draft": false, "prerelease": true }
+            ]
+            """));
+
+        var tag = await UpdateChecker.ReadLatestPrereleaseTagAsync(content, CancellationToken.None);
+
+        Assert.Equal("v3.1.0-rc.1", tag);
     }
 
     [Fact]
