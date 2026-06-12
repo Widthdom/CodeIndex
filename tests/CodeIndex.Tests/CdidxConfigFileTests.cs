@@ -1,4 +1,5 @@
 using CodeIndex.Cli;
+using CodeIndex.Mcp;
 using System.Text;
 
 namespace CodeIndex.Tests;
@@ -47,7 +48,7 @@ public class CdidxConfigFileTests
                   },
                   "mcp": {
                     "tools": { "allow": ["search", "definition"], "deny": ["index"] },
-                    "rate_limit": { "rps": 5, "burst": 10 }
+                    "rate_limit": { "rps": 5, "burst": 10, "bucket_idle_seconds": 120 }
                   }
                 }
                 """);
@@ -69,8 +70,9 @@ public class CdidxConfigFileTests
             Assert.Equal("test_method,generated_parser", env.Writes["CDIDX_INDEX_EXCLUDE_SYMBOL_KINDS"]);
             Assert.Equal("search,definition", env.Writes["CDIDX_MCP_TOOLS_ALLOW"]);
             Assert.Equal("index", env.Writes["CDIDX_MCP_TOOLS_DENY"]);
-            Assert.Equal("5", env.Writes["CDIDX_MCP_RATE_LIMIT_RPS"]);
-            Assert.Equal("10", env.Writes["CDIDX_MCP_RATE_LIMIT_BURST"]);
+            Assert.Equal("5", env.Writes[RateLimiterOptions.RpsEnvVar]);
+            Assert.Equal("10", env.Writes[RateLimiterOptions.BurstEnvVar]);
+            Assert.Equal("120", env.Writes[RateLimiterOptions.BucketIdleSecondsEnvVar]);
         }
         finally { TestProjectHelper.DeleteDirectory(dir); }
     }
@@ -379,6 +381,45 @@ public class CdidxConfigFileTests
 
             Assert.True(result.Failed);
             Assert.Contains("mcp.tools.bogus", result.Error);
+        }
+        finally { TestProjectHelper.DeleteDirectory(dir); }
+    }
+
+    [Fact]
+    public void LoadAndApply_InvalidConfigReportsMultipleDiagnostics_Issue3432()
+    {
+        var dir = CreateTempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, ".cdidxrc.json"), """
+                {
+                  "debug": "1",
+                  "github_token": "secret",
+                  "disable_persistent_log": "yes",
+                  "search": {
+                    "limit": 0,
+                    "typo": true
+                  },
+                  "mcp": {
+                    "rate_limit": {
+                      "burst": "fast",
+                      "unknown": 1
+                    }
+                  }
+                }
+                """);
+
+            var env = new TestEnvironment();
+            var result = CdidxConfigFile.LoadAndApply(dir, env.Read, env.Write);
+
+            Assert.True(result.Failed);
+            Assert.Contains("github_token", result.Error);
+            Assert.Contains("disable_persistent_log", result.Error);
+            Assert.Contains("search.limit", result.Error);
+            Assert.Contains("search.typo", result.Error);
+            Assert.Contains("mcp.rate_limit.burst", result.Error);
+            Assert.Contains("mcp.rate_limit.unknown", result.Error);
+            Assert.Empty(env.Writes);
         }
         finally { TestProjectHelper.DeleteDirectory(dir); }
     }

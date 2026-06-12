@@ -336,6 +336,44 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void ParseArgs_ProjectFilterFallbackReportsEffectiveRoot_Issue3461()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_solution_filter_fallback");
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_solution_filter_fallback_{Guid.NewGuid():N}.db");
+        var originalCurrentDirectory = Environment.CurrentDirectory;
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src", "App"));
+            File.WriteAllText(Path.Combine(projectRoot, "CodeIndex.sln"), """
+            Microsoft Visual Studio Solution File, Format Version 12.00
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "App", "src\App\App.csproj", "{11111111-1111-1111-1111-111111111111}"
+            EndProject
+            """);
+            File.WriteAllText(Path.Combine(projectRoot, "src", "App", "App.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+
+            Environment.CurrentDirectory = projectRoot;
+            var expectedProjectRoot = Path.GetFullPath(Environment.CurrentDirectory);
+            var options = QueryCommandRunner.ParseArgs(
+                ["Auth", "--db", dbPath, "--project", "App"],
+                jsonDefault: false,
+                allowNamedQuery: true);
+
+            Assert.Equal("Auth", options.Query);
+            Assert.Equal(["App"], options.ProjectFilters);
+            Assert.Equal(["src/App/*"], options.PathPatterns);
+            Assert.Equal(expectedProjectRoot, options.ProjectFilterRoot);
+            Assert.Equal(QueryCommandRunner.ProjectFilterRootFallbackReasonCurrentDirectory, options.ProjectFilterRootFallbackReason);
+            Assert.Null(options.ParseError);
+        }
+        finally
+        {
+            Environment.CurrentDirectory = originalCurrentDirectory;
+            TestProjectHelper.DeleteFile(dbPath);
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunDefinition_LspFormatUsesIndexedProjectRootForExplicitDb_Issue3151()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_explicit_db_root");
