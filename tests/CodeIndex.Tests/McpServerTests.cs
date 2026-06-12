@@ -10892,6 +10892,80 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_ProjectScopeFallbackReportsEffectiveRoot_Issue3461()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_project_scope_fallback_root");
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_project_scope_fallback_{Guid.NewGuid():N}.db");
+        var originalCurrentDirectory = Environment.CurrentDirectory;
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src", "App"));
+            File.WriteAllText(Path.Combine(projectRoot, "Repo.sln"), """
+            Microsoft Visual Studio Solution File, Format Version 12.00
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "App", "src\App\App.csproj", "{11111111-1111-1111-1111-111111111111}"
+            EndProject
+            """);
+            File.WriteAllText(Path.Combine(projectRoot, "src", "App", "App.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/App/ServiceA.cs", "csharp", "public class ServiceA { }\n");
+
+            Environment.CurrentDirectory = projectRoot;
+            var expectedProjectRoot = Path.GetFullPath(Environment.CurrentDirectory);
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion(), dbPathExplicit: true);
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"ServiceA","project":"App","exactSubstring":true}}}""")!;
+            var response = server.HandleMessage(request)!;
+
+            Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
+            var structured = response["result"]!["structuredContent"]!;
+            var result = Assert.Single(structured["results"]!.AsArray());
+            Assert.Equal("src/App/ServiceA.cs", result!["path"]!.GetValue<string>());
+            Assert.Equal(expectedProjectRoot, structured["project_filter_root"]!.GetValue<string>());
+            Assert.Equal(QueryCommandRunner.ProjectFilterRootFallbackReasonCurrentDirectory, structured["project_filter_root_fallback_reason"]!.GetValue<string>());
+        }
+        finally
+        {
+            Environment.CurrentDirectory = originalCurrentDirectory;
+            DeleteFileRobust(dbPath);
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_ProjectScopeErrorDoesNotLeakRootDiagnosticToNextResult_Issue3461()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_project_scope_error_root");
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_project_scope_error_{Guid.NewGuid():N}.db");
+        var originalCurrentDirectory = Environment.CurrentDirectory;
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src", "App"));
+            File.WriteAllText(Path.Combine(projectRoot, "Repo.sln"), """
+            Microsoft Visual Studio Solution File, Format Version 12.00
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "App", "src\App\App.csproj", "{11111111-1111-1111-1111-111111111111}"
+            EndProject
+            """);
+            File.WriteAllText(Path.Combine(projectRoot, "src", "App", "App.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+
+            Environment.CurrentDirectory = projectRoot;
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion(), dbPathExplicit: true);
+            var invalidSearch = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"ServiceA","project":"App","since":"not-a-timestamp"}}}""")!;
+            var invalidSearchResponse = server.HandleMessage(invalidSearch)!;
+            var ping = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"ping","arguments":{}}}""")!;
+            var pingResponse = server.HandleMessage(ping)!;
+
+            Assert.True(invalidSearchResponse["result"]!["isError"]!.GetValue<bool>());
+            Assert.False(pingResponse["result"]!["isError"]?.GetValue<bool>() ?? false);
+            Assert.False(pingResponse["result"]!["structuredContent"]!.AsObject().ContainsKey("project_filter_root"));
+            Assert.False(pingResponse["result"]!["structuredContent"]!.AsObject().ContainsKey("project_filter_root_fallback_reason"));
+        }
+        finally
+        {
+            Environment.CurrentDirectory = originalCurrentDirectory;
+            DeleteFileRobust(dbPath);
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void ToolsCall_Index_Rebuild_IgnoresUnreadableDirectoriesWhenCollectingMarkerFingerprints()
     {
         if (OperatingSystem.IsWindows())

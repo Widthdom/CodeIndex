@@ -58,6 +58,10 @@ public static class QueryCommandRunner
     [ThreadStatic]
     private static string? s_activeQueryProjectRoot;
 
+    internal const string ProjectFilterRootFallbackReasonCurrentDirectory = "project_root_unresolved_using_current_directory";
+
+    internal readonly record struct ProjectFilterRootResolution(string Root, string? FallbackReason);
+
     private static DateTime GetUtcNow() => TimeProvider.GetUtcNow().UtcDateTime;
 
     // Cap OR-joined `symbols` names well below SQLite's 1000 expression-tree depth so oversized
@@ -6735,6 +6739,7 @@ public static class QueryCommandRunner
         var namedSearchQueries = new List<SearchNamedQuery>();
         bool languagesIndexedOnly = false;
         var languageCapabilities = new List<string>();
+        ProjectFilterRootResolution? projectFilterRootResolution = null;
 
         void AddParseError(string error)
         {
@@ -7593,8 +7598,8 @@ public static class QueryCommandRunner
         {
             try
             {
-                var projectRoot = ResolveProjectFilterRoot(resolvedDbPath, dbPathExplicit);
-                foreach (var glob in SolutionProjectResolver.ResolveProjectDirectoryGlobs(projectRoot, projectFilters, solutionFilter))
+                projectFilterRootResolution = ResolveProjectFilterRoot(resolvedDbPath, dbPathExplicit);
+                foreach (var glob in SolutionProjectResolver.ResolveProjectDirectoryGlobs(projectFilterRootResolution.Value.Root, projectFilters, solutionFilter))
                     pathPatterns.Add(glob);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
@@ -7665,6 +7670,8 @@ public static class QueryCommandRunner
             PathPatterns = pathPatterns,
             WorkspaceDbPaths = workspaceDbPaths,
             ProjectFilters = projectFilters,
+            ProjectFilterRoot = projectFilterRootResolution?.Root,
+            ProjectFilterRootFallbackReason = projectFilterRootResolution?.FallbackReason,
             SolutionFilter = solutionFilter,
             ExcludePaths = excludePaths,
             VisibilityFilters = visibilityFilters,
@@ -7755,7 +7762,7 @@ public static class QueryCommandRunner
         return true;
     }
 
-    private static string ResolveProjectFilterRoot(string dbPath, bool dbPathExplicit)
+    internal static ProjectFilterRootResolution ResolveProjectFilterRoot(string dbPath, bool dbPathExplicit)
     {
         var effectiveDbPath = s_batchReader != null && !string.IsNullOrWhiteSpace(s_batchDbPath)
             ? s_batchDbPath!
@@ -7763,8 +7770,13 @@ public static class QueryCommandRunner
         var effectiveDbPathExplicit = s_batchReader != null && !string.IsNullOrWhiteSpace(s_batchDbPath)
             ? s_batchDbPathExplicit
             : dbPathExplicit;
-        return DbPathResolver.ResolveProjectRootForQuery(effectiveDbPath, effectiveDbPathExplicit)
-            ?? Environment.CurrentDirectory;
+        var projectRoot = DbPathResolver.ResolveProjectRootForQuery(effectiveDbPath, effectiveDbPathExplicit);
+        if (!string.IsNullOrWhiteSpace(projectRoot))
+            return new ProjectFilterRootResolution(Path.GetFullPath(projectRoot), null);
+
+        return new ProjectFilterRootResolution(
+            Path.GetFullPath(Environment.CurrentDirectory),
+            ProjectFilterRootFallbackReasonCurrentDirectory);
     }
 
     private static List<string> ParseMapSections(string rawValue, Action<string> addParseError)
@@ -8336,7 +8348,7 @@ public static class QueryCommandRunner
 
             reader.IncludeGenerated = options.IncludeGenerated;
             var previousProjectRoot = s_activeQueryProjectRoot;
-            s_activeQueryProjectRoot = ResolveProjectFilterRoot(dbPath, options.DbPathExplicit);
+            s_activeQueryProjectRoot = ResolveProjectFilterRoot(dbPath, options.DbPathExplicit).Root;
             int exitCode;
             try
             {
@@ -9085,6 +9097,12 @@ public static class QueryCommandRunner
             yield return $"query: \"{options.Query}\"";
         if (options.PathPatterns.Count > 0)
             yield return $"path: {string.Join(", ", options.PathPatterns)}";
+        if (options.ProjectFilters.Count > 0)
+            yield return $"project: {string.Join(", ", options.ProjectFilters)}";
+        if (!string.IsNullOrWhiteSpace(options.ProjectFilterRoot))
+            yield return $"project-root: {options.ProjectFilterRoot}";
+        if (!string.IsNullOrWhiteSpace(options.ProjectFilterRootFallbackReason))
+            yield return $"project-root-fallback: {options.ProjectFilterRootFallbackReason}";
         if (options.ExcludePaths.Count > 0)
             yield return $"exclude-path: {string.Join(", ", options.ExcludePaths)}";
         if (options.Lang != null)
@@ -9135,6 +9153,12 @@ public static class QueryCommandRunner
             query["text"] = options.Query;
         if (options.PathPatterns.Count > 0)
             query["path"] = JsonSerializer.SerializeToNode(options.PathPatterns, CliJsonSerializerContextFactory.Create(jsonOptions).ListString);
+        if (options.ProjectFilters.Count > 0)
+            query["project"] = JsonSerializer.SerializeToNode(options.ProjectFilters, CliJsonSerializerContextFactory.Create(jsonOptions).ListString);
+        if (!string.IsNullOrWhiteSpace(options.ProjectFilterRoot))
+            query["project_filter_root"] = options.ProjectFilterRoot;
+        if (!string.IsNullOrWhiteSpace(options.ProjectFilterRootFallbackReason))
+            query["project_filter_root_fallback_reason"] = options.ProjectFilterRootFallbackReason;
         if (options.ExcludePaths.Count > 0)
             query["exclude_path"] = JsonSerializer.SerializeToNode(options.ExcludePaths, CliJsonSerializerContextFactory.Create(jsonOptions).ListString);
         if (options.Lang != null)
@@ -10832,6 +10856,8 @@ public sealed class QueryCommandOptions
     public List<string> PathPatterns { get; init; } = [];
     public List<string> WorkspaceDbPaths { get; init; } = [];
     public List<string> ProjectFilters { get; init; } = [];
+    public string? ProjectFilterRoot { get; init; }
+    public string? ProjectFilterRootFallbackReason { get; init; }
     public string? SolutionFilter { get; init; }
     public List<string> ExcludePaths { get; init; } = [];
     public bool ExcludeTests { get; init; }
