@@ -1149,7 +1149,7 @@ public partial class QueryCommandRunnerTests
         try
         {
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
-                ["--db", dbPath, "--json", "--lang", "markdown"],
+                ["--db", dbPath, "--json", "--lang", "toml"],
                 _jsonOptions));
 
             using var document = ParseJsonOutput(stdout);

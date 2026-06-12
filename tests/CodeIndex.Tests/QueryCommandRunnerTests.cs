@@ -2024,7 +2024,7 @@ public partial class QueryCommandRunnerTests
                 .Select(lang => lang.GetProperty("lang").GetString())
                 .ToList();
 
-            Assert.Equal(["csharp"], names);
+            Assert.Equal(["csharp", "markdown"], names);
         }
         finally
         {
@@ -2165,11 +2165,11 @@ public partial class QueryCommandRunnerTests
     public void RunLanguages_JsonListsHtmlWithSymbolExtractionAndAllExtensions()
     {
         // Pin the #215 surface: `cdidx languages --json` must report html with
-        // symbol_extraction=true and list all four extensions (.html, .htm, .xhtml, .shtml)
-        // so AI tools can discover HTML symbol support without indexing first.
-        // #215 の表面契約を pin: `cdidx languages --json` は html を symbol_extraction=true で
-        // 返し、`.html` / `.htm` / `.xhtml` / `.shtml` の 4 拡張子を列挙する必要がある。
-        // AI ツールがインデックス前でも HTML のシンボル対応を検出できるようにするため。
+        // symbol_extraction/reference_extraction=true and list all four extensions
+        // (.html, .htm, .xhtml, .shtml) so AI tools can discover HTML support without indexing first.
+        // #215 の表面契約を pin: `cdidx languages --json` は html を symbol_extraction /
+        // reference_extraction=true で返し、`.html` / `.htm` / `.xhtml` / `.shtml` の 4 拡張子を
+        // 列挙する必要がある。AI ツールがインデックス前でも HTML 対応を検出できるようにするため。
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages(["--json"], _jsonOptions));
 
         Assert.Equal(CommandExitCodes.Success, exitCode);
@@ -2180,7 +2180,7 @@ public partial class QueryCommandRunnerTests
         var html = languages.EnumerateArray().First(lang => lang.GetProperty("lang").GetString() == "html");
 
         Assert.True(html.GetProperty("symbol_extraction").GetBoolean());
-        Assert.False(html.GetProperty("reference_extraction").GetBoolean());
+        Assert.True(html.GetProperty("reference_extraction").GetBoolean());
         var extensions = html.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()).ToList();
         Assert.Contains(".html", extensions);
         Assert.Contains(".htm", extensions);
@@ -2308,6 +2308,18 @@ public partial class QueryCommandRunnerTests
             Assert.True(languages[buildAutomation].GetProperty("graph_queries").GetBoolean(),
                 $"{buildAutomation} must advertise graph_queries=true");
             Assert.Empty(languages[buildAutomation].GetProperty("capability_gaps").EnumerateArray());
+        }
+
+        foreach (var markupSchema in new[] { "graphql", "html", "markdown" })
+        {
+            Assert.True(languages.ContainsKey(markupSchema), $"expected '{markupSchema}' to be listed");
+            Assert.True(languages[markupSchema].GetProperty("symbol_extraction").GetBoolean(),
+                $"{markupSchema} must advertise symbol_extraction=true");
+            Assert.True(languages[markupSchema].GetProperty("reference_extraction").GetBoolean(),
+                $"{markupSchema} must advertise reference_extraction=true");
+            Assert.True(languages[markupSchema].GetProperty("graph_queries").GetBoolean(),
+                $"{markupSchema} must advertise graph_queries=true");
+            Assert.Empty(languages[markupSchema].GetProperty("capability_gaps").EnumerateArray());
         }
 
         // Cython owns .pyx / .pxd exclusively; python keeps .py / .pyi / .pyw and Bazel filenames.

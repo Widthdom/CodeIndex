@@ -4826,10 +4826,10 @@ public class McpServerTests : IDisposable
     [Fact]
     public void ToolsCall_AnalyzeSymbol_UnsupportedLanguage_ReturnsGraphSupportHint()
     {
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"Heading","lang":"markdown"}}}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"Heading","lang":"toml"}}}""")!;
         var response = _server.HandleMessage(request)!;
 
-        Assert.Equal("markdown", response["result"]!["structuredContent"]!["graph_language"]!.GetValue<string>());
+        Assert.Equal("toml", response["result"]!["structuredContent"]!["graph_language"]!.GetValue<string>());
         Assert.False(response["result"]!["structuredContent"]!["graph_supported"]!.GetValue<bool>());
         Assert.Contains("Use search, definition, excerpt, or files instead.", response["result"]!["structuredContent"]!["graph_support_reason"]!.GetValue<string>());
     }
@@ -5172,10 +5172,10 @@ public class McpServerTests : IDisposable
     [Fact]
     public void ToolsCall_References_UnsupportedLanguage_ReturnsGraphSupportHint()
     {
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"references","arguments":{"query":"Run","lang":"markdown"}}}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"references","arguments":{"query":"Run","lang":"toml"}}}""")!;
         var response = _server.HandleMessage(request)!;
 
-        Assert.Equal("markdown", response["result"]!["structuredContent"]!["graph_language"]!.GetValue<string>());
+        Assert.Equal("toml", response["result"]!["structuredContent"]!["graph_language"]!.GetValue<string>());
         Assert.False(response["result"]!["structuredContent"]!["graph_supported"]!.GetValue<bool>());
         Assert.Contains("not indexed", response["result"]!["structuredContent"]!["graph_support_reason"]!.GetValue<string>());
     }
@@ -5373,10 +5373,10 @@ public class McpServerTests : IDisposable
     [Fact]
     public void ToolsCall_Callers_UnsupportedLanguage_ReturnsGraphSupportHint()
     {
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"callers","arguments":{"query":"Run","lang":"markdown"}}}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"callers","arguments":{"query":"Run","lang":"toml"}}}""")!;
         var response = _server.HandleMessage(request)!;
 
-        Assert.Equal("markdown", response["result"]!["structuredContent"]!["graph_language"]!.GetValue<string>());
+        Assert.Equal("toml", response["result"]!["structuredContent"]!["graph_language"]!.GetValue<string>());
         Assert.False(response["result"]!["structuredContent"]!["graph_supported"]!.GetValue<bool>());
         Assert.Contains("not indexed", response["result"]!["structuredContent"]!["graph_support_reason"]!.GetValue<string>());
     }
@@ -5462,10 +5462,10 @@ public class McpServerTests : IDisposable
     [Fact]
     public void ToolsCall_Callees_UnsupportedLanguage_ReturnsGraphSupportHint()
     {
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"callees","arguments":{"query":"Run","lang":"markdown"}}}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"callees","arguments":{"query":"Run","lang":"toml"}}}""")!;
         var response = _server.HandleMessage(request)!;
 
-        Assert.Equal("markdown", response["result"]!["structuredContent"]!["graph_language"]!.GetValue<string>());
+        Assert.Equal("toml", response["result"]!["structuredContent"]!["graph_language"]!.GetValue<string>());
         Assert.False(response["result"]!["structuredContent"]!["graph_supported"]!.GetValue<bool>());
         Assert.Contains("not indexed", response["result"]!["structuredContent"]!["graph_support_reason"]!.GetValue<string>());
     }
@@ -6535,12 +6535,12 @@ public class McpServerTests : IDisposable
     [Fact]
     public void ToolsCall_AnalyzeSymbol_ExactOnReadOnlyLegacyDb_UnsupportedGraphLanguage_SkipsGraphDegradedSignal()
     {
-        InsertIndexedFile("docs/guide.md", "markdown", "# Heading\n\nSee also `Run`.\n");
+        InsertIndexedFile("docs/guide.toml", "toml", "title = \"Heading\"\nrun = \"Run\"\n");
         ForceLegacyExactFallbackMode();
         DropGraphExactFallbackIndexes();
         using var readOnlyServer = new McpServer(new Uri(_dbPath).AbsoluteUri + "?immutable=1", ConsoleUi.LoadVersion());
 
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"Heading","lang":"markdown","exact":true}}}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"Heading","lang":"toml","exact":true}}}""")!;
         var response = readOnlyServer.HandleMessage(request)!;
         var structured = response["result"]!["structuredContent"]!;
 
@@ -6554,7 +6554,7 @@ public class McpServerTests : IDisposable
     [Fact]
     public void ToolsCall_AnalyzeSymbol_ExactOnReadOnlyLegacyDb_PathOnlyUnsupportedSlice_SkipsGraphDegradedSignal()
     {
-        InsertIndexedFile("docs/guide.md", "markdown", "# Heading\n\nSee also `Run`.\n");
+        InsertIndexedFile("docs/guide.toml", "toml", "title = \"Heading\"\nrun = \"Run\"\n");
         ForceLegacyExactFallbackMode();
         DropGraphExactFallbackIndexes();
         using var readOnlyServer = new McpServer(new Uri(_dbPath).AbsoluteUri + "?immutable=1", ConsoleUi.LoadVersion());
@@ -9173,12 +9173,12 @@ public class McpServerTests : IDisposable
         Assert.Contains(".S", assembly["extensions"]!.AsArray().Select(e => e!.GetValue<string>()));
         Assert.Contains("assembler", assembly["aliases"]!.AsArray().Select(e => e!.GetValue<string>()));
 
-        // Verify a detection-only language / 検出のみの言語を検証
+        // Verify a markup language / markup 言語を検証
         var markdown = languages.First(l => l!["lang"]!.GetValue<string>() == "markdown")!;
         Assert.True(markdown["symbol_extraction"]!.GetValue<bool>());
-        Assert.False(markdown["reference_extraction"]!.GetValue<bool>());
-        Assert.False(markdown["graph_queries"]!.GetValue<bool>());
-        Assert.Contains("missing-references", markdown["capability_gaps"]!.AsArray().Select(e => e!.GetValue<string>()));
+        Assert.True(markdown["reference_extraction"]!.GetValue<bool>());
+        Assert.True(markdown["graph_queries"]!.GetValue<bool>());
+        Assert.DoesNotContain("missing-references", markdown["capability_gaps"]!.AsArray().Select(e => e!.GetValue<string>()));
 
         var yaml = languages.First(l => l!["lang"]!.GetValue<string>() == "yaml")!;
         Assert.True(yaml["symbol_extraction"]!.GetValue<bool>());
@@ -9191,7 +9191,8 @@ public class McpServerTests : IDisposable
         // の 4 拡張子を MCP languages ツールから返すこと。
         var html = languages.First(l => l!["lang"]!.GetValue<string>() == "html")!;
         Assert.True(html["symbol_extraction"]!.GetValue<bool>());
-        Assert.False(html["reference_extraction"]!.GetValue<bool>());
+        Assert.True(html["reference_extraction"]!.GetValue<bool>());
+        Assert.True(html["graph_queries"]!.GetValue<bool>());
         var htmlExtensions = html["extensions"]!.AsArray().Select(e => e!.GetValue<string>()).ToList();
         Assert.Contains(".html", htmlExtensions);
         Assert.Contains(".htm", htmlExtensions);

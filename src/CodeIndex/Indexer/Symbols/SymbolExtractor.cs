@@ -15,6 +15,7 @@ namespace CodeIndex.Indexer;
 public static partial class SymbolExtractor
 {
     public const int DefaultContractVersion = 1;
+    public const int ExpandedLanguageContractVersion = 2;
     public const int CSharpContractVersion = 2;
     private static readonly Regex GraphQLInputBlockRegex = new(
         @"^\s*(?:extend\s+)?input\s+(?<name>\w+)[^{]*\{(?<body>.*?)^\s*\}",
@@ -47,6 +48,7 @@ public static partial class SymbolExtractor
         {
             null or "" => DefaultContractVersion,
             "csharp" => CSharpContractVersion,
+            "cmake" or "graphql" or "html" or "json" or "justfile" or "markdown" or "msbuild" or "yaml" => ExpandedLanguageContractVersion,
             _ => DefaultContractVersion,
         };
     }

@@ -1716,12 +1716,12 @@ public partial class QueryCommandRunnerTests
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
 
             var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
-                ["MissingSymbol", "--db", dbPath, "--lang", "markdown"],
+                ["MissingSymbol", "--db", dbPath, "--lang", "toml"],
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Contains("No references found.", stderr);
-            Assert.Contains("call-graph queries are not indexed for 'markdown'", stderr);
+            Assert.Contains("call-graph queries are not indexed for 'toml'", stderr);
         }
         finally
         {
