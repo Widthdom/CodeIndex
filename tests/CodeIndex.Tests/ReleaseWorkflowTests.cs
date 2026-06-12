@@ -2,6 +2,7 @@ using CodeIndex.PackageNormalize;
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 
 namespace CodeIndex.Tests;
 
@@ -212,6 +213,74 @@ public class ReleaseWorkflowTests
             var relationships = ReadZipEntryText(archive, "_rels/.rels");
             Assert.Contains("/package/services/metadata/core-properties/core-properties.psmdcp", contentTypes);
             Assert.Contains("/package/services/metadata/core-properties/core-properties.psmdcp", relationships);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PackageNormalizeCli_DryRunDoesNotRewritePackage()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizeCli_DryRunDoesNotRewritePackage));
+        try
+        {
+            var packagePath = Path.Combine(projectRoot, "dry-run.nupkg");
+            CreateMinimalNuGetPackage(packagePath, "random.psmdcp");
+            var beforeHash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(packagePath)));
+
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
+                PackageNormalizeCli.Run(["--dry-run", "--summary", packagePath]));
+
+            var afterHash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(packagePath)));
+            Assert.Equal(0, exitCode);
+            Assert.Empty(stderr);
+            Assert.Contains($"Would normalize {packagePath}", stdout);
+            Assert.Contains("Summary: inspected=1 normalized=0 unchanged=0 failed=0 skipped=1", stdout);
+            Assert.Equal(beforeHash, afterHash);
+            Assert.False(File.Exists(packagePath + ".normalize-tmp"));
+
+            using var archive = ZipFile.OpenRead(packagePath);
+            Assert.Contains(archive.Entries, entry => entry.FullName.EndsWith("random.psmdcp", StringComparison.Ordinal));
+            Assert.DoesNotContain(archive.Entries, entry => entry.FullName == PackageCorePropertiesNormalizer.CanonicalCorePropertiesPath);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PackageNormalizeCli_JsonContinueOnErrorReportsAggregateSummary()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizeCli_JsonContinueOnErrorReportsAggregateSummary));
+        try
+        {
+            var packagePath = Path.Combine(projectRoot, "good.nupkg");
+            var missingPackagePath = Path.Combine(projectRoot, "missing.nupkg");
+            CreateMinimalNuGetPackage(packagePath, "random.psmdcp");
+
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
+                PackageNormalizeCli.Run(["--dry-run", "--json", "--continue-on-error", missingPackagePath, packagePath]));
+
+            Assert.Equal(1, exitCode);
+            Assert.Empty(stderr);
+            using var doc = JsonDocument.Parse(stdout);
+            var root = doc.RootElement;
+            Assert.True(root.GetProperty("dry_run").GetBoolean());
+            Assert.True(root.GetProperty("continue_on_error").GetBoolean());
+            Assert.Equal(2, root.GetProperty("inspected").GetInt32());
+            Assert.Equal(0, root.GetProperty("normalized").GetInt32());
+            Assert.Equal(0, root.GetProperty("unchanged").GetInt32());
+            Assert.Equal(1, root.GetProperty("failed").GetInt32());
+            Assert.Equal(1, root.GetProperty("skipped").GetInt32());
+
+            var packages = root.GetProperty("packages").EnumerateArray().ToArray();
+            Assert.Equal("failed", packages[0].GetProperty("status").GetString());
+            Assert.Equal(missingPackagePath, packages[0].GetProperty("path").GetString());
+            Assert.Equal("would_normalize", packages[1].GetProperty("status").GetString());
+            Assert.Equal(packagePath, packages[1].GetProperty("path").GetString());
         }
         finally
         {

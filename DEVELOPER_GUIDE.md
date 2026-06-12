@@ -94,6 +94,14 @@ or publishing NuGet artifacts:
 dotnet run --project tools/CodeIndex.PackageNormalize -- nupkg/*.nupkg nupkg/*.snupkg
 ```
 
+For release diagnostics, inspect without rewriting and request a bounded
+summary across all candidate packages:
+
+```bash
+dotnet run --project tools/CodeIndex.PackageNormalize -- --dry-run --summary nupkg/*.nupkg nupkg/*.snupkg
+dotnet run --project tools/CodeIndex.PackageNormalize -- --dry-run --json --continue-on-error nupkg/*.nupkg nupkg/*.snupkg
+```
+
 `install.sh` is generated from focused fragments under `install_modules/`.
 After editing installer, doctor, self-test, reinstall, uninstall, or dispatch
 logic, regenerate the checked-in one-file installer before testing:
@@ -2231,6 +2239,14 @@ package normalization を実行します:
 
 ```bash
 dotnet run --project tools/CodeIndex.PackageNormalize -- nupkg/*.nupkg nupkg/*.snupkg
+```
+
+release diagnostics では、書き換えずに検査し、candidate package 全体の bounded
+summary を取得できます:
+
+```bash
+dotnet run --project tools/CodeIndex.PackageNormalize -- --dry-run --summary nupkg/*.nupkg nupkg/*.snupkg
+dotnet run --project tools/CodeIndex.PackageNormalize -- --dry-run --json --continue-on-error nupkg/*.nupkg nupkg/*.snupkg
 ```
 
 `install.sh` は `install_modules/` 配下の focused fragment から生成されます。
