@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Reflection;
 using System.Runtime.Loader;
 using System.Runtime.Versioning;
@@ -27,14 +28,16 @@ internal sealed record PostExtractionHookCallbackResult(
 internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
 {
     private readonly PostExtractionHookInfo hook;
+    private readonly int maxProtocolLineBytes;
     private readonly object gate = new();
     private Process? process;
     private StringBuilder stderr = new();
     private bool disposed;
 
-    internal PostExtractionHookCallbackWorkerClient(PostExtractionHookInfo hook)
+    internal PostExtractionHookCallbackWorkerClient(PostExtractionHookInfo hook, int maxProtocolLineBytes = WorkerProtocolLineLimits.MaxLineUtf8Bytes)
     {
         this.hook = hook;
+        this.maxProtocolLineBytes = maxProtocolLineBytes;
     }
 
     internal PostExtractionHookCallbackResult Invoke(
@@ -75,8 +78,8 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
             {
                 responseTask = BoundedLineReader.ReadLineAsync(
                     process!.StandardOutput,
-                    WorkerProtocolLineLimits.MaxLineCharacters,
-                    WorkerProtocolLineLimits.MaxLineUtf8Bytes,
+                    maxProtocolLineBytes,
+                    maxProtocolLineBytes,
                     CancellationToken.None);
                 sendTask = SendRequestAsync(process.StandardInput, requestJson);
             }
@@ -202,7 +205,7 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
 
         ClearExitedWorker();
         stderr = new StringBuilder();
-        if (!PostExtractionHookCallbackWorker.TryCreateStartInfo(hook, out var startInfo, out error))
+        if (!PostExtractionHookCallbackWorker.TryCreateStartInfo(hook, maxProtocolLineBytes, out var startInfo, out error))
             return false;
 
         var next = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
@@ -338,6 +341,7 @@ internal static class PostExtractionHookCallbackWorker
 {
     internal const string CommandName = "__cdidx-post-extraction-hook-callback";
     internal const int WorkerKillWaitMilliseconds = 5000;
+    private const string ProtocolMaxLineBytesOption = "--protocol-max-line-bytes";
     internal static readonly JsonSerializerOptions JsonOptions = PostExtractionHookCallbackWorkerJsonContext.Default.Options;
 
     internal static bool TryRunCommand(
@@ -366,8 +370,22 @@ internal static class PostExtractionHookCallbackWorker
     {
         return TryCreateStartInfo(
             hook,
+            WorkerProtocolLineLimits.MaxLineUtf8Bytes,
+            out startInfo,
+            out error);
+    }
+
+    internal static bool TryCreateStartInfo(
+        PostExtractionHookInfo hook,
+        int maxProtocolLineBytes,
+        out ProcessStartInfo startInfo,
+        out string error)
+    {
+        return TryCreateStartInfo(
+            hook,
             Environment.ProcessPath,
             ResolveCurrentRunnerAssemblyPath(),
+            maxProtocolLineBytes,
             out startInfo,
             out error);
     }
@@ -379,6 +397,23 @@ internal static class PostExtractionHookCallbackWorker
         out ProcessStartInfo startInfo,
         out string error)
     {
+        return TryCreateStartInfo(
+            hook,
+            currentProcessPath,
+            runnerAssemblyPath,
+            WorkerProtocolLineLimits.MaxLineUtf8Bytes,
+            out startInfo,
+            out error);
+    }
+
+    internal static bool TryCreateStartInfo(
+        PostExtractionHookInfo hook,
+        string? currentProcessPath,
+        string? runnerAssemblyPath,
+        int maxProtocolLineBytes,
+        out ProcessStartInfo startInfo,
+        out string error)
+    {
         startInfo = CreateStartInfo();
         if (ShouldStartCurrentExecutable(currentProcessPath, runnerAssemblyPath))
         {
@@ -386,6 +421,7 @@ internal static class PostExtractionHookCallbackWorker
             startInfo.ArgumentList.Add(CommandName);
             startInfo.ArgumentList.Add(hook.AssemblyPath);
             startInfo.ArgumentList.Add(hook.TypeName);
+            AddProtocolLineLimitArguments(startInfo, maxProtocolLineBytes);
             error = string.Empty;
             return true;
         }
@@ -402,6 +438,7 @@ internal static class PostExtractionHookCallbackWorker
         startInfo.ArgumentList.Add(CommandName);
         startInfo.ArgumentList.Add(hook.AssemblyPath);
         startInfo.ArgumentList.Add(hook.TypeName);
+        AddProtocolLineLimitArguments(startInfo, maxProtocolLineBytes);
         ApplyCurrentRuntimeRollForward(startInfo);
 
         error = string.Empty;
@@ -438,11 +475,20 @@ internal static class PostExtractionHookCallbackWorker
         int maxProtocolLineCharacters,
         int maxProtocolLineUtf8Bytes)
     {
-        if (args.Length != 3)
+        if (!TryResolveProtocolLineLimit(
+                args,
+                maxProtocolLineCharacters,
+                maxProtocolLineUtf8Bytes,
+                out var resolvedProtocolLineCharacters,
+                out var resolvedProtocolLineUtf8Bytes,
+                out var protocolLimitError))
         {
-            error.WriteLine("post-extraction hook callback worker requires assembly path and type name.");
+            error.WriteLine(protocolLimitError);
             return 2;
         }
+
+        maxProtocolLineCharacters = resolvedProtocolLineCharacters;
+        maxProtocolLineUtf8Bytes = resolvedProtocolLineUtf8Bytes;
 
         var hookAssemblyPath = args[1];
         var hookTypeName = args[2];
@@ -557,6 +603,40 @@ internal static class PostExtractionHookCallbackWorker
             request.References,
             callbackFailure is null ? null : SafeDiagnosticFormatter.FormatExceptionCategory("hook_callback_failed", callbackFailure),
             null);
+    }
+
+    private static void AddProtocolLineLimitArguments(ProcessStartInfo startInfo, int maxProtocolLineBytes)
+    {
+        startInfo.ArgumentList.Add(ProtocolMaxLineBytesOption);
+        startInfo.ArgumentList.Add(maxProtocolLineBytes.ToString(CultureInfo.InvariantCulture));
+    }
+
+    private static bool TryResolveProtocolLineLimit(
+        string[] args,
+        int fallbackMaxProtocolLineCharacters,
+        int fallbackMaxProtocolLineUtf8Bytes,
+        out int maxProtocolLineCharacters,
+        out int maxProtocolLineUtf8Bytes,
+        out string error)
+    {
+        maxProtocolLineCharacters = fallbackMaxProtocolLineCharacters;
+        maxProtocolLineUtf8Bytes = fallbackMaxProtocolLineUtf8Bytes;
+        error = string.Empty;
+        if (args.Length == 3)
+            return true;
+
+        if (args.Length == 5
+            && StringComparer.Ordinal.Equals(args[3], ProtocolMaxLineBytesOption)
+            && int.TryParse(args[4], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed)
+            && parsed > 0)
+        {
+            maxProtocolLineCharacters = parsed;
+            maxProtocolLineUtf8Bytes = parsed;
+            return true;
+        }
+
+        error = $"post-extraction hook callback worker requires assembly path, type name, and optional `{ProtocolMaxLineBytesOption} <bytes>`.";
+        return false;
     }
 
     private static string ResolveDotnetHostPath()

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Reflection;
 using System.Runtime.Versioning;
 using System.Text;
@@ -17,10 +18,16 @@ internal sealed record SymbolExtractionWorkerResult(
 
 internal sealed class SymbolExtractionWorkerClient : IDisposable
 {
+    private readonly int maxProtocolLineBytes;
     private readonly object gate = new();
     private Process? process;
     private StringBuilder stderr = new();
     private bool disposed;
+
+    internal SymbolExtractionWorkerClient(long? maxFileSizeBytes = null)
+    {
+        maxProtocolLineBytes = WorkerProtocolLineLimits.ResolveForSourceFileBytes(maxFileSizeBytes);
+    }
 
     internal SymbolExtractionWorkerResult Invoke(
         long fileId,
@@ -57,8 +64,8 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
             {
                 responseTask = BoundedLineReader.ReadLineAsync(
                     process!.StandardOutput,
-                    WorkerProtocolLineLimits.MaxLineCharacters,
-                    WorkerProtocolLineLimits.MaxLineUtf8Bytes,
+                    maxProtocolLineBytes,
+                    maxProtocolLineBytes,
                     cancellationToken);
                 sendTask = SendRequestAsync(process.StandardInput, requestJson);
             }
@@ -181,7 +188,7 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
 
         ClearExitedWorker();
         stderr = new StringBuilder();
-        if (!SymbolExtractionWorker.TryCreateStartInfo(out var startInfo, out error))
+        if (!SymbolExtractionWorker.TryCreateStartInfo(maxProtocolLineBytes, out var startInfo, out error))
             return false;
 
         var next = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
@@ -327,6 +334,7 @@ internal static class SymbolExtractionWorker
     internal const string DelayEnvironmentVariable = "CDIDX_TEST_SYMBOL_EXTRACTION_WORKER_DELAY_MS";
     internal const string CompletionPathEnvironmentVariable = "CDIDX_TEST_SYMBOL_EXTRACTION_WORKER_DONE_PATH";
     internal const string ConsoleStdoutEnvironmentVariable = "CDIDX_TEST_SYMBOL_EXTRACTION_WORKER_STDOUT";
+    private const string ProtocolMaxLineBytesOption = "--protocol-max-line-bytes";
     private const int CapturedConsoleMaxChars = 32 * 1024;
     internal static readonly JsonSerializerOptions JsonOptions = SymbolExtractionWorkerJsonContext.Default.Options;
 
@@ -352,8 +360,17 @@ internal static class SymbolExtractionWorker
     internal static bool TryCreateStartInfo(out ProcessStartInfo startInfo, out string error)
     {
         return TryCreateStartInfo(
+            WorkerProtocolLineLimits.MaxLineUtf8Bytes,
+            out startInfo,
+            out error);
+    }
+
+    internal static bool TryCreateStartInfo(int maxProtocolLineBytes, out ProcessStartInfo startInfo, out string error)
+    {
+        return TryCreateStartInfo(
             Environment.ProcessPath,
             ResolveCurrentRunnerAssemblyPath(),
+            maxProtocolLineBytes,
             out startInfo,
             out error);
     }
@@ -364,11 +381,27 @@ internal static class SymbolExtractionWorker
         out ProcessStartInfo startInfo,
         out string error)
     {
+        return TryCreateStartInfo(
+            currentProcessPath,
+            runnerAssemblyPath,
+            WorkerProtocolLineLimits.MaxLineUtf8Bytes,
+            out startInfo,
+            out error);
+    }
+
+    internal static bool TryCreateStartInfo(
+        string? currentProcessPath,
+        string? runnerAssemblyPath,
+        int maxProtocolLineBytes,
+        out ProcessStartInfo startInfo,
+        out string error)
+    {
         startInfo = CreateStartInfo();
         if (ShouldStartCurrentExecutable(currentProcessPath, runnerAssemblyPath))
         {
             startInfo.FileName = currentProcessPath!;
             startInfo.ArgumentList.Add(CommandName);
+            AddProtocolLineLimitArguments(startInfo, maxProtocolLineBytes);
             error = string.Empty;
             return true;
         }
@@ -383,6 +416,7 @@ internal static class SymbolExtractionWorker
         startInfo.FileName = ResolveDotnetHostPath();
         startInfo.ArgumentList.Add(runnerAssemblyPath);
         startInfo.ArgumentList.Add(CommandName);
+        AddProtocolLineLimitArguments(startInfo, maxProtocolLineBytes);
         ApplyCurrentRuntimeRollForward(startInfo);
 
         error = string.Empty;
@@ -448,11 +482,20 @@ internal static class SymbolExtractionWorker
         int maxProtocolLineCharacters,
         int maxProtocolLineUtf8Bytes)
     {
-        if (args.Length != 1)
+        if (!TryResolveProtocolLineLimit(
+                args,
+                maxProtocolLineCharacters,
+                maxProtocolLineUtf8Bytes,
+                out var resolvedProtocolLineCharacters,
+                out var resolvedProtocolLineUtf8Bytes,
+                out var protocolLimitError))
         {
-            error.WriteLine("symbol extraction worker does not accept positional arguments.");
+            error.WriteLine(protocolLimitError);
             return 2;
         }
+
+        maxProtocolLineCharacters = resolvedProtocolLineCharacters;
+        maxProtocolLineUtf8Bytes = resolvedProtocolLineUtf8Bytes;
 
         try
         {
@@ -553,7 +596,7 @@ internal static class SymbolExtractionWorker
     private static void DelayForTestingIfRequested()
     {
         var raw = Environment.GetEnvironmentVariable(DelayEnvironmentVariable);
-        if (!int.TryParse(raw, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var milliseconds)
+        if (!int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var milliseconds)
             || milliseconds <= 0)
         {
             return;
@@ -563,6 +606,40 @@ internal static class SymbolExtractionWorker
         var completionPath = Environment.GetEnvironmentVariable(CompletionPathEnvironmentVariable);
         if (!string.IsNullOrWhiteSpace(completionPath))
             File.WriteAllText(completionPath, "completed");
+    }
+
+    private static void AddProtocolLineLimitArguments(ProcessStartInfo startInfo, int maxProtocolLineBytes)
+    {
+        startInfo.ArgumentList.Add(ProtocolMaxLineBytesOption);
+        startInfo.ArgumentList.Add(maxProtocolLineBytes.ToString(CultureInfo.InvariantCulture));
+    }
+
+    private static bool TryResolveProtocolLineLimit(
+        string[] args,
+        int fallbackMaxProtocolLineCharacters,
+        int fallbackMaxProtocolLineUtf8Bytes,
+        out int maxProtocolLineCharacters,
+        out int maxProtocolLineUtf8Bytes,
+        out string error)
+    {
+        maxProtocolLineCharacters = fallbackMaxProtocolLineCharacters;
+        maxProtocolLineUtf8Bytes = fallbackMaxProtocolLineUtf8Bytes;
+        error = string.Empty;
+        if (args.Length == 1)
+            return true;
+
+        if (args.Length == 3
+            && StringComparer.Ordinal.Equals(args[1], ProtocolMaxLineBytesOption)
+            && int.TryParse(args[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed)
+            && parsed > 0)
+        {
+            maxProtocolLineCharacters = parsed;
+            maxProtocolLineUtf8Bytes = parsed;
+            return true;
+        }
+
+        error = $"symbol extraction worker accepts only `{ProtocolMaxLineBytesOption} <bytes>`.";
+        return false;
     }
 
     private static string ResolveDotnetHostPath()

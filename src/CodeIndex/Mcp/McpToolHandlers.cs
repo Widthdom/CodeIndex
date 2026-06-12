@@ -4251,7 +4251,7 @@ public partial class McpServer
             GitHelper.ResolveIgnoreCase(projectPath, requestToken),
             GitHelper.TryGetRepositoryRoot(projectPath, requestToken) ?? Path.GetFullPath(projectPath),
             maxFileBytes);
-        using var postExtractionHooks = PostExtractionHookRunner.DiscoverDefault();
+        using var postExtractionHooks = PostExtractionHookRunner.DiscoverDefault(maxFileBytes);
         var currentHotspotFamilyMarkerFingerprints = GetHotspotFamilyMarkerFingerprints(indexer, requestToken);
         var currentCSharpSymbolNameContractVersion = DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var csharpSymbolNameContractMatchesCurrent = priorCSharpSymbolNameContractVersion == currentCSharpSymbolNameContractVersion;

@@ -28,6 +28,22 @@ internal static class WorkerProtocolLineLimits
     // file cap after JSON escaping while still bounding line-protocol memory growth.
     internal const int MaxLineCharacters = 32 * 1024 * 1024;
     internal const int MaxLineUtf8Bytes = 32 * 1024 * 1024;
+    private const long JsonEscapedCharacterBytes = 6;
+    private const long ProtocolEnvelopeBytes = 1024 * 1024;
+
+    internal static int ResolveForSourceFileBytes(long? maxFileSizeBytes)
+    {
+        if (maxFileSizeBytes is not > 0)
+            return MaxLineUtf8Bytes;
+
+        var required = checked(maxFileSizeBytes.Value * JsonEscapedCharacterBytes + ProtocolEnvelopeBytes);
+        if (required <= MaxLineUtf8Bytes)
+            return MaxLineUtf8Bytes;
+        if (required >= int.MaxValue)
+            return int.MaxValue;
+
+        return (int)required;
+    }
 }
 
 internal static class BoundedLineReader

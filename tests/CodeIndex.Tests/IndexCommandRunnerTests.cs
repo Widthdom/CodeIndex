@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Runtime.Versioning;
@@ -417,7 +418,13 @@ public class IndexCommandRunnerTests
 
         Assert.True(created, error);
         Assert.Equal(currentProcessPath, startInfo.FileName);
-        Assert.Equal([SymbolExtractionWorker.CommandName], startInfo.ArgumentList);
+        Assert.Equal(
+            [
+                SymbolExtractionWorker.CommandName,
+                "--protocol-max-line-bytes",
+                WorkerProtocolLineLimits.MaxLineUtf8Bytes.ToString(CultureInfo.InvariantCulture),
+            ],
+            startInfo.ArgumentList);
         Assert.True(startInfo.RedirectStandardInput);
         Assert.True(startInfo.RedirectStandardOutput);
         Assert.True(startInfo.RedirectStandardError);
@@ -437,7 +444,39 @@ public class IndexCommandRunnerTests
 
         Assert.True(created, error);
         Assert.NotEqual(currentProcessPath, startInfo.FileName);
-        Assert.Equal([runnerAssemblyPath, SymbolExtractionWorker.CommandName], startInfo.ArgumentList);
+        Assert.Equal(
+            [
+                runnerAssemblyPath,
+                SymbolExtractionWorker.CommandName,
+                "--protocol-max-line-bytes",
+                WorkerProtocolLineLimits.MaxLineUtf8Bytes.ToString(CultureInfo.InvariantCulture),
+            ],
+            startInfo.ArgumentList);
+    }
+
+    [Fact]
+    public void SymbolExtractionWorker_StartInfo_RaisesProtocolLimitForLargeFileCap_Issue3506()
+    {
+        const long maxFileSizeBytes = 50L * 1024L * 1024L;
+        var protocolLimit = WorkerProtocolLineLimits.ResolveForSourceFileBytes(maxFileSizeBytes);
+        var currentProcessPath = Path.Combine(Path.GetTempPath(), OperatingSystem.IsWindows() ? "cdidx.exe" : "cdidx");
+
+        var created = SymbolExtractionWorker.TryCreateStartInfo(
+            currentProcessPath,
+            runnerAssemblyPath: string.Empty,
+            protocolLimit,
+            out var startInfo,
+            out var error);
+
+        Assert.True(created, error);
+        Assert.True(protocolLimit > WorkerProtocolLineLimits.MaxLineUtf8Bytes);
+        Assert.Equal(
+            [
+                SymbolExtractionWorker.CommandName,
+                "--protocol-max-line-bytes",
+                protocolLimit.ToString(CultureInfo.InvariantCulture),
+            ],
+            startInfo.ArgumentList);
     }
 
     [Fact]
@@ -458,7 +497,15 @@ public class IndexCommandRunnerTests
 
         Assert.True(created, error);
         Assert.Equal(currentProcessPath, startInfo.FileName);
-        Assert.Equal([PostExtractionHookCallbackWorker.CommandName, hook.AssemblyPath, hook.TypeName], startInfo.ArgumentList);
+        Assert.Equal(
+            [
+                PostExtractionHookCallbackWorker.CommandName,
+                hook.AssemblyPath,
+                hook.TypeName,
+                "--protocol-max-line-bytes",
+                WorkerProtocolLineLimits.MaxLineUtf8Bytes.ToString(CultureInfo.InvariantCulture),
+            ],
+            startInfo.ArgumentList);
         Assert.True(startInfo.RedirectStandardInput);
         Assert.True(startInfo.RedirectStandardOutput);
         Assert.True(startInfo.RedirectStandardError);
@@ -483,7 +530,48 @@ public class IndexCommandRunnerTests
 
         Assert.True(created, error);
         Assert.NotEqual(currentProcessPath, startInfo.FileName);
-        Assert.Equal([runnerAssemblyPath, PostExtractionHookCallbackWorker.CommandName, hook.AssemblyPath, hook.TypeName], startInfo.ArgumentList);
+        Assert.Equal(
+            [
+                runnerAssemblyPath,
+                PostExtractionHookCallbackWorker.CommandName,
+                hook.AssemblyPath,
+                hook.TypeName,
+                "--protocol-max-line-bytes",
+                WorkerProtocolLineLimits.MaxLineUtf8Bytes.ToString(CultureInfo.InvariantCulture),
+            ],
+            startInfo.ArgumentList);
+    }
+
+    [Fact]
+    public void PostExtractionHookCallbackWorker_StartInfo_RaisesProtocolLimitForLargeFileCap_Issue3506()
+    {
+        const long maxFileSizeBytes = 50L * 1024L * 1024L;
+        var protocolLimit = WorkerProtocolLineLimits.ResolveForSourceFileBytes(maxFileSizeBytes);
+        var hook = new PostExtractionHookInfo(
+            "demo",
+            Path.Combine(Path.GetTempPath(), "demo-hook.dll"),
+            "Demo.Hook");
+        var currentProcessPath = Path.Combine(Path.GetTempPath(), OperatingSystem.IsWindows() ? "cdidx.exe" : "cdidx");
+
+        var created = PostExtractionHookCallbackWorker.TryCreateStartInfo(
+            hook,
+            currentProcessPath,
+            runnerAssemblyPath: string.Empty,
+            protocolLimit,
+            out var startInfo,
+            out var error);
+
+        Assert.True(created, error);
+        Assert.True(protocolLimit > WorkerProtocolLineLimits.MaxLineUtf8Bytes);
+        Assert.Equal(
+            [
+                PostExtractionHookCallbackWorker.CommandName,
+                hook.AssemblyPath,
+                hook.TypeName,
+                "--protocol-max-line-bytes",
+                protocolLimit.ToString(CultureInfo.InvariantCulture),
+            ],
+            startInfo.ArgumentList);
     }
 
     [SkipOnMacOsArm64Fact]
