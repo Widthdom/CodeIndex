@@ -49,6 +49,14 @@ public class ReleaseWorkflowTests
     {
         var workflow = File.ReadAllText(Path.Combine(GetRepositoryRoot(), ".github", "workflows", "release.yml"));
 
+        Assert.Contains("Download release artifacts for checksum calculation", workflow);
+        Assert.Contains("actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1", workflow);
+        Assert.Contains("sha_for_artifact()", workflow);
+        Assert.Contains("find \"$artifact_root\" -type f -name \"$asset\" -print -quit", workflow);
+        Assert.DoesNotContain("CHECKSUMS_URL", workflow);
+        Assert.DoesNotContain("https://x-access-token:${TAP_TOKEN}@github.com/Widthdom/homebrew-tap.git", workflow);
+        Assert.Contains("credential_helper='!f() { echo username=x-access-token; echo \"password=${TAP_TOKEN}\"; }; f'", workflow);
+        Assert.Contains("trap cleanup EXIT", workflow);
         Assert.Contains("native_sqlite_asset = OS.mac? ? \"libe_sqlite3.dylib\" : \"libe_sqlite3.so\"", workflow);
         Assert.Contains("bin.install native_sqlite_asset", workflow);
         Assert.Contains("assert_predicate bin/native_sqlite_asset, :exist?", workflow);
@@ -112,9 +120,33 @@ public class ReleaseWorkflowTests
         Assert.Contains("jq -r '.version // empty' version.json", workflow);
         Assert.Contains("does not match release tag", workflow);
         Assert.Contains("https://api.nuget.org/v3-flatcontainer/cdidx/${VERSION}/cdidx.${VERSION}.nupkg", workflow);
+        Assert.Contains("response_headers=\"$(mktemp \"${RUNNER_TEMP:-/tmp}/cdidx-nuget-head.XXXXXX\")\"", workflow);
+        Assert.Contains("cat \"$response_headers\"", workflow);
+        Assert.DoesNotContain("/tmp/cdidx-nuget-head", workflow);
         Assert.Contains("NuGet package cdidx ${VERSION} is already published", workflow);
         Assert.Contains("Expected packed package ${expected_package} was not produced", workflow);
+        Assert.Contains("Attest NuGet package artifacts", workflow);
+        Assert.Contains("nupkg/*.nupkg", workflow);
+        Assert.Contains("nupkg/*.snupkg", workflow);
+        Assert.Contains("NuGet/login@ebc737b6fc418a6ca0073cf116ec8dc156d8b81e # v1", workflow);
+        Assert.Contains("steps.nuget-login.outputs.NUGET_API_KEY", workflow);
+        Assert.DoesNotContain("secrets.NUGET_API_KEY", workflow);
         Assert.DoesNotContain("--skip-duplicate", workflow);
+    }
+
+    [Fact]
+    public void ReleaseWorkflow_ValidatesReleaseTagBeforePrivilegedJobs()
+    {
+        var workflow = File.ReadAllText(Path.Combine(GetRepositoryRoot(), ".github", "workflows", "release.yml"));
+
+        Assert.Contains("preflight:", workflow);
+        Assert.Contains("name: Validate release tag", workflow);
+        Assert.Contains("permissions:\n      contents: read", workflow);
+        Assert.Contains("ref=refs/tags/${tag}", workflow);
+        Assert.Contains("ref: ${{ needs.preflight.outputs.ref }}", workflow);
+        Assert.Contains("needs: [preflight, release]", workflow);
+        Assert.Contains("needs: [preflight, create-release]", workflow);
+        Assert.DoesNotContain("ref: ${{ inputs.tag_name || github.ref }}", workflow);
     }
 
     [Fact]
@@ -362,10 +394,11 @@ public class ReleaseWorkflowTests
         var dockerfile = File.ReadAllText(Path.Combine(root, "Dockerfile"));
 
         Assert.Contains("publish-container:", workflow);
-        Assert.Contains("needs: create-release", workflow);
+        Assert.Contains("needs: [preflight, create-release]", workflow);
         Assert.Contains("packages: write", workflow);
-        Assert.Contains("docker/login-action@v3", workflow);
-        Assert.Contains("docker/build-push-action@v6", workflow);
+        Assert.Contains("docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4", workflow);
+        Assert.Contains("docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3", workflow);
+        Assert.Contains("docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6", workflow);
         Assert.Contains("platforms: linux/amd64,linux/arm64", workflow);
         Assert.Contains("ghcr.io/widthdom/codeindex:${version}", workflow);
         Assert.Contains("ghcr.io/widthdom/codeindex:latest", workflow);
@@ -375,6 +408,17 @@ public class ReleaseWorkflowTests
         Assert.Contains("linux-musl-x64", dockerfile);
         Assert.Contains("linux-musl-arm64", dockerfile);
         Assert.Contains("ENTRYPOINT [\"cdidx\"]", dockerfile);
+    }
+
+    [Fact]
+    public void MutationWorkflow_PinsActionsByCommitSha()
+    {
+        var workflow = File.ReadAllText(Path.Combine(GetRepositoryRoot(), ".github", "workflows", "mutation-testing.yml"));
+
+        Assert.Contains("actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2", workflow);
+        Assert.Contains("actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0", workflow);
+        Assert.DoesNotContain("actions/checkout@v6", workflow);
+        Assert.DoesNotContain("actions/setup-dotnet@v5", workflow);
     }
 
     private static string GetRepositoryRoot()
