@@ -37,6 +37,7 @@ public partial class McpServer
         "rankBy",
     };
     internal const int MaxMcpIndexFailureMessageLength = 512;
+    private QueryCommandRunner.ProjectFilterRootResolution? _projectFilterRootResolutionForCurrentToolCall;
 
     // --- Tool implementations / ツール実装 ---
 
@@ -1176,6 +1177,7 @@ public partial class McpServer
 
     private List<string>? ReadScopedPathList(JsonNode? args)
     {
+        _projectFilterRootResolutionForCurrentToolCall = null;
         var paths = ReadPathList(args, "path") ?? [];
         var projects = ReadPathList(args, "project") ?? [];
         if (projects.Count == 0)
@@ -1183,7 +1185,8 @@ public partial class McpServer
 
         var solution = args?["solution"]?.GetValue<string>();
         var projectRoot = ResolveProjectFilterRoot();
-        foreach (var glob in SolutionProjectResolver.ResolveProjectDirectoryGlobs(projectRoot, projects, solution))
+        _projectFilterRootResolutionForCurrentToolCall = projectRoot;
+        foreach (var glob in SolutionProjectResolver.ResolveProjectDirectoryGlobs(projectRoot.Root, projects, solution))
             paths.Add(glob);
         return paths.Count == 0 ? null : paths;
     }
@@ -1195,9 +1198,10 @@ public partial class McpServer
             return null;
 
         var solution = args?["solution"]?.GetValue<string>();
+        var projectRoot = ResolveProjectFilterRoot();
         try
         {
-            _ = SolutionProjectResolver.ResolveProjectDirectoryGlobs(ResolveProjectFilterRoot(), projects, solution);
+            _ = SolutionProjectResolver.ResolveProjectDirectoryGlobs(projectRoot.Root, projects, solution);
             return null;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
@@ -1208,15 +1212,32 @@ public partial class McpServer
                 ["message"] = $"Project filter could not be resolved: {diagnostic.Text}",
                 ["parameter"] = "project",
                 ["diagnostic"] = diagnostic.Text,
+                ["project_filter_root"] = projectRoot.Root,
             };
+            if (!string.IsNullOrWhiteSpace(projectRoot.FallbackReason))
+                error["project_filter_root_fallback_reason"] = projectRoot.FallbackReason;
             diagnostic.AddMetadata(error, "diagnostic");
             return error;
         }
     }
 
-    private string ResolveProjectFilterRoot()
-        => DbPathResolver.ResolveProjectRootForQuery(_dbPath, _dbPathExplicit)
-            ?? Environment.CurrentDirectory;
+    private QueryCommandRunner.ProjectFilterRootResolution ResolveProjectFilterRoot()
+        => QueryCommandRunner.ResolveProjectFilterRoot(_dbPath, _dbPathExplicit);
+
+    private void AddProjectFilterRootDiagnostics(JsonObject payload)
+    {
+        var projectRoot = _projectFilterRootResolutionForCurrentToolCall;
+        _projectFilterRootResolutionForCurrentToolCall = null;
+        if (!projectRoot.HasValue)
+            return;
+
+        payload["project_filter_root"] = projectRoot.Value.Root;
+        if (!string.IsNullOrWhiteSpace(projectRoot.Value.FallbackReason))
+            payload["project_filter_root_fallback_reason"] = projectRoot.Value.FallbackReason;
+    }
+
+    private void ClearProjectFilterRootDiagnostics()
+        => _projectFilterRootResolutionForCurrentToolCall = null;
 
     private static bool TryReadSinceArgument(JsonNode? args, out DateTime? since, out string? error)
     {
