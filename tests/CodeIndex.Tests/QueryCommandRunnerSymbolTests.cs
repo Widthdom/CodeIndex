@@ -71,6 +71,159 @@ public partial class QueryCommandRunnerTests
         }
     }
 
+    [Theory]
+    [InlineData("hotspot")]
+    [InlineData("references")]
+    public void RunSymbols_SortByReferenceSignalsAddsRankingMetadata_Issue3451(string sortMode)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_sort_reference_signals");
+        try
+        {
+            var dbPath = CreateSymbolSortFixtureDb(projectRoot);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--kind", "function", "--lang", "csharp", "--path", "src/Beta.cs", "--sort", sortMode, "--limit", "4"],
+                _jsonOptions));
+
+            Assert.True(exitCode == CommandExitCodes.Success, $"exit={exitCode}; stderr={stderr}; stdout={stdout}");
+            Assert.Equal(string.Empty, stderr);
+            var rows = ParseJsonLines(stdout).Select(document => document.RootElement).ToList();
+            Assert.Equal("ShortHot", rows[0].GetProperty("name").GetString());
+            Assert.Equal(sortMode, rows[0].GetProperty("sort_mode").GetString());
+            Assert.True(rows[0].GetProperty("reference_count").GetInt32() >= 2);
+            Assert.True(rows[0].GetProperty("hotspot_score").GetDouble() > 0);
+            Assert.True(rows[0].GetProperty("size_lines").GetInt32() > 0);
+            Assert.True(rows[0].GetProperty("complexity_score").GetDouble() > 0);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbols_SortBySizeAndPathOrdersAuditRows_Issue3451()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_sort_size_path");
+        try
+        {
+            var dbPath = CreateSymbolSortFixtureDb(projectRoot);
+
+            var (sizeExitCode, sizeStdout, sizeStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--kind", "function", "--lang", "csharp", "--path", "src/Beta.cs", "--sort", "size", "--limit", "1"],
+                _jsonOptions));
+            Assert.True(sizeExitCode == CommandExitCodes.Success, $"exit={sizeExitCode}; stderr={sizeStderr}; stdout={sizeStdout}");
+            Assert.Equal(string.Empty, sizeStderr);
+            var sizeRow = Assert.Single(ParseJsonLines(sizeStdout)).RootElement;
+
+            var (pathExitCode, pathStdout, pathStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--kind", "function", "--lang", "csharp", "--sort", "path", "--limit", "1"],
+                _jsonOptions));
+            Assert.True(pathExitCode == CommandExitCodes.Success, $"exit={pathExitCode}; stderr={pathStderr}; stdout={pathStdout}");
+            Assert.Equal(string.Empty, pathStderr);
+            var pathRow = Assert.Single(ParseJsonLines(pathStdout)).RootElement;
+
+            Assert.Equal("LongLow", sizeRow.GetProperty("name").GetString());
+            Assert.Equal("size", sizeRow.GetProperty("sort_mode").GetString());
+            Assert.True(sizeRow.GetProperty("size_lines").GetInt32() > 5);
+
+            Assert.Equal(CommandExitCodes.Success, pathExitCode);
+            Assert.Equal(string.Empty, pathStderr);
+            Assert.Equal("src/Alpha.cs", pathRow.GetProperty("path").GetString());
+            Assert.Equal("path", pathRow.GetProperty("sort_mode").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbols_SortByComplexityAddsMetadata_Issue3451()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_sort_complexity");
+        try
+        {
+            var dbPath = CreateSymbolSortFixtureDb(projectRoot);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--kind", "function", "--lang", "csharp", "--sort", "complexity", "--limit", "1"],
+                _jsonOptions));
+            Assert.True(exitCode == CommandExitCodes.Success, $"exit={exitCode}; stderr={stderr}; stdout={stdout}");
+            Assert.Equal(string.Empty, stderr);
+            var row = Assert.Single(ParseJsonLines(stdout)).RootElement;
+            Assert.Equal("complexity", row.GetProperty("sort_mode").GetString());
+            Assert.True(row.GetProperty("complexity_score").GetDouble() > 0);
+            Assert.True(row.GetProperty("reference_count").GetInt32() >= 0);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbols_InvalidSortReturnsUsageError_Issue3451()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+            ["--sort", "missing"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("--sort must be one of hotspot, references, size, complexity, path", stderr);
+        Assert.Contains("Usage: cdidx symbols", stderr);
+    }
+
+    private static string CreateSymbolSortFixtureDb(string projectRoot)
+    {
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/Alpha.cs",
+            "csharp",
+            """
+            public class Alpha
+            {
+                public void AFirst() { }
+            }
+            """);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/Beta.cs",
+            "csharp",
+            """
+            public class Beta
+            {
+                public void ShortHot() { }
+
+                public void MediumRef() { }
+
+                public void LongLow()
+                {
+                    var total = 0;
+                    total += 1;
+                    total += 2;
+                    total += 3;
+                    total += 4;
+                    total += 5;
+                }
+
+                public void Caller()
+                {
+                    ShortHot();
+                    ShortHot();
+                    MediumRef();
+                }
+            }
+            """);
+        using var db = new DbContext(dbPath);
+        db.InitializeSchema();
+        var writer = new DbWriter(db.Connection);
+        writer.MarkGraphReady();
+        return dbPath;
+    }
+
     [Fact]
     public void RunSymbols_ExactNameFindsPythonFromImportQualifiedNames()
     {

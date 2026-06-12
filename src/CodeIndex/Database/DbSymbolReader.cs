@@ -248,10 +248,10 @@ public partial class DbReader
     /// Search symbols by name pattern, optionally filtered by kind and language.
     /// シンボルを名前パターンで検索（種別・言語でフィルタ可能）。
     /// </summary>
-    public List<SymbolResult> SearchSymbols(string? query = null, int limit = 20, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)
+    public List<SymbolResult> SearchSymbols(string? query = null, int limit = 20, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null, SymbolSortMode sortMode = SymbolSortMode.Name)
     {
         var normalizedQuery = NormalizeSymbolSearchQueryForSymbolSearch(query, lang, exact);
-        return SearchSymbols(normalizedQuery == null ? null : new[] { normalizedQuery }, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact, visibilityFilters, excludeVisibilityFilters);
+        return SearchSymbols(normalizedQuery == null ? null : new[] { normalizedQuery }, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact, visibilityFilters, excludeVisibilityFilters, sortMode);
     }
 
     public int CountSearchSymbols(string? query = null, int limit = 20, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)
@@ -566,7 +566,7 @@ public partial class DbReader
     /// 複数名前パターン（OR結合）でシンボルを検索。空/null なら他フィルタに一致する全シンボルを返す。
     /// <paramref name="exact"/> が true の場合、部分一致ではなく大文字小文字を無視した完全一致になる。
     /// </summary>
-    public List<SymbolResult> SearchSymbols(IReadOnlyList<string>? queries, int limit = 20, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)
+    public List<SymbolResult> SearchSymbols(IReadOnlyList<string>? queries, int limit = 20, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null, SymbolSortMode sortMode = SymbolSortMode.Name)
     {
         lang = DbReader.NormalizeQueryLanguage(lang);
         // Multi-name queries: run one search per name to guarantee per-name candidate coverage
@@ -580,7 +580,7 @@ public partial class DbReader
         {
             var perName = new List<List<SymbolResult>>(validQueries.Count);
             foreach (var q in validQueries)
-                perName.Add(SearchSymbols(new[] { q! }, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact, visibilityFilters, excludeVisibilityFilters));
+                perName.Add(SearchSymbols(new[] { q! }, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact, visibilityFilters, excludeVisibilityFilters, sortMode));
 
             var seen = new HashSet<(string Path, int Line, string Name, string Kind)>();
             var merged = new List<SymbolResult>();
@@ -608,19 +608,61 @@ public partial class DbReader
 
         using var cmd = _conn.CreateCommand();
 
+        var startLineSql = GetSymbolColumnSql("start_line", "s.line");
+        var endLineSql = GetSymbolColumnSql("end_line", "s.line");
+        var bodyStartLineSql = GetSymbolColumnSql("body_start_line");
+        var bodyEndLineSql = GetSymbolColumnSql("body_end_line");
+        var signatureSql = GetSymbolColumnSql("signature");
+        var containerKindSql = GetSymbolColumnSql("container_kind");
+        var containerNameSql = GetSymbolColumnSql("container_name");
+        var visibilitySql = GetSymbolColumnSql("visibility");
+        var returnTypeSql = GetSymbolColumnSql("return_type");
+        var startColumnSql = GetSymbolColumnSql("start_column", "CAST(2147483647 AS INTEGER)");
+        var sizeLinesSql = $"CASE WHEN ({endLineSql}) >= ({startLineSql}) THEN ({endLineSql}) - ({startLineSql}) + 1 ELSE 1 END";
+        var includeRankSignals = sortMode != SymbolSortMode.Name && _hasReferencesTable;
+        var symbolRankJoin = includeRankSignals
+            ? $@"
+            LEFT JOIN (
+                SELECT rf.lang AS lang,
+                       sr.symbol_name AS symbol_name,
+                       COUNT(*) AS reference_count,
+                       SUM({GetHotspotReferenceWeightSql("sr.reference_kind")}) AS hotspot_score
+                FROM symbol_references sr
+                JOIN files rf ON rf.id = sr.file_id
+                WHERE sr.reference_kind IN {CallGraphReferenceKindsSql}
+                  AND sr.symbol_name IS NOT NULL
+                  AND sr.symbol_name <> ''
+                GROUP BY rf.lang, sr.symbol_name
+            ) symbol_rank
+              ON symbol_rank.lang = f.lang
+             AND symbol_rank.symbol_name = s.name COLLATE NOCASE"
+            : string.Empty;
+        var referenceCountSql = includeRankSignals ? "COALESCE(symbol_rank.reference_count, 0)" : "CAST(0 AS INTEGER)";
+        var hotspotScoreSql = includeRankSignals ? "COALESCE(symbol_rank.hotspot_score, 0.0)" : "CAST(0.0 AS REAL)";
+        var complexityScoreSql = $@"(({sizeLinesSql}) + ({referenceCountSql} * 4.0) + ({hotspotScoreSql} * 2.0) + CASE
+                       WHEN {visibilitySql} IN ('public', 'pub', 'open', 'export') THEN 8.0
+                       WHEN {visibilitySql} IN ('protected', 'internal', 'protected internal') THEN 4.0
+                       ELSE 0.0
+                   END)";
+
         var sql = $@"
             SELECT f.path, f.lang, s.kind, {GetSymbolColumnSql("sub_kind")} AS sub_kind, s.name, s.line,
-                   {GetSymbolColumnSql("start_line", "s.line")} AS start_line,
-                   {GetSymbolColumnSql("end_line", "s.line")} AS end_line,
-                   {GetSymbolColumnSql("body_start_line")} AS body_start_line,
-                   {GetSymbolColumnSql("body_end_line")} AS body_end_line,
-                   {GetSymbolColumnSql("signature")} AS signature,
-                   {GetSymbolColumnSql("container_kind")} AS container_kind,
-                   {GetSymbolColumnSql("container_name")} AS container_name,
-                   {GetSymbolColumnSql("visibility")} AS visibility,
-                   {GetSymbolColumnSql("return_type")} AS return_type
+                   {startLineSql} AS start_line,
+                   {endLineSql} AS end_line,
+                   {bodyStartLineSql} AS body_start_line,
+                   {bodyEndLineSql} AS body_end_line,
+                   {signatureSql} AS signature,
+                   {containerKindSql} AS container_kind,
+                   {containerNameSql} AS container_name,
+                   {visibilitySql} AS visibility,
+                   {returnTypeSql} AS return_type,
+                   {referenceCountSql} AS reference_count,
+                   {hotspotScoreSql} AS hotspot_score,
+                   {sizeLinesSql} AS size_lines,
+                   {complexityScoreSql} AS complexity_score
             FROM symbols s
             JOIN files f ON s.file_id = f.id
+            {symbolRankJoin}
             WHERE 1=1";
 
         var effectiveQueries = validQueries;
@@ -676,15 +718,15 @@ public partial class DbReader
             sql += " AND f.modified >= @since";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
         AppendVisibilityFilters(ref sql, visibilityFilters, excludeVisibilityFilters);
-        sql += $" ORDER BY CASE " +
+        var exactNameOrderSql = "CASE " +
             "WHEN @preferLiteralExactMatch = 1 AND s.name = @rawQuery THEN 0 " +
             "WHEN @preferLiteralNormalizedSqlMatch = 1 AND f.lang = 'sql' AND sql_segment_count(s.name) = @rawQuerySegmentCount AND sql_normalize_name(s.name) = @rawQueryNormalized THEN 1 " +
             "WHEN @preferCaseInsensitiveExactMatch = 1 AND s.name = @rawQuery COLLATE NOCASE THEN 2 " +
             "WHEN @preferCaseInsensitiveNormalizedSqlMatch = 1 AND f.lang = 'sql' AND sql_segment_count(s.name) = @rawQuerySegmentCount AND sql_normalize_name_folded(s.name) = @rawQueryNormalizedFolded THEN 3 " +
             "WHEN @preferCaseInsensitiveSqlLeafMatch = 1 AND f.lang = 'sql' AND sql_leaf_name_folded(s.name) = @rawQueryLeafFolded THEN 4 " +
-            "ELSE 5 END, " +
-            $"{PathBucketOrder}, {VisibilityOrder}, s.name, f.path, s.line, " +
-            $"{GetSymbolColumnSql("start_column", "CAST(2147483647 AS INTEGER)")} ASC, s.id ASC LIMIT @limit";
+            "ELSE 5 END";
+        sql += BuildSymbolSortOrderBy(sortMode, exactNameOrderSql, referenceCountSql, hotspotScoreSql, sizeLinesSql, complexityScoreSql, startColumnSql);
+        sql += " LIMIT @limit";
 
         cmd.CommandText = sql;
         if (effectiveQueries != null)
@@ -748,6 +790,8 @@ public partial class DbReader
         AddVisibilityFilterParameters(cmd, visibilityFilters, excludeVisibilityFilters);
         cmd.Parameters.AddWithValue("@limit", limit);
 
+        var includeRankingMetadata = sortMode != SymbolSortMode.Name;
+        var sortModeName = sortMode.ToString().ToLowerInvariant();
         var results = new List<SymbolResult>();
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
@@ -769,9 +813,35 @@ public partial class DbReader
                 ContainerName = GetNullableString(reader, 12),
                 Visibility = GetNullableString(reader, 13),
                 ReturnType = GetNullableString(reader, 14),
+                SortMode = includeRankingMetadata ? sortModeName : null,
+                ReferenceCount = includeRankingMetadata ? Convert.ToInt32(reader.GetInt64(15)) : null,
+                HotspotScore = includeRankingMetadata ? Math.Round(reader.GetDouble(16), 3) : null,
+                SizeLines = includeRankingMetadata ? Convert.ToInt32(reader.GetInt64(17)) : null,
+                ComplexityScore = includeRankingMetadata ? Math.Round(reader.GetDouble(18), 3) : null,
             });
         }
         return results;
+    }
+
+    private string BuildSymbolSortOrderBy(
+        SymbolSortMode sortMode,
+        string exactNameOrderSql,
+        string referenceCountSql,
+        string hotspotScoreSql,
+        string sizeLinesSql,
+        string complexityScoreSql,
+        string startColumnSql)
+    {
+        var stableTieBreakers = $"{PathBucketOrder}, {VisibilityOrder}, s.name, f.path, s.line, {startColumnSql} ASC, s.id ASC";
+        return sortMode switch
+        {
+            SymbolSortMode.Hotspot => $" ORDER BY {hotspotScoreSql} DESC, {referenceCountSql} DESC, {sizeLinesSql} DESC, {stableTieBreakers}",
+            SymbolSortMode.References => $" ORDER BY {referenceCountSql} DESC, {hotspotScoreSql} DESC, {sizeLinesSql} DESC, {stableTieBreakers}",
+            SymbolSortMode.Size => $" ORDER BY {sizeLinesSql} DESC, {referenceCountSql} DESC, {hotspotScoreSql} DESC, {stableTieBreakers}",
+            SymbolSortMode.Complexity => $" ORDER BY {complexityScoreSql} DESC, {hotspotScoreSql} DESC, {referenceCountSql} DESC, {sizeLinesSql} DESC, {stableTieBreakers}",
+            SymbolSortMode.Path => $" ORDER BY f.path, s.line, {startColumnSql} ASC, s.name, s.id ASC",
+            _ => $" ORDER BY {exactNameOrderSql}, {stableTieBreakers}",
+        };
     }
 
     /// <summary>
