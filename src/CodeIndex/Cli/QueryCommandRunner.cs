@@ -2573,6 +2573,7 @@ public static class QueryCommandRunner
                     WriteExactZeroHint(exactZeroHint);
                     WriteKindHint(options.Kind, reader);
                     WriteLangHint(options.Lang, reader);
+                    WriteSymbolExtractionCapabilityHint(options.Lang, reader);
                     WriteZeroResultHints(options, reader);
                 }
                 return ZeroResultExitCode(options);
@@ -9651,6 +9652,20 @@ public static class QueryCommandRunner
                          ?? ConsoleUi.FindClosestMatch(lang, ReferenceExtractor.GetSupportedLanguages());
         if (suggestion != null && !string.Equals(suggestion, lang, StringComparison.OrdinalIgnoreCase))
             Console.Error.WriteLine($"Did you mean: --lang {suggestion}?");
+    }
+
+    private static void WriteSymbolExtractionCapabilityHint(string? lang, DbReader reader)
+    {
+        if (string.IsNullOrWhiteSpace(lang))
+            return;
+        if (SymbolExtractor.GetSupportedLanguages().Contains(lang, StringComparer.Ordinal))
+            return;
+
+        var status = reader.GetStatus();
+        if (status.Languages.Count == 0 || !status.Languages.ContainsKey(lang))
+            return;
+
+        Console.Error.WriteLine($"Hint: '{lang}' is indexed for full-text search, but symbol extraction is not available for that language. Use `cdidx search <query> --lang {lang}` for text matches or `cdidx languages --capability missing-symbols` to audit capability gaps.");
     }
 
     // All valid symbol kinds emitted by SymbolExtractor / SymbolExtractor が出力する全有効シンボル種別

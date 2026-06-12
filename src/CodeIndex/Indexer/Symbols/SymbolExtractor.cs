@@ -2122,7 +2122,7 @@ public static partial class SymbolExtractor
     /// </summary>
     public static IReadOnlyCollection<string> GetSupportedLanguages()
       => PatternCache.Keys
-          .Concat(new[] { "commonlisp", "racket", "vue", "svelte", "markdown", "razor", "blazor", "cshtml" })
+          .Concat(new[] { "commonlisp", "racket", "vue", "svelte", "markdown", "json", "yaml", "razor", "blazor", "cshtml" })
           .Concat(ExtractorPluginRegistry.SymbolLanguages)
           .Distinct(StringComparer.Ordinal)
           .ToArray();
@@ -2260,6 +2260,16 @@ public static partial class SymbolExtractor
         if (lang == "xml")
         {
             return ExtractXmlSymbols(fileId, content.Split('\n'));
+        }
+
+        if (lang == "json")
+        {
+            return ExtractJsonSymbols(fileId, content, content.Split('\n'));
+        }
+
+        if (lang == "yaml")
+        {
+            return ExtractYamlSymbols(fileId, content.Split('\n'));
         }
 
         if (lang == "markdown")

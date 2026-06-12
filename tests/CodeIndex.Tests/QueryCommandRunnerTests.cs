@@ -2285,6 +2285,10 @@ public partial class QueryCommandRunnerTests
         var yamlAliases = languages["yaml"].GetProperty("aliases").EnumerateArray()
             .Select(alias => alias.GetString()).ToList();
         Assert.Contains("yml", yamlAliases);
+        Assert.True(languages["yaml"].GetProperty("symbol_extraction").GetBoolean(),
+            "yaml must advertise symbol_extraction=true");
+        Assert.True(languages["json"].GetProperty("symbol_extraction").GetBoolean(),
+            "json must advertise symbol_extraction=true");
 
         Assert.True(languages.ContainsKey("perl"), "expected 'perl' to be listed");
         Assert.True(languages["perl"].GetProperty("symbol_extraction").GetBoolean(),

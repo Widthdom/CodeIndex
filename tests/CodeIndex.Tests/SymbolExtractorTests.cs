@@ -147,6 +147,60 @@ public partial class SymbolExtractorTests
         }
     }
 
+    [Fact]
+    public void Extract_Json_IndexesConfigurationKeyPaths()
+    {
+        const string content = """
+            {
+              "scripts": {
+                "build": "dotnet build",
+                "test": "dotnet test"
+              },
+              "dependencies": {
+                "xunit": "2.9.3"
+              }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "json", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "namespace" && symbol.Name == "scripts" && symbol.Line == 2);
+        Assert.Contains(symbols, symbol => symbol.Kind == "property" && symbol.Name == "scripts.build" && symbol.ContainerName == "scripts");
+        Assert.Contains(symbols, symbol => symbol.Kind == "property" && symbol.Name == "scripts.test" && symbol.ContainerName == "scripts");
+        Assert.Contains(symbols, symbol => symbol.Kind == "property" && symbol.Name == "dependencies.xunit" && symbol.ContainerName == "dependencies");
+    }
+
+    [Fact]
+    public void Extract_Yaml_IndexesIndentedConfigurationKeyPaths()
+    {
+        const string content = """
+            name: ci
+            on:
+              push:
+                branches:
+                  - main
+            jobs:
+              build:
+                runs-on: ubuntu-latest
+                steps:
+                  - name: Restore
+                    uses: actions/setup-dotnet@v4
+                  - name: Test
+                    run: dotnet test
+            notes: |
+              jobs.fake:
+                run: ignored
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "yaml", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "property" && symbol.Name == "name" && symbol.Line == 1);
+        Assert.Contains(symbols, symbol => symbol.Kind == "namespace" && symbol.Name == "jobs.build" && symbol.ContainerName == "jobs");
+        Assert.Contains(symbols, symbol => symbol.Kind == "property" && symbol.Name == "jobs.build.runs-on");
+        Assert.Contains(symbols, symbol => symbol.Kind == "property" && symbol.Name == "jobs.build.steps.uses");
+        Assert.DoesNotContain(symbols, symbol => symbol.Name.Contains("jobs.fake", StringComparison.Ordinal));
+    }
+
 
 
 

@@ -1697,8 +1697,8 @@ All indexed languages are searchable through FTS5. Rows with **Symbols = yes** a
 | CMake | `.cmake`, `CMakeLists.txt` | -- |
 | SQL | `.sql`, `.pgsql`, `.tsql`, `.plsql`, `.pks`, `.pkb`, `.pls`, `.plb`, `.psql` | yes |
 | Markdown | `.md` | yes |
-| YAML | `.yaml`, `.yml` | -- |
-| JSON | `.json` | -- |
+| YAML | `.yaml`, `.yml` | yes |
+| JSON | `.json` | yes |
 | TOML | `.toml` | -- |
 | HTML | `.html`, `.htm`, `.xhtml`, `.shtml` | yes |
 | CSS | `.css`, `.scss`, `.less`, `.pcss` | yes |
@@ -1713,7 +1713,7 @@ All indexed languages are searchable through FTS5. Rows with **Symbols = yes** a
 - C/C++ headers: `.h` stays on the C path unless the file has clear C++ markers such as `namespace`, `template`, `using`, `class`, or `std::`; those headers are promoted to `cpp` at index time.
 - SQL: query-time `--lang tsql` is accepted as a SQL alias, and T-SQL aggregate, assembly, and XML schema collection declarations are searchable.
 - R: function assignments, S4/R6 class declarations, validity/generic/method declarations, inherit vectors, public/private/active methods, and `library` / `require` imports are indexed.
-- Markdown and CSS: Markdown heading and local-anchor symbols are indexed; CSS variables, placeholders, and `@extend` references are indexed.
+- Markdown, JSON/YAML, and CSS: Markdown heading and local-anchor symbols are indexed; JSON/YAML configuration keys are indexed as structural key paths; CSS variables, placeholders, and `@extend` references are indexed.
 - Dockerfile, Assembly, Common Lisp, and Racket: `ARG` build args, labels/PROC/MACRO blocks, package/module forms, definitions, classes/structs, requires, and provides are surfaced as symbols where applicable.
 - Shell, PowerShell, and Batch: command-style function calls, functions/filters, classes/enums, imports, labels, `goto` / `call` targets, and inline control-flow forms are indexed where the language supports them.
 - C# and Java: modern C# partial members remain visible to `symbols`, `definition`, and `outline`; Java sealed `permits` lists are recorded as `type_reference` graph edges.
@@ -4050,8 +4050,8 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 | CMake | `.cmake`, `CMakeLists.txt` | -- |
 | SQL | `.sql`, `.pgsql`, `.tsql`, `.plsql`, `.pks`, `.pkb`, `.pls`, `.plb`, `.psql` | yes |
 | Markdown | `.md` | yes |
-| YAML | `.yaml`, `.yml` | -- |
-| JSON | `.json` | -- |
+| YAML | `.yaml`, `.yml` | yes |
+| JSON | `.json` | yes |
 | TOML | `.toml` | -- |
 | HTML | `.html`, `.htm`, `.xhtml`, `.shtml` | yes |
 | CSS | `.css`, `.scss`, `.less`, `.pcss` | yes |
@@ -4066,7 +4066,7 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 - C/C++ ヘッダー: `.h` は既定では C として扱います。`namespace`、`template`、`using`、`class`、`std::` などの明確な C++ マーカーがある場合だけ、index 時に `cpp` へ昇格します。
 - SQL: クエリ時の `--lang tsql` は SQL の別名です。T-SQL の aggregate、assembly、XML schema collection 宣言も検索対象です。
 - R: 関数代入、S4/R6 class 宣言、validity/generic/method 宣言、inherit vector、public/private/active method、`library` / `require` import を索引します。
-- Markdown と CSS: Markdown の heading / local anchor、CSS の variable、placeholder、`@extend` をシンボルとして扱います。
+- Markdown、JSON/YAML、CSS: Markdown の heading / local anchor、JSON/YAML の configuration key path、CSS の variable、placeholder、`@extend` をシンボルとして扱います。
 - Dockerfile、Assembly、Common Lisp、Racket: `ARG` build arg、label、PROC/MACRO、package/module form、definition、class/struct、require/provide を必要に応じて表面化します。
 - Shell、PowerShell、Batch: command-style function call、function/filter、class/enum、import、label、`goto` / `call` target、inline control-flow を言語仕様に合わせて索引します。
 - C# と Java: C# の近年の partial member は `symbols`、`definition`、`outline` から見えます。Java の sealed `permits` list は `type_reference` graph edge として記録します。

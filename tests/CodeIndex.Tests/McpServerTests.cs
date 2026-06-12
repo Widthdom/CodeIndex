@@ -9181,8 +9181,9 @@ public class McpServerTests : IDisposable
         Assert.Contains("missing-references", markdown["capability_gaps"]!.AsArray().Select(e => e!.GetValue<string>()));
 
         var yaml = languages.First(l => l!["lang"]!.GetValue<string>() == "yaml")!;
+        Assert.True(yaml["symbol_extraction"]!.GetValue<bool>());
         Assert.Contains("yml", yaml["aliases"]!.AsArray().Select(e => e!.GetValue<string>()));
-        Assert.Contains("missing-symbols", yaml["capability_gaps"]!.AsArray().Select(e => e!.GetValue<string>()));
+        Assert.DoesNotContain("missing-symbols", yaml["capability_gaps"]!.AsArray().Select(e => e!.GetValue<string>()));
 
         // Pin #215: HTML must report symbol_extraction=true and list all four
         // extensions so AI tools discover HTML support via the MCP languages tool.
