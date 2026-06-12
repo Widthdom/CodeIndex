@@ -4924,12 +4924,14 @@ public partial class McpServer
         if (toolInvocationContext != null && SourceCodeDetector.ContainsSourceCode(toolInvocationContext))
             return CreateToolErrorResponse(id, "Tool invocation context appears to contain source code. Please describe the invocation without including code.");
 
+        var samplingDecision = ResolveSuggestionSamplingDecision();
         var sampling = await TrySampleSuggestionMetadataAsync(
             category,
             language,
             RedactSuggestionSamplingInput(description),
             context == null ? null : RedactSuggestionSamplingInput(context),
-            toolInvocationContext == null ? null : RedactSuggestionSamplingInput(toolInvocationContext)).ConfigureAwait(false);
+            toolInvocationContext == null ? null : RedactSuggestionSamplingInput(toolInvocationContext),
+            samplingDecision).ConfigureAwait(false);
         sampling = RedactSuggestionSamplingResult(sampling);
 
         // 4. Compute dedup hash / 重複排除ハッシュを計算
@@ -5016,6 +5018,7 @@ public partial class McpServer
                 dupPayload["upstream_url"] = result.UpstreamUrl;
                 dupPayload["github_issue_url"] = result.UpstreamUrl;
             }
+            AddSuggestionSamplingDiagnostics(dupPayload, samplingDecision, sampling);
             return CreateToolResult(id, "Duplicate suggestion (already recorded).", dupPayload);
         }
 
@@ -5032,6 +5035,7 @@ public partial class McpServer
             ["lifecycle_status"] = JsonNamingPolicy.SnakeCaseLower.ConvertName(result.Status.ToString()),
             ["cdidx_dir"] = cdidxDir,
         };
+        AddSuggestionSamplingDiagnostics(payload, samplingDecision, sampling);
         if (result.SubmissionError != null)
             payload["github_submission_error"] = result.SubmissionError;
         if (result.UpstreamUrl != null)
@@ -5114,6 +5118,11 @@ public partial class McpServer
 
     private sealed record SuggestionSamplingResult(string? Title, string[]? Tags);
 
+    private readonly record struct SuggestionSamplingDecision(
+        bool ShouldRequestClient,
+        string Status,
+        string? Diagnostic);
+
     private static string RedactSuggestionSamplingInput(string value)
         => SuggestionStore.RedactSensitiveText(value, out _);
 
@@ -5146,9 +5155,10 @@ public partial class McpServer
         string? language,
         string description,
         string? context,
-        string? toolInvocationContext)
+        string? toolInvocationContext,
+        SuggestionSamplingDecision samplingDecision)
     {
-        if (!IsSamplingEnabled() || !HasClientCapability("sampling"))
+        if (!samplingDecision.ShouldRequestClient)
             return null;
 
         var prompt = BuildSuggestionSamplingPrompt(category, language, description, context, toolInvocationContext);
@@ -5348,12 +5358,62 @@ public partial class McpServer
                 && node is not null,
         };
 
-    private static bool IsSamplingEnabled()
+    private SuggestionSamplingDecision ResolveSuggestionSamplingDecision()
     {
         var raw = Environment.GetEnvironmentVariable(SamplingEnabledEnvironmentVariable);
-        return raw is null || !(raw.Equals("0", StringComparison.OrdinalIgnoreCase)
-            || raw.Equals("false", StringComparison.OrdinalIgnoreCase)
-            || raw.Equals("off", StringComparison.OrdinalIgnoreCase));
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return new SuggestionSamplingDecision(
+                false,
+                "disabled",
+                $"{SamplingEnabledEnvironmentVariable} is unset; suggestion metadata sampling requires explicit opt-in with true, 1, yes, or on.");
+        }
+
+        var value = raw.Trim();
+        if (IsSamplingOptInValue(value))
+        {
+            return HasClientCapability("sampling")
+                ? new SuggestionSamplingDecision(true, "enabled", null)
+                : new SuggestionSamplingDecision(
+                    false,
+                    "client_capability_missing",
+                    "Client did not advertise MCP sampling capability; suggestion metadata sampling skipped.");
+        }
+
+        if (IsSamplingOptOutValue(value))
+        {
+            return new SuggestionSamplingDecision(
+                false,
+                "disabled",
+                $"{SamplingEnabledEnvironmentVariable} is set to an opt-out value; suggestion metadata sampling disabled.");
+        }
+
+        return new SuggestionSamplingDecision(
+            false,
+            "disabled",
+            $"{SamplingEnabledEnvironmentVariable} contains an unrecognized value; suggestion metadata sampling disabled. Use true, 1, yes, or on to enable.");
+    }
+
+    private static bool IsSamplingOptInValue(string value)
+        => value.Equals("1", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("true", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("yes", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("on", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsSamplingOptOutValue(string value)
+        => value.Equals("0", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("false", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("no", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("off", StringComparison.OrdinalIgnoreCase);
+
+    private static void AddSuggestionSamplingDiagnostics(
+        JsonObject payload,
+        SuggestionSamplingDecision samplingDecision,
+        SuggestionSamplingResult? sampling)
+    {
+        payload["sampling_status"] = sampling != null ? "sampled" : samplingDecision.Status;
+        if (samplingDecision.Diagnostic != null)
+            payload["sampling_diagnostic"] = samplingDecision.Diagnostic;
     }
 
     private static string? ExtractSamplingText(JsonNode? result)

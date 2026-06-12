@@ -12417,6 +12417,8 @@ public class McpServerTests : IDisposable
     [Fact]
     public void SuggestImprovement_WhenSamplingAvailable_StoresSampledMetadata()
     {
+        using var samplingEnv = EnvironmentVariableScope.Capture("CDIDX_MCP_SAMPLING");
+        samplingEnv.Set("CDIDX_MCP_SAMPLING", "1");
         _server.HandleMessage(JsonNode.Parse(
             """{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"capabilities":{"sampling":{}}}}""")!);
         _server.ClientRequestHandlerForTests = (method, _) =>
@@ -12452,6 +12454,7 @@ public class McpServerTests : IDisposable
         var response = _server.HandleMessage(request)!;
 
         var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal("sampled", structured["sampling_status"]!.GetValue<string>());
         Assert.Equal("Improve TypeScript arrow symbol extraction", structured["sampled_title"]!.GetValue<string>());
         Assert.Contains(structured["sampled_tags"]!.AsArray(), tag => tag!.GetValue<string>() == "typescript");
         var stored = new SuggestionStore(Path.GetDirectoryName(_dbPath)!, Path.GetFileNameWithoutExtension(_dbPath)).LoadAll()
@@ -12465,6 +12468,8 @@ public class McpServerTests : IDisposable
     {
         using var env = EnvironmentVariableScope.Capture("CDIDX_GITHUB_TOKEN");
         env.Set("CDIDX_GITHUB_TOKEN", null);
+        using var samplingEnv = EnvironmentVariableScope.Capture("CDIDX_MCP_SAMPLING");
+        samplingEnv.Set("CDIDX_MCP_SAMPLING", "1");
         _server.HandleMessage(JsonNode.Parse(
             """{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"capabilities":{"sampling":{}}}}""")!);
         var secret = $"sample-secret-{Guid.NewGuid():N}";
@@ -12521,6 +12526,8 @@ public class McpServerTests : IDisposable
     [Fact]
     public void SuggestImprovement_WhenSamplingResponseIsTooLarge_IgnoresSampledMetadata()
     {
+        using var samplingEnv = EnvironmentVariableScope.Capture("CDIDX_MCP_SAMPLING");
+        samplingEnv.Set("CDIDX_MCP_SAMPLING", "1");
         _server.HandleMessage(JsonNode.Parse(
             """{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"capabilities":{"sampling":{}}}}""")!);
         _server.ClientRequestHandlerForTests = (method, _) =>
@@ -12556,6 +12563,7 @@ public class McpServerTests : IDisposable
 
         var structured = response["result"]!["structuredContent"]!;
         Assert.Equal("recorded", structured["status"]!.GetValue<string>());
+        Assert.Equal("enabled", structured["sampling_status"]!.GetValue<string>());
         Assert.Null(structured["sampled_title"]);
         var stored = new SuggestionStore(Path.GetDirectoryName(_dbPath)!, Path.GetFileNameWithoutExtension(_dbPath)).LoadAll()
             .Single(s => s.Description == uniqueDesc);
@@ -12566,6 +12574,8 @@ public class McpServerTests : IDisposable
     [Fact]
     public void SuggestImprovement_WhenSamplingClientResponseJsonIsTooLarge_IgnoresSampledMetadata_Issue3098()
     {
+        using var samplingEnv = EnvironmentVariableScope.Capture("CDIDX_MCP_SAMPLING");
+        samplingEnv.Set("CDIDX_MCP_SAMPLING", "1");
         _server.HandleMessage(JsonNode.Parse(
             """{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"capabilities":{"sampling":{}}}}""")!);
         _server.ClientRequestHandlerForTests = (method, _) =>
@@ -12611,6 +12621,8 @@ public class McpServerTests : IDisposable
     [Fact]
     public void SuggestImprovement_WhenSamplingResponseJsonIsTooDeep_IgnoresSampledMetadata()
     {
+        using var samplingEnv = EnvironmentVariableScope.Capture("CDIDX_MCP_SAMPLING");
+        samplingEnv.Set("CDIDX_MCP_SAMPLING", "1");
         _server.HandleMessage(JsonNode.Parse(
             """{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"capabilities":{"sampling":{}}}}""")!);
         _server.ClientRequestHandlerForTests = (method, _) =>
@@ -12657,6 +12669,8 @@ public class McpServerTests : IDisposable
     [Fact]
     public void SuggestImprovement_WhenSamplingAvailable_BoundsPromptAndSummarizesInvocationContext()
     {
+        using var samplingEnv = EnvironmentVariableScope.Capture("CDIDX_MCP_SAMPLING");
+        samplingEnv.Set("CDIDX_MCP_SAMPLING", "1");
         _server.HandleMessage(JsonNode.Parse(
             """{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"capabilities":{"sampling":{}}}}""")!);
         string? capturedPrompt = null;
@@ -12712,6 +12726,88 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void SuggestImprovement_WhenSamplingEnvUnset_DoesNotCallClientSampling_Issue3405()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_MCP_SAMPLING");
+        env.Set("CDIDX_MCP_SAMPLING", null);
+        _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"capabilities":{"sampling":{}}}}""")!);
+        var called = false;
+        _server.ClientRequestHandlerForTests = (_, _) =>
+        {
+            called = true;
+            return null;
+        };
+        var uniqueDesc = $"Sampling unset fail-closed regression {Guid.NewGuid():N}";
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "suggest_improvement",
+                ["arguments"] = new JsonObject
+                {
+                    ["category"] = "other",
+                    ["description"] = uniqueDesc,
+                }
+            }
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.False(called);
+        Assert.Equal("recorded", structured["status"]!.GetValue<string>());
+        Assert.Equal("disabled", structured["sampling_status"]!.GetValue<string>());
+        Assert.Contains("requires explicit opt-in", structured["sampling_diagnostic"]!.GetValue<string>());
+        Assert.Null(structured["sampled_title"]);
+    }
+
+    [Fact]
+    public void SuggestImprovement_WhenSamplingEnvInvalid_DoesNotCallClientSampling_Issue3405()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_MCP_SAMPLING");
+        env.Set("CDIDX_MCP_SAMPLING", new string('x', 512));
+        _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"capabilities":{"sampling":{}}}}""")!);
+        var called = false;
+        _server.ClientRequestHandlerForTests = (_, _) =>
+        {
+            called = true;
+            return null;
+        };
+        var uniqueDesc = $"Sampling invalid env fail-closed regression {Guid.NewGuid():N}";
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "suggest_improvement",
+                ["arguments"] = new JsonObject
+                {
+                    ["category"] = "other",
+                    ["description"] = uniqueDesc,
+                }
+            }
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        var diagnostic = structured["sampling_diagnostic"]!.GetValue<string>();
+        Assert.False(called);
+        Assert.Equal("disabled", structured["sampling_status"]!.GetValue<string>());
+        Assert.Contains("unrecognized value", diagnostic);
+        Assert.True(diagnostic.Length < 200);
+        Assert.DoesNotContain(new string('x', 80), diagnostic);
+        Assert.Null(structured["sampled_title"]);
+    }
+
+    [Fact]
     public void SuggestImprovement_WhenSamplingDisabled_DoesNotCallClientSampling()
     {
         using var env = EnvironmentVariableScope.Capture("CDIDX_MCP_SAMPLING");
@@ -12744,8 +12840,11 @@ public class McpServerTests : IDisposable
         var response = _server.HandleMessage(request)!;
 
         Assert.False(called);
-        Assert.Equal("recorded", response["result"]!["structuredContent"]!["status"]!.GetValue<string>());
-        Assert.Null(response["result"]!["structuredContent"]!["sampled_title"]);
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal("recorded", structured["status"]!.GetValue<string>());
+        Assert.Equal("disabled", structured["sampling_status"]!.GetValue<string>());
+        Assert.Contains("opt-out", structured["sampling_diagnostic"]!.GetValue<string>());
+        Assert.Null(structured["sampled_title"]);
     }
 
     [Fact]
