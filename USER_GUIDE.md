@@ -687,6 +687,12 @@ Use `--channel stable` (or `--channel latest`) to stay on stable releases,
 `selected_version`, `selected_channel`, `selection_source`, and
 `include_prerelease` so automation can record why a release was selected.
 
+On Windows, `cdidx upgrade` selects the same release but does not replace the
+running binary in place. It prints a NuGet handoff command such as
+`dotnet tool update -g cdidx --version <version>` plus the matching release
+page and `CodeIndex-win-*.zip` asset URL; JSON output carries those values in
+`handoff_command`, `handoff_url`, `handoff_asset`, and `handoff_asset_url`.
+
 ### Option B: NuGet Global Tool
 
 Requires the [.NET 8.x SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
@@ -3078,6 +3084,13 @@ stable release に留まる場合は `--channel stable`（または `--channel l
 release tag を入れる場合は `--version <tag>` を使います。JSON 出力には
 `selected_version`、`selected_channel`、`selection_source`、
 `include_prerelease` が含まれるため、automation 側で選択理由を記録できます。
+
+Windows では `cdidx upgrade` は同じ release を選択しますが、実行中 binary を
+その場では置き換えません。代わりに
+`dotnet tool update -g cdidx --version <version>` 形式の NuGet handoff command
+と、対応する release page / `CodeIndex-win-*.zip` asset URL を表示します。JSON 出力では
+`handoff_command`、`handoff_url`、`handoff_asset`、`handoff_asset_url` に
+同じ値が入ります。
 
 ### 方法B: NuGet グローバルツール
 

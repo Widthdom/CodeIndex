@@ -24,6 +24,7 @@ internal static class ProgramRunner
     internal const int QueryTraceArrayMaxItems = 8;
     internal const string QuietEnvironmentVariable = "CDIDX_QUIET";
     private const string ReleaseAssetUrlTemplate = "https://github.com/Widthdom/CodeIndex/releases/download/{0}/{1}";
+    private const string ReleasePageUrlTemplate = "https://github.com/Widthdom/CodeIndex/releases/tag/{0}";
     private const string InstallerScriptAssetName = "install.sh";
     private const string ReleaseChecksumAssetName = "sha256sums.txt";
     private const long MaxInstallerScriptBytes = 1024 * 1024;
@@ -50,6 +51,12 @@ internal static class ProgramRunner
         DateTimeOffset StartTimestamp,
         Stopwatch Stopwatch,
         CancellationToken CancellationToken);
+
+    internal sealed record UpgradeHandoff(
+        string Command,
+        string Url,
+        string Asset,
+        string AssetUrl);
 
     internal static int Run(
         string[] args,
@@ -3168,6 +3175,33 @@ internal static class ProgramRunner
 
         var selectedReleaseTag = result.LatestVersion!;
 
+        if (OperatingSystem.IsWindows())
+        {
+            var handoff = CreateWindowsUpgradeHandoff(selectedReleaseTag, RuntimeInformation.ProcessArchitecture);
+            if (wantsJson)
+            {
+                Console.WriteLine(JsonSerializer.Serialize(
+                    CreateUpgradeJsonResult(
+                        result,
+                        selectedChannel,
+                        selectionSource,
+                        includePrerelease,
+                        installAttempted: false,
+                        installExitCode: null,
+                        error: "windows_handoff_required",
+                        handoff: handoff),
+                    jsonOptions));
+            }
+            else
+            {
+                Console.Error.WriteLine("Error: cdidx upgrade cannot replace the running Windows binary directly.");
+                Console.Error.WriteLine($"Hint: update via NuGet global tool: {handoff.Command}");
+                Console.Error.WriteLine($"Release page: {handoff.Url}");
+                Console.Error.WriteLine($"Manual zip asset: {handoff.Asset} ({handoff.AssetUrl})");
+            }
+            return CommandExitCodes.FeatureUnavailable;
+        }
+
         if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
         {
             if (wantsJson)
@@ -3357,6 +3391,22 @@ internal static class ProgramRunner
     private static bool IsPrereleaseTag(string releaseTag)
         => releaseTag.Contains('-', StringComparison.Ordinal);
 
+    internal static UpgradeHandoff CreateWindowsUpgradeHandoff(string releaseTag, Architecture processArchitecture)
+    {
+        var normalizedTag = releaseTag.Trim();
+        var nugetVersion = normalizedTag.Length > 0 && (normalizedTag[0] is 'v' or 'V')
+            ? normalizedTag[1..]
+            : normalizedTag;
+        var asset = processArchitecture == Architecture.Arm64
+            ? "CodeIndex-win-arm64.zip"
+            : "CodeIndex-win-x64.zip";
+        return new UpgradeHandoff(
+            $"dotnet tool update -g cdidx --version {nugetVersion}",
+            BuildReleasePageUrl(normalizedTag),
+            asset,
+            BuildReleaseAssetUrl(normalizedTag, asset));
+    }
+
     private static UpdateCheckResult CheckLatestPrerelease(string appVersion, CancellationToken cancellationToken)
     {
         if (UpdateChecker.IsDisabled())
@@ -3495,7 +3545,8 @@ internal static class ProgramRunner
         bool includePrerelease,
         bool installAttempted,
         int? installExitCode,
-        string? error)
+        string? error,
+        UpgradeHandoff? handoff = null)
         => new(
             result.CurrentVersion,
             result.LatestVersion,
@@ -3508,7 +3559,17 @@ internal static class ProgramRunner
             error ?? result.Error,
             installAttempted,
             installExitCode,
-            installExitCode is null ? null : installExitCode == CommandExitCodes.Success);
+            installExitCode is null ? null : installExitCode == CommandExitCodes.Success,
+            handoff?.Command,
+            handoff?.Url,
+            handoff?.Asset,
+            handoff?.AssetUrl);
+
+    internal static string BuildReleasePageUrl(string releaseTag)
+        => string.Format(
+            CultureInfo.InvariantCulture,
+            ReleasePageUrlTemplate,
+            Uri.EscapeDataString(releaseTag.Trim()));
 
     internal static string BuildInstallerScriptUrl(string releaseTag)
         => BuildReleaseAssetUrl(releaseTag, InstallerScriptAssetName);

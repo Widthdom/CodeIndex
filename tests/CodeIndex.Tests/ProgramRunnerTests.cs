@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Net;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -1288,6 +1289,21 @@ exit 0
                 ProgramRunner.UpgradeHttpClientFactory = previousFactory;
             }
         }
+    }
+
+    [Theory]
+    [InlineData(Architecture.X64, "CodeIndex-win-x64.zip")]
+    [InlineData(Architecture.Arm64, "CodeIndex-win-arm64.zip")]
+    public void CreateWindowsUpgradeHandoff_UsesNuGetVersionAndMatchingAsset(Architecture architecture, string expectedAsset)
+    {
+        var handoff = ProgramRunner.CreateWindowsUpgradeHandoff("v2.0.0-rc.1", architecture);
+
+        Assert.Equal("dotnet tool update -g cdidx --version 2.0.0-rc.1", handoff.Command);
+        Assert.Equal("https://github.com/Widthdom/CodeIndex/releases/tag/v2.0.0-rc.1", handoff.Url);
+        Assert.Equal(expectedAsset, handoff.Asset);
+        Assert.Equal(
+            $"https://github.com/Widthdom/CodeIndex/releases/download/v2.0.0-rc.1/{expectedAsset}",
+            handoff.AssetUrl);
     }
 
     [Fact]
