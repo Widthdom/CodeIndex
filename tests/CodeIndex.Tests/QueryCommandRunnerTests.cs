@@ -2065,7 +2065,7 @@ public partial class QueryCommandRunnerTests
 
         Assert.NotEmpty(languages);
         Assert.Contains(languages, lang => lang.GetProperty("lang").GetString() == "html");
-        Assert.DoesNotContain(languages, lang => lang.GetProperty("lang").GetString() == "msbuild");
+        Assert.Contains(languages, lang => lang.GetProperty("lang").GetString() == "msbuild");
         Assert.All(languages, lang => Assert.True(lang.GetProperty("symbol_extraction").GetBoolean()));
     }
 
@@ -2256,7 +2256,7 @@ public partial class QueryCommandRunnerTests
         var languages = document.RootElement.GetProperty("languages").EnumerateArray()
             .ToDictionary(entry => entry.GetProperty("lang").GetString()!, entry => entry);
 
-        foreach (var searchOnly in new[] { "cython", "sass", "stylus", "msbuild" })
+        foreach (var searchOnly in new[] { "cython", "sass", "stylus" })
         {
             Assert.True(languages.ContainsKey(searchOnly), $"expected '{searchOnly}' to be listed");
             var entry = languages[searchOnly];
@@ -2297,6 +2297,18 @@ public partial class QueryCommandRunnerTests
             "perl must advertise reference_extraction=true");
         Assert.True(languages["perl"].GetProperty("graph_queries").GetBoolean(),
             "perl must advertise graph_queries=true");
+
+        foreach (var buildAutomation in new[] { "cmake", "justfile", "msbuild" })
+        {
+            Assert.True(languages.ContainsKey(buildAutomation), $"expected '{buildAutomation}' to be listed");
+            Assert.True(languages[buildAutomation].GetProperty("symbol_extraction").GetBoolean(),
+                $"{buildAutomation} must advertise symbol_extraction=true");
+            Assert.True(languages[buildAutomation].GetProperty("reference_extraction").GetBoolean(),
+                $"{buildAutomation} must advertise reference_extraction=true");
+            Assert.True(languages[buildAutomation].GetProperty("graph_queries").GetBoolean(),
+                $"{buildAutomation} must advertise graph_queries=true");
+            Assert.Empty(languages[buildAutomation].GetProperty("capability_gaps").EnumerateArray());
+        }
 
         // Cython owns .pyx / .pxd exclusively; python keeps .py / .pyi / .pyw and Bazel filenames.
         // Cython は .pyx / .pxd を専有し、python は .py / .pyi / .pyw と Bazel ファイル名を維持。

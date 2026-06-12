@@ -30,7 +30,7 @@ public static partial class ReferenceExtractor
         "dart", "scala", "elixir", "lua", "commonlisp", "racket", "vb", "fsharp", "sql", "cobol", "batch",
         "assembly",
         "r", "powershell", "shell", "haskell",
-        "gradle", "terraform", "protobuf", "dockerfile", "makefile",
+        "gradle", "terraform", "protobuf", "dockerfile", "makefile", "cmake", "justfile", "msbuild",
         "zig", "css", "fortran", "pascal", "objc", "smalltalk"
     ];
 

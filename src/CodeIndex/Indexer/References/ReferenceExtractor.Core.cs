@@ -353,6 +353,23 @@ public static partial class ReferenceExtractor
                     ref phpDocblockPropertyNames);
             }
 
+            var context = originalLine.Trim();
+            if (language is "cmake" or "justfile" or "msbuild"
+                && context.Length > 0)
+            {
+                var buildAutomationContainer = containerResolver.Find(lineNumber);
+                BuildAutomationReferenceExtractor.EmitReferences(
+                    language,
+                    originalLine,
+                    context,
+                    lineNumber,
+                    references,
+                    seen,
+                    fileId,
+                    buildAutomationContainer);
+                continue;
+            }
+
             if (string.IsNullOrWhiteSpace(preparedLine))
             {
                 if (language == "csharp"
@@ -375,7 +392,6 @@ public static partial class ReferenceExtractor
                 continue;
             }
 
-            var context = originalLine.Trim();
             if (context.Length == 0)
                 continue;
 
