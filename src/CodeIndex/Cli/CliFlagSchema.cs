@@ -279,6 +279,7 @@ internal static class CliFlagSchema
             new() { Name = "--include-query", ValuePlaceholder = "<name>", Description = "Search recipe: include one child query; repeat or comma-separate values", Commands = Set("search") },
             new() { Name = "--exclude-query", ValuePlaceholder = "<name>", Description = "Search recipe: exclude one child query; repeat or comma-separate values", Commands = Set("search") },
             new() { Name = "--list-recipes", Description = "Search: list built-in audit recipes", Commands = Set("search") },
+            new() { Name = "--audit-scope", ValuePlaceholder = "<source|all>", Description = "Search recipes: use production source defaults or include all indexed paths", Commands = Set("search") },
             new() { Name = "--named-query", ValuePlaceholder = "<name>=<query>", Description = "Search: add one named ad hoc batch query", Commands = Set("search") },
             new() { Name = "--open-issues", ValuePlaceholder = "<path|github|github:owner/name>", Description = "Preflight issue drafts against open issue JSON or GitHub open issues", Commands = Set("search", "suggestions") },
             new() { Name = "--repo", ValuePlaceholder = "<owner/name>", Description = "Issue-drafts: GitHub repository for --open-issues github", Commands = Set("search", "suggestions") },

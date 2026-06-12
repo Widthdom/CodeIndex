@@ -596,6 +596,14 @@ public static class QueryCommandRunner
                 "Use `--recipe risky-code/raw-diagnostic-echo --format compact --cursor <next_cursor>` to fetch the next page for one child query.");
             return CommandExitCodes.UsageError;
         }
+        if (options.AuditScopeExplicit && options.RecipeName == null)
+        {
+            WriteUsageError(
+                "--audit-scope is only supported with `cdidx search --recipe <name>`.",
+                GetUsageLineOrThrow("search"),
+                "Use `--audit-scope source` for the production-code default or `--audit-scope all` when intentionally auditing docs, tests, and recipe definitions.");
+            return CommandExitCodes.UsageError;
+        }
         if ((options.IssueTitle != null || options.IssueLabels.Count > 0) && options.OutputFormat != OutputFormatIssueDrafts)
         {
             WriteUsageError(
@@ -1156,6 +1164,11 @@ public static class QueryCommandRunner
         {
             Console.WriteLine($"{recipe.Name}: {recipe.Description}");
             Console.WriteLine($"  labels: {string.Join(", ", recipe.RecommendedLabels)}");
+            Console.WriteLine($"  default scope: {recipe.DefaultScope}");
+            if (recipe.DefaultPathPatterns.Count > 0)
+                Console.WriteLine($"  default paths: {string.Join(", ", recipe.DefaultPathPatterns)}");
+            if (recipe.DefaultExcludePaths.Count > 0)
+                Console.WriteLine($"  default excludes: {string.Join(", ", recipe.DefaultExcludePaths)}");
             foreach (var query in recipe.Queries)
             {
                 var mode = query.ExactSubstring ? "exact-substring" : "fts";
@@ -1289,6 +1302,7 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         }
         var recipe = selection.Recipe;
+        var scope = BuildSearchRecipeScope(recipe, options);
         if (options.SearchCursor.HasValue && selection.Queries.Count != 1)
         {
             WriteUsageError(
@@ -1302,11 +1316,12 @@ public static class QueryCommandRunner
         {
             if (options.OutputFormat == OutputFormatCompact)
             {
-                var compactQueryResults = CollectSearchRecipeCompactQueryResults(reader, selection.Queries, options, userExact, out var compactTotal);
+                var compactQueryResults = CollectSearchRecipeCompactQueryResults(reader, selection.Queries, scope, options, userExact, out var compactTotal);
                 Console.WriteLine(JsonSerializer.Serialize(
                     new SearchRecipeCompactRunJsonResult(
                         JsonOutputContract.ApiVersion,
                         ToSearchRecipeListItem(recipe, selection.Queries),
+                        scope,
                         selection.Queries.Count,
                         compactTotal,
                         compactQueryResults),
@@ -1314,7 +1329,7 @@ public static class QueryCommandRunner
                 return CommandExitCodes.Success;
             }
 
-            var queryResults = CollectSearchRecipeQueryResults(reader, selection.Queries, options, userExact, out var total);
+            var queryResults = CollectSearchRecipeQueryResults(reader, selection.Queries, scope, options, userExact, out var total);
 
             if (options.Json)
             {
@@ -1322,6 +1337,7 @@ public static class QueryCommandRunner
                     new SearchRecipeRunJsonResult(
                         JsonOutputContract.ApiVersion,
                         ToSearchRecipeListItem(recipe, selection.Queries),
+                        scope,
                         selection.Queries.Count,
                         total,
                         queryResults),
@@ -1331,6 +1347,12 @@ public static class QueryCommandRunner
 
             Console.WriteLine($"Recipe: {recipe.Name}");
             Console.WriteLine(recipe.Description);
+            Console.WriteLine($"Scope: {scope.Name}");
+            if (scope.PathPatterns.Count > 0)
+                Console.WriteLine($"Paths: {string.Join(", ", scope.PathPatterns)}");
+            if (scope.ExcludePaths.Count > 0)
+                Console.WriteLine($"Excludes: {string.Join(", ", scope.ExcludePaths)}");
+            Console.WriteLine($"Exclude tests: {scope.ExcludeTests.ToString().ToLowerInvariant()}");
             Console.WriteLine();
             foreach (var queryResult in queryResults)
             {
@@ -1364,6 +1386,7 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         }
         var recipe = selection.Recipe;
+        var scope = BuildSearchRecipeScope(recipe, options);
         if (!IssueDuplicatePreflight.TryLoad(options.OpenIssuesPath, options.OpenIssuesRepository, out var preflight, out var error))
         {
             WriteUsageError(
@@ -1375,7 +1398,7 @@ public static class QueryCommandRunner
 
         return WithDb(options, jsonOptions, reader =>
         {
-            var queryResults = CollectSearchRecipeQueryResults(reader, selection.Queries, options, userExact, out var total);
+            var queryResults = CollectSearchRecipeQueryResults(reader, selection.Queries, scope, options, userExact, out var total);
             var drafts = queryResults
                 .Where(queryResult => queryResult.Count > 0)
                 .Select(queryResult => ToSearchIssueDraft(recipe, queryResult, preflight, options))
@@ -1384,6 +1407,7 @@ public static class QueryCommandRunner
                 new SearchIssueDraftExportJsonResult(
                     JsonOutputContract.ApiVersion,
                     ToSearchRecipeListItem(recipe, selection.Queries),
+                    scope,
                     selection.Queries.Count,
                     total,
                     drafts.Count,
@@ -1444,6 +1468,7 @@ public static class QueryCommandRunner
                 new SearchIssueDraftExportJsonResult(
                     JsonOutputContract.ApiVersion,
                     null,
+                    null,
                     1,
                     rows.Count,
                     drafts.Count,
@@ -1460,6 +1485,7 @@ public static class QueryCommandRunner
     private static List<SearchRecipeQueryResultJsonResult> CollectSearchRecipeQueryResults(
         DbReader reader,
         IReadOnlyList<SearchAuditRecipeQuery> recipeQueries,
+        SearchRecipeScopeJsonResult scope,
         QueryCommandOptions options,
         bool userExact,
         out int total)
@@ -1474,9 +1500,9 @@ public static class QueryCommandRunner
                 options.Limit,
                 options.Lang,
                 false,
-                options.PathPatterns,
-                options.ExcludePaths,
-                options.ExcludeTests,
+                scope.PathPatterns,
+                scope.ExcludePaths,
+                scope.ExcludeTests,
                 !options.NoDedup,
                 options.Since,
                 exact,
@@ -1505,6 +1531,7 @@ public static class QueryCommandRunner
     private static List<SearchRecipeCompactQueryResultJsonResult> CollectSearchRecipeCompactQueryResults(
         DbReader reader,
         IReadOnlyList<SearchAuditRecipeQuery> recipeQueries,
+        SearchRecipeScopeJsonResult scope,
         QueryCommandOptions options,
         bool userExact,
         out int total)
@@ -1519,9 +1546,9 @@ public static class QueryCommandRunner
                 options.Limit,
                 options.Lang,
                 false,
-                options.PathPatterns,
-                options.ExcludePaths,
-                options.ExcludeTests,
+                scope.PathPatterns,
+                scope.ExcludePaths,
+                scope.ExcludeTests,
                 !options.NoDedup,
                 options.Since,
                 exact,
@@ -1551,6 +1578,39 @@ public static class QueryCommandRunner
         }
 
         return queryResults;
+    }
+
+    private static SearchRecipeScopeJsonResult BuildSearchRecipeScope(SearchAuditRecipe recipe, QueryCommandOptions options)
+    {
+        var scopeName = options.AuditScopeExplicit ? options.AuditScope : recipe.DefaultScope;
+        var pathPatterns = new List<string>(options.PathPatterns);
+        var excludePaths = new List<string>(options.ExcludePaths);
+        var excludeTests = options.ExcludeTests;
+
+        if (string.Equals(scopeName, SearchAuditRecipes.DefaultAuditScope, StringComparison.OrdinalIgnoreCase))
+        {
+            if (pathPatterns.Count == 0)
+                AddDistinct(pathPatterns, recipe.DefaultPathPatterns);
+            AddDistinct(excludePaths, recipe.DefaultExcludePaths);
+            excludeTests = true;
+        }
+
+        return new SearchRecipeScopeJsonResult(
+            scopeName,
+            pathPatterns,
+            excludePaths,
+            excludeTests,
+            [.. recipe.DefaultPathPatterns],
+            [.. recipe.DefaultExcludePaths]);
+    }
+
+    private static void AddDistinct(List<string> target, IEnumerable<string> values)
+    {
+        foreach (var value in values)
+        {
+            if (!target.Contains(value, StringComparer.Ordinal))
+                target.Add(value);
+        }
     }
 
     private static List<SearchRecipeTopFileJsonResult> BuildSearchRecipeTopFiles(IReadOnlyList<SearchDisplayRow> rows)
@@ -1879,6 +1939,9 @@ public static class QueryCommandRunner
         recipe.Name,
         recipe.Description,
         recipe.RecommendedLabels,
+        recipe.DefaultScope,
+        [.. recipe.DefaultPathPatterns],
+        [.. recipe.DefaultExcludePaths],
         SearchRecipeSupportedFormats,
         SearchRecipeFilterSupport,
         SearchRecipeLimitSemantics,
@@ -7377,6 +7440,20 @@ public static class QueryCommandRunner
         return gaps;
     }
 
+    private static bool TryNormalizeSearchAuditScope(string value, out string scope)
+    {
+        scope = value.Trim().ToLowerInvariant();
+        if (scope is SearchAuditRecipes.DefaultAuditScope or SearchAuditRecipes.AllAuditScope)
+            return true;
+        if (scope is "production" or "production-only")
+        {
+            scope = SearchAuditRecipes.DefaultAuditScope;
+            return true;
+        }
+
+        return false;
+    }
+
     public static QueryCommandOptions ParseArgs(
         string[] args,
         bool jsonDefault,
@@ -7474,6 +7551,8 @@ public static class QueryCommandRunner
         var excludeRecipeQueries = new List<string>();
         bool listRecipes = false;
         string? openIssuesPath = null;
+        string auditScope = SearchAuditRecipes.DefaultAuditScope;
+        bool auditScopeExplicit = false;
         string? openIssuesRepository = null;
         string? issueTitle = null;
         var issueLabels = new List<string>();
@@ -7827,6 +7906,22 @@ public static class QueryCommandRunner
                     }
                     else
                         AddParseError(openIssuesError!);
+                    break;
+                case "--audit-scope":
+                    if (!TryReadStringOptionValue(args, ref i, "--audit-scope", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var auditScopeValue, out var auditScopeError))
+                    {
+                        AddParseError(auditScopeError!);
+                    }
+                    else if (TryNormalizeSearchAuditScope(auditScopeValue!, out var normalizedAuditScope))
+                    {
+                        WarnIfDuplicateSingleValueOption("--audit-scope", auditScopeValue!);
+                        auditScope = normalizedAuditScope;
+                        auditScopeExplicit = true;
+                    }
+                    else
+                    {
+                        AddParseError($"Error: unsupported --audit-scope value '{ConsoleUi.FormatBoundedValue(auditScopeValue)}'. Use source or all.");
+                    }
                     break;
                 case "--repo":
                     if (TryReadStringOptionValue(args, ref i, "--repo", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var repoValue, out var repoError))
@@ -8573,6 +8668,8 @@ public static class QueryCommandRunner
             ExcludeRecipeQueries = excludeRecipeQueries,
             ListRecipes = listRecipes,
             OpenIssuesPath = openIssuesPath,
+            AuditScope = auditScope,
+            AuditScopeExplicit = auditScopeExplicit,
             OpenIssuesRepository = openIssuesRepository,
             IssueTitle = issueTitle,
             IssueLabels = issueLabels,
@@ -11912,6 +12009,8 @@ public sealed class QueryCommandOptions
     public List<string> ExcludeRecipeQueries { get; init; } = [];
     public bool ListRecipes { get; init; }
     public string? OpenIssuesPath { get; init; }
+    public string AuditScope { get; init; } = SearchAuditRecipes.DefaultAuditScope;
+    public bool AuditScopeExplicit { get; init; }
     public string? OpenIssuesRepository { get; init; }
     public string? IssueTitle { get; init; }
     public List<string> IssueLabels { get; init; } = [];

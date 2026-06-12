@@ -6,6 +6,8 @@ namespace CodeIndex.Cli;
 
 internal static class SearchAuditRecipes
 {
+    internal const string DefaultAuditScope = "source";
+    internal const string AllAuditScope = "all";
     internal const string RecipePathsEnvironmentVariable = "CDIDX_SEARCH_RECIPE_PATHS";
     private const int MaxRecipeSourceFiles = 8;
     private const long MaxRecipeSourceBytes = 128 * 1024;
@@ -54,8 +56,119 @@ internal static class SearchAuditRecipes
                     "CancellationToken.None",
                     "Find async or stream paths that may be ignoring caller cancellation.",
                     ["audit", "bug"],
-                    "False positives include intentionally fire-and-forget work and APIs that have no meaningful caller cancellation token.")
+                    "False positives include intentionally fire-and-forget work and APIs that have no meaningful caller cancellation token."),
+                new(
+                    "empty-catch-review",
+                    "catch",
+                    "Find catch blocks that may be empty, overly broad, or swallowing diagnostic context.",
+                    ["audit", "bug"],
+                    "False positives include catch blocks that rethrow, translate exceptions safely, or intentionally ignore best-effort cleanup failures."),
+                new(
+                    "broad-exception-catch",
+                    "catch (Exception",
+                    "Find broad C# exception catches that may need narrower exception types or explicit recovery boundaries.",
+                    ["audit", "bug"],
+                    "False positives include top-level command boundaries that intentionally normalize all recoverable failures."),
+                new(
+                    "process-start-info",
+                    "ProcessStartInfo",
+                    "Find external process launch configuration that may need argument, environment, cwd, and shell-use review.",
+                    ["audit", "security"],
+                    "False positives include tests and launch wrappers that already validate arguments and disable shell expansion."),
+                new(
+                    "process-start-direct",
+                    "Process.Start",
+                    "Find direct process launches that may need a shared safe-launch wrapper or explicit argument handling.",
+                    ["audit", "security"],
+                    "False positives include simple URL/document open helpers or test fixtures with trusted inputs."),
+                new(
+                    "recursive-delete",
+                    "Directory.Delete",
+                    "Find recursive or broad delete operations that may need path-boundary and symlink/reparse-point review.",
+                    ["audit", "security"],
+                    "False positives include isolated temporary-directory cleanup guarded by test helpers or workspace-root containment checks."),
+                new(
+                    "infinite-timeout",
+                    "Timeout.InfiniteTimeSpan",
+                    "Find infinite waits that may need bounded timeouts, cancellation, or liveness reporting.",
+                    ["audit", "bug"],
+                    "False positives include deliberate sentinel values that are never passed to blocking waits."),
+                new(
+                    "path-case-heuristic",
+                    "OrdinalIgnoreCase",
+                    "Find case-insensitive path or identifier comparisons that may need filesystem case-sensitivity awareness.",
+                    ["audit", "portability"],
+                    "False positives include non-path protocol tokens, CLI option names, labels, and other intentionally case-insensitive domains."),
+                new(
+                    "regex-construction",
+                    "new Regex",
+                    "Find direct regex construction that may need a timeout, non-backtracking mode, or bounded input review.",
+                    ["audit", "performance"],
+                    "False positives include precompiled bounded patterns with explicit timeouts or tiny trusted inputs."),
+                new(
+                    "regex-timeout-handling",
+                    "RegexMatchTimeoutException",
+                    "Find regex timeout handling boundaries that may need consistent diagnostics and recovery behavior.",
+                    ["audit", "bug"],
+                    "False positives include tests and already-normalized parse/validation errors."),
+                new(
+                    "environment-secret-source",
+                    "GetEnvironmentVariable",
+                    "Find environment-variable reads that may source tokens, secrets, credentials, or operational policy.",
+                    ["audit", "security"],
+                    "False positives include non-secret feature flags and documented public configuration."),
+                new(
+                    "authorization-handling",
+                    "Authorization",
+                    "Find authorization header or auth-boundary handling that may need redaction and egress review.",
+                    ["audit", "security"],
+                    "False positives include documentation, tests, and already-redacted header-name-only handling."),
+                new(
+                    "bearer-token-handling",
+                    "Bearer",
+                    "Find bearer token handling that may need storage, logging, and outbound request review.",
+                    ["audit", "security"],
+                    "False positives include examples, tests, and redacted token placeholders."),
+                new(
+                    "credential-term",
+                    "credential",
+                    "Find credential-related code paths that may need source, persistence, and redaction boundary review.",
+                    ["audit", "security"],
+                    "False positives include natural-language documentation or non-secret credential-type names.",
+                    ExactSubstring: false),
+                new(
+                    "secret-term",
+                    "secret",
+                    "Find secret-related code paths that may need source, persistence, and redaction boundary review.",
+                    ["audit", "security"],
+                    "False positives include documentation, labels, and comments that do not touch secret material.",
+                    ExactSubstring: false),
+                new(
+                    "token-term",
+                    "token",
+                    "Find token-related code paths that may need lexical-token versus auth-token triage.",
+                    ["audit", "security"],
+                    "False positives include parser/tokenizer code, syntax tokens, and non-auth identifiers.",
+                    ExactSubstring: false)
             ])
+        {
+            DefaultPathPatterns = ["src/**"],
+            DefaultExcludePaths =
+            [
+                "src/CodeIndex/Cli/SearchAuditRecipes.cs",
+                "tests/**",
+                "docs/**",
+                "CHANGELOG.md",
+                "changelog.d/**",
+                "README.md",
+                "USER_GUIDE.md",
+                "DEVELOPER_GUIDE.md",
+                "TESTING_GUIDE.md",
+                "AGENT_GUIDE.md",
+                ".codex/**",
+                ".github/**"
+            ]
+        }
     ];
 
     internal static IReadOnlyList<SearchAuditRecipe> All => Load().Recipes;
@@ -367,6 +480,10 @@ internal sealed record SearchAuditRecipe(
     string Description,
     List<SearchAuditRecipeQuery> Queries)
 {
+    public string DefaultScope { get; init; } = SearchAuditRecipes.DefaultAuditScope;
+    public List<string> DefaultPathPatterns { get; init; } = [];
+    public List<string> DefaultExcludePaths { get; init; } = [];
+
     public List<string> RecommendedLabels =>
         Queries
             .SelectMany(query => query.RecommendedLabels)
@@ -392,6 +509,9 @@ internal sealed record SearchRecipeListItemJsonResult(
     [property: JsonPropertyName("name")] string Name,
     [property: JsonPropertyName("description")] string Description,
     [property: JsonPropertyName("recommended_labels")] List<string> RecommendedLabels,
+    [property: JsonPropertyName("default_scope")] string DefaultScope,
+    [property: JsonPropertyName("default_path_patterns")] List<string> DefaultPathPatterns,
+    [property: JsonPropertyName("default_exclude_paths")] List<string> DefaultExcludePaths,
     [property: JsonPropertyName("supported_formats")] List<string> SupportedFormats,
     [property: JsonPropertyName("filter_support")] SearchRecipeFilterSupportJsonResult FilterSupport,
     [property: JsonPropertyName("limit_semantics")] SearchRecipeLimitSemanticsJsonResult LimitSemantics,
@@ -425,6 +545,7 @@ internal sealed record SearchRecipeQueryListItemJsonResult(
 internal sealed record SearchRecipeRunJsonResult(
     [property: JsonPropertyName("api_version")] string ApiVersion,
     [property: JsonPropertyName("recipe")] SearchRecipeListItemJsonResult Recipe,
+    [property: JsonPropertyName("scope")] SearchRecipeScopeJsonResult Scope,
     [property: JsonPropertyName("query_count")] int QueryCount,
     [property: JsonPropertyName("result_count")] int ResultCount,
     [property: JsonPropertyName("queries")] List<SearchRecipeQueryResultJsonResult> Queries);
@@ -456,6 +577,7 @@ internal sealed record SearchRecipeQueryResultJsonResult(
 internal sealed record SearchRecipeCompactRunJsonResult(
     [property: JsonPropertyName("api_version")] string ApiVersion,
     [property: JsonPropertyName("recipe")] SearchRecipeListItemJsonResult Recipe,
+    [property: JsonPropertyName("scope")] SearchRecipeScopeJsonResult Scope,
     [property: JsonPropertyName("query_count")] int QueryCount,
     [property: JsonPropertyName("result_count")] int ResultCount,
     [property: JsonPropertyName("queries")] List<SearchRecipeCompactQueryResultJsonResult> Queries);
@@ -486,6 +608,7 @@ internal sealed record SearchRecipeCompactResultJsonResult(
 internal sealed record SearchIssueDraftExportJsonResult(
     [property: JsonPropertyName("api_version")] string ApiVersion,
     [property: JsonPropertyName("recipe")] SearchRecipeListItemJsonResult? Recipe,
+    [property: JsonPropertyName("scope")] SearchRecipeScopeJsonResult? Scope,
     [property: JsonPropertyName("query_count")] int QueryCount,
     [property: JsonPropertyName("result_count")] int ResultCount,
     [property: JsonPropertyName("count")] int Count,
@@ -509,3 +632,11 @@ internal sealed record SearchIssueDraftSourceJsonResult(
     [property: JsonPropertyName("false_positive_guidance")] string FalsePositiveGuidance,
     [property: JsonPropertyName("exact_substring")] bool ExactSubstring,
     [property: JsonPropertyName("result_count")] int ResultCount);
+
+internal sealed record SearchRecipeScopeJsonResult(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("path_patterns")] List<string> PathPatterns,
+    [property: JsonPropertyName("exclude_paths")] List<string> ExcludePaths,
+    [property: JsonPropertyName("exclude_tests")] bool ExcludeTests,
+    [property: JsonPropertyName("recipe_default_path_patterns")] List<string> RecipeDefaultPathPatterns,
+    [property: JsonPropertyName("recipe_default_exclude_paths")] List<string> RecipeDefaultExcludePaths);
