@@ -1123,6 +1123,15 @@ jobs:
           RELEASE_URL="${REPO_URL}/releases/download/${TAG_NAME}"
           CHECKSUMS_URL="${RELEASE_URL}/sha256sums.txt"
           checksums="$(mktemp)"
+          tap_dir=""
+          cleanup() {
+            rm -f "$checksums"
+            if [ -n "$tap_dir" ]; then
+              rm -rf "$tap_dir"
+            fi
+          }
+          trap cleanup EXIT
+
           curl -fsSL --connect-timeout 10 --max-time 60 --retry 5 --retry-delay 5 --retry-all-errors "$CHECKSUMS_URL" -o "$checksums"
 
           sha_for() {
@@ -1134,7 +1143,8 @@ jobs:
           osx_arm64_sha="$(sha_for CodeIndex-osx-arm64.tar.gz)"
 
           tap_dir="$(mktemp -d)"
-          git clone "https://x-access-token:${TAP_TOKEN}@github.com/Widthdom/homebrew-tap.git" "$tap_dir"
+          credential_helper='!f() { echo username=x-access-token; echo "password=${TAP_TOKEN}"; }; f'
+          git -c credential.helper="$credential_helper" clone "https://github.com/Widthdom/homebrew-tap.git" "$tap_dir"
           mkdir -p "$tap_dir/Formula"
 
           cat > "$tap_dir/Formula/codeindex.rb" <<EOF
@@ -1190,4 +1200,4 @@ jobs:
           fi
 
           git -C "$tap_dir" commit -m "Update codeindex to ${TAG_NAME}"
-          git -C "$tap_dir" push origin HEAD:main
+          git -C "$tap_dir" -c credential.helper="$credential_helper" push origin HEAD:main
