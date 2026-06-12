@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Reflection;
 using System.Runtime.Versioning;
 using System.Text;
@@ -17,10 +18,16 @@ internal sealed record SymbolExtractionWorkerResult(
 
 internal sealed class SymbolExtractionWorkerClient : IDisposable
 {
+    private readonly int maxProtocolLineBytes;
     private readonly object gate = new();
     private Process? process;
     private StringBuilder stderr = new();
     private bool disposed;
+
+    internal SymbolExtractionWorkerClient(long? maxFileSizeBytes = null)
+    {
+        maxProtocolLineBytes = WorkerProtocolLineLimits.ResolveForSourceFileBytes(maxFileSizeBytes);
+    }
 
     internal SymbolExtractionWorkerResult Invoke(
         long fileId,
@@ -55,14 +62,18 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
             Task sendTask;
             try
             {
-                responseTask = process!.StandardOutput.ReadLineAsync();
+                responseTask = BoundedLineReader.ReadLineAsync(
+                    process!.StandardOutput,
+                    maxProtocolLineBytes,
+                    maxProtocolLineBytes,
+                    cancellationToken);
                 sendTask = SendRequestAsync(process.StandardInput, requestJson);
             }
             catch (Exception ex)
             {
                 KillWorker();
                 stopwatch.Stop();
-                return Failure($"failed to send symbol extraction request: {ex.Message}", stopwatch.ElapsedMilliseconds);
+                return Failure($"{SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", ex)} while sending symbol extraction request.", stopwatch.ElapsedMilliseconds);
             }
 
             if (!WaitForTask(sendTask, waitMilliseconds, cancellationToken, out var sendException))
@@ -76,7 +87,7 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
             {
                 KillWorker();
                 stopwatch.Stop();
-                return Failure($"failed to send symbol extraction request: {sendException.Message}", stopwatch.ElapsedMilliseconds);
+                return Failure($"{SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", sendException)} while sending symbol extraction request.", stopwatch.ElapsedMilliseconds);
             }
 
             waitMilliseconds = GetRemainingWaitMilliseconds(stopwatch, callbackBudget);
@@ -91,7 +102,7 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
             {
                 KillWorker();
                 stopwatch.Stop();
-                return Failure($"failed to read symbol extraction response: {responseException.Message}", stopwatch.ElapsedMilliseconds);
+                return Failure($"{SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", responseException)} while reading symbol extraction response.", stopwatch.ElapsedMilliseconds);
             }
 
             if (CallbackBudgetExceeded(stopwatch, callbackBudget))
@@ -120,7 +131,7 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
             catch (JsonException ex)
             {
                 KillWorker();
-                return Failure($"worker returned invalid JSON: {ex.Message}", stopwatch.ElapsedMilliseconds);
+                return Failure($"{SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", ex)} while parsing symbol extraction response.", stopwatch.ElapsedMilliseconds);
             }
 
             if (response == null)
@@ -177,7 +188,7 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
 
         ClearExitedWorker();
         stderr = new StringBuilder();
-        if (!SymbolExtractionWorker.TryCreateStartInfo(out var startInfo, out error))
+        if (!SymbolExtractionWorker.TryCreateStartInfo(maxProtocolLineBytes, out var startInfo, out error))
             return false;
 
         var next = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
@@ -203,7 +214,7 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
         }
         catch (Exception ex)
         {
-            error = $"failed to start symbol extraction worker process: {ex.Message}";
+            error = SafeDiagnosticFormatter.FormatExceptionCategory("worker_start_failed", ex);
             next.Dispose();
             return false;
         }
@@ -293,11 +304,8 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
 
     private static string BuildWorkerExitError(Process? process, string stderr, string fallback)
     {
-        var exitCodeText = process == null
-            ? "unknown"
-            : process.ExitCode.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        var detail = !string.IsNullOrWhiteSpace(stderr) ? stderr.Trim() : fallback;
-        return $"worker exited with code {exitCodeText}: {detail}";
+        var exitCode = process == null ? (int?)null : process.ExitCode;
+        return SafeDiagnosticFormatter.FormatWorkerExit("worker_protocol_error", exitCode, fallback);
     }
 
     private static bool WaitForWorkerExit(Process process, int milliseconds)
@@ -326,6 +334,7 @@ internal static class SymbolExtractionWorker
     internal const string DelayEnvironmentVariable = "CDIDX_TEST_SYMBOL_EXTRACTION_WORKER_DELAY_MS";
     internal const string CompletionPathEnvironmentVariable = "CDIDX_TEST_SYMBOL_EXTRACTION_WORKER_DONE_PATH";
     internal const string ConsoleStdoutEnvironmentVariable = "CDIDX_TEST_SYMBOL_EXTRACTION_WORKER_STDOUT";
+    private const string ProtocolMaxLineBytesOption = "--protocol-max-line-bytes";
     private const int CapturedConsoleMaxChars = 32 * 1024;
     internal static readonly JsonSerializerOptions JsonOptions = SymbolExtractionWorkerJsonContext.Default.Options;
 
@@ -334,7 +343,9 @@ internal static class SymbolExtractionWorker
         TextReader input,
         TextWriter output,
         TextWriter error,
-        out int exitCode)
+        out int exitCode,
+        int maxProtocolLineCharacters = WorkerProtocolLineLimits.MaxLineCharacters,
+        int maxProtocolLineUtf8Bytes = WorkerProtocolLineLimits.MaxLineUtf8Bytes)
     {
         if (args.Length == 0 || !StringComparer.Ordinal.Equals(args[0], CommandName))
         {
@@ -342,15 +353,24 @@ internal static class SymbolExtractionWorker
             return false;
         }
 
-        exitCode = RunCommand(args, input, output, error);
+        exitCode = RunCommand(args, input, output, error, maxProtocolLineCharacters, maxProtocolLineUtf8Bytes);
         return true;
     }
 
     internal static bool TryCreateStartInfo(out ProcessStartInfo startInfo, out string error)
     {
         return TryCreateStartInfo(
+            WorkerProtocolLineLimits.MaxLineUtf8Bytes,
+            out startInfo,
+            out error);
+    }
+
+    internal static bool TryCreateStartInfo(int maxProtocolLineBytes, out ProcessStartInfo startInfo, out string error)
+    {
+        return TryCreateStartInfo(
             Environment.ProcessPath,
             ResolveCurrentRunnerAssemblyPath(),
+            maxProtocolLineBytes,
             out startInfo,
             out error);
     }
@@ -361,11 +381,27 @@ internal static class SymbolExtractionWorker
         out ProcessStartInfo startInfo,
         out string error)
     {
+        return TryCreateStartInfo(
+            currentProcessPath,
+            runnerAssemblyPath,
+            WorkerProtocolLineLimits.MaxLineUtf8Bytes,
+            out startInfo,
+            out error);
+    }
+
+    internal static bool TryCreateStartInfo(
+        string? currentProcessPath,
+        string? runnerAssemblyPath,
+        int maxProtocolLineBytes,
+        out ProcessStartInfo startInfo,
+        out string error)
+    {
         startInfo = CreateStartInfo();
         if (ShouldStartCurrentExecutable(currentProcessPath, runnerAssemblyPath))
         {
             startInfo.FileName = currentProcessPath!;
             startInfo.ArgumentList.Add(CommandName);
+            AddProtocolLineLimitArguments(startInfo, maxProtocolLineBytes);
             error = string.Empty;
             return true;
         }
@@ -380,6 +416,7 @@ internal static class SymbolExtractionWorker
         startInfo.FileName = ResolveDotnetHostPath();
         startInfo.ArgumentList.Add(runnerAssemblyPath);
         startInfo.ArgumentList.Add(CommandName);
+        AddProtocolLineLimitArguments(startInfo, maxProtocolLineBytes);
         ApplyCurrentRuntimeRollForward(startInfo);
 
         error = string.Empty;
@@ -437,29 +474,71 @@ internal static class SymbolExtractionWorker
         }
     }
 
-    private static int RunCommand(string[] args, TextReader input, TextWriter output, TextWriter error)
+    private static int RunCommand(
+        string[] args,
+        TextReader input,
+        TextWriter output,
+        TextWriter error,
+        int maxProtocolLineCharacters,
+        int maxProtocolLineUtf8Bytes)
     {
-        if (args.Length != 1)
+        if (!TryResolveProtocolLineLimit(
+                args,
+                maxProtocolLineCharacters,
+                maxProtocolLineUtf8Bytes,
+                out var resolvedProtocolLineCharacters,
+                out var resolvedProtocolLineUtf8Bytes,
+                out var protocolLimitError))
         {
-            error.WriteLine("symbol extraction worker does not accept positional arguments.");
+            error.WriteLine(protocolLimitError);
             return 2;
         }
 
+        maxProtocolLineCharacters = resolvedProtocolLineCharacters;
+        maxProtocolLineUtf8Bytes = resolvedProtocolLineUtf8Bytes;
+
         try
         {
-            string? requestJson;
-            while ((requestJson = input.ReadLine()) != null)
+            while (true)
             {
                 WorkerResponse response;
+                WorkerRequest request;
+                string? requestJson;
                 try
                 {
-                    var request = JsonSerializer.Deserialize<WorkerRequest>(requestJson, JsonOptions)
+                    requestJson = BoundedLineReader.ReadLine(input, maxProtocolLineCharacters, maxProtocolLineUtf8Bytes);
+                }
+                catch (BoundedLineLengthException ex)
+                {
+                    response = new WorkerResponse(null, SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", ex), null);
+                    output.WriteLine(JsonSerializer.Serialize(response, JsonOptions));
+                    output.Flush();
+                    return 1;
+                }
+
+                if (requestJson is null)
+                    break;
+
+                try
+                {
+                    request = JsonSerializer.Deserialize<WorkerRequest>(requestJson, JsonOptions)
                         ?? throw new InvalidOperationException("worker request was empty.");
+                }
+                catch (Exception ex)
+                {
+                    response = new WorkerResponse(null, SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", ex), null);
+                    output.WriteLine(JsonSerializer.Serialize(response, JsonOptions));
+                    output.Flush();
+                    continue;
+                }
+
+                try
+                {
                     response = InvokeInsideWorker(request);
                 }
                 catch (Exception ex)
                 {
-                    response = new WorkerResponse(null, ex.Message, null);
+                    response = new WorkerResponse(null, SafeDiagnosticFormatter.FormatExceptionCategory("worker_execution_failed", ex), null);
                 }
 
                 output.WriteLine(JsonSerializer.Serialize(response, JsonOptions));
@@ -470,7 +549,7 @@ internal static class SymbolExtractionWorker
         }
         catch (Exception ex)
         {
-            error.WriteLine(ex.Message);
+            error.WriteLine(SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", ex));
             return 1;
         }
     }
@@ -498,7 +577,7 @@ internal static class SymbolExtractionWorker
         }
         catch (Exception ex)
         {
-            return new WorkerResponse(null, ex.Message, capturedError.GetCapturedText());
+            return new WorkerResponse(null, SafeDiagnosticFormatter.FormatExceptionCategory("worker_execution_failed", ex), capturedError.GetCapturedText());
         }
         finally
         {
@@ -517,7 +596,7 @@ internal static class SymbolExtractionWorker
     private static void DelayForTestingIfRequested()
     {
         var raw = Environment.GetEnvironmentVariable(DelayEnvironmentVariable);
-        if (!int.TryParse(raw, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var milliseconds)
+        if (!int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var milliseconds)
             || milliseconds <= 0)
         {
             return;
@@ -527,6 +606,40 @@ internal static class SymbolExtractionWorker
         var completionPath = Environment.GetEnvironmentVariable(CompletionPathEnvironmentVariable);
         if (!string.IsNullOrWhiteSpace(completionPath))
             File.WriteAllText(completionPath, "completed");
+    }
+
+    private static void AddProtocolLineLimitArguments(ProcessStartInfo startInfo, int maxProtocolLineBytes)
+    {
+        startInfo.ArgumentList.Add(ProtocolMaxLineBytesOption);
+        startInfo.ArgumentList.Add(maxProtocolLineBytes.ToString(CultureInfo.InvariantCulture));
+    }
+
+    private static bool TryResolveProtocolLineLimit(
+        string[] args,
+        int fallbackMaxProtocolLineCharacters,
+        int fallbackMaxProtocolLineUtf8Bytes,
+        out int maxProtocolLineCharacters,
+        out int maxProtocolLineUtf8Bytes,
+        out string error)
+    {
+        maxProtocolLineCharacters = fallbackMaxProtocolLineCharacters;
+        maxProtocolLineUtf8Bytes = fallbackMaxProtocolLineUtf8Bytes;
+        error = string.Empty;
+        if (args.Length == 1)
+            return true;
+
+        if (args.Length == 3
+            && StringComparer.Ordinal.Equals(args[1], ProtocolMaxLineBytesOption)
+            && int.TryParse(args[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed)
+            && parsed > 0)
+        {
+            maxProtocolLineCharacters = parsed;
+            maxProtocolLineUtf8Bytes = parsed;
+            return true;
+        }
+
+        error = $"symbol extraction worker accepts only `{ProtocolMaxLineBytesOption} <bytes>`.";
+        return false;
     }
 
     private static string ResolveDotnetHostPath()

@@ -20,13 +20,15 @@ public partial class McpServer
         {
             CreateToolDefinition(
                 "search",
-                "Full-text search across indexed code chunks. Returns match-centered snippets with line metadata plus `result_stable_at` for index-drift checks, `next_cursor` for non-empty paginated responses, and `next_step_suggestion` or `recovery_hint`. Use `prefix` or trailing `*` to widen token matching, `rawQuery` for FTS5 syntax, and `exactSubstring` for case-sensitive text identity. Details and examples: USER_GUIDE.md#search. / インデックス済みコードチャンクの全文検索。レスポンスには index drift 検出用の `result_stable_at`、非空ページ継続用の `next_cursor`、`next_step_suggestion` または `recovery_hint` を含める。`prefix` / 末尾 `*` / `rawQuery` / `exactSubstring` の詳細と例は USER_GUIDE.md#search を参照。",
+                "Full-text search across indexed code chunks, or list/run named search audit recipes. Returns match-centered snippets with line metadata plus `result_stable_at` for index-drift checks, `next_cursor` for non-empty paginated query responses, and `next_step_suggestion` or `recovery_hint`. Use `listRecipes:true` to list recipes and `recipe:\"name\"` to run one. Use `prefix` or trailing `*` to widen token matching, `rawQuery` for FTS5 syntax, and `exactSubstring` for case-sensitive text identity. Details and examples: USER_GUIDE.md#search. / インデックス済みコードチャンクの全文検索、または名前付き search audit recipe の一覧・実行。レスポンスには index drift 検出用の `result_stable_at`、非空ページ継続用の `next_cursor`、`next_step_suggestion` または `recovery_hint` を含める。`listRecipes:true` で recipe 一覧、`recipe:\"name\"` で実行。`prefix` / 末尾 `*` / `rawQuery` / `exactSubstring` の詳細と例は USER_GUIDE.md#search を参照。",
                 new JsonObject
                 {
                     ["type"] = "object",
                     ["properties"] = new JsonObject
                     {
                         ["query"] = new JsonObject { ["type"] = "string", ["description"] = "Search query text. Append `*` to a token to make that token a prefix phrase (`計算*` matches `計算する`)." },
+                        ["recipe"] = new JsonObject { ["type"] = "string", ["description"] = "Run a named search audit recipe instead of a single query. Use `listRecipes:true` to discover available recipe names." },
+                        ["listRecipes"] = new JsonObject { ["type"] = "boolean", ["description"] = "List built-in and configured search audit recipes without running a search.", ["default"] = false },
                         ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20). Responses include `truncated` and `more_available` when more rows exist.", ["default"] = QueryCommandRunner.DefaultQueryLimit },
                         ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language (e.g. csharp, python, javascript)" },
                         ["snippetLines"] = new JsonObject { ["type"] = "integer", ["description"] = "Max snippet lines per result (default: 8, max: 20)", ["default"] = 8, ["minimum"] = 1, ["maximum"] = SearchSnippetFormatter.MaxSnippetLines },
@@ -50,7 +52,12 @@ public partial class McpServer
                         ["countOnly"] = new JsonObject { ["type"] = "boolean", ["description"] = "Return only count metadata and a small top-file histogram; omit row payloads.", ["default"] = false },
                         ["format"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray { "full", "count", "compact" }, ["description"] = "Response shape: full rows, count-only metadata, or compact file/line rows without snippets.", ["default"] = "full" }
                     },
-                    ["required"] = new JsonArray { "query" }
+                    ["anyOf"] = new JsonArray
+                    {
+                        new JsonObject { ["required"] = new JsonArray { "query" } },
+                        new JsonObject { ["required"] = new JsonArray { "recipe" } },
+                        new JsonObject { ["required"] = new JsonArray { "listRecipes" } }
+                    }
                 },
                 ReadOnlyAnnotations()),
             CreateToolDefinition(

@@ -27,6 +27,8 @@ public static class QueryCommandRunner
     internal const int DefaultDependencyCycleGraphLimit = 1_000;
     internal const int MaxWorkspaceDependencyDatabaseCount = 8;
     internal const int MaxWorkspaceDependencyDatabasePairCount = MaxWorkspaceDependencyDatabaseCount * (MaxWorkspaceDependencyDatabaseCount - 1);
+    internal const int FindAllCandidateFileLimit = 4096;
+    internal const int FindAllLineScanLimit = 250_000;
     internal const int BatchMaxLineChars = 1024 * 1024;
     internal const int BatchMaxArgumentCount = 256;
     internal const int BatchMaxArgumentChars = 8192;
@@ -284,11 +286,29 @@ public static class QueryCommandRunner
     private const string OutputFormatGraphMl = "graphml";
     private const string OutputFormatJsonGraph = "json-graph";
     private const string OutputFormatEdgeList = "edgelist";
+    private static readonly HashSet<string> RepoMapOutputFormats = new(StringComparer.Ordinal)
+    {
+        OutputFormatText,
+        OutputFormatJson,
+        OutputFormatCompact,
+    };
+    private static readonly HashSet<string> SymbolOutputFormats = new(StringComparer.Ordinal)
+    {
+        OutputFormatText,
+        OutputFormatJson,
+        OutputFormatCount,
+    };
+    private static readonly HashSet<string> InspectOutputFormats = new(StringComparer.Ordinal)
+    {
+        OutputFormatText,
+        OutputFormatJson,
+        OutputFormatCompact,
+    };
     private static readonly HashSet<string> InlineValueOptions =
         new(
             ValueTakingOptions.Concat(["--json", "--log-format", "--log-retain-count", "--log-max-size-mb"]),
             StringComparer.Ordinal);
-    private const string FindUsage = "Usage: cdidx find <query> --path <glob> [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--before <n>] [--after <n>] [--snippet-lines <n>] [--focus-line <line>] [--focus-column <n>] [--max-line-width <n>] [--exact] [--regex] [--count]\n       cdidx find --query <query> --path <glob> [...]\n       cdidx find [options] -- <query>";
+    private const string FindUsage = "Usage: cdidx find <query> (--path <glob>|--all) [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--before <n>] [--after <n>] [--snippet-lines <n>] [--focus-line <line>] [--focus-column <n>] [--max-line-width <n>] [--exact] [--regex] [--count]\n       cdidx find --query <query> (--path <glob>|--all) [...]\n       cdidx find [options] -- <query>";
 
     public static int RunBatch(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
@@ -458,9 +478,9 @@ public static class QueryCommandRunner
             subArgs = values.Skip(1).ToArray();
             return true;
         }
-        catch (JsonException ex)
+        catch (JsonException)
         {
-            Console.Error.WriteLine($"Error: batch line {lineNumber} is not valid JSON: {ex.Message}");
+            Console.Error.WriteLine($"Error [{CommandErrorCodes.UsageError}]: batch line {lineNumber} {SafeDiagnosticFormatter.FormatCategoryType("invalid_batch_json", nameof(JsonException))}.");
             return false;
         }
     }
@@ -634,14 +654,6 @@ public static class QueryCommandRunner
                     "Remove the positional query, or run a plain `cdidx search <query>` without --recipe.");
                 return CommandExitCodes.UsageError;
             }
-            if (options.CountOnly)
-            {
-                WriteUsageError(
-                    "--count is not supported with --recipe.",
-                    GetUsageLineOrThrow("search"),
-                    "Use `cdidx search --recipe <name> --json` for per-query result counts.");
-                return CommandExitCodes.UsageError;
-            }
             if (options.Prefix)
             {
                 WriteUsageError(
@@ -656,6 +668,14 @@ public static class QueryCommandRunner
                     "--format count/compact/csv/tsv/lsp/qf/sarif is not supported with --recipe.",
                     GetUsageLineOrThrow("search"),
                     "Use `--json` for grouped recipe results or `--format issue-drafts` for draft exports.");
+                return CommandExitCodes.UsageError;
+            }
+            if (options.CountOnly)
+            {
+                WriteUsageError(
+                    "--count is not supported with --recipe.",
+                    GetUsageLineOrThrow("search"),
+                    "Use `cdidx search --recipe <name> --json` for per-query result counts.");
                 return CommandExitCodes.UsageError;
             }
             if (options.JsonOutputFormat == JsonOutputFormatArray)
@@ -748,7 +768,15 @@ public static class QueryCommandRunner
                 {
                     if (options.Json)
                     {
-                        Console.WriteLine(BuildJsonZeroResultPayload(reader, jsonOptions, includeFiles: true, query: options.Query, ftsQueryDiagnostics: queryDiagnostics, queryOptions: options, exactSubstringHint: exactSubstringHint).ToJsonString(jsonOptions));
+                        Console.WriteLine(BuildCountJsonPayload(
+                            reader,
+                            jsonOptions,
+                            count: 0,
+                            files: 0,
+                            query: options.Query,
+                            queryOptions: options,
+                            ftsQueryDiagnostics: queryDiagnostics,
+                            exactSubstringHint: exactSubstringHint).ToJsonString(jsonOptions));
                     }
                     else
                     {
@@ -760,7 +788,15 @@ public static class QueryCommandRunner
 
                 if (options.Json)
                 {
-                    Console.WriteLine(JsonSerializer.Serialize(new QueryCountFilesJsonResult(counts.Count, counts.FileCount, options.Query), CliJsonSerializerContextFactory.Create(jsonOptions).QueryCountFilesJsonResult));
+                    Console.WriteLine(BuildCountJsonPayload(
+                        reader,
+                        jsonOptions,
+                        counts.Count,
+                        counts.FileCount,
+                        query: options.Query,
+                        queryOptions: options,
+                        ftsQueryDiagnostics: queryDiagnostics,
+                        exactSubstringHint: exactSubstringHint).ToJsonString(jsonOptions));
                 }
                 else
                 {
@@ -1168,7 +1204,7 @@ public static class QueryCommandRunner
                 !options.NoVisibilityRank,
                 guardFilters: options.GuardFilters,
                 guardWindow: options.GuardWindow);
-            var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query);
+            var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, rawFtsOverride: false);
             total += rows.Count;
             queryResults.Add(new SearchRecipeQueryResultJsonResult(
                 recipeQuery.Name,
@@ -1316,12 +1352,19 @@ public static class QueryCommandRunner
             query.FalsePositiveGuidance,
             query.ExactSubstring)).ToList());
 
-    private static List<SearchDisplayRow> BuildSearchDisplayRows(List<SearchResult> results, QueryCommandOptions options, bool exact, string? queryOverride = null)
+    private static List<SearchDisplayRow> BuildSearchDisplayRows(
+        List<SearchResult> results,
+        QueryCommandOptions options,
+        bool exact,
+        string? queryOverride = null,
+        bool? rawFtsOverride = null)
     {
         var rows = new List<SearchDisplayRow>(results.Count);
         var seenMatchLocations = options.NoDedup ? null : new HashSet<string>(StringComparer.Ordinal);
         var displayQuery = queryOverride ?? options.Query!;
-        var queryContext = options.RawFts
+        var rawFts = rawFtsOverride ?? options.RawFts;
+        var effectiveRawFts = rawFts && !exact;
+        var queryContext = effectiveRawFts
             ? SearchSnippetFormatter.PrepareRawFtsQueryContext(displayQuery)
             : SearchSnippetFormatter.PrepareQueryContext(displayQuery);
         foreach (var result in results)
@@ -1349,8 +1392,9 @@ public static class QueryCommandRunner
                     exposeLiteralHighlights: exact,
                     preferredMatchLine: preferredOriginFilterLine.Value);
             }
+            SearchSnippetFormatter.ApplyOutputMetadata(compact, options.SnippetLines, options.MaxLineWidth, exact, rawFts);
 
-            if (!options.RawFts && compact.MatchLines.Count == 0 && compact.Highlights.Count == 0)
+            if (!effectiveRawFts && compact.MatchLines.Count == 0 && compact.Highlights.Count == 0)
                 continue;
 
             if (!ApplySearchOriginFilters(compact, options))
@@ -1961,20 +2005,14 @@ public static class QueryCommandRunner
                 if (counts.Count == 0)
                 {
                     Console.WriteLine(options.Json
-                        ? BuildJsonZeroResultPayload(reader, jsonOptions, includeFiles: true, exactZeroHint: exactZeroHintForCount, exactSignal: exact ? exactSignalForCount : null, queryOptions: options).ToJsonString(jsonOptions)
+                        ? BuildCountJsonPayload(reader, jsonOptions, count: 0, files: 0, query: options.Query, exactZeroHint: exactZeroHintForCount, exactSignal: exact ? exactSignalForCount : null, queryOptions: options).ToJsonString(jsonOptions)
                         : "0");
                     return CommandExitCodes.Success;
                 }
 
                 if (options.Json)
                 {
-                    var payload = new JsonObject
-                    {
-                        ["count"] = counts.Count,
-                        ["files"] = counts.FileCount,
-                    };
-                    if (exact)
-                        AddExactJsonFields(payload, exactSignalForCount);
+                    var payload = BuildCountJsonPayload(reader, jsonOptions, counts.Count, counts.FileCount, query: options.Query, exactSignal: exact ? exactSignalForCount : null, queryOptions: options);
                     Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
                 else
@@ -2008,6 +2046,7 @@ public static class QueryCommandRunner
                 return ZeroResultExitCode(options);
             }
 
+            ApplyBodyRecoveryCommands(results, options.DbPath);
             if (options.Json)
             {
                 if (TryWriteFormattedLocations(
@@ -2220,6 +2259,7 @@ public static class QueryCommandRunner
             var results = reader.SearchReferences(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.MaxLineWidth);
             if (options.IncludeBody)
                 AttachBodyExcerpts(reader, results, options.SnippetLines, options.MaxLineWidth);
+            ApplyBodyRecoveryCommands(results, options.DbPath);
             var sqlGraphSignal = NarrowSqlGraphContractSignalByLanguages(baseSqlGraphSignal, results.Select(result => result.Lang), options.Lang, exactGraphLanguage);
             var exactSignal = reader.GetReferencesExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, includeSqlGraphContractSignal: sqlGraphSignal.Relevant);
             var exactZeroHint = BuildExactZeroHint(
@@ -2371,6 +2411,7 @@ public static class QueryCommandRunner
             var results = reader.GetCallers(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.RawKinds, options.RankMode);
             if (options.IncludeBody)
                 AttachBodyExcerpts(reader, results, options.SnippetLines, options.MaxLineWidth);
+            ApplyBodyRecoveryCommands(results, options.DbPath);
             var sqlGraphSignal = NarrowSqlGraphContractSignalByLanguages(baseSqlGraphSignal, results.Select(result => result.Lang), options.Lang, exactGraphLanguage);
             var exactSignal = reader.GetCallersExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, includeSqlGraphContractSignal: sqlGraphSignal.Relevant);
             var exactZeroHint = BuildExactZeroHint(
@@ -2522,6 +2563,7 @@ public static class QueryCommandRunner
             var results = reader.GetCallees(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.RawKinds, options.RankMode);
             if (options.IncludeBody)
                 AttachBodyExcerpts(reader, results, options.SnippetLines, options.MaxLineWidth);
+            ApplyBodyRecoveryCommands(results, options.DbPath);
             var sqlGraphSignal = NarrowSqlGraphContractSignalByLanguages(baseSqlGraphSignal, results.Select(result => result.Lang), options.Lang, exactGraphLanguage);
             var exactSignal = reader.GetCalleesExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, includeSqlGraphContractSignal: sqlGraphSignal.Relevant);
             var exactZeroHint = BuildExactZeroHint(
@@ -2657,10 +2699,19 @@ public static class QueryCommandRunner
 
         var startLine = symbol.StartLine;
         var naturalEndLine = symbol.BodyEndLine ?? symbol.EndLine;
-        var cappedEndLine = (int)Math.Min(naturalEndLine, (long)startLine + SearchSnippetFormatter.ClampSnippetLines(snippetLines) - 1);
+        var cappedLines = SearchSnippetFormatter.ClampSnippetLines(snippetLines);
+        var cappedEndLine = (int)Math.Min(naturalEndLine, (long)startLine + cappedLines - 1);
         var excerpt = reader.GetExcerpt(path, startLine, cappedEndLine, maxLineWidth: maxLineWidth, focusLine: startLine);
         if (excerpt != null && cappedEndLine < naturalEndLine)
-            excerpt.ContentTruncated = true;
+        {
+            excerpt.RequestedStartLine = startLine;
+            excerpt.RequestedEndLine = naturalEndLine;
+            excerpt.EffectiveStartLine = excerpt.StartLine;
+            excerpt.EffectiveEndLine = excerpt.EndLine;
+            var recoveryStartLine = cappedEndLine + 1;
+            var recoveryEndLine = (int)Math.Min(naturalEndLine, (long)recoveryStartLine + cappedLines - 1);
+            AddExcerptTruncation(excerpt, "body_line_cap", recoveryStartLine, recoveryEndLine);
+        }
         return excerpt;
     }
 
@@ -2686,6 +2737,12 @@ public static class QueryCommandRunner
         result.BodyStartLine = excerpt.StartLine;
         result.BodyEndLine = excerpt.EndLine;
         result.BodyContentTruncated = excerpt.ContentTruncated;
+        result.BodyRequestedStartLine = excerpt.RequestedStartLine;
+        result.BodyRequestedEndLine = excerpt.RequestedEndLine;
+        result.BodyEffectiveStartLine = excerpt.EffectiveStartLine;
+        result.BodyEffectiveEndLine = excerpt.EffectiveEndLine;
+        result.BodyContentTruncationReasons = CopyTruncationReasons(excerpt);
+        result.BodyContentRecovery = excerpt.ContentRecovery;
     }
 
     private static void ApplyBodyExcerpt(CallerResult result, FileExcerptResult? excerpt)
@@ -2696,6 +2753,12 @@ public static class QueryCommandRunner
         result.BodyStartLine = excerpt.StartLine;
         result.BodyEndLine = excerpt.EndLine;
         result.BodyContentTruncated = excerpt.ContentTruncated;
+        result.BodyRequestedStartLine = excerpt.RequestedStartLine;
+        result.BodyRequestedEndLine = excerpt.RequestedEndLine;
+        result.BodyEffectiveStartLine = excerpt.EffectiveStartLine;
+        result.BodyEffectiveEndLine = excerpt.EffectiveEndLine;
+        result.BodyContentTruncationReasons = CopyTruncationReasons(excerpt);
+        result.BodyContentRecovery = excerpt.ContentRecovery;
     }
 
     private static void ApplyBodyExcerpt(CalleeResult result, FileExcerptResult? excerpt)
@@ -2706,6 +2769,12 @@ public static class QueryCommandRunner
         result.BodyStartLine = excerpt.StartLine;
         result.BodyEndLine = excerpt.EndLine;
         result.BodyContentTruncated = excerpt.ContentTruncated;
+        result.BodyRequestedStartLine = excerpt.RequestedStartLine;
+        result.BodyRequestedEndLine = excerpt.RequestedEndLine;
+        result.BodyEffectiveStartLine = excerpt.EffectiveStartLine;
+        result.BodyEffectiveEndLine = excerpt.EffectiveEndLine;
+        result.BodyContentTruncationReasons = CopyTruncationReasons(excerpt);
+        result.BodyContentRecovery = excerpt.ContentRecovery;
     }
 
     private static void ApplyBodyExcerpt(ImpactResult result, FileExcerptResult? excerpt)
@@ -2716,6 +2785,61 @@ public static class QueryCommandRunner
         result.BodyStartLine = excerpt.StartLine;
         result.BodyEndLine = excerpt.EndLine;
         result.BodyContentTruncated = excerpt.ContentTruncated;
+        result.BodyRequestedStartLine = excerpt.RequestedStartLine;
+        result.BodyRequestedEndLine = excerpt.RequestedEndLine;
+        result.BodyEffectiveStartLine = excerpt.EffectiveStartLine;
+        result.BodyEffectiveEndLine = excerpt.EffectiveEndLine;
+        result.BodyContentTruncationReasons = CopyTruncationReasons(excerpt);
+        result.BodyContentRecovery = excerpt.ContentRecovery;
+    }
+
+    private static void AddExcerptTruncation(FileExcerptResult excerpt, string reason, int recoveryStartLine, int recoveryEndLine)
+    {
+        excerpt.ContentTruncated = true;
+        if (!excerpt.ContentTruncationReasons.Any(existing => string.Equals(existing, reason, StringComparison.Ordinal)))
+            excerpt.ContentTruncationReasons.Add(reason);
+        excerpt.ContentRecovery ??= FileExcerptResult.CreateRecoveryHint(excerpt.Path, recoveryStartLine, recoveryEndLine);
+    }
+
+    private static List<string>? CopyTruncationReasons(FileExcerptResult excerpt)
+        => excerpt.ContentTruncationReasons.Count > 0 ? [.. excerpt.ContentTruncationReasons] : null;
+
+    private static void ApplyBodyRecoveryCommands(IEnumerable<DefinitionResult> results, string dbPath)
+    {
+        foreach (var result in results)
+            ExcerptRecoveryCommandFormatter.ApplyDbPath(result.BodyContentRecovery, result.Path, dbPath);
+    }
+
+    private static void ApplyBodyRecoveryCommands(IEnumerable<ReferenceResult> results, string dbPath)
+    {
+        foreach (var result in results)
+            ExcerptRecoveryCommandFormatter.ApplyDbPath(result.BodyContentRecovery, result.Path, dbPath);
+    }
+
+    private static void ApplyBodyRecoveryCommands(IEnumerable<CallerResult> results, string dbPath)
+    {
+        foreach (var result in results)
+            ExcerptRecoveryCommandFormatter.ApplyDbPath(result.BodyContentRecovery, result.Path, dbPath);
+    }
+
+    private static void ApplyBodyRecoveryCommands(IEnumerable<CalleeResult> results, string dbPath)
+    {
+        foreach (var result in results)
+            ExcerptRecoveryCommandFormatter.ApplyDbPath(result.BodyContentRecovery, result.Path, dbPath);
+    }
+
+    private static void ApplyBodyRecoveryCommands(IEnumerable<ImpactResult> results, string dbPath)
+    {
+        foreach (var result in results)
+            ExcerptRecoveryCommandFormatter.ApplyDbPath(result.BodyContentRecovery, result.Path, dbPath);
+    }
+
+    private static void ApplyBodyRecoveryCommands(SymbolAnalysisResult result, string dbPath)
+    {
+        ApplyBodyRecoveryCommands(result.Definitions, dbPath);
+        ApplyBodyRecoveryCommands(result.References, dbPath);
+        ApplyBodyRecoveryCommands(result.Callers, dbPath);
+        ApplyBodyRecoveryCommands(result.Callees, dbPath);
     }
 
     private static void WriteOptionalBodyExcerpt(int? startLine, string? content, string indent = "")
@@ -2764,6 +2888,8 @@ public static class QueryCommandRunner
             validateDefaultSnippetLines: false,
             validateDefaultMaxLineWidth: false);
         if (TryWriteUnsupportedOptionError("symbols", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("symbols"), options.Query))
+            return CommandExitCodes.UsageError;
+        if (TryWriteUnsupportedOutputFormat("symbols", options, SymbolOutputFormats, "Use `--format json` for symbol rows or `--format count` for symbol totals; compact symbol rows are not currently defined."))
             return CommandExitCodes.UsageError;
         if (TryWriteInvalidKindFilterError(options, "symbols", KnownSymbolKindFilters))
             return CommandExitCodes.InvalidArgument;
@@ -2827,20 +2953,14 @@ public static class QueryCommandRunner
                 if (counts.Count == 0)
                 {
                     Console.WriteLine(options.Json
-                        ? BuildJsonZeroResultPayload(reader, jsonOptions, includeFiles: true, exactZeroHint: exactZeroHintForCount, exactSignal: hasExactPredicateForCount ? exactSignalForCount : null, queryOptions: options).ToJsonString(jsonOptions)
+                        ? BuildCountJsonPayload(reader, jsonOptions, count: 0, files: 0, query: options.Query, exactZeroHint: exactZeroHintForCount, exactSignal: hasExactPredicateForCount ? exactSignalForCount : null, queryOptions: options).ToJsonString(jsonOptions)
                         : "0");
                     return CommandExitCodes.Success;
                 }
 
                 if (options.Json)
                 {
-                    var payload = new JsonObject
-                    {
-                        ["count"] = counts.Count,
-                        ["files"] = counts.FileCount,
-                    };
-                    if (hasExactPredicateForCount)
-                        AddExactJsonFields(payload, exactSignalForCount);
+                    var payload = BuildCountJsonPayload(reader, jsonOptions, counts.Count, counts.FileCount, query: options.Query, exactSignal: hasExactPredicateForCount ? exactSignalForCount : null, queryOptions: options);
                     Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
                 else
@@ -2935,13 +3055,13 @@ public static class QueryCommandRunner
                 if (counts.Count == 0)
                 {
                     Console.WriteLine(options.Json
-                        ? BuildJsonZeroResultPayload(reader, jsonOptions).ToJsonString(jsonOptions)
+                        ? BuildCountJsonPayload(reader, jsonOptions, count: 0, files: 0, query: options.Query, queryOptions: options).ToJsonString(jsonOptions)
                         : "0");
                     return CommandExitCodes.Success;
                 }
 
                 Console.WriteLine(options.Json
-                    ? JsonSerializer.Serialize(new QueryCountJsonResult(counts.Count), CliJsonSerializerContextFactory.Create(jsonOptions).QueryCountJsonResult)
+                    ? BuildCountJsonPayload(reader, jsonOptions, counts.Count, counts.Count, query: options.Query, queryOptions: options).ToJsonString(jsonOptions)
                     : $"{counts.Count}");
                 return CommandExitCodes.Success;
             }
@@ -3092,7 +3212,10 @@ public static class QueryCommandRunner
                 return ZeroResultExitCode(options);
             }
             if (options.Json)
+            {
+                ExcerptRecoveryCommandFormatter.ApplyDbPath(excerpt, options.DbPath);
                 excerpt.SemanticTokens = BuildExcerptSemanticTokens(excerpt);
+            }
 
             if (options.Json)
             {
@@ -3208,21 +3331,32 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         }
 
-        if (options.PathPatterns.Count == 0)
+        if (options.PathPatterns.Count == 0 && !options.All)
         {
-            Console.Error.WriteLine("Error: find requires at least one --path <glob> to scope the search to known files");
+            Console.Error.WriteLine("Error: find requires at least one --path <glob> or explicit --all to scope the search");
+            Console.Error.WriteLine("Hint: use --path <glob> for a bounded file set, or --all to scan all indexed files with safety caps.");
+            Console.Error.WriteLine(FindUsage);
+            return CommandExitCodes.UsageError;
+        }
+        if (options.PathPatterns.Count > 0 && options.All)
+        {
+            Console.Error.WriteLine("Error: find accepts either --path <glob> or --all, not both");
+            Console.Error.WriteLine("Hint: remove --all when using explicit path filters, or remove --path to scan all indexed files with caps.");
             Console.Error.WriteLine(FindUsage);
             return CommandExitCodes.UsageError;
         }
 
         return WithDb(options, jsonOptions, reader =>
         {
+            var pathPatterns = options.All ? null : options.PathPatterns;
+            var candidateFileLimit = options.All ? FindAllCandidateFileLimit : (int?)null;
+            var lineLimit = options.All ? FindAllLineScanLimit : (int?)null;
             if (options.CountOnly)
             {
-                QueryCountResult counts;
+                FindCountResult counts;
                 try
                 {
-                    counts = reader.CountFindInFiles(options.Query, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Exact, options.FocusLine, options.FocusColumn, options.Regex);
+                    counts = reader.CountFindInFiles(options.Query, options.Lang, pathPatterns, options.ExcludePaths, options.ExcludeTests, options.Exact, options.FocusLine, options.FocusColumn, options.Regex, candidateFileLimit, lineLimit);
                 }
                 catch (Exception ex) when (options.Regex && (ex is ArgumentException || ex is RegexMatchTimeoutException))
                 {
@@ -3233,30 +3367,49 @@ public static class QueryCommandRunner
                 {
                     if (options.Json)
                     {
-                        var payload = BuildJsonZeroResultPayload(reader, jsonOptions, includeFiles: true, queryOptions: options, extraFields: static payload =>
-                        {
-                            payload["file_count"] = 0;
-                        });
+                        var payload = BuildCountJsonPayload(
+                            reader,
+                            jsonOptions,
+                            count: 0,
+                            files: 0,
+                            query: options.Query,
+                            queryOptions: options,
+                            extraFields: payload => AddFindScanJsonFields(payload, counts.Scan));
                         Console.WriteLine(payload.ToJsonString(jsonOptions));
                     }
                     else
                     {
                         Console.WriteLine("0");
+                        WriteFindScanSummary(counts.Scan);
                     }
                     return CommandExitCodes.Success;
                 }
 
-                Console.WriteLine(options.Json
-                    ? JsonSerializer.Serialize(new QueryFindCountJsonResult(counts.Count, counts.FileCount, counts.FileCount), CliJsonSerializerContextFactory.Create(jsonOptions).QueryFindCountJsonResult)
-                    : $"{counts.Count}");
+                if (options.Json)
+                {
+                    var payload = BuildCountJsonPayload(
+                        reader,
+                        jsonOptions,
+                        counts.Count,
+                        counts.FileCount,
+                        query: options.Query,
+                        queryOptions: options,
+                        extraFields: payload => AddFindScanJsonFields(payload, counts.Scan));
+                    Console.WriteLine(payload.ToJsonString(jsonOptions));
+                }
+                else
+                {
+                    Console.WriteLine($"{counts.Count}");
+                    WriteFindScanSummary(counts.Scan);
+                }
                 return CommandExitCodes.Success;
             }
 
             var (contextBefore, contextAfter, snippetLines) = ResolveFindContext(options, preparedFindArgs);
-            List<FileFindResult> results;
+            FindResults findResults;
             try
             {
-                results = reader.FindInFiles(options.Query, options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, contextBefore, contextAfter, options.Exact, options.MaxLineWidth, options.FocusLine, options.FocusColumn, options.Regex);
+                findResults = reader.FindInFiles(options.Query, options.Limit, options.Lang, pathPatterns, options.ExcludePaths, options.ExcludeTests, contextBefore, contextAfter, options.Exact, options.MaxLineWidth, options.FocusLine, options.FocusColumn, options.Regex, candidateFileLimit, lineLimit);
             }
             catch (ArgumentException ex) when (options.Regex)
             {
@@ -3268,9 +3421,10 @@ public static class QueryCommandRunner
                 Console.Error.WriteLine($"Error: invalid regular expression: {ex.Message}");
                 return CommandExitCodes.UsageError;
             }
+            var results = findResults.Results;
             if (results.Count == 0)
             {
-                var candidateFileCount = reader.CountFindCandidateFiles(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
+                var candidateFileCount = findResults.Scan.CandidateFiles;
                 if (options.Json)
                 {
                     if (TryWriteEmptyFormattedResult(options, jsonOptions))
@@ -3288,6 +3442,7 @@ public static class QueryCommandRunner
                         payload["regex"] = options.Regex;
                         payload["file_count"] = candidateFileCount;
                     });
+                    AddFindScanJsonFields(payload, findResults.Scan);
                     Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
                 else
@@ -3341,6 +3496,7 @@ public static class QueryCommandRunner
                 }
                 var fileCount = results.Select(r => r.Path).Distinct().Count();
                 Console.Error.WriteLine($"({results.Count} matches in {fileCount} files)");
+                WriteFindScanSummary(findResults.Scan);
             }
             return CommandExitCodes.Success;
         });
@@ -3507,20 +3663,16 @@ public static class QueryCommandRunner
             Console.Error.WriteLine(previewOptionError);
             return CommandExitCodes.UsageError;
         }
-        if (!TryExtractDepsFormat(cmdArgs, out var depsFormat, out var parseArgs, out var depsFormatError))
-        {
-            Console.Error.WriteLine(depsFormatError);
-            return CommandExitCodes.UsageError;
-        }
-
         var options = ParseArgs(
-            parseArgs,
+            cmdArgs,
             jsonDefault: false,
             validateDefaultSnippetLines: false,
             validateDefaultMaxLineWidth: false);
         if (TryWriteUnsupportedOptionError("map", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("map")))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "map"))
+            return CommandExitCodes.UsageError;
+        if (TryWriteUnsupportedOutputFormat("map", options, RepoMapOutputFormats, "Use `--format json` or `--format compact` for map output; use `cdidx files --count` when you need only a file count."))
             return CommandExitCodes.UsageError;
         if (TryWriteUnexpectedPositionals("map", options))
             return CommandExitCodes.UsageError;
@@ -3922,6 +4074,8 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "inspect"))
             return CommandExitCodes.UsageError;
+        if (TryWriteUnsupportedOutputFormat("inspect", options, InspectOutputFormats, "Use `--format json` or `--format compact` for inspect bundles; count output is not meaningful for one inspect bundle."))
+            return CommandExitCodes.UsageError;
         if (!TryResolveNameExactMode(options, "inspect", out var exact, out var exactError))
         {
             Console.Error.WriteLine(exactError);
@@ -3989,6 +4143,7 @@ public static class QueryCommandRunner
             if (options.Json)
             {
                 var compactTruncation = options.Compact ? ApplySymbolAnalysisCompactCaps(analysis, compactLimit) : null;
+                ApplyBodyRecoveryCommands(analysis, options.DbPath);
                 var payload = JsonSerializer.SerializeToNode(analysis, CliJsonSerializerContextFactory.Create(jsonOptions).SymbolAnalysisResult)!.AsObject();
                 AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
                 if (compactTruncation != null)
@@ -4791,6 +4946,7 @@ public static class QueryCommandRunner
             var analysis = reader.AnalyzeImpact(options.Query, maxDepth, options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.WithPaths);
             if (options.IncludeBody)
                 AttachBodyExcerpts(reader, analysis.Callers, options.SnippetLines, options.MaxLineWidth);
+            ApplyBodyRecoveryCommands(analysis.Callers, options.DbPath);
             var sqlGraphSignal = NarrowSqlGraphContractSignal(
                 reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests),
                 DbReader.IsSqlLanguage(options.Lang)
@@ -4873,6 +5029,7 @@ public static class QueryCommandRunner
                             ["query"] = options.Query,
                             ["resolved_name"] = analysis.ResolvedName,
                             ["count"] = 0,
+                            ["files"] = 0,
                             ["file_count"] = 0,
                             ["confirmed_count"] = 0,
                             ["confirmed_file_count"] = 0,
@@ -4897,8 +5054,8 @@ public static class QueryCommandRunner
                         if (!analysis.GraphTableAvailable)
                             payload["note"] = "symbol_references table is missing in this index (legacy or read-only DB). Zero result is degraded, not authoritative.";
                         AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
-                        AddFreshnessHint(payload, reader);
                         AddImpactOptionWarnings(payload, options);
+                        AddCountEnvelopeJsonFields(payload, reader, jsonOptions, options);
                         Console.WriteLine(payload.ToJsonString(jsonOptions));
                     }
                     else
@@ -4972,6 +5129,7 @@ public static class QueryCommandRunner
                         ["query"] = options.Query,
                         ["resolved_name"] = analysis.ResolvedName,
                         ["count"] = visibleCount,
+                        ["files"] = visibleFileCount,
                         ["file_count"] = visibleFileCount,
                         ["confirmed_count"] = confirmedCount,
                         ["confirmed_file_count"] = confirmedFileCount,
@@ -4986,6 +5144,7 @@ public static class QueryCommandRunner
                         payload["truncated_reason"] = analysis.TruncatedReason;
                     AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
                     AddImpactOptionWarnings(payload, options);
+                    AddCountEnvelopeJsonFields(payload, reader, jsonOptions, options);
                     Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
                 else
@@ -6668,6 +6827,7 @@ public static class QueryCommandRunner
         int? bodyStartLine = null;
         int? bodyLines = null;
         bool countOnly = false;
+        bool all = false;
         bool strictNotFound = false;
         int? startLine = null;
         int? endLine = null;
@@ -6931,6 +7091,10 @@ public static class QueryCommandRunner
                         if (TryParseOutputFormat(formatValue!, out var parsedOutputFormat))
                         {
                             outputFormat = parsedOutputFormat;
+                            if (parsedOutputFormat == OutputFormatCompact)
+                                compact = true;
+                            if (parsedOutputFormat == OutputFormatCount)
+                                countOnly = true;
                             if (parsedOutputFormat != OutputFormatText &&
                                 parsedOutputFormat != OutputFormatDot &&
                                 parsedOutputFormat != OutputFormatGraphMl)
@@ -7215,6 +7379,7 @@ public static class QueryCommandRunner
                 case "--by-bucket":
                     break;
                 case "--all":
+                    all = true;
                     break;
                 case "--no-dedup":
                     noDedup = true;
@@ -7679,6 +7844,7 @@ public static class QueryCommandRunner
             ExcludeTests = excludeTests,
             IncludeGenerated = includeGenerated,
             CountOnly = countOnly,
+            All = all,
             StrictNotFound = strictNotFound,
             Strict = strict,
             Since = since,
@@ -8983,6 +9149,42 @@ public static class QueryCommandRunner
     private static void WriteUsageError(string message, string usage, string hint)
         => CommandErrorWriter.Write(message, hint, usage);
 
+    private static bool TryWriteUnsupportedOutputFormat(string commandName, QueryCommandOptions options, IReadOnlySet<string> supportedFormats, string hint)
+    {
+        if (supportedFormats.Contains(options.OutputFormat))
+            return false;
+
+        WriteUsageError(
+            $"--format {options.OutputFormat} is not supported by {commandName}.",
+            GetUsageLineOrThrow(commandName),
+            hint);
+        return true;
+    }
+
+    private static void AddFindScanJsonFields(JsonObject payload, FindScanSummary scan)
+    {
+        payload["candidate_files"] = scan.CandidateFiles;
+        payload["files_scanned"] = scan.FilesScanned;
+        payload["lines_scanned"] = scan.LinesScanned;
+        payload["scan_truncated"] = scan.Truncated;
+        payload["scan_cap_reached"] = scan.CapReached;
+        payload["scan_timed_out"] = scan.TimedOut;
+        if (scan.TruncationReason != null)
+            payload["scan_truncation_reason"] = scan.TruncationReason;
+        if (scan.CandidateFileLimit.HasValue)
+            payload["candidate_file_limit"] = scan.CandidateFileLimit.Value;
+        if (scan.LineLimit.HasValue)
+            payload["line_scan_limit"] = scan.LineLimit.Value;
+    }
+
+    private static void WriteFindScanSummary(FindScanSummary scan)
+    {
+        var summary = $"scanned {scan.FilesScanned}/{scan.CandidateFiles} candidate files, {ConsoleUi.Counted(scan.LinesScanned, "line")}";
+        if (scan.Truncated)
+            summary += scan.TruncationReason == null ? "; truncated" : $"; truncated by {scan.TruncationReason}";
+        Console.Error.WriteLine($"({summary})");
+    }
+
     // Reject queries that were supplied but resolve to empty / whitespace-only text so the user gets
     // a distinct error instead of the generic "<cmd> requires a query argument" message that fires
     // when the positional was actually missing. The null case is left to the existing missing-query
@@ -9185,14 +9387,24 @@ public static class QueryCommandRunner
             query["since"] = options.Since.Value;
         if (options.CountOnly)
             query["count"] = true;
+        if (options.All)
+            query["all"] = true;
         if (options.RawFts)
             query["fts"] = true;
+        if (options.Regex)
+            query["regex"] = true;
         if (options.Exact)
             query["exact"] = true;
         if (options.Prefix)
             query["prefix"] = true;
         if (options.NoDedup)
             query["dedup"] = false;
+        if (options.RawKinds)
+            query["raw_kinds"] = true;
+        if (options.FocusLine.HasValue)
+            query["focus_line"] = options.FocusLine.Value;
+        if (options.FocusColumn.HasValue)
+            query["focus_column"] = options.FocusColumn.Value;
         if (options.ContextBefore > 0)
             query["before"] = options.ContextBefore;
         if (options.ContextAfter > 0)
@@ -9251,6 +9463,87 @@ public static class QueryCommandRunner
         payload["freshness_available"] = freshness.FreshnessAvailable;
         if (!freshness.FreshnessAvailable && freshness.FreshnessDegradedReason != null)
             payload["freshness_degraded_reason"] = freshness.FreshnessDegradedReason;
+    }
+
+    private static JsonObject BuildCountJsonPayload(
+        DbReader reader,
+        JsonSerializerOptions jsonOptions,
+        int count,
+        int? files = null,
+        string? query = null,
+        QueryCommandOptions? queryOptions = null,
+        bool? graphTableAvailable = null,
+        bool degraded = false,
+        ExactQuerySignal? exactSignal = null,
+        ExactZeroHintResult? exactZeroHint = null,
+        FtsQueryDiagnostics? ftsQueryDiagnostics = null,
+        SearchQueryHint? exactSubstringHint = null,
+        Action<JsonObject>? extraFields = null,
+        bool deferAuthority = false)
+    {
+        var payload = new JsonObject
+        {
+            ["count"] = count,
+        };
+        if (files.HasValue)
+        {
+            payload["files"] = files.Value;
+            payload["file_count"] = files.Value;
+        }
+        if (query != null)
+            payload["query"] = query;
+        if (graphTableAvailable.HasValue)
+            payload["graph_table_available"] = graphTableAvailable.Value;
+        if (degraded)
+            payload["degraded"] = true;
+        if (exactSignal.HasValue)
+            AddExactJsonFields(payload, exactSignal.Value);
+        if (exactZeroHint != null)
+            payload["exact_zero_hint"] = JsonSerializer.SerializeToNode(exactZeroHint, CliJsonSerializerContextFactory.Create(jsonOptions).ExactZeroHintResult);
+        if (ftsQueryDiagnostics is { HasDegradation: true })
+        {
+            payload["query_degraded_reason"] = ftsQueryDiagnostics.QueryDegradedReason;
+            payload["tokens_dropped"] = JsonSerializer.SerializeToNode(ftsQueryDiagnostics.TokensDropped.ToList(), CliJsonSerializerContextFactory.Create(jsonOptions).ListString);
+        }
+        if (exactSubstringHint != null)
+            payload["exact_substring_hint"] = BuildSearchQueryHintJson(exactSubstringHint);
+        extraFields?.Invoke(payload);
+        AddCountEnvelopeJsonFields(payload, reader, jsonOptions, queryOptions, deferAuthority);
+        return payload;
+    }
+
+    private static void AddCountEnvelopeJsonFields(JsonObject payload, DbReader reader, JsonSerializerOptions jsonOptions, QueryCommandOptions? queryOptions, bool deferAuthority = false)
+    {
+        if (queryOptions != null)
+            payload["query_context"] = BuildQueryContextJson(queryOptions, jsonOptions);
+        AddFreshnessHint(payload, reader);
+        if (!deferAuthority)
+            AddCountAuthorityJsonFields(payload);
+    }
+
+    private static void AddCountAuthorityJsonFields(JsonObject payload)
+    {
+        var degraded =
+            JsonBool(payload, "degraded") == true
+            || JsonBool(payload, "graph_table_available") == false
+            || JsonBool(payload, "exact_index_available") == false
+            || JsonBool(payload, "sql_graph_contract_ready") == false
+            || JsonBool(payload, "graph_degraded") == true
+            || JsonBool(payload, "scan_truncated") == true
+            || JsonBool(payload, "scan_cap_reached") == true
+            || JsonBool(payload, "scan_timed_out") == true
+            || JsonBool(payload, "truncated") == true;
+        payload["degraded"] = degraded;
+        payload["authoritative_count"] = !degraded;
+    }
+
+    private static bool? JsonBool(JsonObject payload, string name)
+    {
+        return payload.TryGetPropertyValue(name, out var node)
+            && node is JsonValue value
+            && value.TryGetValue<bool>(out var boolValue)
+            ? boolValue
+            : null;
     }
 
     private static JsonObject BuildJsonZeroResultPayload(
@@ -10234,22 +10527,23 @@ public static class QueryCommandRunner
             return;
         }
 
-        var payload = new JsonObject
-        {
-            ["count"] = count,
-            ["files"] = files,
-            ["graph_table_available"] = graphAvailable,
-        };
-        if (!graphAvailable)
-            payload["degraded"] = true;
+        var payload = BuildCountJsonPayload(
+            reader,
+            jsonOptions,
+            count,
+            files,
+            query: options.Query,
+            queryOptions: options,
+            graphTableAvailable: graphAvailable,
+            degraded: !graphAvailable,
+            deferAuthority: true);
         AddGraphSupportOverrideFields(payload, graphSupportOverride);
         if (options.Exact || options.ExactName)
             AddExactGraphJsonFields(payload, exactSignal);
         if (exactZeroHint != null)
             payload["exact_zero_hint"] = JsonSerializer.SerializeToNode(exactZeroHint, CliJsonSerializerContextFactory.Create(jsonOptions).ExactZeroHintResult);
         extraFields?.Invoke(payload);
-        if (count == 0)
-            AddFreshnessHint(payload, reader);
+        AddCountAuthorityJsonFields(payload);
         Console.WriteLine(payload.ToJsonString(jsonOptions));
     }
 
@@ -10863,6 +11157,7 @@ public sealed class QueryCommandOptions
     public bool ExcludeTests { get; init; }
     public bool IncludeGenerated { get; init; }
     public bool CountOnly { get; init; }
+    public bool All { get; init; }
     public bool StrictNotFound { get; init; }
     public bool Strict { get; init; }
     public DateTime? Since { get; init; }

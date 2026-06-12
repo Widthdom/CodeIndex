@@ -838,6 +838,32 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunBatch_InvalidJsonDoesNotEchoParserMessage_Issue3425()
+    {
+        const string secret = "SECRET_BATCH_JSON_3425";
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_batch_invalid_json");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var input = "[\"status\", " + secret + "\n";
+
+            var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
+                input,
+                () => QueryCommandRunner.RunBatch(["--db", dbPath], _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains("invalid_batch_json: JsonException", stderr, StringComparison.Ordinal);
+            Assert.DoesNotContain(secret, stderr, StringComparison.Ordinal);
+            Assert.DoesNotContain("not valid JSON", stderr, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunBatch_ArgumentCountExceedsLimit_ReturnsUsageError_Issue2891()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_batch_too_many_args");
@@ -931,7 +957,7 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
             Assert.Equal(string.Empty, stdout);
-            Assert.Contains("is not valid JSON", stderr);
+            Assert.Contains("invalid_batch_json: JsonException", stderr);
         }
         finally
         {
@@ -2284,11 +2310,10 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void RunLanguages_HumanOutput_WideExtensionListSpillsOntoContinuationLine()
     {
-        // The human-readable table must not let long extension lists (dockerfile / makefile /
-        // python / ruby / xml / msbuild) swallow the Symbols / Graph columns. Instead, spill onto a
-        // continuation line so the row is still readable.
-        // 人間向けテーブルは、長い拡張子リスト（dockerfile / makefile / python / ruby / xml / msbuild）が
-        // Symbols / Graph 列を食い潰さないようにし、継続行へ退避させて可読性を保つこと。
+        // The human-readable table must not let long extension/file-name lists swallow the
+        // Symbols / Graph columns. Instead, spill onto a continuation line so the row is readable.
+        // 人間向けテーブルは、長い拡張子・ファイル名リストが Symbols / Graph 列を食い潰さないようにし、
+        // 継続行へ退避させて可読性を保つこと。
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages([], _jsonOptions));
 
         Assert.Equal(CommandExitCodes.Success, exitCode);
@@ -2299,7 +2324,7 @@ public partial class QueryCommandRunnerTests
         // Rows with long extension / alias lists must spill onto a continuation line so the
         // Symbols / Graph columns stay readable.
         // 拡張子や alias が長い行は継続行に退避し、Symbols / Graph 列の可読性を保つ。
-        var wideLangs = new[] { "csharp", "dockerfile", "makefile", "python", "ruby", "msbuild" };
+        var wideLangs = new[] { "csharp", "dependency_lock", "dependency_manifest", "dockerfile", "makefile", "python", "ruby", "msbuild" };
         foreach (var wide in wideLangs)
         {
             var headerIndex = Array.FindIndex(lines, line => line.StartsWith($"{wide} ", StringComparison.Ordinal));
@@ -2309,6 +2334,8 @@ public partial class QueryCommandRunnerTests
             // ヘッダ行には言語名・シンボル・グラフのみが含まれ、拡張子文字列は含まれない。
             Assert.DoesNotContain("Dockerfile", header);
             Assert.DoesNotContain("Makefile", header);
+            Assert.DoesNotContain("package-lock.json", header);
+            Assert.DoesNotContain("pyproject.toml", header);
             Assert.DoesNotContain("WORKSPACE", header);
             Assert.DoesNotContain("Gemfile", header);
             Assert.DoesNotContain(".csproj", header);
@@ -4058,6 +4085,13 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(25, json.GetProperty("count").GetInt32());
+            Assert.False(json.GetProperty("degraded").GetBoolean());
+            Assert.True(json.GetProperty("authoritative_count").GetBoolean());
+            Assert.True(json.GetProperty("freshness_available").GetBoolean());
+            Assert.True(json.GetProperty("indexed_file_count").GetInt32() > 0);
+            var queryContext = json.GetProperty("query_context");
+            Assert.True(queryContext.GetProperty("count").GetBoolean());
+            Assert.Equal(useExplicitLimit ? 5 : 20, queryContext.GetProperty("limit").GetInt32());
 
             switch (command)
             {
@@ -4068,12 +4102,15 @@ public partial class QueryCommandRunnerTests
                 case "callers":
                 case "callees":
                     Assert.Equal(25, json.GetProperty("files").GetInt32());
+                    Assert.Equal(25, json.GetProperty("file_count").GetInt32());
                     break;
                 case "find":
                     Assert.Equal(1, json.GetProperty("files").GetInt32());
                     Assert.Equal(1, json.GetProperty("file_count").GetInt32());
                     break;
                 case "files":
+                    Assert.Equal(25, json.GetProperty("files").GetInt32());
+                    Assert.Equal(25, json.GetProperty("file_count").GetInt32());
                     break;
                 default:
                     throw new ArgumentOutOfRangeException(nameof(command), command, null);

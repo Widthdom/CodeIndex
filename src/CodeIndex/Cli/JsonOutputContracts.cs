@@ -44,10 +44,18 @@ internal sealed record UpgradeJsonResult(
     [property: JsonPropertyName("latest_version")] string? LatestVersion,
     [property: JsonPropertyName("update_available")] bool UpdateAvailable,
     [property: JsonPropertyName("from_cache")] bool FromCache,
+    [property: JsonPropertyName("selected_version")] string? SelectedVersion,
+    [property: JsonPropertyName("selected_channel")] string SelectedChannel,
+    [property: JsonPropertyName("selection_source")] string SelectionSource,
+    [property: JsonPropertyName("include_prerelease")] bool IncludePrerelease,
     [property: JsonPropertyName("error")] string? Error,
     [property: JsonPropertyName("install_attempted")] bool InstallAttempted,
     [property: JsonPropertyName("install_exit_code")] int? InstallExitCode,
-    [property: JsonPropertyName("install_succeeded")] bool? InstallSucceeded);
+    [property: JsonPropertyName("install_succeeded")] bool? InstallSucceeded,
+    [property: JsonPropertyName("handoff_command")] string? HandoffCommand,
+    [property: JsonPropertyName("handoff_url")] string? HandoffUrl,
+    [property: JsonPropertyName("handoff_asset")] string? HandoffAsset,
+    [property: JsonPropertyName("handoff_asset_url")] string? HandoffAssetUrl);
 
 internal sealed record DbIntegrityCheckJsonResult(
     [property: JsonPropertyName("db_path")] string DbPath,
@@ -454,10 +462,12 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(ExportImportCommandRunner.ExportManifest))]
 [JsonSerializable(typeof(ExportImportCommandRunner.ImportDryRunResult))]
 [JsonSerializable(typeof(ExportImportCommandRunner.ImportValidationPhaseResult))]
+[JsonSerializable(typeof(ExcerptRecoveryHint))]
 [JsonSerializable(typeof(ExcerptSemanticToken))]
 [JsonSerializable(typeof(FileDependencyResult))]
 [JsonSerializable(typeof(FileExcerptResult))]
 [JsonSerializable(typeof(FileFindResult))]
+[JsonSerializable(typeof(FileFindSnippetTruncationContext))]
 [JsonSerializable(typeof(FileIssue))]
 [JsonSerializable(typeof(FileResult))]
 [JsonSerializable(typeof(FreshnessHintResult))]
@@ -539,6 +549,7 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(SearchIssueDraftExportJsonResult))]
 [JsonSerializable(typeof(SearchIssueDraftJsonResult))]
 [JsonSerializable(typeof(SearchIssueDraftSourceJsonResult))]
+[JsonSerializable(typeof(SearchNextMatchHint))]
 [JsonSerializable(typeof(SearchResult))]
 [JsonSerializable(typeof(SearchTermOccurrence))]
 [JsonSerializable(typeof(SearchTruncationContext))]

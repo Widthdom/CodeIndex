@@ -30,7 +30,7 @@ internal static class DockerfileReferenceExtractor
         var names = new HashSet<string>(StringComparer.Ordinal);
         foreach (var symbol in symbols)
         {
-            if (symbol.Kind != "function" || string.IsNullOrWhiteSpace(symbol.Name))
+            if (symbol.Kind != "stage" || string.IsNullOrWhiteSpace(symbol.Name))
                 continue;
 
             names.Add(symbol.Name);
@@ -47,7 +47,7 @@ internal static class DockerfileReferenceExtractor
         var names = new HashSet<string>(StringComparer.Ordinal);
         foreach (var symbol in symbols)
         {
-            if (symbol.Kind != "property" || string.IsNullOrWhiteSpace(symbol.Name))
+            if (symbol.Kind is not ("build_arg" or "environment") || string.IsNullOrWhiteSpace(symbol.Name))
                 continue;
 
             names.Add(symbol.Name);

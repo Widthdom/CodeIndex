@@ -19,9 +19,9 @@ public static class LineWidthFormatter
     {
         maxLineWidth = ClampMaxLineWidth(maxLineWidth);
         if (maxLineWidth <= 0)
-            return new ClampedTextResult(line, false);
+            return ClampedTextResult.Unclamped(line);
         if (DisplayWidth(line) <= maxLineWidth)
-            return new ClampedTextResult(line, false);
+            return ClampedTextResult.Unclamped(line);
 
         if (focusColumn is > 0)
             return ClampAroundFocus(line, maxLineWidth, focusColumn.Value, Math.Max(1, focusLength));
@@ -32,11 +32,11 @@ public static class LineWidthFormatter
     public static ClampedTextResult ClampLines(IReadOnlyList<string> lines, int maxLineWidth, int? focusLineIndex = null, int? focusColumn = null, int focusLength = 1)
     {
         if (lines.Count == 0)
-            return new ClampedTextResult(string.Empty, false);
+            return ClampedTextResult.Unclamped(string.Empty);
 
         maxLineWidth = ClampMaxLineWidth(maxLineWidth);
         if (maxLineWidth <= 0)
-            return new ClampedTextResult(string.Join('\n', lines), false);
+            return ClampedTextResult.Unclamped(string.Join('\n', lines));
         var output = new string[lines.Count];
         var anyTruncated = false;
         var truncatedCharCount = 0;
@@ -74,11 +74,11 @@ public static class LineWidthFormatter
         if (visibleWidth <= 0)
         {
             var safeEnd = SliceEndByDisplayWidth(line, maxLineWidth);
-            return new ClampedTextResult(line[..safeEnd], true, line.Length - safeEnd);
+            return new ClampedTextResult(line[..safeEnd], true, line.Length - safeEnd, 1, safeEnd, 1);
         }
 
         var safeVisibleEnd = SliceEndByDisplayWidth(line, visibleWidth);
-        return new ClampedTextResult(line[..safeVisibleEnd] + BuildMarker(line.Length - safeVisibleEnd), true, line.Length - safeVisibleEnd);
+        return new ClampedTextResult(line[..safeVisibleEnd] + BuildMarker(line.Length - safeVisibleEnd), true, line.Length - safeVisibleEnd, 1, safeVisibleEnd, 1);
     }
 
     private static ClampedTextResult ClampAroundFocus(string line, int maxLineWidth, int focusColumn, int focusLength)
@@ -97,7 +97,7 @@ public static class LineWidthFormatter
             {
                 var safeFocusStart = SafeSliceStart(line, focusStart);
                 var safeFallbackEnd = SliceEndByDisplayWidth(line, maxLineWidth, safeFocusStart);
-                return new ClampedTextResult(line[safeFocusStart..safeFallbackEnd], true, line.Length - (safeFallbackEnd - safeFocusStart));
+                return new ClampedTextResult(line[safeFocusStart..safeFallbackEnd], true, line.Length - (safeFallbackEnd - safeFocusStart), safeFocusStart + 1, safeFallbackEnd, 1);
             }
 
             var desiredCenter = focusStart + ((focusEnd - focusStart) / 2);
@@ -122,7 +122,7 @@ public static class LineWidthFormatter
         var finalPrefix = safeStart > 0 ? BuildMarker(safeStart) : string.Empty;
         var finalSuffix = safeEnd < line.Length ? BuildMarker(line.Length - safeEnd) : string.Empty;
         var visibleChars = safeEnd - safeStart;
-        return new ClampedTextResult(finalPrefix + line[safeStart..safeEnd] + finalSuffix, true, line.Length - visibleChars);
+        return new ClampedTextResult(finalPrefix + line[safeStart..safeEnd] + finalSuffix, true, line.Length - visibleChars, safeStart + 1, safeEnd, finalPrefix.Length + 1);
     }
 
     // Avoid slicing in the middle of a grapheme cluster so combining marks, ZWJ emoji,
@@ -487,4 +487,14 @@ public static class LineWidthFormatter
             or >= 0x1F19B and <= 0x1F1AC;
 }
 
-public readonly record struct ClampedTextResult(string Text, bool Truncated, int TruncatedCharCount = 0);
+public readonly record struct ClampedTextResult(
+    string Text,
+    bool Truncated,
+    int TruncatedCharCount = 0,
+    int OriginalVisibleStartColumn = 1,
+    int OriginalVisibleEndColumn = 0,
+    int TextVisibleStartColumn = 1)
+{
+    public static ClampedTextResult Unclamped(string text) =>
+        new(text, false, 0, 1, text.Length, 1);
+}

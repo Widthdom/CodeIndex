@@ -155,6 +155,50 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunInspect_JsonBodyRecoveryCommandIncludesActiveDb_Issue3562()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_body_recovery_db_3562");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var longLiteral = new string('a', DbReader.DefinitionBodyMaxBytes + 1024);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/huge_body.py",
+                "python",
+                $"def huge_body():\n    value = \"{longLiteral}\"\n    return value\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["huge_body", "--db", dbPath, "--read-only", "--json", "--body", "--lang", "python", "--exact-name"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var definition = document.RootElement
+                .GetProperty("definitions")
+                .EnumerateArray()
+                .Single(item => item.GetProperty("name").GetString() == "huge_body");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(definition.GetProperty("body_content_truncated").GetBoolean());
+            var recovery = definition.GetProperty("body_content_recovery");
+            var recoveryCommand = recovery.GetProperty("command").GetString();
+            Assert.Contains("cdidx excerpt src/huge_body.py", recoveryCommand);
+            Assert.Contains("--db", recoveryCommand);
+            Assert.Contains("file:", recoveryCommand);
+            var expectedReadOnlyUri = DbContext.ToReadOnlyUri(dbPath);
+            Assert.Contains(expectedReadOnlyUri, recoveryCommand);
+            Assert.Contains("immutable=1", recoveryCommand);
+            Assert.Contains("mode=ro", recoveryCommand);
+            Assert.Contains("--start 2 --end 3 --max-line-width 0 --json", recoveryCommand);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunInspect_ParseFields_ImplyJsonAndCanonicalizeAliases_Issue3056()
     {
         var options = QueryCommandRunner.ParseArgs(
@@ -182,6 +226,42 @@ public partial class QueryCommandRunnerTests
         Assert.Equal(6, options.BodyStartLine);
         Assert.Equal(2, options.BodyLines);
         Assert.Null(options.ParseError);
+    }
+
+    [Fact]
+    public void RunInspect_FormatCompact_ActsLikeCompactJson_Issue3446()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_format_compact");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Target.cs",
+                "csharp",
+                """
+                public class Target
+                {
+                    public void Compute() { }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["Target", "--db", dbPath, "--format", "compact"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(json.GetProperty("compact").GetBoolean());
+            Assert.Equal(QueryCommandRunner.DefaultCompactSectionLimit, json.GetProperty("compact_limit").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
     }
 
     [Fact]

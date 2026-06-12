@@ -9,6 +9,7 @@ internal static class UpdateChecker
 {
     internal const string DisableEnvVar = "CDIDX_DISABLE_UPDATE_CHECK";
     private const string LatestReleaseUrl = "https://api.github.com/repos/Widthdom/CodeIndex/releases/latest";
+    private const string ReleasesUrl = "https://api.github.com/repos/Widthdom/CodeIndex/releases?per_page=20";
     internal const long MaxLatestReleaseResponseBytes = 64 * 1024;
     internal const int MaxLatestReleaseJsonDepth = 16;
     internal const int MaxUpdateCheckCacheBytes = 8 * 1024;
@@ -128,7 +129,7 @@ internal static class UpdateChecker
             && latest > current;
     }
 
-    private static bool IsDisabled()
+    internal static bool IsDisabled()
     {
         var value = Environment.GetEnvironmentVariable(DisableEnvVar);
         return value is "1" || string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
@@ -164,6 +165,27 @@ internal static class UpdateChecker
         return await ReadLatestReleaseTagAsync(response.Content, requestCts.Token).ConfigureAwait(false);
     }
 
+    internal static async Task<string?> FetchLatestPrereleaseTagAsync(
+        HttpClient client,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
+        using var requestCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        requestCts.CancelAfter(timeout);
+        using var request = new HttpRequestMessage(HttpMethod.Get, ReleasesUrl);
+        request.Headers.UserAgent.Add(new ProductInfoHeaderValue("cdidx", ConsoleUi.LoadVersion()));
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
+
+        using var response = await client.SendAsync(
+            request,
+            HttpCompletionOption.ResponseHeadersRead,
+            requestCts.Token).ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+            return null;
+
+        return await ReadLatestPrereleaseTagAsync(response.Content, requestCts.Token).ConfigureAwait(false);
+    }
+
     internal static async Task<string?> ReadLatestReleaseTagAsync(HttpContent content, CancellationToken cancellationToken)
     {
         var payload = await BoundedHttpContentReader.ReadAsByteArrayAsync(
@@ -178,15 +200,52 @@ internal static class UpdateChecker
             : null;
     }
 
+    internal static async Task<string?> ReadLatestPrereleaseTagAsync(HttpContent content, CancellationToken cancellationToken)
+    {
+        var payload = await BoundedHttpContentReader.ReadAsByteArrayAsync(
+            content,
+            MaxLatestReleaseResponseBytes,
+            cancellationToken).ConfigureAwait(false);
+        using var doc = JsonDocument.Parse(
+            payload.AsMemory(),
+            new JsonDocumentOptions { MaxDepth = MaxLatestReleaseJsonDepth });
+        if (doc.RootElement.ValueKind != JsonValueKind.Array)
+            return null;
+
+        foreach (var release in doc.RootElement.EnumerateArray())
+        {
+            if (release.ValueKind != JsonValueKind.Object)
+                continue;
+
+            var isDraft = release.TryGetProperty("draft", out var draftElement)
+                && draftElement.ValueKind == JsonValueKind.True;
+            if (isDraft)
+                continue;
+
+            var isPrerelease = release.TryGetProperty("prerelease", out var prereleaseElement)
+                && prereleaseElement.ValueKind == JsonValueKind.True;
+            if (!isPrerelease)
+                continue;
+
+            if (release.TryGetProperty("tag_name", out var tagElement))
+                return tagElement.GetString();
+        }
+
+        return null;
+    }
+
     private static string ResolveDefaultCachePath()
     {
         var xdgCacheHome = Environment.GetEnvironmentVariable("XDG_CACHE_HOME");
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         var root = !string.IsNullOrWhiteSpace(xdgCacheHome)
             ? Path.Combine(xdgCacheHome, "cdidx")
             : !string.IsNullOrWhiteSpace(home)
                 ? Path.Combine(home, ".cache", "cdidx")
-                : Path.Combine(Path.GetTempPath(), "cdidx");
+                : !string.IsNullOrWhiteSpace(localAppData)
+                    ? Path.Combine(localAppData, "cdidx")
+                    : Path.Combine(Path.GetTempPath(), "cdidx", "cache");
         return Path.Combine(root, "update-check.json");
     }
 
@@ -232,14 +291,14 @@ internal static class UpdateChecker
         {
             var directory = Path.GetDirectoryName(cachePath);
             if (!string.IsNullOrWhiteSpace(directory))
-                Directory.CreateDirectory(directory);
+                DataDirectorySecurity.CreateSensitiveDirectory(directory);
 
             var payload = new
             {
                 checked_at = cache.CheckedAt.UtcDateTime.ToString("O", CultureInfo.InvariantCulture),
                 latest_tag = cache.LatestTag,
             };
-            AtomicFileWriter.WriteJson(cachePath, payload);
+            AtomicFileWriter.WriteJson(cachePath, payload, applyFileMode: DataDirectorySecurity.ApplyPrivateFileMode);
         }
         catch
         {
