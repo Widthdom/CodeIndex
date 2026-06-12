@@ -819,11 +819,53 @@ public class DatabaseTests : IDisposable
             Assert.True(result.FreelistCountAfter < result.FreelistCountBefore);
             Assert.True(result.PagesReclaimed > 0);
             Assert.True(result.BytesReclaimed > 0);
+            Assert.False(result.DryRun);
+            Assert.True(result.EstimatedBytesReclaimable > 0);
+            Assert.True(result.DbSizeBytesBefore > 0);
+            Assert.Equal(2, result.AutoVacuumModeAfter);
+            Assert.Equal("incremental", result.AutoVacuumModeAfterName);
         }
         finally
         {
             DeleteDbFiles(dbPath);
         }
+    }
+
+    [Fact]
+    public void MaintenanceGuidance_HighWalRecommendsCheckpoint_Issue3564()
+    {
+        var guidance = MaintenanceGuidanceBuilder.Build(new MaintenanceMetrics(
+            PageCount: 100,
+            FreelistCount: 0,
+            PageSize: 4096,
+            WalSizeBytes: MaintenanceGuidanceBuilder.DefaultWalWarnBytes + 1,
+            DbSizeBytes: 409_600,
+            AutoVacuumMode: 2));
+
+        Assert.Equal("checkpoint_recommended", guidance.WalState);
+        Assert.Equal("ok", guidance.FreelistState);
+        Assert.Contains("wal_checkpoint", guidance.RecommendedCommand, StringComparison.Ordinal);
+        Assert.Contains("status --json", guidance.PostMaintenanceFollowUp, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MaintenanceGuidance_HighFreelistRecommendsVacuum_Issue3564()
+    {
+        var guidance = MaintenanceGuidanceBuilder.Build(new MaintenanceMetrics(
+            PageCount: 100,
+            FreelistCount: 25,
+            PageSize: 4096,
+            WalSizeBytes: 0,
+            DbSizeBytes: 409_600,
+            AutoVacuumMode: 2));
+
+        Assert.Equal("ok", guidance.WalState);
+        Assert.Equal("vacuum_recommended", guidance.FreelistState);
+        Assert.Equal(0.25, guidance.FreelistRatio);
+        Assert.Equal(25, guidance.EstimatedPagesReclaimable);
+        Assert.Equal(25 * 4096, guidance.EstimatedBytesReclaimable);
+        Assert.Equal("cdidx vacuum --db <db>", guidance.RecommendedCommand);
+        Assert.Equal("incremental", guidance.AutoVacuumModeName);
     }
 
     private static int GetTransactionDepth(DbWriter writer)

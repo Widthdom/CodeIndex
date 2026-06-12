@@ -21,6 +21,7 @@ public partial class McpServer
 {
     private const int DefaultBatchQueryResponseByteLimit = MaxLineByteLength;
     internal const int MaxBatchQueryResponseByteLimit = 10 * 1024 * 1024;
+    internal const int MaxBatchQuerySize = 10;
     private const int DefaultExcerptOutputByteLimit = MaxLineByteLength;
     private const string BatchQueryResponseByteLimitEnvVar = "CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES";
     internal const int MaxMcpArrayFilterCount = QueryCommandRunner.MaxQueryPathFilterCount;
@@ -36,6 +37,7 @@ public partial class McpServer
         "rankBy",
     };
     internal const int MaxMcpIndexFailureMessageLength = 512;
+    private QueryCommandRunner.ProjectFilterRootResolution? _projectFilterRootResolutionForCurrentToolCall;
 
     // --- Tool implementations / ツール実装 ---
 
@@ -298,14 +300,105 @@ public partial class McpServer
             ["endLine"] = endLine,
         };
 
-    /// <summary>
-    /// Clamp limit to a safe range to prevent resource exhaustion.
-    /// リソース枯渇を防ぐためlimitを安全な範囲にクランプ。
-    /// </summary>
-    private static int ClampLimit(int limit) => Math.Clamp(limit, 1, MaxLimit);
+    private sealed class ArgumentAdjustmentCollector
+    {
+        private readonly JsonArray _warnings = [];
+        private readonly JsonArray _adjustments = [];
 
-    private static int ReadOffset(JsonNode? args)
-        => Math.Clamp(args?["offset"]?.GetValue<int>() ?? 0, 0, MaxMcpPaginationOffset);
+        public int Count => _adjustments.Count;
+
+        public void AddClamped(string argument, int requested, int effective, int minimum, int maximum)
+        {
+            var message = $"{argument} was clamped from {requested} to {effective} (server cap is [{minimum}, {maximum}]).";
+            _warnings.Add(message);
+            _adjustments.Add(new JsonObject
+            {
+                ["argument"] = argument,
+                ["action"] = "clamped",
+                ["requested"] = requested,
+                ["effective"] = effective,
+                ["minimum"] = minimum,
+                ["maximum"] = maximum,
+                ["message"] = message,
+            });
+        }
+
+        public void AddIgnored(string argument, int requested, string reason)
+        {
+            var message = $"{argument} value {requested} was ignored: {reason}";
+            _warnings.Add(message);
+            _adjustments.Add(new JsonObject
+            {
+                ["argument"] = argument,
+                ["action"] = "ignored",
+                ["requested"] = requested,
+                ["effective"] = null,
+                ["message"] = message,
+            });
+        }
+
+        public void AddWarning(string message)
+        {
+            _warnings.Add(message);
+        }
+
+        public void ApplyTo(JsonObject payload)
+        {
+            if (_warnings.Count > 0)
+            {
+                var warnings = payload["warnings"] as JsonArray ?? [];
+                foreach (var warning in _warnings)
+                    warnings.Add(warning?.DeepClone());
+                payload["warnings"] = warnings;
+            }
+            if (_adjustments.Count > 0)
+                payload["argument_adjustments"] = _adjustments.DeepClone();
+        }
+    }
+
+    private static int ReadLimit(JsonNode? args, int defaultLimit, ArgumentAdjustmentCollector adjustments)
+    {
+        var requested = args?["limit"]?.GetValue<int>();
+        var effective = Math.Clamp(requested ?? defaultLimit, 1, MaxLimit);
+        if (requested.HasValue && requested.Value != effective)
+            adjustments.AddClamped("limit", requested.Value, effective, 1, MaxLimit);
+        return effective;
+    }
+
+    private static int ReadOffset(JsonNode? args, ArgumentAdjustmentCollector adjustments)
+    {
+        var requested = args?["offset"]?.GetValue<int>();
+        var effective = Math.Clamp(requested ?? 0, 0, MaxMcpPaginationOffset);
+        if (requested.HasValue && requested.Value != effective)
+            adjustments.AddClamped("offset", requested.Value, effective, 0, MaxMcpPaginationOffset);
+        return effective;
+    }
+
+    private static int ReadSnippetLines(JsonNode? args, int defaultSnippetLines, ArgumentAdjustmentCollector adjustments)
+    {
+        var requested = args?["snippetLines"]?.GetValue<int>();
+        var effective = SearchSnippetFormatter.ClampSnippetLines(requested ?? defaultSnippetLines);
+        if (requested.HasValue && requested.Value != effective)
+            adjustments.AddClamped("snippetLines", requested.Value, effective, 1, SearchSnippetFormatter.MaxSnippetLines);
+        return effective;
+    }
+
+    private static int? ReadMapDepth(JsonNode? args, ArgumentAdjustmentCollector adjustments)
+    {
+        var requested = args?["depth"]?.GetValue<int>();
+        if (!requested.HasValue)
+            return null;
+        if (requested.Value < 0)
+        {
+            adjustments.AddIgnored("depth", requested.Value, "depth must be greater than or equal to 0.");
+            return null;
+        }
+
+        var effective = Math.Min(requested.Value, MaxMcpMapDepth);
+        if (effective != requested.Value)
+            adjustments.AddClamped("depth", requested.Value, effective, 0, MaxMcpMapDepth);
+        return effective;
+    }
 
     private static string ReadResponseFormat(JsonNode? args)
         => args?["format"]?.GetValue<string>()?.Trim().ToLowerInvariant() ?? "full";
@@ -412,12 +505,19 @@ public partial class McpServer
 
     private static List<string> ReadStringList(JsonNode? args, string propertyName)
     {
-        return args?[propertyName] is JsonArray array
-            ? array.Select(node => node is JsonValue value && value.TryGetValue<string>(out var text) ? text : null)
+        var node = args?[propertyName];
+        if (node is JsonArray array)
+        {
+            return array.Select(node => node is JsonValue value && value.TryGetValue<string>(out var text) ? text : null)
                 .Where(value => !string.IsNullOrWhiteSpace(value))
                 .Cast<string>()
-                .ToList()
-            : [];
+                .ToList();
+        }
+
+        if (node is JsonValue scalar && scalar.TryGetValue<string>(out var scalarText) && !string.IsNullOrWhiteSpace(scalarText))
+            return [scalarText];
+
+        return [];
     }
 
     private JsonNode? TryReadSearchGuardFilters(JsonNode? id, JsonNode? args, out List<SearchGuardFilter> filters)
@@ -509,6 +609,7 @@ public partial class McpServer
                     ["message"] = $"Tool '{toolName}' does not accept arguments.",
                     ["tool"] = toolName,
                 },
+                toolName,
                 obj.First().Key);
 
         foreach (var property in obj)
@@ -521,6 +622,7 @@ public partial class McpServer
                         ["message"] = $"Unknown argument '{McpBoundedText.ForDisplay(property.Key).Text}' for tool '{toolName}'.",
                         ["tool"] = toolName,
                     },
+                    toolName,
                     property.Key);
             }
 
@@ -549,6 +651,11 @@ public partial class McpServer
             && offsetValue.TryGetValue<int>(out var offset)
             && offset < 0)
             return CreateIntegerMinimumArgumentError(toolName, "offset", minimum: 0, actual: offset);
+
+        if (args["maxResponseBytes"] is JsonValue maxResponseBytesValue
+            && maxResponseBytesValue.TryGetValue<int>(out var maxResponseBytes)
+            && maxResponseBytes <= 0)
+            return CreateIntegerMinimumArgumentError(toolName, "maxResponseBytes", minimum: 1, actual: maxResponseBytes);
 
         return null;
     }
@@ -591,11 +698,44 @@ public partial class McpServer
         return null;
     }
 
-    private static JsonObject AddUnknownArgumentData(JsonObject error, string argumentName)
+    private static JsonObject AddUnknownArgumentData(JsonObject error, string toolName, string argumentName)
     {
         var display = McpBoundedText.ForDisplay(argumentName);
         error["unknown_argument"] = display.Text;
         display.AddMetadata(error, "unknown_argument");
+        return AddArgumentCompatibilityData(error, toolName, argumentName);
+    }
+
+    private static JsonObject AddArgumentCompatibilityData(JsonObject error, string toolName, string argumentName)
+    {
+        switch (toolName, argumentName)
+        {
+            case ("definition", "lspCompatible"):
+            case ("references", "lspCompatible"):
+                error["alias_of"] = "lsp_compatible";
+                break;
+            case ("search", "exact"):
+                error["alias_of"] = "exactSubstring";
+                error["deprecated"] = true;
+                error["deprecation_reason"] = "Use `exactSubstring` for search exact substring matching.";
+                break;
+            case ("definition", "exact"):
+            case ("references", "exact"):
+            case ("callers", "exact"):
+            case ("callees", "exact"):
+            case ("symbols", "exact"):
+            case ("analyze_symbol", "exact"):
+                error["alias_of"] = "exactName";
+                error["deprecated"] = true;
+                error["deprecation_reason"] = "Use `exactName` for exact symbol-name matching.";
+                break;
+            case ("impact_analysis", "maxDepth"):
+                error["alias_of"] = "maxHops";
+                error["deprecated"] = true;
+                error["deprecation_reason"] = "Use `maxHops`; `maxDepth` is retained for compatibility.";
+                break;
+        }
+
         return error;
     }
 
@@ -606,7 +746,7 @@ public partial class McpServer
             if (TryGetExpectedJsonType(toolName, property.Key, out var expected)
                 && !MatchesExpectedJsonType(property.Value, expected))
             {
-                return new JsonObject
+                return AddArgumentCompatibilityData(new JsonObject
                 {
                     ["message"] = $"Invalid type for argument '{property.Key}' on tool '{toolName}'. Expected {expected}.",
                     ["tool"] = toolName,
@@ -614,7 +754,7 @@ public partial class McpServer
                     ["expected"] = expected,
                     ["actual"] = DescribeJsonType(property.Value),
                     ["jsonrpc_invalid_params"] = true,
-                };
+                }, toolName, property.Key);
             }
         }
 
@@ -623,10 +763,16 @@ public partial class McpServer
 
     private static bool TryGetExpectedJsonType(string toolName, string argumentName, out string expected)
     {
-        if (argumentName is "excludePaths" or "names" or "sections" or "files" or "commits" or "changedBetween")
+        if (argumentName is "names" or "sections" or "files" or "commits" or "changedBetween")
         {
-            expected = string.Empty;
-            return false;
+            expected = "array";
+            return true;
+        }
+
+        if (argumentName == "excludePaths")
+        {
+            expected = "string_or_array";
+            return true;
         }
 
         if (argumentName == "path")
@@ -640,15 +786,17 @@ public partial class McpServer
             "limit" or "offset" or "snippetLines" or "maxLineWidth" or "before" or "after" or
                 "focusLine" or "focusColumn" or "focusLength" or "startLine" or "endLine" or
                 "maxHops" or "maxDepth" or "depth" or "parallelism" or "maxFileBytes" or
-                "guardWindow" or "maxOutputBytes" => "integer",
+                "guardWindow" or "maxOutputBytes" or "maxResponseBytes" => "integer",
             "excludeTests" or "includeGenerated" or "rawQuery" or "noDedup" or "exactSubstring" or
                 "exactName" or "exact" or "prefix" or "countOnly" or "includeBody" or "lsp_compatible" or
+                "lspCompatible" or
                 "regex" or "withPaths" or "rebuild" or "dryRun" or "dry_run" or "force" or
-                "optimize" or "reverse" or "cycles" => "boolean",
+                "optimize" or "reverse" or "cycles" or "estimateOnly" or "listRecipes" => "boolean",
             "project" or "requireBefore" or "requireAfter" or "rejectBefore" or "rejectAfter" => "string_or_array",
             "query" or "lang" or "kind" or "format" or "rankBy" or "since" or "cursor" or
                 "solution" or "symbol" or "groupBy" or "category" or "language" or
-                "bucket" or "minConfidence" or "description" or "context" or "toolInvocationContext" or "db" => "string",
+                "bucket" or "minConfidence" or "description" or "context" or "toolInvocationContext" or "db" or
+                "recipe" => "string",
             "queries" or "evidencePaths" or "evidence_paths" => "array",
             _ => string.Empty,
         };
@@ -692,41 +840,6 @@ public partial class McpServer
             _ => "unknown",
         };
     }
-
-    private static bool IsKnownToolName(string toolName) => toolName switch
-    {
-        "search" or "definition" or "references" or "callers" or "callees" or "symbols" or
-        "files" or "find_in_file" or "excerpt" or "map" or "analyze_symbol" or "status" or
-        "outline" or "batch_query" or "deps" or "impact_analysis" or "languages" or "validate" or
-        "unused_symbols" or "symbol_hotspots" or "ping" or "index" or "backfill_fold" or
-        "suggest_improvement" => true,
-        _ => false,
-    };
-
-    private static IReadOnlySet<string> GetAllowedToolArguments(string toolName) => toolName switch
-    {
-        "search" => new HashSet<string>(StringComparer.Ordinal) { "query", "limit", "lang", "snippetLines", "maxLineWidth", "rawQuery", "cursor", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "noDedup", "exactSubstring", "exact", "prefix", "requireBefore", "requireAfter", "rejectBefore", "rejectAfter", "guardWindow", "countOnly", "format", "project", "solution" },
-        "definition" => new HashSet<string>(StringComparer.Ordinal) { "query", "kind", "lang", "limit", "includeBody", "lsp_compatible", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "exactName", "exact", "format", "project", "solution" },
-        "references" => new HashSet<string>(StringComparer.Ordinal) { "query", "kind", "lang", "limit", "offset", "maxLineWidth", "lsp_compatible", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "countOnly", "format", "project", "solution" },
-        "callers" or "callees" => new HashSet<string>(StringComparer.Ordinal) { "query", "kind", "rankBy", "lang", "limit", "offset", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "countOnly", "format", "project", "solution" },
-        "symbols" => new HashSet<string>(StringComparer.Ordinal) { "query", "names", "kind", "lang", "limit", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "exactName", "exact", "project", "solution" },
-        "files" => new HashSet<string>(StringComparer.Ordinal) { "query", "lang", "limit", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "project", "solution" },
-        "find_in_file" => new HashSet<string>(StringComparer.Ordinal) { "query", "path", "limit", "lang", "excludePaths", "excludeTests", "includeGenerated", "before", "after", "snippetLines", "focusLine", "focusColumn", "maxLineWidth", "exact", "regex" },
-        "excerpt" => new HashSet<string>(StringComparer.Ordinal) { "path", "startLine", "endLine", "before", "after", "focusLine", "focusColumn", "focusLength", "maxLineWidth", "maxOutputBytes" },
-        "map" => new HashSet<string>(StringComparer.Ordinal) { "limit", "lang", "path", "excludePaths", "excludeTests", "sections", "depth", "project", "solution" },
-        "analyze_symbol" => new HashSet<string>(StringComparer.Ordinal) { "query", "lang", "limit", "includeBody", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "maxLineWidth", "project", "solution" },
-        "outline" => new HashSet<string>(StringComparer.Ordinal) { "path" },
-        "batch_query" => new HashSet<string>(StringComparer.Ordinal) { "queries" },
-        "deps" => new HashSet<string>(StringComparer.Ordinal) { "path", "reverse", "format", "cycles", "lang", "limit", "excludePaths", "excludeTests", "project", "solution" },
-        "impact_analysis" => new HashSet<string>(StringComparer.Ordinal) { "query", "lang", "maxHops", "maxDepth", "limit", "path", "excludePaths", "excludeTests", "includeGenerated", "withPaths", "countOnly", "project", "solution" },
-        "validate" => new HashSet<string>(StringComparer.Ordinal) { "kind", "path", "excludePaths", "excludeTests", "project", "solution" },
-        "unused_symbols" => new HashSet<string>(StringComparer.Ordinal) { "kind", "lang", "limit", "path", "excludePaths", "excludeTests", "bucket", "minConfidence", "project", "solution" },
-        "symbol_hotspots" => new HashSet<string>(StringComparer.Ordinal) { "kind", "lang", "limit", "groupBy", "path", "excludePaths", "excludeTests", "project", "solution" },
-        "index" => new HashSet<string>(StringComparer.Ordinal) { "path", "rebuild", "maxFileBytes" },
-        "backfill_fold" => new HashSet<string>(StringComparer.Ordinal) { "dry_run", "dryRun", "force" },
-        "suggest_improvement" => new HashSet<string>(StringComparer.Ordinal) { "category", "language", "description", "context", "toolInvocationContext", "evidencePaths", "evidence_paths" },
-        _ => new HashSet<string>(StringComparer.Ordinal),
-    };
 
     private static JsonObject? ValidateStringListArgument(JsonNode? args, string propertyName)
     {
@@ -776,7 +889,7 @@ public partial class McpServer
 
         if (node is JsonValue scalar && scalar.TryGetValue<string>(out var scalarText))
         {
-            if (propertyName is "excludePaths" or "names" or "sections")
+            if (propertyName is "names" or "sections")
                 return new JsonObject
                 {
                     ["message"] = $"{propertyName} must be an array of strings.",
@@ -853,6 +966,27 @@ public partial class McpServer
         }
 
         exact = legacyExact || exactName;
+        error = null;
+        return true;
+    }
+
+    private static bool TryReadLspCompatibleArgument(JsonNode? args, out bool lspCompatible, out string? error)
+    {
+        var snakeNode = args?["lsp_compatible"];
+        var camelNode = args?["lspCompatible"];
+        var snakeProvided = snakeNode is not null;
+        var camelProvided = camelNode is not null;
+        var snakeValue = snakeNode?.GetValue<bool>() ?? false;
+        var camelValue = camelNode?.GetValue<bool>() ?? false;
+
+        if (snakeProvided && camelProvided && snakeValue != camelValue)
+        {
+            lspCompatible = false;
+            error = "Pass only one of 'lsp_compatible' or 'lspCompatible', or give both aliases the same value.";
+            return false;
+        }
+
+        lspCompatible = snakeProvided ? snakeValue : camelValue;
         error = null;
         return true;
     }
@@ -1009,6 +1143,7 @@ public partial class McpServer
 
     private List<string>? ReadScopedPathList(JsonNode? args)
     {
+        _projectFilterRootResolutionForCurrentToolCall = null;
         var paths = ReadPathList(args, "path") ?? [];
         var projects = ReadPathList(args, "project") ?? [];
         if (projects.Count == 0)
@@ -1016,7 +1151,8 @@ public partial class McpServer
 
         var solution = args?["solution"]?.GetValue<string>();
         var projectRoot = ResolveProjectFilterRoot();
-        foreach (var glob in SolutionProjectResolver.ResolveProjectDirectoryGlobs(projectRoot, projects, solution))
+        _projectFilterRootResolutionForCurrentToolCall = projectRoot;
+        foreach (var glob in SolutionProjectResolver.ResolveProjectDirectoryGlobs(projectRoot.Root, projects, solution))
             paths.Add(glob);
         return paths.Count == 0 ? null : paths;
     }
@@ -1028,9 +1164,10 @@ public partial class McpServer
             return null;
 
         var solution = args?["solution"]?.GetValue<string>();
+        var projectRoot = ResolveProjectFilterRoot();
         try
         {
-            _ = SolutionProjectResolver.ResolveProjectDirectoryGlobs(ResolveProjectFilterRoot(), projects, solution);
+            _ = SolutionProjectResolver.ResolveProjectDirectoryGlobs(projectRoot.Root, projects, solution);
             return null;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
@@ -1041,15 +1178,32 @@ public partial class McpServer
                 ["message"] = $"Project filter could not be resolved: {diagnostic.Text}",
                 ["parameter"] = "project",
                 ["diagnostic"] = diagnostic.Text,
+                ["project_filter_root"] = projectRoot.Root,
             };
+            if (!string.IsNullOrWhiteSpace(projectRoot.FallbackReason))
+                error["project_filter_root_fallback_reason"] = projectRoot.FallbackReason;
             diagnostic.AddMetadata(error, "diagnostic");
             return error;
         }
     }
 
-    private string ResolveProjectFilterRoot()
-        => DbPathResolver.ResolveProjectRootForQuery(_dbPath, _dbPathExplicit)
-            ?? Environment.CurrentDirectory;
+    private QueryCommandRunner.ProjectFilterRootResolution ResolveProjectFilterRoot()
+        => QueryCommandRunner.ResolveProjectFilterRoot(_dbPath, _dbPathExplicit);
+
+    private void AddProjectFilterRootDiagnostics(JsonObject payload)
+    {
+        var projectRoot = _projectFilterRootResolutionForCurrentToolCall;
+        _projectFilterRootResolutionForCurrentToolCall = null;
+        if (!projectRoot.HasValue)
+            return;
+
+        payload["project_filter_root"] = projectRoot.Value.Root;
+        if (!string.IsNullOrWhiteSpace(projectRoot.Value.FallbackReason))
+            payload["project_filter_root_fallback_reason"] = projectRoot.Value.FallbackReason;
+    }
+
+    private void ClearProjectFilterRootDiagnostics()
+        => _projectFilterRootResolutionForCurrentToolCall = null;
 
     private static bool TryReadSinceArgument(JsonNode? args, out DateTime? since, out string? error)
     {
@@ -1222,14 +1376,28 @@ public partial class McpServer
 
     private JsonNode ExecuteSearch(JsonNode? id, JsonNode? args)
     {
+        var listRecipes = args?["listRecipes"]?.GetValue<bool>() ?? false;
+        if (listRecipes)
+            return ExecuteSearchRecipeList(id);
+
+        var recipeNode = args?["recipe"];
+        if (recipeNode is not null)
+        {
+            var recipeName = recipeNode.GetValue<string>();
+            if (string.IsNullOrWhiteSpace(recipeName))
+                return CreateToolErrorResponse(id, "'recipe' must be a non-empty search recipe name.");
+            return ExecuteSearchRecipe(id, args, recipeName.Trim());
+        }
+
         if (!TryReadRequiredStringParameter(args, "query", out var query, out var requiredError))
             return CreateToolErrorResponse(id, requiredError!);
         if (query.Length > QueryLimits.MaxQueryLength)
             return CreateToolErrorResponse(id, QueryLimits.FormatQueryTooLongError());
 
-        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? QueryCommandRunner.DefaultQueryLimit);
+        var adjustments = new ArgumentAdjustmentCollector();
+        var limit = ReadLimit(args, QueryCommandRunner.DefaultQueryLimit, adjustments);
         var lang = QueryCommandRunner.NormalizeLangFilterValue(args?["lang"]?.GetValue<string>());
-        var snippetLines = SearchSnippetFormatter.ClampSnippetLines(args?["snippetLines"]?.GetValue<int>() ?? SearchSnippetFormatter.DefaultSnippetLines);
+        var snippetLines = ReadSnippetLines(args, SearchSnippetFormatter.DefaultSnippetLines, adjustments);
         if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
             return maxLineWidthError;
         var rawQuery = args?["rawQuery"]?.GetValue<bool>() ?? false;
@@ -1291,6 +1459,7 @@ public partial class McpServer
                     AddExactSubstringRecoveryHint(payload, query);
                 if (countResults.Count == 0)
                     AddFtsQueryDiagnostics(payload, DbReader.AnalyzeFtsQuery(query, rawQuery, prefix, lang));
+                adjustments.ApplyTo(payload);
                 return CreateToolResult(id, $"Counted {countResults.Count} search result(s).", payload);
             }
 
@@ -1338,6 +1507,7 @@ public partial class McpServer
                         new JsonObject { ["query"] = query, ["limit"] = 5 });
                 }
                 AddFreshnessHint(payload, reader);
+                adjustments.ApplyTo(payload);
                 return CreateToolResult(id, "No results found.", payload);
             }
 
@@ -1369,12 +1539,162 @@ public partial class McpServer
                 BuildExcerptArgs(topResult.Path, topResult.StartLine, topResult.EndLine));
             if (suggestExactSubstring)
                 AddExactSubstringRecoveryHint(structured, query);
+            adjustments.ApplyTo(structured);
             // Include top file paths in summary for quick AI orientation
             // AIが素早く位置把握できるよう、サマリにトップファイルパスを含める
             var topPaths = results.Select(r => r.Path).Distinct().Take(3);
             var summary = $"Found {results.Count} search result(s) in {string.Join(", ", topPaths)}.";
             return CreateToolResult(id, summary, structured);
         });
+    }
+
+    private JsonNode ExecuteSearchRecipeList(JsonNode? id)
+    {
+        var registry = SearchAuditRecipes.Load();
+        var payload = new JsonObject
+        {
+            ["count"] = registry.Recipes.Count,
+            ["recipes"] = ToSearchRecipeArray(registry.Recipes)
+        };
+        AddSearchRecipeSourceDiagnostics(payload, registry.Diagnostics);
+        return CreateToolResult(id, $"Found {registry.Recipes.Count} search recipe(s).", payload);
+    }
+
+    private JsonNode ExecuteSearchRecipe(JsonNode? id, JsonNode? args, string recipeName)
+    {
+        var registry = SearchAuditRecipes.Load();
+        var recipe = registry.Recipes.FirstOrDefault(r => string.Equals(r.Name, recipeName, StringComparison.OrdinalIgnoreCase));
+        if (recipe is null)
+        {
+            var available = string.Join(", ", registry.Recipes.Select(r => r.Name));
+            return CreateToolErrorResponse(id, $"unknown search recipe '{recipeName}'. Available recipes: {available}.");
+        }
+
+        var adjustments = new ArgumentAdjustmentCollector();
+        var limit = ReadLimit(args, QueryCommandRunner.DefaultQueryLimit, adjustments);
+        var lang = QueryCommandRunner.NormalizeLangFilterValue(args?["lang"]?.GetValue<string>());
+        var snippetLines = ReadSnippetLines(args, SearchSnippetFormatter.DefaultSnippetLines, adjustments);
+        if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
+            return maxLineWidthError;
+        var pathPatterns = ReadScopedPathList(args);
+        var excludePaths = ReadStringList(args, "excludePaths");
+        var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
+        if (!TryReadSinceArgument(args, out var since, out var sinceError))
+            return CreateToolErrorResponse(id, sinceError!);
+        var deduplicate = !(args?["noDedup"]?.GetValue<bool>() ?? false);
+        if (!TryResolveSearchExactArgument(args, out var userExact, out var exactError))
+            return CreateToolErrorResponse(id, exactError!);
+        var hasExactOverride = args?["exact"] is not null || args?["exactSubstring"] is not null;
+        if (args?["prefix"]?.GetValue<bool>() ?? false)
+            return CreateToolErrorResponse(id, "'prefix' cannot be combined with recipe execution.");
+        if (args?["cursor"] is not null)
+            return CreateToolErrorResponse(id, "'cursor' is not supported for recipe execution.");
+        if (TryReadSearchGuardFilters(id, args, out var guardFilters) is JsonNode guardError)
+            return guardError;
+        var guardWindow = args?["guardWindow"]?.GetValue<int>() ?? DbReader.DefaultSearchGuardWindow;
+        if (guardWindow < 0 || guardWindow > DbReader.MaxSearchGuardWindow)
+            return CreateToolErrorResponse(id, $"'guardWindow' must be between 0 and {DbReader.MaxSearchGuardWindow}; got {guardWindow}.");
+
+        return WithDbReader(id, args, reader =>
+        {
+            var queryResults = new JsonArray();
+            var total = 0;
+            foreach (var recipeQuery in recipe.Queries)
+            {
+                var exact = hasExactOverride ? userExact : recipeQuery.ExactSubstring;
+                List<SearchResult> results;
+                try
+                {
+                    results = reader.Search(
+                        recipeQuery.Query,
+                        limit,
+                        lang,
+                        false,
+                        pathPatterns,
+                        excludePaths,
+                        excludeTests,
+                        deduplicate,
+                        since,
+                        exact,
+                        false,
+                        guardFilters: guardFilters,
+                        guardWindow: guardWindow);
+                }
+                catch (SearchQueryLimitException ex)
+                {
+                    return CreateToolErrorResponse(id, ex.Message);
+                }
+                catch (SearchGuardCandidateLimitException ex)
+                {
+                    return CreateToolErrorResponse(id, $"guarded search is too broad for recipe '{recipe.Name}' query '{recipeQuery.Name}': {ex.Message} Narrow the search with more specific path/lang filters or guards.");
+                }
+
+                var queryContext = SearchSnippetFormatter.PrepareQueryContext(recipeQuery.Query);
+                var compactResults = SearchSnippetFormatter
+                    .ToCompactResults(results, queryContext, snippetLines, exact, maxLineWidth, exposeLiteralHighlights: exact)
+                    .ToList();
+                total += compactResults.Count;
+                queryResults.Add(new JsonObject
+                {
+                    ["name"] = recipeQuery.Name,
+                    ["query"] = recipeQuery.Query,
+                    ["description"] = recipeQuery.Description,
+                    ["recommended_labels"] = ToJsonArray(recipeQuery.RecommendedLabels),
+                    ["false_positive_guidance"] = recipeQuery.FalsePositiveGuidance,
+                    ["exact_substring"] = exact,
+                    ["count"] = compactResults.Count,
+                    ["results"] = ToJsonArray(compactResults)
+                });
+            }
+
+            var payload = new JsonObject
+            {
+                ["recipe"] = ToSearchRecipeJson(recipe),
+                ["query_count"] = recipe.Queries.Count,
+                ["result_count"] = total,
+                ["limit_per_query"] = limit,
+                ["snippetLines"] = snippetLines,
+                ["maxLineWidth"] = maxLineWidth,
+                ["lang"] = lang,
+                ["path"] = PathEcho(pathPatterns),
+                ["excludeTests"] = excludeTests,
+                ["queries"] = queryResults
+            };
+            AddFreshnessHint(payload, reader);
+            AddSearchRecipeSourceDiagnostics(payload, registry.Diagnostics);
+            adjustments.ApplyTo(payload);
+            var summary = total == 0
+                ? $"Recipe '{recipe.Name}' returned no search results."
+                : $"Recipe '{recipe.Name}' returned {total} search result(s) across {recipe.Queries.Count} query(ies).";
+            return CreateToolResult(id, summary, payload);
+        });
+    }
+
+    private JsonArray ToSearchRecipeArray(IEnumerable<SearchAuditRecipe> recipes)
+        => new(recipes.Select(recipe => ToSearchRecipeJson(recipe)).ToArray<JsonNode?>());
+
+    private JsonObject ToSearchRecipeJson(SearchAuditRecipe recipe)
+        => new()
+        {
+            ["name"] = recipe.Name,
+            ["description"] = recipe.Description,
+            ["recommended_labels"] = ToJsonArray(recipe.RecommendedLabels),
+            ["queries"] = new JsonArray(recipe.Queries.Select(query => new JsonObject
+            {
+                ["name"] = query.Name,
+                ["query"] = query.Query,
+                ["description"] = query.Description,
+                ["recommended_labels"] = ToJsonArray(query.RecommendedLabels),
+                ["false_positive_guidance"] = query.FalsePositiveGuidance,
+                ["exact_substring"] = query.ExactSubstring
+            }).ToArray<JsonNode?>())
+        };
+
+    private static void AddSearchRecipeSourceDiagnostics(JsonObject payload, IReadOnlyList<string> diagnostics)
+    {
+        if (diagnostics.Count == 0)
+            return;
+        payload["recipe_source_diagnostics"] = new JsonArray(diagnostics.Select(diagnostic => JsonValue.Create(diagnostic)).ToArray<JsonNode?>());
     }
 
     private JsonNode ExecuteSymbols(JsonNode? id, JsonNode? args)
@@ -1401,9 +1721,10 @@ public partial class McpServer
         }
         if (namesProvided && names.Count == 0)
             return CreateToolErrorResponse(id, "'names' is present but contains no usable entries (all were empty or whitespace).");
+        var adjustments = new ArgumentAdjustmentCollector();
         var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
         var lang = QueryCommandRunner.NormalizeLangFilterValue(args?["lang"]?.GetValue<string>());
-        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? QueryCommandRunner.DefaultQueryLimit);
+        var limit = ReadLimit(args, QueryCommandRunner.DefaultQueryLimit, adjustments);
         if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
             return maxLineWidthError;
         var pathPatterns = ReadScopedPathList(args);
@@ -1465,6 +1786,7 @@ public partial class McpServer
                     AddExactGraphSignal(payload, exactSignal);
                 AddExactZeroHint(payload, exactZeroHint);
                 AddFreshnessHint(payload, reader);
+                adjustments.ApplyTo(payload);
                 return CreateToolResult(id, "No symbols found.", payload);
             }
 
@@ -1481,6 +1803,7 @@ public partial class McpServer
             };
             if (hasExactPredicate)
                 AddExactGraphSignal(structured, exactSignal);
+            adjustments.ApplyTo(structured);
             return CreateToolResult(id, ConsoleUi.FoundSummary(results.Count, "symbol"), structured);
         });
     }
@@ -1494,11 +1817,13 @@ public partial class McpServer
         if (IsBareVerbatimQueryToken(query))
             return CreateToolErrorResponse(id, "Add a real symbol name after the command; bare verbatim prefixes like `@` are not valid queries.");
 
+        var adjustments = new ArgumentAdjustmentCollector();
         var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
         var lang = QueryCommandRunner.NormalizeLangFilterValue(args?["lang"]?.GetValue<string>());
-        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? QueryCommandRunner.DefaultQueryLimit);
+        var limit = ReadLimit(args, QueryCommandRunner.DefaultQueryLimit, adjustments);
         var includeBody = args?["includeBody"]?.GetValue<bool>() ?? false;
-        var lspCompatible = args?["lsp_compatible"]?.GetValue<bool>() ?? false;
+        if (!TryReadLspCompatibleArgument(args, out var lspCompatible, out var lspCompatibleError))
+            return CreateToolErrorResponse(id, lspCompatibleError!);
         var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
@@ -1525,6 +1850,7 @@ public partial class McpServer
                 countPayload["lang"] = lang;
                 countPayload["path"] = PathEcho(pathPatterns);
                 countPayload["excludeTests"] = excludeTests;
+                adjustments.ApplyTo(countPayload);
                 return CreateToolResult(id, $"Counted {ConsoleUi.Counted(total, "definition")}.", countPayload);
             }
             if (lspCompatible)
@@ -1559,6 +1885,7 @@ public partial class McpServer
                 AddSymbolRecoveryHint(payload, query, "definition", lang, kind, PathEcho(pathPatterns));
                 AddFreshnessHint(payload, reader);
             }
+            adjustments.ApplyTo(payload);
             return CreateToolResult(id,
                 ConsoleUi.FoundSummary(results.Count, "definition"),
                 payload);
@@ -1598,11 +1925,13 @@ public partial class McpServer
         if (IsBareVerbatimQueryToken(query))
             return CreateToolErrorResponse(id, "Add a real symbol name after the command; bare verbatim prefixes like `@` are not valid queries.");
 
+        var adjustments = new ArgumentAdjustmentCollector();
         var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
         var lang = QueryCommandRunner.NormalizeLangFilterValue(args?["lang"]?.GetValue<string>());
-        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? QueryCommandRunner.DefaultQueryLimit);
-        var lspCompatible = args?["lsp_compatible"]?.GetValue<bool>() ?? false;
-        var offset = ReadOffset(args);
+        var limit = ReadLimit(args, QueryCommandRunner.DefaultQueryLimit, adjustments);
+        if (!TryReadLspCompatibleArgument(args, out var lspCompatible, out var lspCompatibleError))
+            return CreateToolErrorResponse(id, lspCompatibleError!);
+        var offset = ReadOffset(args, adjustments);
         if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
             return maxLineWidthError;
         var pathPatterns = ReadScopedPathList(args);
@@ -1629,6 +1958,7 @@ public partial class McpServer
                 countOnlyPayload["lang"] = lang;
                 countOnlyPayload["path"] = PathEcho(pathPatterns);
                 countOnlyPayload["excludeTests"] = excludeTests;
+                adjustments.ApplyTo(countOnlyPayload);
                 return CreateToolResult(id, $"Counted {ConsoleUi.Counted(countOnlyTotal, "reference")}.", countOnlyPayload);
             }
 
@@ -1686,6 +2016,7 @@ public partial class McpServer
                     "excerpt",
                     BuildExcerptArgs(topReference.Path, topReference.Line, topReference.Line));
             }
+            adjustments.ApplyTo(payload);
             return CreateToolResult(id,
                 BuildGraphSummary("reference", "references", results.Count, graphSupport.GraphLanguage, graphSupport.GraphSupported, graphSupport.GraphSupportReason),
                 payload);
@@ -1701,12 +2032,13 @@ public partial class McpServer
         if (IsBareVerbatimQueryToken(query))
             return CreateToolErrorResponse(id, "Add a real symbol name after the command; bare verbatim prefixes like `@` are not valid queries.");
 
+        var adjustments = new ArgumentAdjustmentCollector();
         var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
         if (IsNonCallGraphReferenceKind(kind))
             return CreateToolErrorResponse(id, BuildNonCallGraphKindRejectionMessage("callers", kind!));
         var lang = QueryCommandRunner.NormalizeLangFilterValue(args?["lang"]?.GetValue<string>());
-        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? QueryCommandRunner.DefaultQueryLimit);
-        var offset = ReadOffset(args);
+        var limit = ReadLimit(args, QueryCommandRunner.DefaultQueryLimit, adjustments);
+        var offset = ReadOffset(args, adjustments);
         var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
@@ -1733,6 +2065,7 @@ public partial class McpServer
                 countOnlyPayload["lang"] = lang;
                 countOnlyPayload["path"] = PathEcho(pathPatterns);
                 countOnlyPayload["excludeTests"] = excludeTests;
+                adjustments.ApplyTo(countOnlyPayload);
                 return CreateToolResult(id, $"Counted {ConsoleUi.Counted(countOnlyTotal, "caller")}.", countOnlyPayload);
             }
 
@@ -1780,6 +2113,7 @@ public partial class McpServer
                 AddSymbolRecoveryHint(payload, query, "callers", lang, kind, PathEcho(pathPatterns));
                 AddFreshnessHint(payload, reader);
             }
+            adjustments.ApplyTo(payload);
             return CreateToolResult(id,
                 BuildGraphSummary("caller", "callers", results.Count, graphSupport.GraphLanguage, graphSupport.GraphSupported, graphSupport.GraphSupportReason),
                 payload);
@@ -1795,12 +2129,13 @@ public partial class McpServer
         if (IsBareVerbatimQueryToken(query))
             return CreateToolErrorResponse(id, "Add a real symbol name after the command; bare verbatim prefixes like `@` are not valid queries.");
 
+        var adjustments = new ArgumentAdjustmentCollector();
         var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
         if (IsNonCallGraphReferenceKind(kind))
             return CreateToolErrorResponse(id, BuildNonCallGraphKindRejectionMessage("callees", kind!));
         var lang = QueryCommandRunner.NormalizeLangFilterValue(args?["lang"]?.GetValue<string>());
-        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? QueryCommandRunner.DefaultQueryLimit);
-        var offset = ReadOffset(args);
+        var limit = ReadLimit(args, QueryCommandRunner.DefaultQueryLimit, adjustments);
+        var offset = ReadOffset(args, adjustments);
         var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
@@ -1827,6 +2162,7 @@ public partial class McpServer
                 countOnlyPayload["lang"] = lang;
                 countOnlyPayload["path"] = PathEcho(pathPatterns);
                 countOnlyPayload["excludeTests"] = excludeTests;
+                adjustments.ApplyTo(countOnlyPayload);
                 return CreateToolResult(id, $"Counted {ConsoleUi.Counted(countOnlyTotal, "callee")}.", countOnlyPayload);
             }
 
@@ -1874,6 +2210,7 @@ public partial class McpServer
                 AddSymbolRecoveryHint(payload, query, "callees", lang, kind, PathEcho(pathPatterns));
                 AddFreshnessHint(payload, reader);
             }
+            adjustments.ApplyTo(payload);
             return CreateToolResult(id,
                 BuildGraphSummary("callee", "callees", results.Count, graphSupport.GraphLanguage, graphSupport.GraphSupported, graphSupport.GraphSupportReason),
                 payload);
@@ -1885,8 +2222,9 @@ public partial class McpServer
         var query = args?["query"]?.GetValue<string>();
         if (query != null && query.Length > QueryLimits.MaxQueryLength)
             return CreateToolErrorResponse(id, QueryLimits.FormatQueryTooLongError());
+        var adjustments = new ArgumentAdjustmentCollector();
         var lang = QueryCommandRunner.NormalizeLangFilterValue(args?["lang"]?.GetValue<string>());
-        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? QueryCommandRunner.DefaultQueryLimit);
+        var limit = ReadLimit(args, QueryCommandRunner.DefaultQueryLimit, adjustments);
         var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
@@ -1908,6 +2246,7 @@ public partial class McpServer
                     ["results"] = new JsonArray()
                 };
                 AddFreshnessHint(payload, reader);
+                adjustments.ApplyTo(payload);
                 return CreateToolResult(id, "No files found.", payload);
             }
 
@@ -1920,19 +2259,21 @@ public partial class McpServer
                 ["count"] = results.Count,
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
+            adjustments.ApplyTo(structured);
             return CreateToolResult(id, ConsoleUi.FoundSummary(results.Count, "file"), structured);
         });
     }
 
     private JsonNode ExecuteMap(JsonNode? id, JsonNode? args)
     {
+        var adjustments = new ArgumentAdjustmentCollector();
         var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
-        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? QueryCommandRunner.DefaultMapLimit);
+        var limit = ReadLimit(args, QueryCommandRunner.DefaultMapLimit, adjustments);
         var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
         var sections = ReadStringList(args, "sections").Select(section => section.ToLowerInvariant()).ToHashSet(StringComparer.Ordinal);
-        var depth = args?["depth"]?.GetValue<int>();
+        var depth = ReadMapDepth(args, adjustments);
 
         return WithDbReader(id, args, reader =>
         {
@@ -1965,6 +2306,7 @@ public partial class McpServer
             var hasFilter = (pathPatterns is { Count: > 0 }) || excludePaths.Count > 0 || excludeTests || lang != null;
             if (map.FileCount == 0 && hasFilter)
                 AddFreshnessHint(structured, reader);
+            adjustments.ApplyTo(structured);
             var summary = map.FileCount > 0
                 ? "Repo map returned."
                 : hasFilter ? "No files found matching the given filters." : "Repo map returned.";
@@ -2008,7 +2350,8 @@ public partial class McpServer
         if (IsBareVerbatimQueryToken(query))
             return CreateToolErrorResponse(id, "Add a real symbol name after the command; bare verbatim prefixes like `@` are not valid queries.");
 
-        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? QueryCommandRunner.DefaultMapLimit);
+        var adjustments = new ArgumentAdjustmentCollector();
+        var limit = ReadLimit(args, QueryCommandRunner.DefaultMapLimit, adjustments);
         var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
         var includeBody = args?["includeBody"]?.GetValue<bool>() ?? false;
         if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
@@ -2046,6 +2389,7 @@ public partial class McpServer
             structured["lang"] = lang;
             structured["path"] = PathEcho(pathPatterns);
             structured["excludeTests"] = excludeTests;
+            adjustments.ApplyTo(structured);
             return CreateToolResult(id, BuildAnalyzeSymbolSummary(analysis), structured);
         });
     }
@@ -2301,9 +2645,13 @@ public partial class McpServer
                     ["max_configured_response_bytes"] = MaxConfiguredResponseBytes,
                     ["batch_response_bytes"] = GetBatchQueryResponseByteLimit(),
                     ["max_batch_response_bytes"] = MaxBatchQueryResponseByteLimit,
+                    ["batch_query_response_bytes"] = GetBatchQueryResponseByteLimit(),
+                    ["batch_query_max_response_bytes"] = MaxBatchQueryResponseByteLimit,
+                    ["batch_query_max_queries"] = MaxBatchQuerySize,
                     ["max_pagination_offset"] = MaxMcpPaginationOffset,
                     ["max_json_depth"] = MaxJsonDepth,
                     ["max_batch_requests"] = MaxBatchRequestCount,
+                    ["json_rpc_batch_max_requests"] = MaxBatchRequestCount,
                     ["keep_alive_min_interval_s"] = MinKeepAliveIntervalSeconds,
                     ["keep_alive_max_interval_s"] = MaxKeepAliveIntervalSeconds,
                     ["rate_limit_max_rps"] = RateLimiterOptions.MaxRefillTokensPerSecond,
@@ -2597,7 +2945,8 @@ public partial class McpServer
                 ? "Parameter \"path\" cannot be empty or whitespace-only"
                 : "Missing required parameter: path");
 
-        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? QueryCommandRunner.DefaultQueryLimit);
+        var adjustments = new ArgumentAdjustmentCollector();
+        var limit = ReadLimit(args, QueryCommandRunner.DefaultQueryLimit, adjustments);
         var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
@@ -2638,7 +2987,7 @@ public partial class McpServer
             List<FileFindResult> results;
             try
             {
-                results = reader.FindInFiles(query, limit, lang, pathPatterns, excludePaths, excludeTests, before, after, exact, maxLineWidth, focusLine, focusColumn, regex);
+                results = reader.FindInFiles(query, limit, lang, pathPatterns, excludePaths, excludeTests, before, after, exact, maxLineWidth, focusLine, focusColumn, regex).Results;
             }
             catch (Exception ex) when (regex && (ex is ArgumentException || ex is RegexMatchTimeoutException))
             {
@@ -2668,10 +3017,12 @@ public partial class McpServer
             if (results.Count == 0)
             {
                 AddFreshnessHint(structured, reader);
+                adjustments.ApplyTo(structured);
                 return CreateToolResult(id, "No matches found.", structured);
             }
 
             var fileCount = structured["fileCount"]!.GetValue<int>();
+            adjustments.ApplyTo(structured);
             return CreateToolResult(id, $"Found {ConsoleUi.Counted(results.Count, "in-file match", "in-file matches")} across {ConsoleUi.Counted(fileCount, "file")}.", structured);
         });
     }
@@ -2687,23 +3038,26 @@ public partial class McpServer
         if (queries == null || queries.Count == 0)
             return CreateToolErrorResponse(id, "Missing or empty required parameter: queries");
 
-        const int maxBatchSize = 10;
-        if (queries.Count > maxBatchSize)
-            return CreateToolErrorResponse(id, $"Batch too large: {queries.Count} queries (max {maxBatchSize})");
+        if (queries.Count > MaxBatchQuerySize)
+            return CreateToolErrorResponse(id, $"Batch too large: {queries.Count} queries (max {MaxBatchQuerySize})");
 
         var resultsArray = new JsonArray();
         var truncatedQueries = new JsonArray();
         var totalStopwatch = Stopwatch.StartNew();
+        var adjustments = new ArgumentAdjustmentCollector();
         int successCount = 0;
         int failureCount = 0;
         int? cascadeStartedAtIndex = null;
         var truncated = false;
-        var responseByteLimit = GetBatchQueryResponseByteLimit();
+        var responseByteLimit = ReadBatchQueryResponseByteLimit(args, adjustments);
+        var estimateOnly = args?["estimateOnly"]?.GetValue<bool>() ?? false;
+        if (estimateOnly)
+            return ExecuteBatchQueryEstimate(id, queries, responseByteLimit, adjustments);
         var estimatedResponseBytes = EstimateBatchResponseBytes(id, "Executed 0 queries.", queries.Count, successCount, failureCount,
             GetBatchFailureScope(queries.Count, successCount, failureCount, cascadeStartedAtIndex), cascadeStartedAtIndex,
-            responseByteLimit, resultsArray, truncated: false, truncatedQueries);
+            responseByteLimit, resultsArray, truncated: false, truncatedQueries, adjustments);
 
-        bool TryAppendResult(JsonObject entry, string? toolName, JsonNode? toolArgs, int requestIndex, bool successfulSlot = false, bool failedSlot = false)
+        bool TryAppendResult(JsonObject entry, string? toolName, JsonNode? toolArgs, int requestIndex, string? slotId, bool successfulSlot = false, bool failedSlot = false)
         {
             var candidateResults = CloneJsonArray(resultsArray);
             candidateResults.Add(entry.DeepClone());
@@ -2715,7 +3069,7 @@ public partial class McpServer
                 : $"Executed {candidateExecutedCount} of {queries.Count} queries in 0 ms ({candidateSuccessCount} succeeded, {candidateFailureCount} failed).";
             var candidateBytes = EstimateBatchResponseBytes(id, candidateSummary, queries.Count, candidateSuccessCount, candidateFailureCount,
                 GetBatchFailureScope(queries.Count, candidateSuccessCount, candidateFailureCount, cascadeStartedAtIndex), cascadeStartedAtIndex,
-                responseByteLimit, candidateResults, truncated: false, truncatedQueries);
+                responseByteLimit, candidateResults, truncated: false, truncatedQueries, adjustments);
             if (candidateBytes > responseByteLimit)
             {
                 truncated = true;
@@ -2726,6 +3080,7 @@ public partial class McpServer
                     ["args_summary"] = BuildArgsSummary(toolArgs),
                     ["reason"] = "response_byte_limit_exceeded",
                 };
+                AddBatchSlotId(truncatedEntry, slotId);
                 AddToolDisplayData(truncatedEntry, toolName);
                 truncatedQueries.Add(truncatedEntry);
                 return false;
@@ -2751,7 +3106,7 @@ public partial class McpServer
             }
         }
 
-        void AppendSlotError(int requestIndex, string? toolName, JsonNode? toolArgs, Stopwatch slotStopwatch, string errorMessage,
+        void AppendSlotError(int requestIndex, string? slotId, string? toolName, JsonNode? toolArgs, Stopwatch slotStopwatch, string errorMessage,
             int? code = null, string? category = null, string? suggestion = null, bool? retrySafe = null, JsonObject? extraData = null)
         {
             slotStopwatch.Stop();
@@ -2764,6 +3119,7 @@ public partial class McpServer
                 ["elapsed_ms"] = slotStopwatch.ElapsedMilliseconds,
                 ["error"] = errorMessage,
             };
+            AddBatchSlotId(entry, slotId);
             AddToolDisplayData(entry, toolName);
             CopySlotErrorData(entry, extraData);
             if (code.HasValue)
@@ -2779,7 +3135,7 @@ public partial class McpServer
                 entry["suggestion"] = suggestion;
             if (retrySafe.HasValue)
                 entry["retry_safe"] = retrySafe.Value;
-            TryAppendResult(entry, toolName, toolArgs, requestIndex, failedSlot: true);
+            TryAppendResult(entry, toolName, toolArgs, requestIndex, slotId, failedSlot: true);
             failureCount++;
         }
 
@@ -2794,7 +3150,7 @@ public partial class McpServer
         // 検出・バックオフを可能にする。外側の batch_query 自体もトークンを消費するため、
         // N 個の内側呼び出しを含むスパムは batch_query バケットとツール別バケットの両方で
         // 上限が掛かる（#1560）。
-        void AppendRateLimitedSlot(int requestIndex, string? toolName, JsonNode? toolArgs, Stopwatch slotStopwatch, long retryAfterMs)
+        void AppendRateLimitedSlot(int requestIndex, string? slotId, string? toolName, JsonNode? toolArgs, Stopwatch slotStopwatch, long retryAfterMs)
         {
             slotStopwatch.Stop();
             var toolDisplay = toolName is null ? "(missing)" : BoundToolNameForDisplay(toolName).Text;
@@ -2818,8 +3174,9 @@ public partial class McpServer
                 ["suggestion"] = $"Back off for at least {retryAfterMs} ms before retrying this tool.",
                 ["retry_safe"] = true,
             };
+            AddBatchSlotId(entry, slotId);
             AddToolDisplayData(entry, toolName);
-            TryAppendResult(entry, toolName, toolArgs, requestIndex, failedSlot: true);
+            TryAppendResult(entry, toolName, toolArgs, requestIndex, slotId, failedSlot: true);
             failureCount++;
         }
 
@@ -2832,6 +3189,7 @@ public partial class McpServer
                 ? parsedToolName
                 : null;
             var toolArgs = queryObject?["arguments"];
+            var slotId = ReadBatchSlotId(queryObject);
             var slotStopwatch = Stopwatch.StartNew();
 
             if (truncated)
@@ -2844,6 +3202,7 @@ public partial class McpServer
                     ["args_summary"] = BuildArgsSummary(toolArgs),
                     ["reason"] = "response_byte_limit_already_exceeded",
                 };
+                AddBatchSlotId(truncatedEntry, slotId);
                 AddToolDisplayData(truncatedEntry, toolName);
                 truncatedQueries.Add(truncatedEntry);
                 continue;
@@ -2852,7 +3211,7 @@ public partial class McpServer
             if (string.IsNullOrEmpty(toolName))
             {
                 var message = queryObject is null ? "Each query must be an object with a string tool name." : "Missing tool name";
-                AppendSlotError(requestIndex, toolName, toolArgs, slotStopwatch, message,
+                AppendSlotError(requestIndex, slotId, toolName, toolArgs, slotStopwatch, message,
                     category: McpErrorEnvelope.CategoryMissingParameter,
                     suggestion: "Each batch_query slot must include a string `tool` field.",
                     retrySafe: false);
@@ -2860,7 +3219,7 @@ public partial class McpServer
             }
             if (toolName.Length > McpBoundedText.MaxToolNameChars)
             {
-                AppendSlotError(requestIndex, toolName, toolArgs, slotStopwatch, BuildUnknownToolMessage(toolName),
+                AppendSlotError(requestIndex, slotId, toolName, toolArgs, slotStopwatch, BuildUnknownToolMessage(toolName),
                     category: McpErrorEnvelope.CategoryToolUnknown,
                     suggestion: "Call tools/list to see the tool catalog. Slot tool names are case-sensitive.",
                     retrySafe: false);
@@ -2869,7 +3228,7 @@ public partial class McpServer
 
             if (ValidateToolArguments(toolName, toolArgs) is JsonObject argumentError)
             {
-                AppendSlotError(requestIndex, toolName, toolArgs, slotStopwatch, argumentError["message"]!.GetValue<string>(),
+                AppendSlotError(requestIndex, slotId, toolName, toolArgs, slotStopwatch, argumentError["message"]!.GetValue<string>(),
                     category: McpErrorEnvelope.CategoryInvalidArgument,
                     suggestion: "Use exactly the argument names advertised by tools/list for this tool.",
                     retrySafe: false,
@@ -2879,7 +3238,7 @@ public partial class McpServer
 
             if (ValidateCommonListArguments(toolArgs) is JsonObject listArgumentError)
             {
-                AppendSlotError(requestIndex, toolName, toolArgs, slotStopwatch, listArgumentError["message"]!.GetValue<string>(),
+                AppendSlotError(requestIndex, slotId, toolName, toolArgs, slotStopwatch, listArgumentError["message"]!.GetValue<string>(),
                     category: McpErrorEnvelope.CategoryInvalidArgument,
                     suggestion: "Send only non-empty string entries within the documented MCP array bounds.",
                     retrySafe: false,
@@ -2904,7 +3263,7 @@ public partial class McpServer
             // 前にこのゲートを置く。
             if (McpToolFilter.IsKnownTool(toolName) && !_toolFilter.IsEnabled(toolName))
             {
-                AppendSlotError(requestIndex, toolName, toolArgs, slotStopwatch, $"Tool not enabled: {toolName}", code: -32601,
+                AppendSlotError(requestIndex, slotId, toolName, toolArgs, slotStopwatch, $"Tool not enabled: {toolName}", code: -32601,
                     category: McpErrorEnvelope.CategoryToolDisabled,
                     suggestion: "This tool is disabled on the server. Ask the operator to enable it or remove the slot.",
                     retrySafe: false);
@@ -2914,7 +3273,7 @@ public partial class McpServer
             // Block write operations in batch / バッチ内では書き込み操作をブロック
             if (toolName == "index" || toolName == "backfill_fold" || toolName == "suggest_improvement")
             {
-                AppendSlotError(requestIndex, toolName, toolArgs, slotStopwatch, $"{toolName} is not allowed in batch_query (write operation)",
+                AppendSlotError(requestIndex, slotId, toolName, toolArgs, slotStopwatch, $"{toolName} is not allowed in batch_query (write operation)",
                     category: McpErrorEnvelope.CategoryInvalidArgument,
                     suggestion: "Call write tools (index / backfill_fold / suggest_improvement) directly via tools/call, not inside batch_query.",
                     retrySafe: false);
@@ -2929,7 +3288,7 @@ public partial class McpServer
             // ネスト禁止の明示文に揃える（#1560）。
             if (toolName == "batch_query")
             {
-                AppendSlotError(requestIndex, toolName, toolArgs, slotStopwatch, "batch_query cannot be nested inside batch_query.",
+                AppendSlotError(requestIndex, slotId, toolName, toolArgs, slotStopwatch, "batch_query cannot be nested inside batch_query.",
                     category: McpErrorEnvelope.CategoryInvalidArgument,
                     suggestion: "Flatten the nested batch_query into top-level slots.",
                     retrySafe: false);
@@ -2947,13 +3306,13 @@ public partial class McpServer
             var slotDecision = RateLimiter.TryAcquire(toolName, _caller);
             if (!slotDecision.Allowed)
             {
-                AppendRateLimitedSlot(requestIndex, toolName, toolArgs, slotStopwatch, slotDecision.RetryAfterMs);
+                AppendRateLimitedSlot(requestIndex, slotId, toolName, toolArgs, slotStopwatch, slotDecision.RetryAfterMs);
                 continue;
             }
 
             if (ValidateProjectFilterArguments(toolArgs) is JsonObject projectFilterError)
             {
-                AppendSlotError(requestIndex, toolName, toolArgs, slotStopwatch, projectFilterError["message"]!.GetValue<string>(),
+                AppendSlotError(requestIndex, slotId, toolName, toolArgs, slotStopwatch, projectFilterError["message"]!.GetValue<string>(),
                     category: McpErrorEnvelope.CategoryInvalidArgument,
                     suggestion: "Use a project name or project path from the current workspace, or correct the solution filter.",
                     retrySafe: false,
@@ -2991,7 +3350,7 @@ public partial class McpServer
 
                 if (response == null)
                 {
-                    AppendSlotError(requestIndex, toolName, toolArgs, slotStopwatch, BuildUnknownToolMessage(toolName),
+                    AppendSlotError(requestIndex, slotId, toolName, toolArgs, slotStopwatch, BuildUnknownToolMessage(toolName),
                         category: McpErrorEnvelope.CategoryToolUnknown,
                         suggestion: "Call tools/list to see the tool catalog. Slot tool names are case-sensitive.",
                         retrySafe: false);
@@ -3017,7 +3376,7 @@ public partial class McpServer
                     bool? innerRetrySafe = null;
                     if (innerStructured?["retry_safe"] is JsonValue rv && rv.TryGetValue<bool>(out var rb))
                         innerRetrySafe = rb;
-                    AppendSlotError(requestIndex, toolName, toolArgs, slotStopwatch, errorText,
+                    AppendSlotError(requestIndex, slotId, toolName, toolArgs, slotStopwatch, errorText,
                         category: innerCategory,
                         suggestion: innerSuggestion,
                         retrySafe: innerRetrySafe);
@@ -3026,6 +3385,7 @@ public partial class McpServer
 
                 slotStopwatch.Stop();
                 var structured = response["result"]?["structuredContent"];
+                var slotSummary = response["result"]?["content"]?[0]?["text"]?.GetValue<string>();
                 var entry = new JsonObject
                 {
                     ["request_index"] = requestIndex,
@@ -3033,10 +3393,12 @@ public partial class McpServer
                     ["correlation_id"] = CurrentCorrelationContext.Value?.CorrelationId,
                     ["args_summary"] = BuildArgsSummary(toolArgs),
                     ["elapsed_ms"] = slotStopwatch.ElapsedMilliseconds,
+                    ["summary"] = slotSummary,
                     ["result"] = structured?.DeepClone(),
                 };
+                AddBatchSlotId(entry, slotId);
                 AddToolDisplayData(entry, toolName);
-                TryAppendResult(entry, toolName, toolArgs, requestIndex, successfulSlot: true);
+                TryAppendResult(entry, toolName, toolArgs, requestIndex, slotId, successfulSlot: true);
                 successCount++;
             }
             catch (Exception ex)
@@ -3050,7 +3412,7 @@ public partial class McpServer
                     Database.DbDebug.DumpToStderr(ex);
                 });
                 var classification = McpErrorEnvelope.ClassifyException(ex);
-                AppendSlotError(requestIndex, toolName, toolArgs, slotStopwatch, BuildSanitizedToolErrorMessage(toolName, ex),
+                AppendSlotError(requestIndex, slotId, toolName, toolArgs, slotStopwatch, BuildSanitizedToolErrorMessage(toolName, ex),
                     category: classification.Category,
                     suggestion: classification.Suggestion,
                     retrySafe: classification.RetrySafe);
@@ -3059,28 +3421,33 @@ public partial class McpServer
 
         totalStopwatch.Stop();
         var totalElapsedMs = totalStopwatch.ElapsedMilliseconds;
-        JsonObject BuildPayload() => new()
+        JsonObject BuildPayload()
         {
-            ["count"] = resultsArray.Count,
-            ["total_count"] = queries.Count,
-            ["success_count"] = successCount,
-            ["failure_count"] = failureCount,
-            ["partial_failure"] = failureCount > 0 || cascadeStartedAtIndex.HasValue,
-            ["failure_scope"] = GetBatchFailureScope(queries.Count, successCount, failureCount, cascadeStartedAtIndex),
-            ["cascade_started_at_index"] = cascadeStartedAtIndex,
-            ["metadata"] = new JsonObject
+            var payload = new JsonObject
             {
-                ["submitted"] = queries.Count,
-                ["executed"] = successCount + failureCount,
-                ["errors"] = failureCount,
-                ["total_elapsed_ms"] = totalElapsedMs,
+                ["count"] = resultsArray.Count,
+                ["total_count"] = queries.Count,
                 ["success_count"] = successCount,
                 ["failure_count"] = failureCount,
-                ["response_byte_limit"] = responseByteLimit,
-                ["estimated_response_bytes"] = responseByteLimit,
-            },
-            ["results"] = resultsArray.DeepClone(),
-        };
+                ["partial_failure"] = failureCount > 0 || cascadeStartedAtIndex.HasValue,
+                ["failure_scope"] = GetBatchFailureScope(queries.Count, successCount, failureCount, cascadeStartedAtIndex),
+                ["cascade_started_at_index"] = cascadeStartedAtIndex,
+                ["metadata"] = new JsonObject
+                {
+                    ["submitted"] = queries.Count,
+                    ["executed"] = successCount + failureCount,
+                    ["errors"] = failureCount,
+                    ["total_elapsed_ms"] = totalElapsedMs,
+                    ["success_count"] = successCount,
+                    ["failure_count"] = failureCount,
+                    ["response_byte_limit"] = responseByteLimit,
+                    ["estimated_response_bytes"] = responseByteLimit,
+                },
+                ["results"] = resultsArray.DeepClone(),
+            };
+            adjustments.ApplyTo(payload);
+            return payload;
+        }
 
         string BuildSummary()
         {
@@ -3101,6 +3468,7 @@ public partial class McpServer
             {
                 payload["truncated"] = true;
                 payload["truncated_queries"] = truncatedQueries.DeepClone();
+                payload["split_hint"] = BuildBatchSplitHint(queries.Count, cascadeStartedAtIndex, resultsArray.Count);
             }
 
             summary = BuildSummary();
@@ -3110,9 +3478,18 @@ public partial class McpServer
             if (resultsArray.Count > 0)
             {
                 var removed = resultsArray[resultsArray.Count - 1];
+                truncated = true;
+                if (removed?["request_index"] is JsonValue requestIndexValue
+                    && requestIndexValue.TryGetValue<int>(out var removedRequestIndex))
+                {
+                    cascadeStartedAtIndex = cascadeStartedAtIndex.HasValue
+                        ? Math.Min(cascadeStartedAtIndex.Value, removedRequestIndex)
+                        : removedRequestIndex;
+                }
                 truncatedQueries.Insert(0, new JsonObject
                 {
                     ["request_index"] = removed?["request_index"]?.DeepClone(),
+                    ["slot_id"] = removed?["slot_id"]?.DeepClone(),
                     ["tool"] = removed?["tool"]?.DeepClone(),
                     ["args_summary"] = removed?["args_summary"]?.DeepClone(),
                     ["reason"] = "final_response_byte_limit_exceeded",
@@ -3132,6 +3509,127 @@ public partial class McpServer
         return CreateToolResult(id, summary, payload);
     }
 
+    private JsonNode ExecuteBatchQueryEstimate(JsonNode? id, JsonArray queries, int responseByteLimit, ArgumentAdjustmentCollector adjustments)
+    {
+        var slotEstimates = new JsonArray();
+        for (var requestIndex = 0; requestIndex < queries.Count; requestIndex++)
+        {
+            var queryObject = queries[requestIndex] as JsonObject;
+            slotEstimates.Add(BuildBatchSlotDescriptor(requestIndex, queryObject));
+        }
+
+        var payload = new JsonObject
+        {
+            ["count"] = 0,
+            ["total_count"] = queries.Count,
+            ["success_count"] = 0,
+            ["failure_count"] = 0,
+            ["partial_failure"] = false,
+            ["failure_scope"] = "none",
+            ["cascade_started_at_index"] = null,
+            ["estimate_only"] = true,
+            ["metadata"] = new JsonObject
+            {
+                ["submitted"] = queries.Count,
+                ["executed"] = 0,
+                ["errors"] = 0,
+                ["total_elapsed_ms"] = 0,
+                ["success_count"] = 0,
+                ["failure_count"] = 0,
+                ["response_byte_limit"] = responseByteLimit,
+                ["estimated_response_bytes"] = responseByteLimit,
+            },
+            ["slot_estimates"] = slotEstimates,
+            ["results"] = new JsonArray(),
+        };
+        adjustments.ApplyTo(payload);
+
+        var summary = $"Estimated batch_query envelope for {queries.Count} query slot(s); no slots executed.";
+        var estimatedResponseBytes = EstimateJsonUtf8Bytes(CreateToolResult(id, summary, payload.DeepClone()), responseByteLimit);
+        ((JsonObject)payload["metadata"]!)["estimated_response_bytes"] = estimatedResponseBytes;
+        payload["estimate_exceeds_response_byte_limit"] = estimatedResponseBytes > responseByteLimit;
+        return CreateToolResult(id, summary, payload);
+    }
+
+    private static int ReadBatchQueryResponseByteLimit(JsonNode? args, ArgumentAdjustmentCollector adjustments)
+    {
+        var serverLimit = GetBatchQueryResponseByteLimit();
+        var requested = args?["maxResponseBytes"]?.GetValue<int>();
+        if (!requested.HasValue)
+            return serverLimit;
+        var effective = Math.Min(requested.Value, serverLimit);
+        if (effective != requested.Value)
+            adjustments.AddClamped("maxResponseBytes", requested.Value, effective, 1, serverLimit);
+        return effective;
+    }
+
+    private static JsonObject BuildBatchSlotDescriptor(int requestIndex, JsonObject? queryObject)
+    {
+        var toolName = queryObject?["tool"] is JsonValue toolValue && toolValue.TryGetValue<string>(out var parsedToolName)
+            ? parsedToolName
+            : null;
+        var toolArgs = queryObject?["arguments"];
+        var descriptor = new JsonObject
+        {
+            ["request_index"] = requestIndex,
+            ["args_summary"] = BuildArgsSummary(toolArgs),
+        };
+        AddBatchSlotId(descriptor, ReadBatchSlotId(queryObject));
+        AddToolDisplayData(descriptor, toolName);
+        return descriptor;
+    }
+
+    private static JsonObject BuildBatchSplitHint(int submittedCount, int? cascadeStartedAtIndex, int retainedResultCount)
+    {
+        var nextRequestIndex = cascadeStartedAtIndex ?? submittedCount;
+        return new JsonObject
+        {
+            ["reason"] = "response_byte_limit_exceeded",
+            ["next_request_index"] = nextRequestIndex,
+            ["suggested_query_count"] = Math.Max(1, retainedResultCount),
+            ["resume_cursor"] = $"batch_query:v1:{nextRequestIndex}",
+        };
+    }
+
+    private static string? ReadBatchSlotId(JsonObject? queryObject)
+    {
+        if (TryReadBatchSlotIdValue(queryObject?["slotId"], out var slotId)
+            || TryReadBatchSlotIdValue(queryObject?["id"], out slotId))
+            return McpBoundedText.ForDisplay(slotId!, MaxRequestIdCharacterCount).Text;
+        return null;
+    }
+
+    private static bool TryReadBatchSlotIdValue(JsonNode? node, out string? slotId)
+    {
+        slotId = null;
+        if (node is not JsonValue value)
+            return false;
+        if (value.TryGetValue<string>(out var text))
+        {
+            if (string.IsNullOrWhiteSpace(text))
+                return false;
+            slotId = text;
+            return true;
+        }
+        if (value.TryGetValue<int>(out var intValue))
+        {
+            slotId = intValue.ToString(CultureInfo.InvariantCulture);
+            return true;
+        }
+        if (value.TryGetValue<long>(out var longValue))
+        {
+            slotId = longValue.ToString(CultureInfo.InvariantCulture);
+            return true;
+        }
+        return false;
+    }
+
+    private static void AddBatchSlotId(JsonObject entry, string? slotId)
+    {
+        if (!string.IsNullOrEmpty(slotId))
+            entry["slot_id"] = slotId;
+    }
+
     private static int GetBatchQueryResponseByteLimit()
         => ReadPositiveIntEnvironmentLimit(
             BatchQueryResponseByteLimitEnvVar,
@@ -3146,7 +3644,8 @@ public partial class McpServer
     }
 
     private int EstimateBatchResponseBytes(JsonNode? id, string summary, int submittedCount, int successCount, int failureCount,
-        string failureScope, int? cascadeStartedAtIndex, int responseByteLimit, JsonArray resultsArray, bool truncated, JsonArray truncatedQueries)
+        string failureScope, int? cascadeStartedAtIndex, int responseByteLimit, JsonArray resultsArray, bool truncated, JsonArray truncatedQueries,
+        ArgumentAdjustmentCollector? adjustments = null)
     {
         var payload = new JsonObject
         {
@@ -3175,6 +3674,7 @@ public partial class McpServer
             payload["truncated"] = true;
             payload["truncated_queries"] = truncatedQueries.DeepClone();
         }
+        adjustments?.ApplyTo(payload);
 
         return EstimateJsonUtf8Bytes(CreateToolResult(id, summary, payload), responseByteLimit);
     }
@@ -3232,7 +3732,8 @@ public partial class McpServer
 
     private JsonNode ExecuteDeps(JsonNode? id, JsonNode? args)
     {
-        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? QueryCommandRunner.DefaultImpactLimit);
+        var adjustments = new ArgumentAdjustmentCollector();
+        var limit = ReadLimit(args, QueryCommandRunner.DefaultImpactLimit, adjustments);
         var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
         var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
@@ -3278,6 +3779,7 @@ public partial class McpServer
                 : "No file dependencies found.";
             if (results.Count == 0)
                 AddFreshnessHint(payload, reader);
+            adjustments.ApplyTo(payload);
             return CreateToolResult(id, summary, payload);
         });
     }
@@ -3317,9 +3819,22 @@ public partial class McpServer
         var maxHopsNode = args?["maxHops"];
         var deprecatedMaxDepthNode = args?["maxDepth"];
         var usedDeprecatedMaxDepth = deprecatedMaxDepthNode != null;
+        var adjustments = new ArgumentAdjustmentCollector();
         var maxDepthRequested = maxHopsNode?.GetValue<int>() ?? deprecatedMaxDepthNode?.GetValue<int>() ?? 5;
         var maxDepth = Math.Clamp(maxDepthRequested, 0, MaxImpactDepth);
-        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? QueryCommandRunner.DefaultImpactLimit);
+        string? maxDepthClampWarning = null;
+        string? maxDepthDeprecationWarning = null;
+        if (usedDeprecatedMaxDepth)
+        {
+            maxDepthDeprecationWarning = "maxDepth is deprecated for impact_analysis; use maxHops instead.";
+            adjustments.AddWarning(maxDepthDeprecationWarning);
+        }
+        if (maxDepthRequested != maxDepth)
+        {
+            maxDepthClampWarning = $"maxHops was clamped from {maxDepthRequested} to {maxDepth} (server cap is [0, {MaxImpactDepth}]).";
+            adjustments.AddClamped("maxHops", maxDepthRequested, maxDepth, 0, MaxImpactDepth);
+        }
+        var limit = ReadLimit(args, QueryCommandRunner.DefaultImpactLimit, adjustments);
         var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
         var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
@@ -3372,6 +3887,7 @@ public partial class McpServer
                 };
                 AddImpactFailureFields(countOnlyPayload, analysis);
                 AddSqlGraphContractSignal(countOnlyPayload, sqlGraphSignal);
+                adjustments.ApplyTo(countOnlyPayload);
                 return CreateToolResult(id, $"Counted {ConsoleUi.Counted(count, "impact result")}.", countOnlyPayload);
             }
 
@@ -3410,21 +3926,6 @@ public partial class McpServer
             if (analysis.Cycles is { Count: > 0 })
                 payload["cycles"] = ToJsonArray(analysis.Cycles);
             AddSqlGraphContractSignal(payload, sqlGraphSignal);
-            var warnings = new JsonArray();
-            string? maxDepthClampWarning = null;
-            string? maxDepthDeprecationWarning = null;
-            if (usedDeprecatedMaxDepth)
-            {
-                maxDepthDeprecationWarning = "maxDepth is deprecated for impact_analysis; use maxHops instead.";
-                warnings.Add(maxDepthDeprecationWarning);
-            }
-            if (maxDepthRequested != maxDepth)
-            {
-                maxDepthClampWarning = $"maxHops was clamped from {maxDepthRequested} to {maxDepth} (server cap is [0, {MaxImpactDepth}]).";
-                warnings.Add(maxDepthClampWarning);
-            }
-            if (warnings.Count > 0)
-                payload["warnings"] = warnings;
             if (analysis.ZeroResultReason != null)
                 payload["zero_result_reason"] = analysis.ZeroResultReason;
             AddImpactFailureFields(payload, analysis);
@@ -3470,6 +3971,7 @@ public partial class McpServer
             }
             else if (analysis.Heuristic)
                 payload["note"] = "file_impacts are heuristic hints only; the current graph does not record resolved target file/type for each call.";
+            adjustments.ApplyTo(payload);
             return CreateToolResult(id, summary, payload);
         });
     }
@@ -3510,7 +4012,8 @@ public partial class McpServer
 
     private JsonNode ExecuteSymbolHotspots(JsonNode? id, JsonNode? args)
     {
-        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? QueryCommandRunner.DefaultQueryLimit);
+        var adjustments = new ArgumentAdjustmentCollector();
+        var limit = ReadLimit(args, QueryCommandRunner.DefaultQueryLimit, adjustments);
         var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
         var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
         var groupBy = args?["groupBy"]?.GetValue<string>()?.ToLowerInvariant()
@@ -3617,13 +4120,15 @@ public partial class McpServer
                     new JsonObject());
                 AddFreshnessHint(payload, reader);
             }
+            adjustments.ApplyTo(payload);
             return CreateToolResult(id, summary, payload);
         });
     }
 
     private JsonNode ExecuteUnusedSymbols(JsonNode? id, JsonNode? args)
     {
-        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? QueryCommandRunner.DefaultImpactLimit);
+        var adjustments = new ArgumentAdjustmentCollector();
+        var limit = ReadLimit(args, QueryCommandRunner.DefaultImpactLimit, adjustments);
         var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
         var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
         var bucket = args?["bucket"]?.GetValue<string>()?.ToLowerInvariant();
@@ -3696,6 +4201,7 @@ public partial class McpServer
                     new JsonObject());
                 AddFreshnessHint(payload, reader);
             }
+            adjustments.ApplyTo(payload);
             return CreateToolResult(id, summary, payload);
         });
     }
@@ -4037,7 +4543,7 @@ public partial class McpServer
                 writer.InsertReferences(references);
                 // Keep MCP index parity with CLI index: persist file-level validation issues too.
                 // MCPインデックスもCLIインデックスと同等に、ファイル検証issueを保存する。
-                var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
+                var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang);
                 writer.InsertIssues(fileId, issues);
                 WriteProjectRootOnce();
                 writer.ClearBatchInProgress();
@@ -4194,6 +4700,7 @@ public partial class McpServer
             writer.SetMeta(DbContext.LastIndexRunBytesReadMetaKey, SumReadableFileBytes(files).ToString(System.Globalization.CultureInfo.InvariantCulture));
             writer.SetMeta(DbContext.LastIndexRunRowsUpsertedMetaKey, processed.ToString(System.Globalization.CultureInfo.InvariantCulture));
             writer.SetMeta(DbContext.LastIndexRunRowsDeletedMetaKey, purged.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            writer.ClearLastFailedIndexRunMetadata();
             // Persist the current HEAD only after the run is fully successful (errors == 0).
             // Mirrors the CLI full-scan contract (Issue #1508) so MCP-driven re-indexes also
             // refresh `worktree_head_changed`; partial / failed runs leave the prior HEAD
@@ -4615,12 +5122,14 @@ public partial class McpServer
         if (toolInvocationContext != null && SourceCodeDetector.ContainsSourceCode(toolInvocationContext))
             return CreateToolErrorResponse(id, "Tool invocation context appears to contain source code. Please describe the invocation without including code.");
 
+        var samplingDecision = ResolveSuggestionSamplingDecision();
         var sampling = await TrySampleSuggestionMetadataAsync(
             category,
             language,
             RedactSuggestionSamplingInput(description),
             context == null ? null : RedactSuggestionSamplingInput(context),
-            toolInvocationContext == null ? null : RedactSuggestionSamplingInput(toolInvocationContext)).ConfigureAwait(false);
+            toolInvocationContext == null ? null : RedactSuggestionSamplingInput(toolInvocationContext),
+            samplingDecision).ConfigureAwait(false);
         sampling = RedactSuggestionSamplingResult(sampling);
 
         // 4. Compute dedup hash / 重複排除ハッシュを計算
@@ -4707,6 +5216,7 @@ public partial class McpServer
                 dupPayload["upstream_url"] = result.UpstreamUrl;
                 dupPayload["github_issue_url"] = result.UpstreamUrl;
             }
+            AddSuggestionSamplingDiagnostics(dupPayload, samplingDecision, sampling);
             return CreateToolResult(id, "Duplicate suggestion (already recorded).", dupPayload);
         }
 
@@ -4723,6 +5233,7 @@ public partial class McpServer
             ["lifecycle_status"] = JsonNamingPolicy.SnakeCaseLower.ConvertName(result.Status.ToString()),
             ["cdidx_dir"] = cdidxDir,
         };
+        AddSuggestionSamplingDiagnostics(payload, samplingDecision, sampling);
         if (result.SubmissionError != null)
             payload["github_submission_error"] = result.SubmissionError;
         if (result.UpstreamUrl != null)
@@ -4805,6 +5316,11 @@ public partial class McpServer
 
     private sealed record SuggestionSamplingResult(string? Title, string[]? Tags);
 
+    private readonly record struct SuggestionSamplingDecision(
+        bool ShouldRequestClient,
+        string Status,
+        string? Diagnostic);
+
     private static string RedactSuggestionSamplingInput(string value)
         => SuggestionStore.RedactSensitiveText(value, out _);
 
@@ -4837,9 +5353,10 @@ public partial class McpServer
         string? language,
         string description,
         string? context,
-        string? toolInvocationContext)
+        string? toolInvocationContext,
+        SuggestionSamplingDecision samplingDecision)
     {
-        if (!IsSamplingEnabled() || !HasClientCapability("sampling"))
+        if (!samplingDecision.ShouldRequestClient)
             return null;
 
         var prompt = BuildSuggestionSamplingPrompt(category, language, description, context, toolInvocationContext);
@@ -5039,12 +5556,62 @@ public partial class McpServer
                 && node is not null,
         };
 
-    private static bool IsSamplingEnabled()
+    private SuggestionSamplingDecision ResolveSuggestionSamplingDecision()
     {
         var raw = Environment.GetEnvironmentVariable(SamplingEnabledEnvironmentVariable);
-        return raw is null || !(raw.Equals("0", StringComparison.OrdinalIgnoreCase)
-            || raw.Equals("false", StringComparison.OrdinalIgnoreCase)
-            || raw.Equals("off", StringComparison.OrdinalIgnoreCase));
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return new SuggestionSamplingDecision(
+                false,
+                "disabled",
+                $"{SamplingEnabledEnvironmentVariable} is unset; suggestion metadata sampling requires explicit opt-in with true, 1, yes, or on.");
+        }
+
+        var value = raw.Trim();
+        if (IsSamplingOptInValue(value))
+        {
+            return HasClientCapability("sampling")
+                ? new SuggestionSamplingDecision(true, "enabled", null)
+                : new SuggestionSamplingDecision(
+                    false,
+                    "client_capability_missing",
+                    "Client did not advertise MCP sampling capability; suggestion metadata sampling skipped.");
+        }
+
+        if (IsSamplingOptOutValue(value))
+        {
+            return new SuggestionSamplingDecision(
+                false,
+                "disabled",
+                $"{SamplingEnabledEnvironmentVariable} is set to an opt-out value; suggestion metadata sampling disabled.");
+        }
+
+        return new SuggestionSamplingDecision(
+            false,
+            "disabled",
+            $"{SamplingEnabledEnvironmentVariable} contains an unrecognized value; suggestion metadata sampling disabled. Use true, 1, yes, or on to enable.");
+    }
+
+    private static bool IsSamplingOptInValue(string value)
+        => value.Equals("1", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("true", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("yes", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("on", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsSamplingOptOutValue(string value)
+        => value.Equals("0", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("false", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("no", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("off", StringComparison.OrdinalIgnoreCase);
+
+    private static void AddSuggestionSamplingDiagnostics(
+        JsonObject payload,
+        SuggestionSamplingDecision samplingDecision,
+        SuggestionSamplingResult? sampling)
+    {
+        payload["sampling_status"] = sampling != null ? "sampled" : samplingDecision.Status;
+        if (samplingDecision.Diagnostic != null)
+            payload["sampling_diagnostic"] = samplingDecision.Diagnostic;
     }
 
     private static string? ExtractSamplingText(JsonNode? result)

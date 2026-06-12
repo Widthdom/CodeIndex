@@ -46,7 +46,7 @@ Development contracts:
 |---|---|---|
 | Read-only database queries | `cdidx status --db /artifacts/codeindex.db --read-only --json`; `cdidx search AuthService --db /artifacts/codeindex.db --immutable` | Query commands accept `--read-only` (alias `--immutable`) to open an existing CodeIndex database through SQLite's immutable read-only URI mode. Use this for CI artifacts, mounted caches, and sandboxes where creating or updating `codeindex.db-wal` / `codeindex.db-shm` sidecars is not allowed. |
 | Mutating commands | `index`, `backfill-fold`, `optimize`, `vacuum` | These require writable storage and reject read-only database opens. |
-| Reusable index artifact | `cdidx export codeindex.cdidx.zip`; `cdidx import codeindex.cdidx.zip --db <path>` | Run export after indexing and upload the archive. Consumers import before query commands. Use `--prune-paths` when the archive comes from another checkout and the restored DB should advertise the current workspace root. The archive contains `manifest.json` plus `codeindex.db`; import validates manifest format, manifest `user_version`, `database_sha256`, and the embedded SQLite file as a CodeIndex database before replacing the destination DB. Import rejects archive `codeindex.db` entries whose compressed or uncompressed metadata exceeds 8 GiB, and the extraction stream is also capped at 8 GiB. |
+| Reusable index artifact | `cdidx export codeindex.cdidx.zip`; `cdidx import codeindex.cdidx.zip --db <path>`; `cdidx import codeindex.cdidx.zip --dry-run --json` | Run export after indexing and upload the archive. Consumers import before query commands, or use `--dry-run` / `--check` to validate the archive without replacing the destination DB. Use `--prune-paths` when the archive comes from another checkout and the restored DB should advertise the current workspace root. The archive contains `manifest.json` plus `codeindex.db`; the manifest carries bounded summary/readiness metadata including row counts, readiness bits, writer/indexed-head metadata, schema contract stamps, and unknown-extension summary when available. Import validates manifest format, manifest `user_version`, `database_sha256`, present summary counts, and the embedded SQLite file as a CodeIndex database before replacing the destination DB. Import rejects archive `codeindex.db` entries whose compressed or uncompressed metadata exceeds 8 GiB, and the extraction stream is also capped at 8 GiB. |
 | Maintenance checkpoint | `cdidx db checkpoint <name>`; `cdidx db restore <name>` | Checkpoint snapshots `codeindex.db` plus existing WAL/SHM sidecars before risky maintenance. Restore rolls back and keeps pre-restore files under `<db>.restore-backup-<timestamp>/`. Checkpoints live next to the DB under `<db>.checkpoints/<name>/`. `backfill-fold` creates an automatic checkpoint before it mutates rows unless `--no-checkpoint` is passed. |
 | Binary compatibility | [COMPATIBILITY.md](COMPATIBILITY.md) | Database compatibility across `cdidx` binary upgrades and downgrades is documented there. Keep that policy updated whenever readiness bits, `codeindex_meta` contract stamps, or rebuild requirements change. |
 | Fold backfill preview and recovery | `backfill-fold --dry-run`; MCP `backfill_fold` with `dry_run: true` or `force: true` | Dry-run previews folded-key rows without mutating the DB or stamping FoldReady. MCP accepts the same preview and can force rewriting all folded keys when an operator needs to recover from suspicious fold metadata or row state even though the stored version/fingerprint appears current. Non-dry-run row rewrites are resumable after interruption: completed row updates remain durable, and final FoldReady metadata is stamped only after verification succeeds. MCP responses include `progress.rows_done`, `progress.rows_total`, and `progress.fraction` so clients can report and retry long backfills. |
@@ -72,6 +72,7 @@ in [DISTRIBUTION.md](DISTRIBUTION.md):
 | `install.sh` | Latest install, explicit-version install, `--doctor`, and local mirror self-test. |
 | NuGet global tool | Install/update on a clean .NET 8 tool environment. |
 | Release assets | Published asset exists for every advertised RID. |
+| GHCR container image | Published `linux/amd64` and `linux/arm64` images run `cdidx --version`, omit runtime `git`, and expose provenance/SBOM attestations. |
 | Package metadata | License, repository URL, tags, and runtime prerequisites are correct. |
 | Documentation links | README, USER_GUIDE, and package metadata links resolve to the intended docs. |
 
@@ -81,7 +82,7 @@ in [DISTRIBUTION.md](DISTRIBUTION.md):
 |---|---|
 | Lock-file participation | `Directory.Build.props` sets `RestorePackagesWithLockFile=true`, so every project under this solution writes a `packages.lock.json` next to its `.csproj`. The lock file pins exact resolved versions and `contentHash` for every direct **and transitive** package, including the native-bearing `SQLitePCLRaw.bundle_e_sqlite3` that ships under `Microsoft.Data.Sqlite`. This keeps builds reproducible across machines, CI lanes, and release artifacts, and turns a silent transitive bump or downgrade attack into a loud, build-breaking diff. |
 | Package source boundary | The repository root `nuget.config` clears machine-wide package sources, allows only `https://api.nuget.org/v3/index.json`, maps every package ID to that source, and requires signed packages. Trusted signers are limited to the NuGet.org repository-signing certificates and the author-signing certificates needed by the currently locked package graph, so restore rejects unsigned packages, packages from unconfigured feeds, and packages signed by unknown authors. When NuGet.org or an approved package author rotates a signing certificate, update `nuget.config` in the same change as the restore validation. |
-| CI locked restore | CI (`.github/workflows/dotnet.yml`, `release.yml`, `codeql.yml`) restores the solution with `--locked-mode`, so any drift between the committed lock files and the resolution graph fails the build instead of slipping into artifacts. Local development restores normally; the lock file is only enforced in CI. |
+| CI locked restore | CI (`.github/workflows/dotnet.yml`, `release.yml`, `codeql.yml`) restores the solution with `--locked-mode`, so any drift between the committed lock files and the resolution graph fails the build instead of slipping into artifacts. NuGet package caches in the build and release workflows restore only by the exact lockfile-derived key and do not fall back to broad OS-level cache prefixes. Local development restores normally; the lock file is only enforced in CI. |
 | Deterministic package metadata | The `CodeIndex` package project opts into deterministic builds and publishes repository metadata for Source Link. On GitHub Actions it also sets `ContinuousIntegrationBuild=true` and embeds untracked source inputs so PDBs and `.snupkg` artifacts can map back to the repository without local machine paths. Build metadata uses the Git commit date when available instead of the wall-clock build date so repeated builds of the same commit do not drift by timestamp. `Microsoft.SourceLink.GitHub` is a build-only dependency (`PrivateAssets=All`), not a runtime dependency. |
 | Vulnerability checks | The normal build/test workflow runs `dotnet list src/CodeIndex/CodeIndex.csproj package --vulnerable --include-transitive --no-restore` after locked restore and fails on any High or Critical NuGet advisory in direct or transitive runtime packages. Dependabot is configured for weekly NuGet and GitHub Actions update PRs in `.github/dependabot.yml`, so security fixes and routine dependency/action bumps are proposed before they become release surprises. |
 | Release publish/pack restore | The release `dotnet publish` per-RID and `dotnet pack` NuGet packaging steps intentionally do **not** set `RestoreLockedMode=true`. Those steps run runtime-specific restores that legitimately add lock entries that did not exist at solution-restore time, such as `net8.0/<rid>` runtime sections and `Microsoft.NET.ILLink.Tasks` for trimming. They still consume locked versions because `RestorePackagesWithLockFile=true` from `Directory.Build.props` forces every restore on the machine to resolve through the lock file. The supply-chain guarantee for `Microsoft.Data.Sqlite` and its `SQLitePCLRaw.*` graph is enforced by the solution-level locked restore that runs first. |
@@ -139,7 +140,7 @@ ownership boundaries so behavior changes remain reviewable and testable.
 
 ### Workspaces
 
-`cdidx.workspace.json` and `.cdidx-workspace.json` declare monorepo members without adding a YAML dependency. Workspace manifests are capped at 64 KiB, 16 JSON nesting levels, 1024 members, 4096 characters per member path, and 255 characters for `default_db_name`. The supported schema is additive: `members` is an array of member paths that must be relative to and resolve under the manifest directory, `index_strategy` is `per_member` or `single` with unknown values rejected, `default_db_name` is a plain file name that overrides `codeindex.db`, and `shared_ignores` is reserved for shared ignore policy. `cdidx workspace list` and `cdidx workspace status` report member DB paths.
+`cdidx.workspace.json` and `.cdidx-workspace.json` declare monorepo members without adding a YAML dependency. Workspace manifests are capped at 64 KiB, 16 JSON nesting levels, 1024 members, 4096 characters per member path, and 255 characters for `default_db_name`. The supported schema is additive: `members` is an array of member paths that must be relative to and resolve under the manifest directory, `index_strategy` is `per_member` or `single` with unknown values rejected, `default_db_name` is a plain file name that overrides `codeindex.db`, and `shared_ignores` is reserved for shared ignore policy. Invalid `members` entries are rejected with bounded diagnostics, and valid entries are normalized and deduplicated with the workspace path casing policy before DB paths are materialized. `cdidx workspace list` and `cdidx workspace status` report member DB paths.
 
 `cdidx workspace use <name>` writes an existing manifest member or `default` workspace to the per-user config directory, rejects missing manifest members, and rejects ambiguous member directory names. Query DB resolution keeps existing precedence: explicit `--db`, then explicit `--data-dir` / `CDIDX_DATA_DIR`, then active workspace state, then ancestor/CWD discovery.
 
@@ -216,7 +217,7 @@ Interactive terminal controls are allowed only when stdout is not redirected or 
 
 `SolutionProjectResolver` parses the plain-text `.sln` `Project(...) = "...", "...csproj"` entries with a non-regex parser and resolves C# / F# / VB project files. Project entries that normalize outside the active workspace root are ignored before filesystem probing or path-filter evaluation. Solution parsing rejects `.sln` files above 8 MiB, lines above 16,384 characters, and more than 4096 .NET project references with clear diagnostics. Automatic root-level `.sln` discovery samples at most 128 candidates before sorting and reports a clear error when that cap is exceeded, so callers should pass `--solution <path>` in solution-heavy workspaces. When exactly one `.sln` exists at the workspace root within that cap, `--project <name|path>` uses it automatically; otherwise callers can pass `--solution <path>`. Fallback project discovery caps traversal at 4096 directories and 65,536 files with a clear `--solution <path>` recovery hint. Fallback project discovery and project-file expansion use long-path-safe per-directory enumeration, skip unreadable subtrees, and include bounded traversal diagnostics when a project filter cannot be resolved.
 
-Query commands that accept path filters (`search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `deps`, `impact`, `unused`, `hotspots`, and `validate`) expand `--project` into the matching project directory glob before hitting `DbReader`, so all existing SQL path predicates keep working. `index --project` expands to the files under the selected project directory and reuses the existing `--files` update path, but rejects expansions above 65,536 files for one project or 131,072 unique files across all requested projects with an explicit-files recovery hint.
+Query commands that accept path filters (`search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `deps`, `impact`, `unused`, `hotspots`, and `validate`) expand `--project` into the matching project directory glob before hitting `DbReader`, so all existing SQL path predicates keep working. When the indexed project root cannot be resolved and project expansion falls back to the process current directory, CLI query context and MCP structured payloads include `project_filter_root` and `project_filter_root_fallback_reason`. `index --project` expands to the files under the selected project directory and reuses the existing `--files` update path, but rejects expansions above 65,536 files for one project or 131,072 unique files across all requested projects with an explicit-files recovery hint.
 
 `cdidx batch` is a CLI-side query loop for editor integrations and scripts that need several query commands against the same DB without spawning `cdidx` repeatedly. It opens one `DbContext` / `DbReader`, reads newline-delimited JSON string arrays from stdin, caps each decoded string argument at 8,192 characters, and dispatches only query commands through the existing `QueryCommandRunner` paths so output and validation stay identical to the standalone command shape.
 
@@ -235,18 +236,24 @@ Do not add mutable static caches, shared `StringBuilder` instances, reused `Matc
 | Kind | Current producers / meaning | Graph behavior |
 |---|---|---|
 | `accessor` | Accessor declarations when extracted separately from their owning property | Search/filter symbol |
+| `add` | Dockerfile `ADD` destination paths | Dependency/file-flow search symbol |
 | `annotation` | Annotation declarations or annotation-like language constructs | Metadata/search symbol |
 | `async_function` | JavaScript/TypeScript async function declarations | Callable definition; participates in callers/callees through reference rows |
 | `async_generator` | JavaScript/TypeScript async generator declarations | Callable definition; participates in callers/callees through reference rows |
 | `attribute` | Razor attributes and metadata-like declarations | Context/search symbol; not a call edge by itself |
 | `associatedtype` | Swift associated type declarations | Type-like definition target |
+| `base_image` | Dockerfile `FROM` image names | Container image search symbol |
+| `build_arg` | Dockerfile `ARG` names | Variable/search symbol; participates in Dockerfile variable references |
 | `class` | Class declarations across object-oriented languages | Definition target and container |
 | `class_hook` | Python class hook methods such as dunder hooks reclassified from functions | Callable/search symbol |
 | `code` | Markdown fenced or structured code blocks | Search/outline symbol |
 | `constant` | Constant declarations where the language distinguishes them | Search/filter symbol |
+| `copy` | Dockerfile `COPY` destination paths | Dependency/file-flow search symbol |
 | `delegate` | C# / F# delegate declarations | Callable type definition and container-like target |
 | `enum` | Enum declarations | Definition target and container |
+| `environment` | Dockerfile `ENV` variable names | Variable/search symbol; participates in Dockerfile variable references |
 | `event` | Event declarations | Search/filter symbol |
+| `expose` | Dockerfile `EXPOSE` ports | Container runtime search symbol |
 | `field` | Field declarations where distinct from properties | Search/filter symbol |
 | `file_module` | File-scoped module/package declarations | Namespace-like context symbol |
 | `function` | Functions, methods, constructors, delegates, tasks, and callable bindings that do not have a narrower kind | Primary callable definition; participates in callers/callees through reference rows |
@@ -257,6 +264,7 @@ Do not add mutable static caches, shared `StringBuilder` instances, reused `Matc
 | `import` | Imports, using directives, aliases, and package includes | Search/filter symbol |
 | `interface` | Interface declarations | Definition target and container |
 | `lambda` | Named lambda/arrow bindings | Callable definition; participates in callers/callees through reference rows |
+| `label` | Dockerfile `LABEL` keys | Metadata/search symbol |
 | `layout` | Razor layout directives | Context/search symbol |
 | `method` | Languages or hooks that explicitly distinguish methods from functions | Callable definition; participates in callers/callees through reference rows |
 | `module` | Module declarations | Definition target and container |
@@ -272,8 +280,12 @@ Do not add mutable static caches, shared `StringBuilder` instances, reused `Matc
 | `reference` | Secondary extracted symbolic references, such as HTML classes, metadata keys, or GraphQL union variants | Search/filter symbol |
 | `rule` | CSS/SCSS rule container context used by nested references | Container context |
 | `route` | Razor route directives | Context/search symbol |
+| `run` | Dockerfile `RUN` command bodies | Container build-step search symbol |
 | `service` | Service declarations in IDL/protobuf-like languages | Definition target and container |
+| `shell` | Dockerfile `SHELL` executables | Container runtime search symbol |
 | `specialization` | C++ template specialization declarations | Definition target for specialized type/function forms |
+| `stage` | Dockerfile named build stages | Build-stage definition; participates in Dockerfile stage references |
+| `stopsignal` | Dockerfile `STOPSIGNAL` values | Container runtime search symbol |
 | `struct` | Struct declarations | Definition target and container |
 | `submodule` | Fortran submodule declarations | Namespace/module-like definition target |
 | `subroutine` | Fortran subroutine declarations | Callable definition |
@@ -282,8 +294,11 @@ Do not add mutable static caches, shared `StringBuilder` instances, reused `Matc
 | `type` | Type declarations where a narrower class/interface/struct/enum kind is not available | Definition target |
 | `typealias` | Type alias declarations | Definition target for alias names |
 | `union` | Union declarations | Definition target and container |
+| `user` | Dockerfile `USER` values | Container runtime search symbol |
 | `block data` | Fortran block data declarations | Definition target |
 | `variable` | Variable bindings | Search/filter symbol |
+| `volume` | Dockerfile `VOLUME` paths | Container storage search symbol |
+| `workdir` | Dockerfile `WORKDIR` paths | Container filesystem search symbol |
 
 `symbol_references.reference_kind` uses this separate reference taxonomy:
 
@@ -380,8 +395,9 @@ Current stable codes and triggers:
 | Schema discovery cache | `DbReader` schema discovery uses a process-level cache keyed by the normalized DB path. The cache stores `PRAGMA table_info`, `PRAGMA index_list`, and `sqlite_master` table-existence results, and checks `PRAGMA schema_version` before serving a lookup so SQLite DDL performed by cdidx or an external `sqlite3` session invalidates stale snapshots. Manual schema edits outside cdidx are still unsupported operationally; run `cdidx validate` after such edits before trusting query output. |
 | Batch trust marker | Index write batches stamp `codeindex_meta.batch_in_progress=true` before starting a mutation transaction and clear it inside the transaction that commits the matching rows and readiness metadata. If the indexer crashes after the marker is written but before the commit clears it, the next writable DB open demotes readiness bits and warns: `Last batch did not complete; run cdidx index --rebuild to re-index from a known clean state.` Gracefully handled per-file errors clear the marker after rollback; orphaned markers are reserved for interrupted or crashed batches whose trust metadata should not be treated as clean. |
 | Read-only fallback | When the normal writable open cannot create or lock journal/WAL side files, read-only fallback uses an immutable SQLite URI so query commands can still read a DB from read-only or sandboxed storage. The fallback intentionally skips writable pragmas, migrations, and WAL recovery writes. If a WAL is present and must be observed, copy `.db`, `.db-wal`, and `.db-shm` together to a writable location or use a SQLite backup from an environment that can open the full WAL set. |
-| Status pragma diagnostics | `status --json` exposes resolved connection values under `db_pragma_settings` (`journal_mode`, `synchronous`, `wal_autocheckpoint`, `page_count`, `freelist_count`, `page_size`) for automation and support diagnostics. |
-| Vacuum | `cdidx vacuum` runs `PRAGMA incremental_vacuum` against writable incremental-auto-vacuum DBs, and performs a one-time `PRAGMA auto_vacuum=INCREMENTAL` plus full `VACUUM` conversion for legacy no-autovacuum DBs. |
+| Status pragma diagnostics | `status --json` exposes resolved connection values under `db_pragma_settings` (`journal_mode`, `synchronous`, `wal_autocheckpoint`, `page_count`, `freelist_count`, `page_size`, `auto_vacuum`) for automation and support diagnostics. `maintenance_guidance` derives `wal_state`, `freelist_ratio`, `freelist_state`, `estimated_*_reclaimable`, `auto_vacuum_mode(_name)`, `recommended_command`, and `post_maintenance_follow_up` from those raw metrics without changing the raw values. `status --check --json` adds `repair_commands[]` entries with `name`, `args`, `reason`, and `safety_notes` so clients do not parse prose remediation strings. `last_failed_or_partial_index_run` exposes bounded failed/partial index context (`status`, `mode`, timings, counts, stable error code, reason) and must not include raw exception text or file paths. |
+| Maintenance thresholds | WAL guidance flips to `checkpoint_recommended` at `CDIDX_MAINTENANCE_WAL_WARN_BYTES` (default 64 MiB). Freelist guidance flips to `vacuum_recommended` at `CDIDX_MAINTENANCE_FREELIST_WARN_RATIO` (default `0.20`). Invalid or out-of-range env values fall back to defaults. |
+| Vacuum | `cdidx vacuum` runs `PRAGMA incremental_vacuum` against writable incremental-auto-vacuum DBs, and performs a one-time `PRAGMA auto_vacuum=INCREMENTAL` plus full `VACUUM` conversion for legacy no-autovacuum DBs. `cdidx vacuum --dry-run --json` estimates reclaimable pages/bytes and returns the same maintenance guidance without executing vacuum pragmas. |
 | Size and process diagnostics | `status --json` also reports `db_size_bytes`, `wal_size_bytes`, capped `symbol_kinds` / `symbols_by_language` kind maps with `symbol_kind_*` and `symbols_by_language_kind_*` overflow metadata when caps apply, current `process` heap/GC/working-set metrics, `last_index_run` metadata from successful CLI and MCP index runs, and `last_workspace_freshened_at` as the latest successful index/update timestamp. `indexed_at` still comes from indexed file rows, so partial or no-op updates can freshen the workspace without moving `indexed_at`. |
 | Memory tracing | `index --json --memory-trace` adds a `memory_timeline` block to the CLI index result and persists peak working-set MB into `last_index_run`; `CDIDX_MEM_WARN_MB=<mb>` prints a warning when the sampled working set crosses that threshold. |
 | Newer schema protection | Writable opens reject databases whose `PRAGMA user_version` contains readiness bits outside the current binary's `CurrentSchemaVersion` mask. Read-only status/query paths may still surface `index_newer_than_reader=true` as a degraded audit signal, but write-capable paths must fail with `E003_SCHEMA_TOO_NEW` so an older cdidx cannot silently rewrite a DB stamped by a newer one. |
@@ -953,10 +969,12 @@ For the AI agent search-rule template, see [AI Integration](USER_GUIDE.md#ai-int
 |---|---|
 | Human-readable default | Query commands (`search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `excerpt`, `map`, `inspect`, `suggestions`) default to **human-readable output**. |
 | `--json` | Emits JSON lines output, one JSON object per line, designed for easy parsing by AI agents. |
+| `--count --json` envelope | Count-only JSON for `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, and `impact` is a single automation-oriented object. It always includes `count`, applied `query_context`, freshness metadata (`indexed_file_count`, `indexed_at`, `freshness_available`), and trust flags `degraded` / `authoritative_count`; commands with matched-file totals also include `files` and compatibility alias `file_count`. `authoritative_count=false` means a readiness or graph/exact trust signal made the count non-authoritative, while the freshness fields describe the indexed snapshot used for the count. |
 | `search --json` sentinel | Appends a final `{"done":true,"count":N,"interrupted":false}` sentinel after result rows, including zero-result responses, so stream consumers can distinguish a clean end from a truncated/interrupted stream. |
 | `--json-envelope` commands | Applies to `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `excerpt`, `map`, `inspect`, `outline`, `status`, `validate`, `languages`, `impact`, `deps`, `unused`, and `hotspots`. |
 | `--json-envelope` shape | Wraps the per-line `--json` stream into a single `{"metadata": {...}, "results": [...]}` document. `metadata` carries `api_version`, `command`, `cdidx_version`, `elapsed_ms`, `db_path`, `result_count`, `exit_code`, and, when applicable, `query_normalized` and `indexed_at_head_sha`. |
 | Envelope migration | `--json-envelope` implies `--json`, so callers do not need to pass both. The default output remains the legacy NDJSON / array form for one release; the envelope will become the default in the next major release, when the flat form becomes opt-in via `--json-flat`. |
+| `find --all` scan summary | `find` requires either repeatable `--path <glob>` filters or explicit `--all`. `--all` scans indexed files repo-wide with safety caps and cannot be combined with `--path`. JSON count output includes `candidate_files`, `files_scanned`, `lines_scanned`, `scan_truncated`, `scan_cap_reached`, optional `scan_truncation_reason`, and the active `candidate_file_limit` / `line_scan_limit`; human count output writes the same scan summary to stderr. |
 
 #### JSON output API version contract
 
@@ -974,8 +992,9 @@ For the AI agent search-rule template, see [AI Integration](USER_GUIDE.md#ai-int
 | Readiness and graph trust | `fold_ready`, `fold_ready_reason`, `graph_table_available`, `issues_table_available`, `file_issues_data_current`, `migration_in_progress`, `sql_graph_contract_ready`, `sql_graph_contract_degraded_reason`, `hotspot_family_ready`, `hotspot_family_degraded_reason`, `language_readiness`, `csharp_symbol_name_ready`, `csharp_metadata_target_ready`, `csharp_metadata_target_degraded_reason`. |
 | Workspace and HEAD freshness | `indexed_head_commit`, `worktree_head_changed`, `indexed_head_sha`, `indexed_head_branch`, `indexed_head_timestamp`, `commits_ahead_of_indexed_head`. |
 | Version and forward compatibility | `index_writer_version`, `index_newer_than_reader`, `index_newer_than_reader_reason`. |
-| Unknown-extension and runtime diagnostics | `unknown_extension_file_count`, `unknown_extension_files`, `unknown_extension_files_truncated`, `unknown_extension_file_path_limit`, `extractors`, `path_case_sensitive`, `data_dir_mode`, `mac_profile`, `stale_after_seconds`, `index_age_seconds`. |
-| Remediation fields | `degraded_root_cause`, `degraded_reason`, `recommended_action`, `alternative_action`, `readiness_degradations`. |
+| Unknown-extension and runtime diagnostics | `unknown_extension_file_count`, `unknown_extension_files`, `unknown_extension_files_truncated`, `unknown_extension_file_path_limit`, `unknown_extension_extension_counts`, `unknown_extension_category_counts`, `unknown_extension_groups`, `extractors`, `path_case_sensitive`, `data_dir_mode`, `mac_profile`, `stale_after_seconds`, `index_age_seconds`, `last_failed_or_partial_index_run`. |
+| Database maintenance | `db_size_bytes`, `wal_size_bytes`, `db_pragma_settings` (`journal_mode`, `synchronous`, `wal_autocheckpoint`, `page_count`, `freelist_count`, `page_size`, `auto_vacuum`), `maintenance_guidance`. |
+| Remediation fields | `degraded_root_cause`, `degraded_reason`, `recommended_action`, `alternative_action`, `readiness_degradations`, `repair_commands`. |
 | MCP-only session diagnostics | `mcp_session`, which is session-scoped diagnostics rather than persisted DB state. It contains `log_level`, bounded `roots`, optional `client_info`, and bounded optional `client_capabilities`. When advertised roots are capped, `roots_truncated`, `root_count`, `root_limit`, and `root_uri_length_limit` describe the truncation. When client capabilities are capped, `client_capabilities_truncated`, `client_capabilities_truncation_reason`, `client_capabilities_serialized_bytes`, `client_capabilities_byte_limit`, and `client_capabilities_depth_limit` describe the retained diagnostic subset. |
 | Documentation sync | Keep this list synchronized with `README.md` and `AGENT_GUIDE.md`; `DocumentationStatusContractTests` fails when any required field is missing from one of those docs. |
 
@@ -2156,7 +2175,7 @@ net9 CI lane に合わせる場合は `FRAMEWORK=net9.0 make test` を使いま�
 |---|---|---|
 | read-only database query | `cdidx status --db /artifacts/codeindex.db --read-only --json`; `cdidx search AuthService --db /artifacts/codeindex.db --immutable` | query コマンドは `--read-only`（alias: `--immutable`）を受け付け、既存の CodeIndex database を SQLite の immutable read-only URI mode で開けます。CI artifact、mounted cache、`codeindex.db-wal` / `codeindex.db-shm` sidecar を作成・更新できない sandbox で使います。 |
 | 変更系コマンド | `index`、`backfill-fold`、`optimize`、`vacuum` | 書き込み可能な storage を必要とし、read-only database open を拒否します。 |
-| 再利用可能な index artifact | `cdidx export codeindex.cdidx.zip`; `cdidx import codeindex.cdidx.zip --db <path>` | CI job では index 後に export して archive を upload します。利用側は query コマンドの前に import できます。別 checkout 由来の archive を現在の workspace root として扱いたい場合は `--prune-paths` を使います。archive は `manifest.json` と `codeindex.db` を含み、import は manifest format、manifest `user_version`、`database_sha256`、embedded SQLite file が CodeIndex database であることを検証してから destination DB を置き換えます。archive の `codeindex.db` entry は compressed / uncompressed metadata と extraction stream の双方で 8 GiB を上限に拒否されます。 |
+| 再利用可能な index artifact | `cdidx export codeindex.cdidx.zip`; `cdidx import codeindex.cdidx.zip --db <path>`; `cdidx import codeindex.cdidx.zip --dry-run --json` | CI job では index 後に export して archive を upload します。利用側は query コマンドの前に import でき、`--dry-run` / `--check` で destination DB を置き換えず archive を検証できます。別 checkout 由来の archive を現在の workspace root として扱いたい場合は `--prune-paths` を使います。archive は `manifest.json` と `codeindex.db` を含み、manifest は row count、readiness bit、writer / indexed-head metadata、schema contract stamp、利用可能な unknown-extension summary などの bounded summary/readiness metadata を持ちます。import は manifest format、manifest `user_version`、`database_sha256`、存在する summary count、embedded SQLite file が CodeIndex database であることを検証してから destination DB を置き換えます。archive の `codeindex.db` entry は compressed / uncompressed metadata と extraction stream の双方で 8 GiB を上限に拒否されます。 |
 | maintenance checkpoint | `cdidx db checkpoint <name>`; `cdidx db restore <name>` | 危険な maintenance の前に `codeindex.db` と既存 WAL/SHM sidecar の filesystem snapshot を作成し、restore で戻します。checkpoint は DB の隣の `<db>.checkpoints/<name>/` に置かれ、restore は pre-restore file を `<db>.restore-backup-<timestamp>/` に保持します。`backfill-fold` は `--no-checkpoint` を渡さない限り、row mutation 前に automatic checkpoint を作ります。 |
 | binary compatibility | [COMPATIBILITY.md](COMPATIBILITY.md) | `cdidx` binary の upgrade / downgrade をまたぐ database compatibility を記載します。readiness bit、`codeindex_meta` contract stamp、rebuild requirement を変える場合は、この policy も更新してください。 |
 | Fold backfill の preview / recovery | `backfill-fold --dry-run`; MCP `backfill_fold` の `dry_run: true` または `force: true` | dry-run は DB を変更せず FoldReady stamp も書かずに、rewrite 対象の folded-key row をプレビューします。MCP も同じ preview を受け付け、stored version / fingerprint が current に見える場合でも suspicious な fold metadata や row state を復旧するため `force: true` を受け付けます。non-dry-run rewrite は中断後に resume でき、完了済み row update は durable に残り、最終 FoldReady metadata は verification 成功後にだけ stamp されます。MCP response は `progress.rows_done`、`progress.rows_total`、`progress.fraction` を含みます。 |
@@ -2182,6 +2201,7 @@ channel をすべて確認してください。
 | `install.sh` | latest install、explicit-version install、`--doctor`、local mirror self-test。 |
 | NuGet global tool | clean な .NET 8 tool environment での install/update。 |
 | release asset | advertised RID ごとに published release asset があること。 |
+| GHCR container image | 公開済みの `linux/amd64` / `linux/arm64` image で `cdidx --version` が動作し、runtime `git` を含まず、provenance / SBOM attestation を公開していること。 |
 | package metadata | license、repository URL、tag、runtime prerequisite が正しいこと。 |
 | documentation link | README、USER_GUIDE、package metadata からの link が意図した docs を指すこと。 |
 
@@ -2191,7 +2211,7 @@ channel をすべて確認してください。
 |---|---|
 | lock ファイル参加 | `Directory.Build.props` が `RestorePackagesWithLockFile=true` を設定しているため、本 solution 配下の各 project は `.csproj` と並んで `packages.lock.json` を出力します。lock ファイルは直接依存と**推移依存**の双方について解決済み version と `contentHash` を固定し、`Microsoft.Data.Sqlite` 配下に native を含めて出荷する `SQLitePCLRaw.bundle_e_sqlite3` まで対象に含めます。これにより machine、CI lane、release artifact の再現性が保たれ、推移依存の暗黙 bump や downgrade attack が build を壊す差分として顕在化します。 |
 | package source 境界 | repository root の `nuget.config` は machine-wide な package source を消去し、`https://api.nuget.org/v3/index.json` だけを許可し、すべての package ID をその source に map し、署名付き package を必須にします。trusted signer は NuGet.org repository-signing certificate と、現在 lock されている package graph に必要な author-signing certificate に限定し、未署名 package、未設定 feed 由来の package、未知の author による署名 package を拒否します。NuGet.org または承認済み package author が signing certificate を rotate した場合は、restore 検証と同じ変更で `nuget.config` を更新してください。 |
-| CI locked restore | CI（`.github/workflows/dotnet.yml`, `release.yml`, `codeql.yml`）は solution restore を `--locked-mode` 付きで実行し、commit 済み lock ファイルと解決結果に差分があると artifact に混入する前に build が失敗します。ローカル開発の通常 restore は従来どおりで、lock file enforcement は CI でのみ強制されます。 |
+| CI locked restore | CI（`.github/workflows/dotnet.yml`, `release.yml`, `codeql.yml`）は solution restore を `--locked-mode` 付きで実行し、commit 済み lock ファイルと解決結果に差分があると artifact に混入する前に build が失敗します。build / release workflow の NuGet package cache は lockfile 由来の完全一致 key だけで復元し、OS 単位の broad cache prefix には fallback しません。ローカル開発の通常 restore は従来どおりで、lock file enforcement は CI でのみ強制されます。 |
 | deterministic package metadata | `CodeIndex` package project は deterministic build に opt in し、Source Link 用の repository metadata を公開します。GitHub Actions では `ContinuousIntegrationBuild=true` も設定し、untracked source input を埋め込むため、PDB と `.snupkg` artifact は local machine path なしで repository に対応付けられます。build metadata は可能な場合 wall-clock build date ではなく Git commit date を使い、同じ commit の繰り返し build が timestamp で drift しないようにします。`Microsoft.SourceLink.GitHub` は build-only dependency（`PrivateAssets=All`）であり、runtime dependency ではありません。 |
 | vulnerability check | 通常の build/test workflow は locked restore 後に `dotnet list src/CodeIndex/CodeIndex.csproj package --vulnerable --include-transitive --no-restore` を実行し、direct または transitive runtime package に High / Critical の NuGet advisory があると失敗します。Dependabot は `.github/dependabot.yml` で NuGet と GitHub Actions の weekly update PR を作るよう設定されているため、security fix と通常の dependency/action bump は release surprise になる前に提案されます。 |
 | release publish/pack restore | release の `dotnet publish`（RID ごと）と `dotnet pack`（NuGet packaging）には意図的に `RestoreLockedMode=true` を設定していません。これらは runtime-specific な restore を走らせ、solution restore 時には存在しなかった lock entry（`net8.0/<rid>` 等の runtime section や trimming 用の `Microsoft.NET.ILLink.Tasks`）を正当に追加します。それでも `Directory.Build.props` の `RestorePackagesWithLockFile=true` により、その実行 machine 上の全 restore は lock file 経由で解決されるため version は固定されたままです。`Microsoft.Data.Sqlite` および `SQLitePCLRaw.*` graph に対する supply-chain 保証は、先行する solution-level locked restore で担保されます。 |
@@ -2251,11 +2271,14 @@ ownership boundary を分けるときは、挙動変更を review しやすく t
 ### ワークスペース
 
 `cdidx.workspace.json` と `.cdidx-workspace.json` は YAML dependency を増やさずに monorepo
-member を宣言します。workspace manifest は 64 KiB、JSON nesting 16 level、1024 members に制限されます。
+member を宣言します。workspace manifest は 64 KiB、JSON nesting 16 level、1024 members、
+member path 4096 characters、`default_db_name` 255 characters に制限されます。
 schema は additive で、`members` は manifest directory からの相対 path かつ正規化後も
 manifest directory 配下に残る member path、
 `index_strategy` は `per_member` または `single`、`default_db_name` は
 `codeindex.db` を上書きする plain file name、`shared_ignores` は共有 ignore policy 用の予約 field です。
+invalid な `members` entries は件数を制限した diagnostics で拒否され、有効な entry は DB path を
+作る前に workspace path casing policy で正規化・重複排除されます。
 `cdidx workspace list` と `cdidx workspace status` は member DB path を報告します。
 
 `cdidx workspace use <name>` は active workspace を per-user config directory に保存します。
@@ -2362,7 +2385,7 @@ override が文書化されていない限り ANSI/progress control を抑止す
 
 `SolutionProjectResolver` は plain-text の `.sln` に含まれる `Project(...) = "...", "...csproj"` 行を non-regex parser で読み、C# / F# / VB の project file を解決する。active workspace root の外側へ正規化される project entry は、filesystem probe や path-filter 評価の前に無視する。solution parsing は 8 MiB を超える `.sln`、16,384 文字を超える行、4096 件を超える .NET project reference を明確な diagnostic とともに拒否する。root 直下の `.sln` 自動検出は sort 前に最大 128 candidates で打ち切り、その上限を超えた場合は明確な error を返すため、solution が多い workspace では `--solution <path>` を渡す。上限内で workspace root に `.sln` が 1 つだけある場合、`--project <name|path>` は自動でそれを使う。複数ある場合は caller が `--solution <path>` を渡せる。fallback project discovery は 4096 directories / 65,536 files で traversal を打ち切り、`--solution <path>` を示す明確な recovery hint を返す。fallback project discovery と project-file expansion は long-path-safe な per-directory 列挙を使い、読めない subtree を skip し、project filter を解決できない場合は bounded traversal diagnostics を含める。
 
-path filter を受け付ける query コマンド（`search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `deps`, `impact`, `unused`, `hotspots`, `validate`）は、`--project` を対応する project directory glob に展開してから `DbReader` に渡す。これにより既存の SQL path predicate をそのまま利用できる。`index --project` は選択された project directory 配下のファイルに展開し、既存の `--files` 更新経路を再利用する。ただし 1 project で 65,536 files、requested projects 全体で 131,072 unique files を超える展開は拒否し、明示的な `--files` を使う recovery hint を返す。
+path filter を受け付ける query コマンド（`search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `deps`, `impact`, `unused`, `hotspots`, `validate`）は、`--project` を対応する project directory glob に展開してから `DbReader` に渡す。これにより既存の SQL path predicate をそのまま利用できる。indexed project root を解決できず process current directory に fallback して project expansion する場合、CLI query context と MCP structured payload は `project_filter_root` と `project_filter_root_fallback_reason` を含める。`index --project` は選択された project directory 配下のファイルに展開し、既存の `--files` 更新経路を再利用する。ただし 1 project で 65,536 files、requested projects 全体で 131,072 unique files を超える展開は拒否し、明示的な `--files` を使う recovery hint を返す。
 
 `cdidx batch` は、同じ DB に複数の query command を投げる editor integration や script 向けの CLI 側 query loop である。1 つの `DbContext` / `DbReader` を開き、stdin から newline-delimited JSON 文字列配列を読み、デコード後の各文字列引数を 8,192 文字に制限し、query command だけを既存の `QueryCommandRunner` 経路へ dispatch するため、出力と validation は単発コマンドと同じ形を保つ。
 
@@ -2384,18 +2407,24 @@ filter、downstream JSON consumer が同じ値を理解できるようにして�
 | Kind | 現在の producer / 意味 | Graph behavior |
 |---|---|---|
 | `accessor` | owning property から別 symbol として抽出される accessor declaration | Search/filter symbol |
+| `add` | Dockerfile `ADD` の destination path | dependency / file-flow search symbol |
 | `annotation` | annotation declaration または annotation-like な言語構文 | Metadata/search symbol |
 | `async_function` | JavaScript / TypeScript の async function declaration | Callable definition。reference row 経由で callers/callees に参加 |
 | `async_generator` | JavaScript / TypeScript の async generator declaration | Callable definition。reference row 経由で callers/callees に参加 |
 | `attribute` | Razor attribute と metadata-like declaration | Context/search symbol。単独では call edge ではない |
 | `associatedtype` | Swift associated type declaration | Type-like definition target |
+| `base_image` | Dockerfile `FROM` の image name | container image search symbol |
+| `build_arg` | Dockerfile `ARG` 名 | variable/search symbol。Dockerfile variable reference に参加 |
 | `class` | object-oriented language 全般の class declaration | Definition target and container |
 | `class_hook` | Python dunder hook など、function から再分類された class hook method | Callable/search symbol |
 | `code` | Markdown fenced code block または structured code block | Search/outline symbol |
 | `constant` | 言語が区別する constant declaration | Search/filter symbol |
+| `copy` | Dockerfile `COPY` の destination path | dependency / file-flow search symbol |
 | `delegate` | C# / F# delegate declaration | Callable type definition and container-like target |
 | `enum` | enum declaration | Definition target and container |
+| `environment` | Dockerfile `ENV` variable name | variable/search symbol。Dockerfile variable reference に参加 |
 | `event` | event declaration | Search/filter symbol |
+| `expose` | Dockerfile `EXPOSE` port | container runtime search symbol |
 | `field` | property と区別される field declaration | Search/filter symbol |
 | `file_module` | file-scoped module / package declaration | Namespace-like context symbol |
 | `function` | 関数、method、constructor、delegate、task、およびより狭い kind がない callable binding | Primary callable definition。reference row 経由で callers/callees に参加 |
@@ -2406,6 +2435,7 @@ filter、downstream JSON consumer が同じ値を理解できるようにして�
 | `import` | import、using directive、alias、package include | Search/filter symbol |
 | `interface` | interface declaration | Definition target and container |
 | `lambda` | named lambda / arrow binding | Callable definition。reference row 経由で callers/callees に参加 |
+| `label` | Dockerfile `LABEL` key | metadata/search symbol |
 | `layout` | Razor layout directive | Context/search symbol |
 | `method` | function と method を明示的に区別する言語または hook | Callable definition。reference row 経由で callers/callees に参加 |
 | `module` | module declaration | Definition target and container |
@@ -2421,8 +2451,12 @@ filter、downstream JSON consumer が同じ値を理解できるようにして�
 | `reference` | HTML class、metadata key、GraphQL union variant などの secondary extracted symbolic reference | Search/filter symbol |
 | `rule` | nested reference が使う CSS / SCSS rule container context | Container context |
 | `route` | Razor route directive | Context/search symbol |
+| `run` | Dockerfile `RUN` command body | container build-step search symbol |
 | `service` | IDL / protobuf-like language の service declaration | Definition target and container |
+| `shell` | Dockerfile `SHELL` executable | container runtime search symbol |
 | `specialization` | C++ template specialization declaration | specialized type / function form の definition target |
+| `stage` | Dockerfile named build stage | build-stage definition。Dockerfile stage reference に参加 |
+| `stopsignal` | Dockerfile `STOPSIGNAL` value | container runtime search symbol |
 | `struct` | struct declaration | Definition target and container |
 | `submodule` | Fortran submodule declaration | Namespace/module-like definition target |
 | `subroutine` | Fortran subroutine declaration | Callable definition |
@@ -2431,8 +2465,11 @@ filter、downstream JSON consumer が同じ値を理解できるようにして�
 | `type` | より狭い class / interface / struct / enum kind が使えない type declaration | Definition target |
 | `typealias` | type alias declaration | alias name の definition target |
 | `union` | union declaration | Definition target and container |
+| `user` | Dockerfile `USER` value | container runtime search symbol |
 | `block data` | Fortran block data declaration | Definition target |
 | `variable` | variable binding | Search/filter symbol |
+| `volume` | Dockerfile `VOLUME` path | container storage search symbol |
+| `workdir` | Dockerfile `WORKDIR` path | container filesystem search symbol |
 
 `symbol_references.reference_kind` は別の reference taxonomy を使います。
 
@@ -2542,8 +2579,9 @@ alternative action を同じ場所へ追加してください。
 | schema discovery cache | `DbReader` の schema discovery は正規化済み DB path を key にした process-level cache を使います。この cache は `PRAGMA table_info`、`PRAGMA index_list`、`sqlite_master` の table existence 結果を保持し、lookup 前に `PRAGMA schema_version` を確認するため、cdidx や外部 `sqlite3` session による SQLite DDL は stale snapshot を invalidate します。cdidx 外での手動 schema edit は運用上 unsupported であり、その後は query output を信頼する前に `cdidx validate` を実行してください。 |
 | batch trust marker | index write batch は mutation transaction を始める前に `codeindex_meta.batch_in_progress=true` を stamp し、対応する row と readiness metadata を commit する transaction 内で clear します。marker が書かれた後、clear される前に indexer が crash した場合、次の writable DB open は readiness bit を degrade し、`Last batch did not complete; run cdidx index --rebuild to re-index from a known clean state.` と警告します。file ごとの error が graceful に処理された場合は rollback 後に marker を clear するため、orphaned marker は interrupted / crashed batch の trust metadata を clean と扱わないための signal です。 |
 | read-only fallback | 通常の writable open が journal/WAL side file を作成または lock できない場合、read-only fallback は immutable SQLite URI を使うため、query command は read-only / sandboxed storage 上の DB でも読み取りを継続できます。この fallback は意図的に writable pragma、migration、WAL recovery write を skip します。WAL が存在し、その内容を観測する必要がある場合は、`.db` / `.db-wal` / `.db-shm` をまとめて writable location に copy するか、full WAL set を open できる環境で SQLite backup を使います。 |
-| status pragma diagnostics | `status --json` は automation / support diagnostics 用に、解決済みの接続値を `db_pragma_settings` (`journal_mode`, `synchronous`, `wal_autocheckpoint`, `page_count`, `freelist_count`, `page_size`) で公開します。 |
-| vacuum | `cdidx vacuum` は incremental-auto-vacuum DB では `PRAGMA incremental_vacuum` を実行し、legacy no-autovacuum DB では初回のみ `PRAGMA auto_vacuum=INCREMENTAL` と full `VACUUM` で変換します。 |
+| status pragma diagnostics | `status --json` は automation / support diagnostics 用に、解決済みの接続値を `db_pragma_settings` (`journal_mode`, `synchronous`, `wal_autocheckpoint`, `page_count`, `freelist_count`, `page_size`, `auto_vacuum`) で公開します。`maintenance_guidance` は raw 値を変えずに `wal_state`、`freelist_ratio`、`freelist_state`、`estimated_*_reclaimable`、`auto_vacuum_mode(_name)`、`recommended_command`、`post_maintenance_follow_up` を派生します。`status --check --json` は `repair_commands[]` に `name`、`args`、`reason`、`safety_notes` を返し、client が prose remediation を parse しなくてよいようにします。`last_failed_or_partial_index_run` は bounded な failed / partial index context (`status`、`mode`、timing、count、stable error code、reason) のみを公開し、raw exception text や file path を含めてはいけません。 |
+| maintenance threshold | WAL guidance は `CDIDX_MAINTENANCE_WAL_WARN_BYTES` (既定 64 MiB) 以上で `checkpoint_recommended` になります。freelist guidance は `CDIDX_MAINTENANCE_FREELIST_WARN_RATIO` (既定 `0.20`) 以上で `vacuum_recommended` になります。不正・範囲外の環境変数値は既定値へ戻します。 |
+| vacuum | `cdidx vacuum` は incremental-auto-vacuum DB では `PRAGMA incremental_vacuum` を実行し、legacy no-autovacuum DB では初回のみ `PRAGMA auto_vacuum=INCREMENTAL` と full `VACUUM` で変換します。`cdidx vacuum --dry-run --json` は vacuum pragma を実行せず、回収可能 page/byte の推定と同じ maintenance guidance を返します。 |
 | size / process diagnostics | `status --json` は `db_size_bytes`、`wal_size_bytes`、上限付きの `symbol_kinds` / `symbols_by_language` kind map と、上限適用時の `symbol_kind_*` / `symbols_by_language_kind_*` overflow metadata、現在の `process` heap / GC / working-set metrics、成功した CLI / MCP index 実行由来の `last_index_run` metadata、最新の成功 index/update 時刻を示す `last_workspace_freshened_at` も公開します。`indexed_at` は引き続き indexed file row 由来なので、partial / no-op update は `indexed_at` を動かさずに workspace 鮮度だけを更新することがあります。 |
 | memory tracing | `index --json --memory-trace` は CLI index 結果に `memory_timeline` block を追加し、peak working-set MB を `last_index_run` に保存します。`CDIDX_MEM_WARN_MB=<mb>` は sampled working set がしきい値を超えたときに warning を出します。 |
 | newer schema protection | writable open は、`PRAGMA user_version` に current binary の `CurrentSchemaVersion` mask 外の readiness bit が含まれる database も拒否します。read-only status/query path は degraded audit signal として `index_newer_than_reader=true` を表示できますが、write-capable path は古い cdidx が新しい binary で stamp された DB を黙って rewrite しないよう `E003_SCHEMA_TOO_NEW` で失敗しなければなりません。 |
@@ -3089,10 +3127,12 @@ AI エージェント向け検索ルールのテンプレートについては�
 |---|---|
 | human-readable default | query command（`search`、`definition`、`references`、`callers`、`callees`、`symbols`、`files`、`excerpt`、`map`、`inspect`、`suggestions`）は既定で**人間向け出力**です。 |
 | `--json` | JSON lines output（1 行 1 JSON object）に切り替えます。AI agent が容易に parse できるよう設計されています。 |
+| `--count --json` envelope | `search`、`definition`、`references`、`callers`、`callees`、`symbols`、`files`、`find`、`impact` の count-only JSON は単一の自動化向け object です。常に `count`、適用済み `query_context`、freshness metadata（`indexed_file_count`、`indexed_at`、`freshness_available`）、trust flag の `degraded` / `authoritative_count` を含みます。matched-file total を持つ command は `files` と互換 alias の `file_count` も含みます。`authoritative_count=false` は readiness または graph/exact trust signal により count が authoritative ではないことを示し、freshness field は count に使った index snapshot を説明します。 |
 | `search --json` sentinel | result row の後に、0 件応答も含めて最後の `{"done":true,"count":N,"interrupted":false}` sentinel を追加します。stream consumer は clean end と truncated / interrupted stream を区別できます。 |
 | `--json-envelope` 対象 command | `search`、`definition`、`references`、`callers`、`callees`、`symbols`、`files`、`find`、`excerpt`、`map`、`inspect`、`outline`、`status`、`validate`、`languages`、`impact`、`deps`、`unused`、`hotspots`。 |
 | `--json-envelope` shape | per-line `--json` stream を単一の `{"metadata": {...}, "results": [...]}` document に包みます。`metadata` は `api_version`、`command`、`cdidx_version`、`elapsed_ms`、`db_path`、`result_count`、`exit_code`、該当時は `query_normalized` と `indexed_at_head_sha` を持ちます。 |
 | envelope migration | `--json-envelope` は `--json` を imply するため、caller は両方を指定する必要がありません。既定 output は 1 release の間 legacy NDJSON / array form のままです。次の major release では envelope が既定になり、flat form は `--json-flat` による opt-in になります。 |
+| `find --all` scan summary | `find` は repeatable な `--path <glob>` か明示的な `--all` のどちらかを要求します。`--all` は safety cap 付きで index 済みファイルを repo-wide に走査し、`--path` とは併用できません。JSON count output は `candidate_files`、`files_scanned`、`lines_scanned`、`scan_truncated`、`scan_cap_reached`、任意の `scan_truncation_reason`、有効な `candidate_file_limit` / `line_scan_limit` を含みます。human count output は同じ scan summary を stderr に出します。 |
 
 #### JSON 出力 API バージョン契約
 
@@ -3110,8 +3150,9 @@ AI エージェント向け検索ルールのテンプレートについては�
 | readiness / graph trust | `fold_ready`, `fold_ready_reason`, `graph_table_available`, `issues_table_available`, `file_issues_data_current`, `migration_in_progress`, `sql_graph_contract_ready`, `sql_graph_contract_degraded_reason`, `hotspot_family_ready`, `hotspot_family_degraded_reason`, `language_readiness`, `csharp_symbol_name_ready`, `csharp_metadata_target_ready`, `csharp_metadata_target_degraded_reason`。 |
 | workspace / HEAD freshness | `indexed_head_commit`, `worktree_head_changed`, `indexed_head_sha`, `indexed_head_branch`, `indexed_head_timestamp`, `commits_ahead_of_indexed_head`。 |
 | version / forward compatibility | `index_writer_version`, `index_newer_than_reader`, `index_newer_than_reader_reason`。 |
-| unknown-extension / runtime diagnostics | `unknown_extension_file_count`, `unknown_extension_files`, `unknown_extension_files_truncated`, `unknown_extension_file_path_limit`, `extractors`, `path_case_sensitive`, `data_dir_mode`, `mac_profile`, `stale_after_seconds`, `index_age_seconds`。 |
-| remediation fields | `degraded_root_cause`, `degraded_reason`, `recommended_action`, `alternative_action`, `readiness_degradations`。 |
+| unknown-extension / runtime diagnostics | `unknown_extension_file_count`, `unknown_extension_files`, `unknown_extension_files_truncated`, `unknown_extension_file_path_limit`, `unknown_extension_extension_counts`, `unknown_extension_category_counts`, `unknown_extension_groups`, `extractors`, `path_case_sensitive`, `data_dir_mode`, `mac_profile`, `stale_after_seconds`, `index_age_seconds`, `last_failed_or_partial_index_run`。 |
+| database maintenance | `db_size_bytes`, `wal_size_bytes`, `db_pragma_settings` (`journal_mode`, `synchronous`, `wal_autocheckpoint`, `page_count`, `freelist_count`, `page_size`, `auto_vacuum`), `maintenance_guidance`。 |
+| remediation fields | `degraded_root_cause`, `degraded_reason`, `recommended_action`, `alternative_action`, `readiness_degradations`, `repair_commands`。 |
 | MCP-only session diagnostics | `mcp_session`。これは persisted DB state ではなく session-scoped diagnostics で、`log_level`、上限付きの `roots`、任意の `client_info`、上限付きの任意の `client_capabilities` を含みます。advertised root が切り詰められた場合は `roots_truncated`、`root_count`、`root_limit`、`root_uri_length_limit` が切り詰め内容を示します。client capabilities が切り詰められた場合は `client_capabilities_truncated`、`client_capabilities_truncation_reason`、`client_capabilities_serialized_bytes`、`client_capabilities_byte_limit`、`client_capabilities_depth_limit` が保持された診断 subset を示します。 |
 | documentation sync | この一覧は `README.md` と `AGENT_GUIDE.md` と同期してください。必須 field がそれらの docs から欠けると `DocumentationStatusContractTests` が失敗します。 |
 

@@ -972,12 +972,17 @@ public class ProgramRunnerTests
     [Fact]
     public void CreateInstallerProcessStartInfo_UsesArgumentList()
     {
+        if (OperatingSystem.IsWindows())
+            return;
+
         var startInfo = ProgramRunner.CreateInstallerProcessStartInfo(
             "/tmp/install script's path.sh",
             "v1.27.0",
             "/opt/cdidx install");
 
-        Assert.Equal("bash", startInfo.FileName);
+        Assert.True(Path.IsPathFullyQualified(startInfo.FileName));
+        Assert.Equal("bash", Path.GetFileName(startInfo.FileName));
+        Assert.NotEqual("bash", startInfo.FileName);
         Assert.False(startInfo.UseShellExecute);
         Assert.Equal(string.Empty, startInfo.Arguments);
         Assert.Equal(["/tmp/install script's path.sh", "v1.27.0"], startInfo.ArgumentList.ToArray());
@@ -1186,6 +1191,39 @@ exit 0
                 ProgramRunner.UpgradeHttpClientFactory = previousFactory;
                 TestProjectHelper.DeleteDirectory(cacheRoot);
             }
+        }
+    }
+
+    [Fact]
+    public void UpdateChecker_Check_WritesCacheWithPrivateModes_Issue3411()
+    {
+        using var env = EnvironmentVariableScope.Capture(UpdateChecker.DisableEnvVar);
+        env.Set(UpdateChecker.DisableEnvVar, null);
+        var cacheRoot = Path.Combine(Path.GetTempPath(), $"cdidx_update_cache_private_{Guid.NewGuid():N}");
+        var cachePath = Path.Combine(cacheRoot, "cdidx", "update-check.json");
+        try
+        {
+            var result = UpdateChecker.Check(
+                "1.0.0",
+                cachePath,
+                DateTimeOffset.UtcNow,
+                _ => Task.FromResult<string?>("v9.9.9"));
+
+            Assert.True(result.UpdateAvailable);
+            Assert.True(File.Exists(cachePath));
+            if (!OperatingSystem.IsWindows())
+            {
+                Assert.Equal(
+                    DataDirectorySecurity.PrivateDirectoryMode,
+                    File.GetUnixFileMode(Path.GetDirectoryName(cachePath)!) & DataDirectorySecurity.PermissionBits);
+                Assert.Equal(
+                    DataDirectorySecurity.PrivateFileMode,
+                    File.GetUnixFileMode(cachePath) & DataDirectorySecurity.PermissionBits);
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(cacheRoot);
         }
     }
 
@@ -1473,6 +1511,33 @@ exit 0
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
                 ["search", "--log-max-size-mb", "--path", "USER_GUIDE.md", "--db", dbPath, "--count", "--exact-substring"],
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("1", stdout.Trim());
+            Assert.Equal(string.Empty, stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_SearchBooleanOriginFilterDoesNotConsumeFollowingOptionLikeQuery_Issue3423()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue3423_origin_filter_option_query");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "USER_GUIDE.md",
+                "markdown",
+                "--log-max-size-mb appears here\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["search", "--exclude-comments", "--log-max-size-mb", "--path", "USER_GUIDE.md", "--db", dbPath, "--count", "--exact-substring"],
                 appVersion: "1.10.0"));
 
             Assert.Equal(CommandExitCodes.Success, exitCode);

@@ -131,6 +131,71 @@ public class WorkspaceCommandRunnerTests
     }
 
     [Fact]
+    public void WorkspaceManifestLoader_Load_RejectsInvalidMemberEntriesWithBoundedDiagnostics_Issue3429()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_manifest_invalid_members");
+        try
+        {
+            var manifestPath = Path.Combine(root, "cdidx.workspace.json");
+            var longMember = new string('a', WorkspaceManifestLoader.MaxManifestMemberPathChars + 1);
+            File.WriteAllText(manifestPath, $$"""
+                {
+                  "members": [
+                    "src/A",
+                    "",
+                    42,
+                    true,
+                    "   ",
+                    {{JsonSerializer.Serialize(longMember)}}
+                  ]
+                }
+                """);
+
+            var ex = Assert.Throws<InvalidDataException>(() => WorkspaceManifestLoader.Load(manifestPath));
+
+            Assert.Contains("members contain invalid entries", ex.Message);
+            Assert.Contains("members[1]", ex.Message);
+            Assert.Contains("members[2]", ex.Message);
+            Assert.Contains("members[3]", ex.Message);
+            Assert.Contains("members[4]", ex.Message);
+            Assert.Contains("members[5]", ex.Message);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
+    public void WorkspaceManifestLoader_Load_NormalizesAndDedupesMembers_Issue3429()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_manifest_dedupe");
+        try
+        {
+            var manifestPath = Path.Combine(root, "cdidx.workspace.json");
+            File.WriteAllText(manifestPath, """
+                {
+                  "members": [
+                    "src/A",
+                    "src/./A/",
+                    "src/B/"
+                  ]
+                }
+                """);
+
+            var manifest = WorkspaceManifestLoader.Load(manifestPath);
+
+            Assert.Equal(2, manifest.Members.Count);
+            Assert.Equal(Path.GetFullPath(Path.Combine(root, "src", "A")), manifest.Members[0].Path);
+            Assert.Equal(Path.GetFullPath(Path.Combine(root, "src", "B")), manifest.Members[1].Path);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
     public void WorkspaceManifestLoader_Load_RejectsRootedMemberPath()
     {
         var root = TestProjectHelper.CreateTempProject("cdidx_workspace_manifest_rooted_member");
@@ -173,6 +238,36 @@ public class WorkspaceCommandRunnerTests
         }
         finally
         {
+            TestProjectHelper.DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
+    public void WorkspaceManifestLoader_Load_UsesPathCasingForContainment_Issue3429()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_manifest_case");
+        try
+        {
+            var manifestPath = Path.Combine(root, "cdidx.workspace.json");
+            var alternateRootName = SwapAsciiCase(Path.GetFileName(root));
+            Assert.NotEqual(Path.GetFileName(root), alternateRootName);
+            var member = Path.Combine("..", alternateRootName, "src");
+            File.WriteAllText(manifestPath, $$"""
+                {
+                  "members": [{{JsonSerializer.Serialize(member)}}]
+                }
+                """);
+
+            PathCasing.ResetCacheForTests();
+            PathCasing.SeedFromWorkspace(root, ignoreCase: false);
+
+            var ex = Assert.Throws<InvalidDataException>(() => WorkspaceManifestLoader.Load(manifestPath));
+
+            Assert.Contains("member path escapes the manifest root", ex.Message);
+        }
+        finally
+        {
+            PathCasing.ResetCacheForTests();
             TestProjectHelper.DeleteDirectory(root);
         }
     }
@@ -300,6 +395,14 @@ public class WorkspaceCommandRunnerTests
         {
             TestProjectHelper.DeleteDirectory(root);
         }
+    }
+
+    [Fact]
+    public void WorkspaceManifestLoader_Find_RejectsInvalidStartDirectory_Issue3429()
+    {
+        var ex = Assert.Throws<InvalidDataException>(() => WorkspaceManifestLoader.Find("\0"));
+
+        Assert.Contains("discovery start directory is invalid", ex.Message);
     }
 
     [Fact]
@@ -742,5 +845,20 @@ public class WorkspaceCommandRunnerTests
             TestProjectHelper.DeleteDirectory(root);
             TestProjectHelper.DeleteDirectory(configHome);
         }
+    }
+
+    private static string SwapAsciiCase(string value)
+    {
+        var chars = value.ToCharArray();
+        for (var i = 0; i < chars.Length; i++)
+        {
+            var ch = chars[i];
+            if (ch is >= 'a' and <= 'z')
+                chars[i] = (char)(ch - ('a' - 'A'));
+            else if (ch is >= 'A' and <= 'Z')
+                chars[i] = (char)(ch + ('a' - 'A'));
+        }
+
+        return new string(chars);
     }
 }

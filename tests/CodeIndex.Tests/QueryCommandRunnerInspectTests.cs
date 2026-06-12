@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using CodeIndex.Cli;
 using CodeIndex.Database;
@@ -213,6 +214,57 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunInspect_ParseBodyRange_ImplyBodyAndValidateValues_Issue3394()
+    {
+        var options = QueryCommandRunner.ParseArgs(
+            ["--body-start", "6", "--body-lines=2"],
+            jsonDefault: false,
+            validateDefaultSnippetLines: false,
+            validateDefaultMaxLineWidth: false);
+
+        Assert.True(options.IncludeBody);
+        Assert.Equal(6, options.BodyStartLine);
+        Assert.Equal(2, options.BodyLines);
+        Assert.Null(options.ParseError);
+    }
+
+    [Fact]
+    public void RunInspect_FormatCompact_ActsLikeCompactJson_Issue3446()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_format_compact");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Target.cs",
+                "csharp",
+                """
+                public class Target
+                {
+                    public void Compute() { }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["Target", "--db", dbPath, "--format", "compact"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(json.GetProperty("compact").GetBoolean());
+            Assert.Equal(QueryCommandRunner.DefaultCompactSectionLimit, json.GetProperty("compact_limit").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunInspect_FieldsJson_EmitsOnlySelectedTopLevelGroups_Issue3056()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_fields_json");
@@ -295,6 +347,200 @@ public partial class QueryCommandRunnerTests
             Assert.False(json.TryGetProperty("references", out _));
             Assert.False(json.TryGetProperty("callers", out _));
             Assert.False(json.TryGetProperty("callees", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunInspect_BodyRangeJson_PagesDefinitionBody_Issue3394()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_body_range_json");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Target.cs",
+                "csharp",
+                """
+                public class Target
+                {
+                    public int Compute()
+                    {
+                        var value1 = 1;
+                        var value2 = 2;
+                        var value3 = 3;
+                        return value1 + value2 + value3;
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["Compute", "--db", dbPath, "--json", "--body", "--body-start", "6", "--body-lines", "2"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var definition = document.RootElement.GetProperty("definitions").EnumerateArray().Single();
+            var bodyContent = definition.GetProperty("body_content").GetString();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Contains("var value2 = 2;", bodyContent, StringComparison.Ordinal);
+            Assert.Contains("var value3 = 3;", bodyContent, StringComparison.Ordinal);
+            Assert.DoesNotContain("var value1 = 1;", bodyContent, StringComparison.Ordinal);
+            Assert.DoesNotContain("return value1", bodyContent, StringComparison.Ordinal);
+            Assert.Equal(6, definition.GetProperty("body_content_start_line").GetInt32());
+            Assert.Equal(7, definition.GetProperty("body_content_end_line").GetInt32());
+            Assert.Equal(8, definition.GetProperty("body_content_next_start_line").GetInt32());
+            Assert.True(definition.GetProperty("body_content_truncated").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunInspect_BodyRangeJson_ReportsNextLineFromByteClampedContent_Issue3394()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_body_byte_clamp_range_json");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var longValue = new string('x', DbReader.DefinitionBodyMaxBytes + 1024);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Target.cs",
+                "csharp",
+                $$"""
+                public class Target
+                {
+                    public string Compute()
+                    {
+                        var marker1 = "{{longValue}}";
+                        var marker2 = "after";
+                        return marker1 + marker2;
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["Compute", "--db", dbPath, "--json", "--body"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var definition = document.RootElement.GetProperty("definitions").EnumerateArray().Single();
+            var bodyContent = definition.GetProperty("body_content").GetString();
+            var bodyContentEndLine = definition.GetProperty("body_content_end_line").GetInt32();
+            var bodyContentNextStartLine = definition.GetProperty("body_content_next_start_line").GetInt32();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Contains("var marker1", bodyContent, StringComparison.Ordinal);
+            Assert.DoesNotContain("var marker2", bodyContent, StringComparison.Ordinal);
+            Assert.True(definition.GetProperty("body_content_truncated").GetBoolean());
+            Assert.Equal(bodyContentEndLine + 1, bodyContentNextStartLine);
+            Assert.True(bodyContentNextStartLine < definition.GetProperty("body_end_line").GetInt32());
+
+            var (nextExitCode, nextStdout, nextStderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["Compute", "--db", dbPath, "--json", "--body", "--body-start", bodyContentNextStartLine.ToString(CultureInfo.InvariantCulture)],
+                _jsonOptions));
+
+            using var nextDocument = ParseJsonOutput(nextStdout);
+            var nextDefinition = nextDocument.RootElement.GetProperty("definitions").EnumerateArray().Single();
+            var nextBodyContent = nextDefinition.GetProperty("body_content").GetString();
+
+            Assert.Equal(CommandExitCodes.Success, nextExitCode);
+            Assert.Equal(string.Empty, nextStderr);
+            Assert.Equal(bodyContentNextStartLine, nextDefinition.GetProperty("body_content_start_line").GetInt32());
+            Assert.Contains("var marker2", nextBodyContent, StringComparison.Ordinal);
+            Assert.DoesNotContain("var marker1", nextBodyContent, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunInspect_JsonWithoutBody_IncludesBodyModeHint_Issue3441()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_body_mode_json");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Target.cs",
+                "csharp",
+                """
+                public class Target
+                {
+                    public int Compute()
+                    {
+                        return 42;
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["Compute", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var definition = json.GetProperty("definitions").EnumerateArray().Single();
+            var bodyMode = json.GetProperty("body_mode");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(JsonValueKind.Null, definition.GetProperty("body_content").ValueKind);
+            Assert.False(bodyMode.GetProperty("include_body").GetBoolean());
+            Assert.False(bodyMode.GetProperty("definitions_only").GetBoolean());
+            Assert.False(bodyMode.GetProperty("body_content_present").GetBoolean());
+            Assert.Equal(DbReader.DefinitionBodyMaxLines, bodyMode.GetProperty("default_body_lines").GetInt32());
+            Assert.Equal(DbReader.DefinitionBodyMaxRequestedLines, bodyMode.GetProperty("max_body_lines").GetInt32());
+            Assert.Contains("--body-only", bodyMode.GetProperty("hint").GetString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunInspect_HumanWithoutBody_PrintsBodyModeHint_Issue3441()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_body_mode_human");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Target.cs",
+                "csharp",
+                """
+                public class Target
+                {
+                    public int Compute()
+                    {
+                        return 42;
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["Compute", "--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Contains("Body Hint", stdout, StringComparison.Ordinal);
+            Assert.Contains("--body", stdout, StringComparison.Ordinal);
+            Assert.Contains("--body-only", stdout, StringComparison.Ordinal);
         }
         finally
         {

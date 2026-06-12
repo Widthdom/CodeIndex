@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using System.Security.Cryptography;
 using System.Text.Json;
 using CodeIndex.Cli;
 
@@ -7,6 +8,74 @@ namespace CodeIndex.Tests;
 [Collection("SQLite pool sensitive")]
 public class ExportImportCommandRunnerTests
 {
+    [Fact]
+    public void RunImport_JsonParseErrorIncludesPhaseAndCode_Issue3548()
+    {
+        var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
+
+        var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
+            ExportImportCommandRunner.RunImport(["--json", "--unknown"], jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        AssertExportImportError(stdout, "import", "parse_args", "import_unknown_option");
+    }
+
+    [Fact]
+    public void RunImport_JsonManifestErrorIncludesPhaseAndCode_Issue3548()
+    {
+        var workDir = Path.Combine(Path.GetTempPath(), $"cdidx_manifest_json_error_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(workDir);
+        try
+        {
+            var archivePath = CreateArchiveWithManifest(workDir, "{");
+            var dbPath = Path.Combine(workDir, "codeindex.db");
+            var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
+
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
+                ExportImportCommandRunner.RunImport([archivePath, "--db", dbPath, "--json"], jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            AssertExportImportError(stdout, "import", "manifest", "import_manifest_invalid");
+            Assert.False(File.Exists(dbPath));
+        }
+        finally
+        {
+            Directory.Delete(workDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void RunImport_JsonSqliteValidationErrorIncludesPhaseAndCode_Issue3548()
+    {
+        var workDir = Path.Combine(Path.GetTempPath(), $"cdidx_import_sqlite_json_error_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(workDir);
+        try
+        {
+            var databaseBytes = new byte[] { 1, 2, 3, 4 };
+            var sha256 = Convert.ToHexString(SHA256.HashData(databaseBytes)).ToLowerInvariant();
+            var manifest = $$"""
+                {"format_version":"1","cdidx_version":"test","user_version":0,"database_sha256":"{{sha256}}"}
+                """;
+            var archivePath = CreateArchiveWithManifestAndDatabase(workDir, manifest, databaseBytes);
+            var dbPath = Path.Combine(workDir, "codeindex.db");
+            var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
+
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
+                ExportImportCommandRunner.RunImport([archivePath, "--db", dbPath, "--json"], jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            AssertExportImportError(stdout, "import", "sqlite_validate", "import_manifest_mismatch");
+            Assert.False(File.Exists(dbPath));
+        }
+        finally
+        {
+            Directory.Delete(workDir, recursive: true);
+        }
+    }
+
     [Fact]
     public void RunImport_RejectsOversizedManifestBeforeDatabaseEntry()
     {
@@ -177,6 +246,57 @@ public class ExportImportCommandRunnerTests
     }
 
     [Fact]
+    public void RunImport_DryRunUsesPrivateTemporaryDirectory_Issue3411()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("import_dry_run_private_temp");
+        string? cleanupPath = null;
+        try
+        {
+            var sourceDbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var archivePath = Path.Combine(projectRoot, "codeindex.cdidx.zip");
+            var exportResult = ConsoleCapture.Capture(() =>
+                ExportImportCommandRunner.RunExport([archivePath, "--db", sourceDbPath], new JsonSerializerOptions(), "test"));
+            Assert.Equal(CommandExitCodes.Success, exportResult.ExitCode);
+
+            var importDbPath = Path.Combine(projectRoot, "imported.db");
+            ExportImportCommandRunner.DeleteFileForTesting = path =>
+            {
+                if (Path.GetFileName(path) == "codeindex.db"
+                    && Path.GetFileName(Path.GetDirectoryName(path)!).StartsWith("codeindex-import-", StringComparison.Ordinal))
+                {
+                    cleanupPath = path;
+                    throw new IOException("simulated import dry-run temp cleanup failure");
+                }
+
+                File.Delete(path);
+            };
+
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
+                ExportImportCommandRunner.RunImport([archivePath, "--db", importDbPath, "--dry-run"], new JsonSerializerOptions()));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("Validated CodeIndex archive", stdout);
+            Assert.False(File.Exists(importDbPath));
+            Assert.Contains("Warning: failed to delete import temporary database", stderr);
+            Assert.NotNull(cleanupPath);
+            Assert.True(File.Exists(cleanupPath));
+            if (!OperatingSystem.IsWindows())
+            {
+                Assert.Equal(
+                    DataDirectorySecurity.PrivateDirectoryMode,
+                    File.GetUnixFileMode(Path.GetDirectoryName(cleanupPath)!) & DataDirectorySecurity.PermissionBits);
+            }
+        }
+        finally
+        {
+            ExportImportCommandRunner.DeleteFileForTesting = null;
+            if (cleanupPath != null && File.Exists(cleanupPath))
+                TestProjectHelper.DeleteDirectory(Path.GetDirectoryName(cleanupPath)!);
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunExportArchive_FailureOmitsRawExceptionMessage()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("export_error_sanitize");
@@ -212,8 +332,8 @@ public class ExportImportCommandRunnerTests
             var outputPath = Path.Combine(projectRoot, "codeindex.cdidx.zip");
             ExportImportCommandRunner.DeleteFileForTesting = path =>
             {
-                if (Path.GetFileName(path).StartsWith("codeindex-export-", StringComparison.Ordinal)
-                    && path.EndsWith(".db", StringComparison.Ordinal))
+                if (Path.GetFileName(path) == "codeindex.db"
+                    && Path.GetFileName(Path.GetDirectoryName(path)!).StartsWith("codeindex-export-", StringComparison.Ordinal))
                 {
                     cleanupPath = path;
                     throw new IOException("simulated export temp cleanup failure");
@@ -232,12 +352,18 @@ public class ExportImportCommandRunnerTests
             Assert.Contains("IOException", stderr);
             Assert.NotNull(cleanupPath);
             Assert.True(File.Exists(cleanupPath));
+            if (!OperatingSystem.IsWindows())
+            {
+                Assert.Equal(
+                    DataDirectorySecurity.PrivateDirectoryMode,
+                    File.GetUnixFileMode(Path.GetDirectoryName(cleanupPath)!) & DataDirectorySecurity.PermissionBits);
+            }
         }
         finally
         {
             ExportImportCommandRunner.DeleteFileForTesting = null;
             if (cleanupPath != null && File.Exists(cleanupPath))
-                File.Delete(cleanupPath);
+                TestProjectHelper.DeleteDirectory(Path.GetDirectoryName(cleanupPath)!);
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
@@ -589,5 +715,19 @@ public class ExportImportCommandRunnerTests
             stream.Write(databaseBytes, 0, databaseBytes.Length);
 
         return archivePath;
+    }
+
+    private static void AssertExportImportError(string stdout, string command, string phase, string errorCode)
+    {
+        using var document = JsonDocument.Parse(stdout);
+        var root = document.RootElement;
+        Assert.Equal("1", root.GetProperty("api_version").GetString());
+        Assert.Equal("error", root.GetProperty("status").GetString());
+        Assert.Equal(command, root.GetProperty("command").GetString());
+        Assert.Equal(phase, root.GetProperty("phase").GetString());
+        Assert.Equal(errorCode, root.GetProperty("error_code").GetString());
+        Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("message").GetString()));
+        Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("hint").GetString()));
+        Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("usage").GetString()));
     }
 }

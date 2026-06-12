@@ -336,6 +336,44 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void ParseArgs_ProjectFilterFallbackReportsEffectiveRoot_Issue3461()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_solution_filter_fallback");
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_solution_filter_fallback_{Guid.NewGuid():N}.db");
+        var originalCurrentDirectory = Environment.CurrentDirectory;
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src", "App"));
+            File.WriteAllText(Path.Combine(projectRoot, "CodeIndex.sln"), """
+            Microsoft Visual Studio Solution File, Format Version 12.00
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "App", "src\App\App.csproj", "{11111111-1111-1111-1111-111111111111}"
+            EndProject
+            """);
+            File.WriteAllText(Path.Combine(projectRoot, "src", "App", "App.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+
+            Environment.CurrentDirectory = projectRoot;
+            var expectedProjectRoot = Path.GetFullPath(Environment.CurrentDirectory);
+            var options = QueryCommandRunner.ParseArgs(
+                ["Auth", "--db", dbPath, "--project", "App"],
+                jsonDefault: false,
+                allowNamedQuery: true);
+
+            Assert.Equal("Auth", options.Query);
+            Assert.Equal(["App"], options.ProjectFilters);
+            Assert.Equal(["src/App/*"], options.PathPatterns);
+            Assert.Equal(expectedProjectRoot, options.ProjectFilterRoot);
+            Assert.Equal(QueryCommandRunner.ProjectFilterRootFallbackReasonCurrentDirectory, options.ProjectFilterRootFallbackReason);
+            Assert.Null(options.ParseError);
+        }
+        finally
+        {
+            Environment.CurrentDirectory = originalCurrentDirectory;
+            TestProjectHelper.DeleteFile(dbPath);
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunDefinition_LspFormatUsesIndexedProjectRootForExplicitDb_Issue3151()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_explicit_db_root");
@@ -639,6 +677,54 @@ public partial class QueryCommandRunnerTests
             Assert.Contains(CommandErrorCodes.DbError, stderr);
             Assert.Contains("database must be writable", stderr);
             Assert.DoesNotContain("backfill-fold", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunVacuum_DryRunJsonReportsMaintenanceEstimate_Issue3564()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_vacuum_dry_run");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using (var db = new DbContext(dbPath))
+            {
+                using var command = db.Connection.CreateCommand();
+                command.CommandText = @"
+                    CREATE TABLE vacuum_payload (id INTEGER PRIMARY KEY, payload BLOB);
+                    WITH RECURSIVE n(value) AS (
+                        SELECT 1
+                        UNION ALL
+                        SELECT value + 1 FROM n WHERE value < 128
+                    )
+                    INSERT INTO vacuum_payload (payload)
+                    SELECT randomblob(4096) FROM n;
+                    DELETE FROM vacuum_payload;";
+                command.ExecuteNonQuery();
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunVacuum(
+                ["--db", dbPath, "--dry-run", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            Assert.Equal("dry_run", root.GetProperty("status").GetString());
+            Assert.True(root.GetProperty("dry_run").GetBoolean());
+            Assert.True(root.GetProperty("estimated_pages_reclaimable").GetInt64() > 0);
+            Assert.True(root.GetProperty("estimated_bytes_reclaimable").GetInt64() > 0);
+            Assert.Equal(0, root.GetProperty("pages_reclaimed").GetInt64());
+            Assert.Equal(root.GetProperty("page_count_before").GetInt64(), root.GetProperty("page_count_after").GetInt64());
+            Assert.Equal("incremental", root.GetProperty("auto_vacuum_mode_after_name").GetString());
+            var guidance = root.GetProperty("maintenance_guidance");
+            Assert.Equal("vacuum_recommended", guidance.GetProperty("freelist_state").GetString());
+            Assert.Equal("cdidx vacuum --db <db>", guidance.GetProperty("recommended_command").GetString());
         }
         finally
         {
@@ -2198,11 +2284,10 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void RunLanguages_HumanOutput_WideExtensionListSpillsOntoContinuationLine()
     {
-        // The human-readable table must not let long extension lists (dockerfile / makefile /
-        // python / ruby / xml / msbuild) swallow the Symbols / Graph columns. Instead, spill onto a
-        // continuation line so the row is still readable.
-        // 人間向けテーブルは、長い拡張子リスト（dockerfile / makefile / python / ruby / xml / msbuild）が
-        // Symbols / Graph 列を食い潰さないようにし、継続行へ退避させて可読性を保つこと。
+        // The human-readable table must not let long extension/file-name lists swallow the
+        // Symbols / Graph columns. Instead, spill onto a continuation line so the row is readable.
+        // 人間向けテーブルは、長い拡張子・ファイル名リストが Symbols / Graph 列を食い潰さないようにし、
+        // 継続行へ退避させて可読性を保つこと。
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages([], _jsonOptions));
 
         Assert.Equal(CommandExitCodes.Success, exitCode);
@@ -2213,7 +2298,7 @@ public partial class QueryCommandRunnerTests
         // Rows with long extension / alias lists must spill onto a continuation line so the
         // Symbols / Graph columns stay readable.
         // 拡張子や alias が長い行は継続行に退避し、Symbols / Graph 列の可読性を保つ。
-        var wideLangs = new[] { "csharp", "dockerfile", "makefile", "python", "ruby", "msbuild" };
+        var wideLangs = new[] { "csharp", "dependency_lock", "dependency_manifest", "dockerfile", "makefile", "python", "ruby", "msbuild" };
         foreach (var wide in wideLangs)
         {
             var headerIndex = Array.FindIndex(lines, line => line.StartsWith($"{wide} ", StringComparison.Ordinal));
@@ -2223,6 +2308,8 @@ public partial class QueryCommandRunnerTests
             // ヘッダ行には言語名・シンボル・グラフのみが含まれ、拡張子文字列は含まれない。
             Assert.DoesNotContain("Dockerfile", header);
             Assert.DoesNotContain("Makefile", header);
+            Assert.DoesNotContain("package-lock.json", header);
+            Assert.DoesNotContain("pyproject.toml", header);
             Assert.DoesNotContain("WORKSPACE", header);
             Assert.DoesNotContain("Gemfile", header);
             Assert.DoesNotContain(".csproj", header);
@@ -3972,6 +4059,13 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(25, json.GetProperty("count").GetInt32());
+            Assert.False(json.GetProperty("degraded").GetBoolean());
+            Assert.True(json.GetProperty("authoritative_count").GetBoolean());
+            Assert.True(json.GetProperty("freshness_available").GetBoolean());
+            Assert.True(json.GetProperty("indexed_file_count").GetInt32() > 0);
+            var queryContext = json.GetProperty("query_context");
+            Assert.True(queryContext.GetProperty("count").GetBoolean());
+            Assert.Equal(useExplicitLimit ? 5 : 20, queryContext.GetProperty("limit").GetInt32());
 
             switch (command)
             {
@@ -3982,12 +4076,15 @@ public partial class QueryCommandRunnerTests
                 case "callers":
                 case "callees":
                     Assert.Equal(25, json.GetProperty("files").GetInt32());
+                    Assert.Equal(25, json.GetProperty("file_count").GetInt32());
                     break;
                 case "find":
                     Assert.Equal(1, json.GetProperty("files").GetInt32());
                     Assert.Equal(1, json.GetProperty("file_count").GetInt32());
                     break;
                 case "files":
+                    Assert.Equal(25, json.GetProperty("files").GetInt32());
+                    Assert.Equal(25, json.GetProperty("file_count").GetInt32());
                     break;
                 default:
                     throw new ArgumentOutOfRangeException(nameof(command), command, null);

@@ -32,9 +32,32 @@
           "visible_column": 23,
           "visible_length": 3
         }
-      ]
+      ],
+      "match_origins": [
+        "code"
+      ],
+      "test_file": false,
+      "test_symbol": false,
+      "test_fixture": false
     }
   ],
+  "match_origins": [
+    "code"
+  ],
+  "match_facets": [
+    {
+      "line": 5,
+      "column": 23,
+      "length": 3,
+      "origin": "code",
+      "test_file": false,
+      "test_symbol": false,
+      "test_fixture": false
+    }
+  ],
+  "test_file": false,
+  "test_symbol": false,
+  "test_fixture": false,
   "context_before": 4,
   "context_after": 2,
   "truncated_line_count": 0,

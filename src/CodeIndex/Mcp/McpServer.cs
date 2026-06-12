@@ -174,6 +174,7 @@ public partial class McpServer : IDisposable
     internal const int MaxConfiguredResponseBytes = 64 * 1024 * 1024;
     internal const int MaxClientResponseJsonBytes = 1 * 1024 * 1024;
     internal const int MaxMcpPaginationOffset = 10_000;
+    internal const int MaxMcpMapDepth = 32;
     internal const double MinKeepAliveIntervalSeconds = 1.0;
     internal const double MaxKeepAliveIntervalSeconds = 300.0;
     private const string MaxResponseBytesEnvVar = "CDIDX_MCP_RESPONSE_MAX_BYTES";
@@ -471,7 +472,7 @@ public partial class McpServer : IDisposable
         if (transport is HttpMcpTransport httpTransport)
         {
             httpTransport.OutOfBandFrameHandler = ProcessFrame;
-            httpTransport.HealthJsonProvider = BuildHealthJson;
+            httpTransport.HealthJsonProvider = () => BuildHealthJson(httpTransport);
             httpTransport.KeepAliveInterval = _keepAliveInterval;
             httpTransport.KeepAliveFrameProvider = BuildKeepAliveNotificationJson;
         }
@@ -1394,8 +1395,8 @@ public partial class McpServer : IDisposable
         }).ConfigureAwait(false);
     }
 
-    private string BuildHealthJson()
-        => BuildHealthResult().ToJsonString(_jsonOptions);
+    private string BuildHealthJson(HttpMcpTransport? httpTransport = null)
+        => BuildHealthResult(httpTransport).ToJsonString(_jsonOptions);
 
     private string BuildKeepAliveNotificationJson()
     {
@@ -1430,7 +1431,7 @@ public partial class McpServer : IDisposable
         return TimeSpan.FromSeconds(seconds);
     }
 
-    private JsonObject BuildHealthResult()
+    private JsonObject BuildHealthResult(HttpMcpTransport? httpTransport = null)
     {
         var now = DateTimeOffset.UtcNow;
         var dbOpen = ProbeDbHealth(now, out var dbError);
@@ -1443,6 +1444,13 @@ public partial class McpServer : IDisposable
             ["last_db_check_at"] = _lastDbCheckAt?.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
             ["transport_ready"] = _running,
         };
+        if (httpTransport is not null)
+        {
+            result["http_event_stream_count"] = httpTransport.EventStreamCount;
+            result["http_event_stream_limit"] = httpTransport.MaxEventStreams;
+            result["http_max_concurrent_handlers"] = httpTransport.MaxConcurrentHandlers;
+            result["http_queued_request_count"] = httpTransport.QueuedRequestCount;
+        }
         if (!string.IsNullOrWhiteSpace(dbError))
             result["db_error"] = dbError;
         return result;
@@ -3737,8 +3745,20 @@ public partial class McpServer : IDisposable
                 }
             }
         };
-        if (structuredContent != null)
+        if (structuredContent is JsonObject structuredObject)
+        {
+            AddProjectFilterRootDiagnostics(structuredObject);
             result["structuredContent"] = structuredContent;
+        }
+        else if (structuredContent != null)
+        {
+            ClearProjectFilterRootDiagnostics();
+            result["structuredContent"] = structuredContent;
+        }
+        else
+        {
+            ClearProjectFilterRootDiagnostics();
+        }
         var response = CreateSuccessResponse(true, id, result);
         var responseLimit = GetMaxResponseBytes();
         if (TryMeasureJsonUtf8BytesWithinLimit(response, _jsonOptions, responseLimit, out var responseBytes))
@@ -3904,7 +3924,7 @@ public partial class McpServer : IDisposable
     /// <c>data.similar_values</c> 配列を添えるので、MCP クライアントは
     /// 人間向けメッセージを解析せずに代替候補を提示できる (#1582)。
     /// </summary>
-    private static JsonObject CreateToolErrorResponse(JsonNode? id, string message,
+    private JsonObject CreateToolErrorResponse(JsonNode? id, string message,
         string category, string suggestion, bool retrySafe, JsonObject? extraData = null,
         IReadOnlyList<string>? similarValues = null)
         => CreateToolErrorResponse(id is not null, id, message, category, suggestion, retrySafe, extraData, similarValues);
@@ -3920,7 +3940,7 @@ public partial class McpServer : IDisposable
     // / retry_safe=false とする。任意の `similarValues` は未知 enum 値に対する構造化された
     // did-you-mean 候補 (#1582)。より具体的なカテゴリを持てる呼び出し元は明示オーバーロード
     // を使う。
-    private static JsonObject CreateToolErrorResponse(JsonNode? id, string message,
+    private JsonObject CreateToolErrorResponse(JsonNode? id, string message,
         IReadOnlyList<string>? similarValues = null)
         => CreateToolErrorResponse(id, message,
             category: McpErrorEnvelope.CategoryInvalidArgument,
@@ -3935,10 +3955,11 @@ public partial class McpServer : IDisposable
     // #1581: ツール結果エラーにも JSON-RPC エラーと同じ `category` / `suggestion` / `retry_safe`
     // を `result.structuredContent` に載せる。既存の `content[0].text` + `isError` だけを読む
     // クライアントは互換のまま、新規クライアントは `structuredContent` でカテゴリ分岐できる。
-    private static JsonObject CreateToolErrorResponse(bool hasId, JsonNode? id, string message,
+    private JsonObject CreateToolErrorResponse(bool hasId, JsonNode? id, string message,
         string category, string suggestion, bool retrySafe, JsonObject? extraData = null,
         IReadOnlyList<string>? similarValues = null)
     {
+        ClearProjectFilterRootDiagnostics();
         var result = new JsonObject
         {
             ["content"] = new JsonArray

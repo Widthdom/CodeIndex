@@ -5,7 +5,7 @@
 # Usage / 使い方:
 #   curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash
 #   curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/v1.5.0/install.sh | bash -s -- v1.5.0
-#   export CDIDX_INSTALL_DIR=/usr/local/bin; curl -fsSL ... | bash
+#   export CDIDX_ALLOW_RISKY_INSTALL_DIR=1 CDIDX_INSTALL_DIR=/usr/local/bin; curl -fsSL ... | bash
 #   bash ./install.sh --self-test-local-mirror [--self-test-allow-overwrite] [vX.Y.Z]
 #   bash ./install.sh --reinstall-real vX.Y.Z
 #   bash ./install.sh --doctor [vX.Y.Z]
@@ -21,6 +21,7 @@
 #   CDIDX_REQUIRE_ATTESTATION=1 Require GitHub provenance verification via gh
 #   CDIDX_STRICT_VERIFY=1       Require GPG checksum-manifest signature verification
 #   CDIDX_RELEASE_GPG_FINGERPRINT Expected checksum signer fingerprint
+#   CDIDX_ALLOW_RISKY_INSTALL_DIR=1 Allow root/home/system install targets
 #   CDIDX_LOCAL_MIRROR_PORT     Local self-test HTTP server port (default: 18765)
 #   HTTPS_PROXY / HTTP_PROXY    Proxy used by curl for release and API probes
 #   NO_PROXY                    Hosts that should bypass the proxy
@@ -74,7 +75,7 @@
 set -euo pipefail
 
 REPO="Widthdom/CodeIndex"
-INSTALL_DIR="${CDIDX_INSTALL_DIR:-$HOME/.local/bin}"
+INSTALL_DIR="${CDIDX_INSTALL_DIR-${HOME:-}/.local/bin}"
 BINARY_NAME="cdidx"
 MANIFEST_REQUIRED_VERSION="1.24.6"
 GITHUB_BASE_URL="${CDIDX_GITHUB_BASE_URL:-https://github.com}"
@@ -587,6 +588,221 @@ is_self_test_install_dir_risky() {
     return 1
 }
 
+allow_risky_install_dir() {
+    [ "${CDIDX_ALLOW_RISKY_INSTALL_DIR:-0}" = "1" ]
+}
+
+expand_install_dir_path() {
+    local dir="$1"
+
+    case "$dir" in
+        "~"|"~/"*)
+            if [ -z "${HOME:-}" ] || [ "$HOME" = "/" ]; then
+                report_error "Cannot expand cdidx install directory ${dir}: HOME is empty or root."
+                return 1
+            fi
+            dir="${HOME}${dir#\~}"
+            ;;
+    esac
+
+    while [ "${#dir}" -gt 1 ]; do
+        case "$dir" in
+            */) dir="${dir%/}" ;;
+            *) break ;;
+        esac
+    done
+
+    printf '%s\n' "$dir"
+}
+
+normalize_install_dir_path() {
+    local path="$1"
+    local existing="$path"
+    local suffix=""
+    local base
+    local normalized_existing
+
+    while [ ! -e "$existing" ] && [ "$existing" != "/" ]; do
+        base="$(basename -- "$existing")"
+        suffix="/${base}${suffix}"
+        existing="$(dirname -- "$existing")"
+    done
+
+    if [ ! -d "$existing" ]; then
+        report_error "Install directory ancestor is not a directory: ${existing}"
+        return 1
+    fi
+
+    normalized_existing="$(CDPATH= cd -P -- "$existing" && pwd)" || return 1
+    if [ "$normalized_existing" = "/" ]; then
+        if [ -n "$suffix" ]; then
+            printf '%s\n' "$suffix"
+        else
+            printf '/\n'
+        fi
+    else
+        printf '%s%s\n' "$normalized_existing" "$suffix"
+    fi
+}
+
+normalized_home_dir() {
+    local home_dir="${HOME:-}"
+
+    if [ -z "$home_dir" ]; then
+        return 1
+    fi
+
+    while [ "${#home_dir}" -gt 1 ]; do
+        case "$home_dir" in
+            */) home_dir="${home_dir%/}" ;;
+            *) break ;;
+        esac
+    done
+
+    if [ -d "$home_dir" ]; then
+        (CDPATH= cd -P -- "$home_dir" && pwd)
+    else
+        printf '%s\n' "$home_dir"
+    fi
+}
+
+is_high_risk_install_dir() {
+    local dir="$1"
+    local home_dir
+
+    case "$dir" in
+        /|/bin|/sbin|/tmp|/var|/var/tmp|/private/tmp|/private/var|/private/var/tmp|/usr|/usr/bin|/usr/sbin|/usr/local|/usr/local/bin|/usr/local/sbin|/usr/share|/usr/local/share|/usr/lib|/usr/local/lib|/opt|/opt/bin|/opt/homebrew|/opt/homebrew/bin|/opt/local|/opt/local/bin|/Applications|/Library|/System)
+            return 0
+            ;;
+    esac
+
+    home_dir="$(normalized_home_dir || true)"
+    if [ -n "$home_dir" ] && [ "$dir" = "$home_dir" ]; then
+        return 0
+    fi
+
+    return 1
+}
+
+validate_normal_install_dir() {
+    local expanded
+    local normalized
+
+    if [ -z "${CDIDX_INSTALL_DIR+x}" ] && { [ -z "${HOME:-}" ] || [ "$HOME" = "/" ]; }; then
+        report_error "Cannot safely derive cdidx install directory: HOME is empty or root."
+        return 1
+    fi
+
+    if ! expanded="$(expand_install_dir_path "$INSTALL_DIR")"; then
+        return 1
+    fi
+
+    case "$expanded" in
+        "")
+            report_error "Refusing empty cdidx install directory. Set CDIDX_INSTALL_DIR to an absolute directory."
+            return 1
+            ;;
+        //*)
+            report_error "Refusing ambiguous cdidx install directory: ${expanded}"
+            return 1
+            ;;
+        "."|".."|./*|../*|*/./*|*/../*|*/.|*/..)
+            report_error "Refusing ambiguous cdidx install directory: ${expanded}"
+            return 1
+            ;;
+        /*) ;;
+        *)
+            report_error "Refusing non-absolute cdidx install directory: ${expanded}"
+            return 1
+            ;;
+    esac
+
+    if ! normalized="$(normalize_install_dir_path "$expanded")"; then
+        return 1
+    fi
+
+    if is_high_risk_install_dir "$normalized" && ! allow_risky_install_dir; then
+        report_error "Refusing risky install directory: ${normalized}. Set CDIDX_ALLOW_RISKY_INSTALL_DIR=1 to override."
+        return 1
+    fi
+
+    INSTALL_DIR="$normalized"
+    return 0
+}
+
+normalize_existing_or_parent_directory() {
+    local path="$1"
+    local parent
+    local base
+    local normalized_parent
+
+    while [ "${#path}" -gt 1 ]; do
+        case "$path" in
+            */) path="${path%/}" ;;
+            *) break ;;
+        esac
+    done
+
+    if [ -d "$path" ]; then
+        (CDPATH= cd -P -- "$path" && pwd)
+        return
+    fi
+
+    parent="$(dirname -- "$path")"
+    base="$(basename -- "$path")"
+    if [ ! -d "$parent" ]; then
+        report_error "Cache root parent does not exist: ${parent}"
+        return 1
+    fi
+
+    normalized_parent="$(CDPATH= cd -P -- "$parent" && pwd)" || return 1
+    if [ "$normalized_parent" = "/" ]; then
+        printf '/%s\n' "$base"
+    else
+        printf '%s/%s\n' "$normalized_parent" "$base"
+    fi
+}
+
+resolve_purge_cache_dir() {
+    local cache_root
+    local normalized_root
+
+    if [ -n "${XDG_CACHE_HOME:-}" ]; then
+        cache_root="$XDG_CACHE_HOME"
+    else
+        if [ -z "${HOME:-}" ] || [ "$HOME" = "/" ]; then
+            report_error "Cannot safely derive cdidx cache directory: HOME is empty or root."
+            return 1
+        fi
+        cache_root="${HOME}/.cache"
+    fi
+
+    case "$cache_root" in
+        ""|"/"|".")
+            report_error "Refusing to purge cdidx cache from unsafe cache root: ${cache_root:-<empty>}"
+            return 1
+            ;;
+        /*) ;;
+        *)
+            report_error "Refusing to purge cdidx cache from non-absolute cache root: ${cache_root}"
+            return 1
+            ;;
+    esac
+
+    if ! normalized_root="$(normalize_existing_or_parent_directory "$cache_root")"; then
+        return 1
+    fi
+
+    case "$normalized_root" in
+        ""|"/")
+            report_error "Refusing to purge cdidx cache from unsafe normalized cache root: ${normalized_root:-<empty>}"
+            return 1
+            ;;
+    esac
+
+    printf '%s/cdidx\n' "$normalized_root"
+}
+
 release_download_base_url() {
     printf '%s/%s/releases/download/%s' "$GITHUB_BASE_URL" "$REPO" "$VERSION"
 }
@@ -891,10 +1107,45 @@ restore_backed_up_files() {
     return 0
 }
 
+is_expected_release_asset_name() {
+    case "$1" in
+        "$BINARY_NAME"|version.json|libe_sqlite3.so|libe_sqlite3.dylib|LICENSE|COMMERCIAL_LICENSE.md|INTEGRATION_POLICY.md|TRADEMARKS.md|MANIFEST.sha256|LICENSES)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+validate_promoted_asset_name() {
+    local asset="$1"
+
+    case "$asset" in
+        ""|"."|".."|/*|*/*|*\\*)
+            report_error "Refusing to remove unsafe rollback asset name: ${asset:-<empty>}"
+            return 1
+            ;;
+    esac
+
+    if ! is_expected_release_asset_name "$asset"; then
+        report_error "Refusing to remove unexpected rollback asset name: ${asset}"
+        return 1
+    fi
+
+    return 0
+}
+
 remove_promoted_files() {
     local install_dir="$1"
     local promoted_files="$2"
     local asset
+
+    for asset in $promoted_files; do
+        if ! validate_promoted_asset_name "$asset"; then
+            return 1
+        fi
+    done
 
     for asset in $promoted_files; do
         if [ -e "${install_dir}/${asset}" ]; then
@@ -1445,10 +1696,20 @@ check_path() {
 
 uninstall_cdidx() {
     info "cdidx uninstaller"
+    if ! validate_normal_install_dir; then
+        return 1
+    fi
     acquire_install_lock
 
     local removed=0
     local path
+    local cache_dir=""
+    if [ "$PURGE_CACHE_ON_UNINSTALL" = "1" ]; then
+        if ! cache_dir="$(resolve_purge_cache_dir)"; then
+            return 1
+        fi
+    fi
+
     for path in \
         "${INSTALL_DIR}/${BINARY_NAME}" \
         "${INSTALL_DIR}/version.json" \
@@ -1473,7 +1734,6 @@ uninstall_cdidx() {
     fi
 
     if [ "$PURGE_CACHE_ON_UNINSTALL" = "1" ]; then
-        local cache_dir="${XDG_CACHE_HOME:-${HOME}/.cache}/cdidx"
         if [ -d "$cache_dir" ]; then
             rm -rf "$cache_dir"
             info "Removed ${cache_dir}"
@@ -2175,6 +2435,11 @@ format_doctor_probe_status() {
 
 main() {
     info "cdidx installer"
+    if [ "${SELF_TEST_LOCAL_MIRROR:-0}" != "1" ]; then
+        if ! validate_normal_install_dir; then
+            exit 1
+        fi
+    fi
     detect_platform
     info "Detected platform: ${RID}"
     acquire_install_lock

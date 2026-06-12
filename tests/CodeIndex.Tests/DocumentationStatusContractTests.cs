@@ -28,14 +28,19 @@ public class DocumentationStatusContractTests
         "unknown_extension_files",
         "unknown_extension_files_truncated",
         "unknown_extension_file_path_limit",
+        "unknown_extension_extension_counts",
+        "unknown_extension_category_counts",
+        "unknown_extension_groups",
         "extractors",
         "path_case_sensitive",
         "mac_profile",
         "stale_after_seconds",
         "index_age_seconds",
+        "last_failed_or_partial_index_run",
         "degraded_reason",
         "recommended_action",
         "alternative_action",
+        "repair_commands",
     ];
 
     [Theory]

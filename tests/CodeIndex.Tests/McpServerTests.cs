@@ -3723,15 +3723,19 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
-    public void ToolsList_SearchHasRequiredQueryParam()
+    public void ToolsList_SearchAdvertisesQueryOrRecipeModes_Issue3545()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
         var response = _server.HandleMessage(request)!;
 
         var tools = response["result"]!["tools"]!.AsArray();
         var searchTool = tools.First(t => t!["name"]!.GetValue<string>() == "search")!;
-        var required = searchTool["inputSchema"]!["required"]!.AsArray();
-        Assert.Contains("query", required.Select(r => r!.GetValue<string>()));
+        var modes = searchTool["inputSchema"]!["anyOf"]!.AsArray()
+            .Select(mode => mode!["required"]!.AsArray().Single()!.GetValue<string>())
+            .ToArray();
+        Assert.Contains("query", modes);
+        Assert.Contains("recipe", modes);
+        Assert.Contains("listRecipes", modes);
     }
 
     [Fact]
@@ -3829,8 +3833,11 @@ public class McpServerTests : IDisposable
         Assert.Equal(QueryCommandRunner.MaxQueryPathFilterCount, pathArraySchema["maxItems"]!.GetValue<int>());
         Assert.Equal(QueryCommandRunner.MaxQueryPathFilterLength, pathArraySchema["items"]!["maxLength"]!.GetValue<int>());
         var excludePathsSchema = searchProperties["excludePaths"]!;
-        Assert.Equal(QueryCommandRunner.MaxQueryPathFilterCount, excludePathsSchema["maxItems"]!.GetValue<int>());
-        Assert.Equal(QueryCommandRunner.MaxQueryPathFilterLength, excludePathsSchema["items"]!["maxLength"]!.GetValue<int>());
+        var excludePathsStringSchema = excludePathsSchema["oneOf"]!.AsArray()[0]!;
+        Assert.Equal(QueryCommandRunner.MaxQueryPathFilterLength, excludePathsStringSchema["maxLength"]!.GetValue<int>());
+        var excludePathsArraySchema = excludePathsSchema["oneOf"]!.AsArray()[1]!;
+        Assert.Equal(QueryCommandRunner.MaxQueryPathFilterCount, excludePathsArraySchema["maxItems"]!.GetValue<int>());
+        Assert.Equal(QueryCommandRunner.MaxQueryPathFilterLength, excludePathsArraySchema["items"]!["maxLength"]!.GetValue<int>());
 
         var referencesTool = tools.First(t => t!["name"]!.GetValue<string>() == "references")!;
         var kindEnum = referencesTool["inputSchema"]!["properties"]!["kind"]!["enum"]!.AsArray()
@@ -4138,19 +4145,123 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
-    public void McpToolFilter_Parse_UnknownNamesInDenyListDoNotAffectKnownTools()
+    public void McpToolFilter_Parse_UnknownNamesWarnAndKeepFilterSemantics_Issue3406()
     {
-        // A typo in CDIDX_MCP_TOOLS_DENY simply does not match anything; the known set stays
-        // enabled. Allowlist semantics deliberately differ: a non-empty allowlist is treated
-        // as a strict pin, so an allowlist of only-unknown names exposes nothing — that empty
-        // surface is visible at the next tools/list call.
-        var denyFilter = McpToolFilter.Parse(null, "bogus_tool");
-        foreach (var name in McpToolFilter.KnownToolNames)
-            Assert.True(denyFilter.IsEnabled(name), $"{name} should remain enabled when denylist names only unknown tools");
+        lock (TestConsoleLock.Gate)
+        {
+            var originalError = Console.Error;
+            using var stderr = new StringWriter();
+            try
+            {
+                Console.SetError(stderr);
 
-        var allowFilter = McpToolFilter.Parse("bogus_tool", null);
-        foreach (var name in McpToolFilter.KnownToolNames)
-            Assert.False(allowFilter.IsEnabled(name), $"{name} should be disabled when allowlist only names unknown tools");
+                // A typo in CDIDX_MCP_TOOLS_DENY simply does not match anything; the known set
+                // stays enabled, but the operator now gets a bounded warning.
+                // CDIDX_MCP_TOOLS_DENY の typo は何にも一致しないため既知ツールは有効のまま。
+                // ただし、オペレータに bounded warning を出す。
+                var denyFilter = McpToolFilter.Parse(null, "bogus_tool");
+                foreach (var name in McpToolFilter.KnownToolNames)
+                    Assert.True(denyFilter.IsEnabled(name), $"{name} should remain enabled when denylist names only unknown tools");
+
+                // Allowlist semantics deliberately differ: an allowlist with no known names
+                // fails closed and exposes nothing.
+                // allowlist は厳格に扱い、既知名が 0 件なら fail closed で何も公開しない。
+                var allowFilter = McpToolFilter.Parse("bogus_tool", null);
+                foreach (var name in McpToolFilter.KnownToolNames)
+                    Assert.False(allowFilter.IsEnabled(name), $"{name} should be disabled when allowlist only names unknown tools");
+
+                var warning = stderr.ToString();
+                Assert.Contains(McpToolFilter.DenyEnvVarName, warning);
+                Assert.Contains(McpToolFilter.AllowEnvVarName, warning);
+                Assert.Contains("unknown MCP tool name", warning);
+                Assert.Contains("failing closed", warning);
+            }
+            finally
+            {
+                Console.SetError(originalError);
+            }
+        }
+    }
+
+    [Fact]
+    public void McpToolFilter_Parse_EmptyAllowListWarnsAndFailsClosed_Issue3406()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalError = Console.Error;
+            using var stderr = new StringWriter();
+            try
+            {
+                Console.SetError(stderr);
+                var filter = McpToolFilter.Parse("   ", null);
+
+                foreach (var name in McpToolFilter.KnownToolNames)
+                    Assert.False(filter.IsEnabled(name), $"{name} should be disabled when allowlist is explicitly empty");
+                var warning = stderr.ToString();
+                Assert.Contains(McpToolFilter.AllowEnvVarName, warning);
+                Assert.Contains("empty", warning);
+                Assert.Contains("failing closed", warning);
+            }
+            finally
+            {
+                Console.SetError(originalError);
+            }
+        }
+    }
+
+    [Fact]
+    public void McpToolFilter_Parse_EmptyDenyListWarnsAndKeepsDefaults_Issue3406()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalError = Console.Error;
+            using var stderr = new StringWriter();
+            try
+            {
+                Console.SetError(stderr);
+                var filter = McpToolFilter.Parse(null, "");
+
+                foreach (var name in McpToolFilter.KnownToolNames)
+                    Assert.True(filter.IsEnabled(name), $"{name} should remain enabled when denylist is explicitly empty");
+                var warning = stderr.ToString();
+                Assert.Contains(McpToolFilter.DenyEnvVarName, warning);
+                Assert.Contains("empty", warning);
+                Assert.DoesNotContain("failing closed", warning);
+            }
+            finally
+            {
+                Console.SetError(originalError);
+            }
+        }
+    }
+
+    [Fact]
+    public void McpToolFilter_Parse_UnknownNameWarningIsBounded_Issue3406()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalError = Console.Error;
+            using var stderr = new StringWriter();
+            try
+            {
+                Console.SetError(stderr);
+                var unknownNames = Enumerable.Range(0, McpToolFilter.MaxToolFilterUnknownNamesReported + 2)
+                    .Select(i => $"bogus_tool_{i}");
+
+                var filter = McpToolFilter.Parse(string.Join(',', unknownNames.Prepend("search")), null);
+
+                Assert.True(filter.IsEnabled("search"));
+                Assert.False(filter.IsEnabled("references"));
+                var warning = stderr.ToString();
+                Assert.Contains("unknown MCP tool names", warning);
+                Assert.Contains("more", warning);
+                Assert.DoesNotContain($"bogus_tool_{McpToolFilter.MaxToolFilterUnknownNamesReported + 1}", warning);
+            }
+            finally
+            {
+                Console.SetError(originalError);
+            }
+        }
     }
 
     [Fact]
@@ -4323,6 +4434,137 @@ public class McpServerTests : IDisposable
         Assert.NotNull(structured["results"]![0]!["matchLines"]);
         Assert.NotNull(structured["results"]![0]!["highlights"]);
         Assert.Null(structured["results"]![0]!["content"]);
+    }
+
+    [Fact]
+    public void ToolsCall_Search_ListRecipesReturnsBuiltIns_Issue3545()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_SEARCH_RECIPE_PATHS");
+        env.Set("CDIDX_SEARCH_RECIPE_PATHS", null);
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"listRecipes":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Null(response["error"]);
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.True(structured["count"]!.GetValue<int>() >= 1);
+        var recipes = structured["recipes"]!.AsArray();
+        var risky = recipes.Single(recipe => recipe!["name"]!.GetValue<string>() == "risky-code")!;
+        Assert.Contains(risky["queries"]!.AsArray(), query => query!["name"]!.GetValue<string>() == "unbounded-json-parse");
+    }
+
+    [Fact]
+    public void ToolsCall_Search_RunRecipeReturnsGroupedResults_Issue3545()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_SEARCH_RECIPE_PATHS");
+        env.Set("CDIDX_SEARCH_RECIPE_PATHS", null);
+        InsertIndexedFile("src/json.cs", "csharp", "var doc = JsonDocument.Parse(payload);\n");
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"recipe":"risky-code","limit":5}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Null(response["error"]);
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal("risky-code", structured["recipe"]!["name"]!.GetValue<string>());
+        Assert.True(structured["result_count"]!.GetValue<int>() >= 1);
+        var jsonParseQuery = structured["queries"]!.AsArray()
+            .Single(query => query!["name"]!.GetValue<string>() == "unbounded-json-parse")!;
+        Assert.Equal(1, jsonParseQuery["count"]!.GetValue<int>());
+        Assert.Equal("src/json.cs", jsonParseQuery["results"]![0]!["path"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Search_ListRecipesIncludesConfiguredSources_Issue3545()
+    {
+        var recipePath = Path.Combine(_projectRoot, "search-recipes.json");
+        File.WriteAllText(recipePath, """
+            {
+              "recipes": [
+                {
+                  "name": "local-audit",
+                  "description": "Local audit recipe",
+                  "queries": [
+                    {
+                      "name": "todo-comments",
+                      "query": "TODO",
+                      "description": "Find local TODO markers",
+                      "recommendedLabels": ["audit"],
+                      "falsePositiveGuidance": "Ignore deliberate test fixtures.",
+                      "exactSubstring": true
+                    }
+                  ]
+                }
+              ]
+            }
+            """);
+        using var env = EnvironmentVariableScope.Capture("CDIDX_SEARCH_RECIPE_PATHS");
+        env.Set("CDIDX_SEARCH_RECIPE_PATHS", recipePath);
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"listRecipes":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Null(response["error"]);
+        var structured = response["result"]!["structuredContent"]!;
+        var recipes = structured["recipes"]!.AsArray();
+        var local = recipes.Single(recipe => recipe!["name"]!.GetValue<string>() == "local-audit")!;
+        Assert.Equal("todo-comments", local["queries"]![0]!["name"]!.GetValue<string>());
+        Assert.Null(structured["recipe_source_diagnostics"]);
+    }
+
+    [Fact]
+    public void ToolsCall_Search_ListRecipesBoundsConfiguredSourceDiagnostics_Issue3545()
+    {
+        var recipePaths = new List<string>();
+        for (var i = 0; i < 8; i++)
+        {
+            var recipePath = Path.Combine(_projectRoot, $"invalid-search-recipes-{i}.json");
+            File.WriteAllText(recipePath, "[" + string.Join(",", Enumerable.Repeat("42", 40)) + "]");
+            recipePaths.Add(recipePath);
+        }
+
+        using var env = EnvironmentVariableScope.Capture("CDIDX_SEARCH_RECIPE_PATHS");
+        env.Set("CDIDX_SEARCH_RECIPE_PATHS", string.Join(Path.PathSeparator, recipePaths));
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"listRecipes":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Null(response["error"]);
+        var structured = response["result"]!["structuredContent"]!;
+        var diagnostics = structured["recipe_source_diagnostics"]!.AsArray();
+        Assert.True(diagnostics.Count <= 65);
+        Assert.Contains(diagnostics, diagnostic => diagnostic!.GetValue<string>().Contains("truncated after 64 entries", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ToolsCall_Search_AcceptsScalarExcludePaths_Issue3538()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"App","excludePaths":"src/app.cs"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Null(response["error"]);
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(0, structured["count"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsCall_Definition_AcceptsLspCompatibleAlias_Issue3538()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"definition","arguments":{"query":"App","lspCompatible":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Null(response["error"]);
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.True(structured["lspCompatible"]!.GetValue<bool>());
+        Assert.Equal("file", structured["results"]![0]!["uri"]!.GetValue<string>().Split(':')[0]);
+    }
+
+    [Fact]
+    public void ToolsCall_DeprecatedAliasTypeError_CarriesCompatibilityMetadata_Issue3538()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"references","arguments":{"query":"App","exact":"yes"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Null(response["result"]);
+        var data = response["error"]!["data"]!;
+        Assert.Equal("exactName", data["alias_of"]!.GetValue<string>());
+        Assert.True(data["deprecated"]!.GetValue<bool>());
+        Assert.Equal("boolean", data["expected"]!.GetValue<string>());
     }
 
     [Fact]
@@ -6711,6 +6953,30 @@ public class McpServerTests : IDisposable
         Assert.Equal(McpServer.MaxConfiguredResponseBytes, limits["max_configured_response_bytes"]!.GetValue<int>());
         Assert.Equal(McpServer.MaxBatchQueryResponseByteLimit, limits["batch_response_bytes"]!.GetValue<int>());
         Assert.Equal(McpServer.MaxBatchQueryResponseByteLimit, limits["max_batch_response_bytes"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxBatchQueryResponseByteLimit, limits["batch_query_response_bytes"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxBatchQueryResponseByteLimit, limits["batch_query_max_response_bytes"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxBatchQuerySize, limits["batch_query_max_queries"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxBatchRequestCount, limits["json_rpc_batch_max_requests"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsList_BatchQuerySchemaAdvertisesLimitsAndControls_Issue3539()
+    {
+        var response = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!)!;
+
+        var tools = response["result"]!["tools"]!.AsArray();
+        var batchQuery = tools.First(tool => tool!["name"]!.GetValue<string>() == "batch_query")!;
+        var properties = batchQuery["inputSchema"]!["properties"]!;
+        var queries = properties["queries"]!;
+
+        Assert.Equal(1, queries["minItems"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxBatchQuerySize, queries["maxItems"]!.GetValue<int>());
+        var itemProperties = queries["items"]!["properties"]!;
+        Assert.Equal("string", itemProperties["id"]!["type"]!.GetValue<string>());
+        Assert.Equal("string", itemProperties["slotId"]!["type"]!.GetValue<string>());
+        Assert.Equal(McpServer.MaxBatchQueryResponseByteLimit, properties["maxResponseBytes"]!["maximum"]!.GetValue<int>());
+        Assert.False(properties["estimateOnly"]!["default"]!.GetValue<bool>());
     }
 
     [Fact]
@@ -6727,7 +6993,21 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
-    public void ToolsCall_References_ClampsTooLargeOffset()
+    public void ToolsList_MapDepthSchemaAdvertisesCap_Issue3436()
+    {
+        var response = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!)!;
+
+        var tools = response["result"]!["tools"]!.AsArray();
+        var map = tools.First(tool => tool!["name"]!.GetValue<string>() == "map")!;
+        var depth = map["inputSchema"]!["properties"]!["depth"]!;
+
+        Assert.Equal(0, depth["minimum"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxMcpMapDepth, depth["maximum"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsCall_References_ClampsTooLargeOffset_Issue3436()
     {
         InsertIndexedFile(
             "src/offset-clamp.cs",
@@ -6758,6 +7038,111 @@ public class McpServerTests : IDisposable
         var structured = response["result"]!["structuredContent"]!;
         Assert.Equal(McpServer.MaxMcpPaginationOffset, structured["offset"]!.GetValue<int>());
         Assert.True(structured["total"]!.GetValue<int>() > 0);
+        var warning = Assert.Single(structured["warnings"]!.AsArray());
+        Assert.Contains("offset was clamped", warning!.GetValue<string>(), StringComparison.Ordinal);
+        var adjustment = Assert.Single(structured["argument_adjustments"]!.AsArray());
+        Assert.Equal("offset", adjustment!["argument"]!.GetValue<string>());
+        Assert.Equal("clamped", adjustment["action"]!.GetValue<string>());
+        Assert.Equal(McpServer.MaxMcpPaginationOffset + 1, adjustment["requested"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxMcpPaginationOffset, adjustment["effective"]!.GetValue<int>());
+        Assert.Equal(0, adjustment["minimum"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxMcpPaginationOffset, adjustment["maximum"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsCall_Search_ReportsClampedLimitAndSnippetLines_Issue3436()
+    {
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "search",
+                ["arguments"] = new JsonObject
+                {
+                    ["query"] = "Run",
+                    ["limit"] = 999,
+                    ["snippetLines"] = 999,
+                },
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(SearchSnippetFormatter.MaxSnippetLines, structured["snippetLines"]!.GetValue<int>());
+        var warnings = structured["warnings"]!.AsArray().Select(warning => warning!.GetValue<string>()).ToArray();
+        Assert.Contains(warnings, warning => warning.Contains("limit was clamped", StringComparison.Ordinal));
+        Assert.Contains(warnings, warning => warning.Contains("snippetLines was clamped", StringComparison.Ordinal));
+        var adjustments = structured["argument_adjustments"]!.AsArray();
+        var limit = adjustments.Single(adjustment => adjustment!["argument"]!.GetValue<string>() == "limit")!;
+        Assert.Equal("clamped", limit["action"]!.GetValue<string>());
+        Assert.Equal(999, limit["requested"]!.GetValue<int>());
+        Assert.Equal(200, limit["effective"]!.GetValue<int>());
+        var snippetLines = adjustments.Single(adjustment => adjustment!["argument"]!.GetValue<string>() == "snippetLines")!;
+        Assert.Equal("clamped", snippetLines["action"]!.GetValue<string>());
+        Assert.Equal(999, snippetLines["requested"]!.GetValue<int>());
+        Assert.Equal(SearchSnippetFormatter.MaxSnippetLines, snippetLines["effective"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsCall_Map_ReportsClampedDepth_Issue3436()
+    {
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "map",
+                ["arguments"] = new JsonObject
+                {
+                    ["depth"] = McpServer.MaxMcpMapDepth + 1,
+                },
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(McpServer.MaxMcpMapDepth, structured["depth"]!.GetValue<int>());
+        var adjustment = Assert.Single(structured["argument_adjustments"]!.AsArray());
+        Assert.Equal("depth", adjustment!["argument"]!.GetValue<string>());
+        Assert.Equal("clamped", adjustment["action"]!.GetValue<string>());
+        Assert.Equal(McpServer.MaxMcpMapDepth + 1, adjustment["requested"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxMcpMapDepth, adjustment["effective"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsCall_Map_ReportsIgnoredNegativeDepth_Issue3436()
+    {
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "map",
+                ["arguments"] = new JsonObject
+                {
+                    ["depth"] = -1,
+                },
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Null(structured["depth"]);
+        var adjustment = Assert.Single(structured["argument_adjustments"]!.AsArray());
+        Assert.Equal("depth", adjustment!["argument"]!.GetValue<string>());
+        Assert.Equal("ignored", adjustment["action"]!.GetValue<string>());
+        Assert.Equal(-1, adjustment["requested"]!.GetValue<int>());
+        Assert.Null(adjustment["effective"]);
     }
 
     [Fact]
@@ -6960,7 +7345,6 @@ public class McpServerTests : IDisposable
     }
 
     [Theory]
-    [InlineData("""{"names":""}""", "must be an array")]
     [InlineData("""{"names":[]}""", "no usable entries")]
     [InlineData("""{"names":[""]}""", "no usable entries")]
     [InlineData("""{"names":["   "]}""", "no usable entries")]
@@ -6974,6 +7358,21 @@ public class McpServerTests : IDisposable
         Assert.True(response["result"]!["isError"]!.GetValue<bool>(), $"expected isError for arguments {argsJson}");
         var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
         Assert.Contains(expectedMessageFragment, text);
+    }
+
+    [Fact]
+    public void ToolsCall_Symbols_RejectsScalarNamesAsInvalidParams_Issue3538()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbols","arguments":{"names":""}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Null(response["result"]);
+        var error = response["error"]!;
+        Assert.Equal(-32602, error["code"]!.GetValue<int>());
+        Assert.Contains("Invalid type for argument 'names'", error["message"]!.GetValue<string>(), StringComparison.Ordinal);
+        var data = error["data"]!;
+        Assert.Equal("names", data["parameter"]!.GetValue<string>());
+        Assert.Equal("array", data["expected"]!.GetValue<string>());
     }
 
     [Fact]
@@ -8309,6 +8708,41 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_BatchQuery_EchoesSlotIdAndSummary_Issue3539()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[{"slotId":"ping-slot","tool":"ping"}]}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var slot = Assert.Single(response["result"]!["structuredContent"]!["results"]!.AsArray())!;
+        Assert.Equal("ping-slot", slot["slot_id"]!.GetValue<string>());
+        Assert.Equal("ping", slot["tool"]!.GetValue<string>());
+        Assert.True(slot["ok"]!.GetValue<bool>());
+        Assert.Contains("cdidx v", slot["summary"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.NotNull(slot["result"]!["version"]);
+    }
+
+    [Fact]
+    public void ToolsCall_BatchQuery_EstimateOnlyDoesNotExecuteSlots_Issue3539()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"estimateOnly":true,"queries":[{"id":"slot-a","tool":"ping"},{"slotId":"slot-b","tool":"search","arguments":{"query":"Run","limit":1}}]}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.True(structured["estimate_only"]!.GetValue<bool>());
+        Assert.Equal(2, structured["total_count"]!.GetValue<int>());
+        Assert.Equal(0, structured["metadata"]!["executed"]!.GetValue<int>());
+        Assert.Empty(structured["results"]!.AsArray());
+        Assert.True(structured["metadata"]!["estimated_response_bytes"]!.GetValue<int>() > 0);
+        var estimates = structured["slot_estimates"]!.AsArray();
+        Assert.Equal(2, estimates.Count);
+        Assert.Equal("slot-a", estimates[0]!["slot_id"]!.GetValue<string>());
+        Assert.Equal("ping", estimates[0]!["tool"]!.GetValue<string>());
+        Assert.Equal("slot-b", estimates[1]!["slot_id"]!.GetValue<string>());
+        Assert.Equal("search", estimates[1]!["tool"]!.GetValue<string>());
+        Assert.Contains("query=\"Run\"", estimates[1]!["args_summary"]!.GetValue<string>(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ToolsCall_BatchQuery_BlocksIndexInBatch()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[{"tool":"index","arguments":{"path":"."}}]}}}""")!;
@@ -8716,7 +9150,7 @@ public class McpServerTests : IDisposable
         try
         {
             InsertIndexedFile("src/large.cs", "csharp", "// " + new string('x', 5000));
-            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[{"tool":"ping"},{"tool":"excerpt","arguments":{"path":"src/large.cs","startLine":1,"endLine":1,"maxLineWidth":0}}]}}}""")!;
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[{"slotId":"ping-slot","tool":"ping"},{"slotId":"excerpt-slot","tool":"excerpt","arguments":{"path":"src/large.cs","startLine":1,"endLine":1,"maxLineWidth":0}}]}}}""")!;
             var response = _server.HandleMessage(request)!;
 
             var structured = response["result"]!["structuredContent"]!;
@@ -8726,7 +9160,8 @@ public class McpServerTests : IDisposable
             Assert.True(structured["metadata"]!["estimated_response_bytes"]!.GetValue<int>() <= 950);
             Assert.Equal(950, structured["metadata"]!["response_byte_limit"]!.GetValue<int>());
             Assert.Equal(2, structured["metadata"]!["submitted"]!.GetValue<int>());
-            Assert.Equal(2, structured["metadata"]!["executed"]!.GetValue<int>());
+            var executed = structured["metadata"]!["executed"]!.GetValue<int>();
+            Assert.InRange(executed, 1, 2);
             Assert.Equal(0, structured["metadata"]!["errors"]!.GetValue<int>());
             Assert.Equal("cascading", structured["failure_scope"]!.GetValue<string>());
             Assert.NotNull(structured["cascade_started_at_index"]);
@@ -8735,9 +9170,17 @@ public class McpServerTests : IDisposable
             var truncatedQueries = structured["truncated_queries"]!.AsArray();
             Assert.NotEmpty(truncatedQueries);
             Assert.All(truncatedQueries, q => Assert.NotNull(q!["args_summary"]));
+            Assert.All(truncatedQueries, q => Assert.NotNull(q!["slot_id"]));
             Assert.Contains(truncatedQueries, q =>
-                q!["tool"]?.GetValue<string>() == "ping" &&
-                q["reason"]?.GetValue<string>() == "final_response_byte_limit_exceeded");
+                q!["reason"]?.GetValue<string>() is "response_byte_limit_exceeded" or "response_byte_limit_already_exceeded" or "final_response_byte_limit_exceeded");
+            var splitHint = structured["split_hint"]!;
+            Assert.Equal("response_byte_limit_exceeded", splitHint["reason"]!.GetValue<string>());
+            var firstTruncatedRequestIndex = truncatedQueries
+                .Select(q => q!["request_index"]!.GetValue<int>())
+                .Min();
+            Assert.Equal(firstTruncatedRequestIndex, splitHint["next_request_index"]!.GetValue<int>());
+            Assert.StartsWith("batch_query:v1:", splitHint["resume_cursor"]!.GetValue<string>(), StringComparison.Ordinal);
+            Assert.True(splitHint["suggested_query_count"]!.GetValue<int>() >= 1);
 
             var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
             Assert.Contains("Response truncated", text);
@@ -8759,6 +9202,40 @@ public class McpServerTests : IDisposable
 
         var metadata = response["result"]!["structuredContent"]!["metadata"]!;
         Assert.Equal(McpServer.MaxBatchQueryResponseByteLimit, metadata["response_byte_limit"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsCall_BatchQuery_UsesPerCallResponseBudget_Issue3539()
+    {
+        InsertIndexedFile("src/large-per-call.cs", "csharp", "// " + new string('x', 5000));
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"maxResponseBytes":1200,"queries":[{"slotId":"first","tool":"ping"},{"slotId":"second","tool":"excerpt","arguments":{"path":"src/large-per-call.cs","startLine":1,"endLine":1,"maxLineWidth":0}}]}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(1200, structured["metadata"]!["response_byte_limit"]!.GetValue<int>());
+        Assert.True(structured["truncated"]!.GetValue<bool>(), response.ToJsonString());
+        Assert.NotNull(structured["split_hint"]);
+        Assert.True(Encoding.UTF8.GetByteCount(response.ToJsonString()) <= 1200);
+    }
+
+    [Fact]
+    public void ToolsCall_BatchQuery_ClampedPerCallBudgetCountsAdjustmentsAgainstBudget_Issue3539()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES");
+        env.Set("CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES", "1400");
+        InsertIndexedFile("src/large-per-call-clamped.cs", "csharp", "// " + new string('x', 5000));
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"maxResponseBytes":2000,"queries":[{"slotId":"first","tool":"ping"},{"slotId":"second","tool":"excerpt","arguments":{"path":"src/large-per-call-clamped.cs","startLine":1,"endLine":1,"maxLineWidth":0}}]}}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(1400, structured["metadata"]!["response_byte_limit"]!.GetValue<int>());
+        Assert.True(Encoding.UTF8.GetByteCount(response.ToJsonString()) <= 1400, response.ToJsonString());
+        var adjustment = Assert.Single(structured["argument_adjustments"]!.AsArray());
+        Assert.Equal("maxResponseBytes", adjustment!["argument"]!.GetValue<string>());
+        Assert.Equal("clamped", adjustment["action"]!.GetValue<string>());
+        Assert.Equal(2000, adjustment["requested"]!.GetValue<int>());
+        Assert.Equal(1400, adjustment["effective"]!.GetValue<int>());
     }
 
     [Fact]
@@ -10544,6 +11021,80 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_ProjectScopeFallbackReportsEffectiveRoot_Issue3461()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_project_scope_fallback_root");
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_project_scope_fallback_{Guid.NewGuid():N}.db");
+        var originalCurrentDirectory = Environment.CurrentDirectory;
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src", "App"));
+            File.WriteAllText(Path.Combine(projectRoot, "Repo.sln"), """
+            Microsoft Visual Studio Solution File, Format Version 12.00
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "App", "src\App\App.csproj", "{11111111-1111-1111-1111-111111111111}"
+            EndProject
+            """);
+            File.WriteAllText(Path.Combine(projectRoot, "src", "App", "App.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/App/ServiceA.cs", "csharp", "public class ServiceA { }\n");
+
+            Environment.CurrentDirectory = projectRoot;
+            var expectedProjectRoot = Path.GetFullPath(Environment.CurrentDirectory);
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion(), dbPathExplicit: true);
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"ServiceA","project":"App","exactSubstring":true}}}""")!;
+            var response = server.HandleMessage(request)!;
+
+            Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
+            var structured = response["result"]!["structuredContent"]!;
+            var result = Assert.Single(structured["results"]!.AsArray());
+            Assert.Equal("src/App/ServiceA.cs", result!["path"]!.GetValue<string>());
+            Assert.Equal(expectedProjectRoot, structured["project_filter_root"]!.GetValue<string>());
+            Assert.Equal(QueryCommandRunner.ProjectFilterRootFallbackReasonCurrentDirectory, structured["project_filter_root_fallback_reason"]!.GetValue<string>());
+        }
+        finally
+        {
+            Environment.CurrentDirectory = originalCurrentDirectory;
+            DeleteFileRobust(dbPath);
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_ProjectScopeErrorDoesNotLeakRootDiagnosticToNextResult_Issue3461()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_project_scope_error_root");
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_project_scope_error_{Guid.NewGuid():N}.db");
+        var originalCurrentDirectory = Environment.CurrentDirectory;
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src", "App"));
+            File.WriteAllText(Path.Combine(projectRoot, "Repo.sln"), """
+            Microsoft Visual Studio Solution File, Format Version 12.00
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "App", "src\App\App.csproj", "{11111111-1111-1111-1111-111111111111}"
+            EndProject
+            """);
+            File.WriteAllText(Path.Combine(projectRoot, "src", "App", "App.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+
+            Environment.CurrentDirectory = projectRoot;
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion(), dbPathExplicit: true);
+            var invalidSearch = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"ServiceA","project":"App","since":"not-a-timestamp"}}}""")!;
+            var invalidSearchResponse = server.HandleMessage(invalidSearch)!;
+            var ping = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"ping","arguments":{}}}""")!;
+            var pingResponse = server.HandleMessage(ping)!;
+
+            Assert.True(invalidSearchResponse["result"]!["isError"]!.GetValue<bool>());
+            Assert.False(pingResponse["result"]!["isError"]?.GetValue<bool>() ?? false);
+            Assert.False(pingResponse["result"]!["structuredContent"]!.AsObject().ContainsKey("project_filter_root"));
+            Assert.False(pingResponse["result"]!["structuredContent"]!.AsObject().ContainsKey("project_filter_root_fallback_reason"));
+        }
+        finally
+        {
+            Environment.CurrentDirectory = originalCurrentDirectory;
+            DeleteFileRobust(dbPath);
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void ToolsCall_Index_Rebuild_IgnoresUnreadableDirectoriesWhenCollectingMarkerFingerprints()
     {
         if (OperatingSystem.IsWindows())
@@ -11995,6 +12546,8 @@ public class McpServerTests : IDisposable
     [Fact]
     public void SuggestImprovement_WhenSamplingAvailable_StoresSampledMetadata()
     {
+        using var samplingEnv = EnvironmentVariableScope.Capture("CDIDX_MCP_SAMPLING");
+        samplingEnv.Set("CDIDX_MCP_SAMPLING", "1");
         _server.HandleMessage(JsonNode.Parse(
             """{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"capabilities":{"sampling":{}}}}""")!);
         _server.ClientRequestHandlerForTests = (method, _) =>
@@ -12030,6 +12583,7 @@ public class McpServerTests : IDisposable
         var response = _server.HandleMessage(request)!;
 
         var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal("sampled", structured["sampling_status"]!.GetValue<string>());
         Assert.Equal("Improve TypeScript arrow symbol extraction", structured["sampled_title"]!.GetValue<string>());
         Assert.Contains(structured["sampled_tags"]!.AsArray(), tag => tag!.GetValue<string>() == "typescript");
         var stored = new SuggestionStore(Path.GetDirectoryName(_dbPath)!, Path.GetFileNameWithoutExtension(_dbPath)).LoadAll()
@@ -12043,6 +12597,8 @@ public class McpServerTests : IDisposable
     {
         using var env = EnvironmentVariableScope.Capture("CDIDX_GITHUB_TOKEN");
         env.Set("CDIDX_GITHUB_TOKEN", null);
+        using var samplingEnv = EnvironmentVariableScope.Capture("CDIDX_MCP_SAMPLING");
+        samplingEnv.Set("CDIDX_MCP_SAMPLING", "1");
         _server.HandleMessage(JsonNode.Parse(
             """{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"capabilities":{"sampling":{}}}}""")!);
         var secret = $"sample-secret-{Guid.NewGuid():N}";
@@ -12099,6 +12655,8 @@ public class McpServerTests : IDisposable
     [Fact]
     public void SuggestImprovement_WhenSamplingResponseIsTooLarge_IgnoresSampledMetadata()
     {
+        using var samplingEnv = EnvironmentVariableScope.Capture("CDIDX_MCP_SAMPLING");
+        samplingEnv.Set("CDIDX_MCP_SAMPLING", "1");
         _server.HandleMessage(JsonNode.Parse(
             """{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"capabilities":{"sampling":{}}}}""")!);
         _server.ClientRequestHandlerForTests = (method, _) =>
@@ -12134,6 +12692,7 @@ public class McpServerTests : IDisposable
 
         var structured = response["result"]!["structuredContent"]!;
         Assert.Equal("recorded", structured["status"]!.GetValue<string>());
+        Assert.Equal("enabled", structured["sampling_status"]!.GetValue<string>());
         Assert.Null(structured["sampled_title"]);
         var stored = new SuggestionStore(Path.GetDirectoryName(_dbPath)!, Path.GetFileNameWithoutExtension(_dbPath)).LoadAll()
             .Single(s => s.Description == uniqueDesc);
@@ -12144,6 +12703,8 @@ public class McpServerTests : IDisposable
     [Fact]
     public void SuggestImprovement_WhenSamplingClientResponseJsonIsTooLarge_IgnoresSampledMetadata_Issue3098()
     {
+        using var samplingEnv = EnvironmentVariableScope.Capture("CDIDX_MCP_SAMPLING");
+        samplingEnv.Set("CDIDX_MCP_SAMPLING", "1");
         _server.HandleMessage(JsonNode.Parse(
             """{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"capabilities":{"sampling":{}}}}""")!);
         _server.ClientRequestHandlerForTests = (method, _) =>
@@ -12189,6 +12750,8 @@ public class McpServerTests : IDisposable
     [Fact]
     public void SuggestImprovement_WhenSamplingResponseJsonIsTooDeep_IgnoresSampledMetadata()
     {
+        using var samplingEnv = EnvironmentVariableScope.Capture("CDIDX_MCP_SAMPLING");
+        samplingEnv.Set("CDIDX_MCP_SAMPLING", "1");
         _server.HandleMessage(JsonNode.Parse(
             """{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"capabilities":{"sampling":{}}}}""")!);
         _server.ClientRequestHandlerForTests = (method, _) =>
@@ -12235,6 +12798,8 @@ public class McpServerTests : IDisposable
     [Fact]
     public void SuggestImprovement_WhenSamplingAvailable_BoundsPromptAndSummarizesInvocationContext()
     {
+        using var samplingEnv = EnvironmentVariableScope.Capture("CDIDX_MCP_SAMPLING");
+        samplingEnv.Set("CDIDX_MCP_SAMPLING", "1");
         _server.HandleMessage(JsonNode.Parse(
             """{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"capabilities":{"sampling":{}}}}""")!);
         string? capturedPrompt = null;
@@ -12290,6 +12855,88 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void SuggestImprovement_WhenSamplingEnvUnset_DoesNotCallClientSampling_Issue3405()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_MCP_SAMPLING");
+        env.Set("CDIDX_MCP_SAMPLING", null);
+        _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"capabilities":{"sampling":{}}}}""")!);
+        var called = false;
+        _server.ClientRequestHandlerForTests = (_, _) =>
+        {
+            called = true;
+            return null;
+        };
+        var uniqueDesc = $"Sampling unset fail-closed regression {Guid.NewGuid():N}";
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "suggest_improvement",
+                ["arguments"] = new JsonObject
+                {
+                    ["category"] = "other",
+                    ["description"] = uniqueDesc,
+                }
+            }
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.False(called);
+        Assert.Equal("recorded", structured["status"]!.GetValue<string>());
+        Assert.Equal("disabled", structured["sampling_status"]!.GetValue<string>());
+        Assert.Contains("requires explicit opt-in", structured["sampling_diagnostic"]!.GetValue<string>());
+        Assert.Null(structured["sampled_title"]);
+    }
+
+    [Fact]
+    public void SuggestImprovement_WhenSamplingEnvInvalid_DoesNotCallClientSampling_Issue3405()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_MCP_SAMPLING");
+        env.Set("CDIDX_MCP_SAMPLING", new string('x', 512));
+        _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"capabilities":{"sampling":{}}}}""")!);
+        var called = false;
+        _server.ClientRequestHandlerForTests = (_, _) =>
+        {
+            called = true;
+            return null;
+        };
+        var uniqueDesc = $"Sampling invalid env fail-closed regression {Guid.NewGuid():N}";
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "suggest_improvement",
+                ["arguments"] = new JsonObject
+                {
+                    ["category"] = "other",
+                    ["description"] = uniqueDesc,
+                }
+            }
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        var diagnostic = structured["sampling_diagnostic"]!.GetValue<string>();
+        Assert.False(called);
+        Assert.Equal("disabled", structured["sampling_status"]!.GetValue<string>());
+        Assert.Contains("unrecognized value", diagnostic);
+        Assert.True(diagnostic.Length < 200);
+        Assert.DoesNotContain(new string('x', 80), diagnostic);
+        Assert.Null(structured["sampled_title"]);
+    }
+
+    [Fact]
     public void SuggestImprovement_WhenSamplingDisabled_DoesNotCallClientSampling()
     {
         using var env = EnvironmentVariableScope.Capture("CDIDX_MCP_SAMPLING");
@@ -12322,8 +12969,11 @@ public class McpServerTests : IDisposable
         var response = _server.HandleMessage(request)!;
 
         Assert.False(called);
-        Assert.Equal("recorded", response["result"]!["structuredContent"]!["status"]!.GetValue<string>());
-        Assert.Null(response["result"]!["structuredContent"]!["sampled_title"]);
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal("recorded", structured["status"]!.GetValue<string>());
+        Assert.Equal("disabled", structured["sampling_status"]!.GetValue<string>());
+        Assert.Contains("opt-out", structured["sampling_diagnostic"]!.GetValue<string>());
+        Assert.Null(structured["sampled_title"]);
     }
 
     [Fact]

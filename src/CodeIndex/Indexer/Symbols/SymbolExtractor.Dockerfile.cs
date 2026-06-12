@@ -44,7 +44,7 @@ public static partial class SymbolExtractor
                 new SymbolRecord
                 {
                     FileId = fileId,
-                    Kind = "property",
+                    Kind = "environment",
                     Name = name,
                     Line = lineNumber,
                     StartLine = lineNumber,
@@ -85,7 +85,7 @@ public static partial class SymbolExtractor
                 new SymbolRecord
                 {
                     FileId = fileId,
-                    Kind = "property",
+                    Kind = "label",
                     Name = name,
                     Line = lineNumber,
                     StartLine = lineNumber,
@@ -212,7 +212,7 @@ public static partial class SymbolExtractor
                 new SymbolRecord
                 {
                     FileId = fileId,
-                    Kind = "property",
+                    Kind = "expose",
                     Name = token,
                     Line = lineNumber,
                     StartLine = lineNumber,
@@ -286,7 +286,7 @@ public static partial class SymbolExtractor
                 new SymbolRecord
                 {
                     FileId = fileId,
-                    Kind = "property",
+                    Kind = "volume",
                     Name = token,
                     Line = lineNumber,
                     StartLine = lineNumber,
@@ -332,7 +332,7 @@ public static partial class SymbolExtractor
                     new SymbolRecord
                     {
                         FileId = fileId,
-                        Kind = "property",
+                        Kind = "volume",
                         Name = name,
                         Line = lineNumber,
                         StartLine = lineNumber,
@@ -375,7 +375,7 @@ public static partial class SymbolExtractor
             return;
 
         var name = match.Groups["name"].Value;
-        if (symbols.Any(symbol => symbol.Kind == "function" && symbol.Name == name))
+        if (symbols.Any(symbol => symbol.Kind == "stage" && symbol.Name == name))
             return;
 
         AddSymbolRecord(
@@ -385,7 +385,7 @@ public static partial class SymbolExtractor
             new SymbolRecord
             {
                 FileId = fileId,
-                Kind = "class",
+                Kind = "base_image",
                 Name = name,
                 Line = lineNumber,
                 StartLine = lineNumber,
@@ -430,7 +430,7 @@ public static partial class SymbolExtractor
                 new SymbolRecord
                 {
                     FileId = fileId,
-                    Kind = "property",
+                    Kind = "shell",
                     Name = name,
                     Line = lineNumber,
                     StartLine = lineNumber,
@@ -482,8 +482,38 @@ public static partial class SymbolExtractor
             new SymbolRecord
             {
                 FileId = fileId,
-                Kind = "property",
+                Kind = instruction.Equals("COPY", StringComparison.OrdinalIgnoreCase) ? "copy" : "add",
                 Name = destination,
+                Line = lineNumber,
+                StartLine = lineNumber,
+                EndLine = lineNumber,
+                Signature = line.Trim(),
+            },
+            line);
+    }
+
+    private static void AddDockerfileRunSymbol(
+        long fileId,
+        string line,
+        int lineNumber,
+        List<SymbolRecord> symbols)
+    {
+        if (!TryGetDockerfileInstructionBody(line, "RUN", allowOnbuild: true, out var body))
+            return;
+
+        var name = body.Trim();
+        if (name.Length == 0 || name[0] == '#')
+            return;
+
+        AddSymbolRecord(
+            symbols,
+            cssSeenSymbols: null,
+            lineNumber,
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "run",
+                Name = name,
                 Line = lineNumber,
                 StartLine = lineNumber,
                 EndLine = lineNumber,
