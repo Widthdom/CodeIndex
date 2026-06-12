@@ -94,6 +94,14 @@ or publishing NuGet artifacts:
 dotnet run --project tools/CodeIndex.PackageNormalize -- nupkg/*.nupkg nupkg/*.snupkg
 ```
 
+`install.sh` is generated from focused fragments under `install_modules/`.
+After editing installer, doctor, self-test, reinstall, uninstall, or dispatch
+logic, regenerate the checked-in one-file installer before testing:
+
+```bash
+bash tools/build-install-sh.sh
+```
+
 | Normalizer rule | Detail |
 |---|---|
 | Reproducible OPC metadata (#2756) | NuGet's OPC package writer generates a random `package/services/metadata/core-properties/*.psmdcp` part name on each pack run. The normalizer rewrites that part to `package/services/metadata/core-properties/core-properties.psmdcp`, updates the matching content-type and relationship references, and gives ZIP entries stable timestamps. This is the package reproducibility boundary for `.nupkg` and `.snupkg` archives. |
@@ -2219,6 +2227,14 @@ package normalization を実行します:
 
 ```bash
 dotnet run --project tools/CodeIndex.PackageNormalize -- nupkg/*.nupkg nupkg/*.snupkg
+```
+
+`install.sh` は `install_modules/` 配下の focused fragment から生成されます。
+installer、doctor、self-test、reinstall、uninstall、dispatch logic を変更した場合は、
+テスト前に checked-in の単一ファイル installer を再生成してください:
+
+```bash
+bash tools/build-install-sh.sh
 ```
 
 | normalizer rule | 詳細 |

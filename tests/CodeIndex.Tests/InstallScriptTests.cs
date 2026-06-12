@@ -334,6 +334,30 @@ public sealed class InstallScriptTests : IDisposable
         Assert.True(cleanupIndex > chmodIndex);
     }
 
+    [Fact]
+    public void InstallScript_IsGeneratedFromFocusedModules()
+    {
+        var root = GetRepositoryRoot();
+        var script = File.ReadAllText(Path.Combine(root, "install.sh"));
+        var generated = string.Concat(InstallModuleFiles.Select(module =>
+            File.ReadAllText(Path.Combine(root, "install_modules", module))));
+
+        Assert.Equal(NormalizeNewlines(generated), NormalizeNewlines(script));
+    }
+
+    [Theory]
+    [InlineData("20-installer.sh", "download_and_install()")]
+    [InlineData("40-uninstall.sh", "uninstall_cdidx()")]
+    [InlineData("50-self-test.sh", "run_local_mirror_self_test()")]
+    [InlineData("60-reinstall.sh", "run_reinstall_real()")]
+    [InlineData("70-doctor.sh", "run_doctor()")]
+    public void InstallModules_ExposeFocusedFlowEntrypoints(string module, string entrypoint)
+    {
+        var moduleText = File.ReadAllText(Path.Combine(GetRepositoryRoot(), "install_modules", module));
+
+        Assert.Contains(entrypoint, moduleText);
+    }
+
     [Theory]
     [InlineData("linux", "x64", "linux-x64", "libe_sqlite3.so")]
     [InlineData("osx", "arm64", "osx-arm64", "libe_sqlite3.dylib")]
@@ -5584,6 +5608,22 @@ public sealed class InstallScriptTests : IDisposable
             TestProjectHelper.DeleteDirectory(shimDir);
         }
     }
+
+    private static readonly string[] InstallModuleFiles =
+    [
+        "00-core-and-verification.sh",
+        "10-network-and-platform.sh",
+        "20-installer.sh",
+        "30-path-guidance.sh",
+        "40-uninstall.sh",
+        "50-self-test.sh",
+        "60-reinstall.sh",
+        "70-doctor.sh",
+        "90-dispatch.sh",
+    ];
+
+    private static string NormalizeNewlines(string value)
+        => value.Replace("\r\n", "\n", StringComparison.Ordinal);
 
     [UnsupportedOSPlatform("windows")]
     private static (int ExitCode, string StdOut, string StdErr) RunInstallerSnippet(string snippet, IReadOnlyDictionary<string, string?>? extraEnvironment = null, bool enforceStrictMode = true)
