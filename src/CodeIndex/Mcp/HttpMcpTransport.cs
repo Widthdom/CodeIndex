@@ -619,7 +619,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         var header = context.Request.Headers["Authorization"];
         if (string.IsNullOrEmpty(header))
         {
-            request.AuthOutcome = "missing";
+            request.AuthOutcome = FormatAuthFailureOutcome("missing");
         }
         else if (TryExtractBearerToken(header, out var provided))
         {
@@ -629,11 +629,11 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
                 return true;
             }
 
-            request.AuthOutcome = "wrong-token";
+            request.AuthOutcome = FormatAuthFailureOutcome("wrong-token");
         }
         else
         {
-            request.AuthOutcome = "wrong-scheme";
+            request.AuthOutcome = FormatAuthFailureOutcome("wrong-scheme");
         }
 
         // RFC 7235 §4.1: 401 responses SHOULD carry a WWW-Authenticate challenge so
@@ -646,6 +646,9 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         LogRequest(request, (int)HttpStatusCode.Unauthorized);
         return false;
     }
+
+    private static string FormatAuthFailureOutcome(string detailedOutcome)
+        => McpServer.IsUnsafeDebugEnabled() ? detailedOutcome : "unauthorized";
 
     private static bool TryExtractBearerToken(string header, out string? token)
     {
