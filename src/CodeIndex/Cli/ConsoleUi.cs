@@ -83,11 +83,11 @@ public static class ConsoleUi
         ("hooks", "cdidx hooks <install|uninstall|status> [--project <path>] [--force] [--json]"),
         ("backfill-fold", "cdidx backfill-fold [--db <path>] [--dry-run] [--no-checkpoint] [--json]"),
         ("optimize", "cdidx optimize [--db <path>] [--json]"),
-        ("vacuum", "cdidx vacuum [--db <path>] [--json]"),
+        ("vacuum", "cdidx vacuum [--db <path>] [--dry-run] [--json]"),
         ("index-commits", "cdidx index <projectPath> --commits <commit-ref> [commit-ref ...] [--db <path>] [--verbose] [--dry-run] [--json] [--memory-trace] [--duration-format <auto|seconds|hms>] [--max-file-bytes <bytes>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]]"),
         ("index-changed-between", "cdidx index <projectPath> --changed-between <old-ref> <new-ref> [--db <path>] [--verbose] [--dry-run] [--json] [--memory-trace] [--duration-format <auto|seconds|hms>] [--max-file-bytes <bytes>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]]"),
         ("index-files", "cdidx index <projectPath> --files <path> [path ...] [--db <path>] [--verbose] [--dry-run] [--json] [--memory-trace] [--duration-format <auto|seconds|hms>] [--max-file-bytes <bytes>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]]"),
-        ("search", "cdidx search <query>|--query <query>|-- <query>|--recipe <name>|--list-recipes|--named-query <name>=<query> [--named-query <name>=<query> ...] [--db <path>] [--json[=ndjson|array]] [--pretty] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif|issue-drafts>] [--open-issues <path>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--snippet-lines <n>] [--snippet-focus <leftmost|quality|proximity>] [--max-line-width <n>] [--fts] [--exact|--exact-substring] [--prefix] [--count] [--group-by <file|symbol>] [--since <datetime>] [--no-dedup] [--no-visibility-rank] [--require-before <query>] [--require-after <query>] [--reject-before <query>] [--reject-after <query>] [--guard-window <n>]"),
+        ("search", "cdidx search <query>|--query <query>|-- <query>|--recipe <name>|--list-recipes|--named-query <name>=<query> [--named-query <name>=<query> ...] [--db <path>] [--json[=ndjson|array]] [--pretty] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif|issue-drafts>] [--open-issues <path>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exclude-comments] [--exclude-strings] [--exclude-fixtures] [--snippet-lines <n>] [--snippet-focus <leftmost|quality|proximity>] [--max-line-width <n>] [--fts] [--exact|--exact-substring] [--prefix] [--count] [--group-by <file|symbol>] [--since <datetime>] [--no-dedup] [--no-visibility-rank] [--require-before <query>] [--require-after <query>] [--reject-before <query>] [--reject-after <query>] [--guard-window <n>]"),
         ("definition", "cdidx definition <query>|--query <query>|-- <query> [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--exact|--exact-name] [--count] [--since <datetime>]"),
         ("goto", "cdidx goto <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exact|--exact-name] [--all]"),
         ("references", "cdidx references <query>|--query <query>|-- <query> [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--snippet-lines <n>] [--max-line-width <n>] [--exact|--exact-name] [--count]"),
@@ -98,7 +98,7 @@ public static class ConsoleUi
         ("find", "cdidx find <query> --path <glob> [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--before <n>] [--after <n>] [--snippet-lines <n>] [--focus-line <line>] [--focus-column <n>] [--max-line-width <n>] [--exact] [--regex] [--count]"),
         ("excerpt", "cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--max-line-width <n>] [--focus-line <line>] [--focus-column <n>] [--focus-length <n>] [--db <path>] [--json] [--verbose]"),
         ("map", "cdidx map [--db <path>] [--json] [--pretty] [--compact] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--bytes] [--sections <tree,languages,hotspots,metrics>] [--depth <n>] [--min-entrypoint-confidence <0.0..1.0>]"),
-        ("inspect", "cdidx inspect <query>|--query <query>|-- <query> [--db <path>] [--json] [--pretty] [--compact] [--fields <csv>] [--body-only] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--max-line-width <n>] [--exact|--exact-name]"),
+        ("inspect", "cdidx inspect <query>|--query <query>|-- <query> [--db <path>] [--json] [--pretty] [--compact] [--fields <csv>] [--body-only] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--body-start <line>] [--body-lines <n>] [--max-line-width <n>] [--exact|--exact-name]"),
         ("outline", "cdidx outline <path> [--db <path>] [--json] [--pretty] [--compact] [--verbose] [--limit <n>|--top <n>]"),
         ("status", "cdidx status [--db <path>] [--json] [--verbose] [--check[=workspace,fold,graph,issues,hotspot,csharp,sql,newer]] [--stale-after <duration>] [--explain <field>] [--log-path] [--config] [--check-updates]"),
         ("workspace", "cdidx workspace <list|status|use|current> [name] [--json]"),
@@ -1035,6 +1035,9 @@ public static class ConsoleUi
         WriteHelpLine("  --named-query <name>=<query>  search only: add a named ad hoc batch query; repeat to run related searches with grouped compact results");
         Console.WriteLine("  --exclude-path <glob>      Exclude glob-style path patterns (* and ?) (repeatable)");
         Console.WriteLine("  --exclude-tests            Exclude likely test files");
+        Console.WriteLine("  --exclude-comments         search only: suppress comment-only matches");
+        Console.WriteLine("  --exclude-strings          search only: suppress string, regex, and help-text matches");
+        Console.WriteLine("  --exclude-fixtures         search only: suppress fixture-only matches in tests");
         Console.WriteLine("  --include-generated        Include generated files in query results");
         Console.WriteLine("  --snippet-lines <n>        search/find snippet length (1-20, default: search 8; find 1)");
         Console.WriteLine("  --snippet-focus <mode>     search only: long-line focus mode (leftmost|quality|proximity, default: quality)");
@@ -1082,7 +1085,7 @@ public static class ConsoleUi
         Console.WriteLine("  cdidx ./myproject                             Index a project");
         Console.WriteLine("  cdidx backfill-fold                           Upgrade folded-name columns in an existing DB");
         Console.WriteLine("  cdidx optimize                                Optimize FTS5 segments in an existing DB");
-        Console.WriteLine("  cdidx vacuum --json                           Reclaim DB free pages and report page metrics");
+        Console.WriteLine("  cdidx vacuum --dry-run --json                 Estimate DB free pages and maintenance guidance");
         Console.WriteLine("  cdidx index ./myproject --commits abc123      Update DB from one commit");
         Console.WriteLine("  cdidx index ./myproject --commits abc123 def456");
         Console.WriteLine("                                              Update DB from multiple commits");

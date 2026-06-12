@@ -52,6 +52,8 @@ internal sealed record UpgradeJsonResult(
 internal sealed record DbIntegrityCheckJsonResult(
     [property: JsonPropertyName("db_path")] string DbPath,
     [property: JsonPropertyName("ok")] bool Ok,
+    [property: JsonPropertyName("severity")] string Severity,
+    [property: JsonPropertyName("diagnostic_code")] string DiagnosticCode,
     [property: JsonPropertyName("issues")] List<string> Issues,
     [property: JsonPropertyName("truncated")] bool Truncated = false,
     [property: JsonPropertyName("rows_truncated")] bool RowsTruncated = false,
@@ -98,6 +100,10 @@ internal sealed record DbSchemaEntryJsonResult(
 internal sealed record DbSchemaJsonResult(
     [property: JsonPropertyName("db_path")] string DbPath,
     [property: JsonPropertyName("user_version")] int UserVersion,
+    [property: JsonPropertyName("severity")] string Severity,
+    [property: JsonPropertyName("diagnostic_code")] string DiagnosticCode,
+    [property: JsonPropertyName("object_type_counts")] Dictionary<string, int> ObjectTypeCounts,
+    [property: JsonPropertyName("object_type_omitted_counts")] Dictionary<string, int> ObjectTypeOmittedCounts,
     [property: JsonPropertyName("entries")] List<DbSchemaEntryJsonResult> Entries,
     [property: JsonPropertyName("truncated")] bool Truncated = false,
     [property: JsonPropertyName("entries_truncated")] bool EntriesTruncated = false,
@@ -213,6 +219,13 @@ internal sealed class IndexDryRunJsonResult
 {
     public string Status { get; init; } = string.Empty;
     public int FilesTotal { get; init; }
+    public bool Estimates { get; init; }
+    public int ProjectedFileUpdates { get; init; }
+    public int ProjectedFileDeletes { get; init; }
+    public int ProjectedFilePurges { get; init; }
+    public int UnsupportedTotal { get; init; }
+    public int UnknownExtensionTotal { get; init; }
+    public Dictionary<string, long> EstimatedTableMutations { get; init; } = new();
     public List<string>? FileSamples { get; init; }
     public bool FileSamplesTruncated { get; init; }
     public int FileSampleLimit { get; init; }
@@ -226,13 +239,30 @@ internal sealed class IndexDryRunJsonResult
 internal sealed class IndexWatchEventJsonResult
 {
     public string Status { get; init; } = string.Empty;
+    public string? Phase { get; init; }
     public string? ProjectRoot { get; init; }
     public string? Db { get; init; }
     public int? DebounceMs { get; init; }
     public int? BatchSize { get; init; }
+    public List<string>? BatchPathSamples { get; init; }
+    public int? BatchPathSampleLimit { get; init; }
+    public bool? BatchPathSamplesTruncated { get; init; }
     public long? ElapsedMs { get; init; }
     public int? ExitCode { get; init; }
+    public int? Updated { get; init; }
+    public int? Removed { get; init; }
+    public int? Errors { get; init; }
+    public string? SubRunParseStatus { get; init; }
+    public string? SubRunParseReason { get; init; }
+    public string? OverflowReason { get; init; }
+    public IndexWatchRecoveryCommandJsonResult? RecoveryCommand { get; init; }
     public string? Reason { get; init; }
+}
+
+internal sealed class IndexWatchRecoveryCommandJsonResult
+{
+    public string Command { get; init; } = string.Empty;
+    public List<string> Args { get; init; } = [];
 }
 
 internal sealed class IndexUpdateSummaryJsonResult
@@ -443,6 +473,7 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(IndexUpdateJsonResult))]
 [JsonSerializable(typeof(IndexUpdateSummaryJsonResult))]
 [JsonSerializable(typeof(IndexWatchEventJsonResult))]
+[JsonSerializable(typeof(IndexWatchRecoveryCommandJsonResult))]
 [JsonSerializable(typeof(ExportImportCommandRunner.ImportResult))]
 [JsonSerializable(typeof(HookCommandJsonResult))]
 [JsonSerializable(typeof(JsonStreamDoneResult))]
@@ -487,8 +518,13 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(RepoModuleResult))]
 [JsonSerializable(typeof(ReportBundleSummary))]
 [JsonSerializable(typeof(SearchHighlight))]
+[JsonSerializable(typeof(SearchGuardCheck))]
+[JsonSerializable(typeof(List<SearchGuardCheck>))]
 [JsonSerializable(typeof(SearchGuardEvidence))]
 [JsonSerializable(typeof(List<SearchGuardEvidence>))]
+[JsonSerializable(typeof(SearchGuardSpan))]
+[JsonSerializable(typeof(SearchMatchFacet))]
+[JsonSerializable(typeof(List<SearchMatchFacet>))]
 [JsonSerializable(typeof(SearchQueryHint))]
 [JsonSerializable(typeof(SearchNamedBatchQueryResultJsonResult))]
 [JsonSerializable(typeof(SearchNamedBatchRunJsonResult))]
@@ -506,10 +542,14 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(ExtractorRegistryDiagnostic))]
 [JsonSerializable(typeof(ExtractorRegistryStatus))]
 [JsonSerializable(typeof(StatusResult))]
+[JsonSerializable(typeof(StatusFailedOrPartialIndexRun))]
 [JsonSerializable(typeof(StatusReadinessDegradation))]
 [JsonSerializable(typeof(StatusDbPragmaSettings))]
 [JsonSerializable(typeof(StatusLastIndexRun))]
+[JsonSerializable(typeof(StatusMaintenanceGuidance))]
 [JsonSerializable(typeof(StatusProcessMetrics))]
+[JsonSerializable(typeof(StatusRepairCommand))]
+[JsonSerializable(typeof(StatusUnknownExtensionGroup))]
 [JsonSerializable(typeof(SuggestionDetailJsonResult))]
 [JsonSerializable(typeof(SuggestionExportJsonResult))]
 [JsonSerializable(typeof(SuggestionIssueDraftDuplicateMatchJsonResult))]

@@ -22,6 +22,7 @@ public sealed class McpToolFilter
     internal const string DenyEnvVarName = "CDIDX_MCP_TOOLS_DENY";
     internal const int MaxToolFilterCsvLength = 2048;
     internal const int MaxToolFilterCsvEntries = 128;
+    internal const int MaxToolFilterUnknownNamesReported = 8;
 
     private readonly HashSet<string> _enabled;
 
@@ -90,19 +91,23 @@ public sealed class McpToolFilter
             if (allowInvalid)
                 return new McpToolFilter(new HashSet<string>(StringComparer.OrdinalIgnoreCase));
 
+            WarnUnknownNames(AllowEnvVarName, allow);
             var filtered = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var name in KnownToolNames)
             {
                 if (allow.Contains(name))
                     filtered.Add(name);
             }
+            if (filtered.Count == 0)
+                Console.Error.WriteLine($"Warning: {AllowEnvVarName} did not contain any known MCP tool names; failing closed with no tools enabled.");
             return new McpToolFilter(filtered);
         }
 
         var enabled = new HashSet<string>(KnownToolNames, StringComparer.OrdinalIgnoreCase);
-        var deny = SplitCsv(denyValue, DenyEnvVarName, out _, out _);
-        if (deny.Count > 0)
+        var deny = SplitCsv(denyValue, DenyEnvVarName, out var denySpecified, out var denyInvalid);
+        if (denySpecified && !denyInvalid)
         {
+            WarnUnknownNames(DenyEnvVarName, deny);
             foreach (var name in deny)
                 enabled.Remove(name);
         }
@@ -128,25 +133,53 @@ public sealed class McpToolFilter
     private static HashSet<string> SplitCsv(string? value, string source, out bool specified, out bool invalid)
     {
         var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        specified = !string.IsNullOrWhiteSpace(value);
+        specified = value != null;
         invalid = false;
 
-        if (string.IsNullOrWhiteSpace(value))
+        if (value == null)
             return set;
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            Console.Error.WriteLine($"Warning: {source} is empty; no MCP tool names were provided.");
+            return set;
+        }
         if (!ValidateCsvBounds(source, value))
         {
             invalid = true;
             return set;
         }
 
+        var emptyEntries = 0;
         foreach (var raw in value.Split(','))
         {
             var trimmed = raw.Trim();
             if (trimmed.Length == 0)
+            {
+                emptyEntries++;
                 continue;
+            }
             set.Add(trimmed);
         }
+        if (emptyEntries > 0)
+            Console.Error.WriteLine($"Warning: {source} ignored {emptyEntries} empty comma-separated entr{(emptyEntries == 1 ? "y" : "ies")}.");
         return set;
+    }
+
+    private static void WarnUnknownNames(string source, HashSet<string> names)
+    {
+        var unknown = names
+            .Where(name => !IsKnownTool(name))
+            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (unknown.Length == 0)
+            return;
+
+        var displayed = unknown.Take(MaxToolFilterUnknownNamesReported).ToArray();
+        var suffix = unknown.Length > displayed.Length
+            ? $", ... ({unknown.Length - displayed.Length} more)"
+            : "";
+        Console.Error.WriteLine(
+            $"Warning: {source} ignored {unknown.Length} unknown MCP tool name{(unknown.Length == 1 ? "" : "s")}: {string.Join(", ", displayed)}{suffix}.");
     }
 
     private static bool ValidateCsvBounds(string source, string value)

@@ -77,6 +77,10 @@ public static class QueryCommandRunner
     internal const int MaxQueryPathFilterLength = 1024;
     internal const int ExactZeroHintProbeLimit = 1;
     internal const int ExactZeroHintSampleLimit = 5;
+    private const int SearchOriginFilterMinCandidates = 200;
+    private const int SearchOriginFilterOverFetchFactor = 50;
+    private const int SearchOriginFilterMaxCandidates = 10_000;
+    private const int SearchOriginFilterMaxPages = 50;
     private const string HotspotsGroupedByNameKind = "name_kind";
     private const string HotspotsGroupedBySymbol = "symbol";
     private const string HotspotsGroupedByFile = "file";
@@ -118,6 +122,8 @@ public static class QueryCommandRunner
         "--end",
         "--before",
         "--after",
+        "--body-start",
+        "--body-lines",
         "--name",
         "--snippet-lines",
         "--snippet-focus",
@@ -255,6 +261,7 @@ public static class QueryCommandRunner
         "--list-recipes",
         "--read-only",
         "--immutable",
+        "--dry-run",
         "--pretty",
         "--compact",
         "--body-only",
@@ -729,7 +736,9 @@ public static class QueryCommandRunner
 
             if (options.CountOnly)
             {
-                var counts = reader.CountSearchResults(options.Query, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank, options.GuardFilters, options.GuardWindow);
+                var counts = HasSearchOriginFilters(options)
+                    ? CountFilteredSearchResults(reader, options, exact)
+                    : reader.CountSearchResults(options.Query, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank, options.GuardFilters, options.GuardWindow);
                 var queryDiagnostics = DbReader.AnalyzeFtsQuery(options.Query, options.RawFts, options.Prefix, options.Lang);
                 if (counts.Count == 0)
                 {
@@ -757,9 +766,9 @@ public static class QueryCommandRunner
                 return CommandExitCodes.Success;
             }
 
-            var results = reader.Search(options.Query, options.Limit, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank, guardFilters: options.GuardFilters, guardWindow: options.GuardWindow);
             var ftsQueryDiagnostics = DbReader.AnalyzeFtsQuery(options.Query, options.RawFts, options.Prefix, options.Lang);
-            if (results.Count == 0)
+            var displayRows = ReadSearchDisplayRows(reader, options, exact);
+            if (displayRows.Count == 0)
             {
                 if (options.Json && TryWriteEmptyFormattedResult(options, jsonOptions))
                     return ZeroResultExitCode(options);
@@ -780,35 +789,6 @@ public static class QueryCommandRunner
                     }
                 }
                 else if (!options.Json)
-                {
-                    Console.Error.WriteLine(BuildZeroResultLine("No results found", options));
-                    WriteLangHint(options.Lang, reader);
-                    WriteExactSubstringHintIfNeeded(exactSubstringHint);
-                    WriteZeroResultHints(options, reader);
-                }
-                return ZeroResultExitCode(options);
-            }
-
-            var displayRows = BuildSearchDisplayRows(results, options, exact);
-            if (displayRows.Count == 0)
-            {
-                if (options.Json && TryWriteEmptyFormattedResult(options, jsonOptions))
-                    return ZeroResultExitCode(options);
-                if (options.Json)
-                {
-                    if (options.JsonOutputFormat == JsonOutputFormatArray)
-                    {
-                        Console.WriteLine(JsonSerializer.Serialize(
-                            Array.Empty<CompactSearchResult>(),
-                            CliJsonSerializerContextFactory.Create(jsonOptions).CompactSearchResultArray));
-                    }
-                    else
-                    {
-                        Console.WriteLine(BuildJsonZeroResultPayload(reader, ndjsonOptions, resultsKey: "results", query: options.Query, ftsQueryDiagnostics: ftsQueryDiagnostics, queryOptions: options, exactSubstringHint: exactSubstringHint).ToJsonString(ndjsonOptions));
-                        jsonDoneCount = 0;
-                    }
-                }
-                else
                 {
                     Console.Error.WriteLine(BuildZeroResultLine("No results found", options));
                     WriteLangHint(options.Lang, reader);
@@ -1337,7 +1317,9 @@ public static class QueryCommandRunner
         var rows = new List<SearchDisplayRow>(results.Count);
         var seenMatchLocations = options.NoDedup ? null : new HashSet<string>(StringComparer.Ordinal);
         var displayQuery = queryOverride ?? options.Query!;
-        var queryContext = SearchSnippetFormatter.PrepareQueryContext(displayQuery);
+        var queryContext = options.RawFts
+            ? SearchSnippetFormatter.PrepareRawFtsQueryContext(displayQuery)
+            : SearchSnippetFormatter.PrepareQueryContext(displayQuery);
         foreach (var result in results)
         {
             var compact = SearchSnippetFormatter.ToCompactResult(
@@ -1349,8 +1331,25 @@ public static class QueryCommandRunner
                 result.Lang,
                 options.SnippetFocus,
                 exposeLiteralHighlights: exact);
+            var preferredOriginFilterLine = GetPreferredSearchOriginFilterLine(compact, options);
+            if (preferredOriginFilterLine.HasValue && !IsLineWithinSnippet(compact, preferredOriginFilterLine.Value))
+            {
+                compact = SearchSnippetFormatter.ToCompactResult(
+                    result,
+                    queryContext,
+                    options.SnippetLines,
+                    exact,
+                    options.MaxLineWidth,
+                    result.Lang,
+                    options.SnippetFocus,
+                    exposeLiteralHighlights: exact,
+                    preferredMatchLine: preferredOriginFilterLine.Value);
+            }
 
             if (!options.RawFts && compact.MatchLines.Count == 0 && compact.Highlights.Count == 0)
+                continue;
+
+            if (!ApplySearchOriginFilters(compact, options))
                 continue;
 
             if (seenMatchLocations != null && compact.MatchLines.Count > 0)
@@ -1381,6 +1380,166 @@ public static class QueryCommandRunner
 
         return rows;
     }
+
+    private static int? GetPreferredSearchOriginFilterLine(CompactSearchResult compact, QueryCommandOptions options)
+    {
+        if (!HasSearchOriginFilters(options) || compact.MatchFacets.Count == 0)
+            return null;
+
+        return compact.MatchFacets
+            .Where(facet => !IsSearchFacetExcluded(facet, options))
+            .Select(facet => (int?)facet.Line)
+            .OrderBy(line => line)
+            .FirstOrDefault();
+    }
+
+    private static bool IsLineWithinSnippet(CompactSearchResult compact, int line)
+        => line >= compact.SnippetStartLine && line <= compact.SnippetEndLine;
+
+    private static List<SearchDisplayRow> ReadSearchDisplayRows(DbReader reader, QueryCommandOptions options, bool exact)
+    {
+        if (!HasSearchOriginFilters(options))
+            return BuildSearchDisplayRows(ReadSearchResults(reader, options, exact, options.Limit), options, exact);
+
+        return ReadOriginFilteredSearchDisplayRows(reader, options, exact);
+    }
+
+    private static List<SearchDisplayRow> ReadOriginFilteredSearchDisplayRows(DbReader reader, QueryCommandOptions options, bool exact)
+    {
+        var requestedLimit = Math.Max(0, options.Limit);
+        if (requestedLimit == 0)
+            return [];
+
+        var candidateLimit = GetSearchOriginFilterCandidateLimit(requestedLimit);
+        var batchLimit = GetSearchOriginFilterBatchLimit(requestedLimit);
+        var candidates = new List<SearchResult>(Math.Min(candidateLimit, batchLimit));
+        var displayRows = new List<SearchDisplayRow>();
+        SearchCursor? cursor = null;
+        var pagesRead = 0;
+        while (displayRows.Count < requestedLimit && pagesRead < SearchOriginFilterMaxPages)
+        {
+            var currentOffset = Math.Max(0, cursor?.Offset ?? 0);
+            if (currentOffset >= candidateLimit)
+                break;
+
+            var pageLimit = Math.Min(batchLimit, candidateLimit - currentOffset);
+            if (pageLimit <= 0)
+                break;
+
+            var page = ReadSearchResults(reader, options, exact, pageLimit, cursor, requestedLimit);
+            pagesRead++;
+            if (page.Count == 0)
+                break;
+
+            candidates.AddRange(page);
+            displayRows = BuildSearchDisplayRows(candidates, options, exact);
+
+            var last = page[^1];
+            if (last.NextOffset <= currentOffset)
+                break;
+            cursor = new SearchCursor(last.Score, last.ChunkId, last.NextOffset);
+        }
+
+        return displayRows.Count <= requestedLimit
+            ? displayRows
+            : displayRows.Take(requestedLimit).ToList();
+    }
+
+    private static int GetSearchOriginFilterBatchLimit(int requestedLimit)
+    {
+        var requested = Math.Max(1, requestedLimit);
+        var overFetched = requested * SearchOriginFilterOverFetchFactor;
+        return Math.Min(SearchOriginFilterMaxCandidates, Math.Max(SearchOriginFilterMinCandidates, overFetched));
+    }
+
+    private static int GetSearchOriginFilterCandidateLimit(int requestedLimit)
+        => requestedLimit <= 0 ? 0 : SearchOriginFilterMaxCandidates;
+
+    private static List<SearchResult> ReadSearchResults(DbReader reader, QueryCommandOptions options, bool exact, int limit, SearchCursor? cursor = null, int? guardRequestedLimit = null)
+        => reader.Search(options.Query!, limit, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank, cursor, options.GuardFilters, options.GuardWindow, guardRequestedLimit);
+
+    private static QueryCountResult CountFilteredSearchResults(DbReader reader, QueryCommandOptions options, bool exact)
+    {
+        var results = ReadSearchResults(reader, options, exact, int.MaxValue);
+        var rows = BuildSearchDisplayRows(results, options, exact);
+        return new QueryCountResult(
+            rows.Count,
+            rows.Select(row => row.Result.Path).Distinct(StringComparer.Ordinal).Count());
+    }
+
+    private static bool ApplySearchOriginFilters(CompactSearchResult compact, QueryCommandOptions options)
+    {
+        if (!HasSearchOriginFilters(options))
+            return true;
+        if (compact.MatchFacets.Count == 0)
+            return true;
+
+        var keptFacets = compact.MatchFacets
+            .Where(facet => !IsSearchFacetExcluded(facet, options))
+            .ToList();
+        if (keptFacets.Count == 0)
+            return false;
+
+        compact.MatchFacets = keptFacets;
+        compact.MatchOrigins = keptFacets
+            .Select(facet => facet.Origin)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(origin => origin, StringComparer.Ordinal)
+            .ToList();
+        compact.TestFile = keptFacets.Any(facet => facet.TestFile);
+        compact.TestSymbol = keptFacets.Any(facet => facet.TestSymbol);
+        compact.TestFixture = keptFacets.Any(facet => facet.TestFixture);
+
+        var keptLines = keptFacets.Select(facet => facet.Line).ToHashSet();
+        compact.MatchLines = keptLines
+            .OrderBy(line => line)
+            .ToList();
+        compact.Highlights = compact.Highlights
+            .Where(highlight => keptLines.Contains(highlight.Line))
+            .ToList();
+        var keptFacetKeys = keptFacets
+            .Select(facet => SearchFacetKey(facet.Line, facet.Column, facet.Length))
+            .ToHashSet(StringComparer.Ordinal);
+        foreach (var highlight in compact.Highlights)
+        {
+            var lineFacets = keptFacets.Where(facet => facet.Line == highlight.Line).ToList();
+            highlight.MatchOrigins = lineFacets
+                .Select(facet => facet.Origin)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(origin => origin, StringComparer.Ordinal)
+                .ToList();
+            highlight.TestFile = lineFacets.Any(facet => facet.TestFile);
+            highlight.TestSymbol = lineFacets.Any(facet => facet.TestSymbol);
+            highlight.TestFixture = lineFacets.Any(facet => facet.TestFixture);
+            highlight.TermOccurrences = FilterSearchOccurrences(highlight.TermOccurrences, highlight.Line, keptFacetKeys);
+            if (highlight.LiteralTermOccurrences != null)
+                highlight.LiteralTermOccurrences = FilterSearchOccurrences(highlight.LiteralTermOccurrences, highlight.Line, keptFacetKeys);
+        }
+
+        return keptFacets.Count > 0;
+    }
+
+    private static bool HasSearchOriginFilters(QueryCommandOptions options)
+        => options.ExcludeComments || options.ExcludeStrings || options.ExcludeFixtures;
+
+    private static bool IsSearchFacetExcluded(SearchMatchFacet facet, QueryCommandOptions options)
+    {
+        if (options.ExcludeComments && string.Equals(facet.Origin, SearchMatchClassifier.Comment, StringComparison.Ordinal))
+            return true;
+        if (options.ExcludeStrings && SearchMatchClassifier.IsStringLikeOrigin(facet.Origin))
+            return true;
+        if (options.ExcludeFixtures && facet.TestFixture)
+            return true;
+        return false;
+    }
+
+    private static List<SearchTermOccurrence> FilterSearchOccurrences(List<SearchTermOccurrence> occurrences, int line, HashSet<string> keptFacetKeys)
+        => occurrences
+            .Where(occurrence => keptFacetKeys.Contains(SearchFacetKey(line, occurrence.Column, occurrence.Length)))
+            .ToList();
+
+    private static string SearchFacetKey(int line, int column, int length)
+        => $"{line}:{column}:{length}";
 
     private static IEnumerable<FormattedLocation> ToSearchFormattedLocations(SearchDisplayRow row, string query, bool useMatchLines)
     {
@@ -3678,6 +3837,70 @@ public static class QueryCommandRunner
     private static bool IsInspectListField(string field)
         => field is "definitions" or "nearby_symbols" or "references" or "callers" or "callees";
 
+    private static void AddInspectBodyModeJsonFields(JsonObject payload, QueryCommandOptions options, SymbolAnalysisResult analysis)
+    {
+        var bodyContentPresent = analysis.Definitions.Any(definition => definition.BodyContent != null);
+        var bodyContentTruncated = analysis.Definitions.Any(definition => definition.BodyContentTruncated);
+        var nextStartLine = analysis.Definitions
+            .Where(definition => definition.BodyContentNextStartLine.HasValue)
+            .Select(definition => definition.BodyContentNextStartLine!.Value)
+            .DefaultIfEmpty()
+            .Min();
+
+        var bodyMode = new JsonObject
+        {
+            ["include_body"] = options.IncludeBody,
+            ["definitions_only"] = IsInspectDefinitionsOnlyMode(options),
+            ["body_content_present"] = bodyContentPresent,
+            ["body_content_truncated"] = bodyContentTruncated,
+            ["default_body_lines"] = DbReader.DefinitionBodyMaxLines,
+            ["max_body_lines"] = DbReader.DefinitionBodyMaxRequestedLines,
+            ["hint"] = BuildInspectBodyModeHint(options, bodyContentPresent, bodyContentTruncated),
+        };
+        if (options.BodyStartLine.HasValue)
+            bodyMode["body_start_line"] = options.BodyStartLine.Value;
+        if (options.BodyLines.HasValue)
+            bodyMode["body_lines"] = options.BodyLines.Value;
+        else if (options.IncludeBody)
+            bodyMode["body_lines"] = DbReader.DefinitionBodyMaxLines;
+        if (nextStartLine > 0)
+            bodyMode["next_body_start_line"] = nextStartLine;
+
+        payload["body_mode"] = bodyMode;
+    }
+
+    private static void WriteInspectBodyModeHint(SymbolAnalysisResult analysis, QueryCommandOptions options)
+    {
+        if (analysis.Definitions.Count == 0)
+            return;
+
+        var bodyContentPresent = analysis.Definitions.Any(definition => definition.BodyContent != null);
+        var bodyContentTruncated = analysis.Definitions.Any(definition => definition.BodyContentTruncated);
+        Console.WriteLine($"Body Hint           : {BuildInspectBodyModeHint(options, bodyContentPresent, bodyContentTruncated)}");
+    }
+
+    private static bool IsInspectDefinitionsOnlyMode(QueryCommandOptions options)
+        => options.IncludeBody
+            && options.InspectFields is { Count: 1 } fields
+            && string.Equals(fields[0], "definitions", StringComparison.Ordinal);
+
+    private static string BuildInspectBodyModeHint(QueryCommandOptions options, bool bodyContentPresent, bool bodyContentTruncated)
+    {
+        if (!options.IncludeBody)
+            return "Add `--body` for definition body snippets in JSON, or use `--body-only` for body-focused JSON. Page long bodies with `--body-start <line> --body-lines <n>`.";
+
+        if (!options.Json)
+            return "Body content was requested, but human inspect output stays summary-only; use `--json --fields body` or `--body-only` to show `body_content`.";
+
+        if (bodyContentTruncated)
+            return "Use each definition's `body_content_next_start_line` with `--body-start <line>` and optionally `--body-lines <n>` to fetch the next body slice.";
+
+        if (bodyContentPresent)
+            return "Body content is present under each definition's `body_content` field.";
+
+        return "No definition body content is available for the matched definitions.";
+    }
+
     public static int RunInspect(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var previewOptionError = ValidatePreviewOptions("inspect", cmdArgs, allowMaxLineWidth: true, allowFocusOptions: false);
@@ -3725,7 +3948,18 @@ public static class QueryCommandRunner
         {
             var compactLimit = GetCompactSectionLimit(options);
             var inspectLimit = options.Compact ? GetCompactSourceLimit(compactLimit) : options.Limit;
-            var analysis = reader.AnalyzeSymbol(options.Query, inspectLimit, options.Lang, options.IncludeBody, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.MaxLineWidth);
+            var analysis = reader.AnalyzeSymbol(
+                options.Query,
+                inspectLimit,
+                options.Lang,
+                options.IncludeBody,
+                options.PathPatterns,
+                options.ExcludePaths,
+                options.ExcludeTests,
+                exact,
+                options.MaxLineWidth,
+                options.BodyStartLine,
+                options.BodyLines);
             var sqlGraphSignal = NarrowSqlGraphContractSignal(
                 reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests),
                 DbReader.IsSqlLanguage(options.Lang)
@@ -3756,6 +3990,7 @@ public static class QueryCommandRunner
                 if (compactTruncation != null)
                     AddCompactJsonFields(payload, compactLimit, compactTruncation);
                 ApplyInspectFieldSelection(payload, options, jsonOptions);
+                AddInspectBodyModeJsonFields(payload, options, analysis);
                 Console.WriteLine(payload.ToJsonString(jsonOptions));
             }
             else
@@ -3792,6 +4027,7 @@ public static class QueryCommandRunner
                     }
                 }
                 WriteExactZeroHint(analysis.ExactZeroHint);
+                WriteInspectBodyModeHint(analysis, options);
                 WriteRepoMapSection("Definitions", analysis.Definitions.Select(item => $"{item.Kind,-10} {item.Name,-24} {item.Path}:{item.StartLine}-{item.EndLine}"));
                 WriteRepoMapSection("Nearby symbols", analysis.NearbySymbols.Select(item => $"{item.Kind,-10} {item.Name,-24} {item.Path}:{item.StartLine}-{item.EndLine}"));
                 WriteRepoMapSection("References", analysis.References.Select(item => $"{item.Path}:{item.Line}:{item.Column}  {item.Context}"));
@@ -4134,7 +4370,10 @@ public static class QueryCommandRunner
                 ? BuildStatusCheckFailures(status, options.StatusCheckScopes)
                 : Array.Empty<StatusCheckFailure>();
             if (options.CheckWorkspace)
+            {
                 status.FailedChecks = checkFailures.Select(f => f.Name).ToList();
+                status.RepairCommands = BuildStatusRepairCommands(status, checkFailures, options);
+            }
 
             if (options.Json)
             {
@@ -4481,7 +4720,7 @@ public static class QueryCommandRunner
         }
 
         using var db = new DbContext(options.DbPath);
-        var result = db.RunIncrementalVacuum();
+        var result = db.RunIncrementalVacuum(options.DryRun);
         if (options.Json)
         {
             Console.WriteLine(JsonSerializer.Serialize(
@@ -4490,10 +4729,17 @@ public static class QueryCommandRunner
         }
         else
         {
-            Console.WriteLine($"Vacuum complete: reclaimed {result.PagesReclaimed:N0} page(s) ({result.BytesReclaimed:N0} bytes).");
+            Console.WriteLine(result.DryRun
+                ? $"Vacuum dry run: estimated reclaimable {result.EstimatedPagesReclaimable:N0} page(s) ({result.EstimatedBytesReclaimable:N0} bytes)."
+                : $"Vacuum complete: reclaimed {result.PagesReclaimed:N0} page(s) ({result.BytesReclaimed:N0} bytes).");
             Console.WriteLine(ConsoleUi.FormatSummaryLine("Page size", $"{result.PageSize:N0} bytes"));
             Console.WriteLine(ConsoleUi.FormatSummaryLine("Pages", $"{result.PageCountBefore:N0} -> {result.PageCountAfter:N0}"));
             Console.WriteLine(ConsoleUi.FormatSummaryLine("Freelist", $"{result.FreelistCountBefore:N0} -> {result.FreelistCountAfter:N0}"));
+            Console.WriteLine(ConsoleUi.FormatSummaryLine("AutoVac", $"{result.AutoVacuumModeBeforeName} -> {result.AutoVacuumModeAfterName}"));
+            if (result.MaintenanceGuidance.RecommendedCommand != "none")
+                Console.WriteLine(ConsoleUi.FormatSummaryLine("Recommend", result.MaintenanceGuidance.RecommendedCommand));
+            if (!string.IsNullOrWhiteSpace(result.MaintenanceGuidance.PostMaintenanceFollowUp))
+                Console.WriteLine(ConsoleUi.FormatSummaryLine("Follow-up", result.MaintenanceGuidance.PostMaintenanceFollowUp));
         }
 
         return CommandExitCodes.Success;
@@ -6415,6 +6661,8 @@ public static class QueryCommandRunner
         string? query = null;
         bool rawFts = false;
         bool includeBody = false;
+        int? bodyStartLine = null;
+        int? bodyLines = null;
         bool countOnly = false;
         bool strictNotFound = false;
         int? startLine = null;
@@ -6446,11 +6694,15 @@ public static class QueryCommandRunner
         bool prefix = false;
         var guardFilters = new List<SearchGuardFilter>();
         var guardWindow = DbReader.DefaultSearchGuardWindow;
+        bool excludeComments = false;
+        bool excludeStrings = false;
+        bool excludeFixtures = false;
         List<string>? parseErrors = null;
         bool exactName = false;
         bool exactSubstring = false;
         bool dbPathExplicit = false;
         bool readOnly = false;
+        bool dryRun = false;
         bool checkWorkspace = false;
         TimeSpan? staleAfter = null;
         HashSet<string>? statusCheckScopes = null;
@@ -6601,6 +6853,9 @@ public static class QueryCommandRunner
                 case "--read-only":
                 case "--immutable":
                     readOnly = true;
+                    break;
+                case "--dry-run":
+                    dryRun = true;
                     break;
                 case "--pretty":
                     break;
@@ -6916,6 +7171,30 @@ public static class QueryCommandRunner
                 case "--body":
                     includeBody = true;
                     break;
+                case "--body-start":
+                    if (!TryReadRawOptionValue(args, ref i, "--body-start", inlineValue, out var bodyStartValue, out var missingBodyStartError))
+                        AddParseError(missingBodyStartError!);
+                    else if (TryParsePositiveInt(bodyStartValue!, "--body-start", out var parsedBodyStartLine, out var bodyStartError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--body-start", bodyStartValue!);
+                        bodyStartLine = parsedBodyStartLine;
+                        includeBody = true;
+                    }
+                    else
+                        AddParseError(bodyStartError!);
+                    break;
+                case "--body-lines":
+                    if (!TryReadRawOptionValue(args, ref i, "--body-lines", inlineValue, out var bodyLinesValue, out var missingBodyLinesError))
+                        AddParseError(missingBodyLinesError!);
+                    else if (TryParsePositiveInt(bodyLinesValue!, "--body-lines", out var parsedBodyLines, out var bodyLinesError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--body-lines", bodyLinesValue!);
+                        bodyLines = parsedBodyLines;
+                        includeBody = true;
+                    }
+                    else
+                        AddParseError(bodyLinesError!);
+                    break;
                 case "--count":
                     countOnly = true;
                     break;
@@ -7139,6 +7418,15 @@ public static class QueryCommandRunner
                 case "--exclude-tests":
                     excludeTests = true;
                     break;
+                case "--exclude-comments":
+                    excludeComments = true;
+                    break;
+                case "--exclude-strings":
+                    excludeStrings = true;
+                    break;
+                case "--exclude-fixtures":
+                    excludeFixtures = true;
+                    break;
                 case "--include-generated":
                     includeGenerated = true;
                     break;
@@ -7344,6 +7632,7 @@ public static class QueryCommandRunner
             DbPath = resolvedDbPath,
             DbPathExplicit = dbPathExplicit,
             ReadOnly = readOnly,
+            DryRun = dryRun,
             DataDir = dbResolution.DataDir,
             DataDirSource = dbResolution.DataDirSource,
             Json = json ?? jsonDefault,
@@ -7359,6 +7648,8 @@ public static class QueryCommandRunner
             Query = query,
             RawFts = rawFts,
             IncludeBody = includeBody,
+            BodyStartLine = bodyStartLine,
+            BodyLines = bodyLines,
             StartLine = startLine,
             EndLine = endLine,
             ContextBefore = contextBefore,
@@ -7391,6 +7682,9 @@ public static class QueryCommandRunner
             Prefix = prefix,
             GuardFilters = guardFilters,
             GuardWindow = guardWindow,
+            ExcludeComments = excludeComments,
+            ExcludeStrings = excludeStrings,
+            ExcludeFixtures = excludeFixtures,
             ExactName = exactName,
             ExactSubstring = exactSubstring,
             CheckWorkspace = checkWorkspace,
@@ -8747,8 +9041,8 @@ public static class QueryCommandRunner
             return;
         }
 
-        if (options.Lang != null || options.PathPatterns.Count > 0 || options.ExcludeTests || options.ExcludePaths.Count > 0)
-            Console.Error.WriteLine($"Hint: {filterHint ?? "try removing --lang, --path, --exclude-path, or --exclude-tests to broaden the search."}");
+        if (options.Lang != null || options.PathPatterns.Count > 0 || options.ExcludeTests || options.ExcludeComments || options.ExcludeStrings || options.ExcludeFixtures || options.ExcludePaths.Count > 0)
+            Console.Error.WriteLine($"Hint: {filterHint ?? "try removing --lang, --path, --exclude-path, --exclude-tests, --exclude-comments, --exclude-strings, or --exclude-fixtures to broaden the search."}");
 
         if (alternativeHint != null)
             Console.Error.WriteLine($"Hint: {alternativeHint}");
@@ -8805,6 +9099,12 @@ public static class QueryCommandRunner
             yield return $"rank-by: {FormatReferenceRankMode(options.RankMode)}";
         if (options.ExcludeTests)
             yield return "exclude-tests: true";
+        if (options.ExcludeComments)
+            yield return "exclude-comments: true";
+        if (options.ExcludeStrings)
+            yield return "exclude-strings: true";
+        if (options.ExcludeFixtures)
+            yield return "exclude-fixtures: true";
         if (options.Since.HasValue)
             yield return $"since: {options.Since.Value:O}";
         if (options.CountOnly)
@@ -8849,6 +9149,12 @@ public static class QueryCommandRunner
             query["rank_by"] = FormatReferenceRankMode(options.RankMode);
         if (options.ExcludeTests)
             query["exclude_tests"] = true;
+        if (options.ExcludeComments)
+            query["exclude_comments"] = true;
+        if (options.ExcludeStrings)
+            query["exclude_strings"] = true;
+        if (options.ExcludeFixtures)
+            query["exclude_fixtures"] = true;
         if (options.IncludeGenerated)
             query["include_generated"] = true;
         if (options.Since.HasValue)
@@ -9264,6 +9570,127 @@ public static class QueryCommandRunner
             failures.Add(new StatusCheckFailure("index_newer_than_reader", false, $"[degraded] index_newer_than_reader=true reason={status.IndexNewerThanReaderReason ?? "unknown"}"));
 
         return failures;
+    }
+
+    private static List<StatusRepairCommand>? BuildStatusRepairCommands(
+        StatusResult status,
+        IReadOnlyList<StatusCheckFailure> failures,
+        QueryCommandOptions options)
+    {
+        if (failures.Count == 0)
+            return null;
+
+        var commands = new List<StatusRepairCommand>();
+        foreach (var failure in failures)
+        {
+            var command = failure.Name switch
+            {
+                "workspace_stale" or "workspace_unavailable" => BuildIndexRepairCommand(
+                    status,
+                    options,
+                    failure.Name,
+                    rebuild: false,
+                    "Re-runs indexing for the current workspace snapshot."),
+                "graph_table_available" or "issues_table_available" or "file_issues_data_current"
+                    or "sql_graph_contract_ready" or "csharp_symbol_name_ready" or "csharp_metadata_target_ready"
+                    => BuildIndexRepairCommand(
+                        status,
+                        options,
+                        failure.Name,
+                        rebuild: false,
+                        "Rewrites stale or missing index metadata before query results are trusted."),
+                "hotspot_family_ready" or "index_newer_than_reader" => BuildIndexRepairCommand(
+                    status,
+                    options,
+                    failure.Name,
+                    rebuild: true,
+                    "Performs a full rebuild because partial updates cannot prove every indexed row was restamped."),
+                "fold_ready" => BuildBackfillFoldRepairCommand(options, failure.Name),
+                "migration_in_progress" => BuildStatusCheckRepairCommand(options, failure.Name),
+                _ => null,
+            };
+            if (command != null)
+                commands.Add(command);
+        }
+
+        return commands.Count == 0 ? null : commands;
+    }
+
+    private static StatusRepairCommand BuildIndexRepairCommand(
+        StatusResult status,
+        QueryCommandOptions options,
+        string reason,
+        bool rebuild,
+        string safetyNote)
+    {
+        var args = new List<string>
+        {
+            "index",
+            string.IsNullOrWhiteSpace(status.ProjectRoot) ? "." : status.ProjectRoot!,
+        };
+        if (options.DbPathExplicit)
+        {
+            args.Add("--db");
+            args.Add(ResolveWritableDbPathOrPlaceholder(options.DbPath));
+        }
+        if (rebuild)
+            args.Add("--rebuild");
+
+        return new StatusRepairCommand
+        {
+            Name = "cdidx",
+            Args = args,
+            Reason = reason,
+            SafetyNotes =
+            [
+                safetyNote,
+                "Avoid running concurrently with another cdidx index writer for the same database.",
+            ],
+        };
+    }
+
+    private static StatusRepairCommand BuildBackfillFoldRepairCommand(QueryCommandOptions options, string reason)
+    {
+        var args = new List<string> { "backfill-fold" };
+        if (options.DbPathExplicit)
+        {
+            args.Add("--db");
+            args.Add(ResolveWritableDbPathOrPlaceholder(options.DbPath));
+        }
+
+        return new StatusRepairCommand
+        {
+            Name = "cdidx",
+            Args = args,
+            Reason = reason,
+            SafetyNotes =
+            [
+                "Restamps folded-name columns in place without reparsing source files.",
+                "Use a full index rebuild instead if the database must be regenerated from source.",
+            ],
+        };
+    }
+
+    private static StatusRepairCommand BuildStatusCheckRepairCommand(QueryCommandOptions options, string reason)
+    {
+        var args = new List<string> { "status", "--check", "--json" };
+        if (options.DbPathExplicit)
+        {
+            args.Add("--db");
+            args.Add(options.DbPath);
+        }
+
+        return new StatusRepairCommand
+        {
+            Name = "cdidx",
+            Args = args,
+            Reason = reason,
+            SafetyNotes =
+            [
+                "Wait for the active index or migration writer to finish before rerunning status.",
+                "Do not start a second writer unless the existing writer is known to be gone.",
+            ],
+        };
     }
 
     private static void WriteStatusCheckDiagnostics(IReadOnlyList<StatusCheckFailure> failures)
@@ -9988,6 +10415,8 @@ public static class QueryCommandRunner
             ["--snippet-lines"] = SearchSnippetFormatter.MaxSnippetLines,
             ["--max-line-width"] = LineWidthFormatter.MaxAllowedLineWidth,
             ["--slow-query-ms"] = 3_600_000,
+            ["--body-start"] = 10_000_000,
+            ["--body-lines"] = DbReader.DefinitionBodyMaxRequestedLines,
             ["--max-hops"] = 64,
             ["--depth"] = 64,
             ["--before"] = 1_000,
@@ -10012,6 +10441,8 @@ public static class QueryCommandRunner
         ["--data-dir"] = "pass a directory where cdidx should store `codeindex.db`, e.g. `--data-dir /var/cache/cdidx`.",
         ["--limit"] = "pass a positive integer, e.g. `--limit 20` (default 20).",
         ["--top"] = "pass a positive integer, e.g. `--top 20` (alias for `--limit`, default 20).",
+        ["--body-start"] = "pass a 1-based source line inside the symbol body, e.g. `--body-start 120`.",
+        ["--body-lines"] = "pass a positive line count for the body slice, e.g. `--body-lines 40`.",
         ["--lang"] = "pass a language identifier, e.g. `--lang csharp`. Run `cdidx languages` for the supported set.",
         ["--query"] = "pass a search literal, e.g. `--query \"authenticate\"`. Use the `--query` form when the literal starts with `-`.",
         ["--recipe"] = "pass a built-in audit recipe name, e.g. `--recipe risky-code`; run `cdidx search --list-recipes` to list available recipes.",
@@ -10366,6 +10797,7 @@ public sealed class QueryCommandOptions
     public string DbPath { get; init; } = Path.Combine(".cdidx", "codeindex.db");
     public bool DbPathExplicit { get; init; }
     public bool ReadOnly { get; init; }
+    public bool DryRun { get; init; }
     public string? DataDir { get; init; }
     public string? DataDirSource { get; init; }
     public bool Json { get; init; }
@@ -10383,6 +10815,8 @@ public sealed class QueryCommandOptions
     public string? Query { get; init; }
     public bool RawFts { get; init; }
     public bool IncludeBody { get; init; }
+    public int? BodyStartLine { get; init; }
+    public int? BodyLines { get; init; }
     public int? StartLine { get; init; }
     public int? EndLine { get; init; }
     public int ContextBefore { get; init; }
@@ -10413,6 +10847,9 @@ public sealed class QueryCommandOptions
     public bool Prefix { get; init; }
     public List<SearchGuardFilter> GuardFilters { get; init; } = [];
     public int GuardWindow { get; init; } = DbReader.DefaultSearchGuardWindow;
+    public bool ExcludeComments { get; init; }
+    public bool ExcludeStrings { get; init; }
+    public bool ExcludeFixtures { get; init; }
     public bool ExactName { get; init; }
     public bool ExactSubstring { get; init; }
     public bool CheckWorkspace { get; init; }

@@ -317,7 +317,13 @@ For AI-oriented bounded payloads, `map`, `inspect`, and `outline` accept
 For narrower `inspect` evidence, `--fields <csv>` implies JSON and selects
 top-level groups such as `definitions`, `file`, `graph`, `references`,
 `callers`, and `callees`; `--body-only` is shorthand for `--body --fields
-definitions`.
+definitions`. When a definition body is longer than the returned slice,
+`body_content_next_start_line` points to the next source line to pass with
+`--body-start`; use `--body-lines` to choose the page size. If a single long
+source line hits the body byte cap, continuation still advances to the following
+source line because body paging is line-based. `inspect --json` also includes
+`body_mode` metadata so clients can see whether body content was requested,
+whether it is present, and which follow-up flags to use.
 
 ```bash
 cdidx search authenticate --json          # ndjson stream, one result per line
@@ -325,6 +331,7 @@ cdidx search authenticate --json=array    # single JSON array
 cdidx inspect QueryCommandRunner --json --pretty
 cdidx map --compact                       # capped JSON with truncation metadata
 cdidx inspect Compute --body-only         # definitions with body_content only
+cdidx inspect Compute --body --body-start 40 --body-lines 40
 ```
 
 For `cdidx find --count --json`, `files` is the canonical matched-file count.
@@ -863,6 +870,9 @@ This opens the database read-only, runs SQLite's `PRAGMA integrity_check`, and p
 cdidx search "authenticate"                             # full-text search
 cdidx search "handleRequest" --lang go                  # filter by language
 cdidx search "TODO" --limit 50                          # more results
+cdidx search "TODO" --exclude-comments                  # suppress comment-only matches
+cdidx search "Password" --exclude-strings               # suppress string, regex, and help-text matches
+cdidx search "DangerousApi" --exclude-fixtures           # suppress fixture-only matches in tests
 cdidx search "auth*"                                    # trailing * on one token opts that token into FTS5 prefix matching
 cdidx search "計算" --prefix                            # widen every token to a prefix phrase (CJK runs are one unicode61 token; opt in to reach `計算する`)
 cdidx search "content:auth*" --fts                      # raw FTS5 syntax; `content:` is the only valid column qualifier, and NEAR distance is capped at 100
@@ -891,7 +901,10 @@ Guard-aware search filters primary `search` matches by nearby literal guards:
 `--require-before` / `--require-after` keep matches only when the guard query
 appears in the selected line window, while `--reject-before` / `--reject-after`
 drop matches when the guard query appears. JSON search results include
-`guard_evidence` for required guards that matched.
+`guard_evidence` for matched guards and `guard_checks` for each guard evaluated
+on a returned match. Guard evidence includes the guard name, pattern,
+before/after relationship, 1-based span, origin category, and source line.
+Each `guard_checks[]` entry includes a compact pass/fail summary.
 Guarded searches inspect a bounded candidate set before pagination; if a guarded
 query is too broad to satisfy the requested page within that budget, CLI and MCP
 return a validation error. Narrow with more specific query text, `--lang`,
@@ -1022,6 +1035,8 @@ When `definition --body` is combined with `--json`, `body_content` is capped to 
 `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, and `find` also share repeatable `--path <glob>` glob-style path filters (multiple values are OR'd together), repeatable `--exclude-path <glob>`, and `--exclude-tests`. Use `*` and `?` to match path segments, and plain text still behaves like a substring filter when you do not include wildcards. Search results prefer source files over tests and docs, and `search` boosts files whose symbol names or paths match the query exactly.
 
 `search --json`, `search --format compact`, named search batches, and MCP `search` return compact match-centered snippets instead of whole chunks. Each result includes `chunk_start_line`, `chunk_end_line`, `snippet_start_line`, `snippet_end_line`, `snippet`, `match_lines`, `highlights`, `context_before`, `context_after`, `truncated_line_count`, `dropped_match_line_count`, and `truncation_context`, plus optional `enclosing_symbol_name`, `enclosing_symbol_kind`, `enclosing_symbol_start_line`, `enclosing_symbol_end_line`, and `enclosing_container_name` when the match line is inside an indexed symbol. Use `--snippet-lines <n>` to shrink or widen the excerpt window (default: 8, max: 20), and `--max-line-width <n>` to clamp each line around the strongest match when a minified / transpiled file would otherwise return a single huge line (default: 512, max: 4096; `0` disables clamping). `--snippet-focus <leftmost|quality|proximity>` controls that long-line focus; `quality` is the default, `leftmost` keeps the legacy earliest-match behavior, and `proximity` favors dense multi-token clusters. Clamped lines are marked with `...(+N)...` in the snippet and expose `highlights[].truncated` / `highlights[].original_line_length` in JSON / MCP output.
+Search JSON also exposes `match_origins` and `match_facets` so tools can distinguish matches in code, comments, string literals, regex literals, and CLI help text. Each highlight includes its own `match_origins`; `--exclude-comments` and `--exclude-strings` use those facets to hide comment-only or string-like matches.
+The same facets expose `test_file`, `test_symbol`, and `test_fixture` booleans at result, highlight, and match-facet levels. `test_fixture` marks string-like matches inside likely test files or indexed test methods, and `--exclude-fixtures` hides fixture-only matches while keeping real code matches.
 
 ### Resolve a definition
 
@@ -1227,6 +1242,8 @@ same source location.
 | `--compact` | `map`, `inspect`, `outline` | Emit AI-oriented compact JSON with capped list sections and `truncation.sections.*` metadata. The default cap is 5 unless `--limit` / `--top` is supplied. |
 | `--fields <csv>` | `inspect` | Select top-level inspect JSON groups: `file`, `workspace`, `graph`, `definitions`, `body`, `nearby_symbols`, `references`, `callers`, `callees`, or `all`. `body` includes definition bodies and maps to `definitions`. |
 | `--body-only` | `inspect` | Shorthand for `--body --fields definitions`, useful when large audits need implementation text without graph context. |
+| `--body-start <line>` | `inspect` | Start the returned definition body slice at a 1-based source line inside the symbol body. Pair with `body_content_next_start_line` from JSON to page a long body. |
+| `--body-lines <n>` | `inspect` | Return at most this many definition body lines for `--body`, `--body-only`, or `--fields body`; maximum 1000. |
 | `--status <all\|submitted\|unsubmitted>` | `suggestions` | Filter local suggestion history by GitHub submission state. |
 | `--language <lang>` / `--lang <lang>` | `suggestions` | Filter local suggestion history by recorded target language. |
 | `--category <category>` | `suggestions` | Filter local suggestion history by suggestion category. |
@@ -1248,6 +1265,9 @@ same source location.
 | `--open-issues <path>` | `search --recipe <name> --format issue-drafts` | Preflight generated issue drafts against an open-issues JSON file such as `gh issue list --state open --json number,title,labels,url`. |
 | `--exclude-path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | Exclude glob-style path patterns. `*` and `?` are wildcards (repeatable) |
 | `--exclude-tests` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | Exclude likely test files and prefer production code |
+| `--exclude-comments` | `search` | Exclude matches whose only retained origin is a comment |
+| `--exclude-strings` | `search` | Exclude matches whose only retained origin is a string literal, regex literal, or CLI help text |
+| `--exclude-fixtures` | `search` | Exclude matches whose only retained facet is a test fixture string |
 | `--include-generated` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `deps`, `impact`, `unused`, `hotspots` | Include files detected as generated code; generated files are excluded from query results by default |
 | `--workspace-db <path>` | `deps` | Add another CodeIndex database to the file-dependency query. Repeat it for up to 7 distinct additional DBs (8 total including `--db`); JSON edges include `source_db` and `target_db` so same relative paths can be disambiguated. |
 | `--snippet-lines <n>` | `search`, `references`, `callers`, `callees`, `impact` | Search snippet length or graph `--body` excerpt length (default: 8, max: 20) |
@@ -1985,25 +2005,46 @@ cdidx includes a built-in **MCP (Model Context Protocol) server**. MCP is a stan
 `cdidx lsp --db .cdidx/codeindex.db` starts a read-only Language Server Protocol
 server over stdio. It reuses the existing CodeIndex database and exposes
 `initialize`, `workspace/symbol`, `textDocument/documentSymbol`,
-`textDocument/definition`, and `textDocument/references` for editors that can
-launch an arbitrary LSP command but do not speak MCP.
+`textDocument/definition`, `textDocument/declaration`,
+`textDocument/typeDefinition`, `textDocument/implementation`, and
+`textDocument/references` for editors that can launch an arbitrary LSP command
+but do not speak MCP.
 Incoming `textDocument.uri` values must be strings, must be absolute `file:`
 URIs, and are rejected before URI parsing when they exceed 4096 characters,
 matching the MCP resource URI limit and keeping error responses bounded. LSP
 frame parsing also rejects more than 64 header lines, more than 65536 aggregate
 header bytes, any one header line above 8192 bytes, duplicate `Content-Length`
 headers, or a body above 8388608 bytes before reading the message body.
+The stdio loop observes the CLI cancellation token while reading headers and
+message bodies, so Ctrl-C / host cancellation can interrupt pending frame reads
+instead of waiting for another complete request.
 Unknown-method diagnostics echo at most 240 method-name characters with `...`
 when the method name is longer. Request IDs must be bounded JSON-RPC scalar
 values: strings are capped at 256
 characters, integer IDs must fit in `Int64`, and non-scalar IDs are rejected as
 invalid requests before response IDs are cloned. `workspace/symbol` query
 strings are capped at 1000 characters before symbol search runs.
-`textDocument/documentSymbol` returns at most 1000 indexed symbols, truncates
-each `detail` string to 512 characters with `...`, and stops adding symbols
-before the result array exceeds 524288 JSON bytes.
+`workspace/symbol` accepts optional numeric `limit` / `maxResults` parameters
+and clamps them to 1000 results. `textDocument/documentSymbol` returns
+hierarchical `DocumentSymbol` children when container metadata is available,
+returns at most 1000 indexed symbols, truncates each `detail` string to 512
+characters with `...`, and trims the tree before the result array exceeds
+524288 JSON bytes.
 Position-based `definition` and `references` lookups read at most 16384
 characters from the target source line before returning an empty result.
+`textDocument/references` honors `context.includeDeclaration`; when true, the
+definition locations are prepended to the reference result without duplicating
+identical locations. `declaration`, `typeDefinition`, and `implementation`
+requests reuse the same indexed definition lookup and return the same location
+shape as `definition`.
+Tracked `workspaceFolders` are used when resolving position-based requests for
+indexed absolute paths, including folders added or removed through
+`workspace/didChangeWorkspaceFolders`; relative indexed paths remain anchored to
+the database project root.
+When a position lookup returns an empty result because the request cannot be
+resolved safely, the `CodeIndex` `ActivitySource` emits an `lsp.lookup_failed`
+event with a safe `lsp.lookup.failure_reason` code such as `outside_project`,
+`file_not_indexed`, `position_file_too_large`, or `no_token_at_position`.
 When exact indexed path resolution misses, LSP document path fallback inspects
 at most 32 basename candidates before treating the document as unresolved.
 
@@ -2112,7 +2153,7 @@ The MCP `tools/list` response includes an `examples` array for every registered 
 | `impact_analysis` | Compute transitive callers of a symbol (inclusive `maxHops`: `maxHops: N` returns callers at hop 1..N — a chain A→B→C→D queried against D with `maxHops: 2` yields C at hop 1 and B at hop 2). The deprecated `maxDepth` alias is still accepted during the compatibility period and surfaces a warning. The symbol-level BFS walks only call-graph kinds (`call`, `instantiate`, `subscribe`) and excludes metadata-only edges (`attribute`, `annotation`, `type_reference`) so metadata cycles do not inflate caller counts. Use `maxHops: 0` to resolve the symbol only, or rely on single-type fallback to heuristic file-level dependency hints and partial-definition hints; those file hints may include metadata edges. Pass `withPaths: true` to also receive a `paths` array per caller (shortest chains `[resolvedRoot, intermediate..., callerName]`; diamond convergence surfaces every route, capped per row with a `paths_truncated` overflow flag). |
 | `unused_symbols` | Find symbols defined but never referenced, with confidence buckets for dead-code triage |
 | `symbol_hotspots` | Find high-impact hotspots. `groupBy` supports `symbol`, `file`, and `statement`; SQL scopes default to statement grouping while non-SQL scopes default to symbol grouping. |
-| `batch_query` | Execute multiple queries in a single call (MCP only, max 10). The response includes a top-level `metadata` object with `submitted`, `executed`, `errors`, `total_elapsed_ms`, `success_count`, and `failure_count`; every entry in `results` carries `request_index`, `ok`, `elapsed_ms`, and compact `args_summary` fields so callers can correlate partial failures and slow inner queries without relying on positional guesses. |
+| `batch_query` | Execute multiple queries in a single call (MCP only, max 10). The response includes a top-level `metadata` object with `submitted`, `executed`, `errors`, `total_elapsed_ms`, `success_count`, and `failure_count`; every entry in `results` carries `request_index`, optional client `slot_id`, `ok`, `elapsed_ms`, `summary`, and compact `args_summary` fields so callers can correlate partial failures and slow inner queries without relying on positional guesses. |
 | `validate` | Report encoding issues (U+FFFD with origin/severity, BOM, null bytes, mixed/CR-only line endings, UTF-16 BOM detection, likely non-UTF8 encodings) |
 | `languages` | List all supported languages, file extensions, and capabilities |
 | `ping` | Lightweight connection check |
@@ -2137,6 +2178,12 @@ This recomputes persisted `name_folded` / `*_folded` columns from existing DB ro
 Graph-oriented MCP tools such as `references`, `callers`, and `callees` also return `graph_language`, `graph_supported`, and `graph_support_reason` when a language filter is provided, so clients can distinguish unsupported languages from genuine zero-hit queries.
 
 All MCP tools include `annotations` (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) so AI clients can auto-approve safe read-only queries without prompting the user.
+
+`tools/list` also advertises argument compatibility metadata. Common path filters such as `excludePaths` accept either a scalar string or a string array, matching `path`; schemas expose `x-expectedType`, aliases through `x-aliases` / `x-aliasOf`, and deprecated aliases through `deprecated` plus `x-deprecationReason`. Validation errors echo `expected` and, where relevant, `alias_of` / `deprecated` so clients can recover without parsing prose. `definition` and `references` accept both `lsp_compatible` and the JSON-style `lspCompatible` alias.
+
+When an MCP tool clamps or ignores a supported argument, successful responses include human-readable `warnings` and machine-readable `argument_adjustments`. Each adjustment records `argument`, `action` (`clamped` or `ignored`), `requested`, `effective`, and cap fields when applicable, so clients can tell when `limit`, `offset`, `snippetLines`, `map.depth`, or `impact_analysis.maxHops` returned a narrower result than requested.
+
+`batch_query` advertises its slot cap as `queries.maxItems` in `tools/list`, and `status` exposes clear `mcp.limits.batch_query_max_queries`, `batch_query_response_bytes`, and `batch_query_max_response_bytes` fields distinct from JSON-RPC batch limits. Clients can pass `estimateOnly: true` to get `slot_estimates` and byte-budget metadata without executing slots, pass `maxResponseBytes` to request a lower per-call response budget, and add per-slot `id` or `slotId` values that are echoed as `slot_id`. When the aggregate response is truncated, `truncated_queries` preserves slot ids and `split_hint` returns `next_request_index`, `suggested_query_count`, and an opaque `resume_cursor` so clients can split the remaining original query array deterministically.
 
 #### MCP error responses
 
@@ -2201,6 +2248,8 @@ For read-only deployments or sessions that only need a narrow tool surface, two 
 - `CDIDX_MCP_TOOLS_DENY=<comma-separated names>` — remove individual tools from the default-all-enabled set. Example: `CDIDX_MCP_TOOLS_DENY=index,backfill_fold,suggest_improvement` hides the write-side tools on a read-only mount.
 
 When both are set, the allowlist wins. `tools/list` only advertises enabled tools, and the `initialize` instructions string no longer recommends tools the gate disabled. A top-level `tools/call` on a disabled known tool returns the structured JSON-RPC error `-32601 Tool not enabled: <name>`. `batch_query` continues to succeed at the envelope, but each disabled-tool slot carries a `code: -32601` field alongside the `error` string so clients can branch on the code instead of substring-matching prose. Unknown names (typos) still surface as `-32602 Unknown tool`, so operator-disabled tools are distinguishable from missing tools. Names are compared case-insensitively. The default is **all tools enabled**, so existing deployments are unaffected unless an operator sets one of these variables.
+
+Filter parsing also warns on `stderr` when an allow/deny variable is empty, contains empty CSV entries, or names unknown tools. Unknown names in `CDIDX_MCP_TOOLS_DENY` are ignored after the warning. `CDIDX_MCP_TOOLS_ALLOW` fails closed when it is explicitly set but contains no known tool names, so a typo-only allowlist exposes no tools instead of accidentally falling back to the default surface. Oversized filter values remain rejected with a warning.
 
 #### MCP roots and sampling
 
@@ -2623,7 +2672,11 @@ AI 向けに上限付き payload が必要な場合、`map`、`inspect`、`outli
 `inspect` の証跡をさらに絞りたい場合、`--fields <csv>` は JSON 出力を暗黙に有効化し、
 `definitions`、`file`、`graph`、`references`、`callers`、`callees` などの
 top-level group を選択します。`--body-only` は `--body --fields definitions` の
-shorthand です。
+shorthand です。definition body が返却 slice より長い場合は
+`body_content_next_start_line` が次に `--body-start` へ渡す source line を示します。
+`--body-lines` で page size を指定できます。`inspect --json` には `body_mode`
+metadata も含まれるため、body content が要求済みか、存在するか、次に使う flag が何かを
+client 側で判断できます。
 
 ```bash
 cdidx search authenticate --json          # ndjson stream、1 行 1 result
@@ -2631,6 +2684,7 @@ cdidx search authenticate --json=array    # 単一 JSON array
 cdidx inspect QueryCommandRunner --json --pretty
 cdidx map --compact                       # truncation metadata 付きの cap 済み JSON
 cdidx inspect Compute --body-only         # body_content 付き definitions のみ
+cdidx inspect Compute --body --body-start 40 --body-lines 40
 ```
 
 ## Editor / index portability
@@ -3168,12 +3222,26 @@ cdidx db --integrity-check --json                       # 機械可読な結果
 
 DB を read-only で開いて SQLite の `PRAGMA integrity_check` を実行し、`ok` か、検出された破損行の一覧を出力します。終了コードは安定しており、`0` = 健全、`2` (NotFound) = ファイル無し、`3` (DatabaseError) = 破損検出です。SQLite には汎用的な修復プリミティブが無いため、チェックが失敗した場合は `cdidx index <projectPath> --rebuild` で再構築するのが推奨復旧手段です。
 
+`--json` の診断出力は自動化向けに安定した `severity` と `diagnostic_code` を含みます。`db --integrity-check --json` は `integrity_ok` / `integrity_failed` を返し、`db schema --json` は `schema_ok` / `schema_truncated` に加えて `object_type_counts` と `object_type_omitted_counts` で SQLite の table / index / trigger / view 件数と省略数を返します。
+
+DB / WAL の肥大や空き page を確認したい場合は `status --json` の `maintenance_guidance` を見ます。既定では WAL が 64 MiB 以上で `checkpoint_recommended`、`freelist_count / page_count` が 0.20 以上で `vacuum_recommended` になり、`recommended_command` と `post_maintenance_follow_up` が返ります。しきい値は `CDIDX_MAINTENANCE_WAL_WARN_BYTES` と `CDIDX_MAINTENANCE_FREELIST_WARN_RATIO` で調整できます。
+
+`status --check --json` は failed check ごとに `repair_commands` を返します。各 entry は `name`、`args`、`reason`、`safety_notes` を持つため、自動化は `recommended_action` の文章を分解せずに修復コマンドを組み立てられます。前回の index が中断・失敗した情報が DB に残っている場合は、`last_failed_or_partial_index_run` に bounded metadata だけを返し、例外本文や file path は含めません。
+
+```bash
+cdidx vacuum --dry-run --json   # 回収見積もりと maintenance guidance だけを確認
+cdidx vacuum --json             # incremental vacuum / 初回変換を実行
+```
+
 ### コード検索
 
 ```bash
 cdidx search "authenticate"                             # 全文検索
 cdidx search "handleRequest" --lang go                  # 言語でフィルタ
 cdidx search "TODO" --limit 50                          # 結果数を増やす
+cdidx search "TODO" --exclude-comments                  # コメントだけの一致を除外
+cdidx search "Password" --exclude-strings               # 文字列・正規表現・ヘルプ文言の一致を除外
+cdidx search "DangerousApi" --exclude-fixtures           # テスト内 fixture だけの一致を除外
 cdidx search "auth*"                                    # 末尾の * はそのトークンだけを FTS5 prefix phrase にする shorthand
 cdidx search "計算" --prefix                            # クエリ全体を prefix phrase 化（CJK は unicode61 が連続コードポイントを 1 トークン扱いするため、`計算する` に届かせるには opt-in）
 cdidx search "content:auth*" --fts                      # 生のFTS5構文。列修飾子は `content:` だけが有効で、NEAR distance は 100 まで
@@ -3201,7 +3269,9 @@ literal-safe な `search` query は 1000 文字、128 whitespace term までで�
 guard-aware search は primary の `search` 一致を近傍の literal guard で絞り込みます:
 `--require-before` / `--require-after` は指定行窓内に guard query がある場合だけ残し、
 `--reject-before` / `--reject-after` は guard query がある一致を落とします。JSON の検索結果には
-一致した required guard の `guard_evidence` が含まれます。
+一致した guard の `guard_evidence` と、返却された一致に対して評価した各 guard の
+`guard_checks` が含まれます。guard evidence には guard 名、pattern、before/after の関係、
+1-based span、origin category、ソース行、簡潔な pass/fail summary が入ります。
 guard filter を使う検索は pagination 前に上限付きの候補集合だけを調べます。その budget 内で
 要求ページを満たせないほど query が広い場合、CLI/MCP は validation error を返します。
 query text、`--lang`、`--path`、`--exclude-tests` で絞り込むか、MCP cursor の offset を小さくしてください。
@@ -3326,6 +3396,8 @@ function   CreateUser                               src/Services/UserService.cs:
 `search`、`definition`、`references`、`callers`、`callees`、`symbols`、`files` は共通で繰り返し指定できる `--path <glob>` の glob 形式パスフィルタ（複数値は OR で結合）、繰り返し指定できる `--exclude-path <glob>`、`--exclude-tests` に対応しています。`*` と `?` でパスパターンを指定でき、ワイルドカードを含めない場合は従来どおり部分文字列として扱われます。検索結果は tests や docs より source を優先し、`search` はシンボル名やパスがクエリと正確に一致するファイルを上に出します。
 
 `search --json`、`search --format compact`、名前付き search batch、MCP の `search` は、チャンク全文ではなく一致中心の軽量スニペットを返します。各結果には `chunk_start_line`、`chunk_end_line`、`snippet_start_line`、`snippet_end_line`、`snippet`、`match_lines`、`highlights`、`context_before`、`context_after`、`truncated_line_count`、`dropped_match_line_count`、`truncation_context` が含まれ、マッチ行がインデックス済みシンボル範囲内にある場合は `enclosing_symbol_name`、`enclosing_symbol_kind`、`enclosing_symbol_start_line`、`enclosing_symbol_end_line`、`enclosing_container_name` も含まれます。抜粋の長さは `--snippet-lines <n>` で調整でき（デフォルト: 8、最大: 20）、minified / transpiled で 1 行が極端に長いファイルでは `--max-line-width <n>` を使って各行を最も強い一致周辺へクランプできます（`0` でクランプ解除、デフォルト: 512、最大: 4096）。長い行の焦点は `--snippet-focus <leftmost|quality|proximity>` で制御でき、`quality` がデフォルト、`leftmost` は従来の最左一致、`proximity` は近接した複数トークンを優先します。クランプされた行はスニペット内に `...(+N)...` マーカーが入り、JSON / MCP 出力では `highlights[].truncated` / `highlights[].original_line_length` でも検出できます。
+検索 JSON には `match_origins` と `match_facets` も含まれ、コード、コメント、文字列リテラル、正規表現リテラル、CLI ヘルプ文言のどこで一致したかをツール側で区別できます。各 highlight にも個別の `match_origins` が付き、`--exclude-comments` と `--exclude-strings` はこの facet を使ってコメントのみ、または文字列系のみの一致を隠します。
+同じ facet は result、highlight、match-facet の各レベルで `test_file`、`test_symbol`、`test_fixture` boolean も返します。`test_fixture` はテストらしいファイルまたはインデックス済み test method 内の文字列系一致を示し、`--exclude-fixtures` は実コードの一致を残したまま fixture だけの一致を隠します。
 
 ### 定義を引く
 
@@ -3532,6 +3604,8 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--compact` | `map`、`inspect`、`outline` | list section を cap した AI 向け compact JSON を出力し、`truncation.sections.*` metadata を含める。既定 cap は 5 件で、`--limit` / `--top` 指定時はその値を使う。 |
 | `--fields <csv>` | `inspect` | inspect JSON の top-level group を選択。`file`、`workspace`、`graph`、`definitions`、`body`、`nearby_symbols`、`references`、`callers`、`callees`、`all` を指定できる。`body` は definition body を含め、`definitions` に対応する。 |
 | `--body-only` | `inspect` | `--body --fields definitions` の shorthand。大規模 audit で graph context なしに実装本文だけが必要な場合に使う。 |
+| `--body-start <line>` | `inspect` | symbol body 内の 1-based source line から definition body slice を返す。長い body の page 送りでは JSON の `body_content_next_start_line` を次の値として渡す。 |
+| `--body-lines <n>` | `inspect` | `--body`、`--body-only`、`--fields body` で返す definition body 行数の上限。最大 1000。 |
 | `--status <all\|submitted\|unsubmitted>` | `suggestions` | ローカル提案履歴を GitHub 送信状態で絞り込みます。 |
 | `--language <lang>` / `--lang <lang>` | `suggestions` | ローカル提案履歴を記録済み対象言語で絞り込みます。 |
 | `--category <category>` | `suggestions` | ローカル提案履歴を提案カテゴリで絞り込みます。 |
@@ -3552,6 +3626,9 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--open-issues <path>` | `search --recipe <name> --format issue-drafts` | `gh issue list --state open --json number,title,labels,url` のような open issue JSON file と照合し、生成した issue draft を事前重複確認する。 |
 | `--exclude-path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | glob 形式のパスパターンを除外する。`*` と `?` がワイルドカード。繰り返し指定可 |
 | `--exclude-tests` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | テストらしいパスを除外し、本番コードを優先 |
+| `--exclude-comments` | `search` | 保持される一致 origin がコメントだけの検索結果を除外する |
+| `--exclude-strings` | `search` | 保持される一致 origin が文字列リテラル、正規表現リテラル、CLI ヘルプ文言だけの検索結果を除外する |
+| `--exclude-fixtures` | `search` | 保持される facet がテスト fixture 文字列だけの検索結果を除外する |
 | `--include-generated` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `deps`, `impact`, `unused`, `hotspots` | 生成コードとして検出されたファイルを含める。生成ファイルは既定でクエリ結果から除外される |
 | `--snippet-lines <n>` | `search`, `references`, `callers`, `callees`, `impact` | search スニペット、または graph `--body` 抜粋の行数（デフォルト: 8、最大: 20） |
 | `--snippet-focus <leftmost\|quality\|proximity>` | `search` | 長い検索結果行をクランプするときの焦点選択。`quality`（デフォルト）は全文一致や強いトークンを優先し、`proximity` は近接した複数トークンを優先し、`leftmost` は従来の最左一致を使う。 |
@@ -4285,23 +4362,38 @@ cdidxには**MCP（Model Context Protocol）サーバー**が組み込まれて�
 サーバーを stdio で起動します。既存の CodeIndex database を再利用し、
 任意の LSP command を起動できるが MCP には対応していない editor 向けに
 `initialize`、`workspace/symbol`、`textDocument/documentSymbol`、
-`textDocument/definition`、`textDocument/references` を公開します。
+`textDocument/definition`、`textDocument/declaration`、
+`textDocument/typeDefinition`、`textDocument/implementation`、
+`textDocument/references` を公開します。
 受信した `textDocument.uri` は string かつ absolute `file:` URI である必要があり、
 4096 文字を超える場合は URI parse の前に拒否されます。これは MCP resource URI の上限と
 揃えており、エラー応答が過大にならないようにします。
 LSP frame parsing は、message body を読む前に 64 行を超える header、合計 65536 bytes を
 超える header、8192 bytes を超える単一 header 行、重複した `Content-Length` header、
 8388608 bytes を超える body を拒否します。
+stdio loop は header / message body 読み取り中も CLI cancellation token を監視するため、
+Ctrl-C や host cancellation が次の完全な request を待たずに pending frame read を中断できます。
 method-not-found diagnostic で echo する method name は最大 240 文字に制限され、
 長い場合は `...` を付けて切り詰めます。
 request ID は bounded な JSON-RPC scalar value に限定され、string は 256 文字まで、
 integer ID は `Int64` に収まるものだけを受理し、non-scalar ID は response ID を複製する前に
 invalid request として拒否します。
 `workspace/symbol` の query string は symbol search を実行する前に 1000 文字で上限をかけます。
-`textDocument/documentSymbol` は最大 1000 件の indexed symbol を返し、各 `detail` string を
-`...` 付きの 512 文字に切り詰め、result array が 524288 JSON bytes を超える前に symbol 追加を止めます。
+`workspace/symbol` は任意の numeric `limit` / `maxResults` parameter を受け取り、1000 件までに
+clamp します。`textDocument/documentSymbol` は container metadata がある場合に階層化された
+`DocumentSymbol` children を返し、最大 1000 件の indexed symbol を返し、各 `detail` string を
+`...` 付きの 512 文字に切り詰め、result tree が 524288 JSON bytes を超える前に trim します。
 position-based な `definition` / `references` lookup は、対象 source line を最大 16384 文字まで読み、
 超過時は空の result を返します。
+`textDocument/references` は `context.includeDeclaration` を尊重し、true の場合は definition location を
+重複なしで reference result の先頭に追加します。`declaration`、`typeDefinition`、`implementation`
+request は同じ indexed definition lookup を再利用し、`definition` と同じ location shape を返します。
+追跡中の `workspaceFolders` は indexed absolute path に対する position-based request の解決に使われ、
+`workspace/didChangeWorkspaceFolders` で追加・削除された folder も反映されます。relative indexed path は
+database project root に紐づいたままです。
+position lookup が安全に解決できず空の result を返す場合、`CodeIndex` `ActivitySource` は
+`outside_project`、`file_not_indexed`、`position_file_too_large`、`no_token_at_position`
+などの安全な `lsp.lookup.failure_reason` code を持つ `lsp.lookup_failed` event を出します。
 exact indexed path resolution が失敗した場合、LSP document path fallback は最大 32 件の
 basename candidate だけを確認し、見つからなければ unresolved document として扱います。
 
@@ -4408,7 +4500,7 @@ OpenAI Codex CLI (`codex.json` または `~/.codex/config.json`):
 | `impact_analysis` | シンボルの推移的 caller を算出（`maxHops` は inclusive で、`maxHops: N` 指定時は hop 1〜N の caller を返す。例: A→B→C→D のチェーンで D を `maxHops: 2` 検索すると C(hop=1) と B(hop=2) が返る）。非推奨 alias の `maxDepth` は互換期間中も受け付け、使用時は warning を返す。symbol-level BFS は call graph 種別（`call`、`instantiate`、`subscribe`）のみを辿り、metadata-only edge（`attribute`、`annotation`、`type_reference`）を除外するため、metadata cycle で caller 件数が膨らまない。`maxHops: 0` で symbol 解決のみを行い、単一定義の型は heuristic な file-level dependency hint にフォールバックし、複数定義時はヒントも返す。この file hint は metadata edge を含み得る。`withPaths: true` を渡すと、各 caller に最短経路 `[resolvedRoot, 中間..., callerName]` の `paths` 配列が付き、ダイヤモンド収束時もすべての経路を返す（1 行あたりの保持上限を超えると `paths_truncated` で通知） |
 | `unused_symbols` | 定義されているが参照されていないシンボルを bucket 付きで検索（デッドコード検出向け） |
 | `symbol_hotspots` | 影響の大きい hotspot を検索。`groupBy` は `symbol` / `file` / `statement` を指定でき、SQL scope は statement grouping、非 SQL scope は symbol grouping が既定。 |
-| `batch_query` | 複数クエリを1回で実行（MCP専用、最大10件）。レスポンスにはトップレベル `metadata`（`submitted` / `executed` / `errors` / `total_elapsed_ms` / `success_count` / `failure_count`）と各 `results` エントリの `request_index` / `ok` / `elapsed_ms` / `args_summary` が含まれ、位置だけに依存せず部分失敗や遅い内部クエリを把握できます。 |
+| `batch_query` | 複数クエリを1回で実行（MCP専用、最大10件）。レスポンスにはトップレベル `metadata`（`submitted` / `executed` / `errors` / `total_elapsed_ms` / `success_count` / `failure_count`）と各 `results` エントリの `request_index`、任意の client `slot_id`、`ok`、`elapsed_ms`、`summary`、`args_summary` が含まれ、位置だけに依存せず部分失敗や遅い内部クエリを把握できます。 |
 | `validate` | エンコーディング問題（origin/severity 付き U+FFFD、BOM、null バイト、改行混在 / CR-only 行末、UTF-16 BOM 検出、UTF-8 以外と推定されるエンコーディング）を報告 |
 | `languages` | 対応言語一覧を拡張子・機能付きで表示。`--indexed-only` と `--capability graph|symbols|references` で現在の DB や機能別に絞り込み可能 |
 | `ping` | 軽量な接続確認 |
@@ -4433,6 +4525,12 @@ cdidx backfill-fold
 `references`、`callers`、`callees` などの graph 系 MCP ツールも、言語フィルタが指定されている場合は `graph_language`、`graph_supported`、`graph_support_reason` を返し、未対応言語と単なる 0 件ヒットを区別できるようにしています。
 
 全 MCP ツールは `annotations`（`readOnlyHint`、`destructiveHint`、`idempotentHint`、`openWorldHint`）を含み、AIクライアントがユーザーへの確認なしに安全な読み取り専用クエリを自動承認できるようにしています。
+
+`tools/list` は引数互換メタデータも公開します。`excludePaths` などの共通 path filter は `path` と同じくスカラー文字列または文字列配列を受け付け、schema には `x-expectedType`、`x-aliases` / `x-aliasOf` による alias、`deprecated` と `x-deprecationReason` による非推奨 alias 情報が含まれます。検証エラーも `expected` と、該当する場合は `alias_of` / `deprecated` を返すため、クライアントは説明文を parse せず復旧できます。`definition` と `references` は `lsp_compatible` と JSON 風 alias の `lspCompatible` の両方を受け付けます。
+
+MCP ツールが対応済み引数をクランプまたは無視した場合、成功レスポンスには人間向けの `warnings` と機械処理向けの `argument_adjustments` が含まれます。各 adjustment は `argument`、`action`（`clamped` または `ignored`）、`requested`、`effective`、必要に応じて cap 情報を持つため、`limit`、`offset`、`snippetLines`、`map.depth`、`impact_analysis.maxHops` が要求より狭い結果に調整されたかをクライアント側で判定できます。
+
+`batch_query` は `tools/list` の `queries.maxItems` で slot 上限を広告し、`status` には JSON-RPC batch 上限と区別できる `mcp.limits.batch_query_max_queries`、`batch_query_response_bytes`、`batch_query_max_response_bytes` を返します。クライアントは `estimateOnly: true` で slot を実行せず `slot_estimates` と byte budget metadata を取得でき、`maxResponseBytes` で呼び出し単位の低い response budget を要求できます。各 slot の `id` または `slotId` は `slot_id` として echo されます。aggregate response が切り詰められた場合、`truncated_queries` は slot id を保持し、`split_hint` が `next_request_index`、`suggested_query_count`、opaque な `resume_cursor` を返すため、残りの元 query 配列を deterministic に分割して再実行できます。
 
 #### MCP エラー応答
 
@@ -4497,6 +4595,8 @@ stdio の `cdidx mcp` を信頼度の低いチャネル（転送ソケット、�
 - `CDIDX_MCP_TOOLS_DENY=<カンマ区切り名>` — 既定の全有効集合から個別ツールを除外。例: `CDIDX_MCP_TOOLS_DENY=index,backfill_fold,suggest_improvement` で read-only マウント上の書き込み系ツールを非表示にします。
 
 両方指定された場合は allowlist が優先されます。`tools/list` は有効ツールのみ広告し、`initialize` の instructions 文字列も無効化されたツールを推奨しなくなります。トップレベル `tools/call` で無効化された既知ツールを呼び出した場合は、構造化された JSON-RPC エラー `-32601 Tool not enabled: <name>` を返します。`batch_query` 自体は引き続きエンベロープとして成功しますが、無効化ツールの各 slot に `code: -32601` フィールドが `error` 文字列と並んで載るため、クライアントは prose の部分一致ではなく code で分岐できます。typo などサーバーに元から無い名前は引き続き `-32602 Unknown tool` を返すため、オペレータによる無効化と typo を区別できます。比較は大小文字無視。既定は **全ツール有効** なので、オペレータがこれらの変数を設定しない限り既存デプロイへの影響はありません。
+
+filter 解析では、allow / deny 変数が空、CSV 内に空 entry がある、または未知の tool 名を含む場合に `stderr` へ警告します。`CDIDX_MCP_TOOLS_DENY` の未知名は警告後に無視されます。`CDIDX_MCP_TOOLS_ALLOW` は明示的に設定されているのに既知 tool 名が 0 件の場合 fail closed となり、typo だけの allowlist が既定の全公開 surface に戻ることを防ぎます。過大な filter 値は従来通り warning 付きで拒否されます。
 
 #### MCP roots と sampling
 

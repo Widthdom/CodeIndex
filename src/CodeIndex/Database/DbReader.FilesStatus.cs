@@ -656,11 +656,21 @@ public partial class DbReader
         var unknownExtensionFiles = ParseMetaStringList(TryGetMetaStringInternal(DbContext.UnknownExtensionFilePathsMetaKey));
         var unknownExtensionFilesTruncated = ParseMetaBool(TryGetMetaStringInternal(DbContext.UnknownExtensionFilesTruncatedMetaKey));
         var unknownExtensionFilePathLimit = ParseMetaLong(TryGetMetaStringInternal(DbContext.UnknownExtensionFilePathLimitMetaKey));
+        var unknownExtensionExtensionCounts = UnknownExtensionClassifier.DeserializeCounts(TryGetMetaStringInternal(DbContext.UnknownExtensionExtensionCountsMetaKey));
+        var unknownExtensionCategoryCounts = UnknownExtensionClassifier.DeserializeCounts(TryGetMetaStringInternal(DbContext.UnknownExtensionCategoryCountsMetaKey));
+        var unknownExtensionGroups = UnknownExtensionClassifier.DeserializeGroups(TryGetMetaStringInternal(DbContext.UnknownExtensionGroupsMetaKey));
         if (unknownExtensionFiles != null)
         {
             unknownExtensionFilesTruncated ??= unknownExtensionFileCount.HasValue
                 && unknownExtensionFileCount.Value > unknownExtensionFiles.Count;
             unknownExtensionFilePathLimit ??= unknownExtensionFiles.Count;
+            if (unknownExtensionExtensionCounts == null || unknownExtensionCategoryCounts == null || unknownExtensionGroups == null)
+            {
+                var fallbackClassification = UnknownExtensionClassifier.Classify(unknownExtensionFiles);
+                unknownExtensionExtensionCounts ??= fallbackClassification.ExtensionCounts;
+                unknownExtensionCategoryCounts ??= fallbackClassification.CategoryCounts;
+                unknownExtensionGroups ??= fallbackClassification.Groups;
+            }
         }
         // #1546: workspace case-sensitivity stamp. Read inside the SHARED snapshot for
         // consistency with the other freshness signals; missing on legacy DBs.
@@ -669,11 +679,19 @@ public partial class DbReader
         var dbPragmaSettings = GetDbPragmaSettings();
         var dbSizeBytes = TryGetDatabaseFileSize();
         var walSizeBytes = TryGetWalFileSize();
+        var maintenanceGuidance = MaintenanceGuidanceBuilder.Build(new MaintenanceMetrics(
+            dbPragmaSettings.PageCount,
+            dbPragmaSettings.FreelistCount,
+            dbPragmaSettings.PageSize,
+            walSizeBytes,
+            dbSizeBytes,
+            dbPragmaSettings.AutoVacuum));
         var lastIndexRun = GetLastIndexRun();
         var batchInProgress = string.Equals(
             TryGetMetaStringInternal(DbContext.BatchInProgressMetaKey),
             "true",
             StringComparison.OrdinalIgnoreCase);
+        var lastFailedOrPartialIndexRun = GetLastFailedOrPartialIndexRun(batchInProgress);
 
         var result = new StatusResult
         {
@@ -685,6 +703,9 @@ public partial class DbReader
             UnknownExtensionFiles = unknownExtensionFiles,
             UnknownExtensionFilesTruncated = unknownExtensionFilesTruncated,
             UnknownExtensionFilePathLimit = unknownExtensionFilePathLimit,
+            UnknownExtensionExtensionCounts = unknownExtensionExtensionCounts,
+            UnknownExtensionCategoryCounts = unknownExtensionCategoryCounts,
+            UnknownExtensionGroups = unknownExtensionGroups,
             IndexedAt = freshness.IndexedAt,
             LastWorkspaceFreshenedAt = lastIndexRun?.StartedAt ?? indexedHeadTimestamp,
             LatestModified = freshness.LatestModified,
@@ -712,10 +733,12 @@ public partial class DbReader
             IndexNewerThanReaderReason = _indexNewerThanReaderReason,
             PathCaseSensitive = pathCaseSensitive,
             DbPragmaSettings = dbPragmaSettings,
+            MaintenanceGuidance = maintenanceGuidance,
             DbSizeBytes = dbSizeBytes,
             WalSizeBytes = walSizeBytes,
             Process = StatusProcessMetrics.Capture(),
             LastIndexRun = lastIndexRun,
+            LastFailedOrPartialIndexRun = lastFailedOrPartialIndexRun,
             ReadOnlyFallback = _readOnlyFallback,
             WalCheckpointAttempted = _walCheckpointAttempted,
             WalCheckpointSucceeded = _walCheckpointSucceeded,
@@ -751,6 +774,7 @@ public partial class DbReader
         PageCount = ExecuteNullableLong("PRAGMA page_count"),
         FreelistCount = ExecuteNullableLong("PRAGMA freelist_count"),
         PageSize = ExecuteNullableLong("PRAGMA page_size"),
+        AutoVacuum = ExecuteNullableLong("PRAGMA auto_vacuum"),
     };
 
     private long? TryGetDatabaseFileSize()
@@ -817,6 +841,41 @@ public partial class DbReader
             RowsUpserted = rowsUpserted,
             RowsDeleted = rowsDeleted,
             PeakMemoryMb = peakMemoryMb,
+        };
+    }
+
+    private StatusFailedOrPartialIndexRun? GetLastFailedOrPartialIndexRun(bool batchInProgress)
+    {
+        var status = TryGetMetaStringInternal(DbContext.LastFailedIndexRunStatusMetaKey);
+        var mode = TryGetMetaStringInternal(DbContext.LastFailedIndexRunModeMetaKey);
+        var startedAt = ParseMetaDateTime(TryGetMetaStringInternal(DbContext.LastFailedIndexRunStartedAtMetaKey));
+        var durationMs = ParseMetaLong(TryGetMetaStringInternal(DbContext.LastFailedIndexRunDurationMsMetaKey));
+        var filesProcessed = ParseMetaLong(TryGetMetaStringInternal(DbContext.LastFailedIndexRunFilesProcessedMetaKey));
+        var filesTotal = ParseMetaLong(TryGetMetaStringInternal(DbContext.LastFailedIndexRunFilesTotalMetaKey));
+        var errorCode = TryGetMetaStringInternal(DbContext.LastFailedIndexRunErrorCodeMetaKey);
+        var reason = TryGetMetaStringInternal(DbContext.LastFailedIndexRunReasonMetaKey);
+        if (status == null && mode == null && startedAt == null && durationMs == null && filesProcessed == null
+            && filesTotal == null && errorCode == null && reason == null)
+        {
+            return batchInProgress
+                ? new StatusFailedOrPartialIndexRun
+                {
+                    Status = "partial",
+                    Reason = "batch_in_progress",
+                }
+                : null;
+        }
+
+        return new StatusFailedOrPartialIndexRun
+        {
+            Status = status,
+            Mode = mode,
+            StartedAt = startedAt,
+            DurationMs = durationMs,
+            FilesProcessed = filesProcessed,
+            FilesTotal = filesTotal,
+            ErrorCode = errorCode,
+            Reason = reason,
         };
     }
 
