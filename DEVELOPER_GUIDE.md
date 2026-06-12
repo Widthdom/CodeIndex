@@ -164,7 +164,7 @@ ownership boundaries so behavior changes remain reviewable and testable.
 
 CodeIndex exposes an opt-in `ActivitySource` named `CodeIndex`. MCP JSON-RPC frames create `mcp.request` server spans and SQLite commands routed through tracked database helpers create `db.query` spans. MCP callers can pass W3C trace context as `params._meta.traceparent`; when present, the MCP span uses that trace as its parent. No exporter dependency is bundled, so spans are emitted only when the host process installs an OpenTelemetry/Diagnostics listener.
 
-Set `CDIDX_SLOW_QUERY_MS=<milliseconds>` to write slow SQLite command diagnostics to stderr. Query commands also accept `--profile` for a JSON profile block and `--slow-query-ms <milliseconds>` for command-scoped profiling.
+Set `CDIDX_SLOW_QUERY_MS=<milliseconds>` to write slow SQLite command diagnostics to stderr. Query commands also accept `--profile` for a JSON profile block and `--slow-query-ms <milliseconds>` for command-scoped profiling. Slow-query SQL diagnostics are single-line, length-bounded, and redact SQL string/blob/numeric literals before they reach stderr or the global tool log; the logged SQL is intended for operation/shape debugging, not value recovery.
 
 ### Indexing pipeline
 

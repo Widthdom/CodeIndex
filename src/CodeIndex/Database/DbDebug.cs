@@ -280,8 +280,14 @@ public static class DbDebug
         Console.Error.WriteLine($"[cdidx] slow_query elapsed_ms={elapsedMs:0.###}{rowText} sql={sql}");
     }
 
-    internal static string FormatSqlForSlowQueryLog(string sql) =>
-        TruncateDiagnosticText(sql.ReplaceLineEndings(" "), MaxSlowQuerySqlChars);
+    internal static string FormatSqlForSlowQueryLog(string sql)
+    {
+        var singleLine = sql.ReplaceLineEndings(" ");
+        var redacted = DiagnosticRedactor.RedactSensitiveText(
+            DiagnosticRedactor.RedactSqlLiterals(singleLine),
+            redactPaths: true);
+        return TruncateDiagnosticText(redacted, MaxSlowQuerySqlChars);
+    }
 
     private static List<QueryPlanRow> CaptureQueryPlan(SqliteCommand source)
     {

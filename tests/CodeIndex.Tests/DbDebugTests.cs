@@ -154,6 +154,27 @@ public class DbDebugTests
     }
 
     [Fact]
+    public void FormatSqlForSlowQueryLog_RedactsLiteralsAndSensitiveText_Issue3416()
+    {
+        var path = "/Users/example/private/project/secret_module.cs";
+        var searchText = "literal user search text";
+        var secret = "0123456789abcdef0123456789abcdef";
+        var sql = $"SELECT * FROM chunks WHERE path = '{path}' AND content MATCH '{searchText}' AND api_token = '{secret}' AND rank > 42 AND payload = X'0123abcd'";
+
+        var formatted = DbDebug.FormatSqlForSlowQueryLog(sql);
+
+        Assert.Contains("path = '<redacted>'", formatted);
+        Assert.Contains("content MATCH '<redacted>'", formatted);
+        Assert.Contains("api_token = '<redacted>'", formatted);
+        Assert.Contains("rank > <number>", formatted);
+        Assert.Contains("payload = X'<redacted>'", formatted);
+        Assert.DoesNotContain(path, formatted);
+        Assert.DoesNotContain(searchText, formatted);
+        Assert.DoesNotContain(secret, formatted);
+        Assert.DoesNotContain("0123abcd", formatted);
+    }
+
+    [Fact]
     public void DumpToStderr_NoOp_WhenDisabled()
     {
         using var env = EnvironmentVariableScope.Capture("CDIDX_DEBUG");

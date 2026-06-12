@@ -95,6 +95,44 @@ internal static class DiagnosticRedactor
         return BoundDiagnosticText(RedactSensitiveText(raw, AngleRedacted, redactPaths: true), maxChars);
     }
 
+    internal static string RedactSqlLiterals(string sql)
+    {
+        if (string.IsNullOrEmpty(sql))
+            return sql;
+
+        var builder = new StringBuilder(sql.Length);
+        var i = 0;
+        while (i < sql.Length)
+        {
+            var ch = sql[i];
+            if ((ch == 'x' || ch == 'X') && i + 1 < sql.Length && sql[i + 1] == '\'')
+            {
+                builder.Append(ch).Append('\'').Append(AngleRedacted).Append('\'');
+                i = ConsumeSqlSingleQuotedLiteral(sql, i + 1);
+                continue;
+            }
+
+            if (ch == '\'')
+            {
+                builder.Append('\'').Append(AngleRedacted).Append('\'');
+                i = ConsumeSqlSingleQuotedLiteral(sql, i);
+                continue;
+            }
+
+            if (IsSqlNumericLiteralStart(sql, i))
+            {
+                builder.Append("<number>");
+                i = ConsumeSqlNumericLiteral(sql, i);
+                continue;
+            }
+
+            builder.Append(ch);
+            i++;
+        }
+
+        return builder.ToString();
+    }
+
     internal static string RedactSensitiveText(string value, string placeholder = AngleRedacted, bool redactPaths = false)
     {
         if (string.IsNullOrEmpty(value))
@@ -162,6 +200,75 @@ internal static class DiagnosticRedactor
 
         return false;
     }
+
+    private static int ConsumeSqlSingleQuotedLiteral(string value, int quoteIndex)
+    {
+        var i = quoteIndex + 1;
+        while (i < value.Length)
+        {
+            if (value[i] != '\'')
+            {
+                i++;
+                continue;
+            }
+
+            if (i + 1 < value.Length && value[i + 1] == '\'')
+            {
+                i += 2;
+                continue;
+            }
+
+            return i + 1;
+        }
+
+        return value.Length;
+    }
+
+    private static bool IsSqlNumericLiteralStart(string value, int index)
+    {
+        var ch = value[index];
+        if (!char.IsDigit(ch) && (ch != '.' || index + 1 >= value.Length || !char.IsDigit(value[index + 1])))
+            return false;
+
+        return index == 0 || !IsSqlIdentifierPart(value[index - 1]);
+    }
+
+    private static int ConsumeSqlNumericLiteral(string value, int index)
+    {
+        var i = index;
+        if (i + 1 < value.Length && value[i] == '0' && (value[i + 1] == 'x' || value[i + 1] == 'X'))
+        {
+            i += 2;
+            while (i < value.Length && Uri.IsHexDigit(value[i]))
+                i++;
+            return i;
+        }
+
+        while (i < value.Length && char.IsDigit(value[i]))
+            i++;
+        if (i < value.Length && value[i] == '.')
+        {
+            i++;
+            while (i < value.Length && char.IsDigit(value[i]))
+                i++;
+        }
+        if (i < value.Length && (value[i] == 'e' || value[i] == 'E'))
+        {
+            var exponent = i + 1;
+            if (exponent < value.Length && (value[exponent] == '+' || value[exponent] == '-'))
+                exponent++;
+            var digitStart = exponent;
+            while (exponent < value.Length && char.IsDigit(value[exponent]))
+                exponent++;
+            if (exponent > digitStart)
+                i = exponent;
+        }
+
+        return i;
+    }
+
+    private static bool IsSqlIdentifierPart(char ch) =>
+        char.IsLetterOrDigit(ch) || ch == '_' || ch == '$';
 
     private static string FlattenDiagnosticControlChars(string value)
     {
