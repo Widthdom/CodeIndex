@@ -22,6 +22,7 @@ public static class QueryCommandRunner
     internal const int DefaultQueryLimit = 20;
     internal const int DefaultMapLimit = 10;
     internal const int DefaultCompactSectionLimit = 5;
+    private const int MaxNamedSearchQueryNameLength = 128;
     internal const int DefaultImpactLimit = 50;
     internal const int DefaultDependencyCycleGraphLimit = 1_000;
     internal const int MaxWorkspaceDependencyDatabaseCount = 8;
@@ -145,6 +146,7 @@ public static class QueryCommandRunner
         "--depth",
         "--query",
         "--recipe",
+        "--named-query",
         "--open-issues",
         "--group-by",
         "--focus-line",
@@ -540,12 +542,32 @@ public static class QueryCommandRunner
                 "Use an open-issues JSON file from `gh issue list --state open --json number,title,labels,url`.");
             return CommandExitCodes.UsageError;
         }
+        if (exact && options.Prefix)
+        {
+            WriteValidationError(
+                "--prefix cannot be combined with --exact / --exact-substring (exact uses instr(), not FTS5 prefix phrases).",
+                "Drop --prefix to keep the exact substring path, or drop --exact to opt into FTS5 prefix matching.");
+            return CommandExitCodes.UsageError;
+        }
+        if (options.GroupBy != null && (options.ListRecipes || options.NamedSearchQueries.Count > 0 || options.RecipeName != null))
+        {
+            var mode = options.ListRecipes
+                ? "--list-recipes"
+                : options.NamedSearchQueries.Count > 0
+                    ? "--named-query"
+                    : "--recipe";
+            WriteUsageError(
+                $"--group-by is not supported with {mode}.",
+                GetUsageLineOrThrow("search"),
+                "Use `cdidx search <query> --group-by file --count` or remove --group-by for recipe and named-batch output.");
+            return CommandExitCodes.UsageError;
+        }
         if (options.ListRecipes)
         {
-            if (options.Query != null || options.RecipeName != null || options.ExtraNames.Count > 0)
+            if (options.Query != null || options.RecipeName != null || options.NamedSearchQueries.Count > 0 || options.ExtraNames.Count > 0)
             {
                 WriteUsageError(
-                    "--list-recipes cannot be combined with a query, --recipe, or extra positional arguments.",
+                    "--list-recipes cannot be combined with a query, --recipe, --named-query, or extra positional arguments.",
                     GetUsageLineOrThrow("search"),
                     "Run `cdidx search --list-recipes` to list built-in audit recipes.");
                 return CommandExitCodes.UsageError;
@@ -576,6 +598,51 @@ public static class QueryCommandRunner
                 GetUsageLineOrThrow("search"),
                 "Run `cdidx search --list-recipes` to choose a recipe, then rerun with `--recipe <name> --format issue-drafts`.");
             return CommandExitCodes.UsageError;
+        }
+        if (options.NamedSearchQueries.Count > 0)
+        {
+            if (options.Query != null || options.RecipeName != null || options.ExtraNames.Count > 0)
+            {
+                WriteUsageError(
+                    "--named-query cannot be combined with a positional query, --query, --recipe, or extra positional arguments.",
+                    GetUsageLineOrThrow("search"),
+                    "Pass one or more `--named-query <name>=<query>` values, or run a plain `cdidx search <query>`.");
+                return CommandExitCodes.UsageError;
+            }
+            if (options.OpenIssuesPath != null)
+            {
+                WriteUsageError(
+                    "--open-issues can only be used with `cdidx search --recipe <name> --format issue-drafts`.",
+                    GetUsageLineOrThrow("search"),
+                    "Remove --open-issues for ad hoc named batches.");
+                return CommandExitCodes.UsageError;
+            }
+            if (options.CountOnly)
+            {
+                WriteUsageError(
+                    "--count is not supported with --named-query.",
+                    GetUsageLineOrThrow("search"),
+                    "Use `cdidx search --named-query <name>=<query> --json` for per-query counts.");
+                return CommandExitCodes.UsageError;
+            }
+            if (options.OutputFormat is not OutputFormatText and not OutputFormatJson and not OutputFormatCompact)
+            {
+                WriteUsageError(
+                    "--format count/csv/tsv/lsp/qf/sarif/issue-drafts is not supported with --named-query.",
+                    GetUsageLineOrThrow("search"),
+                    "Use plain text output, `--json`, or `--format compact` for grouped ad hoc results.");
+                return CommandExitCodes.UsageError;
+            }
+            if (options.JsonOutputFormat == JsonOutputFormatArray)
+            {
+                WriteUsageError(
+                    "--json=array is not supported with --named-query because named batch output is grouped by query.",
+                    GetUsageLineOrThrow("search"),
+                    "Use plain `--json` for the grouped named-query object.");
+                return CommandExitCodes.UsageError;
+            }
+
+            return RunSearchNamedBatch(options, jsonOptions, exact);
         }
         if (options.RecipeName != null)
         {
@@ -625,13 +692,6 @@ public static class QueryCommandRunner
 
             return RunSearchRecipe(options, jsonOptions, exact);
         }
-        if (exact && options.Prefix)
-        {
-            WriteValidationError(
-                "--prefix cannot be combined with --exact / --exact-substring (exact uses instr(), not FTS5 prefix phrases).",
-                "Drop --prefix to keep the exact substring path, or drop --exact to opt into FTS5 prefix matching.");
-            return CommandExitCodes.UsageError;
-        }
         if (TryWriteBlankQueryError(options, "search"))
             return CommandExitCodes.UsageError;
         if (options.Query == null)
@@ -652,12 +712,52 @@ public static class QueryCommandRunner
         }
         if (TryWriteUnexpectedExtraPositionals("search", options))
             return CommandExitCodes.UsageError;
+        if (options.GroupBy != null)
+        {
+            if (options.GroupBy is not "file" and not "symbol")
+            {
+                WriteUsageError(
+                    "--group-by for search must be one of file or symbol.",
+                    GetUsageLineOrThrow("search"),
+                    "Use `cdidx search <query> --group-by file --count` or `cdidx search <query> --group-by symbol --count`.");
+                return CommandExitCodes.UsageError;
+            }
+            if (!options.CountOnly)
+            {
+                WriteUsageError(
+                    "search --group-by requires --count.",
+                    GetUsageLineOrThrow("search"),
+                    "Add --count to request grouped result counts, or remove --group-by to print matching snippets.");
+                return CommandExitCodes.UsageError;
+            }
+            if (options.OutputFormat is not OutputFormatText and not OutputFormatJson and not OutputFormatCount)
+            {
+                WriteUsageError(
+                    "--group-by for search only supports plain count output or JSON.",
+                    GetUsageLineOrThrow("search"),
+                    "Use `--count`, optionally with `--json`, instead of compact/location formats.");
+                return CommandExitCodes.UsageError;
+            }
+            if (options.JsonOutputFormat == JsonOutputFormatArray)
+            {
+                WriteUsageError(
+                    "--json=array is not supported with search --group-by because grouped count output is a JSON object.",
+                    GetUsageLineOrThrow("search"),
+                    "Use plain `--json` for the grouped-count object.");
+                return CommandExitCodes.UsageError;
+            }
+        }
 
         var exactSubstringHint = SearchQueryAdvisor.BuildExactSubstringHint(options.Query, options.RawFts, exact, options.Prefix);
         var ndjsonOptions = options.JsonOutputFormat == JsonOutputFormatNdjson ? GetCompactJsonOptions(jsonOptions) : jsonOptions;
         int? jsonDoneCount = null;
         return WithDb(options, jsonOptions, reader =>
         {
+            if (options.GroupBy != null)
+            {
+                return RunGroupedSearchCount(reader, options, jsonOptions, exact, exactSubstringHint);
+            }
+
             if (options.CountOnly)
             {
                 var counts = HasSearchOriginFilters(options)
@@ -740,6 +840,13 @@ public static class QueryCommandRunner
 
             if (options.Json)
             {
+                var compactResults = displayRows.Select(row => row.Compact).ToArray();
+                AttachExactSubstringHint(compactResults, exactSubstringHint);
+                if (options.OutputFormat == OutputFormatCompact)
+                {
+                    WriteCompactSearchResults(compactResults, jsonOptions);
+                    return CommandExitCodes.Success;
+                }
                 if (TryWriteFormattedLocations(
                     options,
                     displayRows.SelectMany(row => ToSearchFormattedLocations(row, options.Query, exact)),
@@ -759,12 +866,6 @@ public static class QueryCommandRunner
                 {
                     WriteSarif(displayRows.SelectMany(row => ToSearchSarifItems(row, options.Query, exact)), jsonOptions);
                     return CommandExitCodes.Success;
-                }
-                var compactResults = displayRows.Select(row => row.Compact).ToArray();
-                if (exactSubstringHint != null)
-                {
-                    foreach (var result in compactResults)
-                        result.ExactSubstringHint = exactSubstringHint;
                 }
                 if (options.JsonOutputFormat == JsonOutputFormatArray)
                 {
@@ -801,6 +902,152 @@ public static class QueryCommandRunner
         {
             if (options.Json && options.JsonOutputFormat == JsonOutputFormatNdjson && jsonDoneCount.HasValue)
                 WriteJsonStreamDone(jsonDoneCount.Value, ndjsonOptions);
+        });
+    }
+
+    private static int RunGroupedSearchCount(DbReader reader, QueryCommandOptions options, JsonSerializerOptions jsonOptions, bool exact, SearchQueryHint? exactSubstringHint)
+    {
+        var results = reader.Search(options.Query!, int.MaxValue, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank, guardFilters: options.GuardFilters, guardWindow: options.GuardWindow);
+        var displayRows = BuildSearchDisplayRows(results, options, exact);
+        var groups = BuildSearchGroupedCounts(options.GroupBy!, displayRows);
+        var fileCount = displayRows.Select(row => row.Result.Path).Distinct(StringComparer.Ordinal).Count();
+
+        if (options.Json)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(
+                new SearchGroupedCountJsonResult(
+                    JsonOutputContract.ApiVersion,
+                    options.Query!,
+                    options.GroupBy!,
+                    displayRows.Count,
+                    fileCount,
+                    groups),
+                CliJsonSerializerContextFactory.Create(jsonOptions).SearchGroupedCountJsonResult));
+        }
+        else
+        {
+            WriteSearchGroupedCounts(options.GroupBy!, groups, displayRows.Count, fileCount);
+            WriteExactSubstringHintIfNeeded(exactSubstringHint);
+        }
+
+        return CommandExitCodes.Success;
+    }
+
+    private static List<SearchGroupedCountItemJsonResult> BuildSearchGroupedCounts(string groupBy, List<SearchDisplayRow> rows)
+        => groupBy == "file"
+            ? rows
+                .GroupBy(row => row.Result.Path, StringComparer.Ordinal)
+                .Select(group => new SearchGroupedCountItemJsonResult(
+                    group.Key,
+                    group.Count(),
+                    group.Key,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null))
+                .OrderByDescending(group => group.Count)
+                .ThenBy(group => group.Key, StringComparer.Ordinal)
+                .ToList()
+            : rows
+                .GroupBy(row => BuildSearchSymbolGroupKey(row.Result), StringComparer.Ordinal)
+                .Select(group =>
+                {
+                    var result = group.First().Result;
+                    var key = BuildSearchSymbolDisplayKey(result);
+                    return new SearchGroupedCountItemJsonResult(
+                        key,
+                        group.Count(),
+                        result.Path,
+                        result.EnclosingSymbolName,
+                        result.EnclosingSymbolKind,
+                        result.EnclosingSymbolStartLine,
+                        result.EnclosingSymbolEndLine,
+                        result.EnclosingContainerName);
+                })
+                .OrderByDescending(group => group.Count)
+                .ThenBy(group => group.Key, StringComparer.Ordinal)
+                .ToList();
+
+    private static string BuildSearchSymbolGroupKey(SearchResult result)
+        => result.EnclosingSymbolName == null
+            ? string.Join('\0', result.Path, "<no-symbol>")
+            : string.Join(
+                '\0',
+                result.Path,
+                result.EnclosingSymbolKind ?? string.Empty,
+                result.EnclosingSymbolName,
+                result.EnclosingSymbolStartLine?.ToString(CultureInfo.InvariantCulture) ?? string.Empty,
+                result.EnclosingSymbolEndLine?.ToString(CultureInfo.InvariantCulture) ?? string.Empty);
+
+    private static string BuildSearchSymbolDisplayKey(SearchResult result)
+    {
+        if (result.EnclosingSymbolName == null)
+            return $"{result.Path}:<no enclosing symbol>";
+
+        var start = result.EnclosingSymbolStartLine?.ToString(CultureInfo.InvariantCulture) ?? "?";
+        var kind = result.EnclosingSymbolKind ?? "symbol";
+        return $"{result.Path}:{start}:{kind}:{result.EnclosingSymbolName}";
+    }
+
+    private static void WriteSearchGroupedCounts(string groupBy, List<SearchGroupedCountItemJsonResult> groups, int totalCount, int fileCount)
+    {
+        foreach (var group in groups)
+        {
+            if (groupBy == "file")
+            {
+                Console.WriteLine($"{group.Count,8} {group.File}");
+                continue;
+            }
+
+            var location = group.SymbolStartLine.HasValue
+                ? $"{group.File}:{group.SymbolStartLine}-{group.SymbolEndLine ?? group.SymbolStartLine}"
+                : group.File ?? group.Key;
+            var symbol = group.SymbolName == null
+                ? "<no enclosing symbol>"
+                : $"{group.SymbolKind ?? "symbol"} {group.SymbolName}";
+            var container = group.ContainerName == null ? string.Empty : $" ({group.ContainerName})";
+            Console.WriteLine($"{group.Count,8} {location} {symbol}{container}");
+        }
+
+        Console.Error.WriteLine($"({totalCount} results in {fileCount} files; grouped by {groupBy})");
+    }
+
+    private static int RunSearchNamedBatch(QueryCommandOptions options, JsonSerializerOptions jsonOptions, bool userExact)
+    {
+        return WithDb(options, jsonOptions, reader =>
+        {
+            var queryResults = CollectSearchNamedBatchQueryResults(reader, options, userExact, out var total);
+
+            if (options.Json)
+            {
+                Console.WriteLine(JsonSerializer.Serialize(
+                    new SearchNamedBatchRunJsonResult(
+                        JsonOutputContract.ApiVersion,
+                        queryResults.Count,
+                        total,
+                        queryResults),
+                    CliJsonSerializerContextFactory.Create(jsonOptions).SearchNamedBatchRunJsonResult));
+                return CommandExitCodes.Success;
+            }
+
+            Console.WriteLine("Named search batch");
+            Console.WriteLine();
+            foreach (var queryResult in queryResults)
+            {
+                Console.WriteLine($"[{queryResult.Name}] {queryResult.Query}");
+                Console.WriteLine($"results: {queryResult.Count}");
+                foreach (var result in queryResult.Results)
+                {
+                    Console.WriteLine($"{result.Path}:{result.ChunkStartLine}-{result.ChunkEndLine}");
+                    foreach (var line in result.Snippet.Split('\n', StringSplitOptions.None))
+                        Console.WriteLine($"  {line}");
+                }
+                Console.WriteLine();
+            }
+
+            Console.Error.WriteLine($"({total} named-query results across {queryResults.Count} queries)");
+            return CommandExitCodes.Success;
         });
     }
 
@@ -966,6 +1213,47 @@ public static class QueryCommandRunner
                 recipeQuery.RecommendedLabels,
                 recipeQuery.FalsePositiveGuidance,
                 exact,
+                rows.Count,
+                rows.Select(row => row.Compact).ToList()));
+        }
+
+        return queryResults;
+    }
+
+    private static List<SearchNamedBatchQueryResultJsonResult> CollectSearchNamedBatchQueryResults(
+        DbReader reader,
+        QueryCommandOptions options,
+        bool userExact,
+        out int total)
+    {
+        var queryResults = new List<SearchNamedBatchQueryResultJsonResult>();
+        total = 0;
+        foreach (var namedQuery in options.NamedSearchQueries)
+        {
+            var results = reader.Search(
+                namedQuery.Query,
+                options.Limit,
+                options.Lang,
+                options.RawFts,
+                options.PathPatterns,
+                options.ExcludePaths,
+                options.ExcludeTests,
+                !options.NoDedup,
+                options.Since,
+                userExact,
+                options.Prefix,
+                !options.NoVisibilityRank,
+                guardFilters: options.GuardFilters,
+                guardWindow: options.GuardWindow);
+            var rows = BuildSearchDisplayRows(results, options, userExact, namedQuery.Query);
+            AttachExactSubstringHint(
+                rows.Select(row => row.Compact),
+                SearchQueryAdvisor.BuildExactSubstringHint(namedQuery.Query, options.RawFts, userExact, options.Prefix));
+            total += rows.Count;
+            queryResults.Add(new SearchNamedBatchQueryResultJsonResult(
+                namedQuery.Name,
+                namedQuery.Query,
+                userExact,
                 rows.Count,
                 rows.Select(row => row.Compact).ToList()));
         }
@@ -1351,6 +1639,14 @@ public static class QueryCommandRunner
 
     private sealed record SearchDisplayRow(SearchResult Result, CompactSearchResult Compact);
 
+    private static void AttachExactSubstringHint(IEnumerable<CompactSearchResult> results, SearchQueryHint? hint)
+    {
+        if (hint == null)
+            return;
+        foreach (var result in results)
+            result.ExactSubstringHint = hint;
+    }
+
     private static void WriteJsonStreamDone(int count, JsonSerializerOptions jsonOptions)
         => Console.WriteLine(JsonSerializer.Serialize(
             new JsonStreamDoneResult(Done: true, Count: count, Interrupted: false),
@@ -1516,6 +1812,16 @@ public static class QueryCommandRunner
                 }
                 writer.Write('}');
             },
+            jsonOptions);
+    }
+
+    private static void WriteCompactSearchResults(IEnumerable<CompactSearchResult> results, JsonSerializerOptions jsonOptions)
+    {
+        var itemOptions = GetCompactJsonOptions(jsonOptions);
+        var context = CliJsonSerializerContextFactory.Create(itemOptions);
+        WriteJsonArray(
+            results,
+            (writer, result) => writer.Write(JsonSerializer.Serialize(result, context.CompactSearchResult)),
             jsonOptions);
     }
 
@@ -6590,6 +6896,7 @@ public static class QueryCommandRunner
         string? recipeName = null;
         bool listRecipes = false;
         string? openIssuesPath = null;
+        var namedSearchQueries = new List<SearchNamedQuery>();
         bool languagesIndexedOnly = false;
         var languageCapabilities = new List<string>();
         ProjectFilterRootResolution? projectFilterRootResolution = null;
@@ -6876,6 +7183,25 @@ public static class QueryCommandRunner
                     }
                     else
                         AddParseError(openIssuesError!);
+                    break;
+                case "--named-query":
+                    if (!allowNamedQuery)
+                    {
+                        AddParseError("Error: --named-query is not supported by this command.");
+                        if (i + 1 < args.Length && !args[i + 1].StartsWith("-", StringComparison.Ordinal))
+                            i++;
+                    }
+                    else if (TryReadStringOptionValue(args, ref i, "--named-query", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var namedQueryValue, out var namedQueryError))
+                    {
+                        if (TryParseNamedSearchQuery(namedQueryValue!, out var namedQuery, out var namedQueryParseError))
+                            namedSearchQueries.Add(namedQuery);
+                        else
+                            AddParseError(namedQueryParseError!);
+                    }
+                    else
+                    {
+                        AddParseError(namedQueryError!);
+                    }
                     break;
                 case "--require-before":
                     if (TryReadStringOptionValue(args, ref i, "--require-before", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var requireBeforeValue, out var requireBeforeError))
@@ -7450,6 +7776,11 @@ public static class QueryCommandRunner
         ValidateQueryPathOptionValues(userPathPatterns, excludePaths, AddParseError);
         if (guardFilters.Count > DbReader.MaxSearchGuardFilters)
             AddParseError($"Error: search accepts at most {DbReader.MaxSearchGuardFilters} guard filters; got {guardFilters.Count}.");
+        var duplicateNamedQuery = namedSearchQueries
+            .GroupBy(query => query.Name, StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault(group => group.Count() > 1);
+        if (duplicateNamedQuery != null)
+            AddParseError($"Error: duplicate --named-query name '{ConsoleUi.FormatBoundedValue(duplicateNamedQuery.Key)}'. Use unique names so grouped results are unambiguous.");
 
         if (validateDefaultLimit && !limitExplicit && defaultLimitError != null)
             AddParseError(defaultLimitError);
@@ -7552,10 +7883,49 @@ public static class QueryCommandRunner
             RecipeName = recipeName,
             ListRecipes = listRecipes,
             OpenIssuesPath = openIssuesPath,
+            NamedSearchQueries = namedSearchQueries,
             LanguagesIndexedOnly = languagesIndexedOnly,
             LanguageCapabilities = languageCapabilities,
             ParseError = parseErrors == null ? null : string.Join(Environment.NewLine, parseErrors),
         };
+    }
+
+    private static bool TryParseNamedSearchQuery(string value, out SearchNamedQuery namedQuery, out string? error)
+    {
+        namedQuery = new SearchNamedQuery(string.Empty, string.Empty);
+        error = null;
+        var separator = value.IndexOf('=');
+        if (separator <= 0)
+        {
+            error = "Error: --named-query must use <name>=<query>.";
+            return false;
+        }
+
+        var name = value[..separator].Trim();
+        var query = value[(separator + 1)..].Trim();
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            error = "Error: --named-query name cannot be empty.";
+            return false;
+        }
+        if (name.Length > MaxNamedSearchQueryNameLength)
+        {
+            error = $"Error: --named-query name '{ConsoleUi.FormatBoundedValue(name)}' exceeds the {MaxNamedSearchQueryNameLength} character limit.";
+            return false;
+        }
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            error = $"Error: --named-query '{ConsoleUi.FormatBoundedValue(name)}' query cannot be empty.";
+            return false;
+        }
+        if (query.Length > QueryLimits.MaxQueryLength)
+        {
+            error = QueryLimits.FormatQueryTooLongError();
+            return false;
+        }
+
+        namedQuery = new SearchNamedQuery(name, query);
+        return true;
     }
 
     internal static ProjectFilterRootResolution ResolveProjectFilterRoot(string dbPath, bool dbPathExplicit)
@@ -10826,7 +11196,10 @@ public sealed class QueryCommandOptions
     public string? RecipeName { get; init; }
     public bool ListRecipes { get; init; }
     public string? OpenIssuesPath { get; init; }
+    public List<SearchNamedQuery> NamedSearchQueries { get; init; } = [];
     public bool LanguagesIndexedOnly { get; init; }
     public List<string> LanguageCapabilities { get; init; } = [];
     public string? ParseError { get; init; }
 }
+
+public sealed record SearchNamedQuery(string Name, string Query);

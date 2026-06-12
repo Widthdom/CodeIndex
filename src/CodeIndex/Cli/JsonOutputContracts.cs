@@ -180,6 +180,24 @@ internal sealed record QueryCountFilesJsonResult(
     [property: JsonPropertyName("files")] int Files,
     [property: JsonPropertyName("query")] string Query);
 
+internal sealed record SearchGroupedCountJsonResult(
+    [property: JsonPropertyName("api_version")] string ApiVersion,
+    [property: JsonPropertyName("query")] string Query,
+    [property: JsonPropertyName("group_by")] string GroupBy,
+    [property: JsonPropertyName("count")] int Count,
+    [property: JsonPropertyName("files")] int Files,
+    [property: JsonPropertyName("groups")] List<SearchGroupedCountItemJsonResult> Groups);
+
+internal sealed record SearchGroupedCountItemJsonResult(
+    [property: JsonPropertyName("key")] string Key,
+    [property: JsonPropertyName("count")] int Count,
+    [property: JsonPropertyName("file")] string? File,
+    [property: JsonPropertyName("symbol_name")] string? SymbolName,
+    [property: JsonPropertyName("symbol_kind")] string? SymbolKind,
+    [property: JsonPropertyName("symbol_start_line")] int? SymbolStartLine,
+    [property: JsonPropertyName("symbol_end_line")] int? SymbolEndLine,
+    [property: JsonPropertyName("container_name")] string? ContainerName);
+
 internal sealed record QueryFindCountJsonResult(
     [property: JsonPropertyName("count")] int Count,
     [property: JsonPropertyName("files")] int Files,
@@ -493,6 +511,8 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(QueryCountFilesJsonResult))]
 [JsonSerializable(typeof(QueryFindCountJsonResult))]
 [JsonSerializable(typeof(QueryPathErrorJsonResult))]
+[JsonSerializable(typeof(SearchGroupedCountJsonResult))]
+[JsonSerializable(typeof(SearchGroupedCountItemJsonResult))]
 [JsonSerializable(typeof(List<ReferenceResult>))]
 [JsonSerializable(typeof(List<List<string>>))]
 [JsonSerializable(typeof(List<string>))]
@@ -519,6 +539,8 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(SearchMatchFacet))]
 [JsonSerializable(typeof(List<SearchMatchFacet>))]
 [JsonSerializable(typeof(SearchQueryHint))]
+[JsonSerializable(typeof(SearchNamedBatchQueryResultJsonResult))]
+[JsonSerializable(typeof(SearchNamedBatchRunJsonResult))]
 [JsonSerializable(typeof(SearchRecipeListItemJsonResult))]
 [JsonSerializable(typeof(SearchRecipeListJsonResult))]
 [JsonSerializable(typeof(SearchRecipeQueryListItemJsonResult))]

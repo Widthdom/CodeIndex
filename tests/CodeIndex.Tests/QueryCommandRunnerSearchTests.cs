@@ -426,7 +426,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunSearch_FormatCompactEmitsFileLineOnly_Issue1642()
+    public void RunSearch_FormatCompactEmitsBoundedSnippet_Issue3481()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_format_compact");
         try
@@ -446,10 +446,246 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             using var document = ParseJsonOutput(stdout);
             var row = Assert.Single(document.RootElement.EnumerateArray());
-            Assert.Equal("src/app.cs", row.GetProperty("file").GetString());
-            Assert.True(row.GetProperty("line").GetInt32() > 0);
-            Assert.False(row.TryGetProperty("snippet", out _));
+            Assert.Equal("Authenticate", row.GetProperty("query").GetString());
+            Assert.Equal("src/app.cs", row.GetProperty("path").GetString());
+            Assert.True(row.GetProperty("chunk_start_line").GetInt32() > 0);
+            Assert.Contains("Authenticate", row.GetProperty("snippet").GetString(), StringComparison.Ordinal);
+            Assert.NotEmpty(row.GetProperty("match_lines").EnumerateArray());
+            Assert.NotEmpty(row.GetProperty("highlights").EnumerateArray());
             Assert.False(row.TryGetProperty("name", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_NamedQueriesReturnGroupedCompactResults_Issue3481()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_named_queries");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "release/pack.md",
+                "markdown",
+                "Run dotnet pack before publishing.");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "release/push.md",
+                "markdown",
+                "Run nuget push after package validation.");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--named-query=pack=dotnet pack", "--named-query=push=nuget push", "--db", dbPath, "--format", "compact"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            Assert.Equal(2, root.GetProperty("query_count").GetInt32());
+            Assert.Equal(2, root.GetProperty("result_count").GetInt32());
+            var queries = root.GetProperty("queries").EnumerateArray().ToList();
+            var pack = Assert.Single(queries, query => query.GetProperty("name").GetString() == "pack");
+            Assert.Equal("dotnet pack", pack.GetProperty("query").GetString());
+            var packResult = Assert.Single(pack.GetProperty("results").EnumerateArray());
+            Assert.Equal("release/pack.md", packResult.GetProperty("path").GetString());
+            Assert.Contains("dotnet pack", packResult.GetProperty("snippet").GetString(), StringComparison.Ordinal);
+            Assert.NotEmpty(packResult.GetProperty("match_lines").EnumerateArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_NamedQueriesRejectExactPrefixConflict_Issue3481()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_named_queries_exact_prefix");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                "public class App { void Run() { Authenticate(); } }");
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--named-query", "auth=Authenticate", "--db", dbPath, "--exact-substring", "--prefix"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("--prefix cannot be combined with --exact", stderr, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_GroupByFileCountJsonReturnsRankedGroups_Issue3388()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_group_by_file");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/alpha.cs",
+                "csharp",
+                "public class Alpha { public void Run() { AuditMarker(); } }");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/beta.cs",
+                "csharp",
+                "public class Beta { public void Run() { AuditMarker(); } }");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["AuditMarker();", "--db", dbPath, "--exact-substring", "--group-by", "file", "--count", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            Assert.Equal("AuditMarker();", root.GetProperty("query").GetString());
+            Assert.Equal("file", root.GetProperty("group_by").GetString());
+            Assert.Equal(2, root.GetProperty("count").GetInt32());
+            Assert.Equal(2, root.GetProperty("files").GetInt32());
+            var groups = root.GetProperty("groups").EnumerateArray().ToList();
+            Assert.Equal(["src/alpha.cs", "src/beta.cs"], groups.Select(group => group.GetProperty("file").GetString()).ToArray());
+            Assert.All(groups, group => Assert.Equal(1, group.GetProperty("count").GetInt32()));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_GroupBySymbolCountJsonIncludesEnclosingSymbols_Issue3388()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_group_by_symbol");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/alpha.cs",
+                "csharp",
+                """
+                public class Alpha
+                {
+                    public void Run()
+                    {
+                        AuditMarker();
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/beta.cs",
+                "csharp",
+                """
+                public class Beta
+                {
+                    public void Execute()
+                    {
+                        AuditMarker();
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["AuditMarker();", "--db", dbPath, "--exact-substring", "--group-by", "symbol", "--count", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            Assert.Equal("symbol", root.GetProperty("group_by").GetString());
+            Assert.Equal(2, root.GetProperty("count").GetInt32());
+            var groups = root.GetProperty("groups").EnumerateArray().ToList();
+            Assert.Equal(2, groups.Count);
+            Assert.Contains(groups, group =>
+                group.GetProperty("file").GetString() == "src/alpha.cs" &&
+                group.GetProperty("symbol_name").GetString() == "Run" &&
+                group.GetProperty("symbol_kind").GetString() == "function" &&
+                group.GetProperty("symbol_start_line").GetInt32() > 0);
+            Assert.Contains(groups, group =>
+                group.GetProperty("file").GetString() == "src/beta.cs" &&
+                group.GetProperty("symbol_name").GetString() == "Execute" &&
+                group.GetProperty("symbol_kind").GetString() == "function" &&
+                group.GetProperty("symbol_start_line").GetInt32() > 0);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_GroupByRequiresCount_Issue3388()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_group_by_requires_count");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                "public class App { public void Run() { AuditMarker(); } }");
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["AuditMarker();", "--db", dbPath, "--exact-substring", "--group-by", "file"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("search --group-by requires --count", stderr, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_GroupByIsRejectedForSearchSubmodes_Issue3388()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_group_by_submodes");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                "public class App { public void Run() { AuditMarker(); } }");
+
+            var (listExitCode, _, listStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--list-recipes", "--group-by", "file"],
+                _jsonOptions));
+            var (recipeExitCode, _, recipeStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "risky-code", "--db", dbPath, "--group-by", "file"],
+                _jsonOptions));
+            var (namedExitCode, _, namedStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--named-query", "audit=AuditMarker", "--db", dbPath, "--group-by", "file"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, listExitCode);
+            Assert.Equal(CommandExitCodes.UsageError, recipeExitCode);
+            Assert.Equal(CommandExitCodes.UsageError, namedExitCode);
+            Assert.Contains("--group-by is not supported with --list-recipes", listStderr, StringComparison.Ordinal);
+            Assert.Contains("--group-by is not supported with --recipe", recipeStderr, StringComparison.Ordinal);
+            Assert.Contains("--group-by is not supported with --named-query", namedStderr, StringComparison.Ordinal);
         }
         finally
         {
@@ -3760,7 +3996,7 @@ jobs:
     }
 
     [Fact]
-    public void RunSearch_GroupBy_IsRejectedOutsideHotspots()
+    public void RunSearch_GroupByWithoutCount_IsRejected()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_group_by_reject");
         try
@@ -3773,7 +4009,7 @@ jobs:
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains("--group-by is only supported by 'hotspots'", stderr);
+            Assert.Contains("search --group-by requires --count", stderr, StringComparison.Ordinal);
         }
         finally
         {
