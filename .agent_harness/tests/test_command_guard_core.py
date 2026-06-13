@@ -5,7 +5,7 @@ import tempfile
 import sys
 from pathlib import Path
 from unittest import TestCase
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 
 def load_core():
@@ -553,10 +553,10 @@ class CommandGuardCoreTests(TestCase):
 
                     self.assertFalse(decision.allowed)
 
-    def test_staged_secret_check_uses_git_diff_fallback(self) -> None:
-        fake_proc = Mock(returncode=0, stdout="+ api_key = 'sk-abcdefghijklmnopqrstuvwx123456'\n", stderr="")
-
-        with patch.object(core.shutil, "which", return_value=None), patch.object(core.subprocess, "run", return_value=fake_proc):
+    def test_staged_secret_check_denies_when_gitleaks_is_unavailable(self) -> None:
+        with patch.object(core.shutil, "which", return_value=None):
             decision = core.staged_secret_check(Path("/tmp"))
 
         self.assertFalse(decision.allowed)
+        self.assertIn("gitleaks is unavailable", decision.reason)
+        self.assertIn("text-only staged diff fallback", decision.reason)

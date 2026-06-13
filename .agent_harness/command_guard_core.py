@@ -1246,29 +1246,7 @@ def staged_secret_check(cwd: Path) -> GuardDecision:
             return _deny("gitleaks blocked this commit:\n" + output)
         return _allow("gitleaks passed")
 
-    try:
-        proc = subprocess.run(
-            ["git", "diff", "--cached", "--unified=0", "--no-ext-diff"],
-            cwd=str(cwd),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=30,
-            check=False,
-        )
-    except Exception as exc:
-        return _deny(f"could not inspect staged diff for secrets; failing closed: {exc}")
-    if proc.returncode != 0:
-        return _deny("could not inspect staged diff for secrets; install gitleaks or fix git diff")
-
-    added_lines = "\n".join(
-        line[1:]
-        for line in (proc.stdout or "").splitlines()
-        if line.startswith("+") and not line.startswith("+++")
+    return _deny(
+        "gitleaks is unavailable; refusing git commit because the text-only staged diff fallback "
+        "cannot safely inspect binary or encoded staged content"
     )
-    for pattern, name in _SECRET_PATTERNS:
-        if pattern.search(added_lines):
-            return _deny(
-                f"secret-looking staged content detected before commit: {name}; install gitleaks for better scanning"
-            )
-    return _allow("staged secret scan passed")
