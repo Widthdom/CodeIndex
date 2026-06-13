@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.Loader;
+using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Diagnostics;
 using CodeIndex.Models;
 
@@ -119,7 +120,9 @@ public sealed class PostExtractionHookRunner : IDisposable
                 if (!HookAssemblyCandidateIsWithinBudget(dllPath, runner, maxAssemblyBytes))
                     continue;
 
-                var loadContext = new AssemblyLoadContext($"cdidx-hook:{Path.GetFileNameWithoutExtension(dllPath)}", isCollectible: true);
+                var loadContext = new ExtensionAssemblyLoadContext(
+                    $"cdidx-hook:{Path.GetFileNameWithoutExtension(dllPath)}",
+                    dllPath);
                 assembly = loadContext.LoadFromAssemblyPath(Path.GetFullPath(dllPath));
             }
             catch (Exception)
@@ -288,6 +291,9 @@ public sealed class PostExtractionHookRunner : IDisposable
     }
 
     public IReadOnlyList<PostExtractionHookInfo> Hooks => hooks.Select(hook => hook.Info).ToList();
+
+    internal IReadOnlyList<AssemblyLoadContext?> LoadContextsForTests
+        => hooks.Select(hook => hook.LoadContext).ToList();
 
     public IReadOnlyList<PostExtractionHookDiagnostic> Diagnostics => diagnostics.ToList();
 
