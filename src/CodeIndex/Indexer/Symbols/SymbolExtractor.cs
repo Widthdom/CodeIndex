@@ -2164,7 +2164,7 @@ public static partial class SymbolExtractor
     /// </summary>
     public static IReadOnlyCollection<string> GetSupportedLanguages()
       => PatternCache.Keys
-          .Concat(new[] { "commonlisp", "racket", "vue", "svelte", "markdown", "json", "yaml", "razor", "blazor", "cshtml" })
+          .Concat(new[] { "commonlisp", "racket", "vue", "svelte", "markdown", "json", "yaml", "xml", "razor", "blazor", "cshtml" })
           .Concat(ExtractorPluginRegistry.SymbolLanguages)
           .Distinct(StringComparer.Ordinal)
           .ToArray();

@@ -26,6 +26,7 @@ public static partial class ReferenceExtractor
 
         content = preparedInput.Content;
         var lines = preparedInput.Lines;
+        var xamlReferenceEnabled = language == "xml" && XamlReferenceExtractor.IsXaml(lines);
         var structuralLines = preparedInput.StructuralLines;
         var csharpLinesInsideMultilineStringContent = preparedInput.CSharpLinesInsideMultilineStringContent;
         var csharpLinesInsideBlockComment = preparedInput.CSharpLinesInsideBlockComment;
@@ -199,6 +200,7 @@ public static partial class ReferenceExtractor
         var markupSchemaState = language is "graphql" or "html" or "markdown"
             ? new MarkupSchemaReferenceExtractor.MarkupState()
             : null;
+        var xamlInXmlComment = false;
         SymbolRecord? phpDocblockContainer = null;
         HashSet<string>? phpDocblockPropertyNames = null;
 
@@ -947,6 +949,11 @@ public static partial class ReferenceExtractor
                 CssReferenceExtractor.EmitSass(preparedLine, references, seen, fileId, context, lineNumber, container);
             else if (language == "stylus")
                 CssReferenceExtractor.EmitStylus(preparedLine, references, seen, fileId, context, lineNumber, definitionNames, container);
+            else if (language == "xml" && xamlReferenceEnabled)
+            {
+                var xamlLine = XamlReferenceExtractor.StripXmlComments(originalLine, ref xamlInXmlComment);
+                XamlReferenceExtractor.Emit(xamlLine, context, lineNumber, references, seen, fileId, container);
+            }
 
             if (language == "terraform")
             {

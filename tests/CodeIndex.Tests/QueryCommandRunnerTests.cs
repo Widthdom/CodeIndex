@@ -2329,6 +2329,13 @@ public partial class QueryCommandRunnerTests
             Assert.Empty(languages[stylesheetPreprocessor].GetProperty("capability_gaps").EnumerateArray());
         }
 
+        Assert.True(languages["xml"].GetProperty("symbol_extraction").GetBoolean(),
+            "xml must advertise symbol_extraction=true for XAML/AXAML files");
+        Assert.True(languages["xml"].GetProperty("reference_extraction").GetBoolean(),
+            "xml must advertise reference_extraction=true for XAML/AXAML files");
+        Assert.True(languages["xml"].GetProperty("graph_queries").GetBoolean(),
+            "xml must advertise graph_queries=true for XAML/AXAML files");
+
         Assert.True(languages.ContainsKey("perl"), "expected 'perl' to be listed");
         Assert.True(languages["perl"].GetProperty("symbol_extraction").GetBoolean(),
             "perl must advertise symbol_extraction=true");

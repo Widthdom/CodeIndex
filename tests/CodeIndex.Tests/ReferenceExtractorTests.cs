@@ -531,6 +531,84 @@ public partial class ReferenceExtractorTests
         Assert.Equal("csharp", razorExtractor.Language);
     }
 
+    [Fact]
+    public void Extract_Xml_XamlReferences_CodeBehindResourcesBindingsAndHandlers()
+    {
+        const string content = """
+            <Window x:Class="Sample.MainWindow"
+                    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+                <Window.Resources>
+                    <SolidColorBrush x:Key="PrimaryBrush" Color="Tomato" />
+                    <Style TargetType="Button" BasedOn="{StaticResource PrimaryButtonStyle}" />
+                </Window.Resources>
+                <!-- <TextBlock Text="{Binding IgnoredCommentBinding}" /> -->
+                <Border Tag="{StaticResource PrimaryBrush}" /><!-- <TextBlock Text="{Binding IgnoredInlineCommentBinding}" /> -->
+                <!-- <TextBlock Text="{Binding IgnoredPrefixCommentBinding}" /> --><TextBlock Text="{Binding AfterInlineComment}" />
+                <!--
+                <TextBlock Text="{Binding IgnoredMultilineCommentBinding}" />
+                -->
+                <Grid>
+                    <TextBox x:Name="SearchBox" />
+                    <TextBlock Text="{Binding Path=ViewModel.Title, ElementName=SearchBox}" />
+                    <Button Clicked="OnSaveClicked" />
+                </Grid>
+            </Window>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "xml", content);
+        var references = ReferenceExtractor.Extract(1, "xml", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Sample.MainWindow"
+            && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Button"
+            && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "PrimaryButtonStyle"
+            && reference.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "PrimaryButtonStyle"
+            && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Title"
+            && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "SearchBox"
+            && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "OnSaveClicked"
+            && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "IgnoredCommentBinding");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "IgnoredInlineCommentBinding");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "IgnoredPrefixCommentBinding");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "IgnoredMultilineCommentBinding");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "AfterInlineComment"
+            && reference.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_Xml_NonXamlXmlDoesNotEmitXamlReferences()
+    {
+        const string content = """
+            <Project>
+              <ItemGroup>
+                <Foo x:Class="Not.Xaml" />
+              </ItemGroup>
+            </Project>
+            """;
+
+        var references = ReferenceExtractor.Extract(1, "xml", content, []);
+
+        Assert.Empty(references);
+    }
+
     [Theory]
     [InlineData("javascript")]
     [InlineData("typescript")]
