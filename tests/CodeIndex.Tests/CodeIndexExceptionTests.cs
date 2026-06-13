@@ -282,6 +282,7 @@ public class CodeIndexExceptionTests
     [InlineData(CommandErrorCodes.FeatureUnavailable, CommandExitCodes.FeatureUnavailable)]
     [InlineData(CommandErrorCodes.UsageError, CommandExitCodes.InvalidArgument)]
     [InlineData(CommandErrorCodes.Interrupted, CommandExitCodes.CancelledBySignal)]
+    [InlineData(CommandErrorCodes.FileSystemCaseProbeFailed, CommandExitCodes.DatabaseError)]
     [InlineData("E999_UNKNOWN", CommandExitCodes.DatabaseError)]
     public void MapCodeIndexExceptionExitCode_MapsKnownCodesToTaxonomy(string code, int expectedExitCode)
     {

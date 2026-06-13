@@ -16,6 +16,8 @@ namespace CodeIndex.Indexer;
 /// </summary>
 public class FileIndexer
 {
+    internal static Func<string, bool>? FileSystemIgnoreCaseProbeForTesting { get; set; }
+
     public enum SymlinkPolicy
     {
         None,
@@ -1074,11 +1076,15 @@ public class FileIndexer
 
     private static bool ProbeFileSystemIgnoreCase(string projectRoot)
     {
+        var normalizedRoot = projectRoot;
         try
         {
-            var normalizedRoot = Path.GetFullPath(projectRoot);
-            if (TryCreateCaseVariant(normalizedRoot, out var rootVariant))
-                return Directory.Exists(LongPath.EnsureWindowsPrefix(rootVariant));
+            normalizedRoot = Path.GetFullPath(projectRoot);
+            if (FileSystemIgnoreCaseProbeForTesting is { } probeOverride)
+                return probeOverride(normalizedRoot);
+
+            if (TryProbeExistingDirectoryPath(normalizedRoot, out var ignoreCase))
+                return ignoreCase;
 
             using var probe = CaseSensitivityProbeDirectory.CreateProbePathScope(normalizedRoot, "case-probe-");
             var probePath = probe.Path;
@@ -1086,19 +1092,49 @@ public class FileIndexer
             File.WriteAllText(prefixedProbePath, string.Empty);
             try
             {
-                return TryCreateCaseVariant(probePath, out var probeVariant) && File.Exists(LongPath.EnsureWindowsPrefix(probeVariant));
+                if (TryCreateCaseVariant(probePath, out var probeVariant))
+                    return File.Exists(LongPath.EnsureWindowsPrefix(probeVariant));
             }
             finally
             {
                 if (File.Exists(prefixedProbePath))
                     File.Delete(prefixedProbePath);
             }
+
+            throw new CaseSensitivityProbeException(
+                "Failed to create a case-variant path for filesystem case-sensitivity probing.",
+                normalizedRoot,
+                probePath: probePath);
         }
-        catch
+        catch (CaseSensitivityProbeException)
         {
-            return OperatingSystem.IsWindows();
+            throw;
+        }
+        catch (Exception ex) when (IsCaseSensitivityProbeFailure(ex))
+        {
+            throw new CaseSensitivityProbeException(
+                "Failed to determine filesystem case sensitivity.",
+                normalizedRoot,
+                ex);
         }
     }
+
+    private static bool TryProbeExistingDirectoryPath(string path, out bool ignoreCase)
+    {
+        ignoreCase = false;
+        if (!TryCreateCaseVariant(path, out var variant))
+            return false;
+
+        ignoreCase = Directory.Exists(LongPath.EnsureWindowsPrefix(variant));
+        return true;
+    }
+
+    private static bool IsCaseSensitivityProbeFailure(Exception ex)
+        => ex is ArgumentException
+            or IOException
+            or UnauthorizedAccessException
+            or NotSupportedException
+            or System.Security.SecurityException;
 
     private static bool TryCreateCaseVariant(string path, out string variant)
     {

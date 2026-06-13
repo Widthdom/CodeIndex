@@ -10,10 +10,14 @@ internal static class CaseSensitivityProbeDirectory
     private const UnixFileMode PrivateDirectoryMode =
         UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
 
+    internal static Action<string>? DeleteCreatedEmptyDirectoryForTesting { get; set; }
+
     internal static ProbePathScope CreateProbePathScope(string projectRoot, string prefix)
     {
-        var directory = CreateProbeDirectory(projectRoot);
+        var normalizedRoot = Path.GetFullPath(projectRoot);
+        var directory = CreateProbeDirectory(normalizedRoot);
         return new ProbePathScope(
+            normalizedRoot,
             Path.Combine(directory.ProbeDirectory, $"{prefix}{Guid.NewGuid():N}"),
             directory.ProbeDirectory,
             directory.DataDirectory,
@@ -43,12 +47,14 @@ internal static class CaseSensitivityProbeDirectory
         private bool _disposed;
 
         internal ProbePathScope(
+            string projectRoot,
             string path,
             string probeDirectory,
             string dataDirectory,
             bool createdProbeDirectory,
             bool createdDataDirectory)
         {
+            ProjectRoot = projectRoot;
             Path = path;
             _probeDirectory = probeDirectory;
             _dataDirectory = dataDirectory;
@@ -56,6 +62,7 @@ internal static class CaseSensitivityProbeDirectory
             _createdDataDirectory = createdDataDirectory;
         }
 
+        internal string ProjectRoot { get; }
         internal string Path { get; }
 
         public void Dispose()
@@ -64,8 +71,33 @@ internal static class CaseSensitivityProbeDirectory
                 return;
 
             _disposed = true;
-            TryDeleteCreatedEmptyDirectory(_probeDirectory, _createdProbeDirectory);
-            TryDeleteCreatedEmptyDirectory(_dataDirectory, _createdDataDirectory);
+            DeleteCreatedEmptyDirectory(_probeDirectory, _createdProbeDirectory);
+            DeleteCreatedEmptyDirectory(_dataDirectory, _createdDataDirectory);
+        }
+
+        private void DeleteCreatedEmptyDirectory(string path, bool createdForProbe)
+        {
+            if (!createdForProbe)
+                return;
+
+            try
+            {
+                if (DeleteCreatedEmptyDirectoryForTesting is { } delete)
+                    delete(path);
+                else
+                    Directory.Delete(LongPath.EnsureWindowsPrefix(path));
+            }
+            catch (DirectoryNotFoundException)
+            {
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                throw new CaseSensitivityProbeException(
+                    "Failed to clean up filesystem case-sensitivity probe directory.",
+                    ProjectRoot,
+                    ex,
+                    cleanupPath: path);
+            }
         }
     }
 
@@ -89,23 +121,4 @@ internal static class CaseSensitivityProbeDirectory
         File.SetUnixFileMode(LongPath.EnsureWindowsPrefix(path), PrivateDirectoryMode);
     }
 
-    private static void TryDeleteCreatedEmptyDirectory(string path, bool createdForProbe)
-    {
-        if (!createdForProbe)
-            return;
-
-        try
-        {
-            Directory.Delete(LongPath.EnsureWindowsPrefix(path));
-        }
-        catch (DirectoryNotFoundException)
-        {
-        }
-        catch (IOException)
-        {
-        }
-        catch (UnauthorizedAccessException)
-        {
-        }
-    }
 }

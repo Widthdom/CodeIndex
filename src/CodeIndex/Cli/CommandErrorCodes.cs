@@ -53,4 +53,7 @@ internal static class CommandErrorCodes
 
     /// <summary>Index extraction made no forward progress within the bounded stall timeout.</summary>
     public const string IndexExtractionStalled = "E013_INDEX_EXTRACTION_STALLED";
+
+    /// <summary>Filesystem case-sensitivity probing failed before a safe path-casing policy could be selected.</summary>
+    public const string FileSystemCaseProbeFailed = "E014_FS_CASE_PROBE_FAILED";
 }

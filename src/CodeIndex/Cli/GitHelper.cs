@@ -38,6 +38,8 @@ public sealed record GitHeadCommitResult(GitHeadCommitState State, string? Sha =
 /// </summary>
 public static class GitHelper
 {
+    internal static Func<string, bool>? FileSystemIgnoreCaseProbeForTesting { get; set; }
+
     internal const int MaxGitMetadataFileBytes = 4 * 1024;
 
     public sealed record WorktreeStatus(bool IsDirty, IReadOnlyList<string> UnresolvedMergeFiles);
@@ -1016,9 +1018,13 @@ public static class GitHelper
 
     private static bool ProbeFileSystemIgnoreCase(string projectRoot)
     {
+        var normalizedRoot = projectRoot;
         try
         {
-            var normalizedRoot = Path.GetFullPath(projectRoot);
+            normalizedRoot = Path.GetFullPath(projectRoot);
+            if (FileSystemIgnoreCaseProbeForTesting is { } probeOverride)
+                return probeOverride(normalizedRoot);
+
             if (TryProbeExistingDirectoryPath(normalizedRoot, out var ignoreCase))
                 return ignoreCase;
 
@@ -1036,14 +1042,49 @@ public static class GitHelper
                 if (File.Exists(ioProbePath))
                     File.Delete(ioProbePath);
             }
-        }
-        catch
-        {
-            // Best-effort fallback only / best-effort のフォールバックのみ
-        }
 
-        return OperatingSystem.IsWindows();
+            throw new CaseSensitivityProbeException(
+                "Failed to create a case-variant path for filesystem case-sensitivity probing.",
+                normalizedRoot,
+                probePath: probePath);
+        }
+        catch (CaseSensitivityProbeException ex)
+        {
+            throw CreateCaseSensitivityProbeException(normalizedRoot, ex);
+        }
+        catch (Exception ex) when (IsCaseSensitivityProbeFailure(ex))
+        {
+            throw CreateCaseSensitivityProbeException(normalizedRoot, ex);
+        }
     }
+
+    private static CodeIndexException CreateCaseSensitivityProbeException(string projectRoot, Exception innerException)
+        => new(
+            code: CommandErrorCodes.FileSystemCaseProbeFailed,
+            category: CodeIndexExceptionCategory.Filesystem,
+            message: "Failed to determine filesystem case sensitivity.",
+            path: TryNormalizePathForError(projectRoot),
+            hint: "Ensure the workspace and its .cdidx probe directory are readable and writable, then rerun the command.",
+            innerException: innerException);
+
+    private static string TryNormalizePathForError(string path)
+    {
+        try
+        {
+            return Path.GetFullPath(path);
+        }
+        catch (Exception ex) when (IsCaseSensitivityProbeFailure(ex))
+        {
+            return path;
+        }
+    }
+
+    private static bool IsCaseSensitivityProbeFailure(Exception ex)
+        => ex is ArgumentException
+            or IOException
+            or UnauthorizedAccessException
+            or NotSupportedException
+            or System.Security.SecurityException;
 
     private static bool TryProbeExistingDirectoryPath(string path, out bool ignoreCase)
     {

@@ -88,6 +88,54 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void Constructor_CaseProbeFailureThrowsInsteadOfOsFallback_Issue3439()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-case-probe-failure-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        var previousProbe = FileIndexer.FileSystemIgnoreCaseProbeForTesting;
+        FileIndexer.FileSystemIgnoreCaseProbeForTesting = _ => throw new IOException("probe blocked");
+        try
+        {
+            var ex = Assert.Throws<CaseSensitivityProbeException>(() => new FileIndexer(tempDir));
+
+            Assert.Equal(Path.GetFullPath(tempDir), ex.ProjectRoot);
+            Assert.IsType<IOException>(ex.InnerException);
+        }
+        finally
+        {
+            FileIndexer.FileSystemIgnoreCaseProbeForTesting = previousProbe;
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
+    public void CaseSensitivityProbeDirectory_CleanupFailureThrows_Issue3439()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-case-probe-cleanup-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        var previousDelete = CaseSensitivityProbeDirectory.DeleteCreatedEmptyDirectoryForTesting;
+        try
+        {
+            using var scope = CaseSensitivityProbeDirectory.CreateProbePathScope(tempDir, "case-probe-test-");
+            CaseSensitivityProbeDirectory.DeleteCreatedEmptyDirectoryForTesting = path => throw new IOException($"blocked: {path}");
+
+            var ex = Assert.Throws<CaseSensitivityProbeException>(() => scope.Dispose());
+
+            Assert.Equal(Path.GetFullPath(tempDir), ex.ProjectRoot);
+            Assert.NotNull(ex.CleanupPath);
+            Assert.EndsWith(
+                $"{CaseSensitivityProbeDirectory.DataDirectoryName}{Path.DirectorySeparatorChar}{CaseSensitivityProbeDirectory.ProbeDirectoryName}",
+                ex.CleanupPath);
+            Assert.IsType<IOException>(ex.InnerException);
+        }
+        finally
+        {
+            CaseSensitivityProbeDirectory.DeleteCreatedEmptyDirectoryForTesting = previousDelete;
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
     public void ScanFilesDetailed_CaseInsensitiveChildDirectory_SkipsCaseOnlyDuplicatePathWithWarning()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-case-dedupe-{Guid.NewGuid():N}");
