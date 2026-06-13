@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Reflection;
+using System.Reflection.Emit;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
@@ -21,6 +22,18 @@ namespace CodeIndex.Tests;
 [Collection("SQLite pool sensitive")]
 public class McpServerTests : IDisposable
 {
+    private static readonly Dictionary<short, OpCode> SingleByteOpCodes = typeof(OpCodes)
+        .GetFields(BindingFlags.Public | BindingFlags.Static)
+        .Where(field => field.GetValue(null) is OpCode opCode && opCode.Size == 1)
+        .Select(field => (OpCode)field.GetValue(null)!)
+        .ToDictionary(opCode => opCode.Value);
+
+    private static readonly Dictionary<short, OpCode> MultiByteOpCodes = typeof(OpCodes)
+        .GetFields(BindingFlags.Public | BindingFlags.Static)
+        .Where(field => field.GetValue(null) is OpCode opCode && opCode.Size == 2)
+        .Select(field => (OpCode)field.GetValue(null)!)
+        .ToDictionary(opCode => (short)(opCode.Value & 0xff));
+
     private readonly string _dbPath;
     private readonly string _projectRoot;
     private readonly DbContext _db;
@@ -84,6 +97,63 @@ public class McpServerTests : IDisposable
 
         _server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
     }
+
+    [Fact]
+    public void RunConcurrentFrameLoop_DoesNotUseSpinWaitPolling_Issue3509()
+    {
+        var method = typeof(McpServer).GetMethod("RunConcurrentFrameLoopAsync", BindingFlags.NonPublic | BindingFlags.Instance);
+
+        Assert.NotNull(method);
+        Assert.False(MethodCallsType(method!, typeof(SpinWait)));
+    }
+
+    private static bool MethodCallsType(MethodInfo method, Type declaringType)
+    {
+        var body = method.GetMethodBody()?.GetILAsByteArray();
+        if (body is null)
+            return false;
+
+        var module = method.Module;
+        for (var i = 0; i < body.Length;)
+        {
+            OpCode opCode;
+            var value = body[i++];
+            if (value == 0xfe)
+            {
+                if (i >= body.Length)
+                    break;
+                opCode = MultiByteOpCodes[(short)body[i++]];
+            }
+            else
+            {
+                opCode = SingleByteOpCodes[(short)value];
+            }
+
+            var operandStart = i;
+            i += OperandSize(opCode.OperandType, body, i);
+            if ((opCode == OpCodes.Call || opCode == OpCodes.Callvirt)
+                && operandStart + 4 <= body.Length)
+            {
+                var token = BitConverter.ToInt32(body, operandStart);
+                var member = module.ResolveMember(token);
+                if (member?.DeclaringType == declaringType)
+                    return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static int OperandSize(OperandType operandType, byte[] body, int offset) => operandType switch
+    {
+        OperandType.InlineNone => 0,
+        OperandType.ShortInlineBrTarget or OperandType.ShortInlineI or OperandType.ShortInlineVar => 1,
+        OperandType.InlineVar => 2,
+        OperandType.InlineI or OperandType.InlineBrTarget or OperandType.InlineField or OperandType.InlineMethod or OperandType.InlineSig or OperandType.InlineString or OperandType.InlineTok or OperandType.InlineType or OperandType.ShortInlineR => 4,
+        OperandType.InlineI8 or OperandType.InlineR => 8,
+        OperandType.InlineSwitch => 4 + (offset + 4 <= body.Length ? BitConverter.ToInt32(body, offset) * 4 : 0),
+        _ => 0,
+    };
 
     [Fact]
     public void ProcessFrame_UsesTraceParentFromMetaAsActivityParent()

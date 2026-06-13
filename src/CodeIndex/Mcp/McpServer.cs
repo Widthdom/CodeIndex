@@ -665,10 +665,12 @@ public partial class McpServer : IDisposable
             }
 
             await _concurrencyGate.WaitAsync(loopToken).ConfigureAwait(false);
-            tasks.Add(Task.Run(async () =>
+            var requestTaskStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var requestTask = Task.Run(async () =>
             {
                 try
                 {
+                    requestTaskStarted.TrySetResult();
                     await normalFrameGate.WaitAsync(loopToken).ConfigureAwait(false);
                     string? response;
                     try
@@ -714,8 +716,9 @@ public partial class McpServer : IDisposable
                 {
                     _concurrencyGate.Release();
                 }
-            }, CancellationToken.None));
-            SpinWait.SpinUntil(() => !_running || _activeRequests.Count > 0, TimeSpan.FromMilliseconds(50));
+            }, CancellationToken.None);
+            tasks.Add(requestTask);
+            await requestTaskStarted.Task.ConfigureAwait(false);
         }
 
         await DrainInFlightTasksAsync(tasks, DefaultEofDrainTimeout, DefaultEofPostCancelDrainTimeout).ConfigureAwait(false);
