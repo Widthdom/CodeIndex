@@ -33,9 +33,109 @@ _INLINE_INTERPRETER_FLAGS = {"-c", "-e", "--eval"}
 _INLINE_INTERPRETERS = {"python", "python3", "ruby", "perl", "node", "deno", "php"}
 _INLINE_SHELLS = {"bash", "sh", "zsh", "fish"}
 _INLINE_SHELL_VARIABLES = {"$SHELL", "${SHELL}"}
+_PYTHON_MODULES_WITHOUT_SCRIPT_OPERANDS = {"pytest", "unittest"}
+_PYTHON_MODULES_WITH_SCRIPT_OPERANDS = {"cProfile", "pdb", "profile", "trace"}
+_PYTHON_MODULE_SCRIPT_OPTION_VALUES = {"-m", "-o", "-s", "--file", "--coverdir", "--ignore-dir"}
 _UNKNOWN_GLOBAL_OPTION_SUBCOMMAND = "__unknown_global_option__"
 _HIGH_RISK_UNKNOWN_GLOBAL_OPTION_REASON = "unrecognized global option before high-risk CLI subcommand is blocked"
 _TRANSPARENT_SCRIPT_WRAPPERS = {"time", "timeout", "gtimeout", "command", "exec", "nice", "nohup"}
+_KNOWN_GIT_SUBCOMMANDS = {
+    "add",
+    "am",
+    "archive",
+    "bisect",
+    "blame",
+    "branch",
+    "bugreport",
+    "bundle",
+    "cat-file",
+    "check-attr",
+    "check-ignore",
+    "check-mailmap",
+    "check-ref-format",
+    "checkout",
+    "cherry",
+    "cherry-pick",
+    "clean",
+    "clone",
+    "column",
+    "commit-tree",
+    "config",
+    "count-objects",
+    "credential",
+    "describe",
+    "diff",
+    "diff-files",
+    "diff-index",
+    "diff-tree",
+    "difftool",
+    "fetch",
+    "filter-branch",
+    "for-each-ref",
+    "format-patch",
+    "fsck",
+    "gc",
+    "grep",
+    "hash-object",
+    "help",
+    "index-pack",
+    "init",
+    "log",
+    "ls-files",
+    "ls-remote",
+    "maintenance",
+    "merge",
+    "merge-base",
+    "merge-file",
+    "merge-index",
+    "merge-tree",
+    "mergetool",
+    "mktag",
+    "mktree",
+    "mv",
+    "name-rev",
+    "notes",
+    "pack-objects",
+    "patch-id",
+    "prune",
+    "pull",
+    "push",
+    "range-diff",
+    "read-tree",
+    "rebase",
+    "reflog",
+    "remote",
+    "repack",
+    "replace",
+    "request-pull",
+    "rerere",
+    "reset",
+    "restore",
+    "rev-list",
+    "rev-parse",
+    "revert",
+    "rm",
+    "shortlog",
+    "show",
+    "show-branch",
+    "show-ref",
+    "sparse-checkout",
+    "stash",
+    "status",
+    "submodule",
+    "switch",
+    "symbolic-ref",
+    "tag",
+    "update-index",
+    "update-ref",
+    "verify-commit",
+    "verify-pack",
+    "verify-tag",
+    "version",
+    "whatchanged",
+    "worktree",
+    "write-tree",
+}
 _SEARCH_OR_DISCOVERY_COMMANDS = {
     "grep",
     "egrep",
@@ -630,13 +730,38 @@ def _tokenized_forbidden_script_reason(text: str) -> str | None:
     return _tokenized_forbidden_command_reason(text)
 
 
-def _git_subcommand(args: list[str]) -> str:
+def _git_alias_name(config_key: str) -> str | None:
+    key = config_key.split("=", 1)[0].lower()
+    if not key.startswith("alias."):
+        return None
+    name = key[len("alias.") :]
+    return name or None
+
+
+def _collect_git_alias_config(config: str, aliases: dict[str, str | None], *, unknown_value: bool = False) -> None:
+    name = _git_alias_name(config)
+    if name is None:
+        return
+    aliases[name] = None if unknown_value or "=" not in config else config.split("=", 1)[1]
+
+
+def _git_subcommand_and_aliases(args: list[str]) -> tuple[str, dict[str, str | None]]:
+    aliases: dict[str, str | None] = {}
     index = 0
     options_with_values = {"-c", "-C", "--config-env", "--exec-path", "--git-dir", "--work-tree", "--namespace"}
     while index < len(args):
         arg = args[index]
         if arg in options_with_values:
+            if index + 1 < len(args):
+                if arg == "-c":
+                    _collect_git_alias_config(args[index + 1], aliases)
+                elif arg == "--config-env":
+                    _collect_git_alias_config(args[index + 1], aliases, unknown_value=True)
             index += 2
+            continue
+        if arg.startswith("--config-env="):
+            _collect_git_alias_config(arg.split("=", 1)[1], aliases, unknown_value=True)
+            index += 1
             continue
         if any(arg.startswith(option + "=") for option in options_with_values if option.startswith("--")):
             index += 1
@@ -644,8 +769,38 @@ def _git_subcommand(args: list[str]) -> str:
         if arg.startswith("-"):
             index += 1
             continue
-        return arg
-    return ""
+        return arg, aliases
+    return "", aliases
+
+
+def _git_subcommand(args: list[str]) -> str:
+    return _git_subcommand_and_aliases(args)[0]
+
+
+def _git_alias_targets_commit(value: str | None) -> bool:
+    if value is None:
+        return True
+
+    text = value.strip()
+    if text.startswith("!"):
+        text = text[1:].strip()
+
+    tokens = _expand_env_split_strings(_split_command(text))
+    for segment in _token_segments(tokens):
+        segment = _strip_transparent_script_wrappers(_strip_leading_env_assignments(segment))
+        if not segment:
+            continue
+        command_name = _token_command_name(segment[0])
+        if command_name == "commit":
+            return True
+        if command_name == "git" and _git_subcommand(segment[1:]) == "commit":
+            return True
+
+    return bool(re.search(r"(?i)(^|[^\w./-])git\s+commit(?=$|[^\w./-])", text))
+
+
+def _git_subcommand_may_be_alias(subcommand: str) -> bool:
+    return bool(subcommand) and subcommand.lower() not in _KNOWN_GIT_SUBCOMMANDS
 
 
 def _contains_inline_interpreter(command: str) -> bool:
@@ -1062,6 +1217,26 @@ def _command_is_safe_cdidx_mcp_init_smoke(command: str, cwd: Path) -> bool:
     return bool(match and _token_is_expanded_installed_cdidx(match.group("cdidx"), cwd))
 
 
+def _python_module_script_operand(args: list[str], cwd: Path) -> Path | None:
+    index = 0
+    while index < len(args):
+        token = args[index]
+        if token == "--":
+            index += 1
+            continue
+        if token in _PYTHON_MODULE_SCRIPT_OPTION_VALUES:
+            index += 2
+            continue
+        if any(token.startswith(option + "=") for option in _PYTHON_MODULE_SCRIPT_OPTION_VALUES if option.startswith("--")):
+            index += 1
+            continue
+        if token.startswith("-"):
+            index += 1
+            continue
+        return _token_path(token, cwd)
+    return None
+
+
 def should_skip_script_scan(decision: GuardDecision, path: Path, project_root: Path) -> bool:
     return (
         decision.allowed
@@ -1152,9 +1327,37 @@ def _candidate_script_paths_from_tokens(tokens: list[str], cwd: Path) -> list[Pa
     if first in {"bash", "sh", "zsh", "fish", "python", "python3", "ruby", "perl", "node", "deno", "php"}:
         if any(token in _INLINE_INTERPRETER_FLAGS for token in tokens[1:]):
             return result
-        for token in tokens[1:]:
-            if token.startswith("-"):
+        index = 1
+        while index < len(tokens):
+            token = tokens[index]
+            if first in {"python", "python3"} and token == "-m":
+                if index + 1 >= len(tokens):
+                    return result
+                module = tokens[index + 1]
+                if module in _PYTHON_MODULES_WITHOUT_SCRIPT_OPERANDS:
+                    return result
+                if module in _PYTHON_MODULES_WITH_SCRIPT_OPERANDS:
+                    path = _python_module_script_operand(tokens[index + 2 :], cwd)
+                    if path is not None:
+                        result.append(path)
+                    return result
+                path = _token_path(module, cwd)
+                if path is not None:
+                    result.append(path)
+                return result
+            if first in {"python", "python3"} and token in {"-W", "-X"}:
+                index += 2
                 continue
+            if token == "--":
+                index += 1
+                if index >= len(tokens):
+                    return result
+                token = tokens[index]
+            elif token.startswith("-"):
+                index += 1
+                continue
+            if token.startswith("-"):
+                return result
             path = _token_path(token, cwd)
             if path is not None:
                 result.append(path)
@@ -1179,6 +1382,23 @@ def candidate_script_paths(command: str, cwd: Path) -> list[Path]:
     return _candidate_script_paths_from_tokens(_split_command(command), cwd)
 
 
+def command_is_git_commit(command: str) -> bool:
+    tokens = _expand_env_split_strings(_split_command(command))
+    for segment in _token_segments(tokens):
+        segment = _strip_transparent_script_wrappers(_strip_leading_env_assignments(segment))
+        if not segment or _token_command_name(segment[0]) != "git":
+            continue
+        subcommand, aliases = _git_subcommand_and_aliases(segment[1:])
+        if subcommand == "commit":
+            return True
+        alias_key = subcommand.lower()
+        if alias_key in aliases:
+            return _git_alias_targets_commit(aliases[alias_key])
+        if _git_subcommand_may_be_alias(subcommand):
+            return True
+    return False
+
+
 def _is_relative_to(path: Path, parent: Path) -> bool:
     try:
         path.relative_to(parent)
@@ -1189,7 +1409,7 @@ def _is_relative_to(path: Path, parent: Path) -> bool:
 
 def check_script_file(path: Path, project_root: Path) -> GuardDecision:
     if not path.exists():
-        return _allow(f"script not found: {path}")
+        return _deny(f"candidate script not found; failing closed: {path}")
     if not path.is_file():
         return _deny(f"candidate script is not a file: {path}")
 
@@ -1203,9 +1423,14 @@ def check_script_file(path: Path, project_root: Path) -> GuardDecision:
         return _deny(f"script outside project is blocked: {path}")
 
     try:
-        data = resolved.read_bytes()
+        with resolved.open("rb") as handle:
+            data = handle.read(MAX_SCRIPT_SCAN_BYTES + 1)
     except Exception as exc:
         return _deny(f"could not inspect script before execution; failing closed: {path}: {exc}")
+    if len(data) > MAX_SCRIPT_SCAN_BYTES:
+        return _deny(
+            f"candidate script exceeds {MAX_SCRIPT_SCAN_BYTES} byte scan limit; failing closed: {path}"
+        )
 
     text = data.decode("utf-8", errors="ignore")
     if ANSI_C_QUOTE_RE.search(text):
@@ -1241,29 +1466,7 @@ def staged_secret_check(cwd: Path) -> GuardDecision:
             return _deny("gitleaks blocked this commit:\n" + output)
         return _allow("gitleaks passed")
 
-    try:
-        proc = subprocess.run(
-            ["git", "diff", "--cached", "--unified=0", "--no-ext-diff"],
-            cwd=str(cwd),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=30,
-            check=False,
-        )
-    except Exception as exc:
-        return _deny(f"could not inspect staged diff for secrets; failing closed: {exc}")
-    if proc.returncode != 0:
-        return _deny("could not inspect staged diff for secrets; install gitleaks or fix git diff")
-
-    added_lines = "\n".join(
-        line[1:]
-        for line in (proc.stdout or "").splitlines()
-        if line.startswith("+") and not line.startswith("+++")
+    return _deny(
+        "gitleaks is unavailable; refusing git commit because the text-only staged diff fallback "
+        "cannot safely inspect binary or encoded staged content"
     )
-    for pattern, name in _SECRET_PATTERNS:
-        if pattern.search(added_lines):
-            return _deny(
-                f"secret-looking staged content detected before commit: {name}; install gitleaks for better scanning"
-            )
-    return _allow("staged secret scan passed")

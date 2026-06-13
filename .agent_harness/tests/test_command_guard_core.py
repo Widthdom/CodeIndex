@@ -5,7 +5,7 @@ import tempfile
 import sys
 from pathlib import Path
 from unittest import TestCase
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 
 def load_core():
@@ -375,6 +375,33 @@ class CommandGuardCoreTests(TestCase):
             self.assertEqual([script.resolve()], env_split)
             self.assertEqual([script.resolve()], env_argv0)
 
+    def test_candidate_script_paths_ignores_python_module_invocation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+
+            for command in (
+                "python -m unittest discover -s .agent_harness/tests",
+                "python3 -I -m unittest .agent_harness.tests.test_command_guard_core",
+                "env python3 -m pytest .agent_harness/tests",
+            ):
+                with self.subTest(command=command):
+                    self.assertEqual([], core.candidate_script_paths(command, cwd=root))
+
+    def test_candidate_script_paths_scans_python_module_script_runners(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            script = root / "tools" / "guard.py"
+            script.parent.mkdir(parents=True, exist_ok=True)
+            script.write_text("print('ok')", encoding="utf-8")
+
+            for command in (
+                "python3 -m cProfile tools/guard.py",
+                "python3 -m trace --trace tools/guard.py",
+                "python3 -m pdb tools/guard.py",
+            ):
+                with self.subTest(command=command):
+                    self.assertEqual([script.resolve()], core.candidate_script_paths(command, cwd=root))
+
     def test_check_script_file_denies_outside_project_root(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -384,6 +411,28 @@ class CommandGuardCoreTests(TestCase):
             decision = core.check_script_file(outside, project_root=root)
 
             self.assertFalse(decision.allowed)
+
+    def test_check_script_file_denies_missing_candidate_script(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            missing = root / "tools" / "missing.sh"
+
+            decision = core.check_script_file(missing, project_root=root)
+
+            self.assertFalse(decision.allowed)
+            self.assertIn("candidate script not found", decision.reason)
+
+    def test_check_script_file_denies_scripts_above_scan_byte_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            script = root / "tools" / "large.sh"
+            script.parent.mkdir(parents=True, exist_ok=True)
+            script.write_text(" " * (core.MAX_SCRIPT_SCAN_BYTES + 1), encoding="utf-8")
+
+            decision = core.check_script_file(script, project_root=root)
+
+            self.assertFalse(decision.allowed)
+            self.assertIn("scan limit", decision.reason)
 
     def test_check_script_file_denies_forbidden_content(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -531,10 +580,41 @@ class CommandGuardCoreTests(TestCase):
 
                     self.assertFalse(decision.allowed)
 
-    def test_staged_secret_check_uses_git_diff_fallback(self) -> None:
-        fake_proc = Mock(returncode=0, stdout="+ api_key = 'sk-abcdefghijklmnopqrstuvwx123456'\n", stderr="")
-
-        with patch.object(core.shutil, "which", return_value=None), patch.object(core.subprocess, "run", return_value=fake_proc):
+    def test_staged_secret_check_denies_when_gitleaks_is_unavailable(self) -> None:
+        with patch.object(core.shutil, "which", return_value=None):
             decision = core.staged_secret_check(Path("/tmp"))
 
         self.assertFalse(decision.allowed)
+        self.assertIn("gitleaks is unavailable", decision.reason)
+        self.assertIn("text-only staged diff fallback", decision.reason)
+
+    def test_command_is_git_commit_detects_global_options_and_wrappers(self) -> None:
+        for command in (
+            "git commit -m test",
+            "git -c user.name=Codex commit -m test",
+            "git --no-pager commit -m test",
+            "/usr/bin/git commit -m test",
+            "env git -c user.email=codex@example.invalid commit -m test",
+            "git -c alias.ci=commit ci -m test",
+            "git -c alias.ci='commit --verbose' ci -m test",
+            "git -c alias.ci='!git commit' ci -m test",
+            "git --config-env=alias.ci=CI_ALIAS ci -m test",
+            "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.ci GIT_CONFIG_VALUE_0=commit git ci -m test",
+            "git ci -m test",
+            "time git commit -m test",
+            "true && git --git-dir .git commit -m test",
+        ):
+            with self.subTest(command=command):
+                self.assertTrue(core.command_is_git_commit(command))
+
+    def test_command_is_git_commit_ignores_non_commit_git_commands(self) -> None:
+        for command in (
+            "git status",
+            "git commit-tree HEAD",
+            "echo git commit",
+            "git -c user.name=Codex status",
+            "git -c alias.ci=status ci",
+            "git -c alias.ci=commit status",
+        ):
+            with self.subTest(command=command):
+                self.assertFalse(core.command_is_git_commit(command))

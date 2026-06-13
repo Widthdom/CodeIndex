@@ -12,7 +12,6 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
-import re
 import subprocess
 import sys
 from pathlib import Path
@@ -33,17 +32,35 @@ def load_core():
 core = load_core()
 
 
+def deny(reason: str) -> None:
+    print(
+        json.dumps(
+            {
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": reason,
+                }
+            },
+            ensure_ascii=False,
+        )
+    )
+    sys.exit(2)
+
+
 def load_payload() -> dict:
     try:
         return json.load(sys.stdin)
-    except Exception:
-        return {}
+    except Exception as exc:
+        deny(f"failed to parse Codex hook input; failing closed: {exc}")
 
 
 def get_command(payload: dict) -> str:
     tool_input = payload.get("tool_input") or {}
     command = tool_input.get("command")
-    return command if isinstance(command, str) else ""
+    if not isinstance(command, str):
+        deny("Bash command missing from hook input; failing closed")
+    return command
 
 
 def resolve_project_root(cwd: Path) -> Path:
@@ -61,26 +78,10 @@ def resolve_project_root(cwd: Path) -> Path:
             output = (proc.stdout or "").strip()
             if output:
                 return Path(output).resolve()
-    except Exception:
-        pass
-
-    return cwd.resolve()
-
-
-def deny(reason: str) -> None:
-    print(
-        json.dumps(
-            {
-                "hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "permissionDecision": "deny",
-                    "permissionDecisionReason": reason,
-                }
-            },
-            ensure_ascii=False,
-        )
-    )
-    sys.exit(2)
+        details = (proc.stderr or proc.stdout or f"exit {proc.returncode}").strip()
+        deny(f"could not resolve git project root from {cwd}; failing closed: {details}")
+    except Exception as exc:
+        deny(f"could not resolve git project root from {cwd}; failing closed: {exc}")
 
 
 def main() -> None:
@@ -100,7 +101,7 @@ def main() -> None:
         if not script_decision.allowed:
             deny(script_decision.reason)
 
-    if re.search(r"(?i)(^|[\s;&|()`])git\s+commit\b", command):
+    if core.command_is_git_commit(command):
         commit_decision = core.staged_secret_check(cwd)
         if not commit_decision.allowed:
             deny(commit_decision.reason)
