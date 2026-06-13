@@ -365,39 +365,22 @@ public static class ReportCommandRunner
             detectEncodingFromByteOrderMarks: startOffset == 0,
             bufferSize: 8192,
             leaveOpen: false);
-        var text = reader.ReadToEnd();
         if (startOffset > 0)
         {
-            var firstNewline = text.IndexOf('\n', StringComparison.Ordinal);
-            if (firstNewline < 0)
+            if (reader.ReadLine() == null)
                 return [];
-            text = text[(firstNewline + 1)..];
         }
 
-        return TakeLastLines(text, maxLines);
-    }
-
-    private static IReadOnlyList<string> TakeLastLines(string text, int maxLines)
-    {
-        var lines = new List<string>();
-        var end = text.Length;
-        if (end > 0 && text[end - 1] == '\n')
-            end--;
-        while (end > 0 && lines.Count < maxLines)
+        var lines = new Queue<string>(Math.Min(maxLines, MaxLogLines));
+        string? line;
+        while ((line = reader.ReadLine()) != null)
         {
-            var start = text.LastIndexOf('\n', end - 1);
-            var lineStart = start + 1;
-            var line = text[lineStart..end];
-            if (line.EndsWith('\r'))
-                line = line[..^1];
-            lines.Add(line);
-            if (start < 0)
-                break;
-            end = start;
+            if (lines.Count == maxLines)
+                lines.Dequeue();
+            lines.Enqueue(line);
         }
 
-        lines.Reverse();
-        return lines;
+        return lines.ToArray();
     }
 
     internal static string RedactSensitiveFields(string line)

@@ -498,6 +498,28 @@ public class ReportCommandRunnerTests
     }
 
     [Fact]
+    public void ReadLogFileTailLines_LargeLogKeepsOnlyRequestedTail_Issue3397()
+    {
+        var workDir = CreateWorkDir();
+        var path = Path.Combine(workDir, "stderr-20260608.log");
+        try
+        {
+            File.WriteAllText(
+                path,
+                new string('x', ReportCommandRunner.MaxLogFileTailBytes + 512)
+                + "\nline-1\nline-2\nline-3\n");
+
+            var lines = ReportCommandRunner.ReadLogFileTailLines(path, 2);
+
+            Assert.Equal(new[] { "line-2", "line-3" }, lines);
+        }
+        finally
+        {
+            TryDeleteDirectory(workDir);
+        }
+    }
+
+    [Fact]
     public void BuildRecentLogTail_ManyLogFilesKeepsNewestBoundedCandidates_Issue3026()
     {
         var workDir = CreateWorkDir();
