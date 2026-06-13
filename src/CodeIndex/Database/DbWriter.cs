@@ -2,6 +2,7 @@ using Microsoft.Data.Sqlite;
 using CodeIndex.Cli;
 using CodeIndex.Indexer;
 using CodeIndex.Models;
+using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -32,6 +33,8 @@ public class DbWriter
     private readonly object _transactionStateLock = new();
     private readonly SemaphoreSlim _transactionGate = new(1, 1);
     private readonly AsyncLocal<Guid?> _currentTransactionGateToken = new();
+    private static readonly TimeSpan DefaultTransactionStateContentionTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan TransactionStateContentionWaitInterval = TimeSpan.FromMilliseconds(50);
     private const int BatchSize = 500;
     private const int DeleteFilesBatchSize = 500;
     private const int MaxSqlVariables = 999;
@@ -56,6 +59,7 @@ public class DbWriter
     private int _transactionOwnerThreadId;
     private Guid _transactionOwnerToken;
     private bool? _hasIssueMetadataColumns;
+    internal static TimeSpan? TransactionStateContentionTimeoutForTesting { get; set; }
     // Outermost SqliteTransaction currently held open by this writer (null when no
     // transaction is active OR after the outermost transaction has been committed /
     // rolled back). Tracked so cached prepared commands can be re-pointed at the live
@@ -155,7 +159,7 @@ public class DbWriter
             if (_transactionDepth == 0)
             {
                 var txn = _conn.BeginTransaction();
-                _transactionDepth = 1;
+                SetTransactionDepth(1);
                 _activeTransaction = txn;
                 return new TransactionScope(txn, this, gateLease);
             }
@@ -165,7 +169,7 @@ public class DbWriter
                 // ネスト: BEGIN TRANSACTIONの代わりにSAVEPOINTを使用
                 var name = $"sp_{_transactionDepth}";
                 Execute($"SAVEPOINT {name}");
-                _transactionDepth++;
+                IncrementTransactionDepth();
                 return new TransactionScope(name, _conn, this, gateLease);
             }
         }
@@ -204,8 +208,72 @@ public class DbWriter
             }
 
             _transactionGate.Release();
-            Thread.Yield();
+            WaitForTransactionDepthToClear();
         }
+    }
+
+    private void SetTransactionDepth(int depth)
+    {
+        lock (_transactionStateLock)
+        {
+            _transactionDepth = depth;
+            Monitor.PulseAll(_transactionStateLock);
+        }
+    }
+
+    private void IncrementTransactionDepth()
+    {
+        lock (_transactionStateLock)
+        {
+            _transactionDepth++;
+            Monitor.PulseAll(_transactionStateLock);
+        }
+    }
+
+    private int DecrementTransactionDepth()
+    {
+        lock (_transactionStateLock)
+        {
+            if (_transactionDepth > 0)
+                _transactionDepth--;
+            Monitor.PulseAll(_transactionStateLock);
+            return _transactionDepth;
+        }
+    }
+
+    private void WaitForTransactionDepthToClear()
+    {
+        var timeout = GetTransactionStateContentionTimeout();
+        var stopwatch = Stopwatch.StartNew();
+        lock (_transactionStateLock)
+        {
+            while (_transactionDepth > 0)
+            {
+                var waitMilliseconds = GetTransactionStateContentionWaitMilliseconds(timeout, stopwatch);
+                if (waitMilliseconds <= 0)
+                {
+                    throw new InvalidOperationException(
+                        $"Timed out waiting for DbWriter transaction gate state to clear; transaction_depth={_transactionDepth}.");
+                }
+
+                Monitor.Wait(_transactionStateLock, waitMilliseconds);
+            }
+        }
+    }
+
+    private static TimeSpan GetTransactionStateContentionTimeout()
+        => TransactionStateContentionTimeoutForTesting ?? DefaultTransactionStateContentionTimeout;
+
+    private static int GetTransactionStateContentionWaitMilliseconds(TimeSpan timeout, Stopwatch stopwatch)
+    {
+        var remaining = timeout - stopwatch.Elapsed;
+        if (remaining <= TimeSpan.Zero)
+            return 0;
+
+        var wait = remaining < TransactionStateContentionWaitInterval
+            ? remaining
+            : TransactionStateContentionWaitInterval;
+        return Math.Max(1, (int)Math.Ceiling(wait.TotalMilliseconds));
     }
 
     private void ExitTransactionGate(Guid token, Guid? previousToken)
@@ -257,6 +325,7 @@ public class DbWriter
         private readonly SqliteConnection? _conn;
         private readonly DbWriter _writer;
         private readonly TransactionGateLease _transactionGateLease;
+        private readonly object _stateWaitLock = new();
         private const int StateActive = 0;
         private const int StateCommitting = 1;
         private const int StateCommitted = 2;
@@ -303,7 +372,7 @@ public class DbWriter
                     throw new InvalidOperationException("Cannot commit a transaction scope that has already been rolled back.");
                 if (state == StateRollingBack)
                 {
-                    Thread.Yield();
+                    WaitForStateTransition("commit", state);
                     continue;
                 }
 
@@ -328,7 +397,7 @@ public class DbWriter
                 }
                 // Mark committed after success so Dispose() will rollback if Commit/Release throws.
                 // コミット/リリース成功後に committed に遷移し、失敗時は Dispose() でロールバックされるようにする。
-                Volatile.Write(ref _state, StateCommitted);
+                SetState(StateCommitted);
                 // Clear the writer's cached active-transaction reference immediately after a
                 // real-transaction commit. Otherwise a subsequent RentCommand between Commit
                 // and Dispose would bind a cached prepared command to the now-committed (and
@@ -343,7 +412,7 @@ public class DbWriter
             }
             catch
             {
-                Volatile.Write(ref _state, StateActive);
+                SetState(StateActive);
                 throw;
             }
         }
@@ -359,7 +428,7 @@ public class DbWriter
                     throw new InvalidOperationException("Cannot roll back a transaction scope that has already been committed.");
                 if (state == StateCommitting || state == StateRollingBack)
                 {
-                    Thread.Yield();
+                    WaitForStateTransition("rollback", state);
                     continue;
                 }
 
@@ -376,7 +445,7 @@ public class DbWriter
                     _transaction.Rollback();
                 else
                     ExecuteSql($"ROLLBACK TO SAVEPOINT {_savepointName}");
-                Volatile.Write(ref _state, StateRolledBack);
+                SetState(StateRolledBack);
                 // Same rationale as Commit: drop the stale reference so cached commands
                 // re-bind correctly after the transaction boundary.
                 // Commit と同じ理由で stale 参照を解除する。
@@ -385,7 +454,7 @@ public class DbWriter
             }
             catch
             {
-                Volatile.Write(ref _state, StateActive);
+                SetState(StateActive);
                 throw;
             }
         }
@@ -405,7 +474,7 @@ public class DbWriter
                         break;
                     if (state == StateCommitting || state == StateRollingBack)
                     {
-                        Thread.Yield();
+                        WaitForStateTransition("dispose", state);
                         continue;
                     }
 
@@ -421,13 +490,13 @@ public class DbWriter
                             _transaction.Rollback();
                         else
                             ExecuteSql($"ROLLBACK TO SAVEPOINT {_savepointName}");
-                        Volatile.Write(ref _state, StateRolledBack);
+                        SetState(StateRolledBack);
                     }
                     catch (Exception ex)
                     {
                         // Best effort during dispose / Dispose中はベストエフォート
                         GlobalToolLog.Error($"transaction_scope_dispose_rollback_failed {GlobalToolLog.FormatExceptionChain(ex)}");
-                        Volatile.Write(ref _state, StateRolledBack);
+                        SetState(StateRolledBack);
                     }
                     break;
                 }
@@ -437,12 +506,12 @@ public class DbWriter
                 try
                 {
                     _transaction?.Dispose();
-                    if (_writer._transactionDepth > 0) _writer._transactionDepth--;
+                    var transactionDepth = _writer.DecrementTransactionDepth();
                     // Safety net: even if Commit/Rollback was bypassed (e.g. uncommitted scope
                     // disposed after an exception), make sure the outer-transaction reference is
                     // cleared before the next RentCommand sees it.
                     // 安全弁: Commit/Rollback を経由せず Dispose された場合でも active reference を解除。
-                    if (_writer._transactionDepth == 0)
+                    if (transactionDepth == 0)
                         _writer._activeTransaction = null;
                 }
                 finally
@@ -451,6 +520,49 @@ public class DbWriter
                 }
             }
         }
+
+        private void SetState(int state)
+        {
+            lock (_stateWaitLock)
+            {
+                Volatile.Write(ref _state, state);
+                Monitor.PulseAll(_stateWaitLock);
+            }
+        }
+
+        private void WaitForStateTransition(string operation, int observedState)
+        {
+            var timeout = GetTransactionStateContentionTimeout();
+            var stopwatch = Stopwatch.StartNew();
+            lock (_stateWaitLock)
+            {
+                while (IsFinalizingState(Volatile.Read(ref _state)))
+                {
+                    var waitMilliseconds = GetTransactionStateContentionWaitMilliseconds(timeout, stopwatch);
+                    if (waitMilliseconds <= 0)
+                    {
+                        throw new InvalidOperationException(
+                            $"Timed out waiting for transaction scope state transition during {operation}; state={FormatState(observedState)}.");
+                    }
+
+                    Monitor.Wait(_stateWaitLock, waitMilliseconds);
+                }
+            }
+        }
+
+        private static bool IsFinalizingState(int state)
+            => state == StateCommitting || state == StateRollingBack;
+
+        private static string FormatState(int state)
+            => state switch
+            {
+                StateActive => "active",
+                StateCommitting => "committing",
+                StateCommitted => "committed",
+                StateRollingBack => "rolling_back",
+                StateRolledBack => "rolled_back",
+                _ => "unknown",
+            };
 
         private void ExecuteSql(string sql)
         {
