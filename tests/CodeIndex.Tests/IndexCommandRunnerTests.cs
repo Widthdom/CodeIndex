@@ -431,7 +431,38 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void SymbolExtractionWorker_StartInfo_UsesFrameworkDependentDllWhenProcessIsNotCdidx()
+    public void SymbolExtractionWorker_StartInfo_UsesFrameworkDependentDllWithTrustedDotnetHost()
+    {
+        var currentProcessPath = CreateTemporaryDotnetHostPath();
+        var runnerAssemblyPath = Path.Combine(Path.GetTempPath(), "cdidx.dll");
+
+        try
+        {
+            var created = SymbolExtractionWorker.TryCreateStartInfo(
+                currentProcessPath,
+                runnerAssemblyPath,
+                out var startInfo,
+                out var error);
+
+            Assert.True(created, error);
+            Assert.Equal(currentProcessPath, startInfo.FileName);
+            Assert.Equal(
+                [
+                    runnerAssemblyPath,
+                    SymbolExtractionWorker.CommandName,
+                    "--protocol-max-line-bytes",
+                    WorkerProtocolLineLimits.MaxLineUtf8Bytes.ToString(CultureInfo.InvariantCulture),
+                ],
+                startInfo.ArgumentList);
+        }
+        finally
+        {
+            DeleteTemporaryDotnetHostPath(currentProcessPath);
+        }
+    }
+
+    [Fact]
+    public void SymbolExtractionWorker_StartInfo_FailsWithoutTrustedDotnetHost_Issue3455()
     {
         var currentProcessPath = Path.Combine(Path.GetTempPath(), OperatingSystem.IsWindows() ? "testhost.exe" : "testhost");
         var runnerAssemblyPath = Path.Combine(Path.GetTempPath(), "cdidx.dll");
@@ -439,19 +470,21 @@ public class IndexCommandRunnerTests
         var created = SymbolExtractionWorker.TryCreateStartInfo(
             currentProcessPath,
             runnerAssemblyPath,
-            out var startInfo,
+            out _,
             out var error);
 
-        Assert.True(created, error);
-        Assert.NotEqual(currentProcessPath, startInfo.FileName);
-        Assert.Equal(
-            [
-                runnerAssemblyPath,
-                SymbolExtractionWorker.CommandName,
-                "--protocol-max-line-bytes",
-                WorkerProtocolLineLimits.MaxLineUtf8Bytes.ToString(CultureInfo.InvariantCulture),
-            ],
-            startInfo.ArgumentList);
+        Assert.False(created);
+        Assert.Contains("trusted dotnet host path", error);
+    }
+
+    [Fact]
+    public void DotnetHostPathResolver_RejectsMissingDotnetHost_Issue3455()
+    {
+        var missingDotnetPath = Path.Combine(Path.GetTempPath(), $"cdidx_missing_dotnet_{Guid.NewGuid():N}", OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet");
+
+        var resolved = DotnetHostPathResolver.Resolve(missingDotnetPath);
+
+        Assert.Null(resolved);
     }
 
     [Fact]
@@ -512,7 +545,45 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void PostExtractionHookCallbackWorker_StartInfo_UsesFrameworkDependentDllWhenProcessIsNotCdidx()
+    public void PostExtractionHookCallbackWorker_StartInfo_UsesFrameworkDependentDllWithTrustedDotnetHost()
+    {
+        var hook = new PostExtractionHookInfo(
+            "demo",
+            Path.Combine(Path.GetTempPath(), "demo-hook.dll"),
+            "Demo.Hook");
+        var currentProcessPath = CreateTemporaryDotnetHostPath();
+        var runnerAssemblyPath = Path.Combine(Path.GetTempPath(), "cdidx.dll");
+
+        try
+        {
+            var created = PostExtractionHookCallbackWorker.TryCreateStartInfo(
+                hook,
+                currentProcessPath,
+                runnerAssemblyPath,
+                out var startInfo,
+                out var error);
+
+            Assert.True(created, error);
+            Assert.Equal(currentProcessPath, startInfo.FileName);
+            Assert.Equal(
+                [
+                    runnerAssemblyPath,
+                    PostExtractionHookCallbackWorker.CommandName,
+                    hook.AssemblyPath,
+                    hook.TypeName,
+                    "--protocol-max-line-bytes",
+                    WorkerProtocolLineLimits.MaxLineUtf8Bytes.ToString(CultureInfo.InvariantCulture),
+                ],
+                startInfo.ArgumentList);
+        }
+        finally
+        {
+            DeleteTemporaryDotnetHostPath(currentProcessPath);
+        }
+    }
+
+    [Fact]
+    public void PostExtractionHookCallbackWorker_StartInfo_FailsWithoutTrustedDotnetHost_Issue3455()
     {
         var hook = new PostExtractionHookInfo(
             "demo",
@@ -525,21 +596,11 @@ public class IndexCommandRunnerTests
             hook,
             currentProcessPath,
             runnerAssemblyPath,
-            out var startInfo,
+            out _,
             out var error);
 
-        Assert.True(created, error);
-        Assert.NotEqual(currentProcessPath, startInfo.FileName);
-        Assert.Equal(
-            [
-                runnerAssemblyPath,
-                PostExtractionHookCallbackWorker.CommandName,
-                hook.AssemblyPath,
-                hook.TypeName,
-                "--protocol-max-line-bytes",
-                WorkerProtocolLineLimits.MaxLineUtf8Bytes.ToString(CultureInfo.InvariantCulture),
-            ],
-            startInfo.ArgumentList);
+        Assert.False(created);
+        Assert.Contains("trusted dotnet host path", error);
     }
 
     [Fact]
@@ -11006,6 +11067,22 @@ public class IndexCommandRunnerTests
         var projectRoot = Path.Combine(Path.GetTempPath(), $"cdidx_index_runner_{Guid.NewGuid():N}");
         Directory.CreateDirectory(projectRoot);
         return projectRoot;
+    }
+
+    private static string CreateTemporaryDotnetHostPath()
+    {
+        var hostDir = Path.Combine(Path.GetTempPath(), $"cdidx_dotnet_host_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(hostDir);
+        var hostPath = Path.Combine(hostDir, OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet");
+        File.WriteAllText(hostPath, string.Empty);
+        return hostPath;
+    }
+
+    private static void DeleteTemporaryDotnetHostPath(string hostPath)
+    {
+        var hostDir = Path.GetDirectoryName(hostPath);
+        if (!string.IsNullOrWhiteSpace(hostDir) && Directory.Exists(hostDir))
+            Directory.Delete(hostDir, recursive: true);
     }
 
     private static int CountOccurrences(string text, string value)
