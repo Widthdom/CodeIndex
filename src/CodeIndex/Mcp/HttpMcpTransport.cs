@@ -8,6 +8,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Collections.Concurrent;
 using System.Threading.Channels;
+using CodeIndex.Diagnostics;
 
 namespace CodeIndex.Mcp;
 
@@ -139,7 +140,11 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             ? null
             : SHA256.HashData(Encoding.UTF8.GetBytes(bearerToken));
         _endpoint = $"http://{host}:{boundPort}/";
-        _acceptLoop = Task.Run(() => AcceptLoopAsync(_acceptCts.Token), CancellationToken.None);
+        _acceptLoop = BackgroundTaskObserver.Run(
+            token => AcceptLoopAsync(token),
+            "cdidx-mcp-http",
+            "accept loop",
+            _acceptCts.Token);
     }
 
     public string Name => "http";
@@ -341,7 +346,10 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
                     continue;
                 }
 
-                _ = Task.Run(() => RunHandlerAsync(context, cancellationToken), CancellationToken.None);
+                _ = BackgroundTaskObserver.Run(
+                    () => RunHandlerAsync(context, cancellationToken),
+                    "cdidx-mcp-http",
+                    "request handler");
             }
         }
         finally
