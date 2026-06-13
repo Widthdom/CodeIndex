@@ -1762,6 +1762,28 @@ check_path() {
     fi
 }
 
+remove_uninstall_file() {
+    local path="$1"
+    if rm -f "$path"; then
+        info "Removed ${path}"
+        return 0
+    fi
+
+    report_error "Failed to remove install file during uninstall: ${path}"
+    return 1
+}
+
+remove_uninstall_directory() {
+    local path="$1"
+    if rm -rf "$path"; then
+        info "Removed ${path}"
+        return 0
+    fi
+
+    report_error "Failed to remove install directory during uninstall: ${path}"
+    return 1
+}
+
 uninstall_cdidx() {
     info "cdidx uninstaller"
     if ! validate_normal_install_dir; then
@@ -1770,6 +1792,7 @@ uninstall_cdidx() {
     acquire_install_lock
 
     local removed=0
+    local removal_failed=0
     local path
     local cache_dir=""
     if [ "$PURGE_CACHE_ON_UNINSTALL" = "1" ]; then
@@ -1789,24 +1812,35 @@ uninstall_cdidx() {
         "${INSTALL_DIR}/TRADEMARKS.md" \
         "${INSTALL_DIR}/MANIFEST.sha256"; do
         if [ -e "$path" ]; then
-            rm -f "$path"
-            info "Removed ${path}"
-            removed=1
+            if remove_uninstall_file "$path"; then
+                removed=1
+            else
+                removal_failed=1
+            fi
         fi
     done
 
     if [ -d "${INSTALL_DIR}/LICENSES" ]; then
-        rm -rf "${INSTALL_DIR}/LICENSES"
-        info "Removed ${INSTALL_DIR}/LICENSES"
-        removed=1
+        if remove_uninstall_directory "${INSTALL_DIR}/LICENSES"; then
+            removed=1
+        else
+            removal_failed=1
+        fi
     fi
 
     if [ "$PURGE_CACHE_ON_UNINSTALL" = "1" ]; then
         if [ -d "$cache_dir" ]; then
-            rm -rf "$cache_dir"
-            info "Removed ${cache_dir}"
-            removed=1
+            if remove_uninstall_directory "$cache_dir"; then
+                removed=1
+            else
+                removal_failed=1
+            fi
         fi
+    fi
+
+    if [ "$removal_failed" = "1" ]; then
+        report_error "Uninstall incomplete because one or more files or directories could not be removed."
+        return 1
     fi
 
     if [ "$removed" = "0" ]; then

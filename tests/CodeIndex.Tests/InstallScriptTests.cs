@@ -89,6 +89,77 @@ public sealed class InstallScriptTests : IDisposable
     }
 
     [Fact]
+    public void Uninstall_ReportsFileRemovalFailureWithoutSuccessMessage_Issue3500()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var installDir = Path.Combine(_tempRoot, "uninstall_failure_bin");
+        Directory.CreateDirectory(installDir);
+        Directory.CreateDirectory(Path.Combine(installDir, "cdidx"));
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            """
+            if uninstall_cdidx; then
+                echo "UNINSTALL_OK"
+            else
+                echo "UNINSTALL_FAILED:$?"
+            fi
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+            });
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("UNINSTALL_FAILED:1", stdout);
+        Assert.DoesNotContain($"Removed {Path.Combine(installDir, "cdidx")}", stdout);
+        Assert.DoesNotContain("Uninstall complete", stdout);
+        Assert.Contains("Failed to remove install file during uninstall", stderr);
+        Assert.Contains("Uninstall incomplete", stderr);
+        Assert.True(Directory.Exists(Path.Combine(installDir, "cdidx")));
+    }
+
+    [Fact]
+    public void Uninstall_ReportsDirectoryRemovalFailureWithoutSuccessMessage_Issue3500()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var installDir = Path.Combine(_tempRoot, "uninstall_directory_failure_bin");
+        var licensesDir = Path.Combine(installDir, "LICENSES");
+        Directory.CreateDirectory(licensesDir);
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            """
+            rm() {
+                if [ "$#" -eq 2 ] && [ "$1" = "-rf" ] && [ "$2" = "${INSTALL_DIR}/LICENSES" ]; then
+                    return 1
+                fi
+                command rm "$@"
+            }
+
+            if uninstall_cdidx; then
+                echo "UNINSTALL_OK"
+            else
+                echo "UNINSTALL_FAILED:$?"
+            fi
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+            });
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("UNINSTALL_FAILED:1", stdout);
+        Assert.DoesNotContain($"Removed {licensesDir}", stdout);
+        Assert.DoesNotContain("Uninstall complete", stdout);
+        Assert.Contains("Failed to remove install directory during uninstall", stderr);
+        Assert.Contains("Uninstall incomplete", stderr);
+        Assert.True(Directory.Exists(licensesDir));
+    }
+
+    [Fact]
     public void UninstallPurgeCache_RejectsUnsafeCacheRootBeforeRemovingInstall_Issue3499()
     {
         if (OperatingSystem.IsWindows())
