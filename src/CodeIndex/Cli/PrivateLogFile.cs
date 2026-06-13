@@ -141,7 +141,7 @@ internal static class PrivateLogFile
         return string.Compare(left.Name, right.Name, StringComparison.Ordinal);
     }
 
-    internal static bool TryRotateSlots(string path, int retainedFileCount)
+    internal static bool TryRotateSlots(string path, int retainedFileCount, Action<string>? afterMove = null)
     {
         try
         {
@@ -149,22 +149,21 @@ internal static class PrivateLogFile
 
             for (var slot = retainedFileCount - 2; slot >= 1; slot--)
             {
-                var current = LongPath.EnsureWindowsPrefix(SlotPath(path, slot));
-                var next = LongPath.EnsureWindowsPrefix(SlotPath(path, slot + 1));
-                if (!File.Exists(current))
+                var current = SlotPath(path, slot);
+                var next = SlotPath(path, slot + 1);
+                var ioCurrent = LongPath.EnsureWindowsPrefix(current);
+                if (!File.Exists(ioCurrent))
                     continue;
-                if (File.Exists(next))
-                    SafeDelete(next);
-                File.Move(current, next);
+                MoveReplacing(ioCurrent, LongPath.EnsureWindowsPrefix(next));
+                afterMove?.Invoke(next);
             }
 
             var ioPath = LongPath.EnsureWindowsPrefix(path);
             if (File.Exists(ioPath))
             {
-                var first = LongPath.EnsureWindowsPrefix(SlotPath(path, 1));
-                if (File.Exists(first))
-                    SafeDelete(first);
-                File.Move(ioPath, first);
+                var first = SlotPath(path, 1);
+                MoveReplacing(ioPath, LongPath.EnsureWindowsPrefix(first));
+                afterMove?.Invoke(first);
             }
 
             return true;
@@ -177,6 +176,9 @@ internal static class PrivateLogFile
 
     private static string SlotPath(string path, int slot)
         => slot <= 0 ? path : path + "." + slot.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+    private static void MoveReplacing(string sourcePath, string destinationPath)
+        => File.Move(sourcePath, destinationPath, overwrite: true);
 
     private static void SafeDelete(string path)
     {

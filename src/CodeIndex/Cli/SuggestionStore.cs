@@ -900,30 +900,11 @@ public class SuggestionStore
 
     private void RotateArchiveFiles()
     {
-        var oldestPath = GetArchiveRotationPath(MaxSuggestionArchiveRotations);
-        if (File.Exists(oldestPath))
-            File.Delete(oldestPath);
-
-        for (var generation = MaxSuggestionArchiveRotations - 1; generation >= 1; generation--)
-        {
-            var sourcePath = GetArchiveRotationPath(generation);
-            if (!File.Exists(sourcePath))
-                continue;
-
-            var destinationPath = GetArchiveRotationPath(generation + 1);
-            File.Move(sourcePath, destinationPath, overwrite: true);
-            DataDirectorySecurity.ApplyPrivateFileMode(destinationPath);
-        }
-
-        if (File.Exists(_archivePath))
-        {
-            var firstRotationPath = GetArchiveRotationPath(1);
-            File.Move(_archivePath, firstRotationPath, overwrite: true);
-            DataDirectorySecurity.ApplyPrivateFileMode(firstRotationPath);
-        }
+        PrivateLogFile.TryRotateSlots(
+            _archivePath,
+            MaxSuggestionArchiveRotations + 1,
+            DataDirectorySecurity.ApplyPrivateFileMode);
     }
-
-    private string GetArchiveRotationPath(int generation) => $"{_archivePath}.{generation.ToString(CultureInfo.InvariantCulture)}";
 
     internal static TimeSpan ResolveMaxAge()
     {

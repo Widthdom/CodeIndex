@@ -116,6 +116,32 @@ public class GlobalToolLogTests
     }
 
     [Fact]
+    public void PrivateLogFile_TryRotateSlots_ReplacesExistingSlotsAtomicallyWherePossible()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"cdidx_private_log_rotate_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        var path = Path.Combine(directory, "metrics.jsonl");
+        try
+        {
+            File.WriteAllText(path, "current");
+            File.WriteAllText(path + ".1", "previous-1");
+            File.WriteAllText(path + ".2", "previous-2");
+
+            Assert.True(PrivateLogFile.TryRotateSlots(path, retainedFileCount: 3));
+
+            Assert.False(File.Exists(path));
+            Assert.Equal("current", File.ReadAllText(path + ".1"));
+            Assert.Equal("previous-1", File.ReadAllText(path + ".2"));
+            Assert.False(File.Exists(path + ".3"));
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public void FormatArgs_RedactsSensitiveArgumentsByDefault()
     {
         using var env = EnvironmentVariableScope.Capture("CDIDX_LOG_REDACT");
