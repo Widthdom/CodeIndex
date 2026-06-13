@@ -63,8 +63,106 @@ public static class GitHelper
         set => GitCommandTimeoutOverride.Value = value;
     }
 
+    private static readonly Lazy<string?> TrustedGitExecutablePath = new(ResolveTrustedGitExecutablePathFromKnownLocations);
+    private static readonly AsyncLocal<string?> GitExecutablePathOverrideValue = new();
+    internal static string? GitExecutablePathOverride
+    {
+        get => GitExecutablePathOverrideValue.Value;
+        set => GitExecutablePathOverrideValue.Value = value;
+    }
+
     private static readonly TimeSpan GitKillWaitTimeout = TimeSpan.FromSeconds(5);
     private const int GitProcessFailureExitCode = -1;
+    private const string TrustedGitUnavailableMessage =
+        "Could not resolve a trusted git executable path. Install git in a standard system location. / 信頼済みの git 実行ファイルパスを解決できませんでした。標準のシステム場所に git をインストールしてください。";
+
+    private static ProcessStartInfo? TryCreateGitStartInfo(string projectRoot)
+    {
+        var gitExecutablePath = TryResolveGitExecutablePath();
+        if (gitExecutablePath == null)
+            return null;
+
+        return new ProcessStartInfo
+        {
+            FileName = gitExecutablePath,
+            WorkingDirectory = projectRoot,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+    }
+
+    private static ProcessStartInfo CreateGitStartInfoOrThrow(string projectRoot)
+        => TryCreateGitStartInfo(projectRoot) ?? throw new InvalidOperationException(TrustedGitUnavailableMessage);
+
+    private static string? TryResolveGitExecutablePath()
+    {
+        var overridePath = NormalizeTrustedGitExecutablePath(GitExecutablePathOverrideValue.Value);
+        return overridePath ?? TrustedGitExecutablePath.Value;
+    }
+
+    private static string? ResolveTrustedGitExecutablePathFromKnownLocations()
+    {
+        foreach (var candidate in EnumerateTrustedGitExecutableCandidates())
+        {
+            var normalized = NormalizeTrustedGitExecutablePath(candidate);
+            if (normalized != null)
+                return normalized;
+        }
+
+        return null;
+    }
+
+    private static IEnumerable<string> EnumerateTrustedGitExecutableCandidates()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+            if (!string.IsNullOrWhiteSpace(programFiles))
+            {
+                yield return Path.Combine(programFiles, "Git", "cmd", "git.exe");
+                yield return Path.Combine(programFiles, "Git", "bin", "git.exe");
+            }
+
+            var programFilesX86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
+            if (!string.IsNullOrWhiteSpace(programFilesX86))
+            {
+                yield return Path.Combine(programFilesX86, "Git", "cmd", "git.exe");
+                yield return Path.Combine(programFilesX86, "Git", "bin", "git.exe");
+            }
+
+            var windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+            if (!string.IsNullOrWhiteSpace(windows))
+                yield return Path.Combine(windows, "System32", "git.exe");
+            yield break;
+        }
+
+        yield return "/usr/bin/git";
+        yield return "/bin/git";
+    }
+
+    private static string? NormalizeTrustedGitExecutablePath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return null;
+
+        try
+        {
+            if (!Path.IsPathFullyQualified(path))
+                return null;
+
+            var fullPath = Path.GetFullPath(path);
+            if (!string.Equals(Path.GetFileNameWithoutExtension(fullPath), "git", StringComparison.OrdinalIgnoreCase))
+                return null;
+
+            return File.Exists(LongPath.EnsureWindowsPrefix(fullPath)) ? fullPath : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
 
     /// <summary>
     /// Resolve the common git directory for a project root, handling both normal repos and worktrees.
@@ -147,15 +245,7 @@ public static class GitHelper
     {
         ValidateSingleCommitRef(projectRoot, commitId, cancellationToken);
 
-        var psi = new ProcessStartInfo
-        {
-            FileName = "git",
-            WorkingDirectory = projectRoot,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
+        var psi = CreateGitStartInfoOrThrow(projectRoot);
         psi.ArgumentList.Add("diff-tree");
         psi.ArgumentList.Add("--no-commit-id");
         psi.ArgumentList.Add("--root");
@@ -205,6 +295,9 @@ public static class GitHelper
         string commitId,
         CancellationToken cancellationToken = default)
     {
+        if (TryResolveGitExecutablePath() == null)
+            throw new InvalidOperationException(TrustedGitUnavailableMessage);
+
         // Reject range/pathspec syntax before invoking git so --commits remains a list
         // of single commit-ish values, not revision-set expressions.
         if (string.IsNullOrWhiteSpace(commitId)
@@ -246,15 +339,7 @@ public static class GitHelper
         ValidateGitRef(oldRef, nameof(oldRef));
         ValidateGitRef(newRef, nameof(newRef));
 
-        var psi = new ProcessStartInfo
-        {
-            FileName = "git",
-            WorkingDirectory = projectRoot,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
+        var psi = CreateGitStartInfoOrThrow(projectRoot);
         psi.ArgumentList.Add("diff");
         psi.ArgumentList.Add("--name-status");
         psi.ArgumentList.Add("-M");
@@ -432,15 +517,10 @@ public static class GitHelper
     {
         try
         {
-            var psi = new ProcessStartInfo
-            {
-                FileName = "git",
-                WorkingDirectory = projectRoot,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            };
+            var psi = TryCreateGitStartInfo(projectRoot);
+            if (psi == null)
+                return false;
+
             foreach (var arg in args)
                 psi.ArgumentList.Add(arg);
 
@@ -636,15 +716,9 @@ public static class GitHelper
     {
         try
         {
-            var psi = new ProcessStartInfo
-            {
-                FileName = "git",
-                WorkingDirectory = projectRoot,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            };
+            var psi = TryCreateGitStartInfo(projectRoot);
+            if (psi == null)
+                return null;
 
             foreach (var arg in args)
                 psi.ArgumentList.Add(arg);
@@ -685,15 +759,9 @@ public static class GitHelper
     {
         try
         {
-            var psi = new ProcessStartInfo
-            {
-                FileName = "git",
-                WorkingDirectory = projectRoot,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            };
+            var psi = TryCreateGitStartInfo(projectRoot);
+            if (psi == null)
+                return new GitCommandResult(null, null, null, TrustedGitUnavailableMessage);
 
             foreach (var arg in args)
                 psi.ArgumentList.Add(arg);
