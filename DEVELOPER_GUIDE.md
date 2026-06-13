@@ -2018,6 +2018,7 @@ The following categories ride the standard JSON-RPC codes:
 | `-32602` | `tool_unknown` | `false` | `tools/call` received an MCP tool name the server does not implement (typo or version mismatch). `data.tool` carries the unknown name. |
 | `-32602` | `missing_parameter` | `false` | `tools/call` request omitted the required `params.name` string. |
 | `-32602` | `invalid_argument` | `false` | Argument shape rejected by the tool (also covers the protocol-version handshake mismatch from #1554, which exposes `data.requestedVersion` / `data.supportedVersions`). |
+| `-32602` | `regex_timeout` | `true` | A user-supplied regex exceeded the bounded match timeout while executing, for example `find_in_file` regex scans. `data.error_code` carries the CLI-aligned stable code. |
 | `-32603` | `internal_error` | `false` | Unhandled exception path (fallback bucket). The wire message stays generic per #1530 sanitization; stderr carries the exception type. |
 
 The classifier `McpErrorEnvelope.ClassifyException(ex)` maps unhandled
@@ -3871,6 +3872,7 @@ JSON-RPC 2.0 は `-32700` と `-32600..-32603` を仕様自身、`-32000..-32099
 | `-32602` | `tool_unknown` | `false` | `tools/call` がサーバー未実装の MCP ツール名を指定した（typo またはバージョン不整合）。`data.tool` に未知の名前を含める。 |
 | `-32602` | `missing_parameter` | `false` | `tools/call` リクエストに必須 `params.name` 文字列が無い。 |
 | `-32602` | `invalid_argument` | `false` | ツールが引数 shape を拒否した（#1554 のプロトコルバージョン交渉ミスマッチもここで、`data.requestedVersion` / `data.supportedVersions` を併載）。 |
+| `-32602` | `regex_timeout` | `true` | ユーザー指定 regex が実行中に bounded match timeout を超えた場合。例: `find_in_file` の regex scan。`data.error_code` に CLI と揃えた stable code を含める。 |
 | `-32603` | `internal_error` | `false` | 未処理例外の fallback バケット。ワイヤメッセージは #1530 の sanitization に従い汎用のまま、stderr に例外型を出す。 |
 
 分類器 `McpErrorEnvelope.ClassifyException(ex)` は未処理例外を例外型と一部の `SqliteException.Message` サブストリングから `index_stale` / `index_corrupted` / `request_cancelled` / `internal_error` にマッピングする — 生メッセージはワイヤに乗らない（#1530）。`ProcessFrame` の JSON-RPC catch-all と `tools/call` の catch-all が同じ分類器を使うため、ツール呼び出し途中で `SqliteException` が起きても `error.data` でも `result.structuredContent` でも同じ `index_stale` envelope が surface する。
