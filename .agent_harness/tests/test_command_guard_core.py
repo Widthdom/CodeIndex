@@ -584,6 +584,8 @@ class CommandGuardCoreTests(TestCase):
             "git -c alias.ci='commit --verbose' ci -m test",
             "git -c alias.ci='!git commit' ci -m test",
             "git --config-env=alias.ci=CI_ALIAS ci -m test",
+            "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.ci GIT_CONFIG_VALUE_0=commit git ci -m test",
+            "git ci -m test",
             "time git commit -m test",
             "true && git --git-dir .git commit -m test",
         ):

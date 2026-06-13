@@ -36,6 +36,103 @@ _INLINE_SHELL_VARIABLES = {"$SHELL", "${SHELL}"}
 _UNKNOWN_GLOBAL_OPTION_SUBCOMMAND = "__unknown_global_option__"
 _HIGH_RISK_UNKNOWN_GLOBAL_OPTION_REASON = "unrecognized global option before high-risk CLI subcommand is blocked"
 _TRANSPARENT_SCRIPT_WRAPPERS = {"time", "timeout", "gtimeout", "command", "exec", "nice", "nohup"}
+_KNOWN_GIT_SUBCOMMANDS = {
+    "add",
+    "am",
+    "archive",
+    "bisect",
+    "blame",
+    "branch",
+    "bugreport",
+    "bundle",
+    "cat-file",
+    "check-attr",
+    "check-ignore",
+    "check-mailmap",
+    "check-ref-format",
+    "checkout",
+    "cherry",
+    "cherry-pick",
+    "clean",
+    "clone",
+    "column",
+    "commit-tree",
+    "config",
+    "count-objects",
+    "credential",
+    "describe",
+    "diff",
+    "diff-files",
+    "diff-index",
+    "diff-tree",
+    "difftool",
+    "fetch",
+    "filter-branch",
+    "for-each-ref",
+    "format-patch",
+    "fsck",
+    "gc",
+    "grep",
+    "hash-object",
+    "help",
+    "index-pack",
+    "init",
+    "log",
+    "ls-files",
+    "ls-remote",
+    "maintenance",
+    "merge",
+    "merge-base",
+    "merge-file",
+    "merge-index",
+    "merge-tree",
+    "mergetool",
+    "mktag",
+    "mktree",
+    "mv",
+    "name-rev",
+    "notes",
+    "pack-objects",
+    "patch-id",
+    "prune",
+    "pull",
+    "push",
+    "range-diff",
+    "read-tree",
+    "rebase",
+    "reflog",
+    "remote",
+    "repack",
+    "replace",
+    "request-pull",
+    "rerere",
+    "reset",
+    "restore",
+    "rev-list",
+    "rev-parse",
+    "revert",
+    "rm",
+    "shortlog",
+    "show",
+    "show-branch",
+    "show-ref",
+    "sparse-checkout",
+    "stash",
+    "status",
+    "submodule",
+    "switch",
+    "symbolic-ref",
+    "tag",
+    "update-index",
+    "update-ref",
+    "verify-commit",
+    "verify-pack",
+    "verify-tag",
+    "version",
+    "whatchanged",
+    "worktree",
+    "write-tree",
+}
 _SEARCH_OR_DISCOVERY_COMMANDS = {
     "grep",
     "egrep",
@@ -699,6 +796,10 @@ def _git_alias_targets_commit(value: str | None) -> bool:
     return bool(re.search(r"(?i)(^|[^\w./-])git\s+commit(?=$|[^\w./-])", text))
 
 
+def _git_subcommand_may_be_alias(subcommand: str) -> bool:
+    return bool(subcommand) and subcommand.lower() not in _KNOWN_GIT_SUBCOMMANDS
+
+
 def _contains_inline_interpreter(command: str) -> bool:
     tokens = _expand_env_split_strings(_split_command(command))
     for index, token in enumerate(tokens):
@@ -1254,10 +1355,10 @@ def command_is_git_commit(command: str) -> bool:
         subcommand, aliases = _git_subcommand_and_aliases(segment[1:])
         if subcommand == "commit":
             return True
-        alias = aliases.get(subcommand.lower())
-        if alias is not None and _git_alias_targets_commit(alias):
-            return True
-        if subcommand.lower() in aliases and aliases[subcommand.lower()] is None:
+        alias_key = subcommand.lower()
+        if alias_key in aliases:
+            return _git_alias_targets_commit(aliases[alias_key])
+        if _git_subcommand_may_be_alias(subcommand):
             return True
     return False
 
