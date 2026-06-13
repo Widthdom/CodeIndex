@@ -1,6 +1,7 @@
 using System.Text.Json;
 using CodeIndex.Cli;
 using CodeIndex.Database;
+using CodeIndex.Indexer.Hooks;
 using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
 
@@ -170,6 +171,46 @@ public partial class QueryCommandRunnerTests
                 Assert.Equal("broken", hook.GetProperty("name").GetString());
                 Assert.EndsWith("broken.dll", hook.GetProperty("assembly_path").GetString(), StringComparison.Ordinal);
                 Assert.Equal(string.Empty, hook.GetProperty("type_name").GetString());
+            }
+            finally
+            {
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void RunStatus_Json_ReportsHookDiscoveryLimitDiagnostics_3456()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_hook_cap_3456");
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture(
+                "CDIDX_HOOKS_DIR",
+                PostExtractionHookRunner.DiscoveryLimitEnvironmentVariable);
+            try
+            {
+                var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+                var hooksDir = Path.Combine(projectRoot, "hooks");
+                Directory.CreateDirectory(hooksDir);
+                File.WriteAllText(Path.Combine(hooksDir, "a.dll"), "not a real assembly");
+                File.WriteAllText(Path.Combine(hooksDir, "b.dll"), "not a real assembly");
+                File.WriteAllText(Path.Combine(hooksDir, "c.dll"), "not a real assembly");
+                env.Set("CDIDX_HOOKS_DIR", hooksDir);
+                env.Set(PostExtractionHookRunner.DiscoveryLimitEnvironmentVariable, "2");
+
+                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                    ["--db", dbPath, "--json"],
+                    _jsonOptions));
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                using var document = JsonDocument.Parse(stdout);
+                Assert.Equal(2, document.RootElement.GetProperty("hooks").GetArrayLength());
+                var diagnostic = Assert.Single(document.RootElement.GetProperty("hook_diagnostics").EnumerateArray());
+                Assert.EndsWith("hooks", diagnostic.GetProperty("assembly_path").GetString(), StringComparison.Ordinal);
+                Assert.DoesNotContain(projectRoot, diagnostic.GetProperty("assembly_path").GetString(), StringComparison.Ordinal);
+                Assert.Contains("candidate limit", diagnostic.GetProperty("message").GetString(), StringComparison.Ordinal);
             }
             finally
             {
