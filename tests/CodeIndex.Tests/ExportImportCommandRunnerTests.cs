@@ -2,6 +2,7 @@ using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text.Json;
 using CodeIndex.Cli;
+using CodeIndex.Database;
 
 namespace CodeIndex.Tests;
 
@@ -168,6 +169,57 @@ public class ExportImportCommandRunnerTests
                 Assert.Equal(outputLength, outputInfo.Length);
                 Assert.Equal(outputLastWriteUtc, outputInfo.LastWriteTimeUtc);
             }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void IsDatabaseOrSqliteSidecarPath_UsesStampedCaseSensitivity_Issue3368()
+    {
+        var dbPath = Path.Combine("Project", ".cdidx", "codeindex.db");
+        var dbPathCaseVariant = Path.Combine("Project", ".cdidx", "CODEINDEX.DB");
+        var walPathCaseVariant = Path.Combine("Project", ".cdidx", "CODEINDEX.DB-WAL");
+
+        Assert.False(ExportImportCommandRunner.IsDatabaseOrSqliteSidecarPath(
+            dbPathCaseVariant,
+            dbPath,
+            StringComparison.Ordinal));
+        Assert.False(ExportImportCommandRunner.IsDatabaseOrSqliteSidecarPath(
+            walPathCaseVariant,
+            dbPath,
+            StringComparison.Ordinal));
+
+        Assert.True(ExportImportCommandRunner.IsDatabaseOrSqliteSidecarPath(
+            dbPathCaseVariant,
+            dbPath,
+            StringComparison.OrdinalIgnoreCase));
+        Assert.True(ExportImportCommandRunner.IsDatabaseOrSqliteSidecarPath(
+            walPathCaseVariant,
+            dbPath,
+            StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Theory]
+    [InlineData("true", StringComparison.Ordinal)]
+    [InlineData("false", StringComparison.OrdinalIgnoreCase)]
+    public void ResolveDatabasePathComparison_UsesWorkspaceStamp_Issue3368(
+        string stamp,
+        StringComparison expectedComparison)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("export_path_case_stamp");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.SetMeta(DbContext.WorkspacePathCaseSensitiveMetaKey, stamp);
+            }
+
+            Assert.Equal(expectedComparison, ExportImportCommandRunner.ResolveDatabasePathComparison(dbPath));
         }
         finally
         {

@@ -247,7 +247,8 @@ internal static class ExportImportCommandRunner
 
         var fullSourceDbPath = Path.GetFullPath(normalizedDbPath);
         var fullOutputPath = Path.GetFullPath(outputPath);
-        if (IsDatabaseOrSqliteSidecarPath(fullOutputPath, fullSourceDbPath))
+        var dbPathComparison = ResolveDatabasePathComparison(normalizedDbPath);
+        if (IsDatabaseOrSqliteSidecarPath(fullOutputPath, fullSourceDbPath, dbPathComparison))
         {
             return WriteExportError(wantsJson, jsonOptions, PhaseParseArgs, "export_archive_overlaps_database", "export archive path must not be the source database or a SQLite sidecar.", "choose a separate archive path, for example `codeindex.cdidx.zip`.", "cdidx export <archive> [--db <path>] [--json]");
         }
@@ -330,7 +331,8 @@ internal static class ExportImportCommandRunner
         var normalizedDbPath = DbPathResolver.NormalizeDbPath(dbPath);
         var fullSourceDbPath = Path.GetFullPath(normalizedDbPath);
         var fullOutputPath = Path.GetFullPath(outputPath);
-        if (IsDatabaseOrSqliteSidecarPath(fullOutputPath, fullSourceDbPath))
+        var dbPathComparison = ResolveDatabasePathComparison(normalizedDbPath);
+        if (IsDatabaseOrSqliteSidecarPath(fullOutputPath, fullSourceDbPath, dbPathComparison))
         {
             return WriteError("ctags output path must not be the source database or a SQLite sidecar.", "choose a separate tags path, for example `tags`.", "cdidx export ctags [--output <path>] [--db <path>]");
         }
@@ -902,16 +904,43 @@ internal static class ExportImportCommandRunner
     internal static Action<string>? DeleteFileForTesting { get; set; }
     internal static Action<string>? DeleteSqliteSidecarForTesting { get; set; }
 
-    private static bool IsSamePath(string left, string right)
+    internal static StringComparison ResolveDatabasePathComparison(string dbPath)
+    {
+        if (TryReadDatabasePathCaseSensitive(dbPath, out var pathCaseSensitive))
+            return pathCaseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+
+        return PathCasing.ComparisonFor(dbPath);
+    }
+
+    private static bool TryReadDatabasePathCaseSensitive(string dbPath, out bool pathCaseSensitive)
+    {
+        pathCaseSensitive = false;
+        try
+        {
+            using var connection = new SqliteConnection(CreateUnpooledConnectionString(dbPath));
+            connection.Open();
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = @key LIMIT 1";
+            cmd.Parameters.AddWithValue("@key", DbContext.WorkspacePathCaseSensitiveMetaKey);
+            var raw = cmd.ExecuteScalar();
+            return raw is string value && bool.TryParse(value, out pathCaseSensitive);
+        }
+        catch (Exception ex) when (ex is SqliteException or IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsSamePath(string left, string right, StringComparison comparison)
         => string.Equals(
             Path.GetFullPath(left).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
             Path.GetFullPath(right).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
-            OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+            comparison);
 
-    private static bool IsDatabaseOrSqliteSidecarPath(string path, string dbPath)
-        => IsSamePath(path, dbPath)
-            || IsSamePath(path, dbPath + "-wal")
-            || IsSamePath(path, dbPath + "-shm");
+    internal static bool IsDatabaseOrSqliteSidecarPath(string path, string dbPath, StringComparison comparison)
+        => IsSamePath(path, dbPath, comparison)
+            || IsSamePath(path, dbPath + "-wal", comparison)
+            || IsSamePath(path, dbPath + "-shm", comparison);
 
     private static string SanitizeCtagsField(string value)
         => value.Replace('\t', ' ').Replace('\r', ' ').Replace('\n', ' ');
