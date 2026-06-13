@@ -1086,6 +1086,49 @@ sleep 30
     }
 
     [Fact]
+    public void RunInstallerProcess_SuppressedOutputDrainsLargeStreams_Issue3376()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        lock (TestConsoleLock.Gate)
+        {
+            var root = Path.Combine(Path.GetTempPath(), $"cdidx_installer_output_{Guid.NewGuid():N}");
+            Directory.CreateDirectory(root);
+            var script = Path.Combine(root, "install.sh");
+            try
+            {
+                File.WriteAllText(script, """
+#!/bin/sh
+i=0
+while [ "$i" -lt 2000 ]; do
+  printf 'stdout-line-%04d-abcdefghijklmnopqrstuvwxyz\n' "$i"
+  printf 'stderr-line-%04d-abcdefghijklmnopqrstuvwxyz\n' "$i" >&2
+  i=$((i + 1))
+done
+exit 0
+""");
+                File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+                var startInfo = ProgramRunner.CreateInstallerProcessStartInfo(script, "v1.27.0", root);
+
+                var (exitCode, stdout, stderr) = CaptureConsole(() =>
+                    ProgramRunner.RunInstallerProcess(
+                        startInfo,
+                        TimeSpan.FromSeconds(10),
+                        suppressOutput: true));
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Empty(stdout);
+                Assert.Empty(stderr);
+            }
+            finally
+            {
+                TestProjectHelper.DeleteDirectory(root);
+            }
+        }
+    }
+
+    [Fact]
     public async Task DownloadInstallerScriptAsync_CancelsStalledBody()
     {
         var path = Path.Combine(Path.GetTempPath(), $"cdidx-install-timeout-{Guid.NewGuid():N}.sh");

@@ -29,6 +29,7 @@ internal static class ProgramRunner
     private const string ReleaseChecksumAssetName = "sha256sums.txt";
     private const long MaxInstallerScriptBytes = 1024 * 1024;
     internal const long MaxReleaseChecksumBytes = 256 * 1024;
+    private const int InstallerSuppressedOutputDrainBufferChars = 4096;
     internal const int WorkspaceVersionPinMaxBytes = 4096;
     internal const int WorkspaceVersionPinMaxSkippedBlankLines = 16;
     internal const int WorkspaceVersionPinMaxLineChars = 256;
@@ -3515,7 +3516,7 @@ internal static class ProgramRunner
         }
 
         var outputDrainTask = suppressOutput
-            ? Task.WhenAll(process.StandardOutput.ReadToEndAsync(), process.StandardError.ReadToEndAsync())
+            ? DrainSuppressedInstallerOutputAsync(process)
             : Task.CompletedTask;
 
         try
@@ -3571,6 +3572,19 @@ internal static class ProgramRunner
         if (!suppressOutput)
             Console.Error.WriteLine("Hint: rerun `install.sh` manually for the desired release.");
         return CommandExitCodes.DatabaseError;
+    }
+
+    private static Task DrainSuppressedInstallerOutputAsync(Process process)
+        => Task.WhenAll(
+            DrainSuppressedInstallerOutputAsync(process.StandardOutput),
+            DrainSuppressedInstallerOutputAsync(process.StandardError));
+
+    private static async Task DrainSuppressedInstallerOutputAsync(TextReader reader)
+    {
+        var buffer = new char[InstallerSuppressedOutputDrainBufferChars];
+        while (await reader.ReadAsync(buffer.AsMemory()).ConfigureAwait(false) > 0)
+        {
+        }
     }
 
     private static UpgradeJsonResult CreateUpgradeJsonResult(
