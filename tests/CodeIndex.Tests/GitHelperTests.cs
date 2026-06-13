@@ -796,6 +796,39 @@ exit 7
     }
 
     [Fact]
+    public void TryGetHeadCommitResult_RootDiscoveryTimeoutReportsStructuredFailure_Issue3434()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var repoDir = Path.Combine(_tempDir, "repo-head-root-timeout");
+        Directory.CreateDirectory(repoDir);
+        var fakeGitDir = Path.Combine(_tempDir, "fake-git-head-root-timeout");
+        Directory.CreateDirectory(fakeGitDir);
+        WriteFakeGitThatHangsForAnyCommand(fakeGitDir);
+
+        var oldGitExecutablePath = GitHelper.GitExecutablePathOverride;
+        var oldTimeout = GitHelper.GitCommandTimeout;
+        GitHelper.GitExecutablePathOverride = Path.Combine(fakeGitDir, "git");
+        GitHelper.GitCommandTimeout = TimeSpan.FromMilliseconds(100);
+        try
+        {
+            var actual = GitHelper.TryGetHeadCommitResult(repoDir);
+
+            Assert.Equal(GitHeadCommitState.Error, actual.State);
+            Assert.Null(actual.Sha);
+            Assert.Equal(GitCommandFailureKind.TimedOut, actual.FailureKind);
+            Assert.Contains("timed out", actual.Diagnostic);
+            Assert.NotEqual(GitHeadCommitState.NotARepo, actual.State);
+        }
+        finally
+        {
+            GitHelper.GitCommandTimeout = oldTimeout;
+            GitHelper.GitExecutablePathOverride = oldGitExecutablePath;
+        }
+    }
+
+    [Fact]
     public void TryGetHeadCommitResult_ReturnsNoneForUnbornHead()
     {
         var repoDir = CreateGitRepo();
