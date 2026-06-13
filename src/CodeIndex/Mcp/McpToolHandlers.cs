@@ -6266,16 +6266,16 @@ public partial class McpServer
 
         // Build GitHub submission callback (null if no token configured).
         // GitHub 送信コールバックを構築（トークン未設定なら null）。
-        Func<SuggestionRecord, Task<SuggestionStore.SubmitAttemptResult>>? githubCallback = null;
+        Func<SuggestionRecord, CancellationToken, Task<SuggestionStore.SubmitAttemptResult>>? githubCallback = null;
         var githubTokenConfigured = GitHubIssueReporter.ResolveToken() != null;
+        var cancellationToken = _currentRequestToken.Value;
         if (githubTokenConfigured)
         {
             var version = _version;
-            var cancellationToken = _currentRequestToken.Value;
-            githubCallback = r => GitHubIssueReporter.TryCreateIssueDetailedAsync(r, version, cancellationToken);
+            githubCallback = (r, token) => GitHubIssueReporter.TryCreateIssueDetailedAsync(r, version, token);
         }
 
-        var result = await store.TryAddAndSubmitAsync(record, githubCallback).ConfigureAwait(false);
+        var result = await store.TryAddAndSubmitAsync(record, githubCallback, cancellationToken).ConfigureAwait(false);
         var storedHash = result.StoredHash ?? hash;
 
         if (!result.IsNew)

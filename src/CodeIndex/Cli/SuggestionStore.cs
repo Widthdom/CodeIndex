@@ -223,13 +223,33 @@ public class SuggestionStore
             record,
             submitToGitHub == null
                 ? null
-                : r => Task.FromResult(submitToGitHub(r))).GetAwaiter().GetResult();
+                : (r, _) => Task.FromResult(submitToGitHub(r)),
+            CancellationToken.None).GetAwaiter().GetResult();
     }
 
     public async Task<AddAndSubmitResult> TryAddAndSubmitAsync(
         SuggestionRecord record,
         Func<SuggestionRecord, Task<SubmitAttemptResult>>? submitToGitHub)
+        => await TryAddAndSubmitAsync(
+            record,
+            submitToGitHub == null ? null : (r, _) => submitToGitHub(r),
+            CancellationToken.None).ConfigureAwait(false);
+
+    public async Task<AddAndSubmitResult> TryAddAndSubmitAsync(
+        SuggestionRecord record,
+        Func<SuggestionRecord, Task<SubmitAttemptResult>>? submitToGitHub,
+        CancellationToken cancellationToken)
+        => await TryAddAndSubmitAsync(
+            record,
+            submitToGitHub == null ? null : (r, _) => submitToGitHub(r),
+            cancellationToken).ConfigureAwait(false);
+
+    public async Task<AddAndSubmitResult> TryAddAndSubmitAsync(
+        SuggestionRecord record,
+        Func<SuggestionRecord, CancellationToken, Task<SubmitAttemptResult>>? submitToGitHub,
+        CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         record = RedactRecordForPersistence(record);
         var reservation = WithFileLock(() =>
         {
@@ -299,7 +319,9 @@ public class SuggestionStore
         SubmitAttemptResult submitResult;
         try
         {
-            submitResult = await submitToGitHub(reservation.RecordToSubmit).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            submitResult = await submitToGitHub(reservation.RecordToSubmit, cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
         }
         catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException)
         {
