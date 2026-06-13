@@ -2977,6 +2977,8 @@ public partial class McpServer
             status.Extractors = ExtractorPluginRegistry.GetStatusSnapshot();
             var postExtractionHookSnapshot = PostExtractionHookRunner.DiscoverDefaultMetadata();
             var postExtractionHooks = postExtractionHookSnapshot.Hooks;
+            if (postExtractionHookSnapshot.Diagnostics.Count > 0)
+                status.HookDiagnostics = postExtractionHookSnapshot.Diagnostics.ToList();
             if (postExtractionHooks.Count > 0)
             {
                 status.Hooks = postExtractionHooks

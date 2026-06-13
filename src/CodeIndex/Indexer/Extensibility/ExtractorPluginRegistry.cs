@@ -31,6 +31,7 @@ public static class ExtractorPluginRegistry
     private static readonly Dictionary<string, IReferenceExtractor> ReferenceExtractors = new(StringComparer.Ordinal);
     private static readonly HashSet<string> LoadedPluginAssemblyPaths = new(StringComparer.OrdinalIgnoreCase);
     private static readonly HashSet<string> LoadedPatternConfigPaths = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly List<AssemblyLoadContext> LoadedPluginAssemblyContexts = [];
     private static readonly IReadOnlyList<string> PatternConfigSearchPatterns = ["*.yaml", "*.yml"];
     private static readonly List<ExtractorRegistryDiagnostic> Diagnostics = [];
     private const int DiagnosticLimit = 20;
@@ -134,6 +135,7 @@ public static class ExtractorPluginRegistry
             ReferenceExtractors.Clear();
             LoadedPluginAssemblyPaths.Clear();
             LoadedPatternConfigPaths.Clear();
+            UnloadPluginAssemblyContexts();
             Diagnostics.Clear();
             pluginAssemblyCount = 0;
             patternConfigCount = 0;
@@ -152,6 +154,7 @@ public static class ExtractorPluginRegistry
             ReferenceExtractors.Clear();
             LoadedPluginAssemblyPaths.Clear();
             LoadedPatternConfigPaths.Clear();
+            UnloadPluginAssemblyContexts();
             Diagnostics.Clear();
             pluginAssemblyCount = 0;
             patternConfigCount = 0;
@@ -173,6 +176,12 @@ public static class ExtractorPluginRegistry
 
     internal static IReadOnlyList<string> EnumeratePatternConfigPathsFromDirectoryForTests(string directory)
         => EnumeratePatternConfigPathsFromDirectory(directory, workspaceRoot: null).ToArray();
+
+    internal static IReadOnlyList<AssemblyLoadContext> PluginAssemblyLoadContextsForTests()
+    {
+        lock (Gate)
+            return LoadedPluginAssemblyContexts.ToList();
+    }
 
     internal static void LoadPluginAssembliesForTests(IReadOnlyList<string> directories)
         => LoadPluginAssemblies(directories);
@@ -996,6 +1005,7 @@ public static class ExtractorPluginRegistry
     private static void TryLoadPlugin(string pluginPath)
     {
         var fullPath = pluginPath;
+        ExtensionAssemblyLoadContext? loadContext = null;
         try
         {
             fullPath = Path.GetFullPath(pluginPath);
@@ -1008,7 +1018,10 @@ public static class ExtractorPluginRegistry
             if (!PluginAssemblyCandidateIsWithinBudget(fullPath))
                 return;
 
-            var assembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(fullPath);
+            loadContext = new ExtensionAssemblyLoadContext(
+                $"cdidx-plugin:{Path.GetFileNameWithoutExtension(fullPath)}",
+                fullPath);
+            var assembly = loadContext.LoadFromAssemblyPath(fullPath);
             var attribute = assembly.GetCustomAttribute<CdidxPluginAttribute>();
             if (attribute == null)
             {
@@ -1036,7 +1049,11 @@ public static class ExtractorPluginRegistry
             }
 
             lock (Gate)
+            {
                 pluginAssemblyCount++;
+                LoadedPluginAssemblyContexts.Add(loadContext);
+                loadContext = null;
+            }
 
             foreach (var type in assembly.GetTypes())
             {
@@ -1054,6 +1071,21 @@ public static class ExtractorPluginRegistry
                 "Failed to load plugin assembly.",
                 countsAsSkippedFile: true);
         }
+        finally
+        {
+            loadContext?.Unload();
+        }
+    }
+
+    private static void UnloadPluginAssemblyContexts()
+    {
+        foreach (var loadContext in LoadedPluginAssemblyContexts)
+        {
+            if (loadContext.IsCollectible)
+                loadContext.Unload();
+        }
+
+        LoadedPluginAssemblyContexts.Clear();
     }
 
     private static bool PluginAssemblyCandidateIsWithinBudget(string fullPath)

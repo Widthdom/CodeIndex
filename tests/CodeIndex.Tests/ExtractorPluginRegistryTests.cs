@@ -1,4 +1,9 @@
+using System.Reflection;
+using System.Runtime.Loader;
 using CodeIndex.Indexer.Extensibility;
+using CodeIndex.Models;
+
+[assembly: CdidxPlugin(ExtractorPluginRegistry.CurrentApiVersion, ExtractorPluginRegistry.CurrentApiVersion)]
 
 namespace CodeIndex.Tests;
 
@@ -146,6 +151,30 @@ public class ExtractorPluginRegistryTests
             {
                 ExtractorPluginRegistry.ResetForTests();
                 TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void LoadPlugin_LoadsExtractorAssemblyInCollectibleContext_3413()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+
+                ExtractorPluginRegistry.LoadPluginForTests(Assembly.GetExecutingAssembly().Location);
+
+                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("collectibledsl", out var extractor));
+                var loadContext = Assert.Single(ExtractorPluginRegistry.PluginAssemblyLoadContextsForTests());
+                Assert.True(loadContext.IsCollectible);
+                Assert.NotSame(AssemblyLoadContext.Default, loadContext);
+                Assert.Same(loadContext, AssemblyLoadContext.GetLoadContext(extractor.GetType().Assembly));
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
             }
         }
     }
@@ -342,4 +371,14 @@ public class ExtractorPluginRegistryTests
             _ => throw new ArgumentOutOfRangeException(nameof(scalarName), scalarName, null),
         };
     }
+}
+
+public sealed class CollectiblePluginSymbolExtractor : ISymbolExtractor
+{
+    public string Language => "collectibledsl";
+
+    public IReadOnlyCollection<string> FileExtensions => [".collectible"];
+
+    public IReadOnlyList<SymbolRecord> Extract(long fileId, string source, ExtractionContext context)
+        => [];
 }
