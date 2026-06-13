@@ -799,6 +799,81 @@ public class GitHubIssueReporterTests : IDisposable
     }
 
     [Fact]
+    public async Task TryCreateIssueDetailedAsync_SearchMissingItemsFailsClosedWithoutCreate()
+    {
+        _env.Set("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
+
+        var handler = new RecordingHandler();
+        handler.AddResponse(req => req.Method == HttpMethod.Get && req.RequestUri!.AbsolutePath == "/search/issues",
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = MakeJsonContent("""{ "total_count": 0 }"""),
+            });
+        handler.AddResponse(req => req.Method == HttpMethod.Post && req.RequestUri!.AbsolutePath.Contains("/issues"),
+            new HttpResponseMessage(HttpStatusCode.Created)
+            {
+                Content = MakeJsonContent("""{ "html_url": "https://github.com/widthdom/CodeIndex/issues/12345" }"""),
+            });
+        using var mockClient = new HttpClient(handler);
+        GitHubIssueReporter.s_httpClientOverride = mockClient;
+        try
+        {
+            var record = MakeRecordWithKnownHash();
+            var result = await GitHubIssueReporter.TryCreateIssueDetailedAsync(record, "1.0.0-test");
+
+            Assert.Null(result.IssueUrl);
+            Assert.Contains("existing-suggestion lookup failed during search", result.Error);
+            Assert.Contains("missing items array", result.Error);
+            Assert.Equal(1, handler.RequestCount);
+            Assert.DoesNotContain(handler.Requests, r => r.Method == HttpMethod.Post);
+        }
+        finally
+        {
+            GitHubIssueReporter.s_httpClientOverride = null;
+        }
+    }
+
+    [Fact]
+    public async Task TryCreateIssueDetailedAsync_LabelListObjectFailsClosedWithoutCreate()
+    {
+        _env.Set("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
+
+        var handler = new RecordingHandler();
+        handler.AddResponse(req => req.Method == HttpMethod.Get && req.RequestUri!.AbsolutePath == "/search/issues",
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = MakeJsonContent("""{ "total_count": 0, "items": [] }"""),
+            });
+        handler.AddResponse(req => req.Method == HttpMethod.Get && req.RequestUri!.AbsolutePath == "/repos/widthdom/CodeIndex/issues",
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = MakeJsonContent("""{ "message": "not an array" }"""),
+            });
+        handler.AddResponse(req => req.Method == HttpMethod.Post && req.RequestUri!.AbsolutePath.Contains("/issues"),
+            new HttpResponseMessage(HttpStatusCode.Created)
+            {
+                Content = MakeJsonContent("""{ "html_url": "https://github.com/widthdom/CodeIndex/issues/12345" }"""),
+            });
+        using var mockClient = new HttpClient(handler);
+        GitHubIssueReporter.s_httpClientOverride = mockClient;
+        try
+        {
+            var record = MakeRecordWithKnownHash();
+            var result = await GitHubIssueReporter.TryCreateIssueDetailedAsync(record, "1.0.0-test");
+
+            Assert.Null(result.IssueUrl);
+            Assert.Contains("existing-suggestion lookup failed during label list", result.Error);
+            Assert.Contains("expected issue array", result.Error);
+            Assert.Equal(2, handler.RequestCount);
+            Assert.DoesNotContain(handler.Requests, r => r.Method == HttpMethod.Post);
+        }
+        finally
+        {
+            GitHubIssueReporter.s_httpClientOverride = null;
+        }
+    }
+
+    [Fact]
     public async Task TryCreateIssueDetailedAsync_CreateSuccessBodyOverLimit_ReturnsDiagnosticError()
     {
         _env.Set("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");

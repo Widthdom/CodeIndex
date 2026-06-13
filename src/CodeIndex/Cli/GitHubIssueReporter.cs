@@ -266,7 +266,13 @@ internal static class GitHubIssueReporter
         }
 
         var items = node?["items"] as JsonArray;
-        if (items == null || items.Count == 0)
+        if (items == null)
+        {
+            return ExistingIssueLookupResult.Failure(
+                BuildExistingSuggestionLookupFailure("search", "InvalidResponse: missing items array"));
+        }
+
+        if (items.Count == 0)
             return ExistingIssueLookupResult.NotFound;
 
         try
@@ -330,7 +336,15 @@ internal static class GitHubIssueReporter
                 }
 
                 var items = node as JsonArray;
-                if (items == null || items.Count == 0)
+                if (items == null)
+                {
+                    return ExistingIssueLookupResult.Failure(
+                        BuildExistingSuggestionLookupFailure(
+                            $"label list '{label}' page {page}",
+                            "InvalidResponse: expected issue array"));
+                }
+
+                if (items.Count == 0)
                     break;
 
                 try
