@@ -508,6 +508,85 @@ public class ReportCommandRunnerTests
     }
 
     [Fact]
+    public void Run_WithFullyIncludedShortLog_DoesNotReportTailOmission_Issue3555()
+    {
+        var workDir = CreateWorkDir();
+        var logDir = Path.Combine(workDir, "logs");
+        Directory.CreateDirectory(logDir);
+        File.WriteAllText(
+            Path.Combine(logDir, "stderr-20260519.log"),
+            string.Join('\n',
+                "2026-05-19T03:00:00Z [INFO] first",
+                "2026-05-19T03:00:01Z [INFO] second",
+                ""));
+
+        var previousLogDir = Environment.GetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR");
+        Environment.SetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR", logDir);
+        try
+        {
+            var output = Path.Combine(workDir, "bundle.tgz");
+            var (exitCode, _, _) = RunAndCaptureStreams([
+                "--output", output,
+                "--db", Path.Combine(workDir, "missing.db"),
+                "--log-lines", "20",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            var entries = ReadTarGzEntries(output);
+            using var manifest = ReadJsonEntry(entries, "support-manifest.json");
+            var logOmissions = manifest.RootElement.GetProperty("omissions").GetProperty("log");
+
+            Assert.Equal(2, manifest.RootElement.GetProperty("bundle").GetProperty("log_lines_included").GetInt32());
+            Assert.False(JsonArrayContains(logOmissions, "older_log_lines_outside_tail_limit"));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR", previousLogDir);
+            TryDeleteDirectory(workDir);
+        }
+    }
+
+    [Fact]
+    public void Run_WithTruncatedLog_ReportsTailOmission_Issue3555()
+    {
+        var workDir = CreateWorkDir();
+        var logDir = Path.Combine(workDir, "logs");
+        Directory.CreateDirectory(logDir);
+        File.WriteAllText(
+            Path.Combine(logDir, "stderr-20260520.log"),
+            string.Join('\n',
+                "2026-05-20T03:00:00Z [INFO] omitted",
+                "2026-05-20T03:00:01Z [INFO] kept-one",
+                "2026-05-20T03:00:02Z [INFO] kept-two",
+                ""));
+
+        var previousLogDir = Environment.GetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR");
+        Environment.SetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR", logDir);
+        try
+        {
+            var output = Path.Combine(workDir, "bundle.tgz");
+            var (exitCode, _, _) = RunAndCaptureStreams([
+                "--output", output,
+                "--db", Path.Combine(workDir, "missing.db"),
+                "--log-lines", "2",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            var entries = ReadTarGzEntries(output);
+            using var manifest = ReadJsonEntry(entries, "support-manifest.json");
+            var logOmissions = manifest.RootElement.GetProperty("omissions").GetProperty("log");
+
+            Assert.Equal(2, manifest.RootElement.GetProperty("bundle").GetProperty("log_lines_included").GetInt32());
+            Assert.True(JsonArrayContains(logOmissions, "older_log_lines_outside_tail_limit"));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR", previousLogDir);
+            TryDeleteDirectory(workDir);
+        }
+    }
+
+    [Fact]
     public void BuildRecentLogTail_LargeLogReadsBoundedTail_Issue2837()
     {
         var workDir = CreateWorkDir();
