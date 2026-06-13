@@ -468,6 +468,7 @@ public class ReleaseWorkflowTests
         var workflow = File.ReadAllText(Path.Combine(root, ".github", "workflows", "release.yml"));
         var dockerfile = File.ReadAllText(Path.Combine(root, "Dockerfile"));
         var dockerignore = File.ReadAllText(Path.Combine(root, ".dockerignore"));
+        var entrypoint = File.ReadAllText(Path.Combine(root, "scripts", "docker-entrypoint.sh"));
         var project = File.ReadAllText(Path.Combine(root, "src", "CodeIndex", "CodeIndex.csproj"));
 
         Assert.Contains("publish-container:", workflow);
@@ -492,9 +493,15 @@ public class ReleaseWorkflowTests
         Assert.Contains("FROM mcr.microsoft.com/dotnet/runtime-deps:8.0-alpine@sha256:7ec14bf41e70f3ca60f7b369b077636f642a0e6867caf28677d970e0abd9c6e6 AS runtime", dockerfile);
         Assert.DoesNotContain("FROM mcr.microsoft.com/dotnet/sdk:8.0-alpine AS build", dockerfile);
         Assert.DoesNotContain("FROM mcr.microsoft.com/dotnet/runtime-deps:8.0-alpine AS runtime", dockerfile);
-        Assert.Contains("adduser -S -D -H -G cdidx -h /repo cdidx", dockerfile);
+        Assert.Contains("COPY scripts/docker-entrypoint.sh /usr/local/bin/cdidx-entrypoint", dockerfile);
+        Assert.Contains("apk add --no-cache ca-certificates su-exec", dockerfile);
+        Assert.Contains("addgroup -S -g 10001 cdidx", dockerfile);
+        Assert.Contains("adduser -S -D -H -u 10001 -G cdidx -h /repo cdidx", dockerfile);
         Assert.Contains("chown cdidx:cdidx /repo", dockerfile);
-        Assert.Contains("USER cdidx:cdidx", dockerfile);
+        Assert.DoesNotContain("USER cdidx:cdidx", dockerfile);
+        Assert.Contains("stat -c '%u' /repo", entrypoint);
+        Assert.Contains("stat -c '%g' /repo", entrypoint);
+        Assert.Contains("su-exec \"${target_uid}:${target_gid}\" cdidx \"$@\"", entrypoint);
         Assert.DoesNotContain("COPY . .", dockerfile);
         Assert.Contains("COPY Directory.Build.props nuget.config version.json ./", dockerfile);
         Assert.Contains("COPY src/CodeIndex/CodeIndex.csproj src/CodeIndex/packages.lock.json src/CodeIndex/", dockerfile);
@@ -513,7 +520,7 @@ public class ReleaseWorkflowTests
         Assert.Contains("ARG TARGETARCH=amd64", dockerfile);
         Assert.Contains("linux-musl-x64", dockerfile);
         Assert.Contains("linux-musl-arm64", dockerfile);
-        Assert.Contains("ENTRYPOINT [\"cdidx\"]", dockerfile);
+        Assert.Contains("ENTRYPOINT [\"/usr/local/bin/cdidx-entrypoint\"]", dockerfile);
         Assert.Contains("CdidxBuildCommitOverride", project);
         Assert.Contains("CdidxBuildDateOverride", project);
         Assert.Contains("CdidxBuildDirtyOverride", project);

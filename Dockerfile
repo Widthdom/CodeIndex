@@ -33,11 +33,13 @@ RUN case "$TARGETARCH" in \
 
 FROM mcr.microsoft.com/dotnet/runtime-deps:8.0-alpine@sha256:7ec14bf41e70f3ca60f7b369b077636f642a0e6867caf28677d970e0abd9c6e6 AS runtime
 
-RUN apk add --no-cache ca-certificates \
-    && addgroup -S cdidx \
-    && adduser -S -D -H -G cdidx -h /repo cdidx \
+COPY scripts/docker-entrypoint.sh /usr/local/bin/cdidx-entrypoint
+RUN apk add --no-cache ca-certificates su-exec \
+    && addgroup -S -g 10001 cdidx \
+    && adduser -S -D -H -u 10001 -G cdidx -h /repo cdidx \
     && mkdir -p /repo \
-    && chown cdidx:cdidx /repo
+    && chown cdidx:cdidx /repo \
+    && chmod 0755 /usr/local/bin/cdidx-entrypoint
 
 WORKDIR /repo
 COPY --from=build /out/ /usr/local/lib/cdidx/
@@ -45,7 +47,5 @@ COPY LICENSE COMMERCIAL_LICENSE.md INTEGRATION_POLICY.md TRADEMARKS.md /usr/loca
 COPY LICENSES/ /usr/local/lib/cdidx/LICENSES/
 RUN ln -s /usr/local/lib/cdidx/cdidx /usr/local/bin/cdidx
 
-USER cdidx:cdidx
-
-ENTRYPOINT ["cdidx"]
+ENTRYPOINT ["/usr/local/bin/cdidx-entrypoint"]
 CMD ["--help"]
