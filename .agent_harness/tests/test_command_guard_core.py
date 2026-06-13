@@ -403,9 +403,9 @@ class CommandGuardCoreTests(TestCase):
                     self.assertEqual([script.resolve()], core.candidate_script_paths(command, cwd=root))
 
     def test_check_script_file_denies_outside_project_root(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside_tmp:
             root = Path(tmp)
-            outside = Path(tmp).parent / "guard.py"
+            outside = Path(outside_tmp) / "guard.py"
             outside.write_text("print('ok')", encoding="utf-8")
 
             decision = core.check_script_file(outside, project_root=root)
