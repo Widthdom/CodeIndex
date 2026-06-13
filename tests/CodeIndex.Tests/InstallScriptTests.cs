@@ -118,6 +118,41 @@ public sealed class InstallScriptTests : IDisposable
         Assert.True(File.Exists(binaryPath));
     }
 
+    [Fact]
+    public void PathProfileUpdate_BacksUpAndAtomicallyReplacesProfile_Issue3501()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var home = Path.Combine(_tempRoot, "path_profile_home");
+        Directory.CreateDirectory(home);
+        var profilePath = Path.Combine(home, ".zshrc");
+        File.WriteAllText(profilePath, "export EXISTING=1\n");
+        var installDir = Path.Combine(_tempRoot, "path_profile_bin");
+        Directory.CreateDirectory(installDir);
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            "append_path_to_shell_profile",
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+                ["HOME"] = home,
+                ["SHELL"] = "/bin/zsh",
+            });
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Contains("Backed up", stdout);
+        Assert.Contains("Added", stdout);
+        var backups = Directory.GetFiles(home, ".zshrc.cdidx-backup.*");
+        Assert.Single(backups);
+        Assert.Equal("export EXISTING=1\n", File.ReadAllText(backups[0]));
+        var profile = File.ReadAllText(profilePath);
+        Assert.Contains("export EXISTING=1", profile);
+        Assert.Contains($"export PATH=\"{installDir}:$PATH\"", profile);
+        Assert.Empty(Directory.GetFiles(home, ".zshrc.cdidx-tmp.*"));
+    }
+
     [Theory]
     [InlineData("/")]
     [InlineData("/usr/local")]

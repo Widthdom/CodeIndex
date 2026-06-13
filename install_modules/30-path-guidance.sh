@@ -45,17 +45,66 @@ candidate_shell_profile() {
 append_path_to_shell_profile() {
     local profile_path
     profile_path="$(candidate_shell_profile)"
-    mkdir -p "$(dirname "$profile_path")"
+    local profile_dir
+    profile_dir="$(dirname "$profile_path")"
+    if ! mkdir -p "$profile_dir"; then
+        report_error "Failed to create shell profile directory: ${profile_dir}"
+        return 1
+    fi
 
     if [ -f "$profile_path" ] && grep -F "export PATH=\"${INSTALL_DIR}:\$PATH\"" "$profile_path" >/dev/null 2>&1; then
         info "PATH export already present in ${profile_path}"
         return 0
     fi
 
+    local tmp_path
+    if ! tmp_path="$(mktemp "${profile_path}.cdidx-tmp.XXXXXX")"; then
+        report_error "Failed to create temporary shell profile file next to ${profile_path}"
+        return 1
+    fi
+
+    if [ -f "$profile_path" ]; then
+        if ! cp -p "$profile_path" "$tmp_path"; then
+            report_error "Failed to copy ${profile_path} before updating PATH."
+            rm -f "$tmp_path"
+            return 1
+        fi
+    else
+        if ! : > "$tmp_path"; then
+            report_error "Failed to initialize temporary shell profile file: ${tmp_path}"
+            rm -f "$tmp_path"
+            return 1
+        fi
+    fi
+
     {
         printf '\n# Added by cdidx installer\n'
         printf 'export PATH="%s:$PATH"\n' "$INSTALL_DIR"
-    } >> "$profile_path"
+    } >> "$tmp_path" || {
+        report_error "Failed to append PATH update to temporary shell profile file: ${tmp_path}"
+        rm -f "$tmp_path"
+        return 1
+    }
+
+    if [ -f "$profile_path" ]; then
+        local backup_path
+        if ! backup_path="$(mktemp "${profile_path}.cdidx-backup.XXXXXX")"; then
+            report_error "Failed to create shell profile backup path for ${profile_path}"
+            rm -f "$tmp_path"
+            return 1
+        fi
+        if ! cp -p "$profile_path" "$backup_path"; then
+            report_error "Failed to back up ${profile_path} to ${backup_path}"
+            rm -f "$tmp_path" "$backup_path"
+            return 1
+        fi
+        info "Backed up ${profile_path} to ${backup_path}"
+    fi
+
+    if ! mv -f "$tmp_path" "$profile_path"; then
+        report_error "Failed to atomically replace ${profile_path}. Temporary file preserved at ${tmp_path}"
+        return 1
+    fi
 
     info "Added ${INSTALL_DIR} to PATH in ${profile_path}"
 }
