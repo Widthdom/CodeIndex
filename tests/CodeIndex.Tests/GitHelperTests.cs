@@ -353,8 +353,8 @@ public class GitHelperTests : IDisposable
         Directory.CreateDirectory(fakeGitDir);
         WriteFakeGitThatEmitsLargeStderr(fakeGitDir);
 
-        var oldPath = Environment.GetEnvironmentVariable("PATH");
-        Environment.SetEnvironmentVariable("PATH", fakeGitDir + Path.PathSeparator + oldPath);
+        var oldGitExecutablePath = GitHelper.GitExecutablePathOverride;
+        GitHelper.GitExecutablePathOverride = Path.Combine(fakeGitDir, "git");
         try
         {
             var task = Task.Run(() => GitHelper.GetChangedFilesFromCommit(repoDir, "0123456789abcdef"));
@@ -364,6 +364,38 @@ public class GitHelperTests : IDisposable
         }
         finally
         {
+            GitHelper.GitExecutablePathOverride = oldGitExecutablePath;
+        }
+    }
+
+    [Fact]
+    public void GetChangedFilesFromCommit_UsesTrustedGitExecutableInsteadOfPath_Issue3433()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var repoDir = Path.Combine(_tempDir, "repo-trusted-git");
+        Directory.CreateDirectory(repoDir);
+        var trustedGitDir = Path.Combine(_tempDir, "trusted-git");
+        var pathGitDir = Path.Combine(_tempDir, "path-git");
+        Directory.CreateDirectory(trustedGitDir);
+        Directory.CreateDirectory(pathGitDir);
+        WriteFakeGitThatReturnsChangedFile(trustedGitDir, "trusted.txt");
+        WriteFakeGitThatReturnsChangedFile(pathGitDir, "path.txt");
+
+        var oldPath = Environment.GetEnvironmentVariable("PATH");
+        var oldGitExecutablePath = GitHelper.GitExecutablePathOverride;
+        Environment.SetEnvironmentVariable("PATH", pathGitDir + Path.PathSeparator + oldPath);
+        GitHelper.GitExecutablePathOverride = Path.Combine(trustedGitDir, "git");
+        try
+        {
+            var changedFiles = GitHelper.GetChangedFilesFromCommit(repoDir, "0123456789abcdef");
+
+            Assert.Equal(["trusted.txt"], changedFiles);
+        }
+        finally
+        {
+            GitHelper.GitExecutablePathOverride = oldGitExecutablePath;
             Environment.SetEnvironmentVariable("PATH", oldPath);
         }
     }
@@ -380,8 +412,8 @@ public class GitHelperTests : IDisposable
         Directory.CreateDirectory(fakeGitDir);
         WriteFakeGitThatExceedsStdoutLimit(fakeGitDir);
 
-        var oldPath = Environment.GetEnvironmentVariable("PATH");
-        Environment.SetEnvironmentVariable("PATH", fakeGitDir + Path.PathSeparator + oldPath);
+        var oldGitExecutablePath = GitHelper.GitExecutablePathOverride;
+        GitHelper.GitExecutablePathOverride = Path.Combine(fakeGitDir, "git");
         try
         {
             var ex = Assert.Throws<InvalidOperationException>(
@@ -391,7 +423,7 @@ public class GitHelperTests : IDisposable
         }
         finally
         {
-            Environment.SetEnvironmentVariable("PATH", oldPath);
+            GitHelper.GitExecutablePathOverride = oldGitExecutablePath;
         }
     }
 
@@ -407,8 +439,8 @@ public class GitHelperTests : IDisposable
         Directory.CreateDirectory(fakeGitDir);
         WriteFakeGitThatExceedsStdoutLimitWithoutNewlines(fakeGitDir);
 
-        var oldPath = Environment.GetEnvironmentVariable("PATH");
-        Environment.SetEnvironmentVariable("PATH", fakeGitDir + Path.PathSeparator + oldPath);
+        var oldGitExecutablePath = GitHelper.GitExecutablePathOverride;
+        GitHelper.GitExecutablePathOverride = Path.Combine(fakeGitDir, "git");
         try
         {
             var ex = Assert.Throws<InvalidOperationException>(
@@ -418,7 +450,7 @@ public class GitHelperTests : IDisposable
         }
         finally
         {
-            Environment.SetEnvironmentVariable("PATH", oldPath);
+            GitHelper.GitExecutablePathOverride = oldGitExecutablePath;
         }
     }
 
@@ -434,9 +466,9 @@ public class GitHelperTests : IDisposable
         Directory.CreateDirectory(fakeGitDir);
         WriteFakeGitThatHangsOnDiffTree(fakeGitDir);
 
-        var oldPath = Environment.GetEnvironmentVariable("PATH");
+        var oldGitExecutablePath = GitHelper.GitExecutablePathOverride;
         var oldTimeout = GitHelper.GitCommandTimeout;
-        Environment.SetEnvironmentVariable("PATH", fakeGitDir + Path.PathSeparator + oldPath);
+        GitHelper.GitExecutablePathOverride = Path.Combine(fakeGitDir, "git");
         GitHelper.GitCommandTimeout = TimeSpan.FromSeconds(1);
         try
         {
@@ -448,7 +480,7 @@ public class GitHelperTests : IDisposable
         finally
         {
             GitHelper.GitCommandTimeout = oldTimeout;
-            Environment.SetEnvironmentVariable("PATH", oldPath);
+            GitHelper.GitExecutablePathOverride = oldGitExecutablePath;
         }
     }
 
@@ -464,8 +496,8 @@ public class GitHelperTests : IDisposable
         Directory.CreateDirectory(fakeGitDir);
         WriteFakeGitThatHangsOnDiffTree(fakeGitDir);
 
-        var oldPath = Environment.GetEnvironmentVariable("PATH");
-        Environment.SetEnvironmentVariable("PATH", fakeGitDir + Path.PathSeparator + oldPath);
+        var oldGitExecutablePath = GitHelper.GitExecutablePathOverride;
+        GitHelper.GitExecutablePathOverride = Path.Combine(fakeGitDir, "git");
         try
         {
             using var cts = new CancellationTokenSource();
@@ -481,7 +513,7 @@ public class GitHelperTests : IDisposable
         }
         finally
         {
-            Environment.SetEnvironmentVariable("PATH", oldPath);
+            GitHelper.GitExecutablePathOverride = oldGitExecutablePath;
         }
     }
 
@@ -497,8 +529,8 @@ public class GitHelperTests : IDisposable
         Directory.CreateDirectory(fakeGitDir);
         WriteFakeGitThatHangsOnRevParse(fakeGitDir);
 
-        var oldPath = Environment.GetEnvironmentVariable("PATH");
-        Environment.SetEnvironmentVariable("PATH", fakeGitDir + Path.PathSeparator + oldPath);
+        var oldGitExecutablePath = GitHelper.GitExecutablePathOverride;
+        GitHelper.GitExecutablePathOverride = Path.Combine(fakeGitDir, "git");
         try
         {
             using var cts = new CancellationTokenSource();
@@ -514,8 +546,49 @@ public class GitHelperTests : IDisposable
         }
         finally
         {
-            Environment.SetEnvironmentVariable("PATH", oldPath);
+            GitHelper.GitExecutablePathOverride = oldGitExecutablePath;
         }
+    }
+
+    [Fact]
+    public void TrustedGitExecutableCandidates_OnMacOS_ExcludeDeveloperToolsShim_Issue3433()
+    {
+        if (!OperatingSystem.IsMacOS())
+            return;
+
+        var candidates = GitHelper.TrustedGitExecutableCandidatePathsForTests();
+
+        Assert.DoesNotContain("/usr/bin/git", candidates);
+        Assert.Contains("/Library/Developer/CommandLineTools/usr/bin/git", candidates);
+        Assert.Contains("/Applications/Xcode.app/Contents/Developer/usr/bin/git", candidates);
+    }
+
+    [Fact]
+    public void TryGetHeadCommitResult_OnMacOS_DoesNotUseDeveloperDirShimGit_Issue3433()
+    {
+        if (!OperatingSystem.IsMacOS())
+            return;
+
+        var projectDir = Path.Combine(_tempDir, "developer-dir-project");
+        Directory.CreateDirectory(projectDir);
+        var developerDir = Path.Combine(_tempDir, "FakeDeveloper");
+        var developerGitDir = Path.Combine(developerDir, "usr", "bin");
+        Directory.CreateDirectory(developerGitDir);
+        var markerPath = Path.Combine(_tempDir, "developer-dir-git-ran.txt");
+        var fakeGitPath = Path.Combine(developerGitDir, "git");
+        File.WriteAllText(fakeGitPath, $"""
+#!/bin/sh
+printf ran > "{markerPath.Replace("\"", "\\\"", StringComparison.Ordinal)}"
+exit 7
+""");
+        File.SetUnixFileMode(fakeGitPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+        using var env = EnvironmentVariableScope.Capture("DEVELOPER_DIR");
+        env.Set("DEVELOPER_DIR", developerDir);
+
+        _ = GitHelper.TryGetHeadCommitResult(projectDir);
+
+        Assert.False(File.Exists(markerPath), "GitHelper must not execute git selected through DEVELOPER_DIR.");
     }
 
     [Theory]
@@ -966,6 +1039,30 @@ if [ "$1" = "diff-tree" ]; then
 fi
 exit 1
 """);
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+    }
+
+    private static void WriteFakeGitThatReturnsChangedFile(string directory, string changedPath)
+    {
+        var script = Path.Combine(directory, "git");
+        File.WriteAllText(script, """
+#!/bin/sh
+if [ "$1" = "rev-parse" ]; then
+  if [ "$2" = "--symbolic-full-name" ]; then
+    exit 0
+  fi
+  if [ "$2" = "--verify" ]; then
+    printf '%s\n' '0123456789abcdef0123456789abcdef01234567'
+    exit 0
+  fi
+fi
+if [ "$1" = "diff-tree" ]; then
+  printf 'M\t__CHANGED_PATH__\n'
+  exit 0
+fi
+exit 1
+""".Replace("__CHANGED_PATH__", changedPath, StringComparison.Ordinal));
         if (!OperatingSystem.IsWindows())
             File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
     }

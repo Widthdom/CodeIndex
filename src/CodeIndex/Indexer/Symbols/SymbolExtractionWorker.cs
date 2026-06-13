@@ -413,7 +413,15 @@ internal static class SymbolExtractionWorker
             return false;
         }
 
-        startInfo.FileName = ResolveDotnetHostPath();
+        var dotnetHostPath = DotnetHostPathResolver.Resolve(currentProcessPath);
+        if (dotnetHostPath == null)
+        {
+            startInfo = new ProcessStartInfo();
+            error = "could not resolve a trusted dotnet host path for isolated symbol extraction; run cdidx through an absolute dotnet host path or use a self-contained cdidx executable.";
+            return false;
+        }
+
+        startInfo.FileName = dotnetHostPath;
         startInfo.ArgumentList.Add(runnerAssemblyPath);
         startInfo.ArgumentList.Add(CommandName);
         AddProtocolLineLimitArguments(startInfo, maxProtocolLineBytes);
@@ -438,7 +446,7 @@ internal static class SymbolExtractionWorker
 
     private static bool ShouldStartCurrentExecutable(string? currentProcessPath, string? runnerAssemblyPath)
     {
-        if (string.IsNullOrWhiteSpace(currentProcessPath) || IsDotnetHostPath(currentProcessPath))
+        if (string.IsNullOrWhiteSpace(currentProcessPath) || DotnetHostPathResolver.IsDotnetHostPath(currentProcessPath))
             return false;
 
         var processName = Path.GetFileNameWithoutExtension(currentProcessPath);
@@ -642,21 +650,6 @@ internal static class SymbolExtractionWorker
         return false;
     }
 
-    private static string ResolveDotnetHostPath()
-    {
-        var dotnetHostPath = Environment.GetEnvironmentVariable("DOTNET_HOST_PATH");
-        if (!string.IsNullOrWhiteSpace(dotnetHostPath))
-            return dotnetHostPath;
-
-        var processPath = Environment.ProcessPath;
-        if (!string.IsNullOrWhiteSpace(processPath) && IsDotnetHostPath(processPath))
-        {
-            return processPath;
-        }
-
-        return "dotnet";
-    }
-
     private static string? ResolveCurrentRunnerAssemblyPath()
     {
         var assemblyName = typeof(SymbolExtractionWorker).Assembly.GetName().Name;
@@ -666,9 +659,6 @@ internal static class SymbolExtractionWorker
         var candidate = Path.Combine(AppContext.BaseDirectory, assemblyName + ".dll");
         return File.Exists(candidate) ? candidate : null;
     }
-
-    private static bool IsDotnetHostPath(string path)
-        => string.Equals(Path.GetFileNameWithoutExtension(path), "dotnet", StringComparison.OrdinalIgnoreCase);
 
     private static void ApplyCurrentRuntimeRollForward(ProcessStartInfo startInfo)
     {
