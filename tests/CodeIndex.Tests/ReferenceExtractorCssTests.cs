@@ -412,4 +412,60 @@ public partial class ReferenceExtractorTests
             reference.SymbolName == "elevated"
             && reference.ReferenceKind == "call"));
     }
+
+    [Fact]
+    public void Extract_Sass_IndentedVariablesMixinsAndImports_AreReferenced()
+    {
+        const string content = """
+            @use "theme"
+            $primary: #3366cc
+            $spacing-base: 8px
+
+            =rounded($radius)
+              border-radius: $radius
+
+            .button
+              color: $primary
+              padding: $spacing-base * 2
+              +rounded(4px)
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sass", content);
+        var references = ReferenceExtractor.Extract(1, "sass", content, symbols);
+
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "primary"
+            && reference.ReferenceKind == "call"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "spacing-base"
+            && reference.ReferenceKind == "call"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "rounded"
+            && reference.ReferenceKind == "call"));
+    }
+
+    [Fact]
+    public void Extract_Stylus_VariablesAndFunctionCalls_AreReferenced()
+    {
+        const string content = """
+            primary = #3366cc
+
+            rounded(radius)
+              border-radius radius
+
+            .button
+              color $primary
+              rounded(4px)
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "stylus", content);
+        var references = ReferenceExtractor.Extract(1, "stylus", content, symbols);
+
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "primary"
+            && reference.ReferenceKind == "call"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "rounded"
+            && reference.ReferenceKind == "call"));
+    }
 }

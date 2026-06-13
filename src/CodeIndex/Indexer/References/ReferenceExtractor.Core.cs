@@ -943,6 +943,10 @@ public static partial class ReferenceExtractor
                     definitionNames,
                     container);
             }
+            else if (language == "sass")
+                CssReferenceExtractor.EmitSass(preparedLine, references, seen, fileId, context, lineNumber, container);
+            else if (language == "stylus")
+                CssReferenceExtractor.EmitStylus(preparedLine, references, seen, fileId, context, lineNumber, definitionNames, container);
 
             if (language == "terraform")
             {

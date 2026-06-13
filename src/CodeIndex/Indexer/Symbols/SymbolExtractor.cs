@@ -2029,6 +2029,29 @@ public static partial class SymbolExtractor
             // SCSS placeholder selector / SCSS プレースホルダーセレクタ
             new("class",    new Regex(@"^\s*(?<name>%[\w-]+)\s*[,{]", RegexOptions.Compiled), BodyStyle.Brace),
         ],
+        ["sass"] =
+        [
+            // Sass indented syntax has no braces, so keep these as line-level anchors.
+            // Sass インデント構文は波括弧を持たないため、行単位のアンカーとして扱う。
+            new("import",   new Regex(@"^\s*@(?:import|use|forward)\s+(?<name>.+?)(?:\s*!default)?\s*$", RegexOptions.Compiled), BodyStyle.None),
+            new("function", new Regex(@"^\s*(?:@mixin\s+|=)(?<name>[\w-]+)", RegexOptions.Compiled), BodyStyle.None),
+            new("function", new Regex(@"^\s*@function\s+(?<name>[\w-]+)", RegexOptions.Compiled), BodyStyle.None),
+            new("function", new Regex(@"^\s*@keyframes\s+(?<name>[\w-]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("property", new Regex(@"^\s*\$(?<name>[\w-]+)\s*:", RegexOptions.Compiled), BodyStyle.None),
+            new("class",    new Regex(@"^\s*(?<name>[.#%][\w-]+)(?=[\s\.,:>+~\[]|$)", RegexOptions.Compiled), BodyStyle.None),
+            new("property", new Regex(@"^\s*&(?:(?::(?<name>[\w-]+))|(?:\s*(?:[>+~]\s*)?(?:\.|#)?(?<name>[\w-]+)))", RegexOptions.Compiled), BodyStyle.None),
+        ],
+        ["stylus"] =
+        [
+            // Stylus supports optional punctuation, so only capture conservative declaration shapes.
+            // Stylus は句読点を省略できるため、保守的な宣言形だけを捕捉する。
+            new("import",   new Regex(@"^\s*@(?:import|require|use)\s+(?<name>.+?)\s*$", RegexOptions.Compiled), BodyStyle.None),
+            new("function", new Regex(@"^\s*(?<name>[A-Za-z_][\w-]*)\s*\([^)\r\n]*\)\s*$", RegexOptions.Compiled), BodyStyle.None),
+            new("function", new Regex(@"^\s*@keyframes\s+(?<name>[\w-]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("property", new Regex(@"^\s*\$?(?<name>[A-Za-z_][\w-]*)\s*(?:=|:=)\s*", RegexOptions.Compiled), BodyStyle.None),
+            new("class",    new Regex(@"^\s*(?<name>[.#%][\w-]+)(?=[\s\.,:>+~\[]|$)", RegexOptions.Compiled), BodyStyle.None),
+            new("property", new Regex(@"^\s*&(?:(?::(?<name>[\w-]+))|(?:\s*(?:[>+~]\s*)?(?:\.|#)?(?<name>[\w-]+)))", RegexOptions.Compiled), BodyStyle.None),
+        ],
         // HTML does not use the regex pattern loop — it needs true tag-structure
         // awareness (attribute enumeration, quoted-value handling, custom-element
         // detection) that regex alone can't express without losing outer-tag

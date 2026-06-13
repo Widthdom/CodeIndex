@@ -329,10 +329,12 @@ public partial class SymbolExtractorTests
             ["racket"] = "(define (run x) x)\n",
             ["ruby"] = "class Service\n  def run\n    1\n  end\nend\n",
             ["rust"] = "pub struct Service;\npub fn run() -> i32 { 1 }\n",
+            ["sass"] = "$primary: #3366cc\n@mixin rounded($radius)\n.button\n  +rounded(4px)\n",
             ["scala"] = "class Service {\n  def run(): Int = 1\n}\n",
             ["shell"] = "run() {\n  echo ok\n}\n",
             ["smalltalk"] = "Object subclass: #Service\nService >> run\n  ^1\n",
             ["sql"] = "CREATE TABLE users (id int);\nCREATE PROCEDURE run AS SELECT 1;\n",
+            ["stylus"] = "primary = #3366cc\nrounded(radius)\n  border-radius radius\n.button\n  rounded(4px)\n",
             ["svelte"] = "<script>\n  export let name;\n  function run() { return name; }\n</script>\n",
             ["swift"] = "class Service { func run() -> Int { 1 } }\n",
             ["terraform"] = "resource \"local_file\" \"demo\" {\n  filename = \"demo.txt\"\n}\n",
@@ -14957,6 +14959,60 @@ public partial class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "--accent");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".root");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "#root");
+    }
+
+    [Fact]
+    public void Extract_Sass_CapturesIndentedPreprocessorSymbols()
+    {
+        var content = """
+            @use "theme"
+            $primary: #3366cc
+
+            =rounded($radius)
+              border-radius: $radius
+
+            @function spacing($step)
+              @return $step * 4px
+
+            %button-base
+              padding: spacing(2)
+
+            .button
+              color: $primary
+              +rounded(4px)
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sass", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "\"theme\"");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "primary");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "rounded");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "spacing");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "%button-base");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".button");
+    }
+
+    [Fact]
+    public void Extract_Stylus_CapturesIndentedPreprocessorSymbols()
+    {
+        var content = """
+            @require "theme"
+            primary = #3366cc
+
+            rounded(radius)
+              border-radius radius
+
+            .button
+              color primary
+              rounded(4px)
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "stylus", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "\"theme\"");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "primary");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "rounded");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".button");
     }
 
     [Fact]

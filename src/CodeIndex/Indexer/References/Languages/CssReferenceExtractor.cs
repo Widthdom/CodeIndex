@@ -20,6 +20,18 @@ internal static class CssReferenceExtractor
         @"@include\s+(?<name>[A-Za-z_][\w-]*)",
         RegexOptions.Compiled);
 
+    private static readonly Regex SassIndentedMixinReferenceRegex = new(
+        @"(?<![\w-])\+(?<name>[A-Za-z_][\w-]*)",
+        RegexOptions.Compiled);
+
+    private static readonly Regex StylusVariableReferenceRegex = new(
+        @"(?<![\w$])\$(?<name>[A-Za-z_][\w-]*)",
+        RegexOptions.Compiled);
+
+    private static readonly Regex StylusBareFunctionReferenceRegex = new(
+        @"(?<![@\w.-])(?<name>[A-Za-z_][\w-]*)\s*\(",
+        RegexOptions.Compiled);
+
     private static readonly Regex CssCustomPropertyReferenceRegex = new(@"\bvar\(\s*--(?<name>[\w-]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex CssAnimationNameValueRegex = new(@"\banimation-name\s*:\s*(?<value>[^;{}]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex CssAnimationShorthandValueRegex = new(@"\banimation\s*:\s*(?<value>[^;{}]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -146,6 +158,77 @@ internal static class CssReferenceExtractor
     {
         foreach (var pattern in ScssReferencePatterns)
             EmitMatches(pattern, preparedLine, context, lineNumber, references, seen, fileId, definitionNames: null, container);
+    }
+
+    public static void EmitSass(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        EmitScss(preparedLine, references, seen, fileId, context, lineNumber, container);
+
+        foreach (Match match in BoundedRegex.EnumerateMatches(SassIndentedMixinReferenceRegex, preparedLine))
+        {
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                match,
+                "call",
+                context,
+                lineNumber,
+                container);
+        }
+    }
+
+    public static void EmitStylus(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        HashSet<string>? definitionNames,
+        SymbolRecord? container)
+    {
+        foreach (Match match in BoundedRegex.EnumerateMatches(StylusVariableReferenceRegex, preparedLine))
+        {
+            if (ShouldSkipScssVariableReference(preparedLine, match.Groups["name"].Index))
+                continue;
+
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                match,
+                "call",
+                context,
+                lineNumber,
+                container);
+        }
+
+        foreach (Match match in BoundedRegex.EnumerateMatches(StylusBareFunctionReferenceRegex, preparedLine))
+        {
+            var name = match.Groups["name"].Value;
+            if (name is "url" or "var" or "calc" or "rgb" or "rgba" or "hsl" or "hsla")
+                continue;
+            if (definitionNames != null && definitionNames.Contains(name) && match.Groups["name"].Index == 0)
+                continue;
+
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                match,
+                "call",
+                context,
+                lineNumber,
+                container);
+        }
     }
 
     private static void EmitMatches(
