@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
@@ -356,24 +355,7 @@ internal sealed class IssueDuplicatePreflight
     }
 
     private static HttpClient CreateDefaultHttpClient()
-    {
-        var handler = new HttpClientHandler
-        {
-            UseProxy = true,
-            Proxy = HttpClient.DefaultProxy,
-            DefaultProxyCredentials = CredentialCache.DefaultCredentials,
-        };
-        return new HttpClient(handler)
-        {
-            Timeout = TimeSpan.FromSeconds(10),
-            DefaultRequestHeaders =
-            {
-                { "User-Agent", "cdidx" },
-                { "Accept", "application/vnd.github+json" },
-                { "X-GitHub-Api-Version", "2022-11-28" },
-            },
-        };
-    }
+        => GitHubHttpClientFactory.CreateDefaultHttpClient(TimeSpan.FromSeconds(10));
 
     private static string? TryReadString(JsonNode? node, int maxLength)
     {
