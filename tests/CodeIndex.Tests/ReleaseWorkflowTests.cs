@@ -693,6 +693,9 @@ public class ReleaseWorkflowTests
         Assert.Contains("ARG TARGETARCH=amd64", dockerfile);
         Assert.Contains("linux-musl-x64", dockerfile);
         Assert.Contains("linux-musl-arm64", dockerfile);
+        Assert.Contains("dotnet restore src/CodeIndex/CodeIndex.csproj", dockerfile);
+        Assert.Contains("--locked-mode", dockerfile);
+        Assert.Contains("--no-restore", dockerfile);
         Assert.Contains("ENTRYPOINT [\"/usr/local/bin/cdidx-entrypoint\"]", dockerfile);
         Assert.Contains("CdidxBuildCommitOverride", project);
         Assert.Contains("CdidxBuildDateOverride", project);

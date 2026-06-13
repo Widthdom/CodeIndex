@@ -5,12 +5,20 @@ FROM mcr.microsoft.com/dotnet/sdk:8.0-alpine@sha256:d9f4f4a5d99a43799b500ee1365c
 WORKDIR /src
 COPY Directory.Build.props nuget.config version.json ./
 COPY src/CodeIndex/CodeIndex.csproj src/CodeIndex/packages.lock.json src/CodeIndex/
-RUN dotnet restore src/CodeIndex/CodeIndex.csproj
+
+ARG TARGETARCH=amd64
+RUN case "$TARGETARCH" in \
+      amd64) rid="linux-musl-x64" ;; \
+      arm64) rid="linux-musl-arm64" ;; \
+      *) echo "Unsupported container architecture: $TARGETARCH" >&2; exit 1 ;; \
+    esac && \
+    dotnet restore src/CodeIndex/CodeIndex.csproj \
+      --locked-mode
+
 COPY src/CodeIndex/ src/CodeIndex/
 COPY LICENSE COMMERCIAL_LICENSE.md INTEGRATION_POLICY.md TRADEMARKS.md ./
 COPY LICENSES/ LICENSES/
 
-ARG TARGETARCH=amd64
 ARG CDIDX_BUILD_COMMIT=unknown
 ARG CDIDX_BUILD_DATE
 ARG CDIDX_BUILD_DIRTY=unknown
@@ -23,6 +31,7 @@ RUN case "$TARGETARCH" in \
     dotnet publish src/CodeIndex/CodeIndex.csproj \
       --configuration Release \
       --runtime "$rid" \
+      --no-restore \
       --self-contained true \
       -p:PublishSingleFile=true \
       -p:PublishTrimmed=true \
